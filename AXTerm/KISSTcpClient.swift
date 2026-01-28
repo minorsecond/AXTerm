@@ -229,6 +229,10 @@ final class KISSTcpClient: ObservableObject {
             return
         }
 
+        let host = connectedHost ?? settings.host
+        let port = connectedPort ?? settings.portValue
+        let endpoint = KISSEndpoint(host: host, port: port)
+
         let packet = Packet(
             timestamp: Date(),
             from: decoded.from,
@@ -238,7 +242,8 @@ final class KISSTcpClient: ObservableObject {
             control: decoded.control,
             pid: decoded.pid,
             info: decoded.info,
-            rawAx25: ax25Data
+            rawAx25: ax25Data,
+            kissEndpoint: endpoint
         )
 
         handleIncomingPacket(packet)

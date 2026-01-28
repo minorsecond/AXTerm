@@ -32,11 +32,22 @@ struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Hashable {
     var infoASCII: String
     var infoHex: String
     var rawAx25Hex: String
+    var rawAx25Bytes: Data
+    var infoBytes: Data
     var portName: String?
+    var kissHost: String
+    var kissPort: Int
     var pinned: Bool
     var tags: String?
 
-    init(packet: Packet) {
+    init(packet: Packet, endpoint: KISSEndpoint) throws {
+        guard (1...65_535).contains(Int(endpoint.port)) else {
+            throw PacketRecordError.invalidPort(Int(endpoint.port))
+        }
+        let host = endpoint.host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else {
+            throw PacketRecordError.invalidHost
+        }
         let from = packet.from ?? AX25Address(call: "UNKNOWN")
         let to = packet.to ?? AX25Address(call: "UNKNOWN")
         let viaPath = PacketEncoding.encodeViaPath(packet.via)
@@ -66,7 +77,11 @@ struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Hashable {
         self.infoASCII = infoASCII
         self.infoHex = infoHex
         self.rawAx25Hex = rawHex
+        self.rawAx25Bytes = packet.rawAx25
+        self.infoBytes = packet.info
         self.portName = nil
+        self.kissHost = host
+        self.kissPort = Int(endpoint.port)
         self.pinned = false
         self.tags = nil
     }
@@ -75,11 +90,12 @@ struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Hashable {
         let from = AX25Address(call: fromCall, ssid: fromSSID)
         let to = AX25Address(call: toCall, ssid: toSSID)
         let via = PacketEncoding.decodeViaPath(viaPath)
-        let info = PacketEncoding.decodeHex(infoHex)
-        let raw = PacketEncoding.decodeHex(rawAx25Hex)
+        let info = infoBytes.isEmpty ? PacketEncoding.decodeHex(infoHex) : infoBytes
+        let raw = rawAx25Bytes.isEmpty ? PacketEncoding.decodeHex(rawAx25Hex) : rawAx25Bytes
         let frame = FrameType(rawValue: frameType) ?? .unknown
         let control = PacketEncoding.decodeControl(controlHex)
         let pidValue = pid.flatMap { UInt8(clamping: $0) }
+        let endpoint = KISSEndpoint(host: kissHost, port: UInt16(clamping: kissPort))
         return Packet(
             id: id,
             timestamp: receivedAt,
@@ -90,7 +106,13 @@ struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Hashable {
             control: control,
             pid: pidValue,
             info: info,
-            rawAx25: raw
+            rawAx25: raw,
+            kissEndpoint: endpoint
         )
     }
+}
+
+enum PacketRecordError: Error {
+    case invalidHost
+    case invalidPort(Int)
 }

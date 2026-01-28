@@ -20,7 +20,10 @@ final class SQLitePacketStore: PacketStore {
     }
 
     func save(_ packet: Packet) throws {
-        let record = PacketRecord(packet: packet)
+        guard let endpoint = packet.kissEndpoint else {
+            throw PacketStoreError.missingKISSEndpoint
+        }
+        let record = try PacketRecord(packet: packet, endpoint: endpoint)
         try dbQueue.write { db in
             try record.insert(db)
         }
@@ -76,4 +79,8 @@ final class SQLitePacketStore: PacketStore {
             try PacketRecord.fetchCount(db)
         }
     }
+}
+
+enum PacketStoreError: Error {
+    case missingKISSEndpoint
 }
