@@ -116,10 +116,6 @@ struct PacketTableView: View {
             onInspectSelection()
             return .handled
         }
-        .onKeyPress(.enter) {
-            onInspectSelection()
-            return .handled
-        }
     }
 
     private func rowForeground(_ packet: Packet) -> Color {
