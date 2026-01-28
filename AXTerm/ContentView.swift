@@ -177,15 +177,15 @@ struct ContentView: View {
                 ClipboardWriter.copy(PayloadFormatter.hexString(packet.rawAx25))
             }
         )
-        .onChange(of: selection) { _ in
-            if selection.isEmpty {
+        .onChange(of: selection) { _, newSelection in
+            if newSelection.isEmpty {
                 inspectorSelection = nil
             }
         }
-        .onChange(of: searchText) { _ in syncSelection(with: rows) }
-        .onChange(of: filters) { _ in syncSelection(with: rows) }
-        .onChange(of: client.selectedStationCall) { _ in syncSelection(with: rows) }
-        .onChange(of: client.packets) { _ in syncSelection(with: rows) }
+        .onChange(of: searchText) { _, _ in syncSelection(with: rows) }
+        .onChange(of: filters) { _, _ in syncSelection(with: rows) }
+        .onChange(of: client.selectedStationCall) { _, _ in syncSelection(with: rows) }
+        .onChange(of: client.packets) { _, _ in syncSelection(with: rows) }
     }
 
     // MARK: - Toolbar
