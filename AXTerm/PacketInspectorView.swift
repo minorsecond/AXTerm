@@ -47,9 +47,19 @@ struct PacketInspectorView: View {
     @State private var renderFullRaw: Bool = false
     @State private var findQuery: String = ""
     @FocusState private var isFindFocused: Bool
+    @State private var copyFeedback: CopyFeedback?
 
     private let payloadPreviewLimit: Int = 2048
     private let rawPreviewLimit: Int = 2048
+
+    private enum CopyFeedback: Equatable {
+        case info
+        case infoHex
+        case ascii
+        case json
+        case rawHex
+        case frequency(String)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -162,10 +172,12 @@ struct PacketInspectorView: View {
                     Spacer()
 
                     Button("Copy Hex") {
-                        copyToClipboard(PayloadFormatter.hexString(packet.rawAx25))
+                        performCopy(PayloadFormatter.hexString(packet.rawAx25), feedback: .rawHex)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+
+                    copyBadge(for: .rawHex)
                 }
 
                 if packet.rawAx25.count > rawPreviewLimit && !renderFullRaw {
@@ -294,29 +306,51 @@ struct PacketInspectorView: View {
     private var actionSection: some View {
         GroupBox("Actions") {
             HStack(spacing: 10) {
-                Button("Copy Info") {
-                    copyToClipboard(packet.infoText ?? "")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(packet.infoText == nil)
-
-                Button("Copy Hex") {
-                    copyToClipboard(PayloadFormatter.hexString(packet.info))
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-
-                Button("Copy ASCII") {
-                    copyToClipboard(PayloadFormatter.asciiString(packet.info))
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-
-                Button("Export JSON") {
-                    if let json = PacketExport(packet: packet).jsonString() {
-                        copyToClipboard(json)
+                HStack(spacing: 6) {
+                    Button("Copy Info") {
+                        performCopy(packet.infoText ?? "", feedback: .info)
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(packet.infoText == nil)
+
+                    copyBadge(for: .info)
+                }
+
+                HStack(spacing: 6) {
+                    Button("Copy Hex") {
+                        performCopy(PayloadFormatter.hexString(packet.info), feedback: .infoHex)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    copyBadge(for: .infoHex)
+                }
+
+                HStack(spacing: 6) {
+                    Button("Copy ASCII") {
+                        performCopy(PayloadFormatter.asciiString(packet.info), feedback: .ascii)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    copyBadge(for: .ascii)
+                }
+
+                HStack(spacing: 6) {
+                    Button("Copy JSON") {
+                        if let json = PacketExport(packet: packet).jsonString() {
+                            performCopy(json, feedback: .json)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    copyBadge(for: .json)
+                }
+
+                Button("Save JSON...") {
+                    saveJSON()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -358,11 +392,15 @@ struct PacketInspectorView: View {
                             .foregroundStyle(.secondary)
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], alignment: .leading, spacing: 8) {
                             ForEach(summary.frequencies, id: \.self) { freq in
-                                Button("Copy \(freq) MHz") {
-                                    copyToClipboard(freq)
+                                HStack(spacing: 6) {
+                                    Button("Copy \(freq) MHz") {
+                                        performCopy(freq, feedback: .frequency(freq))
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+
+                                    copyBadge(for: .frequency(freq))
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
                             }
                         }
                     }
@@ -403,24 +441,36 @@ struct PacketInspectorView: View {
 
                     Spacer()
 
-                    Button("Copy Info") {
-                        copyToClipboard(packet.infoText ?? "")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(packet.infoText == nil)
+                    HStack(spacing: 6) {
+                        Button("Copy Info") {
+                            performCopy(packet.infoText ?? "", feedback: .info)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(packet.infoText == nil)
 
-                    Button("Copy Hex") {
-                        copyToClipboard(PayloadFormatter.hexString(packet.info))
+                        copyBadge(for: .info)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
 
-                    Button("Copy ASCII") {
-                        copyToClipboard(PayloadFormatter.asciiString(packet.info))
+                    HStack(spacing: 6) {
+                        Button("Copy Hex") {
+                            performCopy(PayloadFormatter.hexString(packet.info), feedback: .infoHex)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        copyBadge(for: .infoHex)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+
+                    HStack(spacing: 6) {
+                        Button("Copy ASCII") {
+                            performCopy(PayloadFormatter.asciiString(packet.info), feedback: .ascii)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        copyBadge(for: .ascii)
+                    }
                 }
 
                 HStack {
@@ -537,9 +587,49 @@ struct PacketInspectorView: View {
         }
     }
 
-    private func copyToClipboard(_ s: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(s, forType: .string)
+    private func performCopy(_ string: String, feedback: CopyFeedback) {
+        ClipboardWriter.copy(string)
+        showCopyFeedback(feedback)
+    }
+
+    private func showCopyFeedback(_ feedback: CopyFeedback) {
+        withAnimation(.easeInOut(duration: 0.12)) {
+            copyFeedback = feedback
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            if copyFeedback == feedback {
+                withAnimation(.easeInOut(duration: 0.12)) {
+                    copyFeedback = nil
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func copyBadge(for feedback: CopyFeedback) -> some View {
+        if copyFeedback == feedback {
+            Text("Copied")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .transition(.opacity)
+        }
+    }
+
+    private func saveJSON() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "packet-\(packet.id.uuidString.prefix(8)).json"
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try PacketExport(packet: packet).writeJSON(to: url)
+            } catch {
+                NSSound.beep()
+            }
+        }
     }
 }
 

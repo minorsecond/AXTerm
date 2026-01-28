@@ -49,13 +49,15 @@ enum PayloadTokenExtractor {
 
     private static func extractCallsigns(from text: String, excluding urls: [String]) -> [String] {
         let urlSet = Set(urls.map { $0.uppercased() })
-        let regex = try? NSRegularExpression(pattern: "\\b[A-Z0-9]{1,6}(?:-[0-9]{1,2})?\\b")
+        let pattern = "(?<![A-Z0-9])[A-Z0-9]{1,6}(?:-[0-9]{1,2})?(?:/[A-Z0-9]{1,2})?\\*?(?![A-Z0-9])"
+        let regex = try? NSRegularExpression(pattern: pattern)
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         let matches = regex?.matches(in: text, options: [], range: range) ?? []
         var callsigns: [String] = []
         for match in matches {
             guard let range = Range(match.range, in: text) else { continue }
             let token = String(text[range])
+            guard token.count > 1 else { continue }
             guard token.rangeOfCharacter(from: .letters) != nil else { continue }
             guard !urlSet.contains(token) else { continue }
             if !callsigns.contains(token) {
