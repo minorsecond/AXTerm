@@ -456,6 +456,10 @@ struct PacketInspectorView: View {
             }
             .keyboardShortcut("f", modifiers: [.command])
         }
+        .frame(maxHeight: 260)
+        .padding(8)
+        .background(.background.secondary)
+        .cornerRadius(6)
     }
 
     private var payloadContent: some View {
