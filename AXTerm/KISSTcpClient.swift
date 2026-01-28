@@ -50,7 +50,7 @@ struct RawChunk: Identifiable, Hashable {
     }
 
     var hex: String {
-        data.map { String(format: "%02X", $0) }.joined(separator: " ")
+        RawEntryEncoding.encodeHex(data)
     }
 
     var timestampString: String {
@@ -74,6 +74,9 @@ final class KISSTcpClient: ObservableObject {
     private let maxRawChunks: Int
     private let settings: AppSettingsStore
     private let packetStore: PacketStore?
+    private let consoleStore: ConsoleStore?
+    private let rawStore: RawStore?
+    private let eventLogger: EventLogger?
     private var cancellables: Set<AnyCancellable> = []
 
     // MARK: - Published State
@@ -102,16 +105,22 @@ final class KISSTcpClient: ObservableObject {
 
     init(
         maxPackets: Int = 5000,
-        maxConsoleLines: Int = 5000,
-        maxRawChunks: Int = 1000,
+        maxConsoleLines: Int = 10_000,
+        maxRawChunks: Int = 10_000,
         settings: AppSettingsStore,
-        packetStore: PacketStore? = nil
+        packetStore: PacketStore? = nil,
+        consoleStore: ConsoleStore? = nil,
+        rawStore: RawStore? = nil,
+        eventLogger: EventLogger? = nil
     ) {
         self.maxPackets = maxPackets
         self.maxConsoleLines = maxConsoleLines
         self.maxRawChunks = maxRawChunks
         self.settings = settings
         self.packetStore = packetStore
+        self.consoleStore = consoleStore
+        self.rawStore = rawStore
+        self.eventLogger = eventLogger
         observeSettings()
     }
 
@@ -124,12 +133,14 @@ final class KISSTcpClient: ObservableObject {
         lastError = nil
         connectedHost = host
         connectedPort = port
+        eventLogger?.log(level: .info, category: .connection, message: "Connecting to \(host):\(port)", metadata: nil)
 
         let nwHost = NWEndpoint.Host(host)
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             status = .failed
             lastError = "Invalid port \(port)"
-            addErrorLine("Connection failed: invalid port \(port)")
+            addErrorLine("Connection failed: invalid port \(port)", category: .connection)
+            eventLogger?.log(level: .error, category: .connection, message: "Connection failed: invalid port \(port)", metadata: nil)
             return
         }
 
@@ -163,20 +174,24 @@ final class KISSTcpClient: ObservableObject {
         switch state {
         case .ready:
             status = .connected
-            addSystemLine("Connected to \(host):\(port)")
+            addSystemLine("Connected to \(host):\(port)", category: .connection)
+            eventLogger?.log(level: .info, category: .connection, message: "Connected to \(host):\(port)", metadata: nil)
             startReceiving()
 
         case .failed(let error):
             status = .failed
             lastError = error.localizedDescription
-            addErrorLine("Connection failed: \(error.localizedDescription)")
+            addErrorLine("Connection failed: \(error.localizedDescription)", category: .connection)
+            eventLogger?.log(level: .error, category: .connection, message: "Connection failed: \(error.localizedDescription)", metadata: nil)
 
         case .cancelled:
             status = .disconnected
-            addSystemLine("Disconnected")
+            addSystemLine("Disconnected", category: .connection)
+            eventLogger?.log(level: .info, category: .connection, message: "Disconnected", metadata: nil)
 
         case .waiting(let error):
             lastError = error.localizedDescription
+            eventLogger?.log(level: .warning, category: .connection, message: "Waiting: \(error.localizedDescription)", metadata: nil)
 
         default:
             break
@@ -190,12 +205,13 @@ final class KISSTcpClient: ObservableObject {
                 guard let self = self else { return }
 
                 if let data = content, !data.isEmpty {
-                    self.handleReceivedData(data)
+                    self.handleIncomingData(data)
                 }
 
                 if let error = error {
                     self.lastError = error.localizedDescription
-                    self.addErrorLine("Receive error: \(error.localizedDescription)")
+                    self.addErrorLine("Receive error: \(error.localizedDescription)", category: .connection)
+                    self.eventLogger?.log(level: .error, category: .connection, message: "Receive error: \(error.localizedDescription)", metadata: nil)
                     return
                 }
 
@@ -210,7 +226,7 @@ final class KISSTcpClient: ObservableObject {
         }
     }
 
-    private func handleReceivedData(_ data: Data) {
+    func handleIncomingData(_ data: Data) {
         bytesReceived += data.count
 
         // Always log raw chunk
@@ -226,6 +242,12 @@ final class KISSTcpClient: ObservableObject {
 
     private func processAX25Frame(_ ax25Data: Data) {
         guard let decoded = AX25.decodeFrame(ax25: ax25Data) else {
+            eventLogger?.log(
+                level: .warning,
+                category: .parser,
+                message: "Failed to decode AX.25 frame",
+                metadata: ["byteCount": "\(ax25Data.count)"]
+            )
             return
         }
 
@@ -262,20 +284,27 @@ final class KISSTcpClient: ObservableObject {
         CappedArray.append(packet, to: &packets, max: maxPackets)
     }
 
-    private func appendConsoleLine(_ line: ConsoleLine) {
+    private func appendConsoleLine(
+        _ line: ConsoleLine,
+        category: ConsoleEntryRecord.Category,
+        packetID: UUID? = nil,
+        byteCount: Int? = nil
+    ) {
         CappedArray.append(line, to: &consoleLines, max: maxConsoleLines)
+        persistConsoleLine(line, category: category, packetID: packetID, byteCount: byteCount)
     }
 
     private func appendRawChunk(_ chunk: RawChunk) {
         CappedArray.append(chunk, to: &rawChunks, max: maxRawChunks)
+        persistRawChunk(chunk)
     }
 
-    private func addSystemLine(_ text: String) {
-        appendConsoleLine(ConsoleLine.system(text))
+    private func addSystemLine(_ text: String, category: ConsoleEntryRecord.Category) {
+        appendConsoleLine(ConsoleLine.system(text), category: category)
     }
 
-    private func addErrorLine(_ text: String) {
-        appendConsoleLine(ConsoleLine.error(text))
+    private func addErrorLine(_ text: String, category: ConsoleEntryRecord.Category) {
+        appendConsoleLine(ConsoleLine.error(text), category: category)
     }
 
     // MARK: - Filtering
@@ -305,6 +334,13 @@ final class KISSTcpClient: ObservableObject {
         } else {
             pinnedPacketIDs.insert(id)
         }
+        let action = shouldPin ? "Pinned packet" : "Unpinned packet"
+        eventLogger?.log(
+            level: .info,
+            category: .ui,
+            message: action,
+            metadata: ["packetID": id.uuidString]
+        )
         persistPinned(id: id, pinned: shouldPin)
     }
 
@@ -315,12 +351,18 @@ final class KISSTcpClient: ObservableObject {
         pinnedPacketIDs.removeAll()
     }
 
-    func clearConsole() {
+    func clearConsole(clearPersisted: Bool = true) {
         consoleLines.removeAll()
+        if clearPersisted {
+            clearPersistedConsole()
+        }
     }
 
-    func clearRaw() {
+    func clearRaw(clearPersisted: Bool = true) {
         rawChunks.removeAll()
+        if clearPersisted {
+            clearPersistedRaw()
+        }
     }
 
     func clearStations() {
@@ -342,10 +384,16 @@ final class KISSTcpClient: ObservableObject {
                 text: text,
                 timestamp: packet.timestamp
             )
-            appendConsoleLine(line)
+            appendConsoleLine(line, category: .packet, packetID: packet.id, byteCount: packet.info.count)
         }
 
         persistPacket(packet)
+    }
+
+    func loadPersistedHistory() {
+        loadPersistedPackets()
+        loadPersistedConsole()
+        loadPersistedRaw()
     }
 
     func loadPersistedPackets() {
@@ -371,6 +419,38 @@ final class KISSTcpClient: ObservableObject {
         rebuildStations(from: loaded)
     }
 
+    func loadPersistedConsole() {
+        guard settings.persistHistory, let consoleStore else { return }
+        let limit = min(settings.consoleRetentionLimit, maxConsoleLines)
+        DispatchQueue.global(qos: .utility).async { [weak self, consoleStore] in
+            do {
+                let records = try consoleStore.loadRecent(limit: limit)
+                let lines = records.reversed().map { $0.toConsoleLine() }
+                Task { @MainActor in
+                    self?.consoleLines = lines
+                }
+            } catch {
+                return
+            }
+        }
+    }
+
+    func loadPersistedRaw() {
+        guard settings.persistHistory, let rawStore else { return }
+        let limit = min(settings.rawRetentionLimit, maxRawChunks)
+        DispatchQueue.global(qos: .utility).async { [weak self, rawStore] in
+            do {
+                let records = try rawStore.loadRecent(limit: limit)
+                let chunks = records.reversed().map { $0.toRawChunk() }
+                Task { @MainActor in
+                    self?.rawChunks = chunks
+                }
+            } catch {
+                return
+            }
+        }
+    }
+
     private func rebuildStations(from packets: [Packet]) {
         stationTracker.reset()
         for packet in packets {
@@ -386,6 +466,60 @@ final class KISSTcpClient: ObservableObject {
             do {
                 try packetStore.save(packet)
                 try packetStore.pruneIfNeeded(retentionLimit: retentionLimit)
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func persistConsoleLine(
+        _ line: ConsoleLine,
+        category: ConsoleEntryRecord.Category,
+        packetID: UUID? = nil,
+        byteCount: Int? = nil
+    ) {
+        guard settings.persistHistory, let consoleStore else { return }
+        let metadata = ConsoleEntryMetadata(from: line.from, to: line.to)
+        let metadataJSON = metadata.hasValues ? DeterministicJSON.encode(metadata) : nil
+        let entry = ConsoleEntryRecord(
+            id: line.id,
+            createdAt: line.timestamp,
+            level: ConsoleEntryRecord.Level(from: line.kind),
+            category: category,
+            message: line.text,
+            packetID: packetID,
+            metadataJSON: metadataJSON,
+            byteCount: byteCount
+        )
+        let retentionLimit = settings.consoleRetentionLimit
+        DispatchQueue.global(qos: .utility).async { [consoleStore] in
+            do {
+                try consoleStore.append(entry)
+                try consoleStore.pruneIfNeeded(retentionLimit: retentionLimit)
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func persistRawChunk(_ chunk: RawChunk) {
+        guard settings.persistHistory, let rawStore else { return }
+        let entry = RawEntryRecord(
+            id: chunk.id,
+            createdAt: chunk.timestamp,
+            source: "kiss",
+            direction: "rx",
+            kind: .bytes,
+            rawHex: RawEntryEncoding.encodeHex(chunk.data),
+            byteCount: chunk.data.count,
+            packetID: nil,
+            metadataJSON: nil
+        )
+        let retentionLimit = settings.rawRetentionLimit
+        DispatchQueue.global(qos: .utility).async { [rawStore] in
+            do {
+                try rawStore.append(entry)
+                try rawStore.pruneIfNeeded(retentionLimit: retentionLimit)
             } catch {
                 return
             }
@@ -411,11 +545,25 @@ final class KISSTcpClient: ObservableObject {
             }
             .store(in: &cancellables)
 
+        settings.$consoleRetentionLimit
+            .dropFirst()
+            .sink { [weak self] newLimit in
+                self?.prunePersistedConsole(limit: newLimit)
+            }
+            .store(in: &cancellables)
+
+        settings.$rawRetentionLimit
+            .dropFirst()
+            .sink { [weak self] newLimit in
+                self?.prunePersistedRaw(limit: newLimit)
+            }
+            .store(in: &cancellables)
+
         settings.$persistHistory
             .dropFirst()
             .sink { [weak self] enabled in
                 guard enabled else { return }
-                self?.loadPersistedPackets()
+                self?.loadPersistedHistory()
             }
             .store(in: &cancellables)
     }
@@ -428,6 +576,72 @@ final class KISSTcpClient: ObservableObject {
             } catch {
                 return
             }
+        }
+    }
+
+    private func prunePersistedConsole(limit: Int) {
+        guard settings.persistHistory, let consoleStore else { return }
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                try consoleStore.pruneIfNeeded(retentionLimit: limit)
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func prunePersistedRaw(limit: Int) {
+        guard settings.persistHistory, let rawStore else { return }
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                try rawStore.pruneIfNeeded(retentionLimit: limit)
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func clearPersistedConsole() {
+        guard settings.persistHistory, let consoleStore else { return }
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                try consoleStore.deleteAll()
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func clearPersistedRaw() {
+        guard settings.persistHistory, let rawStore else { return }
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                try rawStore.deleteAll()
+            } catch {
+                return
+            }
+        }
+    }
+}
+
+private struct ConsoleEntryMetadata: Codable {
+    let from: String?
+    let to: String?
+
+    var hasValues: Bool {
+        from != nil || to != nil
+    }
+}
+
+private extension ConsoleEntryRecord.Level {
+    init(from kind: ConsoleLine.Kind) {
+        switch kind {
+        case .system:
+            self = .system
+        case .error:
+            self = .error
+        case .packet:
+            self = .info
         }
     }
 }

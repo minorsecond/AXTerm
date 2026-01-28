@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ConsoleView: View {
     let lines: [ConsoleLine]
+    let showDaySeparators: Bool
     let onClear: () -> Void
 
     @State private var autoScroll = true
@@ -40,9 +41,21 @@ struct ConsoleView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(lines) { line in
-                            ConsoleLineView(line: line)
-                                .id(line.id)
+                        if showDaySeparators {
+                            ForEach(groupedLines) { section in
+                                DaySeparatorView(date: section.date)
+                                    .padding(.vertical, 4)
+
+                                ForEach(section.items) { line in
+                                    ConsoleLineView(line: line)
+                                        .id(line.id)
+                                }
+                            }
+                        } else {
+                            ForEach(lines) { line in
+                                ConsoleLineView(line: line)
+                                    .id(line.id)
+                            }
                         }
                     }
                     .padding()
@@ -58,6 +71,10 @@ struct ConsoleView: View {
             }
             .background(.background)
         }
+    }
+
+    private var groupedLines: [DayGroupedSection<ConsoleLine>] {
+        DayGrouping.group(items: lines, date: { $0.timestamp })
     }
 }
 

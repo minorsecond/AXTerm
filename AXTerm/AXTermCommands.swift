@@ -70,6 +70,7 @@ struct AXTermCommands: Commands {
     @FocusedValue(\.toggleConnection) private var toggleConnection
     @FocusedValue(\.inspectPacket) private var inspectPacket
     @FocusedValue(\.selectNavigation) private var selectNavigation
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         CommandGroup(after: .textEditing) {
@@ -106,6 +107,12 @@ struct AXTermCommands: Commands {
                 selectNavigation?.action(.raw)
             }
             .keyboardShortcut("3", modifiers: [.command])
+        }
+
+        CommandGroup(after: .help) {
+            Button("Diagnostics…") {
+                openWindow(id: "diagnostics")
+            }
         }
 
     }
