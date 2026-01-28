@@ -10,6 +10,7 @@ import AppKit
 
 struct RawView: View {
     let chunks: [RawChunk]
+    let showDaySeparators: Bool
     let onClear: () -> Void
 
     @State private var autoScroll = true
@@ -41,9 +42,21 @@ struct RawView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(chunks) { chunk in
-                            RawChunkView(chunk: chunk)
-                                .id(chunk.id)
+                        if showDaySeparators {
+                            ForEach(groupedChunks) { section in
+                                DaySeparatorView(date: section.date)
+                                    .padding(.vertical, 4)
+
+                                ForEach(section.items) { chunk in
+                                    RawChunkView(chunk: chunk)
+                                        .id(chunk.id)
+                                }
+                            }
+                        } else {
+                            ForEach(chunks) { chunk in
+                                RawChunkView(chunk: chunk)
+                                    .id(chunk.id)
+                            }
                         }
                     }
                     .padding()
@@ -59,6 +72,10 @@ struct RawView: View {
             }
             .background(.background)
         }
+    }
+
+    private var groupedChunks: [DayGroupedSection<RawChunk>] {
+        DayGrouping.group(items: chunks, date: { $0.timestamp })
     }
 }
 

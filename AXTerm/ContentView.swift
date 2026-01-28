@@ -64,7 +64,7 @@ struct ContentView: View {
         .task {
             guard !didLoadHistory else { return }
             didLoadHistory = true
-            client.loadPersistedPackets()
+            client.loadPersistedHistory()
         }
         .focusedValue(\.searchFocus, SearchFocusAction { isSearchFocused = true })
         .focusedValue(\.toggleConnection, ToggleConnectionAction { toggleConnection() })
@@ -156,9 +156,17 @@ struct ContentView: View {
             case .packets:
                 packetsView
             case .console:
-                ConsoleView(lines: client.consoleLines, onClear: { client.clearConsole() })
+                ConsoleView(
+                    lines: client.consoleLines,
+                    showDaySeparators: settings.showConsoleDaySeparators,
+                    onClear: { client.clearConsole() }
+                )
             case .raw:
-                RawView(chunks: client.rawChunks, onClear: { client.clearRaw() })
+                RawView(
+                    chunks: client.rawChunks,
+                    showDaySeparators: settings.showRawDaySeparators,
+                    onClear: { client.clearRaw() }
+                )
             }
         }
     }

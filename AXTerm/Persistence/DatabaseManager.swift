@@ -116,6 +116,45 @@ enum DatabaseManager {
                 GROUP BY fromCall, fromSSID
                 """)
         }
+        migrator.registerMigration("createConsoleRawEvents") { db in
+            try db.create(table: ConsoleEntryRecord.databaseTableName) { table in
+                table.column("id", .text).primaryKey()
+                table.column("createdAt", .datetime).notNull()
+                table.column("level", .text).notNull()
+                table.column("category", .text).notNull()
+                table.column("message", .text).notNull()
+                table.column("packetID", .text)
+                table.column("metadataJSON", .text)
+                table.column("byteCount", .integer)
+            }
+            try db.create(index: "idx_console_createdAt", on: ConsoleEntryRecord.databaseTableName, columns: ["createdAt"])
+            try db.create(index: "idx_console_level_category", on: ConsoleEntryRecord.databaseTableName, columns: ["level", "category"])
+
+            try db.create(table: RawEntryRecord.databaseTableName) { table in
+                table.column("id", .text).primaryKey()
+                table.column("createdAt", .datetime).notNull()
+                table.column("source", .text).notNull()
+                table.column("direction", .text).notNull()
+                table.column("kind", .text).notNull()
+                table.column("rawHex", .text).notNull()
+                table.column("byteCount", .integer).notNull()
+                table.column("packetID", .text)
+                table.column("metadataJSON", .text)
+            }
+            try db.create(index: "idx_raw_createdAt", on: RawEntryRecord.databaseTableName, columns: ["createdAt"])
+            try db.create(index: "idx_raw_kind_source", on: RawEntryRecord.databaseTableName, columns: ["kind", "source"])
+
+            try db.create(table: AppEventRecord.databaseTableName) { table in
+                table.column("id", .text).primaryKey()
+                table.column("createdAt", .datetime).notNull()
+                table.column("level", .text).notNull()
+                table.column("category", .text).notNull()
+                table.column("message", .text).notNull()
+                table.column("metadataJSON", .text)
+            }
+            try db.create(index: "idx_events_createdAt", on: AppEventRecord.databaseTableName, columns: ["createdAt"])
+            try db.create(index: "idx_events_level_category", on: AppEventRecord.databaseTableName, columns: ["level", "category"])
+        }
         return migrator
     }()
 

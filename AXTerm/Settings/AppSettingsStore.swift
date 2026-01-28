@@ -12,13 +12,25 @@ final class AppSettingsStore: ObservableObject {
     static let hostKey = "lastHost"
     static let portKey = "lastPort"
     static let retentionKey = "retentionLimit"
+    static let consoleRetentionKey = "consoleRetentionLimit"
+    static let rawRetentionKey = "rawRetentionLimit"
+    static let eventRetentionKey = "eventRetentionLimit"
     static let persistKey = "persistHistory"
+    static let consoleSeparatorsKey = "consoleDaySeparators"
+    static let rawSeparatorsKey = "rawDaySeparators"
 
     static let defaultHost = "localhost"
     static let defaultPort = 8001
     static let defaultRetention = 50_000
     static let minRetention = 1_000
     static let maxRetention = 500_000
+    static let defaultConsoleRetention = 10_000
+    static let defaultRawRetention = 10_000
+    static let defaultEventRetention = 10_000
+    static let minLogRetention = 1_000
+    static let maxLogRetention = 200_000
+    static let defaultConsoleSeparators = true
+    static let defaultRawSeparators = false
 
     @Published var host: String {
         didSet {
@@ -53,8 +65,49 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
+    @Published var consoleRetentionLimit: Int {
+        didSet {
+            let sanitized = Self.sanitizeLogRetention(consoleRetentionLimit)
+            guard sanitized == consoleRetentionLimit else {
+                consoleRetentionLimit = sanitized
+                return
+            }
+            persistConsoleRetention()
+        }
+    }
+
+    @Published var rawRetentionLimit: Int {
+        didSet {
+            let sanitized = Self.sanitizeLogRetention(rawRetentionLimit)
+            guard sanitized == rawRetentionLimit else {
+                rawRetentionLimit = sanitized
+                return
+            }
+            persistRawRetention()
+        }
+    }
+
+    @Published var eventRetentionLimit: Int {
+        didSet {
+            let sanitized = Self.sanitizeLogRetention(eventRetentionLimit)
+            guard sanitized == eventRetentionLimit else {
+                eventRetentionLimit = sanitized
+                return
+            }
+            persistEventRetention()
+        }
+    }
+
     @Published var persistHistory: Bool {
         didSet { persistPersistHistory() }
+    }
+
+    @Published var showConsoleDaySeparators: Bool {
+        didSet { persistConsoleSeparators() }
+    }
+
+    @Published var showRawDaySeparators: Bool {
+        didSet { persistRawSeparators() }
     }
 
     private let defaults: UserDefaults
@@ -64,12 +117,22 @@ final class AppSettingsStore: ObservableObject {
         let storedHost = defaults.string(forKey: Self.hostKey) ?? Self.defaultHost
         let storedPort = defaults.string(forKey: Self.portKey) ?? String(Self.defaultPort)
         let storedRetention = defaults.object(forKey: Self.retentionKey) as? Int ?? Self.defaultRetention
+        let storedConsoleRetention = defaults.object(forKey: Self.consoleRetentionKey) as? Int ?? Self.defaultConsoleRetention
+        let storedRawRetention = defaults.object(forKey: Self.rawRetentionKey) as? Int ?? Self.defaultRawRetention
+        let storedEventRetention = defaults.object(forKey: Self.eventRetentionKey) as? Int ?? Self.defaultEventRetention
         let storedPersist = defaults.object(forKey: Self.persistKey) as? Bool ?? true
+        let storedConsoleSeparators = defaults.object(forKey: Self.consoleSeparatorsKey) as? Bool ?? Self.defaultConsoleSeparators
+        let storedRawSeparators = defaults.object(forKey: Self.rawSeparatorsKey) as? Bool ?? Self.defaultRawSeparators
 
         self.host = Self.sanitizeHost(storedHost)
         self.port = Self.sanitizePort(storedPort)
         self.retentionLimit = Self.sanitizeRetention(storedRetention)
+        self.consoleRetentionLimit = Self.sanitizeLogRetention(storedConsoleRetention)
+        self.rawRetentionLimit = Self.sanitizeLogRetention(storedRawRetention)
+        self.eventRetentionLimit = Self.sanitizeLogRetention(storedEventRetention)
         self.persistHistory = storedPersist
+        self.showConsoleDaySeparators = storedConsoleSeparators
+        self.showRawDaySeparators = storedRawSeparators
     }
 
     var portValue: UInt16 {
@@ -92,6 +155,10 @@ final class AppSettingsStore: ObservableObject {
         min(max(value, minRetention), maxRetention)
     }
 
+    static func sanitizeLogRetention(_ value: Int) -> Int {
+        min(max(value, minLogRetention), maxLogRetention)
+    }
+
     private func persistHost() {
         defaults.set(host, forKey: Self.hostKey)
     }
@@ -104,7 +171,27 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(retentionLimit, forKey: Self.retentionKey)
     }
 
+    private func persistConsoleRetention() {
+        defaults.set(consoleRetentionLimit, forKey: Self.consoleRetentionKey)
+    }
+
+    private func persistRawRetention() {
+        defaults.set(rawRetentionLimit, forKey: Self.rawRetentionKey)
+    }
+
+    private func persistEventRetention() {
+        defaults.set(eventRetentionLimit, forKey: Self.eventRetentionKey)
+    }
+
     private func persistPersistHistory() {
         defaults.set(persistHistory, forKey: Self.persistKey)
+    }
+
+    private func persistConsoleSeparators() {
+        defaults.set(showConsoleDaySeparators, forKey: Self.consoleSeparatorsKey)
+    }
+
+    private func persistRawSeparators() {
+        defaults.set(showRawDaySeparators, forKey: Self.rawSeparatorsKey)
     }
 }

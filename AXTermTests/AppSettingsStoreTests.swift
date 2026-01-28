@@ -26,4 +26,10 @@ final class AppSettingsStoreTests: XCTestCase {
         XCTAssertEqual(AppSettingsStore.sanitizeRetention(600_000), AppSettingsStore.maxRetention)
         XCTAssertEqual(AppSettingsStore.sanitizeRetention(50_000), 50_000)
     }
+
+    func testLogRetentionValidationClamps() {
+        XCTAssertEqual(AppSettingsStore.sanitizeLogRetention(10), AppSettingsStore.minLogRetention)
+        XCTAssertEqual(AppSettingsStore.sanitizeLogRetention(600_000), AppSettingsStore.maxLogRetention)
+        XCTAssertEqual(AppSettingsStore.sanitizeLogRetention(10_000), 10_000)
+    }
 }
