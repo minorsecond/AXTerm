@@ -11,8 +11,12 @@ import GRDB
 final class SQLitePacketStore: PacketStore {
     private let dbQueue: DatabaseQueue
 
-    init(dbQueue: DatabaseQueue = try DatabaseManager.makeDatabaseQueue()) {
+    init(dbQueue: DatabaseQueue) {
         self.dbQueue = dbQueue
+    }
+
+    convenience init() throws {
+        try self.init(dbQueue: DatabaseManager.makeDatabaseQueue())
     }
 
     func save(_ packet: Packet) throws {
