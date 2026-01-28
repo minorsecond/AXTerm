@@ -17,6 +17,10 @@ enum PacketEncoding {
         return data.map { String(format: "%02X", $0) }.joined()
     }
 
+    static func hexString(_ data: Data, bytesPerLine: Int = PayloadFormatter.defaultBytesPerLine) -> String {
+        PayloadFormatter.hexString(data, bytesPerLine: bytesPerLine)
+    }
+
     static func decodeHex(_ hex: String) -> Data {
         let cleaned = hex.filter { !$0.isWhitespace }
         guard cleaned.count % 2 == 0 else { return Data() }

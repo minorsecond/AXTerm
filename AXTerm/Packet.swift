@@ -21,6 +21,7 @@ struct Packet: Identifiable, Hashable {
     let pid: UInt8?
     let info: Data
     let rawAx25: Data
+    let kissEndpoint: KISSEndpoint?
 
     /// Info field as text if mostly printable ASCII
     var infoText: String? {
@@ -93,7 +94,8 @@ struct Packet: Identifiable, Hashable {
         control: UInt8 = 0,
         pid: UInt8? = nil,
         info: Data = Data(),
-        rawAx25: Data = Data()
+        rawAx25: Data = Data(),
+        kissEndpoint: KISSEndpoint? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -105,5 +107,18 @@ struct Packet: Identifiable, Hashable {
         self.pid = pid
         self.info = info
         self.rawAx25 = rawAx25
+        self.kissEndpoint = kissEndpoint
+    }
+}
+
+struct KISSEndpoint: Hashable {
+    let host: String
+    let port: UInt16
+
+    init?(host: String, port: UInt16) {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, port >= 1 else { return nil }
+        self.host = trimmed
+        self.port = port
     }
 }

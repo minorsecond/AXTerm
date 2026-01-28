@@ -34,6 +34,11 @@ final class PacketEncodingTests: XCTestCase {
         XCTAssertEqual(PacketEncoding.encodeHex(data), "01AB00FF")
     }
 
+    func testHexDisplayStringDeterministic() {
+        let data = Data([0x01, 0x02, 0x03, 0x04])
+        XCTAssertEqual(PacketEncoding.hexString(data, bytesPerLine: 2), "01 02\n03 04")
+    }
+
     func testSSIDParsingNormalizesCalls() {
         let parsed = PacketEncoding.parseCallsign("KB5YZB-7")
         XCTAssertEqual(parsed.call, "KB5YZB")

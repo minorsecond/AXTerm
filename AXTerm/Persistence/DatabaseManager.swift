@@ -26,9 +26,29 @@ enum DatabaseManager {
 
     static func makeDatabaseQueue() throws -> DatabaseQueue {
         let url = try databaseURL()
-        let queue = try DatabaseQueue(path: url.path)
-        try migrator.migrate(queue)
-        return queue
+        func openQueue() throws -> DatabaseQueue {
+            let queue = try DatabaseQueue(path: url.path)
+            try migrator.migrate(queue)
+            return queue
+        }
+
+        var queue: DatabaseQueue? = try openQueue()
+        if let currentQueue = queue, try needsDevReset(currentQueue) {
+            let message = "AXTerm: schema mismatch detected for \(url.path)"
+            #if DEBUG
+            print("\(message) - deleting database in DEBUG.")
+            queue = nil
+            try? FileManager.default.removeItem(at: url)
+            return try openQueue()
+            #else
+            print("\(message) - refusing to delete database in Release.")
+            throw DatabaseManagerError.schemaMismatch
+            #endif
+        }
+        guard let finalQueue = queue else {
+            throw DatabaseManagerError.schemaMismatch
+        }
+        return finalQueue
     }
 
     static let migrator: DatabaseMigrator = {
@@ -56,20 +76,88 @@ enum DatabaseManager {
                 table.column("infoASCII", .text).notNull()
                 table.column("infoHex", .text).notNull()
                 table.column("rawAx25Hex", .text).notNull()
+                table.column("rawAx25Bytes", .blob).notNull()
+                table.column("infoBytes", .blob).notNull()
                 table.column("portName", .text)
+                table.column("kissHost", .text).notNull()
+                table.column("kissPort", .integer).notNull()
                 table.column("pinned", .boolean).notNull().defaults(to: false)
                 table.column("tags", .text)
             }
 
             try db.create(index: "idx_packets_receivedAt", on: PacketRecord.databaseTableName, columns: ["receivedAt"])
-            try db.create(index: "idx_packets_from", on: PacketRecord.databaseTableName, columns: ["fromCall", "fromSSID"])
-            try db.create(index: "idx_packets_to", on: PacketRecord.databaseTableName, columns: ["toCall", "toSSID"])
+            try db.create(index: "idx_packets_from_receivedAt", on: PacketRecord.databaseTableName, columns: ["fromCall", "fromSSID", "receivedAt"])
+            try db.create(index: "idx_packets_to_receivedAt", on: PacketRecord.databaseTableName, columns: ["toCall", "toSSID", "receivedAt"])
             try db.create(index: "idx_packets_frameType", on: PacketRecord.databaseTableName, columns: ["frameType"])
+            try db.create(index: "idx_packets_pid", on: PacketRecord.databaseTableName, columns: ["pid"])
             try db.create(index: "idx_packets_printable", on: PacketRecord.databaseTableName, columns: ["isPrintableText"])
             try db.create(index: "idx_packets_pinned", on: PacketRecord.databaseTableName, columns: ["pinned"])
             try db.create(index: "idx_packets_viaCount", on: PacketRecord.databaseTableName, columns: ["viaCount"])
-            try db.create(index: "idx_packets_from_receivedAt", on: PacketRecord.databaseTableName, columns: ["fromCall", "receivedAt"])
+            try db.create(index: "idx_packets_hasDigipeaters", on: PacketRecord.databaseTableName, columns: ["hasDigipeaters"])
+            try db.create(index: "idx_packets_kissEndpoint", on: PacketRecord.databaseTableName, columns: ["kissHost", "kissPort"])
+            try db.create(index: "idx_packets_frameType_receivedAt", on: PacketRecord.databaseTableName, columns: ["frameType", "receivedAt"])
+            try db.create(index: "idx_packets_pinned_receivedAt", on: PacketRecord.databaseTableName, columns: ["pinned", "receivedAt"])
+
+            try db.execute(sql: """
+                CREATE VIEW v_daily_counts AS
+                SELECT date(receivedAt) AS day,
+                       COUNT(*) AS packetCount
+                FROM \(PacketRecord.databaseTableName)
+                GROUP BY day
+                """)
+
+            try db.execute(sql: """
+                CREATE VIEW v_station_counts AS
+                SELECT fromCall,
+                       fromSSID,
+                       COUNT(*) AS packetCount,
+                       MAX(receivedAt) AS lastReceivedAt
+                FROM \(PacketRecord.databaseTableName)
+                GROUP BY fromCall, fromSSID
+                """)
         }
         return migrator
     }()
+
+    private static func needsDevReset(_ queue: DatabaseQueue) throws -> Bool {
+        try queue.read { db in
+            guard try db.tableExists(PacketRecord.databaseTableName) else { return false }
+            let columns = try db.columns(in: PacketRecord.databaseTableName).map(\.name)
+            let required: Set<String> = [
+                "id",
+                "receivedAt",
+                "ax25Timestamp",
+                "direction",
+                "source",
+                "fromCall",
+                "fromSSID",
+                "toCall",
+                "toSSID",
+                "viaPath",
+                "viaCount",
+                "hasDigipeaters",
+                "frameType",
+                "controlHex",
+                "pid",
+                "infoLen",
+                "isPrintableText",
+                "infoText",
+                "infoASCII",
+                "infoHex",
+                "rawAx25Hex",
+                "rawAx25Bytes",
+                "infoBytes",
+                "portName",
+                "kissHost",
+                "kissPort",
+                "pinned",
+                "tags"
+            ]
+            return !required.isSubset(of: Set(columns))
+        }
+    }
+}
+
+enum DatabaseManagerError: Error {
+    case schemaMismatch
 }
