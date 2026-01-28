@@ -24,6 +24,7 @@ struct PacketFilters: Equatable {
     var showS: Bool = true
     var showU: Bool = true
     var onlyWithInfo: Bool = false
+    var onlyPinned: Bool = false
 
     func allows(frameType: FrameType) -> Bool {
         switch frameType {
@@ -86,7 +87,7 @@ final class KISSTcpClient: ObservableObject {
     @Published private(set) var stations: [Station] = []
 
     @Published var selectedStationCall: String?
-    @Published var selectedPacket: Packet?
+    @Published private(set) var pinnedPacketIDs: Set<Packet.ID> = []
 
     // MARK: - Private State
 
@@ -268,13 +269,36 @@ final class KISSTcpClient: ObservableObject {
     // MARK: - Filtering
 
     func filteredPackets(search: String, filters: PacketFilters, stationCall: String?) -> [Packet] {
-        PacketFilter.filter(packets: packets, search: search, filters: filters, stationCall: stationCall)
+        PacketFilter.filter(
+            packets: packets,
+            search: search,
+            filters: filters,
+            stationCall: stationCall,
+            pinnedIDs: pinnedPacketIDs
+        )
+    }
+
+    func packet(with id: Packet.ID) -> Packet? {
+        packets.first { $0.id == id }
+    }
+
+    func isPinned(_ id: Packet.ID) -> Bool {
+        pinnedPacketIDs.contains(id)
+    }
+
+    func togglePin(for id: Packet.ID) {
+        if pinnedPacketIDs.contains(id) {
+            pinnedPacketIDs.remove(id)
+        } else {
+            pinnedPacketIDs.insert(id)
+        }
     }
 
     // MARK: - Clear Actions
 
     func clearPackets() {
         packets.removeAll()
+        pinnedPacketIDs.removeAll()
     }
 
     func clearConsole() {

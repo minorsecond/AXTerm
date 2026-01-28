@@ -24,6 +24,7 @@ struct ContentView: View {
     @State private var port: String = "8001"
 
     @State private var selection = Set<Packet.ID>()
+    @State private var inspectorSelection: PacketInspectorSelection?
     @FocusState private var isSearchFocused: Bool
 
     @AppStorage("lastHost") private var savedHost: String = "localhost"
@@ -40,9 +41,22 @@ struct ContentView: View {
         .toolbar {
             toolbarContent
         }
-        .sheet(item: $client.selectedPacket) { packet in
-            PacketInspectorView(packet: packet) {
-                client.selectedPacket = nil
+        .sheet(item: $inspectorSelection) { selection in
+            if let packet = client.packet(with: selection.id) {
+                PacketInspectorView(
+                    packet: packet,
+                    isPinned: client.isPinned(packet.id),
+                    onTogglePin: { client.togglePin(for: packet.id) },
+                    onFilterStation: { call in
+                        client.selectedStationCall = call
+                    },
+                    onClose: {
+                        inspectorSelection = nil
+                    }
+                )
+            } else {
+                Text("Packet unavailable")
+                    .padding()
             }
         }
         .onAppear {
@@ -147,13 +161,24 @@ struct ContentView: View {
     }
 
     private var packetsView: some View {
-        let rows = client.filteredPackets(
-            search: searchText,
-            filters: filters,
-            stationCall: client.selectedStationCall
-        )
+        let rows = filteredPackets
 
-        return PacketTableView(packets: rows, selection: $selection)
+        return PacketTableView(
+            packets: rows,
+            selection: $selection,
+            onInspect: { packet in
+                openInspector(for: packet.id)
+            }
+        )
+        .onChange(of: selection) { _ in
+            if selection.isEmpty {
+                inspectorSelection = nil
+            }
+        }
+        .onChange(of: searchText) { _ in syncSelection(with: rows) }
+        .onChange(of: filters) { _ in syncSelection(with: rows) }
+        .onChange(of: client.selectedStationCall) { _ in syncSelection(with: rows) }
+        .onChange(of: client.packets) { _ in syncSelection(with: rows) }
     }
 
     // MARK: - Toolbar
@@ -230,6 +255,11 @@ struct ContentView: View {
             .toggleStyle(.button)
             .buttonStyle(.bordered)
             .disabled(client.packets.isEmpty)
+
+        Toggle("Pinned", isOn: $filters.onlyPinned)
+            .toggleStyle(.button)
+            .buttonStyle(.bordered)
+            .disabled(client.pinnedPacketIDs.isEmpty)
 
         if client.selectedStationCall != nil {
             Button {
@@ -308,9 +338,31 @@ struct ContentView: View {
     }
 
     private func inspectSelectedPacket() {
-        guard let id = selection.first,
-              let pkt = client.packets.first(where: { $0.id == id }) else { return }
-        client.selectedPacket = pkt
+        guard let pkt = PacketSelectionResolver.resolve(selection: selection, in: filteredPackets) else { return }
+        openInspector(for: pkt.id)
+    }
+
+    private var filteredPackets: [Packet] {
+        client.filteredPackets(
+            search: searchText,
+            filters: filters,
+            stationCall: client.selectedStationCall
+        )
+    }
+
+    private func syncSelection(with packets: [Packet]) {
+        let nextSelection = PacketSelectionResolver.filteredSelection(selection, for: packets)
+        if nextSelection != selection {
+            selection = nextSelection
+        }
+
+        if selection.isEmpty {
+            inspectorSelection = nil
+        }
+    }
+
+    private func openInspector(for id: Packet.ID) {
+        inspectorSelection = PacketInspectorSelection(id: id)
     }
 }
 
