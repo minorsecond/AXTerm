@@ -38,4 +38,16 @@ struct PacketExport: Codable, Equatable {
         encoder.dateEncodingStrategy = .iso8601
         return try? String(data: encoder.encode(self), encoding: .utf8)
     }
+
+    func jsonData() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return try encoder.encode(self)
+    }
+
+    func writeJSON(to url: URL) throws {
+        let data = try jsonData()
+        try data.write(to: url, options: [.atomic])
+    }
 }

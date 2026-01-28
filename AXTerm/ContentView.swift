@@ -15,6 +15,7 @@ enum NavigationItem: String, Hashable, CaseIterable {
 
 struct ContentView: View {
     @StateObject private var client = KISSTcpClient()
+    private let inspectionCoordinator = PacketInspectionCoordinator()
 
     @State private var selectedNav: NavigationItem = .packets
     @State private var searchText: String = ""
@@ -166,8 +167,14 @@ struct ContentView: View {
         return PacketTableView(
             packets: rows,
             selection: $selection,
-            onInspect: { packet in
-                openInspector(for: packet.id)
+            onInspectSelection: {
+                inspectSelectedPacket()
+            },
+            onCopyInfo: { packet in
+                ClipboardWriter.copy(packet.infoText ?? "")
+            },
+            onCopyRawHex: { packet in
+                ClipboardWriter.copy(PayloadFormatter.hexString(packet.rawAx25))
             }
         )
         .onChange(of: selection) { _ in
@@ -338,8 +345,13 @@ struct ContentView: View {
     }
 
     private func inspectSelectedPacket() {
-        guard let pkt = PacketSelectionResolver.resolve(selection: selection, in: filteredPackets) else { return }
-        openInspector(for: pkt.id)
+        guard let selection = inspectionCoordinator.inspectSelectedPacket(
+            selection: selection,
+            packets: filteredPackets
+        ) else {
+            return
+        }
+        inspectorSelection = selection
     }
 
     private var filteredPackets: [Packet] {
@@ -361,9 +373,6 @@ struct ContentView: View {
         }
     }
 
-    private func openInspector(for id: Packet.ID) {
-        inspectorSelection = PacketInspectorSelection(id: id)
-    }
 }
 
 #Preview {
