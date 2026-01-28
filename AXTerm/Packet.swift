@@ -17,6 +17,7 @@ struct Packet: Identifiable, Hashable {
     let to: AX25Address?
     let via: [AX25Address]
     let frameType: FrameType
+    let control: UInt8
     let pid: UInt8?
     let info: Data
     let rawAx25: Data
@@ -89,6 +90,7 @@ struct Packet: Identifiable, Hashable {
         to: AX25Address? = nil,
         via: [AX25Address] = [],
         frameType: FrameType = .unknown,
+        control: UInt8 = 0,
         pid: UInt8? = nil,
         info: Data = Data(),
         rawAx25: Data = Data()
@@ -99,6 +101,7 @@ struct Packet: Identifiable, Hashable {
         self.to = to
         self.via = via
         self.frameType = frameType
+        self.control = control
         self.pid = pid
         self.info = info
         self.rawAx25 = rawAx25
