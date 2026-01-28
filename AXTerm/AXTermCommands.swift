@@ -25,39 +25,43 @@ struct SelectNavigationAction {
 
 extension FocusedValues {
     var searchFocus: SearchFocusAction? {
-        get { self[SearchFocusActionKey.self] }
+        get { self[SearchFocusActionKey.self] ?? nil }
         set { self[SearchFocusActionKey.self] = newValue }
     }
 
     var toggleConnection: ToggleConnectionAction? {
-        get { self[ToggleConnectionActionKey.self] }
+        get { self[ToggleConnectionActionKey.self] ?? nil }
         set { self[ToggleConnectionActionKey.self] = newValue }
     }
 
     var inspectPacket: InspectPacketAction? {
-        get { self[InspectPacketActionKey.self] }
+        get { self[InspectPacketActionKey.self] ?? nil }
         set { self[InspectPacketActionKey.self] = newValue }
     }
 
     var selectNavigation: SelectNavigationAction? {
-        get { self[SelectNavigationActionKey.self] }
+        get { self[SelectNavigationActionKey.self] ?? nil }
         set { self[SelectNavigationActionKey.self] = newValue }
     }
 }
 
 private struct SearchFocusActionKey: FocusedValueKey {
+    typealias Value = SearchFocusAction?
     static let defaultValue: SearchFocusAction? = nil
 }
 
 private struct ToggleConnectionActionKey: FocusedValueKey {
+    typealias Value = ToggleConnectionAction?
     static let defaultValue: ToggleConnectionAction? = nil
 }
 
 private struct InspectPacketActionKey: FocusedValueKey {
+    typealias Value = InspectPacketAction?
     static let defaultValue: InspectPacketAction? = nil
 }
 
 private struct SelectNavigationActionKey: FocusedValueKey {
+    typealias Value = SelectNavigationAction?
     static let defaultValue: SelectNavigationAction? = nil
 }
 
@@ -68,11 +72,16 @@ struct AXTermCommands: Commands {
     @FocusedValue(\.selectNavigation) private var selectNavigation
 
     var body: some Commands {
-        CommandGroup(after: .find) {
+        CommandGroup(after: .textEditing) {
             Button("Focus Search") {
                 searchFocus?.action()
             }
             .keyboardShortcut("f", modifiers: [.command])
+            
+            Button("Inspect Packet") {
+                inspectPacket?.action()
+            }
+            .keyboardShortcut("i", modifiers: [.command])
         }
 
         CommandMenu("Connection") {
@@ -99,11 +108,5 @@ struct AXTermCommands: Commands {
             .keyboardShortcut("3", modifiers: [.command])
         }
 
-        CommandGroup(after: .textEditing) {
-            Button("Inspect Packet") {
-                inspectPacket?.action()
-            }
-            .keyboardShortcut("i", modifiers: [.command])
-        }
     }
 }
