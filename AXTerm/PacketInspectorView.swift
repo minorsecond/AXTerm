@@ -456,6 +456,10 @@ struct PacketInspectorView: View {
             }
             .keyboardShortcut("f", modifiers: [.command])
         }
+        .frame(maxHeight: 260)
+        .padding(8)
+        .background(.background.secondary)
+        .cornerRadius(6)
     }
 
     private var payloadContent: some View {
@@ -557,16 +561,28 @@ private struct PathChip: View {
 
 private enum PayloadSearchHighlighter {
     static func highlight(text: String, query: String) -> AttributedString {
-        var attributed = AttributedString(text)
-        guard !query.isEmpty else { return attributed }
+        guard !query.isEmpty else { return AttributedString(text) }
 
-        var searchRange = attributed.startIndex..<attributed.endIndex
-        while let range = attributed.range(of: query, options: [.caseInsensitive], range: searchRange) {
-            attributed[range].backgroundColor = .yellow.opacity(0.4)
-            searchRange = range.upperBound..<attributed.endIndex
+        let nsText = text as NSString
+        let lowerText = text.lowercased() as NSString
+        let lowerQuery = query.lowercased()
+        let result = NSMutableAttributedString(string: text)
+
+        var searchRange = NSRange(location: 0, length: nsText.length)
+        while true {
+            let foundRange = lowerText.range(of: lowerQuery, options: [], range: searchRange)
+            if foundRange.location == NSNotFound {
+                break
+            }
+            result.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.35), range: foundRange)
+            let nextLocation = foundRange.location + foundRange.length
+            if nextLocation >= nsText.length {
+                break
+            }
+            searchRange = NSRange(location: nextLocation, length: nsText.length - nextLocation)
         }
 
-        return attributed
+        return AttributedString(result)
     }
 }
 
