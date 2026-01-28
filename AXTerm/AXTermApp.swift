@@ -13,5 +13,13 @@ struct AXTermApp: App {
         WindowGroup {
             ContentView()
         }
+        .commands {
+            CommandGroup(after: .windowArrangement) {
+                Button("Close") {
+                    NSApp.keyWindow?.performClose(nil)
+                }
+                .keyboardShortcut("w", modifiers: [.command])
+            }
+        }
     }
 }

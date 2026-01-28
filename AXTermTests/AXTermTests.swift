@@ -10,27 +10,103 @@ import XCTest
 
 final class AXTermTests: XCTestCase {
 
-    override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
+    // MARK: - AX25Address Tests
+
+    func testAX25AddressDisplay() {
+        let addrWithSSID = AX25Address(call: "N0CALL", ssid: 1)
+        XCTAssertEqual(addrWithSSID.display, "N0CALL-1")
+
+        let addrNoSSID = AX25Address(call: "N0CALL", ssid: 0)
+        XCTAssertEqual(addrNoSSID.display, "N0CALL")
     }
 
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
+    func testAX25AddressNormalization() {
+        let addr = AX25Address(call: "  n0call  ", ssid: 1)
+        XCTAssertEqual(addr.call, "N0CALL")
     }
 
-    func testExample() throws {
-        // This is an example of a functional test case.
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // Any test you write for XCTest can be annotated as throws and async.
-        // Mark your test throws to produce an unexpected failure when your test encounters an uncaught error.
-        // Mark your test async to allow awaiting for asynchronous code to complete. Check the results with assertions afterwards.
+    func testAX25AddressSSIDClamping() {
+        let addrHighSSID = AX25Address(call: "TEST", ssid: 20)
+        XCTAssertEqual(addrHighSSID.ssid, 15) // Clamped to max
+
+        let addrNegSSID = AX25Address(call: "TEST", ssid: -5)
+        XCTAssertEqual(addrNegSSID.ssid, 0) // Clamped to min
     }
 
-    func testPerformanceExample() throws {
-        // This is an example of a performance test case.
-        self.measure {
-            // Put the code you want to measure the time of here.
-        }
+    // MARK: - Packet Tests
+
+    func testPacketDisplayHelpers() {
+        let packet = Packet(
+            from: AX25Address(call: "N0CALL", ssid: 1),
+            to: AX25Address(call: "APRS"),
+            via: [AX25Address(call: "WIDE1", ssid: 1, repeated: true)],
+            frameType: .ui,
+            info: "Test".data(using: .ascii)!
+        )
+
+        XCTAssertEqual(packet.fromDisplay, "N0CALL-1")
+        XCTAssertEqual(packet.toDisplay, "APRS")
+        XCTAssertTrue(packet.viaDisplay.contains("WIDE1-1*"))
+        XCTAssertEqual(packet.typeDisplay, "UI")
     }
 
+    func testPacketInfoPreview() {
+        let longInfo = String(repeating: "A", count: 100)
+        let packet = Packet(info: longInfo.data(using: .ascii)!)
+
+        XCTAssertTrue(packet.infoPreview.count <= 80)
+        XCTAssertTrue(packet.infoPreview.hasSuffix("..."))
+    }
+
+    func testPacketWithNilAddresses() {
+        let packet = Packet()
+
+        XCTAssertEqual(packet.fromDisplay, "?")
+        XCTAssertEqual(packet.toDisplay, "?")
+        XCTAssertEqual(packet.viaDisplay, "")
+    }
+
+    // MARK: - FrameType Tests
+
+    func testFrameTypeDisplayName() {
+        XCTAssertEqual(FrameType.ui.displayName, "UI")
+        XCTAssertEqual(FrameType.i.displayName, "I")
+        XCTAssertEqual(FrameType.s.displayName, "S")
+        XCTAssertEqual(FrameType.u.displayName, "U")
+        XCTAssertEqual(FrameType.unknown.displayName, "?")
+    }
+
+    // MARK: - ConsoleLine Tests
+
+    func testConsoleLineFormatting() {
+        let line = ConsoleLine.packet(from: "N0CALL", to: "APRS", text: "Test message")
+
+        XCTAssertEqual(line.kind, .packet)
+        XCTAssertEqual(line.from, "N0CALL")
+        XCTAssertEqual(line.to, "APRS")
+        XCTAssertEqual(line.text, "Test message")
+    }
+
+    func testConsoleLineSystem() {
+        let line = ConsoleLine.system("Connected")
+
+        XCTAssertEqual(line.kind, .system)
+        XCTAssertNil(line.from)
+        XCTAssertNil(line.to)
+    }
+
+    func testConsoleLineError() {
+        let line = ConsoleLine.error("Connection failed")
+
+        XCTAssertEqual(line.kind, .error)
+        XCTAssertEqual(line.text, "Connection failed")
+    }
+
+    // MARK: - RawChunk Tests
+
+    func testRawChunkHex() {
+        let chunk = RawChunk(data: Data([0xC0, 0x00, 0x01, 0x02]))
+
+        XCTAssertEqual(chunk.hex, "C0 00 01 02")
+    }
 }
