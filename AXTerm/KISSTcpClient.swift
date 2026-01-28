@@ -77,6 +77,8 @@ final class KISSTcpClient: ObservableObject {
     @Published private(set) var status: ConnectionStatus = .disconnected
     @Published private(set) var lastError: String?
     @Published private(set) var bytesReceived: Int = 0
+    @Published private(set) var connectedHost: String?
+    @Published private(set) var connectedPort: UInt16?
 
     @Published private(set) var packets: [Packet] = []
     @Published private(set) var consoleLines: [ConsoleLine] = []
@@ -90,7 +92,7 @@ final class KISSTcpClient: ObservableObject {
 
     private var connection: NWConnection?
     private var parser = KISSFrameParser()
-    private var stationIndex: [String: Int] = [:] // call -> index in stations array
+    private var stationTracker = StationTracker()
 
     // MARK: - Initialization
 
@@ -107,6 +109,8 @@ final class KISSTcpClient: ObservableObject {
 
         status = .connecting
         lastError = nil
+        connectedHost = host
+        connectedPort = port
 
         let nwHost = NWEndpoint.Host(host)
         let nwPort = NWEndpoint.Port(rawValue: port)!
@@ -133,6 +137,8 @@ final class KISSTcpClient: ObservableObject {
         connection = nil
         parser.reset()
         status = .disconnected
+        connectedHost = nil
+        connectedPort = nil
     }
 
     private func handleConnectionState(_ state: NWConnection.State, host: String, port: UInt16) {
@@ -233,62 +239,22 @@ final class KISSTcpClient: ObservableObject {
     // MARK: - MHeard (Station Tracking)
 
     private func updateMHeard(for packet: Packet) {
-        guard let from = packet.from else { return }
-        let call = from.display
-
-        if let index = stationIndex[call] {
-            // Update existing station
-            stations[index].lastHeard = packet.timestamp
-            stations[index].heardCount += 1
-            if !packet.via.isEmpty {
-                stations[index].lastVia = packet.via.map { $0.display }
-            }
-        } else {
-            // New station
-            let station = Station(
-                call: call,
-                lastHeard: packet.timestamp,
-                heardCount: 1,
-                lastVia: packet.via.map { $0.display }
-            )
-            stations.append(station)
-            stationIndex[call] = stations.count - 1
-        }
-
-        // Re-sort by lastHeard descending
-        sortStations()
-    }
-
-    private func sortStations() {
-        stations.sort { ($0.lastHeard ?? .distantPast) > ($1.lastHeard ?? .distantPast) }
-        // Rebuild index
-        stationIndex.removeAll()
-        for (index, station) in stations.enumerated() {
-            stationIndex[station.call] = index
-        }
+        stationTracker.update(with: packet)
+        stations = stationTracker.stations
     }
 
     // MARK: - Capped Array Helpers
 
     private func appendPacket(_ packet: Packet) {
-        packets.append(packet)
-        if packets.count > maxPackets {
-            packets.removeFirst(packets.count - maxPackets)
-        }
+        CappedArray.append(packet, to: &packets, max: maxPackets)
     }
 
     private func appendConsoleLine(_ line: ConsoleLine) {
-        consoleLines.append(line)
-        if consoleLines.count > maxConsoleLines {
-            consoleLines.removeFirst(consoleLines.count - maxConsoleLines)
-        }
+        CappedArray.append(line, to: &consoleLines, max: maxConsoleLines)
     }
 
     private func appendRawChunk(_ chunk: RawChunk) {
-        rawChunks.append(chunk)
-        if rawChunks.count > maxRawChunks {
-            rawChunks.removeFirst(rawChunks.count - maxRawChunks)
-        }
+        CappedArray.append(chunk, to: &rawChunks, max: maxRawChunks)
     }
 
     private func addSystemLine(_ text: String) {
@@ -302,32 +268,7 @@ final class KISSTcpClient: ObservableObject {
     // MARK: - Filtering
 
     func filteredPackets(search: String, filters: PacketFilters, stationCall: String?) -> [Packet] {
-        packets.filter { packet in
-            // Station filter
-            if let call = stationCall {
-                guard packet.fromDisplay == call else { return false }
-            }
-
-            // Frame type filter
-            guard filters.allows(frameType: packet.frameType) else { return false }
-
-            // Only with info filter
-            if filters.onlyWithInfo && packet.infoText == nil {
-                return false
-            }
-
-            // Search filter
-            if !search.isEmpty {
-                let searchLower = search.lowercased()
-                let matches = packet.fromDisplay.lowercased().contains(searchLower) ||
-                              packet.toDisplay.lowercased().contains(searchLower) ||
-                              packet.viaDisplay.lowercased().contains(searchLower) ||
-                              (packet.infoText?.lowercased().contains(searchLower) ?? false)
-                guard matches else { return false }
-            }
-
-            return true
-        }
+        PacketFilter.filter(packets: packets, search: search, filters: filters, stationCall: stationCall)
     }
 
     // MARK: - Clear Actions
@@ -346,7 +287,7 @@ final class KISSTcpClient: ObservableObject {
 
     func clearStations() {
         stations.removeAll()
-        stationIndex.removeAll()
+        stationTracker.reset()
         selectedStationCall = nil
     }
 }

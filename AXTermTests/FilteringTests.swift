@@ -51,7 +51,7 @@ final class FilteringTests: XCTestCase {
         let packets = createTestPackets()
         let filters = PacketFilters()
 
-        let filtered = filterPackets(packets, search: "", filters: filters, stationCall: "N0CALL-1")
+        let filtered = PacketFilter.filter(packets: packets, search: "", filters: filters, stationCall: "N0CALL-1")
 
         XCTAssertEqual(filtered.count, 3)
         XCTAssertTrue(filtered.allSatisfy { $0.fromDisplay == "N0CALL-1" })
@@ -61,7 +61,7 @@ final class FilteringTests: XCTestCase {
         let packets = createTestPackets()
         let filters = PacketFilters()
 
-        let filtered = filterPackets(packets, search: "", filters: filters, stationCall: "NOBODY")
+        let filtered = PacketFilter.filter(packets: packets, search: "", filters: filters, stationCall: "NOBODY")
 
         XCTAssertEqual(filtered.count, 0)
     }
@@ -75,7 +75,7 @@ final class FilteringTests: XCTestCase {
         filters.showS = false
         filters.showU = false
 
-        let filtered = filterPackets(packets, search: "", filters: filters, stationCall: nil)
+        let filtered = PacketFilter.filter(packets: packets, search: "", filters: filters, stationCall: nil)
 
         XCTAssertEqual(filtered.count, 2)
         XCTAssertTrue(filtered.allSatisfy { $0.frameType == .ui })
@@ -88,7 +88,7 @@ final class FilteringTests: XCTestCase {
         filters.showS = false
         filters.showU = false
 
-        let filtered = filterPackets(packets, search: "", filters: filters, stationCall: nil)
+        let filtered = PacketFilter.filter(packets: packets, search: "", filters: filters, stationCall: nil)
 
         XCTAssertEqual(filtered.count, 1)
         XCTAssertEqual(filtered[0].frameType, .i)
@@ -102,7 +102,7 @@ final class FilteringTests: XCTestCase {
         filters.showS = false
         filters.showU = false
 
-        let filtered = filterPackets(packets, search: "", filters: filters, stationCall: nil)
+        let filtered = PacketFilter.filter(packets: packets, search: "", filters: filters, stationCall: nil)
 
         XCTAssertEqual(filtered.count, 0)
     }
@@ -114,7 +114,7 @@ final class FilteringTests: XCTestCase {
         var filters = PacketFilters()
         filters.onlyWithInfo = true
 
-        let filtered = filterPackets(packets, search: "", filters: filters, stationCall: nil)
+        let filtered = PacketFilter.filter(packets: packets, search: "", filters: filters, stationCall: nil)
 
         // Only packets with non-empty, printable info
         XCTAssertTrue(filtered.allSatisfy { $0.infoText != nil })
@@ -126,7 +126,7 @@ final class FilteringTests: XCTestCase {
         let packets = createTestPackets()
         let filters = PacketFilters()
 
-        let filtered = filterPackets(packets, search: "W0ABC", filters: filters, stationCall: nil)
+        let filtered = PacketFilter.filter(packets: packets, search: "W0ABC", filters: filters, stationCall: nil)
 
         XCTAssertEqual(filtered.count, 1)
         XCTAssertEqual(filtered[0].fromDisplay, "W0ABC")
@@ -136,7 +136,7 @@ final class FilteringTests: XCTestCase {
         let packets = createTestPackets()
         let filters = PacketFilters()
 
-        let filtered = filterPackets(packets, search: "W0XYZ", filters: filters, stationCall: nil)
+        let filtered = PacketFilter.filter(packets: packets, search: "W0XYZ", filters: filters, stationCall: nil)
 
         XCTAssertEqual(filtered.count, 1)
         XCTAssertEqual(filtered[0].toDisplay, "W0XYZ")
@@ -146,7 +146,7 @@ final class FilteringTests: XCTestCase {
         let packets = createTestPackets()
         let filters = PacketFilters()
 
-        let filtered = filterPackets(packets, search: "WIDE1", filters: filters, stationCall: nil)
+        let filtered = PacketFilter.filter(packets: packets, search: "WIDE1", filters: filters, stationCall: nil)
 
         XCTAssertEqual(filtered.count, 1)
         XCTAssertTrue(filtered[0].viaDisplay.contains("WIDE1"))
@@ -156,7 +156,7 @@ final class FilteringTests: XCTestCase {
         let packets = createTestPackets()
         let filters = PacketFilters()
 
-        let filtered = filterPackets(packets, search: "Position", filters: filters, stationCall: nil)
+        let filtered = PacketFilter.filter(packets: packets, search: "Position", filters: filters, stationCall: nil)
 
         XCTAssertEqual(filtered.count, 1)
         XCTAssertTrue(filtered[0].infoText?.contains("Position") ?? false)
@@ -166,7 +166,7 @@ final class FilteringTests: XCTestCase {
         let packets = createTestPackets()
         let filters = PacketFilters()
 
-        let filtered = filterPackets(packets, search: "position", filters: filters, stationCall: nil)
+        let filtered = PacketFilter.filter(packets: packets, search: "position", filters: filters, stationCall: nil)
 
         XCTAssertEqual(filtered.count, 1)
     }
@@ -175,7 +175,7 @@ final class FilteringTests: XCTestCase {
         let packets = createTestPackets()
         let filters = PacketFilters()
 
-        let filtered = filterPackets(packets, search: "ZZZZZ", filters: filters, stationCall: nil)
+        let filtered = PacketFilter.filter(packets: packets, search: "ZZZZZ", filters: filters, stationCall: nil)
 
         XCTAssertEqual(filtered.count, 0)
     }
@@ -190,7 +190,7 @@ final class FilteringTests: XCTestCase {
         filters.showU = false
         filters.onlyWithInfo = true
 
-        let filtered = filterPackets(packets, search: "APRS", filters: filters, stationCall: nil)
+        let filtered = PacketFilter.filter(packets: packets, search: "APRS", filters: filters, stationCall: nil)
 
         // UI frames only, with info, matching "APRS"
         XCTAssertEqual(filtered.count, 2)
@@ -216,34 +216,4 @@ final class FilteringTests: XCTestCase {
         XCTAssertTrue(filters.allows(frameType: .i))
     }
 
-    // MARK: - Helper
-
-    private func filterPackets(_ packets: [Packet], search: String, filters: PacketFilters, stationCall: String?) -> [Packet] {
-        packets.filter { packet in
-            // Station filter
-            if let call = stationCall {
-                guard packet.fromDisplay == call else { return false }
-            }
-
-            // Frame type filter
-            guard filters.allows(frameType: packet.frameType) else { return false }
-
-            // Only with info filter
-            if filters.onlyWithInfo && packet.infoText == nil {
-                return false
-            }
-
-            // Search filter
-            if !search.isEmpty {
-                let searchLower = search.lowercased()
-                let matches = packet.fromDisplay.lowercased().contains(searchLower) ||
-                              packet.toDisplay.lowercased().contains(searchLower) ||
-                              packet.viaDisplay.lowercased().contains(searchLower) ||
-                              (packet.infoText?.lowercased().contains(searchLower) ?? false)
-                guard matches else { return false }
-            }
-
-            return true
-        }
-    }
 }

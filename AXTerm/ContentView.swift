@@ -24,6 +24,7 @@ struct ContentView: View {
     @State private var port: String = "8001"
 
     @State private var selection = Set<Packet.ID>()
+    @FocusState private var isSearchFocused: Bool
 
     @AppStorage("lastHost") private var savedHost: String = "localhost"
     @AppStorage("lastPort") private var savedPort: String = "8001"
@@ -35,6 +36,7 @@ struct ContentView: View {
             detailView
         }
         .searchable(text: $searchText, prompt: "Search packets...")
+        .searchFocused($isSearchFocused)
         .toolbar {
             toolbarContent
         }
@@ -47,6 +49,12 @@ struct ContentView: View {
             host = savedHost
             port = savedPort
         }
+        .focusedValue(\.searchFocus, SearchFocusAction { isSearchFocused = true })
+        .focusedValue(\.toggleConnection, ToggleConnectionAction { toggleConnection() })
+        .focusedValue(\.inspectPacket, InspectPacketAction { inspectSelectedPacket() })
+        .focusedValue(\.selectNavigation, SelectNavigationAction { item in
+            selectedNav = item
+        })
     }
 
     // MARK: - Sidebar
@@ -81,7 +89,7 @@ struct ContentView: View {
                         .font(.caption)
                 } else {
                     ForEach(client.stations) { station in
-                        StationRow(
+                        StationRowView(
                             station: station,
                             isSelected: client.selectedStationCall == station.call
                         )
@@ -145,68 +153,7 @@ struct ContentView: View {
             stationCall: client.selectedStationCall
         )
 
-        return Table(rows, selection: $selection) {
-            TableColumn("Time") { pkt in
-                Text(pkt.timestamp.formatted(date: .omitted, time: .standard))
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-            .width(min: 70, ideal: 80)
-
-            TableColumn("From") { pkt in
-                Text(pkt.fromDisplay)
-                    .font(.system(.body, design: .monospaced))
-            }
-            .width(min: 80, ideal: 100)
-
-            TableColumn("To") { pkt in
-                Text(pkt.toDisplay)
-                    .font(.system(.body, design: .monospaced))
-            }
-            .width(min: 80, ideal: 100)
-
-            TableColumn("Via") { pkt in
-                Text(pkt.viaDisplay.isEmpty ? "" : pkt.viaDisplay)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .width(min: 60, ideal: 120)
-
-            TableColumn("Type") { pkt in
-                Text(pkt.typeDisplay)
-                    .font(.system(.caption, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(typeColor(pkt.frameType).opacity(0.2))
-                    .cornerRadius(4)
-            }
-            .width(min: 40, ideal: 50)
-
-            TableColumn("Info") { pkt in
-                Text(pkt.infoPreview)
-                    .font(.system(.body, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-        }
-        .onChange(of: selection) { _, newValue in
-            guard let id = newValue.first else { return }
-            if let pkt = client.packets.first(where: { $0.id == id }) {
-                client.selectedPacket = pkt
-                selection.removeAll()
-            }
-        }
-    }
-
-    private func typeColor(_ type: FrameType) -> Color {
-        switch type {
-        case .ui: return .blue
-        case .i: return .green
-        case .s: return .orange
-        case .u: return .purple
-        case .unknown: return .gray
-        }
+        return PacketTableView(packets: rows, selection: $selection)
     }
 
     // MARK: - Toolbar
@@ -260,24 +207,29 @@ struct ContentView: View {
         Toggle("UI", isOn: $filters.showUI)
             .toggleStyle(.button)
             .buttonStyle(.bordered)
+            .disabled(client.packets.isEmpty)
 
         Toggle("I", isOn: $filters.showI)
             .toggleStyle(.button)
             .buttonStyle(.bordered)
+            .disabled(client.packets.isEmpty)
 
         Toggle("S", isOn: $filters.showS)
             .toggleStyle(.button)
             .buttonStyle(.bordered)
+            .disabled(client.packets.isEmpty)
 
         Toggle("U", isOn: $filters.showU)
             .toggleStyle(.button)
             .buttonStyle(.bordered)
+            .disabled(client.packets.isEmpty)
 
         Divider()
 
         Toggle("Info Only", isOn: $filters.onlyWithInfo)
             .toggleStyle(.button)
             .buttonStyle(.bordered)
+            .disabled(client.packets.isEmpty)
 
         if client.selectedStationCall != nil {
             Button {
@@ -289,40 +241,51 @@ struct ContentView: View {
     }
 
     private var statusPill: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
-
-            Text(statusText)
+        VStack(alignment: .leading, spacing: 2) {
+            Text(statusTitle)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            Text(statusDetail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(.quaternary, in: Capsule())
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .animation(.easeInOut(duration: 0.2), value: client.status)
     }
 
-    private var statusColor: Color {
-        switch client.status {
-        case .connected: return .green
-        case .connecting: return .orange
-        case .disconnected: return .gray
-        case .failed: return .red
-        }
-    }
-
-    private var statusText: String {
+    private var statusTitle: String {
         switch client.status {
         case .connected:
-            return "Connected | \(formatBytes(client.bytesReceived)) | \(client.packets.count) pkts"
+            return "\(statusEmoji) Dire Wolf @ \(connectionHostPort)"
         case .connecting:
-            return "Connecting..."
+            return "\(statusEmoji) Connecting..."
         case .disconnected:
-            return "Disconnected"
+            return "\(statusEmoji) Disconnected"
         case .failed:
-            return "Failed"
+            return "\(statusEmoji) Connection Failed"
         }
+    }
+
+    private var statusDetail: String {
+        "\(formatBytes(client.bytesReceived)) • \(client.packets.count) packets"
+    }
+
+    private var statusEmoji: String {
+        switch client.status {
+        case .connected: return "🟢"
+        case .connecting: return "🟠"
+        case .disconnected: return "⚪️"
+        case .failed: return "🔴"
+        }
+    }
+
+    private var connectionHostPort: String {
+        let hostValue = client.connectedHost ?? savedHost
+        let portValue = client.connectedPort.map(String.init) ?? savedPort
+        return "\(hostValue):\(portValue)"
     }
 
     private func formatBytes(_ bytes: Int) -> String {
@@ -330,226 +293,24 @@ struct ContentView: View {
         if bytes < 1024 * 1024 { return String(format: "%.1f KB", Double(bytes) / 1024) }
         return String(format: "%.1f MB", Double(bytes) / (1024 * 1024))
     }
-}
 
-// MARK: - Station Row
-
-struct StationRow: View {
-    let station: Station
-    let isSelected: Bool
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(station.call)
-                    .font(.system(.body, design: .monospaced))
-                    .fontWeight(isSelected ? .semibold : .regular)
-
-                Text(station.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            if isSelected {
-                Image(systemName: "checkmark")
-                    .foregroundStyle(.secondary)
+    private func toggleConnection() {
+        switch client.status {
+        case .connected, .connecting:
+            client.disconnect()
+        case .disconnected, .failed:
+            savedHost = host
+            savedPort = port
+            if let portNum = UInt16(port) {
+                client.connect(host: host, port: portNum)
             }
         }
-        .padding(.vertical, 2)
-        .background(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
-        .cornerRadius(4)
-    }
-}
-
-// MARK: - Console View
-
-struct ConsoleView: View {
-    let lines: [ConsoleLine]
-    let onClear: () -> Void
-
-    @State private var autoScroll = true
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Toggle("Auto-scroll", isOn: $autoScroll)
-                    .toggleStyle(.checkbox)
-
-                Spacer()
-
-                Text("\(lines.count) lines")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-
-                Button("Clear") {
-                    onClear()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            .background(.bar)
-
-            Divider()
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(lines) { line in
-                            ConsoleLineView(line: line)
-                                .id(line.id)
-                        }
-                    }
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .onChange(of: lines.count) { _, _ in
-                    if autoScroll, let lastLine = lines.last {
-                        withAnimation(.easeOut(duration: 0.1)) {
-                            proxy.scrollTo(lastLine.id, anchor: .bottom)
-                        }
-                    }
-                }
-            }
-            .background(.background)
-        }
-    }
-}
-
-struct ConsoleLineView: View {
-    let line: ConsoleLine
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text(line.timestampString)
-                .foregroundStyle(.secondary)
-
-            if let from = line.from {
-                Text(from)
-                    .foregroundStyle(kindColor)
-
-                if let to = line.to {
-                    Text(">")
-                        .foregroundStyle(.secondary)
-                    Text(to)
-                        .foregroundStyle(.secondary)
-                }
-
-                Text(":")
-                    .foregroundStyle(.secondary)
-            }
-
-            Text(line.text)
-                .textSelection(.enabled)
-        }
-        .font(.system(.body, design: .monospaced))
-        .foregroundStyle(kindColor)
     }
 
-    private var kindColor: Color {
-        switch line.kind {
-        case .system: return .blue
-        case .error: return .red
-        case .packet: return .primary
-        }
-    }
-}
-
-// MARK: - Raw View
-
-struct RawView: View {
-    let chunks: [RawChunk]
-    let onClear: () -> Void
-
-    @State private var autoScroll = true
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Toggle("Auto-scroll", isOn: $autoScroll)
-                    .toggleStyle(.checkbox)
-
-                Spacer()
-
-                Text("\(chunks.count) chunks")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-
-                Button("Clear") {
-                    onClear()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            .background(.bar)
-
-            Divider()
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(chunks) { chunk in
-                            RawChunkView(chunk: chunk)
-                                .id(chunk.id)
-                        }
-                    }
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .onChange(of: chunks.count) { _, _ in
-                    if autoScroll, let lastChunk = chunks.last {
-                        withAnimation(.easeOut(duration: 0.1)) {
-                            proxy.scrollTo(lastChunk.id, anchor: .bottom)
-                        }
-                    }
-                }
-            }
-            .background(.background)
-        }
-    }
-}
-
-struct RawChunkView: View {
-    let chunk: RawChunk
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text(chunk.timestampString)
-                    .foregroundStyle(.secondary)
-
-                Text("[\(chunk.data.count) bytes]")
-                    .foregroundStyle(.tertiary)
-
-                Spacer()
-
-                Button {
-                    copyToPasteboard(chunk.hex)
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-            }
-
-            Text(chunk.hex)
-                .font(.system(.caption, design: .monospaced))
-                .textSelection(.enabled)
-                .lineLimit(4)
-        }
-        .padding(8)
-        .background(.background.secondary)
-        .cornerRadius(6)
-    }
-
-    private func copyToPasteboard(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+    private func inspectSelectedPacket() {
+        guard let id = selection.first,
+              let pkt = client.packets.first(where: { $0.id == id }) else { return }
+        client.selectedPacket = pkt
     }
 }
 

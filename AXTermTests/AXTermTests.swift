@@ -54,7 +54,7 @@ final class AXTermTests: XCTestCase {
         let longInfo = String(repeating: "A", count: 100)
         let packet = Packet(info: longInfo.data(using: .ascii)!)
 
-        XCTAssertTrue(packet.infoPreview.count <= 80)
+        XCTAssertTrue(packet.infoPreview.count <= Packet.infoPreviewLimit)
         XCTAssertTrue(packet.infoPreview.hasSuffix("..."))
     }
 
@@ -74,6 +74,14 @@ final class AXTermTests: XCTestCase {
         XCTAssertEqual(FrameType.s.displayName, "S")
         XCTAssertEqual(FrameType.u.displayName, "U")
         XCTAssertEqual(FrameType.unknown.displayName, "?")
+    }
+
+    func testFrameTypeIconMapping() {
+        XCTAssertEqual(FrameType.ui.icon, "📡")
+        XCTAssertEqual(FrameType.i.icon, "💬")
+        XCTAssertEqual(FrameType.s.icon, "🔁")
+        XCTAssertEqual(FrameType.u.icon, "⚙️")
+        XCTAssertEqual(FrameType.unknown.icon, "❓")
     }
 
     // MARK: - ConsoleLine Tests
