@@ -10,6 +10,35 @@ import XCTest
 
 final class MHeardTests: XCTestCase {
 
+    func testStationTrackerUpdatesCountAndVia() {
+        let now = Date()
+        let later = now.addingTimeInterval(10)
+        var tracker = StationTracker()
+
+        let firstPacket = Packet(
+            timestamp: now,
+            from: AX25Address(call: "N0CALL", ssid: 1),
+            via: [AX25Address(call: "WIDE1", ssid: 1)]
+        )
+        tracker.update(with: firstPacket)
+
+        XCTAssertEqual(tracker.stations.count, 1)
+        XCTAssertEqual(tracker.stations.first?.heardCount, 1)
+        XCTAssertEqual(tracker.stations.first?.lastVia, ["WIDE1-1"])
+
+        let secondPacket = Packet(
+            timestamp: later,
+            from: AX25Address(call: "N0CALL", ssid: 1),
+            via: [AX25Address(call: "WIDE2", ssid: 1)]
+        )
+        tracker.update(with: secondPacket)
+
+        XCTAssertEqual(tracker.stations.count, 1)
+        XCTAssertEqual(tracker.stations.first?.heardCount, 2)
+        XCTAssertEqual(tracker.stations.first?.lastHeard, later)
+        XCTAssertEqual(tracker.stations.first?.lastVia, ["WIDE2-1"])
+    }
+
     func testStationHeardCountIncrements() {
         // Test that Station struct tracks heardCount correctly
         var testStation = Station(call: "N0CALL-1", heardCount: 0)

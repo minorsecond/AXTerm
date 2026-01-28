@@ -9,6 +9,8 @@ import Foundation
 
 /// Represents a decoded AX.25 packet
 struct Packet: Identifiable, Hashable {
+    static let infoPreviewLimit: Int = 60
+
     let id: UUID
     let timestamp: Date
     let from: AX25Address?
@@ -53,15 +55,31 @@ struct Packet: Identifiable, Hashable {
         if let text = infoText {
             let trimmed = text.replacingOccurrences(of: "\r", with: " ")
                               .replacingOccurrences(of: "\n", with: " ")
-            if trimmed.count > 80 {
-                return String(trimmed.prefix(77)) + "..."
-            }
-            return trimmed
+            return trimmed.wordSafeTruncate(limit: Self.infoPreviewLimit)
         }
         if info.isEmpty {
             return ""
         }
         return "[\(info.count) bytes]"
+    }
+
+    var infoTooltip: String {
+        infoText ?? infoPreview
+    }
+
+    var isLowSignal: Bool {
+        if info.isEmpty { return true }
+        guard let text = infoText else { return false }
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return normalized == "ID" || normalized.hasPrefix("ID ") || normalized.hasPrefix("ID:") || normalized.hasPrefix("BEACON")
+    }
+
+    var asciiPayload: String {
+        PayloadFormatter.asciiString(info)
+    }
+
+    var hexPayload: String {
+        PayloadFormatter.hexString(info)
     }
 
     init(

@@ -18,4 +18,14 @@ enum FrameType: String, Hashable, Codable, CaseIterable {
     var displayName: String {
         rawValue
     }
+
+    var icon: String {
+        switch self {
+        case .ui: return "📡"
+        case .i: return "💬"
+        case .s: return "🔁"
+        case .u: return "⚙️"
+        case .unknown: return "❓"
+        }
+    }
 }
