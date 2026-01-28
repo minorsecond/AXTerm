@@ -52,6 +52,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9B1C3E6C2F3A000100000003 /* GRDB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -59,6 +60,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9B1C3E6C2F3A000100000004 /* GRDB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -70,6 +72,11 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXBuildFile section */
+		9B1C3E6C2F3A000100000003 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1C3E6C2F3A000100000002 /* GRDB */; };
+		9B1C3E6C2F3A000100000004 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1C3E6C2F3A000100000002 /* GRDB */; };
+/* End PBXBuildFile section */
 
 /* Begin PBXGroup section */
 		3487E8942F2AA2A700DF0172 = {
@@ -112,6 +119,7 @@
 			);
 			name = AXTerm;
 			packageProductDependencies = (
+				9B1C3E6C2F3A000100000002 /* GRDB */,
 			);
 			productName = AXTerm;
 			productReference = 3487E89D2F2AA2A700DF0172 /* AXTerm.app */;
@@ -135,6 +143,7 @@
 			);
 			name = AXTermTests;
 			packageProductDependencies = (
+				9B1C3E6C2F3A000100000002 /* GRDB */,
 			);
 			productName = AXTermTests;
 			productReference = 3487E8AA2F2AA2A800DF0172 /* AXTermTests.xctest */;
@@ -199,6 +208,9 @@
 			productRefGroup = 3487E89E2F2AA2A700DF0172 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				9B1C3E6C2F3A000100000001 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
+			);
 			targets = (
 				3487E89C2F2AA2A700DF0172 /* AXTerm */,
 				3487E8A92F2AA2A800DF0172 /* AXTermTests */,
@@ -206,6 +218,25 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		9B1C3E6C2F3A000100000001 /* XCRemoteSwiftPackageReference "GRDB.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/groue/GRDB.swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 6.29.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		9B1C3E6C2F3A000100000002 /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9B1C3E6C2F3A000100000001 /* XCRemoteSwiftPackageReference "GRDB.swift" */;
+			productName = GRDB;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin PBXResourcesBuildPhase section */
 		3487E89B2F2AA2A700DF0172 /* Resources */ = {

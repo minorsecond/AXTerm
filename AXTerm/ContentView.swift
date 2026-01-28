@@ -14,22 +14,23 @@ enum NavigationItem: String, Hashable, CaseIterable {
 }
 
 struct ContentView: View {
-    @StateObject private var client = KISSTcpClient()
+    @StateObject private var client: KISSTcpClient
+    @ObservedObject private var settings: AppSettingsStore
     private let inspectionCoordinator = PacketInspectionCoordinator()
 
     @State private var selectedNav: NavigationItem = .packets
     @State private var searchText: String = ""
     @State private var filters = PacketFilters()
 
-    @State private var host: String = "localhost"
-    @State private var port: String = "8001"
-
     @State private var selection = Set<Packet.ID>()
     @State private var inspectorSelection: PacketInspectorSelection?
     @FocusState private var isSearchFocused: Bool
+    @State private var didLoadHistory = false
 
-    @AppStorage("lastHost") private var savedHost: String = "localhost"
-    @AppStorage("lastPort") private var savedPort: String = "8001"
+    init(client: KISSTcpClient, settings: AppSettingsStore) {
+        _client = StateObject(wrappedValue: client)
+        _settings = ObservedObject(wrappedValue: settings)
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -60,9 +61,10 @@ struct ContentView: View {
                     .padding()
             }
         }
-        .onAppear {
-            host = savedHost
-            port = savedPort
+        .task {
+            guard !didLoadHistory else { return }
+            didLoadHistory = true
+            client.loadPersistedPackets()
         }
         .focusedValue(\.searchFocus, SearchFocusAction { isSearchFocused = true })
         .focusedValue(\.toggleConnection, ToggleConnectionAction { toggleConnection() })
@@ -209,20 +211,16 @@ struct ContentView: View {
     private var connectionControls: some View {
         if client.status == .disconnected || client.status == .failed {
             HStack(spacing: 4) {
-                TextField("Host", text: $host)
+                TextField("Host", text: $settings.host)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 120)
 
-                TextField("Port", text: $port)
+                TextField("Port", text: $settings.port)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 60)
 
                 Button("Connect") {
-                    savedHost = host
-                    savedPort = port
-                    if let portNum = UInt16(port) {
-                        client.connect(host: host, port: portNum)
-                    }
+                    client.connect(host: settings.host, port: settings.portValue)
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -320,8 +318,8 @@ struct ContentView: View {
     }
 
     private var connectionHostPort: String {
-        let hostValue = client.connectedHost ?? savedHost
-        let portValue = client.connectedPort.map(String.init) ?? savedPort
+        let hostValue = client.connectedHost ?? settings.host
+        let portValue = client.connectedPort.map(String.init) ?? settings.port
         return "\(hostValue):\(portValue)"
     }
 
@@ -336,11 +334,7 @@ struct ContentView: View {
         case .connected, .connecting:
             client.disconnect()
         case .disconnected, .failed:
-            savedHost = host
-            savedPort = port
-            if let portNum = UInt16(port) {
-                client.connect(host: host, port: portNum)
-            }
+            client.connect(host: settings.host, port: settings.portValue)
         }
     }
 
@@ -376,5 +370,8 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(
+        client: KISSTcpClient(settings: AppSettingsStore()),
+        settings: AppSettingsStore()
+    )
 }

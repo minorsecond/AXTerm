@@ -72,6 +72,9 @@ final class KISSTcpClient: ObservableObject {
     private let maxPackets: Int
     private let maxConsoleLines: Int
     private let maxRawChunks: Int
+    private let settings: AppSettingsStore
+    private let packetStore: PacketStore?
+    private var cancellables: Set<AnyCancellable> = []
 
     // MARK: - Published State
 
@@ -97,10 +100,19 @@ final class KISSTcpClient: ObservableObject {
 
     // MARK: - Initialization
 
-    init(maxPackets: Int = 5000, maxConsoleLines: Int = 5000, maxRawChunks: Int = 1000) {
+    init(
+        maxPackets: Int = 5000,
+        maxConsoleLines: Int = 5000,
+        maxRawChunks: Int = 1000,
+        settings: AppSettingsStore,
+        packetStore: PacketStore? = nil
+    ) {
         self.maxPackets = maxPackets
         self.maxConsoleLines = maxConsoleLines
         self.maxRawChunks = maxRawChunks
+        self.settings = settings
+        self.packetStore = packetStore
+        observeSettings()
     }
 
     // MARK: - Connection Management
@@ -114,7 +126,12 @@ final class KISSTcpClient: ObservableObject {
         connectedPort = port
 
         let nwHost = NWEndpoint.Host(host)
-        let nwPort = NWEndpoint.Port(rawValue: port)!
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
+            status = .failed
+            lastError = "Invalid port \(port)"
+            addErrorLine("Connection failed: invalid port \(port)")
+            return
+        }
 
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
@@ -218,23 +235,13 @@ final class KISSTcpClient: ObservableObject {
             to: decoded.to,
             via: decoded.via,
             frameType: decoded.frameType,
+            control: decoded.control,
             pid: decoded.pid,
             info: decoded.info,
             rawAx25: ax25Data
         )
 
-        appendPacket(packet)
-        updateMHeard(for: packet)
-
-        if let text = packet.infoText {
-            let line = ConsoleLine.packet(
-                from: packet.fromDisplay,
-                to: packet.toDisplay,
-                text: text,
-                timestamp: packet.timestamp
-            )
-            appendConsoleLine(line)
-        }
+        handleIncomingPacket(packet)
     }
 
     // MARK: - MHeard (Station Tracking)
@@ -287,11 +294,13 @@ final class KISSTcpClient: ObservableObject {
     }
 
     func togglePin(for id: Packet.ID) {
+        let shouldPin = !pinnedPacketIDs.contains(id)
         if pinnedPacketIDs.contains(id) {
             pinnedPacketIDs.remove(id)
         } else {
             pinnedPacketIDs.insert(id)
         }
+        persistPinned(id: id, pinned: shouldPin)
     }
 
     // MARK: - Clear Actions
@@ -313,5 +322,107 @@ final class KISSTcpClient: ObservableObject {
         stations.removeAll()
         stationTracker.reset()
         selectedStationCall = nil
+    }
+
+    // MARK: - Persistence Integration
+
+    func handleIncomingPacket(_ packet: Packet) {
+        appendPacket(packet)
+        updateMHeard(for: packet)
+
+        if let text = packet.infoText {
+            let line = ConsoleLine.packet(
+                from: packet.fromDisplay,
+                to: packet.toDisplay,
+                text: text,
+                timestamp: packet.timestamp
+            )
+            appendConsoleLine(line)
+        }
+
+        persistPacket(packet)
+    }
+
+    func loadPersistedPackets() {
+        guard settings.persistHistory, let packetStore else { return }
+        let limit = min(settings.retentionLimit, maxPackets)
+        DispatchQueue.global(qos: .utility).async { [weak self, packetStore] in
+            do {
+                let records = try packetStore.loadRecent(limit: limit)
+                let packets = records.map { $0.toPacket() }
+                let pinnedIDs = Set(records.filter { $0.pinned }.map(\.id))
+                Task { @MainActor in
+                    self?.applyLoadedPackets(packets, pinnedIDs: pinnedIDs)
+                }
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func applyLoadedPackets(_ loaded: [Packet], pinnedIDs: Set<Packet.ID>) {
+        packets = loaded
+        pinnedPacketIDs = pinnedIDs
+        rebuildStations(from: loaded)
+    }
+
+    private func rebuildStations(from packets: [Packet]) {
+        stationTracker.reset()
+        for packet in packets {
+            stationTracker.update(with: packet)
+        }
+        stations = stationTracker.stations
+    }
+
+    private func persistPacket(_ packet: Packet) {
+        guard settings.persistHistory, let packetStore else { return }
+        let retentionLimit = settings.retentionLimit
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                try packetStore.save(packet)
+                try packetStore.pruneIfNeeded(retentionLimit: retentionLimit)
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func persistPinned(id: Packet.ID, pinned: Bool) {
+        guard settings.persistHistory, let packetStore else { return }
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                try packetStore.setPinned(packetId: id, pinned: pinned)
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func observeSettings() {
+        settings.$retentionLimit
+            .dropFirst()
+            .sink { [weak self] newLimit in
+                self?.prunePersistedHistory(limit: newLimit)
+            }
+            .store(in: &cancellables)
+
+        settings.$persistHistory
+            .dropFirst()
+            .sink { [weak self] enabled in
+                guard enabled else { return }
+                self?.loadPersistedPackets()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func prunePersistedHistory(limit: Int) {
+        guard settings.persistHistory, let packetStore else { return }
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                try packetStore.pruneIfNeeded(retentionLimit: limit)
+            } catch {
+                return
+            }
+        }
     }
 }
