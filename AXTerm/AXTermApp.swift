@@ -20,6 +20,7 @@ struct AXTermApp: App {
                 }
                 .keyboardShortcut("w", modifiers: [.command])
             }
+            AXTermCommands()
         }
     }
 }

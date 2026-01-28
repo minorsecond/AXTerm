@@ -12,12 +12,22 @@ struct PacketInspectorView: View {
     let packet: Packet
     var onClose: (() -> Void)?
 
+    private enum PayloadViewMode: String, CaseIterable {
+        case hex = "Hex"
+        case ascii = "ASCII"
+    }
+
     init(packet: Packet, onClose: (() -> Void)? = nil) {
         self.packet = packet
         self.onClose = onClose
     }
 
     @Environment(\.dismiss) private var dismiss
+    @State private var payloadViewMode: PayloadViewMode = .hex
+
+    private let infoPreviewHeight: CGFloat = 150
+    private let payloadPreviewHeight: CGFloat = 160
+    private let rawPreviewHeight: CGFloat = 120
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -45,6 +55,7 @@ struct PacketInspectorView: View {
                     addressSection
                     frameSection
                     infoSection
+                    payloadSection
                     rawSection
                 }
                 .padding()
@@ -126,20 +137,20 @@ struct PacketInspectorView: View {
     }
 
     private var infoSection: some View {
-        GroupBox {
+        GroupBox("Info") {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Info (\(packet.info.count) bytes)")
+                    Text("\(packet.info.count) bytes")
+                        .foregroundStyle(.secondary)
 
                     Spacer()
 
-                    if packet.infoText != nil {
-                        Button("Copy") {
-                            copyToClipboard(packet.infoText ?? "")
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                    Button("Copy Info") {
+                        copyToClipboard(packet.infoText ?? "")
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(packet.infoText == nil)
                 }
 
                 if let text = packet.infoText {
@@ -149,7 +160,7 @@ struct PacketInspectorView: View {
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxHeight: 150)
+                    .frame(maxHeight: infoPreviewHeight)
                     .padding(8)
                     .background(.background.secondary)
                     .cornerRadius(4)
@@ -168,28 +179,68 @@ struct PacketInspectorView: View {
         }
     }
 
-    private var rawSection: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
+    private var payloadSection: some View {
+        GroupBox("Payload") {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("Raw AX.25")
+                    Picker("Payload View", selection: $payloadViewMode) {
+                        ForEach(PayloadViewMode.allCases, id: \.self) { mode in
+                            Text(mode.rawValue)
+                                .tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 180)
 
                     Spacer()
 
                     Button("Copy Hex") {
-                        copyToClipboard(hexString(packet.rawAx25))
+                        copyToClipboard(PayloadFormatter.hexString(packet.info))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Copy ASCII") {
+                        copyToClipboard(PayloadFormatter.asciiString(packet.info))
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 }
 
                 ScrollView {
-                    Text(hexString(packet.rawAx25))
+                    Text(payloadText)
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: payloadPreviewHeight)
+                .padding(8)
+                .background(.background.secondary)
+                .cornerRadius(4)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+    }
+
+    private var rawSection: some View {
+        GroupBox("Raw AX.25") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Button("Copy Hex") {
+                        copyToClipboard(PayloadFormatter.hexString(packet.rawAx25))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+
+                ScrollView {
+                    Text(PayloadFormatter.hexString(packet.rawAx25))
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 100)
+                .frame(maxHeight: rawPreviewHeight)
                 .padding(8)
                 .background(.background.secondary)
                 .cornerRadius(4)
@@ -221,22 +272,18 @@ struct PacketInspectorView: View {
         }
     }
 
-    private func hexString(_ data: Data) -> String {
-        var result = ""
-        for (index, byte) in data.enumerated() {
-            if index > 0 && index % 16 == 0 {
-                result += "\n"
-            } else if index > 0 {
-                result += " "
-            }
-            result += String(format: "%02X", byte)
-        }
-        return result
-    }
-
     private func copyToClipboard(_ s: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(s, forType: .string)
+    }
+
+    private var payloadText: String {
+        switch payloadViewMode {
+        case .hex:
+            return PayloadFormatter.hexString(packet.info)
+        case .ascii:
+            return PayloadFormatter.asciiString(packet.info)
+        }
     }
 }
 
