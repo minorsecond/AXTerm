@@ -12,7 +12,8 @@ enum PacketFilter {
         packets: [Packet],
         search: String,
         filters: PacketFilters,
-        stationCall: String?
+        stationCall: String?,
+        pinnedIDs: Set<Packet.ID> = []
     ) -> [Packet] {
         packets.filter { packet in
             if let call = stationCall {
@@ -22,6 +23,10 @@ enum PacketFilter {
             guard filters.allows(frameType: packet.frameType) else { return false }
 
             if filters.onlyWithInfo && packet.infoText == nil {
+                return false
+            }
+
+            if filters.onlyPinned && !pinnedIDs.contains(packet.id) {
                 return false
             }
 

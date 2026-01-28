@@ -10,6 +10,7 @@ import SwiftUI
 struct PacketTableView: View {
     let packets: [Packet]
     @Binding var selection: Set<Packet.ID>
+    let onInspect: (Packet) -> Void
 
     var body: some View {
         Table(packets, selection: $selection) {
@@ -17,6 +18,10 @@ struct PacketTableView: View {
                 Text(pkt.timestamp.formatted(date: .omitted, time: .standard))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        onInspect(pkt)
+                    }
             }
             .width(min: 70, ideal: 80)
 
@@ -24,6 +29,10 @@ struct PacketTableView: View {
                 Text(pkt.fromDisplay)
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(rowForeground(pkt))
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        onInspect(pkt)
+                    }
             }
             .width(min: 80, ideal: 100)
 
@@ -31,6 +40,10 @@ struct PacketTableView: View {
                 Text(pkt.toDisplay)
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(rowForeground(pkt))
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        onInspect(pkt)
+                    }
             }
             .width(min: 80, ideal: 100)
 
@@ -39,6 +52,10 @@ struct PacketTableView: View {
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        onInspect(pkt)
+                    }
             }
             .width(min: 60, ideal: 120)
 
@@ -47,6 +64,10 @@ struct PacketTableView: View {
                     .font(.system(.body))
                     .foregroundStyle(rowForeground(pkt))
                     .help(pkt.frameType.displayName)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        onInspect(pkt)
+                    }
             }
             .width(min: 40, ideal: 50)
 
@@ -57,6 +78,10 @@ struct PacketTableView: View {
                     .truncationMode(.tail)
                     .foregroundStyle(pkt.isLowSignal ? .secondary : .primary)
                     .help(pkt.infoTooltip)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        onInspect(pkt)
+                    }
             }
         }
     }
@@ -65,4 +90,3 @@ struct PacketTableView: View {
         packet.isLowSignal ? .secondary : .primary
     }
 }
-

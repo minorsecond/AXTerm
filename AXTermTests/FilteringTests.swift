@@ -120,6 +120,24 @@ final class FilteringTests: XCTestCase {
         XCTAssertTrue(filtered.allSatisfy { $0.infoText != nil })
     }
 
+    func testFilterOnlyPinned() {
+        let packets = createTestPackets()
+        var filters = PacketFilters()
+        filters.onlyPinned = true
+        let pinnedIDs: Set<Packet.ID> = [packets[1].id]
+
+        let filtered = PacketFilter.filter(
+            packets: packets,
+            search: "",
+            filters: filters,
+            stationCall: nil,
+            pinnedIDs: pinnedIDs
+        )
+
+        XCTAssertEqual(filtered.count, 1)
+        XCTAssertEqual(filtered.first?.id, packets[1].id)
+    }
+
     // MARK: - Search Filter Tests
 
     func testSearchMatchesFrom() {
