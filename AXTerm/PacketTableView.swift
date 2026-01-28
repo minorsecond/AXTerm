@@ -112,10 +112,13 @@ struct PacketTableView: View {
             }
         }
         .focusable(true)
-        .onKeyPress(.return) {
-            onInspectSelection()
-            return .handled
-        }
+        .background(
+            Button(action: onInspectSelection) {
+                EmptyView()
+            }
+            .keyboardShortcut(.defaultAction)
+            .hidden()
+        )
     }
 
     private func rowForeground(_ packet: Packet) -> Color {
