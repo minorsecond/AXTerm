@@ -98,6 +98,26 @@ final class AnalyticsSeriesTests: XCTestCase {
         XCTAssertEqual(series.uniqueStationsPerBucket[1].bucket, bucketTwoStart)
         XCTAssertEqual(series.uniqueStationsPerBucket[1].value, 1)
     }
+
+    func testUniqueStationsPerBucketIncludesViaByDefault() {
+        let bucketStart = makeDate(year: 2026, month: 2, day: 18, hour: 10, minute: 0, second: 0)
+        let bucketTimestamp = makeDate(year: 2026, month: 2, day: 18, hour: 10, minute: 3, second: 0)
+
+        let packets = [
+            makePacket(timestamp: bucketTimestamp, from: "alpha", to: "beta", via: ["dig1", "dig2"]),
+            makePacket(timestamp: bucketTimestamp, from: "alpha", to: nil, via: ["dig1"])
+        ]
+
+        let series = AnalyticsEngine.computeSeries(
+            packets: packets,
+            bucket: .hour,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(series.uniqueStationsPerBucket.count, 1)
+        XCTAssertEqual(series.uniqueStationsPerBucket[0].bucket, bucketStart)
+        XCTAssertEqual(series.uniqueStationsPerBucket[0].value, 4)
+    }
 }
 
 private extension AnalyticsSeriesTests {
@@ -118,13 +138,14 @@ private extension AnalyticsSeriesTests {
         timestamp: Date,
         from: String? = nil,
         to: String? = nil,
+        via: [String] = [],
         infoBytes: [UInt8] = []
     ) -> Packet {
         Packet(
             timestamp: timestamp,
             from: from.map { AX25Address(call: $0) },
             to: to.map { AX25Address(call: $0) },
-            via: [],
+            via: via.map { AX25Address(call: $0) },
             frameType: .ui,
             info: Data(infoBytes)
         )

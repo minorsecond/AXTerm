@@ -33,7 +33,8 @@ enum AnalyticsEngine {
     static func computeSeries(
         packets: [Packet],
         bucket: TimeBucket,
-        calendar: Calendar
+        calendar: Calendar,
+        includeViaInUniqueStations: Bool = true
     ) -> AnalyticsSeries {
         guard !packets.isEmpty else { return .empty }
         let events = normalizePackets(packets)
@@ -50,6 +51,11 @@ enum AnalyticsEngine {
             }
             if let to = event.to {
                 uniqueStations[key, default: []].insert(to)
+            }
+            if includeViaInUniqueStations {
+                event.via.forEach { station in
+                    uniqueStations[key, default: []].insert(station)
+                }
             }
         }
 
