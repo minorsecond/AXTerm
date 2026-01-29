@@ -28,38 +28,42 @@ struct AnalyticsGraphView: View {
     @State private var hoverNodeID: String?
 
     var body: some View {
-        ZStack {
-            GraphMetalViewRepresentable(
-                graphModel: graphModel,
-                nodePositions: nodePositions,
-                selectedNodeIDs: selectedNodeIDs,
-                hoveredNodeID: hoveredNodeID,
-                myCallsign: myCallsign,
-                resetToken: resetToken,
-                focusNodeID: focusNodeID,
-                onSelect: onSelect,
-                onSelectMany: onSelectMany,
-                onClearSelection: onClearSelection,
-                onHover: { nodeID, position in
-                    hoverNodeID = nodeID
-                    hoverPoint = position
-                    onHover(nodeID)
-                },
-                onSelectionRect: { rect in
-                    selectionRect = rect
-                },
-                onFocusHandled: onFocusHandled
-            )
+        GeometryReader { geometry in
+            ZStack {
+                GraphMetalViewRepresentable(
+                    graphModel: graphModel,
+                    nodePositions: nodePositions,
+                    selectedNodeIDs: selectedNodeIDs,
+                    hoveredNodeID: hoveredNodeID,
+                    myCallsign: myCallsign,
+                    resetToken: resetToken,
+                    focusNodeID: focusNodeID,
+                    onSelect: onSelect,
+                    onSelectMany: onSelectMany,
+                    onClearSelection: onClearSelection,
+                    onHover: { nodeID, position in
+                        hoverNodeID = nodeID
+                        hoverPoint = position
+                        onHover(nodeID)
+                    },
+                    onSelectionRect: { rect in
+                        selectionRect = rect
+                    },
+                    onFocusHandled: onFocusHandled
+                )
 
-            if let selectionRect {
-                SelectionRectView(rect: selectionRect)
-            }
+                if let selectionRect {
+                    let h = geometry.size.height
+                    let flipped = CGRect(x: selectionRect.minX, y: h - selectionRect.maxY, width: selectionRect.width, height: selectionRect.height)
+                    SelectionRectView(rect: flipped)
+                }
 
-            if let hoverNodeID,
-               let hoverPoint,
-               let node = graphModel.nodes.first(where: { $0.id == hoverNodeID }) {
-                GraphTooltipView(node: node)
-                    .position(x: hoverPoint.x + 12, y: hoverPoint.y - 12)
+                if let hoverNodeID,
+                   let hoverPoint,
+                   let node = graphModel.nodes.first(where: { $0.id == hoverNodeID }) {
+                    GraphTooltipView(node: node)
+                        .position(x: hoverPoint.x + 12, y: hoverPoint.y - 12)
+                }
             }
         }
         .background(AnalyticsStyle.Colors.neutralFill)
@@ -539,13 +543,14 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     }
 
     func handleScroll(location: CGPoint, delta: CGSize, modifiers: NSEvent.ModifierFlags) {
-        guard modifiers.contains(.command) else {
+        let zoomModifier = modifiers.contains(.command) || modifiers.contains(.option)
+        if zoomModifier {
+            let sensitivity: CGFloat = 0.0012
+            let zoomDelta = 1 - (delta.height * sensitivity)
+            camera.zoom(at: location, scaleDelta: zoomDelta, view: view)
+        } else {
             camera.pan(by: CGSize(width: -delta.width, height: -delta.height))
-            requestInteractionRedraw()
-            return
         }
-        let zoomDelta = 1 - (delta.height * 0.002)
-        camera.zoom(at: location, scaleDelta: zoomDelta, view: view)
         requestInteractionRedraw()
     }
 
@@ -800,7 +805,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         let viewSizePixels = view.drawableSize
         let insetPixels = AnalyticsStyle.Layout.graphInset * backingScale
         let cameraOffsetPixels = CGSize(width: camera.offset.width * backingScale, height: camera.offset.height * backingScale)
-        let hitPixel = CGPoint(x: point.x * backingScale, y: point.y * backingScale)
+        // View coords: origin bottom-left (AppKit default). Drawable: origin top-left. Flip Y.
+        let hitPixel = CGPoint(x: point.x * backingScale, y: viewSizePixels.height - point.y * backingScale)
 
         var closest: (String, CGFloat, CGPoint)?
         for node in nodeCache {
@@ -836,9 +842,10 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         let viewSizePixels = view.drawableSize
         let insetPixels = AnalyticsStyle.Layout.graphInset * backingScale
         let cameraOffsetPixels = CGSize(width: camera.offset.width * backingScale, height: camera.offset.height * backingScale)
+        // View rect: origin bottom-left (AppKit). Drawable: origin top-left. Flip Y so rect in drawable space.
         let pixelRect = CGRect(
             x: rect.origin.x * backingScale,
-            y: rect.origin.y * backingScale,
+            y: viewSizePixels.height - (rect.origin.y + rect.height) * backingScale,
             width: rect.width * backingScale,
             height: rect.height * backingScale
         )

@@ -239,8 +239,18 @@ struct AnalyticsDashboardView: View {
                     .padding(.top, 4)
             }
 
-            // Optional: floating translucent bar over graph — wrap graph in ZStack, add overlay with .opacity(0.7), use @State hover and .opacity(hover ? 1 : 0.7).
-            Text("Click to select, Shift-click to toggle, Shift-drag to select, drag to pan, pinch to zoom, ⌘-scroll to zoom, Esc clears")
+            HStack {
+                Text("Click to select, Shift-drag to select, drag to pan, ⌘ or Opt + scroll to zoom, Esc clears")
+                    .font(.caption)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                Spacer()
+                Button("Reset view") {
+                    graphResetToken = UUID()
+                    viewModel.resetGraphView()
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.top, 4)
                 .font(.caption)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 .padding(.top, 4)

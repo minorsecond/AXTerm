@@ -70,8 +70,23 @@ struct NetworkGraphBuilder {
         let filteredEdges = undirectedEdges
             .filter { $0.value.count >= max(1, options.minimumEdgeCount) }
 
+        let specialDestinations = Set([
+            "ID", "BEACON", "CQ", "QST", "SK", "CQ DX", "QSO", "TEST", "RELAY",
+            "WIDEn", "WIDE1", "WIDE2", "TRACE", "TEMP", "GATE", "ECHO"
+        ].map { $0.uppercased() })
+        func isSpecialDestination(_ id: String) -> Bool {
+            let upper = id.uppercased()
+            if specialDestinations.contains(upper) { return true }
+            if upper.hasPrefix("WIDE") && upper.count <= 6 { return true }
+            return false
+        }
+
+        let edgesExcludingSpecial = filteredEdges.filter { key, _ in
+            !isSpecialDestination(key.source) && !isSpecialDestination(key.target)
+        }
+
         var adjacency: [String: [GraphNeighborStat]] = [:]
-        for (key, aggregate) in filteredEdges {
+        for (key, aggregate) in edgesExcludingSpecial {
             adjacency[key.source, default: []].append(
                 GraphNeighborStat(id: key.target, weight: aggregate.count, bytes: aggregate.bytes)
             )
@@ -80,7 +95,7 @@ struct NetworkGraphBuilder {
             )
         }
 
-        let activeNodeIDs = Set(filteredEdges.flatMap { [$0.key.source, $0.key.target] })
+        let activeNodeIDs = Set(edgesExcludingSpecial.flatMap { [$0.key.source, $0.key.target] })
         var nodes: [NetworkGraphNode] = []
         nodes.reserveCapacity(activeNodeIDs.count)
 
@@ -113,7 +128,7 @@ struct NetworkGraphBuilder {
         let keptIDs = Set(keptNodes.map { $0.id })
         let droppedCount = max(0, nodes.count - keptNodes.count)
 
-        let edges: [NetworkGraphEdge] = filteredEdges
+        let edges: [NetworkGraphEdge] = edgesExcludingSpecial
             .filter { keptIDs.contains($0.key.source) && keptIDs.contains($0.key.target) }
             .map { key, aggregate in
                 NetworkGraphEdge(

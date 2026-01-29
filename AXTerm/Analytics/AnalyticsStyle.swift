@@ -66,7 +66,7 @@ enum AnalyticsStyle {
         static let edgeThicknessRange: ClosedRange<CGFloat> = 0.8...2.6
         static let edgeAlphaRange: ClosedRange<Double> = 0.2...0.8
         static let selectionGlowWidth: CGFloat = 4
-        static let zoomRange: ClosedRange<CGFloat> = 0.25...4.0
+        static let zoomRange: ClosedRange<CGFloat> = 0.4...2.5
         static let focusScale: CGFloat = 1.4
         static let panDamping: CGFloat = 0.9
         static let zoomSmoothing: Double = 0.18
