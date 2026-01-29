@@ -6,17 +6,21 @@
 //
 
 import SwiftUI
+import ServiceManagement
 
 struct SettingsView: View {
     @ObservedObject var settings: AppSettingsStore
-    @ObservedObject var client: KISSTcpClient
+    @ObservedObject var client: PacketEngine
     let packetStore: PacketStore?
     let consoleStore: ConsoleStore?
     let rawStore: RawStore?
     let eventLogger: EventLogger?
+    let notificationManager: NotificationAuthorizationManager
 
     @State private var showingClearConfirmation = false
     @State private var clearFeedback: String?
+    @State private var notificationFeedback: String?
+    @State private var launchAtLoginFeedback: String?
 
     private let retentionStep = 1_000
 
@@ -29,11 +33,32 @@ struct SettingsView: View {
                 TextField("KISS Port", text: $settings.port)
                     .textFieldStyle(.roundedBorder)
 
+                Toggle("Auto-connect on launch", isOn: $settings.autoConnectOnLaunch)
+
                 if shouldSuggestReconnect {
                     Text("Reconnect to apply host/port changes.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            Section("Station") {
+                VStack(alignment: .leading, spacing: 6) {
+                    TextField("My Callsign", text: $settings.myCallsign)
+                        .textFieldStyle(.roundedBorder)
+
+                    if !settings.myCallsign.isEmpty && !CallsignValidator.isValid(settings.myCallsign) {
+                        Text("Enter a valid callsign (e.g. N0CALL or N0CALL-7).")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+
+            Section("Watch List") {
+                watchCallsignsSection
+                Divider()
+                watchKeywordsSection
             }
 
             Section("History") {
@@ -189,6 +214,38 @@ struct SettingsView: View {
                 Toggle("Console day separators", isOn: $settings.showConsoleDaySeparators)
                 Toggle("Raw day separators", isOn: $settings.showRawDaySeparators)
             }
+
+            Section("Menu Bar") {
+                Toggle("Run in menu bar", isOn: $settings.runInMenuBar)
+                Toggle("Launch at login", isOn: $settings.launchAtLogin)
+                if let feedback = launchAtLoginFeedback {
+                    Text(feedback)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Notifications") {
+                Toggle("Notify on watch hits", isOn: $settings.notifyOnWatchHits)
+                Toggle("Play sound", isOn: $settings.notifyPlaySound)
+                Toggle("Only notify when AXTerm is not frontmost", isOn: $settings.notifyOnlyWhenInactive)
+
+                HStack {
+                    Button("Enable Notifications…") {
+                        requestNotificationAuthorization()
+                    }
+
+                    Button("Test Notification") {
+                        notificationManager.sendTestNotification()
+                    }
+
+                    if let feedback = notificationFeedback {
+                        Text(feedback)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
         .padding(20)
@@ -235,6 +292,9 @@ struct SettingsView: View {
                 metadata: ["retention": "\(newValue)"]
             )
         }
+        .onChange(of: settings.launchAtLogin) { _, newValue in
+            updateLaunchAtLogin(enabled: newValue)
+        }
     }
 
     private var shouldSuggestReconnect: Bool {
@@ -272,15 +332,118 @@ struct SettingsView: View {
             }
         }
     }
+
+    private func requestNotificationAuthorization() {
+        notificationFeedback = nil
+        Task {
+            let granted = await notificationManager.requestAuthorization()
+            await MainActor.run {
+                notificationFeedback = granted ? "Enabled" : "Not allowed"
+            }
+        }
+    }
+
+    private func updateLaunchAtLogin(enabled: Bool) {
+        launchAtLoginFeedback = nil
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            launchAtLoginFeedback = "Launch at login failed"
+            settings.launchAtLogin = SMAppService.mainApp.status == .enabled
+        }
+    }
+
+    private var watchCallsignsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Watch callsigns")
+                .font(.subheadline)
+
+            ForEach(settings.watchCallsigns.indices, id: \.self) { index in
+                HStack {
+                    TextField("Callsign", text: bindingForWatchCallsign(at: index))
+                        .textFieldStyle(.roundedBorder)
+
+                    Button {
+                        settings.watchCallsigns.remove(at: index)
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Remove callsign")
+                }
+
+                if !settings.watchCallsigns[index].isEmpty && !CallsignValidator.isValid(settings.watchCallsigns[index]) {
+                    Text("Invalid callsign.")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            Button("Add Callsign") {
+                settings.watchCallsigns.append("")
+            }
+        }
+    }
+
+    private var watchKeywordsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Watch keywords")
+                .font(.subheadline)
+
+            ForEach(settings.watchKeywords.indices, id: \.self) { index in
+                HStack {
+                    TextField("Keyword", text: bindingForWatchKeyword(at: index))
+                        .textFieldStyle(.roundedBorder)
+
+                    Button {
+                        settings.watchKeywords.remove(at: index)
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Remove keyword")
+                }
+            }
+
+            Button("Add Keyword") {
+                settings.watchKeywords.append("")
+            }
+        }
+    }
+
+    private func bindingForWatchCallsign(at index: Int) -> Binding<String> {
+        Binding(
+            get: { settings.watchCallsigns.indices.contains(index) ? settings.watchCallsigns[index] : "" },
+            set: { newValue in
+                guard settings.watchCallsigns.indices.contains(index) else { return }
+                settings.watchCallsigns[index] = CallsignValidator.normalize(newValue)
+            }
+        )
+    }
+
+    private func bindingForWatchKeyword(at index: Int) -> Binding<String> {
+        Binding(
+            get: { settings.watchKeywords.indices.contains(index) ? settings.watchKeywords[index] : "" },
+            set: { newValue in
+                guard settings.watchKeywords.indices.contains(index) else { return }
+                settings.watchKeywords[index] = newValue
+            }
+        )
+    }
 }
 
 #Preview {
     SettingsView(
         settings: AppSettingsStore(),
-        client: KISSTcpClient(settings: AppSettingsStore()),
+        client: PacketEngine(settings: AppSettingsStore()),
         packetStore: nil,
         consoleStore: nil,
         rawStore: nil,
-        eventLogger: nil
+        eventLogger: nil,
+        notificationManager: NotificationAuthorizationManager()
     )
 }

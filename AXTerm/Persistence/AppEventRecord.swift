@@ -24,6 +24,7 @@ struct AppEventRecord: Codable, FetchableRecord, PersistableRecord, Hashable, Id
         case ui
         case settings
         case packet
+        case watch
     }
 
     var id: UUID

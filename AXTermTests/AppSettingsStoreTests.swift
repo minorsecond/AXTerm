@@ -32,4 +32,18 @@ final class AppSettingsStoreTests: XCTestCase {
         XCTAssertEqual(AppSettingsStore.sanitizeLogRetention(600_000), AppSettingsStore.maxLogRetention)
         XCTAssertEqual(AppSettingsStore.sanitizeLogRetention(10_000), 10_000)
     }
+
+    func testWatchListSanitizesAndDedupes() {
+        let input = [" n0call ", "N0CALL", "DEST-1", ""]
+        let result = AppSettingsStore.sanitizeWatchList(input, normalize: CallsignValidator.normalize)
+        XCTAssertEqual(result, ["N0CALL", "DEST-1"])
+    }
+
+    func testMyCallsignPersistsUppercased() {
+        let suiteName = "AXTermTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        let store = AppSettingsStore(defaults: defaults)
+        store.myCallsign = "n0call-7"
+        XCTAssertEqual(store.myCallsign, "N0CALL-7")
+    }
 }

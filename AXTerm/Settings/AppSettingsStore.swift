@@ -18,6 +18,15 @@ final class AppSettingsStore: ObservableObject {
     static let persistKey = "persistHistory"
     static let consoleSeparatorsKey = "consoleDaySeparators"
     static let rawSeparatorsKey = "rawDaySeparators"
+    static let runInMenuBarKey = "runInMenuBar"
+    static let launchAtLoginKey = "launchAtLogin"
+    static let autoConnectKey = "autoConnectOnLaunch"
+    static let notifyOnWatchKey = "notifyOnWatchHits"
+    static let notifyPlaySoundKey = "notifyPlaySound"
+    static let notifyOnlyWhenInactiveKey = "notifyOnlyWhenInactive"
+    static let myCallsignKey = "myCallsign"
+    static let watchCallsignsKey = "watchCallsigns"
+    static let watchKeywordsKey = "watchKeywords"
 
     static let defaultHost = "localhost"
     static let defaultPort = 8001
@@ -31,6 +40,12 @@ final class AppSettingsStore: ObservableObject {
     static let maxLogRetention = 200_000
     static let defaultConsoleSeparators = true
     static let defaultRawSeparators = false
+    static let defaultRunInMenuBar = false
+    static let defaultLaunchAtLogin = false
+    static let defaultAutoConnect = false
+    static let defaultNotifyOnWatch = true
+    static let defaultNotifyPlaySound = true
+    static let defaultNotifyOnlyWhenInactive = true
 
     @Published var host: String {
         didSet {
@@ -110,6 +125,53 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistRawSeparators() }
     }
 
+    @Published var runInMenuBar: Bool {
+        didSet { persistRunInMenuBar() }
+    }
+
+    @Published var launchAtLogin: Bool {
+        didSet { persistLaunchAtLogin() }
+    }
+
+    @Published var autoConnectOnLaunch: Bool {
+        didSet { persistAutoConnect() }
+    }
+
+    @Published var notifyOnWatchHits: Bool {
+        didSet { persistNotifyOnWatch() }
+    }
+
+    @Published var notifyPlaySound: Bool {
+        didSet { persistNotifyPlaySound() }
+    }
+
+    @Published var notifyOnlyWhenInactive: Bool {
+        didSet { persistNotifyOnlyWhenInactive() }
+    }
+
+    @Published var myCallsign: String {
+        didSet {
+            let sanitized = CallsignValidator.normalize(myCallsign)
+            guard sanitized == myCallsign else {
+                myCallsign = sanitized
+                return
+            }
+            persistMyCallsign()
+        }
+    }
+
+    @Published var watchCallsigns: [String] {
+        didSet {
+            persistWatchCallsigns()
+        }
+    }
+
+    @Published var watchKeywords: [String] {
+        didSet {
+            persistWatchKeywords()
+        }
+    }
+
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -123,6 +185,15 @@ final class AppSettingsStore: ObservableObject {
         let storedPersist = defaults.object(forKey: Self.persistKey) as? Bool ?? true
         let storedConsoleSeparators = defaults.object(forKey: Self.consoleSeparatorsKey) as? Bool ?? Self.defaultConsoleSeparators
         let storedRawSeparators = defaults.object(forKey: Self.rawSeparatorsKey) as? Bool ?? Self.defaultRawSeparators
+        let storedRunInMenuBar = defaults.object(forKey: Self.runInMenuBarKey) as? Bool ?? Self.defaultRunInMenuBar
+        let storedLaunchAtLogin = defaults.object(forKey: Self.launchAtLoginKey) as? Bool ?? Self.defaultLaunchAtLogin
+        let storedAutoConnect = defaults.object(forKey: Self.autoConnectKey) as? Bool ?? Self.defaultAutoConnect
+        let storedNotifyOnWatch = defaults.object(forKey: Self.notifyOnWatchKey) as? Bool ?? Self.defaultNotifyOnWatch
+        let storedNotifyPlaySound = defaults.object(forKey: Self.notifyPlaySoundKey) as? Bool ?? Self.defaultNotifyPlaySound
+        let storedNotifyOnlyWhenInactive = defaults.object(forKey: Self.notifyOnlyWhenInactiveKey) as? Bool ?? Self.defaultNotifyOnlyWhenInactive
+        let storedMyCallsign = defaults.string(forKey: Self.myCallsignKey) ?? ""
+        let storedWatchCallsigns = defaults.stringArray(forKey: Self.watchCallsignsKey) ?? []
+        let storedWatchKeywords = defaults.stringArray(forKey: Self.watchKeywordsKey) ?? []
 
         self.host = Self.sanitizeHost(storedHost)
         self.port = Self.sanitizePort(storedPort)
@@ -133,6 +204,15 @@ final class AppSettingsStore: ObservableObject {
         self.persistHistory = storedPersist
         self.showConsoleDaySeparators = storedConsoleSeparators
         self.showRawDaySeparators = storedRawSeparators
+        self.runInMenuBar = storedRunInMenuBar
+        self.launchAtLogin = storedLaunchAtLogin
+        self.autoConnectOnLaunch = storedAutoConnect
+        self.notifyOnWatchHits = storedNotifyOnWatch
+        self.notifyPlaySound = storedNotifyPlaySound
+        self.notifyOnlyWhenInactive = storedNotifyOnlyWhenInactive
+        self.myCallsign = CallsignValidator.normalize(storedMyCallsign)
+        self.watchCallsigns = storedWatchCallsigns
+        self.watchKeywords = storedWatchKeywords
     }
 
     var portValue: UInt16 {
@@ -157,6 +237,17 @@ final class AppSettingsStore: ObservableObject {
 
     static func sanitizeLogRetention(_ value: Int) -> Int {
         min(max(value, minLogRetention), maxLogRetention)
+    }
+
+    static func sanitizeWatchList(_ values: [String], normalize: (String) -> String) -> [String] {
+        var seen = Set<String>()
+        return values.compactMap { value in
+            let trimmed = normalize(value)
+            guard !trimmed.isEmpty else { return nil }
+            guard !seen.contains(trimmed) else { return nil }
+            seen.insert(trimmed)
+            return trimmed
+        }
     }
 
     private func persistHost() {
@@ -193,5 +284,41 @@ final class AppSettingsStore: ObservableObject {
 
     private func persistRawSeparators() {
         defaults.set(showRawDaySeparators, forKey: Self.rawSeparatorsKey)
+    }
+
+    private func persistRunInMenuBar() {
+        defaults.set(runInMenuBar, forKey: Self.runInMenuBarKey)
+    }
+
+    private func persistLaunchAtLogin() {
+        defaults.set(launchAtLogin, forKey: Self.launchAtLoginKey)
+    }
+
+    private func persistAutoConnect() {
+        defaults.set(autoConnectOnLaunch, forKey: Self.autoConnectKey)
+    }
+
+    private func persistNotifyOnWatch() {
+        defaults.set(notifyOnWatchHits, forKey: Self.notifyOnWatchKey)
+    }
+
+    private func persistNotifyPlaySound() {
+        defaults.set(notifyPlaySound, forKey: Self.notifyPlaySoundKey)
+    }
+
+    private func persistNotifyOnlyWhenInactive() {
+        defaults.set(notifyOnlyWhenInactive, forKey: Self.notifyOnlyWhenInactiveKey)
+    }
+
+    private func persistMyCallsign() {
+        defaults.set(myCallsign, forKey: Self.myCallsignKey)
+    }
+
+    private func persistWatchCallsigns() {
+        defaults.set(watchCallsigns, forKey: Self.watchCallsignsKey)
+    }
+
+    private func persistWatchKeywords() {
+        defaults.set(watchKeywords, forKey: Self.watchKeywordsKey)
     }
 }
