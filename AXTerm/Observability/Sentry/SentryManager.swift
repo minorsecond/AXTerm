@@ -276,10 +276,10 @@ final class SentryManager {
     }
 
     /// Finish a performance transaction.
-    func finishTransaction(_ transaction: Any?, status: String = "ok") {
+    func finishTransaction(_ transaction: Any?, status _: String = "ok") {
         #if canImport(Sentry)
         guard let span = transaction as? Span else { return }
-        span.finish(status: SpanStatus(rawValue: status) ?? .ok)
+        span.finish()
         #endif
     }
 
@@ -496,4 +496,3 @@ final class SentryManager {
     }
     #endif
 }
-
