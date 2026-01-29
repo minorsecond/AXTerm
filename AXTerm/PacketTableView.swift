@@ -118,6 +118,7 @@ struct PacketTableView: View {
             }
             .keyboardShortcut(.defaultAction)
             .hidden()
+            .allowsHitTesting(false)
         )
     }
 

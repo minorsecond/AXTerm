@@ -29,7 +29,7 @@ struct ContentView: View {
     @State private var didLoadHistory = false
     @State private var didLoadConsoleHistory = false
     @State private var didLoadRawHistory = false
-    @State private var selectionSyncTask: Task<Void, Never>?
+    @State private var selectionMutationScheduler = SelectionMutationScheduler()
 
     init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter) {
         _client = StateObject(wrappedValue: client)
@@ -430,17 +430,13 @@ struct ContentView: View {
     }
 
     private func scheduleSelectionSync(with packets: [Packet]) {
-        selectionSyncTask?.cancel()
-        selectionSyncTask = Task { @MainActor in
-            await Task.yield()
+        selectionMutationScheduler.schedule {
             syncSelection(with: packets)
         }
     }
 
     private func deferSelectionMutation(_ mutation: @MainActor @escaping () -> Void) {
-        selectionSyncTask?.cancel()
-        selectionSyncTask = Task { @MainActor in
-            await Task.yield()
+        selectionMutationScheduler.schedule {
             mutation()
         }
     }
