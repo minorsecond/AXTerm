@@ -14,8 +14,9 @@ enum NavigationItem: String, Hashable, CaseIterable {
 }
 
 struct ContentView: View {
-    @StateObject private var client: KISSTcpClient
+    @StateObject private var client: PacketEngine
     @ObservedObject private var settings: AppSettingsStore
+    @ObservedObject private var inspectionRouter: PacketInspectionRouter
     private let inspectionCoordinator = PacketInspectionCoordinator()
 
     @State private var selectedNav: NavigationItem = .packets
@@ -27,9 +28,10 @@ struct ContentView: View {
     @FocusState private var isSearchFocused: Bool
     @State private var didLoadHistory = false
 
-    init(client: KISSTcpClient, settings: AppSettingsStore) {
+    init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter) {
         _client = StateObject(wrappedValue: client)
         _settings = ObservedObject(wrappedValue: settings)
+        _inspectionRouter = ObservedObject(wrappedValue: inspectionRouter)
     }
 
     var body: some View {
@@ -65,6 +67,12 @@ struct ContentView: View {
             guard !didLoadHistory else { return }
             didLoadHistory = true
             client.loadPersistedHistory()
+        }
+        .onChange(of: inspectionRouter.requestedPacketID) { _, newValue in
+            guard let newValue else { return }
+            inspectorSelection = PacketInspectorSelection(id: newValue)
+            selection = [newValue]
+            inspectionRouter.consumePacketRequest()
         }
         .focusedValue(\.searchFocus, SearchFocusAction { isSearchFocused = true })
         .focusedValue(\.toggleConnection, ToggleConnectionAction { toggleConnection() })
@@ -379,7 +387,8 @@ struct ContentView: View {
 
 #Preview {
     ContentView(
-        client: KISSTcpClient(settings: AppSettingsStore()),
-        settings: AppSettingsStore()
+        client: PacketEngine(settings: AppSettingsStore()),
+        settings: AppSettingsStore(),
+        inspectionRouter: PacketInspectionRouter()
     )
 }

@@ -16,7 +16,7 @@ final class PacketHandlingTests: XCTestCase {
         let consoleStore = MockConsoleStore()
         let rawStore = MockRawStore()
         let eventLogger = MockEventLogger()
-        let client = KISSTcpClient(
+        let client = PacketEngine(
             maxPackets: 10,
             maxConsoleLines: 10,
             maxRawChunks: 10,
@@ -56,7 +56,7 @@ final class PacketHandlingTests: XCTestCase {
         let store = MockPacketStore()
         let consoleStore = MockConsoleStore()
         let rawStore = MockRawStore()
-        let client = KISSTcpClient(
+        let client = PacketEngine(
             maxPackets: 10,
             maxConsoleLines: 10,
             maxRawChunks: 10,
@@ -90,7 +90,7 @@ final class PacketHandlingTests: XCTestCase {
     func testConnectInvalidPortLogsEvent() {
         let settings = makeSettings(persistHistory: true)
         let eventLogger = MockEventLogger()
-        let client = KISSTcpClient(
+        let client = PacketEngine(
             maxPackets: 1,
             maxConsoleLines: 1,
             maxRawChunks: 1,
@@ -104,6 +104,17 @@ final class PacketHandlingTests: XCTestCase {
         client.connect(host: "localhost", port: 0)
 
         XCTAssertTrue(eventLogger.entries.contains(where: { $0.0 == .error && $0.1 == .connection }))
+    }
+
+    func testConnectDisconnectUpdatesStatus() {
+        let settings = makeSettings(persistHistory: true)
+        let client = PacketEngine(settings: settings)
+
+        client.connect(host: "localhost", port: 8001)
+        XCTAssertEqual(client.status, .connecting)
+
+        client.disconnect()
+        XCTAssertEqual(client.status, .disconnected)
     }
 
     private func makeSettings(persistHistory: Bool) -> AppSettingsStore {

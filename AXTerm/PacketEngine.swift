@@ -1,5 +1,5 @@
 //
-//  KISSTcpClient.swift
+//  PacketEngine.swift
 //  AXTerm
 //
 //  Created by Ross Wardrup on 1/28/26.
@@ -66,7 +66,7 @@ struct RawChunk: Identifiable, Hashable {
 
 /// KISS TCP client that connects to a TNC (e.g., Direwolf)
 @MainActor
-final class KISSTcpClient: ObservableObject {
+final class PacketEngine: ObservableObject {
     // MARK: - Configuration
 
     private let maxPackets: Int
@@ -77,6 +77,9 @@ final class KISSTcpClient: ObservableObject {
     private let consoleStore: ConsoleStore?
     private let rawStore: RawStore?
     private let eventLogger: EventLogger?
+    private let watchMatcher: WatchMatching
+    private let watchRecorder: WatchEventRecording?
+    private let notificationScheduler: NotificationScheduling?
     private var cancellables: Set<AnyCancellable> = []
 
     // MARK: - Published State
@@ -111,7 +114,10 @@ final class KISSTcpClient: ObservableObject {
         packetStore: PacketStore? = nil,
         consoleStore: ConsoleStore? = nil,
         rawStore: RawStore? = nil,
-        eventLogger: EventLogger? = nil
+        eventLogger: EventLogger? = nil,
+        watchMatcher: WatchMatching? = nil,
+        watchRecorder: WatchEventRecording? = nil,
+        notificationScheduler: NotificationScheduling? = nil
     ) {
         self.maxPackets = maxPackets
         self.maxConsoleLines = maxConsoleLines
@@ -121,6 +127,9 @@ final class KISSTcpClient: ObservableObject {
         self.consoleStore = consoleStore
         self.rawStore = rawStore
         self.eventLogger = eventLogger
+        self.watchMatcher = watchMatcher ?? WatchRuleMatcher(settings: settings)
+        self.watchRecorder = watchRecorder
+        self.notificationScheduler = notificationScheduler
         observeSettings()
     }
 
@@ -388,6 +397,14 @@ final class KISSTcpClient: ObservableObject {
         }
 
         persistPacket(packet)
+        handleWatchMatch(for: packet)
+    }
+
+    private func handleWatchMatch(for packet: Packet) {
+        let match = watchMatcher.match(packet: packet)
+        guard match.hasMatches else { return }
+        watchRecorder?.recordWatchHit(packet: packet, match: match)
+        notificationScheduler?.scheduleWatchNotification(packet: packet, match: match)
     }
 
     func loadPersistedHistory() {
