@@ -77,8 +77,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         includeViaDigipeaters: Bool = false,
         minEdgeCount: Int = 1,
         maxNodes: Int? = nil,
-        packetDebounce: RunLoop.SchedulerTimeType.Stride = .milliseconds(250),
-        graphDebounce: RunLoop.SchedulerTimeType.Stride = .milliseconds(400),
+        packetDebounce: TimeInterval = 0.25,
+        graphDebounce: TimeInterval = 0.4,
         packetScheduler: RunLoop = .main
     ) {
         self.calendar = calendar
@@ -86,8 +86,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         self.includeViaDigipeaters = includeViaDigipeaters
         self.minEdgeCount = minEdgeCount
         self.maxNodes = maxNodes ?? AnalyticsStyle.Graph.maxNodesDefault
-        self.aggregationDebouncer = Debouncer(delay: packetDebounce.timeInterval)
-        self.graphDebouncer = Debouncer(delay: graphDebounce.timeInterval)
+        self.aggregationDebouncer = Debouncer(delay: packetDebounce)
+        self.graphDebouncer = Debouncer(delay: graphDebounce)
         bindPackets(packetScheduler: packetScheduler)
     }
 
@@ -485,23 +485,6 @@ private final class Debouncer {
         let item = DispatchWorkItem(block: block)
         workItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
-    }
-}
-
-private extension RunLoop.SchedulerTimeType.Stride {
-    var timeInterval: TimeInterval {
-        switch self {
-        case .seconds(let value):
-            return value
-        case .milliseconds(let value):
-            return Double(value) / 1000
-        case .microseconds(let value):
-            return Double(value) / 1_000_000
-        case .nanoseconds(let value):
-            return Double(value) / 1_000_000_000
-        @unknown default:
-            return 0
-        }
     }
 }
 

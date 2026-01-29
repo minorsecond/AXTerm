@@ -22,8 +22,8 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             includeViaDigipeaters: false,
             minEdgeCount: 1,
             maxNodes: 10,
-            packetDebounce: .zero,
-            graphDebounce: .zero,
+            packetDebounce: 0,
+            graphDebounce: 0,
             packetScheduler: .main
         )
 
@@ -48,8 +48,8 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             includeViaDigipeaters: false,
             minEdgeCount: 1,
             maxNodes: 10,
-            packetDebounce: .zero,
-            graphDebounce: .zero,
+            packetDebounce: 0,
+            graphDebounce: 0,
             packetScheduler: .main
         )
 
@@ -76,8 +76,8 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             includeViaDigipeaters: false,
             minEdgeCount: 1,
             maxNodes: 10,
-            packetDebounce: .zero,
-            graphDebounce: .zero,
+            packetDebounce: 0,
+            graphDebounce: 0,
             packetScheduler: .main
         )
 
@@ -98,8 +98,8 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             includeViaDigipeaters: false,
             minEdgeCount: 1,
             maxNodes: 10,
-            packetDebounce: .zero,
-            graphDebounce: .zero,
+            packetDebounce: 0,
+            graphDebounce: 0,
             packetScheduler: .main
         )
 

@@ -35,10 +35,14 @@ struct AnalyticsDashboardView: View {
             viewModel.updatePackets(packetEngine.packets)
         }
         .onReceive(packetEngine.$packets) { packets in
-            viewModel.updatePackets(packets)
+            DispatchQueue.main.async {
+                viewModel.updatePackets(packets)
+            }
         }
         .onChange(of: viewModel.selectedNodeID) { _, newValue in
-            packetEngine.selectedStationCall = newValue
+            DispatchQueue.main.async {
+                packetEngine.selectedStationCall = newValue
+            }
         }
     }
 
@@ -320,7 +324,9 @@ private struct TimeSeriesChart: View {
                     Rectangle().fill(Color.clear).contentShape(Rectangle())
                         .onHover { isHovering in
                             if !isHovering {
-                                selectedPoint = nil
+                                DispatchQueue.main.async {
+                                    selectedPoint = nil
+                                }
                             }
                         }
                         .onContinuousHover { phase in
@@ -330,10 +336,14 @@ private struct TimeSeriesChart: View {
                                     let closest = points.min { lhs, rhs in
                                         abs(lhs.bucket.timeIntervalSince(date)) < abs(rhs.bucket.timeIntervalSince(date))
                                     }
-                                    selectedPoint = closest
+                                    DispatchQueue.main.async {
+                                        selectedPoint = closest
+                                    }
                                 }
                             case .ended:
-                                selectedPoint = nil
+                                DispatchQueue.main.async {
+                                    selectedPoint = nil
+                                }
                             }
                         }
                         .overlay(alignment: .topLeading) {
@@ -375,10 +385,15 @@ private struct HistogramChart: View {
                             switch phase {
                             case let .active(location):
                                 if let label: String = proxy.value(atX: location.x) {
-                                    selectedBin = data.bins.first(where: { $0.label == label })
+                                    let bin = data.bins.first(where: { $0.label == label })
+                                    DispatchQueue.main.async {
+                                        selectedBin = bin
+                                    }
                                 }
                             case .ended:
-                                selectedBin = nil
+                                DispatchQueue.main.async {
+                                    selectedBin = nil
+                                }
                             }
                         }
                         .overlay(alignment: .topLeading) {
