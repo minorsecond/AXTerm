@@ -157,8 +157,9 @@ struct PacketNSTableView: NSViewRepresentable {
         for column in tableView.tableColumns {
             guard let identifier = ColumnIdentifier(rawValue: column.identifier.rawValue) else { continue }
             guard identifier != .info else { continue }
-            let targetWidth = measurements.width(for: identifier)
-            column.width = max(column.minWidth, targetWidth)
+            let targetWidth = max(column.minWidth, measurements.width(for: identifier))
+            guard targetWidth > column.width else { continue }
+            column.width = targetWidth
         }
     }
 
