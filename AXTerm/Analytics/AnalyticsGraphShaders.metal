@@ -64,13 +64,13 @@ vertex VertexOut graphNodeVertex(
     constant NodeInstance *instances [[buffer(1)]],
     constant GraphUniforms &uniforms [[buffer(2)]]
 ) {
-    CircleVertex vertex = vertices[vertexID];
-    NodeInstance node = instances[instanceID];
-    float2 centerPixel = toPixel(node.center, uniforms);
-    float2 pixel = centerPixel + vertex.position * node.radius * uniforms.scale;
+    CircleVertex circleVert = vertices[vertexID];
+    NodeInstance nodeInst = instances[instanceID];
+    float2 centerPixel = toPixel(nodeInst.center, uniforms);
+    float2 pixel = centerPixel + circleVert.position * nodeInst.radius * uniforms.scale;
     VertexOut out;
     out.position = float4(toClip(pixel, uniforms), 0.0, 1.0);
-    out.color = node.color;
+    out.color = nodeInst.color;
     return out;
 }
 

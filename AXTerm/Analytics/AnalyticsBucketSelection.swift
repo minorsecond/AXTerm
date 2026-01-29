@@ -79,6 +79,8 @@ private extension TimeBucket {
             return 15 * 60
         case .hour:
             return 60 * 60
+        case .day:
+            return 60 * 60 * 24
         }
     }
 }

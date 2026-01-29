@@ -164,9 +164,16 @@ private final class GraphMetalView: MTKView {
         super.init(frame: .zero, device: device)
         enableSetNeedsDisplay = true
         isPaused = true
-        framebufferOnly = false
-        isOpaque = false
-        clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        framebufferOnly = true
+        // Opaque clear so we never show black; matches card background in light/dark mode.
+        let bg = NSColor.controlBackgroundColor.usingColorSpace(.sRGB) ?? NSColor.controlBackgroundColor
+        clearColor = MTLClearColor(
+            red: Double(bg.redComponent),
+            green: Double(bg.greenComponent),
+            blue: Double(bg.blueComponent),
+            alpha: 1
+        )
+        // isOpaque is read-only on NSView; opaque clearColor above avoids black background.
         colorPixelFormat = .bgra8Unorm
         preferredFramesPerSecond = 60
         setupGestures()
@@ -316,11 +323,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         myCallsign: String
     ) {
         let normalizedCallsign = CallsignMatcher.normalize(myCallsign)
-        let newKey = GraphRenderKey(
-            model: graphModel,
-            positions: nodePositions,
-            myCallsign: normalizedCallsign
-        )
+        let newKey = GraphRenderKey.from(model: graphModel, positions: nodePositions, myCallsign: normalizedCallsign)
         if newKey != graphKey {
             graphKey = newKey
             rebuildGraphBuffers(model: graphModel, positions: nodePositions, myCallsign: normalizedCallsign)
@@ -363,6 +366,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         guard let drawable = view.currentDrawable,
               let descriptor = view.currentRenderPassDescriptor,
               let commandQueue else { return }
+        let drawableSize = view.drawableSize
+        guard drawableSize.width >= 1, drawableSize.height >= 1 else { return }
 
         let currentTime = CACurrentMediaTime()
         let deltaTime = currentTime - lastFrameTime
@@ -373,10 +378,11 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             requestInteractionRedraw()
         }
 
+        let scale = backingScale(for: view)
         let uniforms = GraphUniforms(
-            viewSize: SIMD2(Float(view.drawableSize.width), Float(view.drawableSize.height)),
-            inset: SIMD2(Float(AnalyticsStyle.Layout.graphInset * backingScale(for: view))),
-            offset: SIMD2(Float(camera.offset.width * backingScale(for: view)), Float(camera.offset.height * backingScale(for: view))),
+            viewSize: SIMD2(Float(drawableSize.width), Float(drawableSize.height)),
+            inset: SIMD2(repeating: Float(AnalyticsStyle.Layout.graphInset * scale)),
+            offset: SIMD2(Float(camera.offset.width * scale), Float(camera.offset.height * scale)),
             scale: Float(camera.scale)
         )
 
@@ -384,7 +390,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
               let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else {
             return
         }
-        encoder.setFragmentBytes([0], length: MemoryLayout<Float>.size, index: 0)
+        // Fragment shader uses stage_in only; no fragment buffer bindings.
 
         if let edgePipeline, let edgeBuffer = edgeInstanceBuffer {
             encoder.setRenderPipelineState(edgePipeline)
@@ -649,7 +655,12 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
                 color: baseColor
             )
         }
-        edgeInstanceBuffer = device.makeBuffer(bytes: instances, length: instances.count * MemoryLayout<EdgeInstance>.size, options: .storageModeShared)
+        // Metal disallows zero-length buffers; leave buffer nil when empty.
+        if instances.isEmpty {
+            edgeInstanceBuffer = nil
+        } else {
+            edgeInstanceBuffer = device.makeBuffer(bytes: instances, length: instances.count * MemoryLayout<EdgeInstance>.size, options: .storageModeShared)
+        }
     }
 
     private func rebuildHighlightEdges(selectedNodeIDs: Set<String>, hoveredNodeID: String?) {
@@ -681,7 +692,11 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
                 color: color
             )
         }
-        highlightEdgeBuffer = device.makeBuffer(bytes: instances, length: instances.count * MemoryLayout<EdgeInstance>.size, options: .storageModeShared)
+        if instances.isEmpty {
+            highlightEdgeBuffer = nil
+        } else {
+            highlightEdgeBuffer = device.makeBuffer(bytes: instances, length: instances.count * MemoryLayout<EdgeInstance>.size, options: .storageModeShared)
+        }
     }
 
     private func rebuildNodeBuffer(selectedNodeIDs: Set<String>, hoveredNodeID: String?) {
@@ -727,8 +742,16 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             }
         }
 
-        nodeInstanceBuffer = device.makeBuffer(bytes: instances, length: instances.count * MemoryLayout<NodeInstance>.size, options: .storageModeShared)
-        outlineInstanceBuffer = device.makeBuffer(bytes: outlines, length: outlines.count * MemoryLayout<NodeInstance>.size, options: .storageModeShared)
+        if instances.isEmpty {
+            nodeInstanceBuffer = nil
+        } else {
+            nodeInstanceBuffer = device.makeBuffer(bytes: instances, length: instances.count * MemoryLayout<NodeInstance>.size, options: .storageModeShared)
+        }
+        if outlines.isEmpty {
+            outlineInstanceBuffer = nil
+        } else {
+            outlineInstanceBuffer = device.makeBuffer(bytes: outlines, length: outlines.count * MemoryLayout<NodeInstance>.size, options: .storageModeShared)
+        }
     }
 
     private func makeCircleVertexBuffer(device: MTLDevice) -> MTLBuffer? {
@@ -832,10 +855,27 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     }
 }
 
+/// Lightweight key to avoid hashing full GraphModel / [NodePosition] on every update.
 private struct GraphRenderKey: Hashable {
-    let model: GraphModel
-    let positions: [NodePosition]
+    let nodeCount: Int
+    let edgeCount: Int
     let myCallsign: String
+    let positionsChecksum: Int
+
+    static func from(model: GraphModel, positions: [NodePosition], myCallsign: String) -> GraphRenderKey {
+        var hasher = Hasher()
+        for p in positions.sorted(by: { $0.id < $1.id }) {
+            p.id.hash(into: &hasher)
+            p.x.hash(into: &hasher)
+            p.y.hash(into: &hasher)
+        }
+        return GraphRenderKey(
+            nodeCount: model.nodes.count,
+            edgeCount: model.edges.count,
+            myCallsign: myCallsign,
+            positionsChecksum: hasher.finalize()
+        )
+    }
 }
 
 private struct GraphHighlightKey: Hashable {
@@ -912,7 +952,8 @@ private struct GraphCamera {
     mutating func zoom(at location: CGPoint, scaleDelta: CGFloat, view: MTKView?) {
         guard let view else { return }
         guard scaleDelta > 0 else { return }
-        let newScale = (targetScale * scaleDelta).clamped(to: AnalyticsStyle.Graph.zoomRange)
+        let zoomRange = AnalyticsStyle.Graph.zoomRange
+        let newScale = (targetScale * scaleDelta).clamped(to: zoomRange)
         let viewSize = view.bounds.size
         let center = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
         let translated = CGPoint(x: location.x - center.x - targetOffset.width, y: location.y - center.y - targetOffset.height)
@@ -1021,8 +1062,20 @@ private struct EdgeInstance {
     var color: SIMD4<Float>
 }
 
+// MARK: - Safe range (avoids invalid ClosedRange when lower > upper)
+private extension ClosedRange where Bound: Comparable {
+    /// Returns a valid ClosedRange; if lower > upper, bounds are normalized so the range is valid.
+    static func safe(_ lower: Bound, _ upper: Bound) -> ClosedRange<Bound> {
+        let (a, b) = lower <= upper ? (lower, upper) : (upper, lower)
+        return a ... b
+    }
+}
+
 private extension CGFloat {
     func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
-        Swift.min(range.upperBound, Swift.max(range.lowerBound, self))
+        let (lo, hi) = range.lowerBound <= range.upperBound
+            ? (range.lowerBound, range.upperBound)
+            : (range.upperBound, range.lowerBound)
+        return Swift.min(hi, Swift.max(lo, self))
     }
 }
