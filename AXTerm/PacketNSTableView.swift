@@ -357,7 +357,7 @@ extension PacketNSTableView {
             case ColumnIdentifier.info.rawValue:
                 field.stringValue = row.infoText
                 field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-                field.textColor = row.isLowSignal ? .secondaryLabelColor : .labelColor
+                field.textColor = row.isLowSignal ? .tertiaryLabelColor : .secondaryLabelColor
                 field.alignment = .left
                 field.toolTip = row.infoTooltip
                 field.setContentHuggingPriority(.defaultLow, for: .horizontal)
