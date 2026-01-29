@@ -35,11 +35,11 @@ protocol TelemetryBackend {
 struct NoOpTelemetryBackend: TelemetryBackend {
     var isEnabled: Bool { false }
 
-    func addBreadcrumb(category _: String, message _: String, data _: [String: Any]?, level _: TelemetryLevel) {}
-    func startSpan(name _: String, operation _: String?, data _: [String: Any]?) -> TelemetrySpanToken? { nil }
-    func finishSpan(_ span _: TelemetrySpanToken?, status _: TelemetrySpanStatus) {}
-    func capture(error _: Error, message _: String, data _: [String: Any]?) {}
-    func capture(message _: String, data _: [String: Any]?) {}
+    func addBreadcrumb(category: String, message: String, data: [String: Any]?, level: TelemetryLevel) {}
+    func startSpan(name: String, operation: String?, data: [String: Any]?) -> TelemetrySpanToken? { nil }
+    func finishSpan(_ span: TelemetrySpanToken?, status: TelemetrySpanStatus) {}
+    func capture(error: Error, message: String, data: [String: Any]?) {}
+    func capture(message: String, data: [String: Any]?) {}
 }
 
 struct TelemetryBackendFactory {
