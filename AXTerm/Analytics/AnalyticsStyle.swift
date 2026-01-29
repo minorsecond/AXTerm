@@ -57,9 +57,9 @@ enum AnalyticsStyle {
         static let springStrength: Double = 0.12
         static let springLength: Double = 0.18
         static let nodeRadiusRange: ClosedRange<CGFloat> = 4...12
-        static let nodeHitRadius: CGFloat = 12
-        static let edgeThicknessRange: ClosedRange<CGFloat> = 0.4...2.0
-        static let edgeAlphaRange: ClosedRange<Double> = 0.08...0.5
+        static let nodeHitRadius: CGFloat = 16
+        static let edgeThicknessRange: ClosedRange<CGFloat> = 0.8...2.6
+        static let edgeAlphaRange: ClosedRange<Double> = 0.2...0.8
         static let selectionGlowWidth: CGFloat = 4
         static let zoomRange: ClosedRange<CGFloat> = 0.6...2.6
         static let focusScale: CGFloat = 1.4
@@ -82,7 +82,7 @@ enum AnalyticsStyle {
         }
 
         static let neutralFill = Color(nsColor: .secondaryLabelColor).opacity(0.12)
-        static let graphEdge = Color(nsColor: .secondaryLabelColor).opacity(0.35)
+        static let graphEdge = Color(nsColor: .secondaryLabelColor).opacity(0.55)
         static let graphNode = Color(nsColor: .labelColor)
         static let graphNodeMuted = Color(nsColor: .secondaryLabelColor)
     }

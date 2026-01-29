@@ -13,6 +13,6 @@ enum AutoScrollDecision {
         followNewest: Bool,
         didRequestScrollToTop: Bool
     ) -> Bool {
-        didRequestScrollToTop || followNewest || isUserAtTop
+        didRequestScrollToTop || (followNewest && isUserAtTop)
     }
 }

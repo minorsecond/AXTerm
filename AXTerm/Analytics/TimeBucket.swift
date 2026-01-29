@@ -17,15 +17,30 @@ enum TimeBucket: String, CaseIterable, Hashable, Sendable {
     var displayName: String {
         switch self {
         case .minute:
-            return "minute"
+            return "1 min"
         case .fiveMinutes:
-            return "fiveMinutes"
+            return "5 min"
         case .fifteenMinutes:
-            return "fifteenMinutes"
+            return "15 min"
         case .hour:
-            return "hour"
+            return "1 hour"
         case .day:
-            return "day"
+            return "1 day"
+        }
+    }
+
+    var axisStride: (component: Calendar.Component, count: Int) {
+        switch self {
+        case .minute:
+            return (.minute, 1)
+        case .fiveMinutes:
+            return (.minute, 5)
+        case .fifteenMinutes:
+            return (.minute, 15)
+        case .hour:
+            return (.hour, 1)
+        case .day:
+            return (.day, 1)
         }
     }
 

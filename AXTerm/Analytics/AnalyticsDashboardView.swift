@@ -32,7 +32,11 @@ struct AnalyticsDashboardView: View {
         }
         .onAppear {
             viewModel.trackDashboardOpened()
+            viewModel.setActive(true)
             viewModel.updatePackets(packetEngine.packets)
+        }
+        .onDisappear {
+            viewModel.setActive(false)
         }
         .onReceive(packetEngine.$packets) { packets in
             viewModel.updatePackets(packets)
@@ -116,15 +120,15 @@ struct AnalyticsDashboardView: View {
         AnalyticsCard(title: "Charts") {
             LazyVGrid(columns: chartColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
                 ChartCard(title: "Packets over time") {
-                    TimeSeriesChart(points: viewModel.viewState.series.packetsPerBucket, valueLabel: "Packets")
+                    TimeSeriesChart(points: viewModel.viewState.series.packetsPerBucket, valueLabel: "Packets", bucket: viewModel.bucket)
                 }
 
                 ChartCard(title: "Bytes over time") {
-                    TimeSeriesChart(points: viewModel.viewState.series.bytesPerBucket, valueLabel: "Bytes")
+                    TimeSeriesChart(points: viewModel.viewState.series.bytesPerBucket, valueLabel: "Bytes", bucket: viewModel.bucket)
                 }
 
                 ChartCard(title: "Unique stations over time") {
-                    TimeSeriesChart(points: viewModel.viewState.series.uniqueStationsPerBucket, valueLabel: "Stations")
+                    TimeSeriesChart(points: viewModel.viewState.series.uniqueStationsPerBucket, valueLabel: "Stations", bucket: viewModel.bucket)
                 }
 
                 ChartCard(title: "Traffic intensity (hour vs day)", height: AnalyticsStyle.Layout.heatmapHeight) {
@@ -190,7 +194,7 @@ struct AnalyticsDashboardView: View {
                     .padding(.top, 4)
             }
 
-            Text("Click to select, shift-click to add, scroll to zoom, drag to pan, Esc clears")
+            Text("Click to select, shift-click to add, pinch to zoom, scroll or drag to pan, Esc clears")
                 .font(.caption)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 .padding(.top, 4)
@@ -282,6 +286,7 @@ private struct ChartCard<Content: View>: View {
 private struct TimeSeriesChart: View {
     let points: [AnalyticsSeriesPoint]
     let valueLabel: String
+    let bucket: TimeBucket
     @State private var selectedPoint: AnalyticsSeriesPoint?
 
     var body: some View {
@@ -308,7 +313,7 @@ private struct TimeSeriesChart: View {
             }
             .chartYScale(domain: .automatic(includesZero: true))
             .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount))
+                AxisMarks(values: .stride(by: bucket.axisStride.component, count: bucket.axisStride.count))
             }
             .chartYAxis {
                 AxisMarks(values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount))
@@ -551,9 +556,19 @@ private struct AnalyticsGraphView: View {
                 Canvas { context, size in
                     let selection = selectedNodeIDs
 
+                    let focusIDs: Set<String> = {
+                        if !selection.isEmpty {
+                            return selection
+                        }
+                        if let hoveredNodeID {
+                            return [hoveredNodeID]
+                        }
+                        return []
+                    }()
+
                     for edge in graphModel.edges {
                         guard let source = map[edge.sourceID], let target = map[edge.targetID] else { continue }
-                        let isRelated = selection.isEmpty || selection.contains(edge.sourceID) || selection.contains(edge.targetID)
+                        let isRelated = focusIDs.isEmpty || focusIDs.contains(edge.sourceID) || focusIDs.contains(edge.targetID)
                         var path = Path()
                         path.move(to: source)
                         path.addLine(to: target)
@@ -570,6 +585,13 @@ private struct AnalyticsGraphView: View {
                         let fill = isSelected ? AnalyticsStyle.Colors.accent : (isHovered ? AnalyticsStyle.Colors.graphNode : AnalyticsStyle.Colors.graphNodeMuted)
                         let rect = CGRect(x: position.x - radius, y: position.y - radius, width: radius * 2, height: radius * 2)
                         context.fill(Path(ellipseIn: rect), with: .color(fill))
+                        if isSelected || isHovered {
+                            context.stroke(
+                                Path(ellipseIn: rect.insetBy(dx: -AnalyticsStyle.Graph.selectionGlowWidth / 3, dy: -AnalyticsStyle.Graph.selectionGlowWidth / 3)),
+                                with: .color(AnalyticsStyle.Colors.accent.opacity(isSelected ? 0.7 : 0.35)),
+                                lineWidth: AnalyticsStyle.Graph.selectionGlowWidth / 2
+                            )
+                        }
                         if isSelected {
                             context.stroke(
                                 Path(ellipseIn: rect.insetBy(dx: -AnalyticsStyle.Graph.selectionGlowWidth / 2, dy: -AnalyticsStyle.Graph.selectionGlowWidth / 2)),
@@ -605,8 +627,12 @@ private struct AnalyticsGraphView: View {
                         viewport.offset.width += delta.width
                         viewport.offset.height += delta.height
                     },
-                    onScroll: { delta, location in
-                        let scaleDelta = Swift.max(0.8, Swift.min(1.2, 1 - delta * 0.01))
+                    onScroll: { delta, _ in
+                        viewport.offset.width -= delta.width
+                        viewport.offset.height -= delta.height
+                    },
+                    onMagnify: { magnification, location in
+                        let scaleDelta = 1 + magnification
                         let newScale = (viewport.scale * scaleDelta).clamped(to: AnalyticsStyle.Graph.zoomRange)
                         viewport.zoom(at: location, size: proxy.size, newScale: newScale)
                     }
@@ -819,7 +845,8 @@ private struct GraphInteractionView: NSViewRepresentable {
     let onHover: (CGPoint?) -> Void
     let onClick: (CGPoint, Bool, Int) -> Void
     let onDrag: (CGSize) -> Void
-    let onScroll: (CGFloat, CGPoint) -> Void
+    let onScroll: (CGSize, CGPoint) -> Void
+    let onMagnify: (CGFloat, CGPoint) -> Void
 
     func makeNSView(context: Context) -> GraphInteractionNSView {
         let view = GraphInteractionNSView()
@@ -827,6 +854,7 @@ private struct GraphInteractionView: NSViewRepresentable {
         view.onClick = onClick
         view.onDrag = onDrag
         view.onScroll = onScroll
+        view.onMagnify = onMagnify
         return view
     }
 
@@ -835,6 +863,7 @@ private struct GraphInteractionView: NSViewRepresentable {
         nsView.onClick = onClick
         nsView.onDrag = onDrag
         nsView.onScroll = onScroll
+        nsView.onMagnify = onMagnify
     }
 }
 
@@ -842,13 +871,29 @@ private final class GraphInteractionNSView: NSView {
     var onHover: ((CGPoint?) -> Void)?
     var onClick: ((CGPoint, Bool, Int) -> Void)?
     var onDrag: ((CGSize) -> Void)?
-    var onScroll: ((CGFloat, CGPoint) -> Void)?
+    var onScroll: ((CGSize, CGPoint) -> Void)?
+    var onMagnify: ((CGFloat, CGPoint) -> Void)?
 
     private var trackingArea: NSTrackingArea?
     private var lastDragLocation: CGPoint?
     private var accumulatedDrag: CGSize = .zero
 
     override var acceptsFirstResponder: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        let magnifyRecognizer = NSMagnificationGestureRecognizer(target: self, action: #selector(handleMagnify(_:)))
+        addGestureRecognizer(magnifyRecognizer)
+    }
+
+    convenience init() {
+        self.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -900,7 +945,12 @@ private final class GraphInteractionNSView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)
-        onScroll?(event.scrollingDeltaY, location)
+        onScroll?(CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY), location)
+    }
+
+    @objc private func handleMagnify(_ recognizer: NSMagnificationGestureRecognizer) {
+        let location = convert(recognizer.location(in: self), from: nil)
+        onMagnify?(recognizer.magnification, location)
     }
 }
 
