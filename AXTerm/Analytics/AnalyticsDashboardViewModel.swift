@@ -8,9 +8,11 @@
 import Combine
 import CoreGraphics
 import Foundation
+import os
 
 @MainActor
 final class AnalyticsDashboardViewModel: ObservableObject {
+    private let logger = Logger(subsystem: "AXTerm", category: "Analytics")
     @Published var bucket: TimeBucket {
         didSet {
             guard bucket != oldValue else { return }
@@ -70,6 +72,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private var graphTask: Task<Void, Never>?
     private let telemetryLimiter = TelemetryRateLimiter(minimumInterval: 1.0)
     private var loopDetection = RecomputeLoopDetector()
+    private var isActive = false
 
     init(
         calendar: Calendar = .current,
@@ -92,6 +95,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     func updatePackets(_ packets: [Packet]) {
+        self.packets = packets
+        guard isActive else { return }
         packetSubject.send(packets)
     }
 
@@ -142,6 +147,19 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         handleBackgroundClick()
     }
 
+    func setActive(_ active: Bool) {
+        guard isActive != active else { return }
+        isActive = active
+        if active {
+            logger.debug("Analytics dashboard activated")
+            scheduleAggregation(reason: "activate")
+            scheduleGraphBuild(reason: "activate")
+        } else {
+            logger.debug("Analytics dashboard deactivated")
+            cancelWork()
+        }
+    }
+
     func selectedNodeDetails() -> GraphInspectorDetails? {
         guard let selectedNodeID = viewState.selectedNodeID,
               let node = viewState.graphModel.nodes.first(where: { $0.id == selectedNodeID }) else {
@@ -188,6 +206,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     private func scheduleAggregation(reason: String) {
+        guard isActive else { return }
         #if DEBUG
         debugLog("Scheduling aggregation: \(reason)")
         #endif
@@ -197,6 +216,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     private func scheduleGraphBuild(reason: String) {
+        guard isActive else { return }
         #if DEBUG
         debugLog("Scheduling graph build: \(reason)")
         #endif
@@ -395,6 +415,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func prepareLayout(reason: String) {
         layoutTask?.cancel()
+        guard isActive else { return }
         guard !viewState.graphModel.nodes.isEmpty else {
             viewState.nodePositions = []
             layoutState = nil
@@ -457,6 +478,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                     self.layoutTickCount += 1
                     if self.layoutTickCount.isMultiple(of: 10) {
                         let duration = Date().timeIntervalSince(start) * 1000
+                        #if DEBUG
+                        self.logger.debug("Layout tick (energy: \(updated.energy), durationMs: \(duration))")
+                        #endif
                         self.telemetryLimiter.breadcrumb(
                             category: "layout.tick",
                             message: "Layout tick",
@@ -551,6 +575,15 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         print("[AnalyticsDashboardViewModel] \(message)")
     }
     #endif
+
+    private func cancelWork() {
+        aggregationTask?.cancel()
+        graphTask?.cancel()
+        layoutTask?.cancel()
+        aggregationScheduler.cancel()
+        graphScheduler.cancel()
+        loopDetection.reset()
+    }
 }
 
 private struct AggregationCacheKey: Hashable {
@@ -617,5 +650,11 @@ private struct RecomputeLoopDetector {
         lastReason = reason
         lastTimestamp = now
         return count >= 4
+    }
+
+    mutating func reset() {
+        lastReason = nil
+        lastTimestamp = nil
+        count = 0
     }
 }

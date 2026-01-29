@@ -90,13 +90,11 @@ struct ConsoleView: View {
                     isUserNearBottom = distanceFromBottom <= 24
                 }
                 .onChange(of: lines.count) { _, _ in
-                    guard autoScroll, isUserNearBottom, let lastLine = lines.last else { return }
+                    guard autoScroll, isUserNearBottom else { return }
                     Task { @MainActor in
                         // Avoid triggering scroll/layout during the same update transaction.
                         await Task.yield()
-                        withAnimation(.easeOut(duration: 0.1)) {
-                            proxy.scrollTo(lastLine.id, anchor: .bottom)
-                        }
+                        proxy.scrollTo("bottom", anchor: .bottom)
                     }
                 }
             }
