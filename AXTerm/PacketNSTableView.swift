@@ -146,21 +146,14 @@ struct PacketNSTableView: NSViewRepresentable {
 
     private func sizeColumnsToFitContent(in tableView: NSTableView) {
         guard !tableView.tableColumns.isEmpty else { return }
-        // Avoid overriding persisted user widths; autosaved columns take precedence.
-        guard !hasAutosavedColumns(for: tableView) else { return }
         let rows = packets.map { PacketRowViewModel.fromPacket($0) }
         let measurements = PacketTableColumnSizer(rows: rows)
         for column in tableView.tableColumns {
             guard let identifier = ColumnIdentifier(rawValue: column.identifier.rawValue) else { continue }
+            guard identifier != .info else { continue }
             let targetWidth = measurements.width(for: identifier)
             column.width = max(column.minWidth, targetWidth)
         }
-    }
-
-    private func hasAutosavedColumns(for tableView: NSTableView) -> Bool {
-        guard let autosaveName = tableView.autosaveName else { return false }
-        let defaultsKey = "NSTableView Columns \(autosaveName)"
-        return UserDefaults.standard.object(forKey: defaultsKey) != nil
     }
 }
 
@@ -407,7 +400,7 @@ private struct PacketTableColumnSizer {
         case .from, .to: return 200
         case .via: return 180
         case .type: return 80
-        case .info: return 600
+        case .info: return 1200
         }
     }
 }
