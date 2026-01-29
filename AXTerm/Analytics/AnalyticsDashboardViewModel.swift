@@ -491,13 +491,13 @@ private final class Debouncer {
 private extension RunLoop.SchedulerTimeType.Stride {
     var timeInterval: TimeInterval {
         switch self {
-        case let .seconds(value):
+        case .seconds(let value):
             return value
-        case let .milliseconds(value):
+        case .milliseconds(let value):
             return Double(value) / 1000
-        case let .microseconds(value):
+        case .microseconds(let value):
             return Double(value) / 1_000_000
-        case let .nanoseconds(value):
+        case .nanoseconds(let value):
             return Double(value) / 1_000_000_000
         @unknown default:
             return 0
