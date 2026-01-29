@@ -76,7 +76,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         bucket: TimeBucket = .fiveMinutes,
         includeViaDigipeaters: Bool = false,
         minEdgeCount: Int = 1,
-        maxNodes: Int = AnalyticsStyle.Graph.maxNodesDefault,
+        maxNodes: Int? = nil,
         packetDebounce: RunLoop.SchedulerTimeType.Stride = .milliseconds(250),
         graphDebounce: RunLoop.SchedulerTimeType.Stride = .milliseconds(400),
         packetScheduler: RunLoop = .main
@@ -85,7 +85,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         self.bucket = bucket
         self.includeViaDigipeaters = includeViaDigipeaters
         self.minEdgeCount = minEdgeCount
-        self.maxNodes = maxNodes
+        self.maxNodes = maxNodes ?? AnalyticsStyle.Graph.maxNodesDefault
         self.aggregationDebouncer = Debouncer(delay: packetDebounce.timeInterval)
         self.graphDebouncer = Debouncer(delay: graphDebounce.timeInterval)
         bindPackets(packetScheduler: packetScheduler)
@@ -143,7 +143,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     func selectedNodeDetails() -> GraphInspectorDetails? {
-        guard let selectedNodeID,
+        guard let selectedNodeID = selectedNodeID,
               let node = graphModel.nodes.first(where: { $0.id == selectedNodeID }) else {
             return nil
         }

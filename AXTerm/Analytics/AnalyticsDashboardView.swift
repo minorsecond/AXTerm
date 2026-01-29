@@ -430,11 +430,11 @@ private struct HeatmapView: View {
 
                     let labelWidth = AnalyticsStyle.Heatmap.labelWidth
                     let labelHeight = AnalyticsStyle.Heatmap.labelHeight
-                    let gridWidth = max(1, size.width - labelWidth)
-                    let gridHeight = max(1, size.height - labelHeight)
+                    let gridWidth = Swift.max(1, size.width - labelWidth)
+                    let gridHeight = Swift.max(1, size.height - labelHeight)
                     let cellWidth = gridWidth / CGFloat(cols)
                     let cellHeight = gridHeight / CGFloat(rows)
-                    let maxValue = max(1, data.matrix.flatMap { $0 }.max() ?? 1)
+                    let maxValue = Swift.max(1, data.matrix.flatMap { $0 }.max() ?? 1)
 
                     for row in 0..<rows {
                         for col in 0..<cols {
@@ -451,26 +451,28 @@ private struct HeatmapView: View {
                         }
                     }
 
-                    let labelStyle = GraphicsContext.TextStyle(font: .system(size: 9), foregroundColor: NSColor.secondaryLabelColor)
-
-                    let xStride = max(1, cols / AnalyticsStyle.Heatmap.labelStride)
+                    let xStride = Swift.max(1, cols / AnalyticsStyle.Heatmap.labelStride)
                     for col in stride(from: 0, to: cols, by: xStride) {
                         let text = Text(data.xLabels[col])
+                            .font(.system(size: 9))
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                         let position = CGPoint(
                             x: labelWidth + CGFloat(col) * cellWidth + AnalyticsStyle.Heatmap.labelPadding,
                             y: gridHeight + AnalyticsStyle.Heatmap.labelPadding
                         )
-                        context.draw(text, at: position, anchor: .topLeading, style: labelStyle)
+                        context.draw(text, at: position, anchor: .topLeading)
                     }
 
-                    let yStride = max(1, rows / AnalyticsStyle.Heatmap.labelStride)
+                    let yStride = Swift.max(1, rows / AnalyticsStyle.Heatmap.labelStride)
                     for row in stride(from: 0, to: rows, by: yStride) {
                         let text = Text(data.yLabels[row])
+                            .font(.system(size: 9))
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                         let position = CGPoint(
                             x: AnalyticsStyle.Heatmap.labelPadding,
                             y: CGFloat(row) * cellHeight + AnalyticsStyle.Heatmap.labelPadding
                         )
-                        context.draw(text, at: position, anchor: .topLeading, style: labelStyle)
+                        context.draw(text, at: position, anchor: .topLeading)
                     }
                 }
             }
@@ -579,7 +581,7 @@ private struct AnalyticsGraphView: View {
                     }
                 }
 
-                if let hoveredNodeID,
+                if let hoveredNodeID = hoveredNodeID,
                    let node = graphModel.nodes.first(where: { $0.id == hoveredNodeID }),
                    let position = map[hoveredNodeID] {
                     GraphTooltipView(node: node)
@@ -605,7 +607,7 @@ private struct AnalyticsGraphView: View {
                         viewport.offset.height += delta.height
                     },
                     onScroll: { delta, location in
-                        let scaleDelta = max(0.8, min(1.2, 1 - delta * 0.01))
+                        let scaleDelta = Swift.max(0.8, Swift.min(1.2, 1 - delta * 0.01))
                         let newScale = (viewport.scale * scaleDelta).clamped(to: AnalyticsStyle.Graph.zoomRange)
                         viewport.zoom(at: location, size: proxy.size, newScale: newScale)
                     }
@@ -621,7 +623,7 @@ private struct AnalyticsGraphView: View {
                 viewport = GraphViewport()
             }
             .onChange(of: focusNodeID) { _, newValue in
-                guard let newValue, nodePositions.contains(where: { $0.id == newValue }) else { return }
+                guard let newValue = newValue, nodePositions.contains(where: { $0.id == newValue }) else { return }
                 viewport.scale = AnalyticsStyle.Graph.focusScale
                 let map = GraphRenderData(model: graphModel, positions: nodePositions).positionMap(size: proxy.size, viewport: GraphViewport())
                 if let focused = map[newValue] {
@@ -768,15 +770,15 @@ private struct GraphRenderData {
         self.model = model
         self.positions = positions
         let nodeWeights = model.nodes.map { $0.weight }
-        self.minNodeWeight = max(1, nodeWeights.min() ?? 1)
-        self.maxNodeWeight = max(minNodeWeight, nodeWeights.max() ?? minNodeWeight)
-        self.maxEdgeWeight = max(1, model.edges.map { $0.weight }.max() ?? 1)
+        self.minNodeWeight = Swift.max(1, nodeWeights.min() ?? 1)
+        self.maxNodeWeight = Swift.max(minNodeWeight, nodeWeights.max() ?? minNodeWeight)
+        self.maxEdgeWeight = Swift.max(1, model.edges.map { $0.weight }.max() ?? 1)
     }
 
     func positionMap(size: CGSize, viewport: GraphViewport) -> [String: CGPoint] {
         let inset = AnalyticsStyle.Layout.graphInset
-        let width = max(1, size.width - inset * 2)
-        let height = max(1, size.height - inset * 2)
+        let width = Swift.max(1, size.width - inset * 2)
+        let height = Swift.max(1, size.height - inset * 2)
         let center = CGPoint(x: size.width / 2, y: size.height / 2)
 
         var map: [String: CGPoint] = [:]
@@ -797,7 +799,7 @@ private struct GraphRenderData {
     func nodeRadius(for weight: Int) -> CGFloat {
         let logMin = log(Double(minNodeWeight))
         let logMax = log(Double(maxNodeWeight))
-        let logValue = log(Double(max(weight, 1)))
+        let logValue = log(Double(Swift.max(weight, 1)))
         let t = logMax == logMin ? 0.5 : (logValue - logMin) / (logMax - logMin)
         let range = AnalyticsStyle.Graph.nodeRadiusRange
         return range.lowerBound + CGFloat(t) * (range.upperBound - range.lowerBound)
@@ -907,6 +909,6 @@ private final class GraphInteractionNSView: NSView {
 
 private extension CGFloat {
     func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
-        min(range.upperBound, max(range.lowerBound, self))
+        Swift.min(range.upperBound, Swift.max(range.lowerBound, self))
     }
 }
