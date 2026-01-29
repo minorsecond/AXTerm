@@ -72,6 +72,9 @@ struct AXTermApp: App {
             ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter)
         }
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                SettingsLink()
+            }
             CommandGroup(after: .windowArrangement) {
                 Button("Close") {
                     NSApp.keyWindow?.performClose(nil)

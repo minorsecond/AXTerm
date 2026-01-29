@@ -12,6 +12,7 @@ struct MenuBarView: View {
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var inspectionRouter: PacketInspectionRouter
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(alignment: .leading) {
@@ -120,7 +121,7 @@ struct MenuBarView: View {
     }
 
     private func openPreferences() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        openSettings()
         NSApp.activate(ignoringOtherApps: true)
     }
 }
