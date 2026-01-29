@@ -15,6 +15,8 @@ struct PacketNSTableView: NSViewRepresentable {
         static let infoColumnIdentifier: ColumnIdentifier = .info
     }
 
+    private static let appearance = PacketTableAppearance.current
+
     enum ColumnIdentifier: String, CaseIterable {
         case time
         case from
@@ -46,6 +48,7 @@ struct PacketNSTableView: NSViewRepresentable {
         tableView.allowsMultipleSelection = true
         tableView.allowsEmptySelection = true
         tableView.focusRingType = .none
+        tableView.rowHeight = Self.appearance.rowHeight
         tableView.dataSource = context.coordinator
         tableView.delegate = context.coordinator
         tableView.target = context.coordinator
@@ -252,8 +255,8 @@ extension PacketNSTableView {
             NSLayoutConstraint.activate([
                 textField.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
                 textField.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
-                textField.topAnchor.constraint(equalTo: cell.topAnchor, constant: 1),
-                textField.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -1)
+                textField.topAnchor.constraint(equalTo: cell.topAnchor, constant: PacketNSTableView.appearance.rowVerticalPadding),
+                textField.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -PacketNSTableView.appearance.rowVerticalPadding)
             ])
             return cell
         }
@@ -348,7 +351,7 @@ extension PacketNSTableView {
             case ColumnIdentifier.type.rawValue:
                 field.stringValue = row.typeLabel
                 field.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
-                field.textColor = row.isLowSignal ? .tertiaryLabelColor : .secondaryLabelColor
+                field.textColor = .secondaryLabelColor
                 field.alignment = .center
                 field.toolTip = row.typeTooltip
             case ColumnIdentifier.info.rawValue:
@@ -374,7 +377,9 @@ extension PacketNSTableView {
             pillView.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
                 pillView.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
-                pillView.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+                pillView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                pillView.topAnchor.constraint(greaterThanOrEqualTo: cell.topAnchor, constant: PacketNSTableView.appearance.rowVerticalPadding),
+                pillView.bottomAnchor.constraint(lessThanOrEqualTo: cell.bottomAnchor, constant: -PacketNSTableView.appearance.rowVerticalPadding)
             ])
             return cell
         }
@@ -390,7 +395,7 @@ private final class TypePillView: NSView {
         textField.stringValue = text
         textField.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
         textField.alignment = .center
-        textField.textColor = isLowSignal ? .tertiaryLabelColor : .secondaryLabelColor
+        textField.textColor = .secondaryLabelColor
         textField.setContentHuggingPriority(.required, for: .horizontal)
         textField.setContentCompressionResistancePriority(.required, for: .horizontal)
         addSubview(textField)
@@ -401,9 +406,10 @@ private final class TypePillView: NSView {
             textField.topAnchor.constraint(equalTo: topAnchor, constant: 2),
             textField.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2)
         ])
-        layer?.cornerRadius = 6
-        layer?.borderWidth = 1
-        layer?.borderColor = (isLowSignal ? NSColor.quaternaryLabelColor : NSColor.tertiaryLabelColor).cgColor
+        let appearance = PacketTableAppearance.current
+        layer?.cornerRadius = appearance.pillCornerRadius ?? 6
+        layer?.borderWidth = appearance.pillBorderWidth
+        layer?.borderColor = NSColor.tertiaryLabelColor.cgColor
         layer?.backgroundColor = NSColor.clear.cgColor
     }
 
@@ -411,6 +417,15 @@ private final class TypePillView: NSView {
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
+}
+
+private struct PacketTableAppearance {
+    static let current = PacketTableAppearance()
+
+    let pillBorderWidth: CGFloat = 1
+    let rowVerticalPadding: CGFloat = 2
+    let rowHeight: CGFloat = 22
+    let pillCornerRadius: CGFloat? = 6
 }
 
 private struct PacketTableColumnSizer {
@@ -453,7 +468,7 @@ private struct PacketTableColumnSizer {
             font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
             values = rows.map { $0.viaText }
         case .type:
-            font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
+            font = .monospacedSystemFont(ofSize: 11, weight: .medium)
             values = rows.map { $0.typeLabel }
         case .info:
             font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
@@ -475,4 +490,8 @@ private struct PacketTableColumnSizer {
         case .info: return 1200
         }
     }
+}
+
+private extension FrameType {
+    var icon: String { shortLabel }
 }
