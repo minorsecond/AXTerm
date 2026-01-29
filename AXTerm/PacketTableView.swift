@@ -86,9 +86,7 @@ struct PacketTableView: View {
                     onCopyRawHex: onCopyRawHex,
                     alignment: .center
                 ) {
-                    Text(pkt.frameType.icon)
-                        .font(.system(.body))
-                        .foregroundStyle(rowForeground(pkt))
+                    TypePillBadge(text: pkt.frameType.icon, isLowSignal: pkt.isLowSignal)
                         .help(pkt.frameType.displayName)
                 }
             }
@@ -128,6 +126,23 @@ struct PacketTableView: View {
 }
 
 private let packetTableDebugHitTesting = false
+
+private struct TypePillBadge: View {
+    let text: String
+    let isLowSignal: Bool
+
+    var body: some View {
+        Text(text)
+            .font(.system(.caption, design: .monospaced).weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(Color(nsColor: .tertiaryLabelColor), lineWidth: 1)
+            )
+            .foregroundStyle(isLowSignal ? .secondary : .primary)
+    }
+}
 
 private struct PacketTableCell<Content: View>: View {
     let packet: Packet
