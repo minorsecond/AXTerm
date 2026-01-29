@@ -252,21 +252,25 @@ struct ContentView: View {
                 TextField("Host", text: $settings.host)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 120)
+                    .help("Hostname or IP of the KISS TNC")
 
                 TextField("Port", text: $settings.port)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 60)
+                    .help("TCP port for the KISS TNC")
 
                 Button("Connect") {
                     client.connect(host: settings.host, port: settings.portValue)
                 }
                 .buttonStyle(.borderedProminent)
+                .help("Connect to the TNC")
             }
         } else {
             Button("Disconnect") {
                 client.disconnect()
             }
             .buttonStyle(.bordered)
+            .help("Disconnect from the TNC")
         }
     }
 
@@ -276,33 +280,39 @@ struct ContentView: View {
             .toggleStyle(.button)
             .buttonStyle(.bordered)
             .disabled(client.packets.isEmpty)
+            .help("Show UI frames")
 
         Toggle("I", isOn: $filters.showI)
             .toggleStyle(.button)
             .buttonStyle(.bordered)
             .disabled(client.packets.isEmpty)
+            .help("Show I frames")
 
         Toggle("S", isOn: $filters.showS)
             .toggleStyle(.button)
             .buttonStyle(.bordered)
             .disabled(client.packets.isEmpty)
+            .help("Show S frames")
 
         Toggle("U", isOn: $filters.showU)
             .toggleStyle(.button)
             .buttonStyle(.bordered)
             .disabled(client.packets.isEmpty)
+            .help("Show U control frames")
 
         Divider()
 
-        Toggle("Info Only", isOn: $filters.onlyWithInfo)
+        Toggle("Payload Only", isOn: $filters.payloadOnly)
             .toggleStyle(.button)
             .buttonStyle(.bordered)
             .disabled(client.packets.isEmpty)
+            .help("Show I frames and UI frames with payload")
 
         Toggle("Pinned", isOn: $filters.onlyPinned)
             .toggleStyle(.button)
             .buttonStyle(.bordered)
             .disabled(client.pinnedPacketIDs.isEmpty)
+            .help("Show pinned packets only")
 
         if client.selectedStationCall != nil {
             Button {
@@ -310,6 +320,7 @@ struct ContentView: View {
             } label: {
                 Label("Clear Filter", systemImage: "xmark.circle")
             }
+            .help("Clear station filter")
         }
     }
 
