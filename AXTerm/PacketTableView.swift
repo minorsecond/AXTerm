@@ -126,6 +126,8 @@ struct PacketTableView: View {
     }
 }
 
+private let packetTableDebugHitTesting = false
+
 private struct PacketTableCell<Content: View>: View {
     let packet: Packet
     @Binding var selection: Set<Packet.ID>
@@ -179,6 +181,18 @@ private struct PacketTableCell<Content: View>: View {
                 selection = [packet.id]
                 onInspectSelection()
             })
+    }
+
+    @ViewBuilder
+    private var debugHitTestOverlay: some View {
+        if packetTableDebugHitTesting {
+            Rectangle()
+                .strokeBorder(.pink.opacity(0.6), lineWidth: 1)
+                .background(Color.pink.opacity(0.1))
+                .allowsHitTesting(false)
+        } else {
+            EmptyView()
+        }
     }
 
     @ViewBuilder
