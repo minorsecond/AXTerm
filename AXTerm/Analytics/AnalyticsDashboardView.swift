@@ -48,6 +48,8 @@ struct AnalyticsDashboardView: View {
                     }
                 )
             }
+            .scrollDisabled(false)
+            .defaultScrollAnchor(.top)  // Prevent scroll jumping on layout changes
             .coordinateSpace(name: "scroll")
             .onPreferenceChange(ScrollOffsetPreferenceKey.self) { value in
                 scrollOffset = -value
@@ -894,23 +896,30 @@ private struct GraphInspectorView: View {
     let onShowActiveNodes: () -> Void
     let onExportSummary: () -> Void
 
+    /// Fixed height to prevent layout shifts when switching between views
+    private let fixedHeight: CGFloat = 520
+
     var body: some View {
-        if let details {
-            // Node details view when a node is selected
-            NodeDetailsView(
-                details: details,
-                onClear: onClear,
-                onFocus: onFocus
-            )
-        } else {
-            // Network Health view when no node is selected
-            NetworkHealthView(
-                health: networkHealth,
-                onFocusPrimaryHub: onFocusPrimaryHub,
-                onShowActiveNodes: onShowActiveNodes,
-                onExportSummary: onExportSummary
-            )
+        // Use a fixed frame to prevent layout shifts when switching between views
+        Group {
+            if let details {
+                // Node details view when a node is selected
+                NodeDetailsView(
+                    details: details,
+                    onClear: onClear,
+                    onFocus: onFocus
+                )
+            } else {
+                // Network Health view when no node is selected
+                NetworkHealthView(
+                    health: networkHealth,
+                    onFocusPrimaryHub: onFocusPrimaryHub,
+                    onShowActiveNodes: onShowActiveNodes,
+                    onExportSummary: onExportSummary
+                )
+            }
         }
+        .frame(height: fixedHeight, alignment: .top)
     }
 }
 

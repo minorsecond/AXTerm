@@ -79,11 +79,15 @@ struct AnalyticsGraphView: View {
                    let node = graphModel.nodes.first(where: { $0.id == hoverNodeID }) {
                     // hoverPoint is in drawable space (top-left origin, in points).
                     // SwiftUI uses bottom-left origin, so flip Y.
-                    // Position tooltip away from node center so it doesn't block clicks.
-                    let tooltipOffset: CGFloat = 24
+                    // Position tooltip close to node but not overlapping.
+                    let tooltipGap: CGFloat = 8  // Small gap from node edge
                     let tooltipWidth: CGFloat = 110
                     let tooltipHeight: CGFloat = 60
                     let flippedY = geometry.size.height - hoverPoint.y
+
+                    // Estimate node radius (use average since we don't have exact weight here)
+                    let estimatedNodeRadius: CGFloat = 10 * cameraState.scale
+                    let tooltipOffset = estimatedNodeRadius + tooltipGap
 
                     // Determine best quadrant for tooltip (prefer upper-right, adjust if near edges)
                     let nearRightEdge = hoverPoint.x + tooltipOffset + tooltipWidth > geometry.size.width - 8
@@ -99,7 +103,7 @@ struct AnalyticsGraphView: View {
         }
         .background(AnalyticsStyle.Colors.neutralFill)
         .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
-        .focusable()
+        .focusable(interactions: [])  // Disable focus-driven scrolling but keep keyboard handling via NSView
         .onExitCommand {
             onClearSelection()
         }
@@ -124,6 +128,8 @@ private struct NodeLabelsOverlay: View {
 
     private let minZoomForLabels: CGFloat = 0.6
     private let maxLabelsAtLowZoom: Int = 12
+    /// Small gap between node edge and label
+    private let labelGap: CGFloat = 3
 
     var body: some View {
         Canvas { context, size in
@@ -132,6 +138,11 @@ private struct NodeLabelsOverlay: View {
             let normalizedCallsign = CallsignMatcher.normalize(myCallsign)
             let positionMap = Dictionary(uniqueKeysWithValues: nodePositions.map { ($0.id, $0) })
             let inset = AnalyticsStyle.Layout.graphInset
+
+            // Compute node weight range for radius calculation
+            let weights = graphModel.nodes.map { $0.weight }
+            let minWeight = weights.min() ?? 1
+            let maxWeight = weights.max() ?? 1
 
             // Sort nodes by priority for label display
             let sortedNodes = graphModel.nodes.sorted { lhs, rhs in
@@ -163,8 +174,12 @@ private struct NodeLabelsOverlay: View {
                 guard screenPos.x > 0 && screenPos.x < size.width &&
                       screenPos.y > 0 && screenPos.y < size.height else { continue }
 
-                // Calculate label position (to the right of node)
-                let labelOffset: CGFloat = 10 * cameraState.scale
+                // Calculate node radius based on weight (same formula as Metal renderer)
+                let nodeRadius = calculateNodeRadius(weight: node.weight, minWeight: minWeight, maxWeight: maxWeight)
+                let scaledRadius = nodeRadius * cameraState.scale
+
+                // Calculate label position (to the right of node, accounting for node radius)
+                let labelOffset = scaledRadius + labelGap
                 let labelPoint = CGPoint(x: screenPos.x + labelOffset, y: screenPos.y)
 
                 // Measure text
@@ -237,6 +252,16 @@ private struct NodeLabelsOverlay: View {
             x: (base.x - center.x) * scale + center.x + offset.width,
             y: (base.y - center.y) * scale + center.y + offset.height
         )
+    }
+
+    /// Calculate node radius using the same formula as the Metal renderer
+    private func calculateNodeRadius(weight: Int, minWeight: Int, maxWeight: Int) -> CGFloat {
+        let logMin = log(Double(max(minWeight, 1)))
+        let logMax = log(Double(max(maxWeight, 1)))
+        let logValue = log(Double(max(weight, 1)))
+        let t = logMax == logMin ? 0.5 : (logValue - logMin) / (logMax - logMin)
+        let range = AnalyticsStyle.Graph.nodeRadiusRange
+        return range.lowerBound + CGFloat(t) * (range.upperBound - range.lowerBound)
     }
 }
 
@@ -330,6 +355,12 @@ private final class GraphMetalView: MTKView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    /// Prevent the scroll view from scrolling when this view becomes first responder
+    override func scrollToVisible(_ rect: NSRect) -> Bool {
+        // Do nothing - we don't want clicks on the graph to scroll the page
+        return false
+    }
+
     init() {
         let device = MTLCreateSystemDefaultDevice()
         super.init(frame: .zero, device: device)
@@ -386,8 +417,13 @@ private final class GraphMetalView: MTKView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        // Become first responder without triggering scroll-to-visible
+        window?.makeFirstResponder(self)
         interactionDelegate?.handleMouseDown(location: convert(event.locationInWindow, from: nil), modifiers: event.modifierFlags)
     }
+
+    /// Prevent NSClipView/NSScrollView from scrolling when we become first responder
+    override var needsPanelToBecomeKey: Bool { false }
 
     override func mouseDragged(with event: NSEvent) {
         interactionDelegate?.handleMouseDragged(location: convert(event.locationInWindow, from: nil), modifiers: event.modifierFlags)
