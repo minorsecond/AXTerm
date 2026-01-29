@@ -343,7 +343,7 @@ struct ContentView: View {
     private var statusTitle: String {
         switch client.status {
         case .connected:
-            return "\(statusEmoji) Dire Wolf @ \(connectionHostPort)"
+            return "\(statusEmoji) Connected @ \(connectionHostPort)"
         case .connecting:
             return "\(statusEmoji) Connecting..."
         case .disconnected:
