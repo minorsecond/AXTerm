@@ -178,10 +178,10 @@ private struct PacketTableCell<Content: View>: View {
                     onCopyRawHex(packet)
                 }
             }
-            .simultaneousGesture(TapGesture(count: 2).onEnded {
-                selection = [packet.id]
-                onInspectSelection()
-            })
+            //.simultaneousGesture(TapGesture(count: 2).onEnded {
+            //    selection = [packet.id]
+            //    onInspectSelection()
+            //})
     }
 
     @ViewBuilder
