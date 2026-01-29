@@ -20,10 +20,18 @@ enum PacketFilter {
                 guard packet.fromDisplay == call else { return false }
             }
 
-            guard filters.allows(frameType: packet.frameType) else { return false }
-
-            if filters.onlyWithInfo && packet.infoText == nil {
-                return false
+            if filters.payloadOnly {
+                switch packet.frameType {
+                case .i:
+                    guard filters.showI else { return false }
+                case .ui:
+                    guard filters.showUI else { return false }
+                    guard !packet.info.isEmpty else { return false }
+                default:
+                    return false
+                }
+            } else {
+                guard filters.allows(frameType: packet.frameType) else { return false }
             }
 
             if filters.onlyPinned && !pinnedIDs.contains(packet.id) {

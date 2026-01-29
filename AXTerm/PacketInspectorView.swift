@@ -112,9 +112,8 @@ struct PacketInspectorView: View {
                 }
 
                 HStack(spacing: 10) {
-                    Text(packet.frameType.displayName)
-                        .font(.subheadline.weight(.medium))
-                    Text(packet.frameType.icon)
+                    FrameTypeBadge(text: packet.frameType.shortLabel)
+                        .help(packet.frameType.helpText)
                     Text(packet.timestamp, style: .date)
                         .foregroundStyle(.secondary)
                     Text(packet.timestamp, style: .time)
@@ -138,6 +137,7 @@ struct PacketInspectorView: View {
                 dismiss()
             }
             .keyboardShortcut(.cancelAction)
+            .help("Close inspector")
         }
         .padding()
         .background(.bar)
@@ -674,6 +674,19 @@ private enum PayloadSearchHighlighter {
         }
 
         return AttributedString(result)
+    }
+}
+
+private struct FrameTypeBadge: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(.caption, design: .monospaced).weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .foregroundStyle(.primary)
     }
 }
 
