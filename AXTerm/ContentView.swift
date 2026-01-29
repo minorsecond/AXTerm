@@ -31,6 +31,7 @@ struct ContentView: View {
     @State private var didLoadConsoleHistory = false
     @State private var didLoadRawHistory = false
     @State private var selectionMutationScheduler = SelectionMutationScheduler()
+    @StateObject private var analyticsViewModel = AnalyticsDashboardViewModel()
 
     init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter) {
         _client = StateObject(wrappedValue: client)
@@ -200,7 +201,7 @@ struct ContentView: View {
                     onClear: { client.clearRaw() }
                 )
             case .analytics:
-                AnalyticsDashboardView(packetEngine: client)
+                AnalyticsDashboardView(packetEngine: client, viewModel: analyticsViewModel)
             }
         }
     }

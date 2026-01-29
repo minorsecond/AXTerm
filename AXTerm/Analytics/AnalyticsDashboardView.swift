@@ -11,7 +11,7 @@ struct AnalyticsDashboardView: View {
     @ObservedObject var packetEngine: PacketEngine
     @StateObject private var viewModel: AnalyticsDashboardViewModel
 
-    @MainActor init(packetEngine: PacketEngine, viewModel: AnalyticsDashboardViewModel = AnalyticsDashboardViewModel()) {
+    init(packetEngine: PacketEngine, viewModel: AnalyticsDashboardViewModel) {
         self.packetEngine = packetEngine
         _viewModel = StateObject(wrappedValue: viewModel)
     }
