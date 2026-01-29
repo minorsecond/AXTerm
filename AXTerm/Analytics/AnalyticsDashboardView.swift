@@ -618,7 +618,9 @@ private struct AnalyticsGraphView: View {
                     let center = CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2)
                     viewport.offset = CGSize(width: center.x - focused.x, height: center.y - focused.y)
                 }
-                onFocusHandled()
+                DispatchQueue.main.async {
+                    onFocusHandled()
+                }
             }
         }
     }
