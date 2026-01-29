@@ -65,7 +65,7 @@ struct PacketNSTableView: NSViewRepresentable {
         context.coordinator.attach(tableView: tableView)
         configureColumns(for: tableView)
         sizeColumnsToFitContent(in: tableView)
-        tableView.sizeLastColumnToFit()
+        expandInfoColumnToFill(in: tableView)
 
         let scrollView = NSScrollView()
         scrollView.documentView = tableView
@@ -81,7 +81,7 @@ struct PacketNSTableView: NSViewRepresentable {
         let rowViewModels = packets.map { PacketRowViewModel.fromPacket($0) }
         context.coordinator.update(rows: rowViewModels, packets: packets, selection: selection)
         sizeColumnsToFitContent(in: tableView)
-        tableView.sizeLastColumnToFit()
+        expandInfoColumnToFill(in: tableView)
     }
 
     private func configureColumns(for tableView: NSTableView) {
@@ -155,6 +155,21 @@ struct PacketNSTableView: NSViewRepresentable {
             guard identifier != .info else { continue }
             let targetWidth = measurements.width(for: identifier)
             column.width = max(column.minWidth, targetWidth)
+        }
+    }
+
+    private func expandInfoColumnToFill(in tableView: NSTableView) {
+        guard let infoColumn = tableView.tableColumns.first(where: { $0.identifier.rawValue == ColumnIdentifier.info.rawValue }) else {
+            return
+        }
+        let totalSpacing = tableView.intercellSpacing.width * CGFloat(max(0, tableView.tableColumns.count - 1))
+        let otherColumnsWidth = tableView.tableColumns
+            .filter { $0 != infoColumn }
+            .reduce(CGFloat.zero) { $0 + $1.width }
+        let availableWidth = max(infoColumn.minWidth, tableView.bounds.width - otherColumnsWidth - totalSpacing)
+        // Only expand; never shrink user-resized widths.
+        if availableWidth > infoColumn.width {
+            infoColumn.width = availableWidth
         }
     }
 }
