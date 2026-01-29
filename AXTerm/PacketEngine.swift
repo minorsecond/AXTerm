@@ -667,12 +667,22 @@ final class AnalyticsViewModel: ObservableObject {
     @Published private(set) var summary: AnalyticsSummary?
     @Published private(set) var series: AnalyticsSeries = .empty
     @Published private(set) var activeBucket: TimeBucket
+    @Published private(set) var graphEdges: [GraphEdge] = []
+    @Published private(set) var includeViaDigipeaters: Bool
+    @Published private(set) var graphMinCount: Int
 
     private let calendar: Calendar
 
-    init(calendar: Calendar = .current, bucket: TimeBucket = .fiveMinutes) {
+    init(
+        calendar: Calendar = .current,
+        bucket: TimeBucket = .fiveMinutes,
+        includeViaDigipeaters: Bool = false,
+        graphMinCount: Int = 1
+    ) {
         self.calendar = calendar
         self.activeBucket = bucket
+        self.includeViaDigipeaters = includeViaDigipeaters
+        self.graphMinCount = graphMinCount
     }
 
     func setBucket(_ bucket: TimeBucket, packets: [Packet]) {
@@ -684,6 +694,23 @@ final class AnalyticsViewModel: ObservableObject {
             data: ["bucket": bucket.displayName]
         )
         recompute(packets: packets)
+    }
+
+    func setGraphIncludeViaDigipeaters(_ includeViaDigipeaters: Bool, packets: [Packet]) {
+        guard includeViaDigipeaters != self.includeViaDigipeaters else { return }
+        self.includeViaDigipeaters = includeViaDigipeaters
+        Telemetry.breadcrumb(
+            category: "analytics.graph.includeVia.changed",
+            message: "Analytics graph include via changed",
+            data: ["includeVia": includeViaDigipeaters]
+        )
+        recomputeEdges(packets: packets)
+    }
+
+    func setGraphMinCount(_ minCount: Int, packets: [Packet]) {
+        guard minCount != graphMinCount else { return }
+        graphMinCount = minCount
+        recomputeEdges(packets: packets)
     }
 
     func recompute(packets: [Packet]) {
@@ -739,6 +766,8 @@ final class AnalyticsViewModel: ObservableObject {
                 ]
             )
         }
+
+        recomputeEdges(packets: packets)
     }
 
     private func validateSeries(_ series: AnalyticsSeries) -> [String] {
@@ -765,5 +794,37 @@ final class AnalyticsViewModel: ObservableObject {
         }
 
         return issues
+    }
+
+    private func recomputeEdges(packets: [Packet]) {
+        let edges = Telemetry.measureWithResult(
+            name: "analytics.computeEdges",
+            data: [
+                TelemetryContext.packetCount: packets.count,
+                "includeVia": includeViaDigipeaters,
+                "minCount": graphMinCount
+            ],
+            updateData: { result in
+                ["edgeCount": result.count]
+            }
+        ) {
+            AnalyticsEngine.computeEdges(
+                packets: packets,
+                includeViaDigipeaters: includeViaDigipeaters,
+                minCount: graphMinCount
+            )
+        }
+        graphEdges = edges
+
+        if edges.contains(where: { $0.source.isEmpty || $0.target.isEmpty || $0.count <= 0 }) {
+            Telemetry.capture(
+                message: "analytics.edges.invalid",
+                data: [
+                    "includeVia": includeViaDigipeaters,
+                    "minCount": graphMinCount,
+                    "edgeCount": edges.count
+                ]
+            )
+        }
     }
 }

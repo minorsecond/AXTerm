@@ -39,6 +39,28 @@ enum Telemetry {
         }
     }
 
+    @discardableResult
+    static func measureWithResult<T>(
+        name: String,
+        operation: String? = nil,
+        data: [String: Any]? = nil,
+        updateData: ((T) -> [String: Any]?)? = nil,
+        _ block: () throws -> T
+    ) rethrows -> T {
+        let span = backend.startSpan(name: name, operation: operation, data: data)
+        do {
+            let result = try block()
+            if let updateData, let extraData = updateData(result) {
+                backend.updateSpan(span, data: extraData)
+            }
+            backend.finishSpan(span, status: .ok)
+            return result
+        } catch {
+            backend.finishSpan(span, status: .error)
+            throw error
+        }
+    }
+
     static func capture(error: Error, message: String, data: [String: Any]? = nil) {
         backend.capture(error: error, message: message, data: data)
     }
