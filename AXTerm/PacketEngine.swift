@@ -5,9 +5,10 @@
 //  Created by Ross Wardrup on 1/28/26.
 //
 
+import Combine
+import CoreGraphics
 import Foundation
 import Network
-import Combine
 
 /// Connection status for the KISS TCP client
 enum ConnectionStatus: String {
@@ -668,10 +669,13 @@ final class AnalyticsViewModel: ObservableObject {
     @Published private(set) var series: AnalyticsSeries = .empty
     @Published private(set) var activeBucket: TimeBucket
     @Published private(set) var graphEdges: [GraphEdge] = []
+    @Published private(set) var graphLayout: GraphLayoutResult = .empty
     @Published private(set) var includeViaDigipeaters: Bool
     @Published private(set) var graphMinCount: Int
 
     private let calendar: Calendar
+    private var graphLayoutSize: CGSize = .zero
+    private var graphLayoutSeed: Int = 0
 
     init(
         calendar: Calendar = .current,
@@ -704,13 +708,19 @@ final class AnalyticsViewModel: ObservableObject {
             message: "Analytics graph include via changed",
             data: ["includeVia": includeViaDigipeaters]
         )
-        recomputeEdges(packets: packets)
+        recomputeEdges(packets: packets, layoutReason: "filtersChanged")
     }
 
     func setGraphMinCount(_ minCount: Int, packets: [Packet]) {
         guard minCount != graphMinCount else { return }
         graphMinCount = minCount
-        recomputeEdges(packets: packets)
+        recomputeEdges(packets: packets, layoutReason: "filtersChanged")
+    }
+
+    func updateGraphLayout(size: CGSize, seed: Int, reason: String = "layoutRequested") {
+        graphLayoutSize = size
+        graphLayoutSeed = seed
+        recomputeGraphLayout(reason: reason)
     }
 
     func recompute(packets: [Packet]) {
@@ -767,7 +777,7 @@ final class AnalyticsViewModel: ObservableObject {
             )
         }
 
-        recomputeEdges(packets: packets)
+        recomputeEdges(packets: packets, layoutReason: "dataChanged")
     }
 
     private func validateSeries(_ series: AnalyticsSeries) -> [String] {
@@ -796,7 +806,7 @@ final class AnalyticsViewModel: ObservableObject {
         return issues
     }
 
-    private func recomputeEdges(packets: [Packet]) {
+    private func recomputeEdges(packets: [Packet], layoutReason: String) {
         let edges = Telemetry.measureWithResult(
             name: "analytics.computeEdges",
             data: [
@@ -826,5 +836,123 @@ final class AnalyticsViewModel: ObservableObject {
                 ]
             )
         }
+
+        recomputeGraphLayout(reason: layoutReason)
+    }
+
+    private func recomputeGraphLayout(reason: String) {
+        let nodes = buildGraphNodes(from: graphEdges)
+        Telemetry.breadcrumb(
+            category: "analytics.graph.layout.recompute",
+            message: "Analytics graph layout recomputed",
+            data: [
+                "reason": reason,
+                "nodeCount": nodes.count,
+                "edgeCount": graphEdges.count
+            ]
+        )
+
+        let positions = Telemetry.measure(
+            name: "analytics.graph.layout",
+            data: [
+                "nodeCount": nodes.count,
+                "edgeCount": graphEdges.count,
+                "algorithm": GraphLayoutEngine.algorithmName,
+                "iterations": GraphLayoutEngine.iterations
+            ]
+        ) {
+            GraphLayoutEngine.layout(
+                nodes: nodes,
+                edges: graphEdges,
+                size: graphLayoutSize,
+                seed: graphLayoutSeed
+            )
+        }
+        graphLayout = GraphLayoutResult(nodes: positions, edges: graphEdges)
+
+        let layoutIssues = validateLayout(positions: positions, size: graphLayoutSize)
+        if layoutIssues.invalidCount > 0 {
+            Telemetry.capture(
+                message: "analytics.graph.layout.invalid",
+                data: [
+                    "nodeCount": nodes.count,
+                    "edgeCount": graphEdges.count,
+                    "invalidCount": layoutIssues.invalidCount,
+                    "nonFiniteCount": layoutIssues.nonFiniteCount,
+                    "outOfBoundsCount": layoutIssues.outOfBoundsCount,
+                    "width": layoutIssues.width,
+                    "height": layoutIssues.height
+                ]
+            )
+        }
+    }
+
+    private func buildGraphNodes(from edges: [GraphEdge]) -> [GraphNode] {
+        struct NodeMetrics {
+            var degree: Int = 0
+            var count: Int = 0
+            var bytes: Int = 0
+            var hasBytes: Bool = false
+        }
+
+        var metricsById: [String: NodeMetrics] = [:]
+        for edge in edges {
+            let edgeBytes = edge.bytes
+
+            var sourceMetrics = metricsById[edge.source, default: NodeMetrics()]
+            sourceMetrics.degree += 1
+            sourceMetrics.count += edge.count
+            if let edgeBytes {
+                sourceMetrics.bytes += edgeBytes
+                sourceMetrics.hasBytes = true
+            }
+            metricsById[edge.source] = sourceMetrics
+
+            var targetMetrics = metricsById[edge.target, default: NodeMetrics()]
+            targetMetrics.degree += 1
+            targetMetrics.count += edge.count
+            if let edgeBytes {
+                targetMetrics.bytes += edgeBytes
+                targetMetrics.hasBytes = true
+            }
+            metricsById[edge.target] = targetMetrics
+        }
+
+        return metricsById.map { key, metrics in
+            GraphNode(
+                id: key,
+                degree: metrics.degree,
+                count: metrics.count,
+                bytes: metrics.hasBytes ? metrics.bytes : nil
+            )
+        }
+    }
+
+    private func validateLayout(positions: [NodePosition], size: CGSize) -> (invalidCount: Int, nonFiniteCount: Int, outOfBoundsCount: Int, width: Double, height: Double) {
+        let safeWidth = size.width.isFinite ? Double(size.width) : 0
+        let safeHeight = size.height.isFinite ? Double(size.height) : 0
+        var invalidCount = 0
+        var nonFiniteCount = 0
+        var outOfBoundsCount = 0
+
+        for position in positions {
+            if !position.x.isFinite || !position.y.isFinite {
+                nonFiniteCount += 1
+                invalidCount += 1
+                continue
+            }
+            if position.x < 0 || position.x > safeWidth || position.y < 0 || position.y > safeHeight {
+                outOfBoundsCount += 1
+                invalidCount += 1
+            }
+        }
+
+        return (
+            invalidCount: invalidCount,
+            nonFiniteCount: nonFiniteCount,
+            outOfBoundsCount: outOfBoundsCount,
+            width: safeWidth,
+            height: safeHeight
+        )
     }
 }
