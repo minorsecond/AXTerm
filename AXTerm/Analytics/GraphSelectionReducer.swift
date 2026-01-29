@@ -12,7 +12,7 @@ struct GraphSelectionState: Equatable {
     var primarySelectionID: String?
 
     mutating func normalizePrimary() {
-        if let primarySelectionID, selectedIDs.contains(primarySelectionID) {
+        if let primarySelectionID = primarySelectionID, selectedIDs.contains(primarySelectionID) {
             return
         }
         primarySelectionID = selectedIDs.sorted().first
