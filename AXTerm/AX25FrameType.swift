@@ -23,6 +23,10 @@ enum FrameType: String, Hashable, Codable, CaseIterable {
         rawValue
     }
 
+    var icon: String {
+        shortLabel
+    }
+
     var helpText: String {
         switch self {
         case .ui:
