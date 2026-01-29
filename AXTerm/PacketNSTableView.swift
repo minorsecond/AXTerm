@@ -26,6 +26,9 @@ struct PacketNSTableView: NSViewRepresentable {
 
     let packets: [Packet]
     @Binding var selection: Set<Packet.ID>
+    @Binding var isAtTop: Bool
+    @Binding var followNewest: Bool
+    let scrollToTopToken: Int
     let onInspectSelection: () -> Void
     let onCopyInfo: (Packet) -> Void
     let onCopyRawHex: (Packet) -> Void
@@ -33,6 +36,8 @@ struct PacketNSTableView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             selection: $selection,
+            isAtTop: $isAtTop,
+            followNewest: $followNewest,
             onInspectSelection: onInspectSelection,
             onCopyInfo: onCopyInfo,
             onCopyRawHex: onCopyRawHex
@@ -73,13 +78,19 @@ struct PacketNSTableView: NSViewRepresentable {
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.autoresizingMask = [.width, .height]
+        context.coordinator.attach(scrollView: scrollView)
         return scrollView
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let tableView = nsView.documentView as? NSTableView else { return }
         let rowViewModels = packets.map { PacketRowViewModel.fromPacket($0) }
-        context.coordinator.update(rows: rowViewModels, packets: packets, selection: selection)
+        context.coordinator.update(
+            rows: rowViewModels,
+            packets: packets,
+            selection: selection,
+            scrollToTopToken: scrollToTopToken
+        )
         sizeColumnsToFitContent(in: tableView)
         expandInfoColumnToFill(in: tableView)
     }
@@ -178,6 +189,8 @@ struct PacketNSTableView: NSViewRepresentable {
 extension PacketNSTableView {
     final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
         private let selection: Binding<Set<Packet.ID>>
+        private let isAtTop: Binding<Bool>
+        private let followNewest: Binding<Bool>
         private let onInspectSelection: () -> Void
         private let onCopyInfo: (Packet) -> Void
         private let onCopyRawHex: (Packet) -> Void
@@ -186,30 +199,74 @@ extension PacketNSTableView {
         private(set) var packets: [Packet] = []
         private var isApplyingSelection = false
         private var lastContextRow: Int?
+        private var lastScrollToTopToken = 0
+        private var scrollObserver: NSObjectProtocol?
 
         weak var tableView: NSTableView?
+        weak var scrollView: NSScrollView?
 
         init(
             selection: Binding<Set<Packet.ID>>,
+            isAtTop: Binding<Bool>,
+            followNewest: Binding<Bool>,
             onInspectSelection: @escaping () -> Void,
             onCopyInfo: @escaping (Packet) -> Void,
             onCopyRawHex: @escaping (Packet) -> Void
         ) {
             self.selection = selection
+            self.isAtTop = isAtTop
+            self.followNewest = followNewest
             self.onInspectSelection = onInspectSelection
             self.onCopyInfo = onCopyInfo
             self.onCopyRawHex = onCopyRawHex
         }
 
-        func update(rows: [PacketRowViewModel], packets: [Packet], selection: Set<Packet.ID>) {
+        func update(
+            rows: [PacketRowViewModel],
+            packets: [Packet],
+            selection: Set<Packet.ID>,
+            scrollToTopToken: Int
+        ) {
+            guard let tableView else {
+                SentryManager.shared.captureMessage("Packet table update failed: missing tableView", level: .warning, extra: nil)
+                return
+            }
+            let visibleAnchorID = firstVisiblePacketID(in: tableView)
+            let shouldScrollToTop = scrollToTopToken != lastScrollToTopToken
+            lastScrollToTopToken = scrollToTopToken
             self.rows = rows
             self.packets = packets
-            tableView?.reloadData()
+            tableView.reloadData()
             applySelection(selection)
+            updateScrollPosition(
+                in: tableView,
+                anchorID: visibleAnchorID,
+                shouldScrollToTop: shouldScrollToTop
+            )
+            updateIsAtTop(in: tableView)
+            SentryManager.shared.addBreadcrumb(
+                category: "ui.packets",
+                message: "Packet list updated",
+                level: .info,
+                data: ["rowCount": rows.count]
+            )
         }
 
         func attach(tableView: NSTableView) {
             self.tableView = tableView
+        }
+
+        func attach(scrollView: NSScrollView) {
+            self.scrollView = scrollView
+            scrollView.contentView.postsBoundsChangedNotifications = true
+            scrollObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: scrollView.contentView,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self, let tableView = self.tableView else { return }
+                self.updateIsAtTop(in: tableView)
+            }
         }
 
         func applySelection(_ selection: Set<Packet.ID>) {
@@ -310,6 +367,51 @@ extension PacketNSTableView {
                 guard let self else { return }
                 self.selection.wrappedValue = [packetID]
                 self.onInspectSelection()
+            }
+        }
+
+        private func firstVisiblePacketID(in tableView: NSTableView) -> Packet.ID? {
+            let visibleRect = tableView.visibleRect
+            let visibleRows = tableView.rows(in: visibleRect)
+            guard visibleRows.length > 0 else { return nil }
+            let index = Int(visibleRows.location)
+            guard rows.indices.contains(index) else { return nil }
+            return rows[index].id
+        }
+
+        private func updateScrollPosition(
+            in tableView: NSTableView,
+            anchorID: Packet.ID?,
+            shouldScrollToTop: Bool
+        ) {
+            if shouldScrollToTop || followNewest.wrappedValue || isAtTop.wrappedValue {
+                if rows.indices.contains(0) {
+                    tableView.scrollRowToVisible(0)
+                }
+                return
+            }
+
+            guard let anchorID,
+                  let anchorIndex = rows.firstIndex(where: { $0.id == anchorID }) else {
+                return
+            }
+            tableView.scrollRowToVisible(anchorIndex)
+        }
+
+        private func updateIsAtTop(in tableView: NSTableView) {
+            let visibleRect = tableView.visibleRect
+            let atTop = visibleRect.minY <= 1
+            if isAtTop.wrappedValue != atTop {
+                isAtTop.wrappedValue = atTop
+            }
+            if atTop {
+                followNewest.wrappedValue = true
+            }
+        }
+
+        deinit {
+            if let scrollObserver {
+                NotificationCenter.default.removeObserver(scrollObserver)
             }
         }
 
