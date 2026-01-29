@@ -10,12 +10,12 @@ import SwiftUI
 
 struct PacketNSTableView: NSViewRepresentable {
     struct Constants {
-        static let autosaveName = "PacketTable"
+        static let autosaveName = "PacketTable.v3"
         static let defaultColumnOrder: [ColumnIdentifier] = [.time, .from, .to, .via, .type, .info]
         static let infoColumnIdentifier: ColumnIdentifier = .info
     }
 
-    private static let appearance = PacketTableAppearance.current
+    private static let style = PacketTableStyle.current
 
     enum ColumnIdentifier: String, CaseIterable {
         case time
@@ -48,11 +48,9 @@ struct PacketNSTableView: NSViewRepresentable {
         tableView.allowsMultipleSelection = true
         tableView.allowsEmptySelection = true
         tableView.focusRingType = .none
-        tableView.rowHeight = Self.appearance.rowHeight
+        tableView.rowHeight = Self.style.rowHeight
         tableView.dataSource = context.coordinator
         tableView.delegate = context.coordinator
-        tableView.target = context.coordinator
-        tableView.doubleAction = #selector(Coordinator.handleDoubleClick(_:))
         tableView.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         tableView.allowsColumnResizing = true
         tableView.autosaveName = Constants.autosaveName
@@ -62,12 +60,22 @@ struct PacketNSTableView: NSViewRepresentable {
         tableView.translatesAutoresizingMaskIntoConstraints = true
 
         #if DEBUG
-        resetAutosavedColumnsIfNeeded(for: tableView)
+        let didResetAutosave = resetAutosavedColumnsIfNeeded(for: tableView)
+        #else
+        let didResetAutosave = false
         #endif
+        let hasAutosavedColumns = UserDefaults.standard.object(forKey: "NSTableView Columns \(Constants.autosaveName)") != nil
 
         context.coordinator.attach(tableView: tableView)
+        context.coordinator.shouldApplyMeasuredSizing = (!hasAutosavedColumns && !context.coordinator.hasAppliedMeasuredSizing) || didResetAutosave
+        if didResetAutosave {
+            context.coordinator.clearBaselineWidths()
+        }
+        context.coordinator.configureDoubleClick()
         configureColumns(for: tableView)
-        sizeColumnsToFitContent(in: tableView)
+        context.coordinator.captureBaselineWidths(from: tableView)
+        sizeColumnsToFitContent(in: tableView, coordinator: context.coordinator)
+        ensureInfoColumnLast(in: tableView)
         expandInfoColumnToFill(in: tableView)
 
         let scrollView = NSScrollView()
@@ -83,7 +91,7 @@ struct PacketNSTableView: NSViewRepresentable {
         guard let tableView = nsView.documentView as? NSTableView else { return }
         let rowViewModels = packets.map { PacketRowViewModel.fromPacket($0) }
         context.coordinator.update(rows: rowViewModels, packets: packets, selection: selection)
-        sizeColumnsToFitContent(in: tableView)
+        ensureInfoColumnLast(in: tableView)
         expandInfoColumnToFill(in: tableView)
     }
 
@@ -140,27 +148,35 @@ struct PacketNSTableView: NSViewRepresentable {
     }
 
     #if DEBUG
-    private func resetAutosavedColumnsIfNeeded(for tableView: NSTableView) {
+    @discardableResult
+    private func resetAutosavedColumnsIfNeeded(for tableView: NSTableView) -> Bool {
         // Autosaved column widths can mask changes to autoresizingColumn. Use this
         // debug-only toggle to clear saved widths if the Info column stays narrow.
         let shouldResetAutosave = UserDefaults.standard.bool(forKey: "AXTermResetAutosavedPacketTableColumns")
-        guard shouldResetAutosave, let autosaveName = tableView.autosaveName else { return }
-        let defaultsKey = "NSTableView Columns \(autosaveName)"
-        UserDefaults.standard.removeObject(forKey: defaultsKey)
+        guard shouldResetAutosave, let autosaveName = tableView.autosaveName else { return false }
+        let columnDefaultsKey = "NSTableView Columns \(autosaveName)"
+        let sortDefaultsKey = "NSTableView Sort Ordering \(autosaveName)"
+        UserDefaults.standard.removeObject(forKey: columnDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: sortDefaultsKey)
+        return true
     }
     #endif
 
-    private func sizeColumnsToFitContent(in tableView: NSTableView) {
+    private func sizeColumnsToFitContent(in tableView: NSTableView, coordinator: Coordinator) {
+        guard coordinator.shouldApplyMeasuredSizing else { return }
         guard !tableView.tableColumns.isEmpty else { return }
         let rows = packets.map { PacketRowViewModel.fromPacket($0) }
         let measurements = PacketTableColumnSizer(rows: rows)
         for column in tableView.tableColumns {
             guard let identifier = ColumnIdentifier(rawValue: column.identifier.rawValue) else { continue }
             guard identifier != .info else { continue }
+            guard coordinator.shouldResizeColumn(column) else { continue }
             let targetWidth = max(column.minWidth, measurements.width(for: identifier))
             guard targetWidth > column.width else { continue }
             column.width = targetWidth
         }
+        coordinator.captureColumnWidths(from: tableView)
+        coordinator.shouldApplyMeasuredSizing = false
     }
 
     private func expandInfoColumnToFill(in tableView: NSTableView) {
@@ -177,6 +193,15 @@ struct PacketNSTableView: NSViewRepresentable {
             infoColumn.width = availableWidth
         }
     }
+
+    private func ensureInfoColumnLast(in tableView: NSTableView) {
+        guard let infoIndex = tableView.tableColumns.firstIndex(where: { $0.identifier.rawValue == ColumnIdentifier.info.rawValue }) else {
+            return
+        }
+        let lastIndex = tableView.tableColumns.count - 1
+        guard infoIndex != lastIndex else { return }
+        tableView.moveColumn(infoIndex, toColumn: lastIndex)
+    }
 }
 
 extension PacketNSTableView {
@@ -190,6 +215,13 @@ extension PacketNSTableView {
         private(set) var packets: [Packet] = []
         private var isApplyingSelection = false
         private var lastContextRow: Int?
+        private var lastKnownColumnWidths: [NSUserInterfaceItemIdentifier: CGFloat] = [:]
+        private var baselineColumnWidths: [NSUserInterfaceItemIdentifier: CGFloat] = [:]
+        private var doubleClickRecognizer: NSClickGestureRecognizer?
+        private let columnWidthEpsilon: CGFloat = 0.5
+
+        var hasAppliedMeasuredSizing = false
+        var shouldApplyMeasuredSizing = true
 
         weak var tableView: NSTableView?
 
@@ -216,6 +248,18 @@ extension PacketNSTableView {
             self.tableView = tableView
         }
 
+        func configureDoubleClick() {
+            guard let tableView else { return }
+            tableView.target = self
+            tableView.doubleAction = #selector(handleDoubleClick(_:))
+            if doubleClickRecognizer == nil {
+                let recognizer = NSClickGestureRecognizer(target: self, action: #selector(handleDoubleClickGesture(_:)))
+                recognizer.numberOfClicksRequired = 2
+                tableView.addGestureRecognizer(recognizer)
+                doubleClickRecognizer = recognizer
+            }
+        }
+
         func applySelection(_ selection: Set<Packet.ID>) {
             guard let tableView else { return }
             let mapper = PacketTableSelectionMapper(rows: rows)
@@ -239,6 +283,11 @@ extension PacketNSTableView {
             }
         }
 
+        func tableViewColumnDidResize(_ notification: Notification) {
+            guard let tableView else { return }
+            captureColumnWidths(from: tableView)
+        }
+
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             guard let tableColumn, rows.indices.contains(row) else { return nil }
             let rowModel = rows[row]
@@ -253,11 +302,12 @@ extension PacketNSTableView {
             cell.textField = textField
             cell.addSubview(textField)
             textField.translatesAutoresizingMaskIntoConstraints = false
+            let style = PacketNSTableView.style
             NSLayoutConstraint.activate([
-                textField.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
-                textField.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
-                textField.topAnchor.constraint(equalTo: cell.topAnchor, constant: PacketNSTableView.appearance.rowVerticalPadding),
-                textField.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -PacketNSTableView.appearance.rowVerticalPadding)
+                textField.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: style.cellHorizontalPadding),
+                textField.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -style.cellHorizontalPadding),
+                textField.topAnchor.constraint(equalTo: cell.topAnchor, constant: style.cellVerticalPadding),
+                textField.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -style.cellVerticalPadding)
             ])
             return cell
         }
@@ -278,6 +328,13 @@ extension PacketNSTableView {
         @objc func handleDoubleClick(_ sender: Any?) {
             guard let tableView else { return }
             let row = tableView.clickedRow
+            activateRow(row)
+        }
+
+        @objc func handleDoubleClickGesture(_ sender: NSClickGestureRecognizer) {
+            guard let tableView else { return }
+            let location = sender.location(in: tableView)
+            let row = tableView.row(at: location)
             activateRow(row)
         }
 
@@ -309,12 +366,37 @@ extension PacketNSTableView {
             guard let tableView else { return }
             let resolvedRow = row ?? tableView.selectedRowIndexes.first
             guard let resolvedRow, rows.indices.contains(resolvedRow) else { return }
+            tableView.selectRowIndexes(IndexSet(integer: resolvedRow), byExtendingSelection: false)
             let packetID = rows[resolvedRow].id
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.selection.wrappedValue = [packetID]
                 self.onInspectSelection()
             }
+        }
+
+        func captureColumnWidths(from tableView: NSTableView) {
+            let widths = tableView.tableColumns.reduce(into: [NSUserInterfaceItemIdentifier: CGFloat]()) { result, column in
+                result[column.identifier] = column.width
+            }
+            lastKnownColumnWidths = widths
+            hasAppliedMeasuredSizing = true
+        }
+
+        func captureBaselineWidths(from tableView: NSTableView) {
+            guard baselineColumnWidths.isEmpty else { return }
+            baselineColumnWidths = tableView.tableColumns.reduce(into: [NSUserInterfaceItemIdentifier: CGFloat]()) { result, column in
+                result[column.identifier] = column.width
+            }
+        }
+
+        func clearBaselineWidths() {
+            baselineColumnWidths.removeAll()
+        }
+
+        func shouldResizeColumn(_ column: NSTableColumn) -> Bool {
+            guard let baselineWidth = baselineColumnWidths[column.identifier] else { return true }
+            return abs(column.width - baselineWidth) <= columnWidthEpsilon
         }
 
         private func makeTextField(for identifier: NSUserInterfaceItemIdentifier, row: PacketRowViewModel) -> NSTextField {
@@ -376,11 +458,12 @@ extension PacketNSTableView {
             pillView.toolTip = row.typeTooltip
             cell.addSubview(pillView)
             pillView.translatesAutoresizingMaskIntoConstraints = false
+            let style = PacketNSTableView.style
             NSLayoutConstraint.activate([
                 pillView.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
                 pillView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-                pillView.topAnchor.constraint(greaterThanOrEqualTo: cell.topAnchor, constant: PacketNSTableView.appearance.rowVerticalPadding),
-                pillView.bottomAnchor.constraint(lessThanOrEqualTo: cell.bottomAnchor, constant: -PacketNSTableView.appearance.rowVerticalPadding)
+                pillView.topAnchor.constraint(greaterThanOrEqualTo: cell.topAnchor, constant: style.cellVerticalPadding),
+                pillView.bottomAnchor.constraint(lessThanOrEqualTo: cell.bottomAnchor, constant: -style.cellVerticalPadding)
             ])
             return cell
         }
@@ -389,29 +472,40 @@ extension PacketNSTableView {
 
 private final class TypePillView: NSView {
     private let textField = NSTextField(labelWithString: "")
+    private let backgroundView = NSView()
 
     init(text: String, isLowSignal: Bool) {
         super.init(frame: .zero)
+        let style = PacketTableStyle.current
         wantsLayer = true
+        backgroundView.wantsLayer = true
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+        addSubview(backgroundView)
+        backgroundView.translatesAutoresizingMaskIntoConstraints = false
         textField.stringValue = text
-        textField.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+        textField.font = .monospacedSystemFont(ofSize: style.pillFontSize, weight: .semibold)
         textField.alignment = .center
-        textField.textColor = .secondaryLabelColor
+        textField.textColor = isLowSignal ? .secondaryLabelColor : .labelColor
         textField.setContentHuggingPriority(.required, for: .horizontal)
         textField.setContentCompressionResistancePriority(.required, for: .horizontal)
-        addSubview(textField)
+        backgroundView.addSubview(textField)
         textField.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            textField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            textField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            textField.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            textField.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2)
+            backgroundView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            backgroundView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            backgroundView.topAnchor.constraint(equalTo: topAnchor),
+            backgroundView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: style.pillMinWidth),
+            textField.leadingAnchor.constraint(equalTo: backgroundView.leadingAnchor, constant: style.pillHPadding),
+            textField.trailingAnchor.constraint(equalTo: backgroundView.trailingAnchor, constant: -style.pillHPadding),
+            textField.topAnchor.constraint(equalTo: backgroundView.topAnchor, constant: style.pillVPadding),
+            textField.bottomAnchor.constraint(equalTo: backgroundView.bottomAnchor, constant: -style.pillVPadding)
         ])
-        let appearance = PacketTableAppearance.current
-        layer?.cornerRadius = appearance.pillCornerRadius ?? 6
-        layer?.borderWidth = appearance.pillBorderWidth
-        layer?.borderColor = NSColor.tertiaryLabelColor.cgColor
-        layer?.backgroundColor = NSColor.clear.cgColor
+        backgroundView.layer?.cornerRadius = style.pillCornerRadius
+        backgroundView.layer?.borderWidth = style.pillBorderWidth
+        backgroundView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(style.pillBorderAlpha).cgColor
+        backgroundView.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(style.pillBackgroundAlpha).cgColor
     }
 
     @available(*, unavailable)
@@ -420,13 +514,20 @@ private final class TypePillView: NSView {
     }
 }
 
-private struct PacketTableAppearance {
-    static let current = PacketTableAppearance()
+private struct PacketTableStyle {
+    static let current = PacketTableStyle()
 
+    let rowHeight: CGFloat = 20
+    let cellVerticalPadding: CGFloat = 1
+    let cellHorizontalPadding: CGFloat = 4
+    let pillCornerRadius: CGFloat = 8
+    let pillHPadding: CGFloat = 6
+    let pillVPadding: CGFloat = 2
+    let pillBackgroundAlpha: CGFloat = 0.35
+    let pillBorderAlpha: CGFloat = 0.6
+    let pillMinWidth: CGFloat = 28
+    let pillFontSize: CGFloat = 11
     let pillBorderWidth: CGFloat = 1
-    let rowVerticalPadding: CGFloat = 2
-    let rowHeight: CGFloat = 22
-    let pillCornerRadius: CGFloat? = 6
 }
 
 private struct PacketTableColumnSizer {
