@@ -384,7 +384,12 @@ extension PacketNSTableView {
             anchorID: Packet.ID?,
             shouldScrollToTop: Bool
         ) {
-            if shouldScrollToTop || followNewest.wrappedValue || isAtTop.wrappedValue {
+            let shouldAutoScroll = AutoScrollDecision.shouldAutoScroll(
+                isUserAtTop: isAtTop.wrappedValue,
+                followNewest: followNewest.wrappedValue,
+                didRequestScrollToTop: shouldScrollToTop
+            )
+            if shouldAutoScroll {
                 if rows.indices.contains(0) {
                     tableView.scrollRowToVisible(0)
                 }

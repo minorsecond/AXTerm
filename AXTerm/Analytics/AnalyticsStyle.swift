@@ -52,6 +52,7 @@ enum AnalyticsStyle {
         static let layoutCooling: Double = 0.92
         static let layoutTimeStep: Double = 0.018
         static let layoutEnergyThreshold: Double = 0.00001
+        static let layoutPublishThreshold: Double = 0.0005
         static let repulsionStrength: Double = 0.015
         static let springStrength: Double = 0.12
         static let springLength: Double = 0.18

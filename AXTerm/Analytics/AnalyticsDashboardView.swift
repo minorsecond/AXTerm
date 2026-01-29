@@ -35,14 +35,10 @@ struct AnalyticsDashboardView: View {
             viewModel.updatePackets(packetEngine.packets)
         }
         .onReceive(packetEngine.$packets) { packets in
-            DispatchQueue.main.async {
-                viewModel.updatePackets(packets)
-            }
+            viewModel.updatePackets(packets)
         }
-        .onChange(of: viewModel.selectedNodeID) { _, newValue in
-            DispatchQueue.main.async {
-                packetEngine.selectedStationCall = newValue
-            }
+        .onChange(of: viewModel.viewState.selectedNodeID) { _, newValue in
+            packetEngine.selectedStationCall = newValue
         }
     }
 
@@ -99,7 +95,7 @@ struct AnalyticsDashboardView: View {
 
     private var summarySection: some View {
         AnalyticsCard(title: "Summary") {
-            if let summary = viewModel.summary {
+            if let summary = viewModel.viewState.summary {
                 LazyVGrid(columns: metricColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
                     SummaryMetricCard(title: "Total packets", value: summary.totalPackets.formatted())
                     SummaryMetricCard(title: "Unique stations", value: summary.uniqueStations.formatted())
@@ -120,35 +116,35 @@ struct AnalyticsDashboardView: View {
         AnalyticsCard(title: "Charts") {
             LazyVGrid(columns: chartColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
                 ChartCard(title: "Packets over time") {
-                    TimeSeriesChart(points: viewModel.series.packetsPerBucket, valueLabel: "Packets")
+                    TimeSeriesChart(points: viewModel.viewState.series.packetsPerBucket, valueLabel: "Packets")
                 }
 
                 ChartCard(title: "Bytes over time") {
-                    TimeSeriesChart(points: viewModel.series.bytesPerBucket, valueLabel: "Bytes")
+                    TimeSeriesChart(points: viewModel.viewState.series.bytesPerBucket, valueLabel: "Bytes")
                 }
 
                 ChartCard(title: "Unique stations over time") {
-                    TimeSeriesChart(points: viewModel.series.uniqueStationsPerBucket, valueLabel: "Stations")
+                    TimeSeriesChart(points: viewModel.viewState.series.uniqueStationsPerBucket, valueLabel: "Stations")
                 }
 
                 ChartCard(title: "Traffic intensity (hour vs day)", height: AnalyticsStyle.Layout.heatmapHeight) {
-                    HeatmapView(data: viewModel.heatmap)
+                    HeatmapView(data: viewModel.viewState.heatmap)
                 }
 
                 ChartCard(title: "Payload size distribution") {
-                    HistogramChart(data: viewModel.histogram)
+                    HistogramChart(data: viewModel.viewState.histogram)
                 }
 
                 ChartCard(title: "Top talkers") {
-                    TopListView(rows: viewModel.topTalkers)
+                    TopListView(rows: viewModel.viewState.topTalkers)
                 }
 
                 ChartCard(title: "Top destinations") {
-                    TopListView(rows: viewModel.topDestinations)
+                    TopListView(rows: viewModel.viewState.topDestinations)
                 }
 
                 ChartCard(title: "Top digipeaters") {
-                    TopListView(rows: viewModel.topDigipeaters)
+                    TopListView(rows: viewModel.viewState.topDigipeaters)
                 }
             }
         }
@@ -158,10 +154,10 @@ struct AnalyticsDashboardView: View {
         AnalyticsCard(title: "Network graph") {
             HStack(alignment: .top, spacing: AnalyticsStyle.Layout.cardSpacing) {
                 AnalyticsGraphView(
-                    graphModel: viewModel.graphModel,
-                    nodePositions: viewModel.nodePositions,
-                    selectedNodeIDs: viewModel.selectedNodeIDs,
-                    hoveredNodeID: viewModel.hoveredNodeID,
+                    graphModel: viewModel.viewState.graphModel,
+                    nodePositions: viewModel.viewState.nodePositions,
+                    selectedNodeIDs: viewModel.viewState.selectedNodeIDs,
+                    hoveredNodeID: viewModel.viewState.hoveredNodeID,
                     resetToken: graphResetToken,
                     focusNodeID: focusNodeID,
                     onSelect: { nodeID, isShift in
@@ -171,9 +167,7 @@ struct AnalyticsDashboardView: View {
                         viewModel.handleBackgroundClick()
                     },
                     onHover: { nodeID in
-                        DispatchQueue.main.async {
-                            viewModel.updateHover(for: nodeID)
-                        }
+                        viewModel.updateHover(for: nodeID)
                     },
                     onFocusHandled: {
                         focusNodeID = nil
@@ -184,12 +178,12 @@ struct AnalyticsDashboardView: View {
                 GraphInspectorView(details: viewModel.selectedNodeDetails()) {
                     viewModel.handleBackgroundClick()
                 } onFocus: {
-                    focusNodeID = viewModel.selectedNodeID
+                    focusNodeID = viewModel.viewState.selectedNodeID
                 }
                 .frame(width: AnalyticsStyle.Layout.inspectorWidth)
             }
 
-            if let note = viewModel.graphNote {
+            if let note = viewModel.viewState.graphNote {
                 Text(note)
                     .font(.caption)
                     .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
@@ -324,9 +318,7 @@ private struct TimeSeriesChart: View {
                     Rectangle().fill(Color.clear).contentShape(Rectangle())
                         .onHover { isHovering in
                             if !isHovering {
-                                DispatchQueue.main.async {
-                                    selectedPoint = nil
-                                }
+                                selectedPoint = nil
                             }
                         }
                         .onContinuousHover { phase in
@@ -336,14 +328,10 @@ private struct TimeSeriesChart: View {
                                     let closest = points.min { lhs, rhs in
                                         abs(lhs.bucket.timeIntervalSince(date)) < abs(rhs.bucket.timeIntervalSince(date))
                                     }
-                                    DispatchQueue.main.async {
-                                        selectedPoint = closest
-                                    }
+                                    selectedPoint = closest
                                 }
                             case .ended:
-                                DispatchQueue.main.async {
-                                    selectedPoint = nil
-                                }
+                                selectedPoint = nil
                             }
                         }
                         .overlay(alignment: .topLeading) {
@@ -386,14 +374,10 @@ private struct HistogramChart: View {
                             case let .active(location):
                                 if let label: String = proxy.value(atX: location.x) {
                                     let bin = data.bins.first(where: { $0.label == label })
-                                    DispatchQueue.main.async {
-                                        selectedBin = bin
-                                    }
+                                    selectedBin = bin
                                 }
                             case .ended:
-                                DispatchQueue.main.async {
-                                    selectedBin = nil
-                                }
+                                selectedBin = nil
                             }
                         }
                         .overlay(alignment: .topLeading) {
@@ -645,9 +629,7 @@ private struct AnalyticsGraphView: View {
                     let center = CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2)
                     viewport.offset = CGSize(width: center.x - focused.x, height: center.y - focused.y)
                 }
-                DispatchQueue.main.async {
-                    onFocusHandled()
-                }
+                onFocusHandled()
             }
         }
     }
