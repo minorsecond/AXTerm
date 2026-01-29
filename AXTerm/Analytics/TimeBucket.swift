@@ -1,0 +1,70 @@
+//
+//  TimeBucket.swift
+//  AXTerm
+//
+//  Created by AXTerm on 2026-02-18.
+//
+
+import Foundation
+
+enum TimeBucket: String, CaseIterable, Hashable, Sendable {
+    case minute
+    case fiveMinutes
+    case fifteenMinutes
+    case hour
+    case day
+
+    var displayName: String {
+        switch self {
+        case .minute:
+            return "minute"
+        case .fiveMinutes:
+            return "fiveMinutes"
+        case .fifteenMinutes:
+            return "fifteenMinutes"
+        case .hour:
+            return "hour"
+        case .day:
+            return "day"
+        }
+    }
+
+    func normalizedStart(for date: Date, calendar: Calendar) -> Date {
+        var components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        switch self {
+        case .minute:
+            break
+        case .fiveMinutes:
+            components.minute = floorMinute(components.minute, divisor: 5)
+        case .fifteenMinutes:
+            components.minute = floorMinute(components.minute, divisor: 15)
+        case .hour:
+            components.minute = 0
+        case .day:
+            components.hour = 0
+            components.minute = 0
+        }
+        components.second = 0
+        return calendar.date(from: components) ?? date
+    }
+
+    private func floorMinute(_ minute: Int?, divisor: Int) -> Int {
+        guard let minute else { return 0 }
+        return (minute / divisor) * divisor
+    }
+}
+
+struct BucketKey: Hashable, Comparable, Sendable {
+    let date: Date
+
+    init(date: Date, bucket: TimeBucket, calendar: Calendar) {
+        self.date = bucket.normalizedStart(for: date, calendar: calendar)
+    }
+
+    static func < (lhs: BucketKey, rhs: BucketKey) -> Bool {
+        if lhs.date == rhs.date {
+            return lhs.date.timeIntervalSinceReferenceDate < rhs.date.timeIntervalSinceReferenceDate
+        }
+        return lhs.date < rhs.date
+    }
+}
