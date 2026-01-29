@@ -157,9 +157,7 @@ private struct PacketTableCell<Content: View>: View {
         content
             .frame(maxWidth: .infinity, alignment: alignment)
             .contentShape(Rectangle())
-            .background(RowSelectionCaptureView {
-                selection = [packet.id]
-            })
+            .background(debugHitTestOverlay)
             .contextMenu {
                 Button("Inspect Packet") {
                     selection = [packet.id]
@@ -177,9 +175,23 @@ private struct PacketTableCell<Content: View>: View {
                     onCopyRawHex(packet)
                 }
             }
-            .onTapGesture(count: 2) {
+            .simultaneousGesture(TapGesture(count: 2).onEnded {
                 selection = [packet.id]
                 onInspectSelection()
-            }
+            })
     }
+
+    @ViewBuilder
+    private var debugHitTestOverlay: some View {
+        if Self.debugHitTesting {
+            Rectangle()
+                .strokeBorder(.pink.opacity(0.6), lineWidth: 1)
+                .background(Color.pink.opacity(0.1))
+                .allowsHitTesting(false)
+        } else {
+            EmptyView()
+        }
+    }
+
+    private static let debugHitTesting = false
 }
