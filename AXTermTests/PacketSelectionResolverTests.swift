@@ -51,4 +51,32 @@ final class PacketSelectionResolverTests: XCTestCase {
 
         XCTAssertTrue(filtered.isEmpty)
     }
+
+    func testFilteredSelectionPreservesSelectionWhenPacketsGrow() {
+        let selectedID = UUID()
+        let initialPackets = [
+            Packet(id: selectedID, from: AX25Address(call: "N0CALL"))
+        ]
+        let selection: Set<Packet.ID> = [selectedID]
+        let expandedPackets = initialPackets + [Packet(id: UUID(), from: AX25Address(call: "W0ABC"))]
+
+        let filtered = PacketSelectionResolver.filteredSelection(selection, for: expandedPackets)
+
+        XCTAssertEqual(filtered, selection)
+    }
+
+    func testFilteredSelectionPreservesSelectionWithInsertAtTop() {
+        let selectedID = UUID()
+        let existingPackets = [
+            Packet(id: selectedID, from: AX25Address(call: "N0CALL"))
+        ]
+        let selection: Set<Packet.ID> = [selectedID]
+        let packetsWithInsertion = [
+            Packet(id: UUID(), from: AX25Address(call: "K1ABC"))
+        ] + existingPackets
+
+        let filtered = PacketSelectionResolver.filteredSelection(selection, for: packetsWithInsertion)
+
+        XCTAssertEqual(filtered, selection)
+    }
 }
