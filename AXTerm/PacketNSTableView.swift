@@ -111,7 +111,7 @@ struct PacketNSTableView: NSViewRepresentable {
         column.minWidth = minWidth
         column.width = width
         column.resizingMask = .userResizingMask
-        column.headerCell.toolTip = toolTip
+        column.headerToolTip = toolTip
         return column
     }
 
