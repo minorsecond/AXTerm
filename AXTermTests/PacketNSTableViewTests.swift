@@ -17,4 +17,8 @@ final class PacketNSTableViewTests: XCTestCase {
         let identifiers = PacketNSTableView.ColumnIdentifier.allCases.map { $0.rawValue }
         XCTAssertEqual(identifiers, ["time", "from", "to", "via", "type", "info"])
     }
+
+    func testAutoresizingColumnIdentifierIsInfo() {
+        XCTAssertEqual(PacketNSTableView.Constants.autoresizingColumnIdentifier, .info)
+    }
 }

@@ -11,6 +11,7 @@ import SwiftUI
 struct PacketNSTableView: NSViewRepresentable {
     struct Constants {
         static let autosaveName = "PacketTable"
+        static let autoresizingColumnIdentifier: ColumnIdentifier = .info
     }
 
     enum ColumnIdentifier: String, CaseIterable {
@@ -48,10 +49,18 @@ struct PacketNSTableView: NSViewRepresentable {
         tableView.delegate = context.coordinator
         tableView.target = context.coordinator
         tableView.doubleAction = #selector(Coordinator.handleDoubleClick(_:))
-        tableView.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+        tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        tableView.autoresizesAllColumnsToFit = false
+        tableView.allowsColumnResizing = true
         tableView.autosaveName = Constants.autosaveName
         tableView.autosaveTableColumns = true
         tableView.menu = contextMenu(for: context.coordinator)
+        tableView.autoresizingMask = [.width, .height]
+        tableView.translatesAutoresizingMaskIntoConstraints = true
+
+        #if DEBUG
+        resetAutosavedColumnsIfNeeded(for: tableView)
+        #endif
 
         context.coordinator.attach(tableView: tableView)
         configureColumns(for: tableView)
@@ -61,6 +70,7 @@ struct PacketNSTableView: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
+        scrollView.autoresizingMask = [.width, .height]
         return scrollView
     }
 
@@ -87,6 +97,9 @@ struct PacketNSTableView: NSViewRepresentable {
         tableView.addTableColumn(viaColumn)
         tableView.addTableColumn(typeColumn)
         tableView.addTableColumn(infoColumn)
+        // The autoresizingColumn is required for Finder-style fill behavior so Info expands
+        // to consume remaining width when the window grows.
+        tableView.autoresizingColumn = infoColumn
     }
 
     private func makeColumn(id: ColumnIdentifier, title: String, minWidth: CGFloat, width: CGFloat) -> NSTableColumn {
@@ -118,6 +131,17 @@ struct PacketNSTableView: NSViewRepresentable {
 
         return menu
     }
+
+    #if DEBUG
+    private func resetAutosavedColumnsIfNeeded(for tableView: NSTableView) {
+        // Autosaved column widths can mask changes to autoresizingColumn. Use this
+        // debug-only toggle to clear saved widths if the Info column stays narrow.
+        let shouldResetAutosave = false
+        guard shouldResetAutosave, let autosaveName = tableView.autosaveName else { return }
+        let defaultsKey = "NSTableView Columns \(autosaveName)"
+        UserDefaults.standard.removeObject(forKey: defaultsKey)
+    }
+    #endif
 }
 
 extension PacketNSTableView {
