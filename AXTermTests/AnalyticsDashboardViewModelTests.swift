@@ -96,19 +96,20 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             packetScheduler: .main
         )
 
-        viewModel.selectNode("alpha")
+        viewModel.handleNodeClick("alpha", isShift: false)
         XCTAssertEqual(viewModel.selectedNodeID, "alpha")
+        XCTAssertEqual(viewModel.selectedNodeIDs, ["alpha"])
 
         viewModel.updateHover(for: "alpha", isHovering: true)
         XCTAssertEqual(viewModel.hoveredNodeID, "alpha")
 
-        viewModel.togglePinnedNode("alpha")
-        XCTAssertEqual(viewModel.pinnedNodeID, "alpha")
+        viewModel.handleNodeDoubleClick("alpha", isShift: false)
+        XCTAssertNotNil(viewModel.stationInspector)
 
         viewModel.updateHover(for: "alpha", isHovering: false)
         XCTAssertNil(viewModel.hoveredNodeID)
 
-        viewModel.selectNode(nil)
+        viewModel.handleBackgroundClick()
         XCTAssertNil(viewModel.selectedNodeID)
     }
 }
