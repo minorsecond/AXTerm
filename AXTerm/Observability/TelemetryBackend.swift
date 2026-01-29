@@ -27,6 +27,7 @@ protocol TelemetryBackend {
 
     func addBreadcrumb(category: String, message: String, data: [String: Any]?, level: TelemetryLevel)
     func startSpan(name: String, operation: String?, data: [String: Any]?) -> TelemetrySpanToken?
+    func updateSpan(_ span: TelemetrySpanToken?, data: [String: Any])
     func finishSpan(_ span: TelemetrySpanToken?, status: TelemetrySpanStatus)
     func capture(error: Error, message: String, data: [String: Any]?)
     func capture(message: String, data: [String: Any]?)
@@ -37,6 +38,7 @@ struct NoOpTelemetryBackend: TelemetryBackend {
 
     func addBreadcrumb(category: String, message: String, data: [String: Any]?, level: TelemetryLevel) {}
     func startSpan(name: String, operation: String?, data: [String: Any]?) -> TelemetrySpanToken? { nil }
+    func updateSpan(_ span: TelemetrySpanToken?, data: [String: Any]) {}
     func finishSpan(_ span: TelemetrySpanToken?, status: TelemetrySpanStatus) {}
     func capture(error: Error, message: String, data: [String: Any]?) {}
     func capture(message: String, data: [String: Any]?) {}
@@ -79,6 +81,14 @@ final class SentryTelemetryBackend: TelemetryBackend {
             }
         }
         return span
+    }
+
+    func updateSpan(_ span: TelemetrySpanToken?, data: [String: Any]) {
+        guard SentrySDK.isEnabled else { return }
+        guard let span = span as? Span else { return }
+        for (key, value) in data {
+            span.setData(value: value, key: key)
+        }
     }
 
     func finishSpan(_ span: TelemetrySpanToken?, status _: TelemetrySpanStatus) {
