@@ -13,11 +13,42 @@ import os
 @MainActor
 final class AnalyticsDashboardViewModel: ObservableObject {
     private let logger = Logger(subsystem: "AXTerm", category: "Analytics")
-    @Published var bucket: TimeBucket {
+    @Published var timeframe: AnalyticsTimeframe {
         didSet {
-            guard bucket != oldValue else { return }
+            guard timeframe != oldValue else { return }
+            trackFilterChange(reason: "timeframe")
+            updateResolvedBucket(reason: "timeframe")
+            scheduleAggregation(reason: "timeframe")
+            scheduleGraphBuild(reason: "timeframe")
+        }
+    }
+    @Published var bucketSelection: AnalyticsBucketSelection {
+        didSet {
+            guard bucketSelection != oldValue else { return }
             trackFilterChange(reason: "bucket")
+            updateResolvedBucket(reason: "bucket")
             scheduleAggregation(reason: "bucket")
+        }
+    }
+    @Published private(set) var resolvedBucket: TimeBucket
+    @Published var customRangeStart: Date {
+        didSet {
+            guard customRangeStart != oldValue else { return }
+            guard timeframe == .custom else { return }
+            trackFilterChange(reason: "customRangeStart")
+            updateResolvedBucket(reason: "customRangeStart")
+            scheduleAggregation(reason: "customRangeStart")
+            scheduleGraphBuild(reason: "customRangeStart")
+        }
+    }
+    @Published var customRangeEnd: Date {
+        didSet {
+            guard customRangeEnd != oldValue else { return }
+            guard timeframe == .custom else { return }
+            trackFilterChange(reason: "customRangeEnd")
+            updateResolvedBucket(reason: "customRangeEnd")
+            scheduleAggregation(reason: "customRangeEnd")
+            scheduleGraphBuild(reason: "customRangeEnd")
         }
     }
     @Published var includeViaDigipeaters: Bool {
@@ -59,6 +90,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private let packetSubject = CurrentValueSubject<[Packet], Never>([])
     private var cancellables: Set<AnyCancellable> = []
     private var packets: [Packet] = []
+    private var chartWidth: CGFloat = 640
     private var graphLayoutSeed: Int = 1
     private var selectionState = GraphSelectionState()
     private var layoutState: ForceLayoutState?
@@ -76,7 +108,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     init(
         calendar: Calendar = .current,
-        bucket: TimeBucket = .fiveMinutes,
+        timeframe: AnalyticsTimeframe = .oneHour,
+        bucketSelection: AnalyticsBucketSelection = .auto,
         includeViaDigipeaters: Bool = false,
         minEdgeCount: Int = 1,
         maxNodes: Int? = nil,
@@ -85,10 +118,23 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         packetScheduler: RunLoop = .main
     ) {
         self.calendar = calendar
-        self.bucket = bucket
+        self.timeframe = timeframe
+        self.bucketSelection = bucketSelection
         self.includeViaDigipeaters = includeViaDigipeaters
         self.minEdgeCount = AnalyticsInputNormalizer.minEdgeCount(minEdgeCount)
         self.maxNodes = AnalyticsInputNormalizer.maxNodes(maxNodes ?? AnalyticsStyle.Graph.maxNodesDefault)
+        let defaultRange = timeframe.dateInterval(
+            now: Date(),
+            customStart: Date().addingTimeInterval(-3600),
+            customEnd: Date()
+        )
+        self.customRangeStart = defaultRange.start
+        self.customRangeEnd = defaultRange.end
+        self.resolvedBucket = bucketSelection.resolvedBucket(
+            for: timeframe,
+            chartWidth: chartWidth,
+            customRange: defaultRange
+        )
         self.aggregationScheduler = CoalescingScheduler(delay: .milliseconds(Int(packetDebounce * 1000)))
         self.graphScheduler = CoalescingScheduler(delay: .milliseconds(Int(graphDebounce * 1000)))
         bindPackets(packetScheduler: packetScheduler)
@@ -98,6 +144,15 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         self.packets = packets
         guard isActive else { return }
         packetSubject.send(packets)
+    }
+
+    func updateChartWidth(_ width: CGFloat) {
+        guard width > 0, abs(width - chartWidth) > 4 else { return }
+        chartWidth = width
+        updateResolvedBucket(reason: "chartWidth")
+        if bucketSelection == .auto {
+            scheduleAggregation(reason: "chartWidth")
+        }
     }
 
     func resetGraphView() {
@@ -131,6 +186,15 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             )
         }
 
+        handleSelectionEffect(effect)
+    }
+
+    func handleSelectionRect(_ nodeIDs: Set<String>, isShift: Bool) {
+        let effect = GraphSelectionReducer.reduce(
+            state: &selectionState,
+            action: .selectMany(ids: nodeIDs, isShift: isShift)
+        )
+        updateSelectionState()
         handleSelectionEffect(effect)
     }
 
@@ -197,7 +261,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             message: "Analytics filter changed",
             data: [
                 "reason": reason,
-                "bucket": bucket.displayName,
+                "timeframe": timeframe.displayName,
+                "bucket": resolvedBucket.displayName,
                 "includeVia": includeViaDigipeaters,
                 "minEdgeCount": minEdgeCount,
                 "maxNodes": maxNodes
@@ -226,14 +291,18 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     private func recomputeAggregation(reason: String) async {
-        let packetSnapshot = packets
-        let bucketSnapshot = bucket
+        let now = Date()
+        let packetSnapshot = filteredPackets(now: now)
+        let bucketSnapshot = resolvedBucket
         let includeViaSnapshot = includeViaDigipeaters
         let key = AggregationCacheKey(
+            timeframe: timeframe,
             bucket: bucketSnapshot,
             includeVia: includeViaSnapshot,
             packetCount: packetSnapshot.count,
-            lastTimestamp: packetSnapshot.map { $0.timestamp }.max()
+            lastTimestamp: packetSnapshot.map { $0.timestamp }.max(),
+            customStart: customRangeStart,
+            customEnd: customRangeEnd
         )
 
         if loopDetection.record(reason: reason) {
@@ -248,10 +317,13 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
 
         let inputsHash = AnalyticsInputHasher.hash(
+            timeframe: timeframe,
             bucket: bucketSnapshot,
             includeVia: includeViaSnapshot,
             packetCount: packetSnapshot.count,
-            lastTimestamp: packetSnapshot.last?.timestamp
+            lastTimestamp: packetSnapshot.last?.timestamp,
+            customStart: customRangeStart,
+            customEnd: customRangeEnd
         )
         telemetryLimiter.breadcrumb(
             category: "analytics.recompute.requested",
@@ -272,6 +344,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             message: "Analytics recompute started",
             data: [
                 TelemetryContext.packetCount: packetSnapshot.count,
+                "timeframe": timeframe.displayName,
                 "bucket": bucketSnapshot.displayName,
                 "includeVia": includeViaSnapshot,
                 "reason": reason
@@ -333,17 +406,41 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.topDigipeaters = result.topDigipeaters
     }
 
+    private func updateResolvedBucket(reason: String) {
+        let range = currentDateRange(now: Date())
+        let nextBucket = bucketSelection.resolvedBucket(
+            for: timeframe,
+            chartWidth: chartWidth,
+            customRange: range
+        )
+        guard nextBucket != resolvedBucket else { return }
+        resolvedBucket = nextBucket
+    }
+
+    private func currentDateRange(now: Date) -> DateInterval {
+        timeframe.dateInterval(now: now, customStart: customRangeStart, customEnd: customRangeEnd)
+    }
+
+    private func filteredPackets(now: Date) -> [Packet] {
+        let range = currentDateRange(now: now)
+        return packets.filter { range.contains($0.timestamp) }
+    }
+
     private func rebuildGraph(reason: String) async {
-        let packetSnapshot = packets
+        let now = Date()
+        let packetSnapshot = filteredPackets(now: now)
         let includeViaSnapshot = includeViaDigipeaters
         let minEdgeSnapshot = minEdgeCount
         let maxNodesSnapshot = maxNodes
         let key = GraphCacheKey(
+            timeframe: timeframe,
             includeVia: includeViaSnapshot,
             minEdgeCount: minEdgeSnapshot,
             maxNodes: maxNodesSnapshot,
             packetCount: packetSnapshot.count,
-            lastTimestamp: packetSnapshot.map { $0.timestamp }.max()
+            lastTimestamp: packetSnapshot.map { $0.timestamp }.max(),
+            customStart: customRangeStart,
+            customEnd: customRangeEnd
         )
 
         if let cached = graphCache[key] {
@@ -357,6 +454,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             message: "Graph build started",
             data: [
                 TelemetryContext.packetCount: packetSnapshot.count,
+                "timeframe": timeframe.displayName,
                 "includeVia": includeViaSnapshot,
                 "minEdgeCount": minEdgeSnapshot,
                 "maxNodes": maxNodesSnapshot,
@@ -587,18 +685,24 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 }
 
 private struct AggregationCacheKey: Hashable {
+    let timeframe: AnalyticsTimeframe
     let bucket: TimeBucket
     let includeVia: Bool
     let packetCount: Int
     let lastTimestamp: Date?
+    let customStart: Date
+    let customEnd: Date
 }
 
 private struct GraphCacheKey: Hashable {
+    let timeframe: AnalyticsTimeframe
     let includeVia: Bool
     let minEdgeCount: Int
     let maxNodes: Int
     let packetCount: Int
     let lastTimestamp: Date?
+    let customStart: Date
+    let customEnd: Date
 }
 
 struct GraphInspectorDetails: Hashable, Sendable {
@@ -607,12 +711,23 @@ struct GraphInspectorDetails: Hashable, Sendable {
 }
 
 private enum AnalyticsInputHasher {
-    static func hash(bucket: TimeBucket, includeVia: Bool, packetCount: Int, lastTimestamp: Date?) -> Int {
+    static func hash(
+        timeframe: AnalyticsTimeframe,
+        bucket: TimeBucket,
+        includeVia: Bool,
+        packetCount: Int,
+        lastTimestamp: Date?,
+        customStart: Date,
+        customEnd: Date
+    ) -> Int {
         var hasher = Hasher()
+        hasher.combine(timeframe)
         hasher.combine(bucket)
         hasher.combine(includeVia)
         hasher.combine(packetCount)
         hasher.combine(lastTimestamp?.timeIntervalSince1970 ?? 0)
+        hasher.combine(customStart.timeIntervalSince1970)
+        hasher.combine(customEnd.timeIntervalSince1970)
         return hasher.finalize()
     }
 }

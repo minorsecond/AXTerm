@@ -148,6 +148,8 @@ struct AnalyticsAggregator {
 
     private static func advance(date: Date, bucket: TimeBucket, calendar: Calendar) -> Date {
         switch bucket {
+        case .tenSeconds:
+            return calendar.date(byAdding: .second, value: 10, to: date) ?? date
         case .minute:
             return calendar.date(byAdding: .minute, value: 1, to: date) ?? date
         case .fiveMinutes:

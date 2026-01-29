@@ -29,10 +29,10 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Connection") {
-                TextField("KISS Host", text: $settings.host)
+                TextField("Host", text: $settings.host)
                     .textFieldStyle(.roundedBorder)
 
-                TextField("KISS Port", text: $settings.port)
+                TextField("Port", text: $settings.port)
                     .textFieldStyle(.roundedBorder)
 
                 Toggle("Auto-connect on launch", isOn: $settings.autoConnectOnLaunch)
@@ -44,10 +44,14 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Station") {
+            Section("Identity") {
                 VStack(alignment: .leading, spacing: 6) {
                     TextField("My Callsign", text: $settings.myCallsign)
                         .textFieldStyle(.roundedBorder)
+
+                    Text("Used to highlight your node in the graph.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
                     if !settings.myCallsign.isEmpty && !CallsignValidator.isValid(settings.myCallsign) {
                         Text("Enter a valid callsign (e.g. N0CALL or N0CALL-7).")
@@ -58,9 +62,10 @@ struct SettingsView: View {
             }
 
             Section("Watch List") {
-                watchCallsignsSection
-                Divider()
-                watchKeywordsSection
+                VStack(alignment: .leading, spacing: 16) {
+                    watchCallsignsSection
+                    watchKeywordsSection
+                }
             }
 
             Section("History") {
@@ -391,63 +396,65 @@ struct SettingsView: View {
     }
 
     private var watchCallsignsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Watch callsigns")
-                .font(.subheadline)
+        GroupBox("Callsigns") {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(settings.watchCallsigns.indices, id: \.self) { index in
+                    let value = settings.watchCallsigns.indices.contains(index) ? settings.watchCallsigns[index] : ""
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            TextField("Callsign", text: bindingForWatchCallsign(at: index))
+                                .textFieldStyle(.roundedBorder)
 
-            ForEach(settings.watchCallsigns.indices, id: \.self) { index in
-                let value = settings.watchCallsigns.indices.contains(index) ? settings.watchCallsigns[index] : ""
-                HStack {
-                    TextField("Callsign", text: bindingForWatchCallsign(at: index))
-                        .textFieldStyle(.roundedBorder)
+                            Button {
+                                guard settings.watchCallsigns.indices.contains(index) else { return }
+                                settings.watchCallsigns.remove(at: index)
+                            } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Remove callsign")
+                        }
 
-                    Button {
-                        guard settings.watchCallsigns.indices.contains(index) else { return }
-                        settings.watchCallsigns.remove(at: index)
-                    } label: {
-                        Image(systemName: "minus.circle")
+                        if !value.isEmpty && !CallsignValidator.isValid(value) {
+                            Text("Invalid callsign.")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
                     }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("Remove callsign")
                 }
 
-                if !value.isEmpty && !CallsignValidator.isValid(value) {
-                    Text("Invalid callsign.")
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                Button("Add Callsign") {
+                    settings.watchCallsigns.append("")
                 }
             }
-
-            Button("Add Callsign") {
-                settings.watchCallsigns.append("")
-            }
+            .padding(.top, 4)
         }
     }
 
     private var watchKeywordsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Watch keywords")
-                .font(.subheadline)
+        GroupBox("Keywords") {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(settings.watchKeywords.indices, id: \.self) { index in
+                    HStack {
+                        TextField("Keyword", text: bindingForWatchKeyword(at: index))
+                            .textFieldStyle(.roundedBorder)
 
-            ForEach(settings.watchKeywords.indices, id: \.self) { index in
-                HStack {
-                    TextField("Keyword", text: bindingForWatchKeyword(at: index))
-                        .textFieldStyle(.roundedBorder)
-
-                    Button {
-                        guard settings.watchKeywords.indices.contains(index) else { return }
-                        settings.watchKeywords.remove(at: index)
-                    } label: {
-                        Image(systemName: "minus.circle")
+                        Button {
+                            guard settings.watchKeywords.indices.contains(index) else { return }
+                            settings.watchKeywords.remove(at: index)
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Remove keyword")
                     }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("Remove keyword")
+                }
+
+                Button("Add Keyword") {
+                    settings.watchKeywords.append("")
                 }
             }
-
-            Button("Add Keyword") {
-                settings.watchKeywords.append("")
-            }
+            .padding(.top, 4)
         }
     }
 

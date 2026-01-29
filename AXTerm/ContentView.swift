@@ -201,7 +201,7 @@ struct ContentView: View {
                     onClear: { client.clearRaw() }
                 )
             case .analytics:
-                AnalyticsDashboardView(packetEngine: client, viewModel: analyticsViewModel)
+                AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel)
             }
         }
     }

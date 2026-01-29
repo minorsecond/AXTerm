@@ -28,6 +28,7 @@ enum AnalyticsStyle {
         static let axisLabelCount: Int = 5
         static let smoothLines: Bool = false
         static let showSymbols: Bool = false
+        static let targetBucketPixelWidth: CGFloat = 28
     }
 
     enum Heatmap {
@@ -57,13 +58,17 @@ enum AnalyticsStyle {
         static let springStrength: Double = 0.12
         static let springLength: Double = 0.18
         static let nodeRadiusRange: ClosedRange<CGFloat> = 4...12
-        static let nodeHitRadius: CGFloat = 16
+        static let nodeHitRadius: CGFloat = 22
         static let edgeThicknessRange: ClosedRange<CGFloat> = 0.8...2.6
         static let edgeAlphaRange: ClosedRange<Double> = 0.2...0.8
         static let selectionGlowWidth: CGFloat = 4
-        static let zoomRange: ClosedRange<CGFloat> = 0.6...2.6
+        static let zoomRange: ClosedRange<CGFloat> = 0.25...4.0
         static let focusScale: CGFloat = 1.4
         static let panDamping: CGFloat = 0.9
+        static let zoomSmoothing: Double = 0.18
+        static let panSmoothing: Double = 0.2
+        static let hoverEdgeAlpha: Double = 0.7
+        static let myNodeScale: CGFloat = 1.15
     }
 
     enum Tables {
@@ -76,6 +81,10 @@ enum AnalyticsStyle {
         static let divider = Color(nsColor: .separatorColor)
         static let textSecondary = Color(nsColor: .secondaryLabelColor)
         static let accent = Color(nsColor: .controlAccentColor)
+        static let graphMyNode = Color(nsColor: .systemPurple)
+        static let chartGridLine = Color(nsColor: .separatorColor).opacity(0.35)
+        static let chartAxis = Color(nsColor: .secondaryLabelColor)
+        static let chartPlotBackground = Color.clear
 
         static func accent(alpha: Double) -> Color {
             Color(nsColor: NSColor.controlAccentColor.withAlphaComponent(alpha))
