@@ -31,4 +31,14 @@ final class PacketInspectionCoordinatorTests: XCTestCase {
 
         XCTAssertNil(result)
     }
+
+    func testInspectSelectedPacketReturnsNilWhenSelectionEmpty() {
+        let packets = [Packet(id: UUID(), from: AX25Address(call: "N0CALL"))]
+        let selection: Set<Packet.ID> = []
+        let coordinator = PacketInspectionCoordinator()
+
+        let result = coordinator.inspectSelectedPacket(selection: selection, packets: packets)
+
+        XCTAssertNil(result)
+    }
 }
