@@ -17,6 +17,10 @@ struct AnalyticsGraphView: View {
     let myCallsign: String
     let resetToken: UUID
     let focusNodeID: String?
+    let fitToSelectionRequest: UUID?
+    let resetCameraRequest: UUID?
+    /// When focus mode is enabled, only render nodes in this set. Empty = show all.
+    let visibleNodeIDs: Set<String>
     let onSelect: (String, Bool) -> Void
     let onSelectMany: (Set<String>, Bool) -> Void
     let onClearSelection: () -> Void
@@ -39,6 +43,9 @@ struct AnalyticsGraphView: View {
                     myCallsign: myCallsign,
                     resetToken: resetToken,
                     focusNodeID: focusNodeID,
+                    fitToSelectionRequest: fitToSelectionRequest,
+                    resetCameraRequest: resetCameraRequest,
+                    visibleNodeIDs: visibleNodeIDs,
                     onSelect: onSelect,
                     onSelectMany: onSelectMany,
                     onClearSelection: onClearSelection,
@@ -70,7 +77,8 @@ struct AnalyticsGraphView: View {
                     hoveredNodeID: hoveredNodeID,
                     myCallsign: myCallsign,
                     cameraState: cameraState,
-                    viewSize: geometry.size
+                    viewSize: geometry.size,
+                    visibleNodeIDs: visibleNodeIDs
                 )
                 .allowsHitTesting(false)
 
@@ -125,6 +133,8 @@ private struct NodeLabelsOverlay: View {
     let myCallsign: String
     let cameraState: CameraState
     let viewSize: CGSize
+    /// When focus mode is enabled, only render labels for nodes in this set. Empty = show all.
+    let visibleNodeIDs: Set<String>
 
     private let minZoomForLabels: CGFloat = 0.6
     private let maxLabelsAtLowZoom: Int = 12
@@ -139,19 +149,24 @@ private struct NodeLabelsOverlay: View {
             let positionMap = Dictionary(uniqueKeysWithValues: nodePositions.map { ($0.id, $0) })
             let inset = AnalyticsStyle.Layout.graphInset
 
+            // Filter nodes if focus mode is active
+            let displayNodes = visibleNodeIDs.isEmpty
+                ? graphModel.nodes
+                : graphModel.nodes.filter { visibleNodeIDs.contains($0.id) }
+
             // Compute node weight range for radius calculation
-            let weights = graphModel.nodes.map { $0.weight }
+            let weights = displayNodes.map { $0.weight }
             let minWeight = weights.min() ?? 1
             let maxWeight = weights.max() ?? 1
 
             // Sort nodes by priority for label display
-            let sortedNodes = graphModel.nodes.sorted { lhs, rhs in
+            let sortedNodes = displayNodes.sorted { lhs, rhs in
                 labelPriority(for: lhs) > labelPriority(for: rhs)
             }
 
             // Determine max labels based on zoom
             let zoomProgress = min(1, (cameraState.scale - minZoomForLabels) / 0.6)
-            let maxLabels = maxLabelsAtLowZoom + Int(CGFloat(graphModel.nodes.count - maxLabelsAtLowZoom) * zoomProgress)
+            let maxLabels = maxLabelsAtLowZoom + Int(CGFloat(displayNodes.count - maxLabelsAtLowZoom) * zoomProgress)
 
             var drawnRects: [CGRect] = []
 
@@ -273,6 +288,9 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
     let myCallsign: String
     let resetToken: UUID
     let focusNodeID: String?
+    let fitToSelectionRequest: UUID?
+    let resetCameraRequest: UUID?
+    let visibleNodeIDs: Set<String>
     let onSelect: (String, Bool) -> Void
     let onSelectMany: (Set<String>, Bool) -> Void
     let onClearSelection: () -> Void
@@ -306,11 +324,18 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
             nodePositions: nodePositions,
             selectedNodeIDs: selectedNodeIDs,
             hoveredNodeID: hoveredNodeID,
-            myCallsign: myCallsign
+            myCallsign: myCallsign,
+            visibleNodeIDs: visibleNodeIDs
         )
 
         context.coordinator.handle(resetToken: resetToken)
         context.coordinator.handle(focusNodeID: focusNodeID)
+        context.coordinator.handle(
+            fitToSelectionRequest: fitToSelectionRequest,
+            selectedNodeIDs: selectedNodeIDs,
+            nodePositions: nodePositions
+        )
+        context.coordinator.handle(resetCameraRequest: resetCameraRequest)
     }
 }
 
@@ -495,6 +520,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     private var lastFrameTime: CFTimeInterval = CACurrentMediaTime()
     private var lastResetToken: UUID?
     private var lastFocusNodeID: String?
+    private var lastFitToSelectionRequest: UUID?
+    private var lastResetCameraRequest: UUID?
 
     private var selectionStart: CGPoint?
     private var lastDragLocation: CGPoint?
@@ -542,14 +569,26 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         nodePositions: [NodePosition],
         selectedNodeIDs: Set<String>,
         hoveredNodeID: String?,
-        myCallsign: String
+        myCallsign: String,
+        visibleNodeIDs: Set<String>
     ) {
         let normalizedCallsign = CallsignMatcher.normalize(myCallsign)
-        let newKey = GraphRenderKey.from(model: graphModel, positions: nodePositions, myCallsign: normalizedCallsign)
+        // Include visibleNodeIDs in the render key so we re-render when focus filtering changes
+        let newKey = GraphRenderKey.from(
+            model: graphModel,
+            positions: nodePositions,
+            myCallsign: normalizedCallsign,
+            visibleNodeIDs: visibleNodeIDs
+        )
         let graphChanged = newKey != graphKey
         if graphChanged {
             graphKey = newKey
-            rebuildGraphBuffers(model: graphModel, positions: nodePositions, myCallsign: normalizedCallsign)
+            rebuildGraphBuffers(
+                model: graphModel,
+                positions: nodePositions,
+                myCallsign: normalizedCallsign,
+                visibleNodeIDs: visibleNodeIDs
+            )
         }
 
         let newHighlight = GraphHighlightKey(
@@ -581,6 +620,49 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         let viewSize = view.bounds.size
         camera.focus(on: node.position, size: viewSize)
         onFocusHandled()
+        requestInteractionRedraw()
+    }
+
+    /// Handles fit-to-selection requests: computes bounding box of selected nodes and fits camera.
+    func handle(
+        fitToSelectionRequest: UUID?,
+        selectedNodeIDs: Set<String>,
+        nodePositions: [NodePosition]
+    ) {
+        guard fitToSelectionRequest != lastFitToSelectionRequest else { return }
+        lastFitToSelectionRequest = fitToSelectionRequest
+        guard fitToSelectionRequest != nil, let view else { return }
+
+        // Compute bounding box of selected nodes (or all nodes if none selected)
+        let targetNodeIDs = selectedNodeIDs.isEmpty
+            ? Set(nodePositions.map { $0.id })
+            : selectedNodeIDs
+
+        guard let bounds = GraphAlgorithms.boundingBox(
+            visibleNodeIDs: targetNodeIDs,
+            positions: nodePositions
+        ) else { return }
+
+        let viewSize = view.bounds.size
+        camera.fitToBounds(
+            minX: bounds.minX,
+            minY: bounds.minY,
+            maxX: bounds.maxX,
+            maxY: bounds.maxY,
+            viewSize: viewSize
+        )
+        onCameraUpdate(CameraState(scale: camera.scale, offset: camera.offset))
+        requestInteractionRedraw()
+    }
+
+    /// Handles camera reset requests: animates camera back to default view.
+    func handle(resetCameraRequest: UUID?) {
+        guard resetCameraRequest != lastResetCameraRequest else { return }
+        lastResetCameraRequest = resetCameraRequest
+        guard resetCameraRequest != nil else { return }
+
+        camera.animatedReset()
+        onCameraUpdate(CameraState(scale: camera.scale, offset: camera.offset))
         requestInteractionRedraw()
     }
 
@@ -842,20 +924,32 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         }
     }
 
-    private func rebuildGraphBuffers(model: GraphModel, positions: [NodePosition], myCallsign: String) {
+    private func rebuildGraphBuffers(
+        model: GraphModel,
+        positions: [NodePosition],
+        myCallsign: String,
+        visibleNodeIDs: Set<String>
+    ) {
         nodeCache.removeAll()
         edgeCache.removeAll()
         nodeIndex.removeAll()
 
         let positionMap = Dictionary(uniqueKeysWithValues: positions.map { ($0.id, $0) })
-        let weights = model.nodes.map { $0.weight }
+
+        // Determine which nodes to render (all if visibleNodeIDs is empty, otherwise filtered)
+        let shouldFilter = !visibleNodeIDs.isEmpty
+        let filteredNodes = shouldFilter
+            ? model.nodes.filter { visibleNodeIDs.contains($0.id) }
+            : model.nodes
+
+        let weights = filteredNodes.map { $0.weight }
         metrics = GraphMetrics(
             minNodeWeight: max(1, weights.min() ?? 1),
             maxNodeWeight: max(1, weights.max() ?? 1),
             maxEdgeWeight: max(1, model.edges.map { $0.weight }.max() ?? 1)
         )
 
-        for node in model.nodes {
+        for node in filteredNodes {
             guard let position = positionMap[node.id] else { continue }
             let isMyNode = CallsignMatcher.matches(candidate: node.callsign, target: myCallsign)
             let info = GraphNodeInfo(
@@ -869,7 +963,12 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             nodeIndex[node.id] = info
         }
 
-        for edge in model.edges {
+        // Filter edges: only include edges where both endpoints are visible
+        let filteredEdges = shouldFilter
+            ? model.edges.filter { visibleNodeIDs.contains($0.sourceID) && visibleNodeIDs.contains($0.targetID) }
+            : model.edges
+
+        for edge in filteredEdges {
             guard let source = nodeIndex[edge.sourceID],
                   let target = nodeIndex[edge.targetID] else { continue }
             let info = GraphEdgeInfo(
@@ -1121,19 +1220,33 @@ private struct GraphRenderKey: Hashable {
     let edgeCount: Int
     let myCallsign: String
     let positionsChecksum: Int
+    let visibleNodeCount: Int
+    let visibleNodesChecksum: Int
 
-    static func from(model: GraphModel, positions: [NodePosition], myCallsign: String) -> GraphRenderKey {
+    static func from(
+        model: GraphModel,
+        positions: [NodePosition],
+        myCallsign: String,
+        visibleNodeIDs: Set<String> = []
+    ) -> GraphRenderKey {
         var hasher = Hasher()
         for p in positions.sorted(by: { $0.id < $1.id }) {
             p.id.hash(into: &hasher)
             p.x.hash(into: &hasher)
             p.y.hash(into: &hasher)
         }
+        // Hash visible node IDs for focus mode changes
+        var visibleHasher = Hasher()
+        for id in visibleNodeIDs.sorted() {
+            id.hash(into: &visibleHasher)
+        }
         return GraphRenderKey(
             nodeCount: model.nodes.count,
             edgeCount: model.edges.count,
             myCallsign: myCallsign,
-            positionsChecksum: hasher.finalize()
+            positionsChecksum: hasher.finalize(),
+            visibleNodeCount: visibleNodeIDs.count,
+            visibleNodesChecksum: visibleHasher.finalize()
         )
     }
 }
@@ -1266,6 +1379,49 @@ private struct GraphCamera {
     mutating func animatedReset() {
         targetScale = 1.0
         targetOffset = .zero
+    }
+
+    /// Fits camera to a bounding box of nodes (in normalized 0-1 coordinates).
+    /// Computes appropriate scale and offset to show all nodes with padding.
+    ///
+    /// - Parameters:
+    ///   - bounds: Bounding box in normalized coordinates (minX, minY, maxX, maxY)
+    ///   - viewSize: Current view size in points
+    ///   - padding: Fraction of view to use as margin (default 0.1 = 10%)
+    mutating func fitToBounds(
+        minX: Double, minY: Double, maxX: Double, maxY: Double,
+        viewSize: CGSize,
+        padding: CGFloat = 0.1
+    ) {
+        let inset = AnalyticsStyle.Layout.graphInset
+        let drawableWidth = max(1, viewSize.width - inset * 2)
+        let drawableHeight = max(1, viewSize.height - inset * 2)
+
+        // Handle single-point case
+        let boundsWidth = max(0.01, maxX - minX)
+        let boundsHeight = max(0.01, maxY - minY)
+
+        // Compute center of bounds in normalized coords
+        let centerX = (minX + maxX) / 2.0
+        let centerY = (minY + maxY) / 2.0
+
+        // Compute scale to fit bounds within view (with padding)
+        let availableWidth = drawableWidth * (1 - 2 * padding)
+        let availableHeight = drawableHeight * (1 - 2 * padding)
+        let scaleX = availableWidth / (CGFloat(boundsWidth) * drawableWidth)
+        let scaleY = availableHeight / (CGFloat(boundsHeight) * drawableHeight)
+        let fitScale = min(scaleX, scaleY).clamped(to: AnalyticsStyle.Graph.zoomRange)
+
+        // Compute offset to center the bounds
+        let viewCenter = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+        let boundsScreenX = inset + CGFloat(centerX) * drawableWidth
+        let boundsScreenY = inset + CGFloat(centerY) * drawableHeight
+
+        targetScale = fitScale
+        targetOffset = CGSize(
+            width: -(boundsScreenX - viewCenter.x) * fitScale,
+            height: -(boundsScreenY - viewCenter.y) * fitScale
+        )
     }
 
     mutating func update(deltaTime: CFTimeInterval) -> Bool {

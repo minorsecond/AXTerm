@@ -238,6 +238,9 @@ struct AnalyticsDashboardView: View {
                     myCallsign: settings.myCallsign,
                     resetToken: graphResetToken,
                     focusNodeID: focusNodeID,
+                    fitToSelectionRequest: viewModel.fitToSelectionRequest,
+                    resetCameraRequest: viewModel.resetCameraRequest,
+                    visibleNodeIDs: viewModel.filteredGraph.visibleNodeIDs,
                     onSelect: { nodeID, isShift in
                         viewModel.handleNodeClick(nodeID, isShift: isShift)
                     },
@@ -272,10 +275,9 @@ struct AnalyticsDashboardView: View {
                         focusNodeID = viewModel.viewState.selectedNodeID
                     },
                     onFocusPrimaryHub: {
-                        if let hubID = viewModel.primaryHubNodeID() {
-                            viewModel.handleNodeClick(hubID, isShift: false)
-                            focusNodeID = hubID
-                        }
+                        // Use the new selectPrimaryHub which handles selection,
+                        // focus mode enable, and single auto-fit
+                        viewModel.selectPrimaryHub()
                     },
                     onShowActiveNodes: {
                         let activeIDs = viewModel.activeNodeIDs()
@@ -286,6 +288,13 @@ struct AnalyticsDashboardView: View {
                         let pasteboard = NSPasteboard.general
                         pasteboard.clearContents()
                         pasteboard.setString(summary, forType: .string)
+                    },
+                    focusState: $viewModel.focusState,
+                    onFitToSelection: {
+                        viewModel.requestFitToSelection()
+                    },
+                    onResetCamera: {
+                        viewModel.requestCameraReset()
                     }
                 )
                 .frame(width: AnalyticsStyle.Layout.inspectorWidth)
@@ -896,6 +905,11 @@ private struct GraphInspectorView: View {
     let onShowActiveNodes: () -> Void
     let onExportSummary: () -> Void
 
+    // Focus mode controls
+    @Binding var focusState: GraphFocusState
+    let onFitToSelection: () -> Void
+    let onResetCamera: () -> Void
+
     /// Fixed height to prevent layout shifts when switching between views
     private let fixedHeight: CGFloat = 520
 
@@ -915,7 +929,10 @@ private struct GraphInspectorView: View {
                     health: networkHealth,
                     onFocusPrimaryHub: onFocusPrimaryHub,
                     onShowActiveNodes: onShowActiveNodes,
-                    onExportSummary: onExportSummary
+                    onExportSummary: onExportSummary,
+                    focusState: $focusState,
+                    onFitToSelection: onFitToSelection,
+                    onResetCamera: onResetCamera
                 )
             }
         }

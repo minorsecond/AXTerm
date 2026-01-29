@@ -8,12 +8,17 @@
 import SwiftUI
 
 /// Network Health inspector view shown when no node is selected.
-/// Displays health score, metrics, warnings, and quick actions in a macOS-native style.
+/// Displays health score, metrics, warnings, quick actions, and focus controls in a macOS-native style.
 struct NetworkHealthView: View {
     let health: NetworkHealth
     let onFocusPrimaryHub: () -> Void
     let onShowActiveNodes: () -> Void
     let onExportSummary: () -> Void
+
+    // Focus mode controls
+    @Binding var focusState: GraphFocusState
+    let onFitToSelection: () -> Void
+    let onResetCamera: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -33,6 +38,8 @@ struct NetworkHealthView: View {
                 Divider()
                 trendSection
             }
+            Divider()
+            focusControlsSection
             Spacer(minLength: 0)
             Divider()
             actionsSection
@@ -198,6 +205,93 @@ struct NetworkHealthView: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private var focusControlsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Graph Focus")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+
+            // Focus mode toggle
+            Toggle(isOn: $focusState.isFocusEnabled) {
+                HStack(spacing: 4) {
+                    Image(systemName: "scope")
+                        .font(.caption)
+                    Text("Focus Mode")
+                        .font(.caption)
+                }
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .help("When enabled, shows only nodes within k hops of the selected node")
+
+            // K-hop stepper (only shown when focus is enabled)
+            if focusState.isFocusEnabled {
+                HStack {
+                    Text("Max hops:")
+                        .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    Spacer()
+                    Stepper(
+                        value: $focusState.maxHops,
+                        in: GraphFocusState.hopRange
+                    ) {
+                        Text("\(focusState.maxHops)")
+                            .font(.caption.monospacedDigit())
+                            .frame(width: 20, alignment: .trailing)
+                    }
+                    .controlSize(.small)
+                }
+                .help("Number of hops from selected node to include (1-6)")
+            }
+
+            // Hub metric picker
+            HStack {
+                Text("Hub metric:")
+                    .font(.caption)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                Spacer()
+                Picker("", selection: $focusState.hubMetric) {
+                    ForEach(HubMetric.allCases) { metric in
+                        Text(metric.rawValue).tag(metric)
+                    }
+                }
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .frame(width: 90)
+            }
+            .help("Metric used to identify the primary hub node")
+
+            // Camera control buttons
+            HStack(spacing: 8) {
+                Button(action: onFitToSelection) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.caption2)
+                        Text("Fit")
+                            .font(.caption)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Fit camera to show selected nodes")
+
+                Button(action: onResetCamera) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.caption2)
+                        Text("Reset")
+                            .font(.caption)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Reset camera to show entire graph")
             }
         }
     }
@@ -486,9 +580,12 @@ struct NetworkHealthView_Previews: PreviewProvider {
             ),
             onFocusPrimaryHub: {},
             onShowActiveNodes: {},
-            onExportSummary: {}
+            onExportSummary: {},
+            focusState: .constant(GraphFocusState()),
+            onFitToSelection: {},
+            onResetCamera: {}
         )
-        .frame(width: 260, height: 600)
+        .frame(width: 260, height: 700)
         .padding()
     }
 }

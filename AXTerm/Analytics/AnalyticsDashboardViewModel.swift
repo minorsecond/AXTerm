@@ -86,6 +86,20 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     @Published private(set) var viewState: AnalyticsViewState = .empty
 
+    // MARK: - Focus Mode State
+
+    /// Focus mode state for k-hop filtering
+    @Published var focusState = GraphFocusState()
+
+    /// Cached filtered graph result (recomputed when selection or focus settings change)
+    @Published private(set) var filteredGraph: FilteredGraphResult = .empty
+
+    /// Request for camera to fit to selection (consumed by view)
+    @Published var fitToSelectionRequest: UUID?
+
+    /// Request for camera to reset (consumed by view)
+    @Published var resetCameraRequest: UUID?
+
     private let calendar: Calendar
     private let packetSubject = CurrentValueSubject<[Packet], Never>([])
     private var cancellables: Set<AnyCancellable> = []
@@ -141,6 +155,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         self.aggregationScheduler = CoalescingScheduler(delay: .milliseconds(Int(packetDebounce * 1000)))
         self.graphScheduler = CoalescingScheduler(delay: .milliseconds(Int(graphDebounce * 1000)))
         bindPackets(packetScheduler: packetScheduler)
+        bindFocusState()
     }
 
     func updatePackets(_ packets: [Packet]) {
@@ -265,6 +280,17 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                 self?.packets = packets
                 self?.scheduleAggregation(reason: "packets")
                 self?.scheduleGraphBuild(reason: "packets")
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Observes focusState changes (from UI bindings) and recomputes filtered graph
+    private func bindFocusState() {
+        $focusState
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.recomputeFilteredGraph()
             }
             .store(in: &cancellables)
     }
@@ -524,6 +550,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.graphModel = model
         viewState.graphNote = model.droppedNodesCount > 0 ? "Showing top \(maxNodes) nodes" : nil
         updateNetworkHealth()
+        // Recompute filtered graph when underlying model changes
+        recomputeFilteredGraph()
     }
 
     private func updateNetworkHealth() {
@@ -534,11 +562,13 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.networkHealth = health
     }
 
-    /// Returns the ID of the primary hub (highest degree node) if available
+    /// Returns the ID of the primary hub based on the current hub metric.
+    /// Uses GraphAlgorithms for consistent hub selection across the app.
     func primaryHubNodeID() -> String? {
-        viewState.networkHealth.metrics.topRelayCallsign.flatMap { callsign in
-            viewState.graphModel.nodes.first { $0.callsign == callsign }?.id
-        }
+        GraphAlgorithms.findPrimaryHub(
+            model: viewState.graphModel,
+            metric: focusState.hubMetric
+        )
     }
 
     /// Returns IDs of stations active in the last 10 minutes
@@ -552,6 +582,110 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
         // Map callsigns to node IDs
         return Set(viewState.graphModel.nodes.filter { activeCallsigns.contains($0.callsign) }.map { $0.id })
+    }
+
+    // MARK: - Focus Mode Actions
+
+    /// Selects the primary hub, enables focus mode, and performs a single animated fit.
+    ///
+    /// Design: "Primary Hub" is split into distinct behaviors:
+    /// 1. Selects the hub node (based on current hubMetric)
+    /// 2. Enables focus mode (k-hop neighborhood filtering)
+    /// 3. Performs ONE animated fit-to-selection
+    /// 4. After that, NO auto-zoom unless user explicitly presses Fit
+    ///
+    /// This prevents the camera from "fighting" user pan/zoom.
+    func selectPrimaryHub() {
+        guard let hubID = primaryHubNodeID() else { return }
+
+        // Select the hub node
+        _ = GraphSelectionReducer.reduce(
+            state: &selectionState,
+            action: .clickNode(id: hubID, isShift: false)
+        )
+        updateSelectionState()
+
+        // Enable focus mode
+        focusState.isFocusEnabled = true
+
+        // Recompute filtered graph
+        recomputeFilteredGraph()
+
+        // Request a single fit-to-selection
+        focusState.didAutoFitForCurrentSelection = true
+        fitToSelectionRequest = UUID()
+
+        Telemetry.breadcrumb(
+            category: "graph.focusHub",
+            message: "Primary hub selected with focus mode",
+            data: [
+                "hubID": hubID,
+                "metric": focusState.hubMetric.rawValue,
+                "maxHops": focusState.maxHops
+            ]
+        )
+    }
+
+    /// Toggles focus mode on/off.
+    /// When enabled with a selection, filters graph to k-hop neighborhood.
+    func toggleFocusMode() {
+        focusState.isFocusEnabled.toggle()
+        focusState.didAutoFitForCurrentSelection = false
+        recomputeFilteredGraph()
+    }
+
+    /// Sets focus mode explicitly.
+    func setFocusMode(_ enabled: Bool) {
+        guard focusState.isFocusEnabled != enabled else { return }
+        focusState.isFocusEnabled = enabled
+        focusState.didAutoFitForCurrentSelection = false
+        recomputeFilteredGraph()
+    }
+
+    /// Updates the max hops for focus filtering.
+    func setMaxHops(_ hops: Int) {
+        let clamped = hops.clamped(to: GraphFocusState.hopRange)
+        guard focusState.maxHops != clamped else { return }
+        focusState.maxHops = clamped
+        recomputeFilteredGraph()
+    }
+
+    /// Updates the hub metric used for Primary Hub selection.
+    func setHubMetric(_ metric: HubMetric) {
+        guard focusState.hubMetric != metric else { return }
+        focusState.hubMetric = metric
+    }
+
+    /// Explicit fit-to-selection camera action.
+    /// Computes bounding box of visible nodes and fits camera.
+    func requestFitToSelection() {
+        fitToSelectionRequest = UUID()
+    }
+
+    /// Explicit reset camera action.
+    /// Returns camera to default zoom/pan (zoom = 1, offset = 0).
+    func requestCameraReset() {
+        resetCameraRequest = UUID()
+    }
+
+    /// Recomputes the filtered graph based on current selection and focus state.
+    /// Called when selection, focus mode, or maxHops changes.
+    private func recomputeFilteredGraph() {
+        if focusState.isFocusEnabled && !viewState.selectedNodeIDs.isEmpty {
+            filteredGraph = GraphAlgorithms.filterToKHop(
+                model: viewState.graphModel,
+                selectedNodeIDs: viewState.selectedNodeIDs,
+                maxHops: focusState.maxHops
+            )
+        } else {
+            // No filtering: show all nodes and edges
+            filteredGraph = FilteredGraphResult(
+                visibleNodeIDs: Set(viewState.graphModel.nodes.map { $0.id }),
+                visibleEdgeKeys: Set(viewState.graphModel.edges.map { FocusEdgeKey($0.sourceID, $0.targetID) }),
+                focusNodeID: viewState.selectedNodeID,
+                hopDistances: [:]
+            )
+        }
     }
 
     /// Generates a text summary of network health for export
@@ -627,6 +761,13 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         selectionState.normalizePrimary()
         viewState.selectedNodeID = selectionState.primarySelectionID
         captureMissingSelectionIfNeeded()
+
+        // Reset auto-fit flag when selection changes (unless via selectPrimaryHub)
+        // This ensures explicit selection changes don't trigger unwanted auto-fits
+        focusState.didAutoFitForCurrentSelection = false
+
+        // Recompute filtered graph when selection changes
+        recomputeFilteredGraph()
     }
 
     private func captureMissingSelectionIfNeeded() {
