@@ -83,6 +83,7 @@ final class PacketEngine: ObservableObject {
     private let watchRecorder: WatchEventRecording?
     private let notificationScheduler: NotificationScheduling?
     private var cancellables: Set<AnyCancellable> = []
+    private let packetInsertSubject = PassthroughSubject<Packet, Never>()
 
     // MARK: - Published State
 
@@ -133,7 +134,9 @@ final class PacketEngine: ObservableObject {
         self.watchMatcher = watchMatcher ?? WatchRuleMatcher(settings: settings)
         self.watchRecorder = watchRecorder
         self.notificationScheduler = notificationScheduler
+        configureStationSubscription()
         observeSettings()
+        loadPersistedPackets(reason: "startup")
     }
 
     // MARK: - Connection Management
@@ -148,6 +151,7 @@ final class PacketEngine: ObservableObject {
         SentryManager.shared.breadcrumbConnectAttempt(host: host, port: port)
         SentryManager.shared.setConnectionTags(host: host, port: port)
         eventLogger?.log(level: .info, category: .connection, message: "Connecting to \(host):\(port)", metadata: nil)
+        loadPersistedPackets(reason: "connect")
 
         let nwHost = NWEndpoint.Host(host)
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
@@ -296,8 +300,17 @@ final class PacketEngine: ObservableObject {
     // MARK: - MHeard (Station Tracking)
 
     private func updateMHeard(for packet: Packet) {
+        guard let stationCall = packet.from?.display else { return }
         stationTracker.update(with: packet)
         stations = stationTracker.stations
+        if let heardCount = stationTracker.heardCount(for: stationCall) {
+            SentryManager.shared.addBreadcrumb(
+                category: "stations.update.on_packet_insert",
+                message: "Stations updated from packet insert",
+                level: .info,
+                data: ["stationKey": stationCall, "heardCount": heardCount]
+            )
+        }
     }
 
     // MARK: - Capped Array Helpers
@@ -409,7 +422,7 @@ final class PacketEngine: ObservableObject {
             data: ["packetID": packet.id.uuidString, "currentCount": packets.count]
         )
         insertPacketSorted(packet)
-        updateMHeard(for: packet)
+        packetInsertSubject.send(packet)
 
         if let text = packet.infoText {
             let line = ConsoleLine.packet(
@@ -441,14 +454,47 @@ final class PacketEngine: ObservableObject {
     }
 
     func loadPersistedPackets() {
+        loadPersistedPackets(reason: "manual")
+    }
+
+    private func loadPersistedPackets(reason: String) {
         guard settings.persistHistory, let persistenceWorker else { return }
+        if !packets.isEmpty {
+            if stations.isEmpty {
+                rebuildStations(from: packets)
+                SentryManager.shared.addBreadcrumb(
+                    category: "stations.initial_load.end",
+                    message: "Stations seeded from in-memory packets",
+                    level: .info,
+                    data: ["packetCount": packets.count, "stationCount": stations.count, "reason": reason]
+                )
+            }
+            return
+        }
         let limit = min(settings.retentionLimit, maxPackets)
+        SentryManager.shared.addBreadcrumb(
+            category: "stations.initial_load.start",
+            message: "Stations initial load started",
+            level: .info,
+            data: ["retentionLimit": limit, "reason": reason]
+        )
         Task {
             do {
                 let result = try await persistenceWorker.loadPackets(limit: limit)
                 applyLoadedPackets(result.packets, pinnedIDs: result.pinnedIDs)
+                SentryManager.shared.addBreadcrumb(
+                    category: "stations.initial_load.end",
+                    message: "Stations initial load completed",
+                    level: .info,
+                    data: ["packetCount": result.packets.count, "stationCount": stations.count, "reason": reason]
+                )
             } catch {
                 SentryManager.shared.capturePersistenceFailure("loadRecent packets", errorDescription: error.localizedDescription)
+                SentryManager.shared.captureMessage(
+                    "stations.initial_load.failed",
+                    level: .error,
+                    extra: ["reason": reason, "error": error.localizedDescription]
+                )
             }
         }
     }
@@ -484,10 +530,7 @@ final class PacketEngine: ObservableObject {
     }
 
     private func rebuildStations(from packets: [Packet]) {
-        stationTracker.reset()
-        for packet in packets {
-            stationTracker.update(with: packet)
-        }
+        stationTracker.rebuild(from: packets)
         stations = stationTracker.stations
     }
 
@@ -622,6 +665,20 @@ final class PacketEngine: ObservableObject {
             .sink { [weak self] enabled in
                 guard enabled else { return }
                 self?.loadPersistedHistory()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func configureStationSubscription() {
+        SentryManager.shared.addBreadcrumb(
+            category: "stations.subscription",
+            message: "Stations subscription configured",
+            level: .info,
+            data: nil
+        )
+        packetInsertSubject
+            .sink { [weak self] packet in
+                self?.updateMHeard(for: packet)
             }
             .store(in: &cancellables)
     }
