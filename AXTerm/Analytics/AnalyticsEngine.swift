@@ -30,6 +30,36 @@ enum AnalyticsEngine {
         )
     }
 
+    static func computeSeries(
+        packets: [Packet],
+        bucket: TimeBucket,
+        calendar: Calendar
+    ) -> AnalyticsSeries {
+        guard !packets.isEmpty else { return .empty }
+        let events = normalizePackets(packets)
+        var packetCounts: [BucketKey: Int] = [:]
+        var payloadBytes: [BucketKey: Int] = [:]
+        var uniqueStations: [BucketKey: Set<String>] = [:]
+
+        events.forEach { event in
+            let key = BucketKey(date: event.timestamp, bucket: bucket, calendar: calendar)
+            packetCounts[key, default: 0] += 1
+            payloadBytes[key, default: 0] += event.payloadBytes
+            if let from = event.from {
+                uniqueStations[key, default: []].insert(from)
+            }
+            if let to = event.to {
+                uniqueStations[key, default: []].insert(to)
+            }
+        }
+
+        return AnalyticsSeries(
+            packetsPerBucket: points(from: packetCounts),
+            bytesPerBucket: points(from: payloadBytes),
+            uniqueStationsPerBucket: points(from: uniqueStations.mapValues { $0.count })
+        )
+    }
+
     private static func computeSummary(
         events: [PacketEvent],
         includeViaInUniqueStations: Bool,
@@ -92,10 +122,21 @@ enum AnalyticsEngine {
             .sorted { lhs, rhs in
                 if lhs.count == rhs.count {
                     return lhs.station < rhs.station
-                }
-                return lhs.count > rhs.count
             }
-            .prefix(limit)
-            .map { $0 }
+            return lhs.count > rhs.count
+        }
+        .prefix(limit)
+        .map { $0 }
+    }
+
+    private static func points(from values: [BucketKey: Int]) -> [AnalyticsSeriesPoint] {
+        values
+            .map { AnalyticsSeriesPoint(bucket: $0.key.date, value: $0.value) }
+            .sorted { lhs, rhs in
+                if lhs.bucket == rhs.bucket {
+                    return lhs.value < rhs.value
+                }
+                return lhs.bucket < rhs.bucket
+            }
     }
 }

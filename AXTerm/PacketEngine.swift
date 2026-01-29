@@ -665,6 +665,26 @@ private extension ConsoleEntryRecord.Level {
 @MainActor
 final class AnalyticsViewModel: ObservableObject {
     @Published private(set) var summary: AnalyticsSummary?
+    @Published private(set) var series: AnalyticsSeries = .empty
+    @Published private(set) var activeBucket: TimeBucket
+
+    private let calendar: Calendar
+
+    init(calendar: Calendar = .current, bucket: TimeBucket = .fiveMinutes) {
+        self.calendar = calendar
+        self.activeBucket = bucket
+    }
+
+    func setBucket(_ bucket: TimeBucket, packets: [Packet]) {
+        guard bucket != activeBucket else { return }
+        activeBucket = bucket
+        Telemetry.breadcrumb(
+            category: "analytics.bucket.changed",
+            message: "Analytics bucket changed",
+            data: ["bucket": bucket.displayName]
+        )
+        recompute(packets: packets)
+    }
 
     func recompute(packets: [Packet]) {
         Telemetry.breadcrumb(
@@ -684,6 +704,32 @@ final class AnalyticsViewModel: ObservableObject {
         }
         self.summary = summary
 
+        let series = Telemetry.measure(
+            name: "analytics.computeSeries",
+            data: [
+                TelemetryContext.packetCount: packets.count,
+                "bucket": activeBucket.displayName
+            ]
+        ) {
+            AnalyticsEngine.computeSeries(
+                packets: packets,
+                bucket: activeBucket,
+                calendar: calendar
+            )
+        }
+        self.series = series
+
+        let seriesIssues = validateSeries(series)
+        if !seriesIssues.isEmpty {
+            Telemetry.capture(
+                message: "analytics.series.invalid",
+                data: [
+                    "issues": seriesIssues,
+                    "bucket": activeBucket.displayName
+                ]
+            )
+        }
+
         if summary.infoTextRatio.isNaN || summary.totalPayloadBytes < 0 {
             Telemetry.capture(
                 message: "analytics.summary.invalid",
@@ -693,5 +739,31 @@ final class AnalyticsViewModel: ObservableObject {
                 ]
             )
         }
+    }
+
+    private func validateSeries(_ series: AnalyticsSeries) -> [String] {
+        var issues: [String] = []
+        issues.append(contentsOf: validate(points: series.packetsPerBucket, label: "packetsPerBucket"))
+        issues.append(contentsOf: validate(points: series.bytesPerBucket, label: "bytesPerBucket"))
+        issues.append(contentsOf: validate(points: series.uniqueStationsPerBucket, label: "uniqueStationsPerBucket"))
+        return issues
+    }
+
+    private func validate(points: [AnalyticsSeriesPoint], label: String) -> [String] {
+        var issues: [String] = []
+        var seen: Set<Date> = []
+        var lastBucket: Date?
+
+        for point in points {
+            if let lastBucket, point.bucket < lastBucket {
+                issues.append("\(label).unsorted")
+            }
+            if !seen.insert(point.bucket).inserted {
+                issues.append("\(label).duplicateBucket")
+            }
+            lastBucket = point.bucket
+        }
+
+        return issues
     }
 }
