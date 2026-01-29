@@ -128,6 +128,9 @@ extension PacketTableCoordinator: NSTableViewDelegate {
         guard let tableColumn, rows.indices.contains(row) else { return nil }
         let rowModel = rows[row]
         let identifier = tableColumn.identifier
+        if identifier.rawValue == PacketTableColumnIdentifier.type.rawValue {
+            return makeTypePillCell(for: identifier, row: rowModel)
+        }
         let textField = makeTextField(for: identifier, row: rowModel)
         let cell = NSTableCellView()
         cell.identifier = identifier
@@ -190,14 +193,14 @@ extension PacketTableCoordinator: NSTableViewDelegate {
             field.toolTip = row.viaText
         case PacketTableColumnIdentifier.type.rawValue:
             field.stringValue = row.typeLabel
-            field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
-            field.textColor = row.isLowSignal ? .secondaryLabelColor : .labelColor
+            field.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+            field.textColor = row.isLowSignal ? .tertiaryLabelColor : .secondaryLabelColor
             field.alignment = .center
             field.toolTip = row.typeTooltip
         case PacketTableColumnIdentifier.info.rawValue:
             field.stringValue = row.infoText
             field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-            field.textColor = row.isLowSignal ? .secondaryLabelColor : .labelColor
+            field.textColor = row.isLowSignal ? .tertiaryLabelColor : .secondaryLabelColor
             field.alignment = .left
             field.toolTip = row.infoTooltip
         default:
@@ -205,6 +208,20 @@ extension PacketTableCoordinator: NSTableViewDelegate {
         }
 
         return field
+    }
+
+    private func makeTypePillCell(for identifier: NSUserInterfaceItemIdentifier, row: PacketRowViewModel) -> NSTableCellView {
+        let cell = NSTableCellView()
+        cell.identifier = identifier
+        let pillView = TypePillView(text: row.typeLabel, isLowSignal: row.isLowSignal)
+        pillView.toolTip = row.typeTooltip
+        cell.addSubview(pillView)
+        pillView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            pillView.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
+            pillView.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+        ])
+        return cell
     }
 }
 
@@ -225,5 +242,37 @@ final class PacketTableNativeTableView: NSTableView {
         let row = row(at: location)
         onRightClickRow?(row)
         super.rightMouseDown(with: event)
+    }
+}
+
+private final class TypePillView: NSView {
+    private let textField = NSTextField(labelWithString: "")
+
+    init(text: String, isLowSignal: Bool) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        textField.stringValue = text
+        textField.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+        textField.alignment = .center
+        textField.textColor = isLowSignal ? .tertiaryLabelColor : .secondaryLabelColor
+        textField.setContentHuggingPriority(.required, for: .horizontal)
+        textField.setContentCompressionResistancePriority(.required, for: .horizontal)
+        addSubview(textField)
+        textField.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            textField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            textField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            textField.topAnchor.constraint(equalTo: topAnchor, constant: 2),
+            textField.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2)
+        ])
+        layer?.cornerRadius = 6
+        layer?.borderWidth = 1
+        layer?.borderColor = (isLowSignal ? NSColor.quaternaryLabelColor : NSColor.tertiaryLabelColor).cgColor
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
     }
 }
