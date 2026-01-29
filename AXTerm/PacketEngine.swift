@@ -302,8 +302,14 @@ final class PacketEngine: ObservableObject {
 
     // MARK: - Capped Array Helpers
 
-    private func appendPacket(_ packet: Packet) {
-        CappedArray.append(packet, to: &packets, max: maxPackets)
+    private func insertPacketSorted(_ packet: Packet) {
+        // NOTE: Persisted packets load newest-first; appending new packets at the end
+        // caused "All Packets" to appear stale because fresh rows landed off-screen.
+        let insertionIndex = PacketEngine.insertionIndex(for: packet, in: packets)
+        packets.insert(packet, at: insertionIndex)
+        if packets.count > maxPackets {
+            packets.removeLast(packets.count - maxPackets)
+        }
     }
 
     private func appendConsoleLine(
@@ -396,7 +402,13 @@ final class PacketEngine: ObservableObject {
     // MARK: - Persistence Integration
 
     func handleIncomingPacket(_ packet: Packet) {
-        appendPacket(packet)
+        SentryManager.shared.addBreadcrumb(
+            category: "packets.insert",
+            message: "Packet insert received",
+            level: .info,
+            data: ["packetID": packet.id.uuidString, "currentCount": packets.count]
+        )
+        insertPacketSorted(packet)
         updateMHeard(for: packet)
 
         if let text = packet.infoText {
@@ -442,7 +454,7 @@ final class PacketEngine: ObservableObject {
     }
 
     private func applyLoadedPackets(_ loaded: [Packet], pinnedIDs: Set<Packet.ID>) {
-        packets = loaded
+        packets = loaded.sorted(by: PacketEngine.shouldPrecede)
         pinnedPacketIDs = pinnedIDs
         rebuildStations(from: loaded)
     }
@@ -485,10 +497,39 @@ final class PacketEngine: ObservableObject {
         Task {
             do {
                 try await persistenceWorker.savePacket(packet, retentionLimit: retentionLimit)
+                await MainActor.run {
+                    SentryManager.shared.addBreadcrumb(
+                        category: "packets.insert",
+                        message: "Packet insert committed",
+                        level: .info,
+                        data: ["packetID": packet.id.uuidString, "retentionLimit": retentionLimit]
+                    )
+                }
             } catch {
                 SentryManager.shared.capturePersistenceFailure("save/prune packet", errorDescription: error.localizedDescription)
             }
         }
+    }
+
+    private static func shouldPrecede(_ lhs: Packet, _ rhs: Packet) -> Bool {
+        if lhs.timestamp != rhs.timestamp {
+            return lhs.timestamp > rhs.timestamp
+        }
+        return lhs.id.uuidString > rhs.id.uuidString
+    }
+
+    private static func insertionIndex(for packet: Packet, in packets: [Packet]) -> Int {
+        var lowerBound = 0
+        var upperBound = packets.count
+        while lowerBound < upperBound {
+            let mid = (lowerBound + upperBound) / 2
+            if shouldPrecede(packet, packets[mid]) {
+                upperBound = mid
+            } else {
+                lowerBound = mid + 1
+            }
+        }
+        return lowerBound
     }
 
     private func persistConsoleLine(
