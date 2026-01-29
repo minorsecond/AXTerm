@@ -175,6 +175,7 @@ private final class GraphMetalView: MTKView {
         )
         // isOpaque is read-only on NSView; opaque clearColor above avoids black background.
         colorPixelFormat = .bgra8Unorm
+        sampleCount = 4
         preferredFramesPerSecond = 60
         setupGestures()
     }
@@ -324,7 +325,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     ) {
         let normalizedCallsign = CallsignMatcher.normalize(myCallsign)
         let newKey = GraphRenderKey.from(model: graphModel, positions: nodePositions, myCallsign: normalizedCallsign)
-        if newKey != graphKey {
+        let graphChanged = newKey != graphKey
+        if graphChanged {
             graphKey = newKey
             rebuildGraphBuffers(model: graphModel, positions: nodePositions, myCallsign: normalizedCallsign)
         }
@@ -333,12 +335,14 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             selectedNodeIDs: selectedNodeIDs,
             hoveredNodeID: hoveredNodeID
         )
-        if newHighlight != highlightKey {
+        let highlightChanged = newHighlight != highlightKey
+        if highlightChanged {
             highlightKey = newHighlight
             rebuildHighlightBuffers(selectedNodeIDs: selectedNodeIDs, hoveredNodeID: hoveredNodeID)
         }
-
-        requestRedraw()
+        if graphChanged || highlightChanged {
+            requestRedraw()
+        }
     }
 
     func handle(resetToken: UUID) {
@@ -506,7 +510,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             isShiftSelecting = false
         }
 
-        let isClick = hypot(accumulatedDrag.width, accumulatedDrag.height) < 3
+        let isClick = hypot(accumulatedDrag.width, accumulatedDrag.height) < AnalyticsStyle.Graph.dragThresholdPoints
         if let selectionRect, selectionRect.width > 2, selectionRect.height > 2, isShiftSelecting {
             let selected = nodes(in: selectionRect)
             onSelectMany(selected, true)
@@ -558,11 +562,14 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         commandQueue = device.makeCommandQueue()
         circleVertexBuffer = makeCircleVertexBuffer(device: device)
 
+        let sampleCount = view.sampleCount
         let library = device.makeDefaultLibrary()
+
         let nodePipeline = MTLRenderPipelineDescriptor()
         nodePipeline.vertexFunction = library?.makeFunction(name: "graphNodeVertex")
         nodePipeline.fragmentFunction = library?.makeFunction(name: "graphSolidFragment")
         nodePipeline.colorAttachments[0].pixelFormat = view.colorPixelFormat
+        nodePipeline.rasterSampleCount = sampleCount
         nodePipeline.colorAttachments[0].isBlendingEnabled = true
         nodePipeline.colorAttachments[0].rgbBlendOperation = .add
         nodePipeline.colorAttachments[0].alphaBlendOperation = .add
@@ -575,6 +582,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         edgePipeline.vertexFunction = library?.makeFunction(name: "graphEdgeVertex")
         edgePipeline.fragmentFunction = library?.makeFunction(name: "graphSolidFragment")
         edgePipeline.colorAttachments[0].pixelFormat = view.colorPixelFormat
+        edgePipeline.rasterSampleCount = sampleCount
         edgePipeline.colorAttachments[0].isBlendingEnabled = true
         edgePipeline.colorAttachments[0].rgbBlendOperation = .add
         edgePipeline.colorAttachments[0].alphaBlendOperation = .add
@@ -788,56 +796,62 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     }
 
     private func hitTest(at point: CGPoint, in view: MTKView) -> (id: String, screenPoint: CGPoint)? {
-        let scale = backingScale(for: view)
-        let hitPoint = CGPoint(x: point.x * scale, y: point.y * scale)
-        let size = view.drawableSize
+        let backingScale = self.backingScale(for: view)
+        let viewSizePixels = view.drawableSize
+        let insetPixels = AnalyticsStyle.Layout.graphInset * backingScale
+        let cameraOffsetPixels = CGSize(width: camera.offset.width * backingScale, height: camera.offset.height * backingScale)
+        let hitPixel = CGPoint(x: point.x * backingScale, y: point.y * backingScale)
+
         var closest: (String, CGFloat, CGPoint)?
         for node in nodeCache {
-            let screenPoint = GraphCoordinateMapper.screenPoint(
+            let centerPixel = GraphCoordinateMapper.normalizedToPixel(
                 normalized: node.position,
-                size: size,
-                inset: AnalyticsStyle.Layout.graphInset * scale,
-                scale: camera.scale,
-                offset: CGSize(width: camera.offset.width * scale, height: camera.offset.height * scale)
+                viewSizePixels: viewSizePixels,
+                insetPixels: insetPixels,
+                cameraScale: camera.scale,
+                cameraOffsetPixels: cameraOffsetPixels
             )
-            let radius = metrics.nodeRadius(for: node.weight) * camera.scale
-            let hitRadius = max(AnalyticsStyle.Graph.nodeHitRadius * scale, radius + 6)
-            let distance = hypot(screenPoint.x - hitPoint.x, screenPoint.y - hitPoint.y)
-            if distance <= hitRadius {
+            let nodeRadiusPixels = metrics.nodeRadius(for: node.weight) * camera.scale * backingScale
+            let minHitPixels = AnalyticsStyle.Graph.minHitRadiusPoints * backingScale
+            let hitRadiusPixels = max(minHitPixels, nodeRadiusPixels + 4)
+            let distance = hypot(centerPixel.x - hitPixel.x, centerPixel.y - hitPixel.y)
+            if distance <= hitRadiusPixels {
                 if let existing = closest {
                     if distance < existing.1 {
-                        closest = (node.id, distance, screenPoint)
+                        closest = (node.id, distance, centerPixel)
                     }
                 } else {
-                    closest = (node.id, distance, screenPoint)
+                    closest = (node.id, distance, centerPixel)
                 }
             }
         }
         guard let closest else { return nil }
-        let screenPoint = CGPoint(x: closest.2.x / scale, y: closest.2.y / scale)
-        return (closest.0, screenPoint)
+        let screenPointPoints = CGPoint(x: closest.2.x / backingScale, y: closest.2.y / backingScale)
+        return (closest.0, screenPointPoints)
     }
 
     private func nodes(in rect: CGRect) -> Set<String> {
         guard let view else { return [] }
-        let scale = backingScale(for: view)
+        let backingScale = self.backingScale(for: view)
+        let viewSizePixels = view.drawableSize
+        let insetPixels = AnalyticsStyle.Layout.graphInset * backingScale
+        let cameraOffsetPixels = CGSize(width: camera.offset.width * backingScale, height: camera.offset.height * backingScale)
         let pixelRect = CGRect(
-            x: rect.origin.x * scale,
-            y: rect.origin.y * scale,
-            width: rect.width * scale,
-            height: rect.height * scale
+            x: rect.origin.x * backingScale,
+            y: rect.origin.y * backingScale,
+            width: rect.width * backingScale,
+            height: rect.height * backingScale
         )
-        let size = view.drawableSize
         var selected: Set<String> = []
         for node in nodeCache {
-            let screenPoint = GraphCoordinateMapper.screenPoint(
+            let centerPixel = GraphCoordinateMapper.normalizedToPixel(
                 normalized: node.position,
-                size: size,
-                inset: AnalyticsStyle.Layout.graphInset * scale,
-                scale: camera.scale,
-                offset: CGSize(width: camera.offset.width * scale, height: camera.offset.height * scale)
+                viewSizePixels: viewSizePixels,
+                insetPixels: insetPixels,
+                cameraScale: camera.scale,
+                cameraOffsetPixels: cameraOffsetPixels
             )
-            if pixelRect.contains(screenPoint) {
+            if pixelRect.contains(centerPixel) {
                 selected.insert(node.id)
             }
         }
@@ -932,9 +946,9 @@ private struct GraphCamera {
     private var targetOffset: CGSize = .zero
 
     var isSettled: Bool {
-        abs(scale - targetScale) < 0.002 &&
-        abs(offset.width - targetOffset.width) < 0.5 &&
-        abs(offset.height - targetOffset.height) < 0.5
+        abs(scale - targetScale) < AnalyticsStyle.Graph.cameraSnapScaleEpsilon &&
+        abs(offset.width - targetOffset.width) < AnalyticsStyle.Graph.cameraSnapOffsetEpsilon &&
+        abs(offset.height - targetOffset.height) < AnalyticsStyle.Graph.cameraSnapOffsetEpsilon
     }
 
     mutating func reset() {
@@ -981,16 +995,30 @@ private struct GraphCamera {
 
     mutating func update(deltaTime: CFTimeInterval) -> Bool {
         _ = deltaTime
+        let snapScale = AnalyticsStyle.Graph.cameraSnapScaleEpsilon
+        let snapOffset = AnalyticsStyle.Graph.cameraSnapOffsetEpsilon
+        let deadScale = AnalyticsStyle.Graph.cameraDeadZoneScale
+        let deadOffset = AnalyticsStyle.Graph.cameraDeadZoneOffset
+
+        if abs(scale - targetScale) < snapScale && abs(offset.width - targetOffset.width) < snapOffset && abs(offset.height - targetOffset.height) < snapOffset {
+            scale = targetScale
+            offset = targetOffset
+            return false
+        }
+
         let zoomSmoothing = AnalyticsStyle.Graph.zoomSmoothing
         let panSmoothing = AnalyticsStyle.Graph.panSmoothing
+        var nextScale = scale + (targetScale - scale) * zoomSmoothing
+        var nextOffsetWidth = offset.width + (targetOffset.width - offset.width) * panSmoothing
+        var nextOffsetHeight = offset.height + (targetOffset.height - offset.height) * panSmoothing
 
-        let nextScale = scale + (targetScale - scale) * zoomSmoothing
-        let nextOffsetWidth = offset.width + (targetOffset.width - offset.width) * panSmoothing
-        let nextOffsetHeight = offset.height + (targetOffset.height - offset.height) * panSmoothing
+        if abs(nextScale - targetScale) < deadScale { nextScale = targetScale }
+        if abs(nextOffsetWidth - targetOffset.width) < deadOffset { nextOffsetWidth = targetOffset.width }
+        if abs(nextOffsetHeight - targetOffset.height) < deadOffset { nextOffsetHeight = targetOffset.height }
 
-        let changed = abs(nextScale - scale) > 0.0005 ||
-            abs(nextOffsetWidth - offset.width) > 0.05 ||
-            abs(nextOffsetHeight - offset.height) > 0.05
+        let changed = abs(nextScale - scale) > snapScale ||
+            abs(nextOffsetWidth - offset.width) > snapOffset ||
+            abs(nextOffsetHeight - offset.height) > snapOffset
 
         scale = nextScale
         offset = CGSize(width: nextOffsetWidth, height: nextOffsetHeight)
@@ -998,26 +1026,28 @@ private struct GraphCamera {
     }
 }
 
-private struct GraphCoordinateMapper {
-    static func screenPoint(
+/// Canonical normalized [0,1] -> drawable pixel mapping; must match Metal toPixel exactly.
+private enum GraphCoordinateMapper {
+    /// Converts normalized (x,y in [0,1]) to pixel coordinates in drawable space.
+    /// Uses same formula as shader: base = inset + normalized * (size - inset*2); pixel = (base - center)*scale + center + offset.
+    static func normalizedToPixel(
         normalized: SIMD2<Float>,
-        size: CGSize,
-        inset: CGFloat,
-        scale: CGFloat,
-        offset: CGSize
+        viewSizePixels: CGSize,
+        insetPixels: CGFloat,
+        cameraScale: CGFloat,
+        cameraOffsetPixels: CGSize
     ) -> CGPoint {
-        let width = max(1, size.width - inset * 2)
-        let height = max(1, size.height - inset * 2)
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let base = CGPoint(
-            x: inset + CGFloat(normalized.x) * width,
-            y: inset + CGFloat(normalized.y) * height
-        )
-        let scaled = CGPoint(
-            x: (base.x - center.x) * scale + center.x + offset.width,
-            y: (base.y - center.y) * scale + center.y + offset.height
-        )
-        return scaled
+        let sx = viewSizePixels.width
+        let sy = viewSizePixels.height
+        let ix = insetPixels
+        let iy = insetPixels
+        let baseX = ix + CGFloat(normalized.x) * (sx - ix * 2)
+        let baseY = iy + CGFloat(normalized.y) * (sy - iy * 2)
+        let centerX = sx * 0.5
+        let centerY = sy * 0.5
+        let pixelX = (baseX - centerX) * cameraScale + centerX + cameraOffsetPixels.width
+        let pixelY = (baseY - centerY) * cameraScale + centerY + cameraOffsetPixels.height
+        return CGPoint(x: pixelX, y: pixelY)
     }
 }
 

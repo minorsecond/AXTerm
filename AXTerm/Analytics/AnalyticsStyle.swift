@@ -59,6 +59,10 @@ enum AnalyticsStyle {
         static let springLength: Double = 0.18
         static let nodeRadiusRange: ClosedRange<CGFloat> = 4...12
         static let nodeHitRadius: CGFloat = 22
+        /// Minimum hit radius in points so "my node" and small nodes are always clickable.
+        static let minHitRadiusPoints: CGFloat = 14
+        /// Drag below this (points) is treated as a click.
+        static let dragThresholdPoints: CGFloat = 6
         static let edgeThicknessRange: ClosedRange<CGFloat> = 0.8...2.6
         static let edgeAlphaRange: ClosedRange<Double> = 0.2...0.8
         static let selectionGlowWidth: CGFloat = 4
@@ -67,6 +71,12 @@ enum AnalyticsStyle {
         static let panDamping: CGFloat = 0.9
         static let zoomSmoothing: Double = 0.18
         static let panSmoothing: Double = 0.2
+        /// When within this of target, snap and stop animating.
+        static let cameraSnapScaleEpsilon: CGFloat = 0.0005
+        static let cameraSnapOffsetEpsilon: CGFloat = 0.3
+        /// Ignore target changes smaller than this (avoids float jitter).
+        static let cameraDeadZoneScale: CGFloat = 0.0002
+        static let cameraDeadZoneOffset: CGFloat = 0.2
         static let hoverEdgeAlpha: Double = 0.7
         static let myNodeScale: CGFloat = 1.15
     }

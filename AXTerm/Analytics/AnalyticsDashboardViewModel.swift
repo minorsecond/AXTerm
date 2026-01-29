@@ -96,6 +96,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private var layoutState: ForceLayoutState?
     private var layoutTask: Task<Void, Never>?
     private var layoutTickCount: Int = 0
+    private var layoutKey: GraphLayoutKey?
+    private var layoutCache: [GraphLayoutKey: [NodePosition]] = [:]
+    private var myCallsignForLayout: String = ""
     private var aggregationCache: [AggregationCacheKey: AnalyticsAggregationResult] = [:]
     private var graphCache: [GraphCacheKey: GraphModel] = [:]
     private let aggregationScheduler: CoalescingScheduler
@@ -157,7 +160,18 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     func resetGraphView() {
         graphLayoutSeed += 1
+        layoutKey = nil
+        layoutCache.removeAll()
         prepareLayout(reason: "graphReset")
+    }
+
+    /// Set once so radial layout can center on "my" node; call when graph section is shown or settings change.
+    func setMyCallsignForLayout(_ value: String) {
+        guard value != myCallsignForLayout else { return }
+        myCallsignForLayout = value
+        if !viewState.graphModel.nodes.isEmpty {
+            prepareLayout(reason: "myCallsign")
+        }
     }
 
     func trackDashboardOpened() {
@@ -513,98 +527,30 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func prepareLayout(reason: String) {
         layoutTask?.cancel()
+        layoutState = nil
         guard isActive else { return }
-        guard !viewState.graphModel.nodes.isEmpty else {
+        let model = viewState.graphModel
+        guard !model.nodes.isEmpty else {
             viewState.nodePositions = []
-            layoutState = nil
             viewState.layoutEnergy = 0
+            layoutKey = nil
             return
         }
 
-        let previous = layoutState?.positions ?? [:]
-        let initialState = ForceLayoutEngine.initialize(
-            nodes: viewState.graphModel.nodes,
-            previous: previous,
-            seed: graphLayoutSeed
-        )
-        layoutState = initialState
-        startLayoutTask(reason: reason, initialState: initialState)
-    }
-
-    private func startLayoutTask(reason: String, initialState: ForceLayoutState) {
-        layoutTickCount = 0
-        let model = viewState.graphModel
-        layoutTask = Task.detached(priority: .utility) { [weak self] in
-            var state = initialState
-            while !Task.isCancelled {
-                let start = Date()
-                let updated = ForceLayoutEngine.tick(
-                    model: model,
-                    state: state,
-                    iterations: AnalyticsStyle.Graph.layoutIterationsPerTick,
-                    repulsion: AnalyticsStyle.Graph.repulsionStrength,
-                    springStrength: AnalyticsStyle.Graph.springStrength,
-                    springLength: AnalyticsStyle.Graph.springLength,
-                    damping: AnalyticsStyle.Graph.layoutCooling,
-                    timeStep: AnalyticsStyle.Graph.layoutTimeStep
-                )
-                state = updated
-
-                let positions = model.nodes.compactMap { node -> NodePosition? in
-                    guard let position = updated.positions[node.id] else { return nil }
-                    return NodePosition(id: node.id, x: Double(position.x), y: Double(position.y))
-                }
-
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    self.layoutState = updated
-                    self.viewState.layoutEnergy = updated.energy
-                    if self.shouldPublishLayout(newPositions: positions) {
-                        self.viewState.nodePositions = positions
-                    }
-
-                    if positions.contains(where: { !$0.x.isFinite || !$0.y.isFinite }) {
-                        Telemetry.capture(
-                            message: "graph.layout.invalid",
-                            data: [
-                                "nodeCount": model.nodes.count,
-                                "edgeCount": model.edges.count
-                            ]
-                        )
-                    }
-
-                    self.layoutTickCount += 1
-                    if self.layoutTickCount.isMultiple(of: 10) {
-                        let duration = Date().timeIntervalSince(start) * 1000
-                        #if DEBUG
-                        self.logger.debug("Layout tick (energy: \(updated.energy), durationMs: \(duration))")
-                        #endif
-                        self.telemetryLimiter.breadcrumb(
-                            category: "layout.tick",
-                            message: "Layout tick",
-                            data: [
-                                "iterationCount": AnalyticsStyle.Graph.layoutIterationsPerTick,
-                                "energy": updated.energy,
-                                "durationMs": duration,
-                                "reason": reason
-                            ]
-                        )
-                    }
-
-                    if updated.energy < AnalyticsStyle.Graph.layoutEnergyThreshold {
-                        self.layoutTask?.cancel()
-                    }
-
-                    self.reconcileSelectionAfterLayout()
-                }
-
-                do {
-                    try await Task.sleep(for: .milliseconds(66))
-                } catch {
-                    return
-                }
-            }
+        let key = GraphLayoutKey.from(model: model)
+        if let cached = layoutCache[key], key == layoutKey {
+            viewState.nodePositions = cached
+            viewState.layoutEnergy = 0
+            reconcileSelectionAfterLayout()
+            return
         }
+
+        let positions = RadialGraphLayout.layout(model: model, myCallsign: myCallsignForLayout)
+        layoutKey = key
+        layoutCache[key] = positions
+        viewState.nodePositions = positions
+        viewState.layoutEnergy = 0
+        reconcileSelectionAfterLayout()
     }
 
     private func updateSelectionState() {
@@ -650,22 +596,6 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         case .inspect:
             break
         }
-    }
-
-    private func shouldPublishLayout(newPositions: [NodePosition]) -> Bool {
-        guard newPositions.count == viewState.nodePositions.count else { return true }
-        let epsilon = AnalyticsStyle.Graph.layoutPublishThreshold
-        for position in newPositions {
-            guard let existing = viewState.nodePositions.first(where: { $0.id == position.id }) else {
-                return true
-            }
-            let dx = existing.x - position.x
-            let dy = existing.y - position.y
-            if abs(dx) > epsilon || abs(dy) > epsilon {
-                return true
-            }
-        }
-        return false
     }
 
     #if DEBUG

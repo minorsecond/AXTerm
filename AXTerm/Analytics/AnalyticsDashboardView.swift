@@ -217,6 +217,12 @@ struct AnalyticsDashboardView: View {
                     }
                 )
                 .frame(minHeight: AnalyticsStyle.Layout.graphHeight)
+                .onAppear {
+                    viewModel.setMyCallsignForLayout(settings.myCallsign)
+                }
+                .onChange(of: settings.myCallsign) { _, newValue in
+                    viewModel.setMyCallsignForLayout(newValue)
+                }
 
                 GraphInspectorView(details: viewModel.selectedNodeDetails()) {
                     viewModel.handleBackgroundClick()
@@ -233,6 +239,7 @@ struct AnalyticsDashboardView: View {
                     .padding(.top, 4)
             }
 
+            // Optional: floating translucent bar over graph — wrap graph in ZStack, add overlay with .opacity(0.7), use @State hover and .opacity(hover ? 1 : 0.7).
             Text("Click to select, Shift-click to toggle, Shift-drag to select, drag to pan, pinch to zoom, ⌘-scroll to zoom, Esc clears")
                 .font(.caption)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
