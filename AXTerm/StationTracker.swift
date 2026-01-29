@@ -40,8 +40,62 @@ struct StationTracker {
         stationIndex.removeAll()
     }
 
+    mutating func rebuild(from packets: [Packet]) {
+        stations.removeAll(keepingCapacity: true)
+        stationIndex.removeAll(keepingCapacity: true)
+
+        struct Aggregation {
+            var lastHeard: Date?
+            var heardCount: Int = 0
+            var lastVia: [String] = []
+        }
+
+        var aggregates: [String: Aggregation] = [:]
+
+        for packet in packets {
+            guard let from = packet.from else { continue }
+            let call = from.display
+            var aggregate = aggregates[call, default: Aggregation()]
+            aggregate.heardCount += 1
+            if let currentLastHeard = aggregate.lastHeard {
+                if packet.timestamp >= currentLastHeard {
+                    aggregate.lastHeard = packet.timestamp
+                    if !packet.via.isEmpty {
+                        aggregate.lastVia = packet.via.map { $0.display }
+                    }
+                }
+            } else {
+                aggregate.lastHeard = packet.timestamp
+                aggregate.lastVia = packet.via.map { $0.display }
+            }
+            aggregates[call] = aggregate
+        }
+
+        stations = aggregates.map { call, aggregate in
+            Station(
+                call: call,
+                lastHeard: aggregate.lastHeard,
+                heardCount: aggregate.heardCount,
+                lastVia: aggregate.lastVia
+            )
+        }
+        sortStations()
+    }
+
+    func heardCount(for call: String) -> Int? {
+        guard let index = stationIndex[call] else { return nil }
+        return stations[index].heardCount
+    }
+
     private mutating func sortStations() {
-        stations.sort { ($0.lastHeard ?? .distantPast) > ($1.lastHeard ?? .distantPast) }
+        stations.sort {
+            let leftDate = $0.lastHeard ?? .distantPast
+            let rightDate = $1.lastHeard ?? .distantPast
+            if leftDate != rightDate {
+                return leftDate > rightDate
+            }
+            return $0.call.localizedCaseInsensitiveCompare($1.call) == .orderedAscending
+        }
         stationIndex.removeAll()
         for (index, station) in stations.enumerated() {
             stationIndex[station.call] = index
