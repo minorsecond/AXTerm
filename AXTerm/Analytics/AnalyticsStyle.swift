@@ -6,7 +6,6 @@
 //
 
 import AppKit
-import Charts
 import SwiftUI
 
 enum AnalyticsStyle {
@@ -28,7 +27,6 @@ enum AnalyticsStyle {
     enum Chart {
         static let axisLabelCount: Int = 5
         static let smoothLines: Bool = false
-        static var lineInterpolation: MarkInterpolation { smoothLines ? .catmullRom : .linear }
         static let showSymbols: Bool = false
     }
 

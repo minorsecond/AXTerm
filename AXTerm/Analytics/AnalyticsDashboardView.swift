@@ -167,7 +167,9 @@ struct AnalyticsDashboardView: View {
                         viewModel.handleBackgroundClick()
                     },
                     onHover: { nodeID in
-                        viewModel.updateHover(for: nodeID)
+                        DispatchQueue.main.async {
+                            viewModel.updateHover(for: nodeID)
+                        }
                     },
                     onFocusHandled: {
                         focusNodeID = nil
@@ -288,14 +290,22 @@ private struct TimeSeriesChart: View {
         if points.isEmpty {
             EmptyChartPlaceholder(text: "No data")
         } else {
-            Chart {
+                Chart {
                 ForEach(points, id: \.bucket) { point in
-                    LineMark(
-                        x: .value("Time", point.bucket),
-                        y: .value(valueLabel, point.value)
-                    )
-                    .interpolationMethod(AnalyticsStyle.Chart.lineInterpolation)
-                    .foregroundStyle(AnalyticsStyle.Colors.accent)
+                    if #available(macOS 13.0, *) {
+                        LineMark(
+                            x: .value("Time", point.bucket),
+                            y: .value(valueLabel, point.value)
+                        )
+                        .interpolationMethod(AnalyticsStyle.Chart.smoothLines ? .catmullRom : .linear)
+                        .foregroundStyle(AnalyticsStyle.Colors.accent)
+                    } else {
+                        LineMark(
+                            x: .value("Time", point.bucket),
+                            y: .value(valueLabel, point.value)
+                        )
+                        .foregroundStyle(AnalyticsStyle.Colors.accent)
+                    }
                 }
             }
             .chartYScale(domain: .automatic(includesZero: true))
