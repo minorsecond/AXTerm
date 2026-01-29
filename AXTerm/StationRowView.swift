@@ -17,15 +17,18 @@ struct StationRowView: View {
                 Text(station.call)
                     .font(.system(.body, design: .monospaced))
                     .fontWeight(isSelected ? .semibold : .regular)
+                    .help("Station callsign")
 
                 Text(station.subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .help("Packet count and last heard time")
 
                 if !station.lastViaDisplay.isEmpty {
                     Text("Via \(station.lastViaDisplay)")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                        .help("Last heard digipeater path")
                 }
             }
 
@@ -41,4 +44,3 @@ struct StationRowView: View {
         .cornerRadius(4)
     }
 }
-

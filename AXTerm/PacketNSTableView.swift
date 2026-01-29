@@ -87,12 +87,12 @@ struct PacketNSTableView: NSViewRepresentable {
     private func configureColumns(for tableView: NSTableView) {
         if !tableView.tableColumns.isEmpty { return }
 
-        let timeColumn = makeColumn(id: .time, title: "Time", minWidth: 70, width: 80)
-        let fromColumn = makeColumn(id: .from, title: "From", minWidth: 80, width: 100)
-        let toColumn = makeColumn(id: .to, title: "To", minWidth: 80, width: 100)
-        let viaColumn = makeColumn(id: .via, title: "Via", minWidth: 60, width: 120)
-        let typeColumn = makeColumn(id: .type, title: "Type", minWidth: 40, width: 50)
-        let infoColumn = makeColumn(id: .info, title: "Info", minWidth: 200, width: 400)
+        let timeColumn = makeColumn(id: .time, title: "Time", minWidth: 70, width: 80, toolTip: "Received time")
+        let fromColumn = makeColumn(id: .from, title: "From", minWidth: 80, width: 100, toolTip: "Source callsign")
+        let toColumn = makeColumn(id: .to, title: "To", minWidth: 80, width: 100, toolTip: "Destination callsign")
+        let viaColumn = makeColumn(id: .via, title: "Via", minWidth: 60, width: 120, toolTip: "Digipeater path")
+        let typeColumn = makeColumn(id: .type, title: "Type", minWidth: 40, width: 50, toolTip: "AX.25 frame type")
+        let infoColumn = makeColumn(id: .info, title: "Info", minWidth: 200, width: 400, toolTip: "Decoded payload preview")
         infoColumn.resizingMask = [.autoresizingMask, .userResizingMask]
 
         tableView.addTableColumn(timeColumn)
@@ -105,12 +105,13 @@ struct PacketNSTableView: NSViewRepresentable {
         // remaining width like Finder. Keep Info last to make it the expanding column.
     }
 
-    private func makeColumn(id: ColumnIdentifier, title: String, minWidth: CGFloat, width: CGFloat) -> NSTableColumn {
+    private func makeColumn(id: ColumnIdentifier, title: String, minWidth: CGFloat, width: CGFloat, toolTip: String) -> NSTableColumn {
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id.rawValue))
         column.title = title
         column.minWidth = minWidth
         column.width = width
         column.resizingMask = .userResizingMask
+        column.headerCell.toolTip = toolTip
         return column
     }
 
@@ -321,24 +322,28 @@ extension PacketNSTableView {
                 field.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
                 field.textColor = .secondaryLabelColor
                 field.alignment = .left
+                field.toolTip = row.timeText
             case ColumnIdentifier.from.rawValue:
                 field.stringValue = row.fromText
                 field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
                 field.textColor = row.isLowSignal ? .secondaryLabelColor : .labelColor
                 field.alignment = .left
+                field.toolTip = row.fromText
             case ColumnIdentifier.to.rawValue:
                 field.stringValue = row.toText
                 field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
                 field.textColor = row.isLowSignal ? .secondaryLabelColor : .labelColor
                 field.alignment = .left
+                field.toolTip = row.toText
             case ColumnIdentifier.via.rawValue:
                 field.stringValue = row.viaText
                 field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
                 field.textColor = .secondaryLabelColor
                 field.alignment = .left
+                field.toolTip = row.viaText
             case ColumnIdentifier.type.rawValue:
-                field.stringValue = row.typeIcon
-                field.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+                field.stringValue = row.typeLabel
+                field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
                 field.textColor = row.isLowSignal ? .secondaryLabelColor : .labelColor
                 field.alignment = .center
                 field.toolTip = row.typeTooltip
@@ -398,8 +403,8 @@ private struct PacketTableColumnSizer {
             font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
             values = rows.map { $0.viaText }
         case .type:
-            font = .systemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-            values = rows.map { $0.typeIcon }
+            font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
+            values = rows.map { $0.typeLabel }
         case .info:
             font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
             values = rows.map { $0.infoText }

@@ -169,24 +169,28 @@ extension PacketTableCoordinator: NSTableViewDelegate {
             field.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
             field.textColor = .secondaryLabelColor
             field.alignment = .left
+            field.toolTip = row.timeText
         case PacketTableColumnIdentifier.from.rawValue:
             field.stringValue = row.fromText
             field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
             field.textColor = row.isLowSignal ? .secondaryLabelColor : .labelColor
             field.alignment = .left
+            field.toolTip = row.fromText
         case PacketTableColumnIdentifier.to.rawValue:
             field.stringValue = row.toText
             field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
             field.textColor = row.isLowSignal ? .secondaryLabelColor : .labelColor
             field.alignment = .left
+            field.toolTip = row.toText
         case PacketTableColumnIdentifier.via.rawValue:
             field.stringValue = row.viaText
             field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
             field.textColor = .secondaryLabelColor
             field.alignment = .left
+            field.toolTip = row.viaText
         case PacketTableColumnIdentifier.type.rawValue:
-            field.stringValue = row.typeIcon
-            field.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            field.stringValue = row.typeLabel
+            field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
             field.textColor = row.isLowSignal ? .secondaryLabelColor : .labelColor
             field.alignment = .center
             field.toolTip = row.typeTooltip

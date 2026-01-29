@@ -66,36 +66,42 @@ struct PacketTableNSTableView: NSViewRepresentable {
         timeColumn.minWidth = 70
         timeColumn.width = 80
         timeColumn.resizingMask = [.autoresizingMask]
+        timeColumn.headerCell.toolTip = "Received time"
 
         let fromColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(PacketTableColumnIdentifier.from.rawValue))
         fromColumn.title = "From"
         fromColumn.minWidth = 80
         fromColumn.width = 100
         fromColumn.resizingMask = [.autoresizingMask]
+        fromColumn.headerCell.toolTip = "Source callsign"
 
         let toColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(PacketTableColumnIdentifier.to.rawValue))
         toColumn.title = "To"
         toColumn.minWidth = 80
         toColumn.width = 100
         toColumn.resizingMask = [.autoresizingMask]
+        toColumn.headerCell.toolTip = "Destination callsign"
 
         let viaColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(PacketTableColumnIdentifier.via.rawValue))
         viaColumn.title = "Via"
         viaColumn.minWidth = 60
         viaColumn.width = 120
         viaColumn.resizingMask = [.autoresizingMask]
+        viaColumn.headerCell.toolTip = "Digipeater path"
 
         let typeColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(PacketTableColumnIdentifier.type.rawValue))
         typeColumn.title = "Type"
         typeColumn.minWidth = 40
         typeColumn.width = 50
         typeColumn.resizingMask = [.autoresizingMask]
+        typeColumn.headerCell.toolTip = "AX.25 frame type"
 
         let infoColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(PacketTableColumnIdentifier.info.rawValue))
         infoColumn.title = "Info"
         infoColumn.minWidth = 200
         infoColumn.width = 400
         infoColumn.resizingMask = [.autoresizingMask]
+        infoColumn.headerCell.toolTip = "Decoded payload preview"
 
         tableView.addTableColumn(timeColumn)
         tableView.addTableColumn(fromColumn)

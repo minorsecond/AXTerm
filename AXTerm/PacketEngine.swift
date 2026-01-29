@@ -23,7 +23,7 @@ struct PacketFilters: Equatable {
     var showI: Bool = true
     var showS: Bool = true
     var showU: Bool = true
-    var onlyWithInfo: Bool = false
+    var payloadOnly: Bool = false
     var onlyPinned: Bool = false
 
     func allows(frameType: FrameType) -> Bool {
