@@ -20,12 +20,14 @@ enum TelemetrySpanStatus: Sendable {
     case error
 }
 
+typealias TelemetrySpanToken = AnyObject
+
 protocol TelemetryBackend {
     var isEnabled: Bool { get }
 
     func addBreadcrumb(category: String, message: String, data: [String: Any]?, level: TelemetryLevel)
-    func startSpan(name: String, operation: String?, data: [String: Any]?) -> Any?
-    func finishSpan(_ span: Any?, status: TelemetrySpanStatus)
+    func startSpan(name: String, operation: String?, data: [String: Any]?) -> TelemetrySpanToken?
+    func finishSpan(_ span: TelemetrySpanToken?, status: TelemetrySpanStatus)
     func capture(error: Error, message: String, data: [String: Any]?)
     func capture(message: String, data: [String: Any]?)
 }
@@ -34,8 +36,8 @@ struct NoOpTelemetryBackend: TelemetryBackend {
     var isEnabled: Bool { false }
 
     func addBreadcrumb(category _: String, message _: String, data _: [String: Any]?, level _: TelemetryLevel) {}
-    func startSpan(name _: String, operation _: String?, data _: [String: Any]?) -> Any? { nil }
-    func finishSpan(_ span _: Any?, status _: TelemetrySpanStatus) {}
+    func startSpan(name _: String, operation _: String?, data _: [String: Any]?) -> TelemetrySpanToken? { nil }
+    func finishSpan(_ span _: TelemetrySpanToken?, status _: TelemetrySpanStatus) {}
     func capture(error _: Error, message _: String, data _: [String: Any]?) {}
     func capture(message _: String, data _: [String: Any]?) {}
 }
@@ -68,7 +70,7 @@ final class SentryTelemetryBackend: TelemetryBackend {
         SentrySDK.addBreadcrumb(crumb)
     }
 
-    func startSpan(name: String, operation: String?, data: [String: Any]?) -> Any? {
+    func startSpan(name: String, operation: String?, data: [String: Any]?) -> TelemetrySpanToken? {
         guard SentrySDK.isEnabled else { return nil }
         let span = SentrySDK.startTransaction(name: name, operation: operation ?? "measure")
         if let data {
@@ -79,7 +81,7 @@ final class SentryTelemetryBackend: TelemetryBackend {
         return span
     }
 
-    func finishSpan(_ span: Any?, status _: TelemetrySpanStatus) {
+    func finishSpan(_ span: TelemetrySpanToken?, status _: TelemetrySpanStatus) {
         guard SentrySDK.isEnabled else { return }
         guard let span = span as? Span else { return }
         span.finish()
