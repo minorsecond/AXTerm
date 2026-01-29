@@ -195,6 +195,4 @@ private struct PacketTableCell<Content: View>: View {
             EmptyView()
         }
     }
-
-    
 }
