@@ -38,9 +38,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     @Published private(set) var edges: [GraphEdge] = []
     @Published private(set) var nodePositions: [NodePosition] = []
 
-    @Published var selectedNodeID: String?
+    @Published private(set) var selectedNodeID: String?
+    @Published private(set) var selectedNodeIDs: Set<String> = []
     @Published var hoveredNodeID: String?
-    @Published var pinnedNodeID: String?
+    @Published var stationInspector: StationInspectorViewModel?
 
     private let calendar: Calendar
     private let packetSubject = CurrentValueSubject<[Packet], Never>([])
@@ -50,6 +51,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private var graphLayoutSeed: Int = 1
     private let packetDebounce: RunLoop.SchedulerTimeType.Stride
     private let packetScheduler: RunLoop
+    private var selectionState = GraphSelectionState()
 
     init(
         calendar: Calendar = .current,
@@ -86,18 +88,47 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         )
     }
 
-    func selectNode(_ nodeID: String?) {
-        selectedNodeID = nodeID
-        guard let nodeID else { return }
-        Telemetry.breadcrumb(
-            category: "analytics.graph.node.selected",
-            message: "Analytics graph node selected",
-            data: ["nodeID": nodeID]
+    func handleNodeClick(_ nodeID: String, isShift: Bool) {
+        let effect = GraphSelectionReducer.reduce(
+            state: &selectionState,
+            action: .clickNode(id: nodeID, isShift: isShift)
         )
+        updateSelectionState()
+
+        Telemetry.breadcrumb(
+            category: "analytics.graph.node.clicked",
+            message: "Analytics graph node clicked",
+            data: [
+                "nodeID": nodeID,
+                "shiftKey": isShift
+            ]
+        )
+
+        handleSelectionEffect(effect)
     }
 
-    func togglePinnedNode(_ nodeID: String) {
-        pinnedNodeID = pinnedNodeID == nodeID ? nil : nodeID
+    func handleNodeDoubleClick(_ nodeID: String, isShift: Bool) {
+        let effect = GraphSelectionReducer.reduce(
+            state: &selectionState,
+            action: .doubleClickNode(id: nodeID, isShift: isShift)
+        )
+        updateSelectionState()
+
+        Telemetry.breadcrumb(
+            category: "analytics.graph.node.doubleClicked",
+            message: "Analytics graph node double clicked",
+            data: [
+                "nodeID": nodeID,
+                "shiftKey": isShift
+            ]
+        )
+
+        handleSelectionEffect(effect)
+    }
+
+    func handleBackgroundClick() {
+        _ = GraphSelectionReducer.reduce(state: &selectionState, action: .clickBackground)
+        updateSelectionState()
     }
 
     func updateHover(for nodeID: String, isHovering: Bool) {
@@ -106,6 +137,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         } else if hoveredNodeID == nodeID {
             hoveredNodeID = nil
         }
+    }
+
+    func closeStationInspector() {
+        stationInspector = nil
     }
 
     private func bindPackets() {
@@ -149,6 +184,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         recomputeSummary(packets: packets)
         recomputeSeries(packets: packets)
         recomputeEdges(packets: packets)
+        refreshStationInspector()
     }
 
     private func recomputeSummary(packets: [Packet]) {
@@ -254,6 +290,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             )
         }
 
+        refreshStationInspector()
         recomputeLayout(reason: "edgesUpdated")
     }
 
@@ -278,6 +315,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             )
         }
         nodePositions = positions
+        reconcileSelectionAfterLayout()
 
         let invalidPositions = positions.filter { !$0.x.isFinite || !$0.y.isFinite }
         if !invalidPositions.isEmpty {
@@ -331,6 +369,68 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                 bytes: metrics.hasBytes ? metrics.bytes : nil
             )
         }
+    }
+
+    private func updateSelectionState() {
+        selectedNodeIDs = selectionState.selectedIDs
+        selectionState.normalizePrimary()
+        selectedNodeID = selectionState.primarySelectionID
+        captureMissingSelectionIfNeeded()
+    }
+
+    private func captureMissingSelectionIfNeeded() {
+        let availableIDs = Set(nodePositions.map { $0.id })
+        let missing = selectedNodeIDs.subtracting(availableIDs)
+        guard !missing.isEmpty else { return }
+        Telemetry.capture(
+            message: "analytics.graph.selection.missingNode",
+            data: [
+                "missingCount": missing.count,
+                "missingIDs": Array(missing).sorted()
+            ]
+        )
+    }
+
+    private func reconcileSelectionAfterLayout() {
+        let availableIDs = Set(nodePositions.map { $0.id })
+        let missing = selectionState.selectedIDs.subtracting(availableIDs)
+        guard !missing.isEmpty else { return }
+        Telemetry.capture(
+            message: "analytics.graph.selection.missingNode",
+            data: [
+                "missingCount": missing.count,
+                "missingIDs": Array(missing).sorted()
+            ]
+        )
+        selectionState.selectedIDs = selectionState.selectedIDs.intersection(availableIDs)
+        selectionState.normalizePrimary()
+        updateSelectionState()
+    }
+
+    private func handleSelectionEffect(_ effect: GraphSelectionEffect) {
+        switch effect {
+        case .none:
+            break
+        case let .inspect(nodeID):
+            openStationInspector(for: nodeID)
+        }
+    }
+
+    private func openStationInspector(for nodeID: String) {
+        Telemetry.breadcrumb(
+            category: "analytics.station.inspect.opened",
+            message: "Station inspector opened",
+            data: ["nodeID": nodeID]
+        )
+        stationInspector = StationInspectorViewModel(
+            stationID: nodeID,
+            packets: packets,
+            edges: edges
+        )
+    }
+
+    private func refreshStationInspector() {
+        stationInspector?.update(packets: packets, edges: edges)
     }
 
     private func validateSeries(_ series: AnalyticsSeries) -> [String] {

@@ -33,6 +33,14 @@ struct AnalyticsDashboardView: View {
         .onReceive(packetEngine.$packets) { packets in
             viewModel.updatePackets(packets)
         }
+        .onChange(of: viewModel.selectedNodeID) { _, newValue in
+            packetEngine.selectedStationCall = newValue
+        }
+        .sheet(item: $viewModel.stationInspector) { inspector in
+            StationInspectorView(viewModel: inspector) {
+                viewModel.closeStationInspector()
+            }
+        }
     }
 
     private var filterSection: some View {
@@ -111,14 +119,17 @@ struct AnalyticsDashboardView: View {
                     .frame(minHeight: 260)
 
                 HStack {
-                    Text("Selected: \(viewModel.selectedNodeID ?? "None")")
+                    if viewModel.selectedNodeIDs.isEmpty {
+                        Text("Selected: None")
+                    } else {
+                        Text("Selected: \(viewModel.selectedNodeIDs.sorted().joined(separator: ", "))")
+                    }
                     Spacer()
-                    Text("Pinned: \(viewModel.pinnedNodeID ?? "None")")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-                Text("Tip: click to select, double-click to pin.")
+                Text("Tip: click to select, shift-click to add, double-click to inspect, Esc to clear.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -216,6 +227,13 @@ private struct AnalyticsGraphView: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack {
+                Rectangle()
+                    .fill(Color.clear)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        viewModel.handleBackgroundClick()
+                    }
+
                 Canvas { context, _ in
                     let positions = Dictionary(uniqueKeysWithValues: viewModel.nodePositions.map {
                         ($0.id, CGPoint(x: $0.x, y: $0.y))
@@ -230,23 +248,40 @@ private struct AnalyticsGraphView: View {
                 }
 
                 ForEach(viewModel.nodePositions, id: \.id) { node in
-                    let isSelected = viewModel.selectedNodeID == node.id
-                    let isPinned = viewModel.pinnedNodeID == node.id
+                    let isSelected = viewModel.selectedNodeIDs.contains(node.id)
+                    let isPrimary = viewModel.selectedNodeID == node.id
                     let isHovered = viewModel.hoveredNodeID == node.id
 
                     Circle()
-                        .fill(nodeColor(selected: isSelected, pinned: isPinned, hovered: isHovered))
-                        .frame(width: isPinned ? 16 : 12, height: isPinned ? 16 : 12)
+                        .fill(nodeColor(selected: isSelected, hovered: isHovered))
+                        .frame(width: 12, height: 12)
                         .overlay(
                             Circle()
-                                .stroke(isSelected ? Color.accentColor : .clear, lineWidth: 2)
+                                .stroke(isPrimary ? Color.accentColor : .clear, lineWidth: 2)
                         )
                         .position(x: node.x, y: node.y)
+                        .highPriorityGesture(
+                            TapGesture(count: 2)
+                                .modifiers(.shift)
+                                .onEnded {
+                                    viewModel.handleNodeDoubleClick(node.id, isShift: true)
+                                }
+                        )
+                        .highPriorityGesture(
+                            TapGesture(count: 2)
+                                .onEnded {
+                                    viewModel.handleNodeDoubleClick(node.id, isShift: false)
+                                }
+                        )
+                        .highPriorityGesture(
+                            TapGesture()
+                                .modifiers(.shift)
+                                .onEnded {
+                                    viewModel.handleNodeClick(node.id, isShift: true)
+                                }
+                        )
                         .onTapGesture {
-                            viewModel.selectNode(node.id)
-                        }
-                        .onTapGesture(count: 2) {
-                            viewModel.togglePinnedNode(node.id)
+                            viewModel.handleNodeClick(node.id, isShift: false)
                         }
                         .onHover { hovering in
                             viewModel.updateHover(for: node.id, isHovering: hovering)
@@ -262,12 +297,13 @@ private struct AnalyticsGraphView: View {
         }
         .background(Color.secondary.opacity(0.06))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .focusable()
+        .onExitCommand {
+            viewModel.handleBackgroundClick()
+        }
     }
 
-    private func nodeColor(selected: Bool, pinned: Bool, hovered: Bool) -> Color {
-        if pinned {
-            return .orange
-        }
+    private func nodeColor(selected: Bool, hovered: Bool) -> Color {
         if selected {
             return .accentColor
         }
