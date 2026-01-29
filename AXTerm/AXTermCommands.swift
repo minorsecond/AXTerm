@@ -113,6 +113,17 @@ struct AXTermCommands: Commands {
             Button("Diagnostics…") {
                 openWindow(id: "diagnostics")
             }
+
+            #if DEBUG
+            Divider()
+
+            Button("Send Test Event to Sentry") {
+                Task { @MainActor in
+                    SentryManager.shared.sendTestEvent()
+                }
+            }
+            .disabled(!SentryManager.shared.isRunning)
+            #endif
         }
 
     }
