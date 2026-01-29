@@ -5,6 +5,7 @@
 //  Created by AXTerm on 2026-02-23.
 //
 
+import Combine
 import Foundation
 
 final class StationInspectorViewModel: ObservableObject, Identifiable {
