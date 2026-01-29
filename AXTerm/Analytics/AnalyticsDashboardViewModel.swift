@@ -28,6 +28,11 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
     @Published var minEdgeCount: Int {
         didSet {
+            let normalized = AnalyticsInputNormalizer.minEdgeCount(minEdgeCount)
+            if normalized != minEdgeCount {
+                minEdgeCount = normalized
+                return
+            }
             guard minEdgeCount != oldValue else { return }
             trackFilterChange(reason: "minEdgeCount")
             scheduleGraphBuild(reason: "minEdgeCount")
@@ -35,27 +40,18 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
     @Published var maxNodes: Int {
         didSet {
+            let normalized = AnalyticsInputNormalizer.maxNodes(maxNodes)
+            if normalized != maxNodes {
+                maxNodes = normalized
+                return
+            }
             guard maxNodes != oldValue else { return }
             trackFilterChange(reason: "maxNodes")
             scheduleGraphBuild(reason: "maxNodes")
         }
     }
 
-    @Published private(set) var summary: AnalyticsSummaryMetrics?
-    @Published private(set) var series: AnalyticsSeries = .empty
-    @Published private(set) var heatmap: HeatmapData = .empty
-    @Published private(set) var histogram: HistogramData = .empty
-    @Published private(set) var topTalkers: [RankRow] = []
-    @Published private(set) var topDestinations: [RankRow] = []
-    @Published private(set) var topDigipeaters: [RankRow] = []
-    @Published private(set) var graphModel: GraphModel = .empty
-    @Published private(set) var nodePositions: [NodePosition] = []
-    @Published private(set) var layoutEnergy: Double = 0
-    @Published private(set) var graphNote: String?
-
-    @Published private(set) var selectedNodeID: String?
-    @Published private(set) var selectedNodeIDs: Set<String> = []
-    @Published var hoveredNodeID: String?
+    @Published private(set) var viewState: AnalyticsViewState = .empty
 
     private let calendar: Calendar
     private let packetSubject = CurrentValueSubject<[Packet], Never>([])
@@ -63,13 +59,17 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private var packets: [Packet] = []
     private var graphLayoutSeed: Int = 1
     private var selectionState = GraphSelectionState()
-    private let aggregationDebouncer: Debouncer
-    private let graphDebouncer: Debouncer
     private var layoutState: ForceLayoutState?
-    private var layoutTicker: AnyCancellable?
+    private var layoutTask: Task<Void, Never>?
     private var layoutTickCount: Int = 0
     private var aggregationCache: [AggregationCacheKey: AnalyticsAggregationResult] = [:]
     private var graphCache: [GraphCacheKey: GraphModel] = [:]
+    private let aggregationScheduler: CoalescingScheduler
+    private let graphScheduler: CoalescingScheduler
+    private var aggregationTask: Task<Void, Never>?
+    private var graphTask: Task<Void, Never>?
+    private let telemetryLimiter = TelemetryRateLimiter(minimumInterval: 1.0)
+    private var loopDetection = RecomputeLoopDetector()
 
     init(
         calendar: Calendar = .current,
@@ -84,10 +84,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         self.calendar = calendar
         self.bucket = bucket
         self.includeViaDigipeaters = includeViaDigipeaters
-        self.minEdgeCount = minEdgeCount
-        self.maxNodes = maxNodes ?? AnalyticsStyle.Graph.maxNodesDefault
-        self.aggregationDebouncer = Debouncer(delay: packetDebounce)
-        self.graphDebouncer = Debouncer(delay: graphDebounce)
+        self.minEdgeCount = AnalyticsInputNormalizer.minEdgeCount(minEdgeCount)
+        self.maxNodes = AnalyticsInputNormalizer.maxNodes(maxNodes ?? AnalyticsStyle.Graph.maxNodesDefault)
+        self.aggregationScheduler = CoalescingScheduler(delay: .milliseconds(Int(packetDebounce * 1000)))
+        self.graphScheduler = CoalescingScheduler(delay: .milliseconds(Int(graphDebounce * 1000)))
         bindPackets(packetScheduler: packetScheduler)
     }
 
@@ -115,7 +115,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         )
         updateSelectionState()
 
-        if let node = graphModel.nodes.first(where: { $0.id == nodeID }) {
+        if let node = viewState.graphModel.nodes.first(where: { $0.id == nodeID }) {
             Telemetry.breadcrumb(
                 category: "graph.selectNode",
                 message: "Graph node selected",
@@ -135,7 +135,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     func updateHover(for nodeID: String?) {
-        hoveredNodeID = nodeID
+        viewState.hoveredNodeID = nodeID
     }
 
     func handleEscape() {
@@ -143,12 +143,20 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     func selectedNodeDetails() -> GraphInspectorDetails? {
-        guard let selectedNodeID = selectedNodeID,
-              let node = graphModel.nodes.first(where: { $0.id == selectedNodeID }) else {
+        guard let selectedNodeID = viewState.selectedNodeID,
+              let node = viewState.graphModel.nodes.first(where: { $0.id == selectedNodeID }) else {
             return nil
         }
-        let neighbors = graphModel.adjacency[selectedNodeID] ?? []
+        let neighbors = viewState.graphModel.adjacency[selectedNodeID] ?? []
         return GraphInspectorDetails(node: node, neighbors: neighbors)
+    }
+
+    deinit {
+        aggregationTask?.cancel()
+        graphTask?.cancel()
+        layoutTask?.cancel()
+        aggregationScheduler.cancel()
+        graphScheduler.cancel()
     }
 
     private func bindPackets(packetScheduler: RunLoop) {
@@ -180,23 +188,58 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     private func scheduleAggregation(reason: String) {
-        aggregationDebouncer.schedule { [weak self] in
-            self?.recomputeAggregation(reason: reason)
+        #if DEBUG
+        debugLog("Scheduling aggregation: \(reason)")
+        #endif
+        aggregationScheduler.schedule { [weak self] in
+            await self?.recomputeAggregation(reason: reason)
         }
     }
 
     private func scheduleGraphBuild(reason: String) {
-        graphDebouncer.schedule { [weak self] in
-            self?.rebuildGraph(reason: reason)
+        #if DEBUG
+        debugLog("Scheduling graph build: \(reason)")
+        #endif
+        graphScheduler.schedule { [weak self] in
+            await self?.rebuildGraph(reason: reason)
         }
     }
 
-    private func recomputeAggregation(reason: String) {
+    private func recomputeAggregation(reason: String) async {
+        let packetSnapshot = packets
+        let bucketSnapshot = bucket
+        let includeViaSnapshot = includeViaDigipeaters
         let key = AggregationCacheKey(
-            bucket: bucket,
-            includeVia: includeViaDigipeaters,
-            packetCount: packets.count,
-            lastTimestamp: packets.map { $0.timestamp }.max()
+            bucket: bucketSnapshot,
+            includeVia: includeViaSnapshot,
+            packetCount: packetSnapshot.count,
+            lastTimestamp: packetSnapshot.map { $0.timestamp }.max()
+        )
+
+        if loopDetection.record(reason: reason) {
+            telemetryLimiter.breadcrumb(
+                category: "analytics.stateLoop.detected",
+                message: "Repeated analytics recompute detected",
+                data: [
+                    "reason": reason,
+                    "packetCount": packetSnapshot.count
+                ]
+            )
+        }
+
+        let inputsHash = AnalyticsInputHasher.hash(
+            bucket: bucketSnapshot,
+            includeVia: includeViaSnapshot,
+            packetCount: packetSnapshot.count,
+            lastTimestamp: packetSnapshot.last?.timestamp
+        )
+        telemetryLimiter.breadcrumb(
+            category: "analytics.recompute.requested",
+            message: "Analytics recompute requested",
+            data: [
+                "reason": reason,
+                "inputsHash": inputsHash
+            ]
         )
 
         if let cached = aggregationCache[key] {
@@ -204,223 +247,254 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             return
         }
 
-        Telemetry.breadcrumb(
-            category: "analytics.recompute.start",
+        telemetryLimiter.breadcrumb(
+            category: "analytics.recompute.started",
             message: "Analytics recompute started",
             data: [
-                TelemetryContext.packetCount: packets.count,
-                "bucket": bucket.displayName,
-                "includeVia": includeViaDigipeaters,
+                TelemetryContext.packetCount: packetSnapshot.count,
+                "bucket": bucketSnapshot.displayName,
+                "includeVia": includeViaSnapshot,
                 "reason": reason
             ]
         )
 
-        let start = Date()
-        let result = AnalyticsAggregator.aggregate(
-            packets: packets,
-            bucket: bucket,
-            calendar: calendar,
-            options: AnalyticsAggregator.Options(
-                includeViaDigipeaters: includeViaDigipeaters,
-                histogramBinCount: AnalyticsStyle.Histogram.binCount,
-                topLimit: AnalyticsStyle.Tables.topLimit
+        aggregationTask?.cancel()
+        aggregationTask = Task.detached(priority: .userInitiated) { [calendar] in
+            let start = Date()
+            let result = AnalyticsAggregator.aggregate(
+                packets: packetSnapshot,
+                bucket: bucketSnapshot,
+                calendar: calendar,
+                options: AnalyticsAggregator.Options(
+                    includeViaDigipeaters: includeViaSnapshot,
+                    histogramBinCount: AnalyticsStyle.Histogram.binCount,
+                    topLimit: AnalyticsStyle.Tables.topLimit
+                )
             )
-        )
-        aggregationCache[key] = result
-        applyAggregationResult(result)
+            let duration = Date().timeIntervalSince(start) * 1000
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                guard !Task.isCancelled else { return }
+                self.aggregationCache[key] = result
+                self.applyAggregationResult(result)
+                self.telemetryLimiter.breadcrumb(
+                    category: "analytics.recompute.finished",
+                    message: "Analytics recompute finished",
+                    data: [
+                        "durationMs": duration,
+                        "packetSeries": result.series.packetsPerBucket.count,
+                        "byteSeries": result.series.bytesPerBucket.count,
+                        "uniqueSeries": result.series.uniqueStationsPerBucket.count
+                    ]
+                )
 
-        let duration = Date().timeIntervalSince(start) * 1000
-        Telemetry.breadcrumb(
-            category: "analytics.recompute.end",
-            message: "Analytics recompute finished",
-            data: [
-                "durationMs": duration,
-                "packetSeries": result.series.packetsPerBucket.count,
-                "byteSeries": result.series.bytesPerBucket.count,
-                "uniqueSeries": result.series.uniqueStationsPerBucket.count
-            ]
-        )
-
-        let heatmapTotal = result.heatmap.matrix.flatMap { $0 }.reduce(0, +)
-        if heatmapTotal != result.summary.totalPackets {
-            Telemetry.capture(
-                message: "analytics.heatmap.total.mismatch",
-                data: [
-                    "heatmapTotal": heatmapTotal,
-                    "packetTotal": result.summary.totalPackets
-                ]
-            )
+                let heatmapTotal = result.heatmap.matrix.flatMap { $0 }.reduce(0, +)
+                if heatmapTotal != result.summary.totalPackets {
+                    Telemetry.capture(
+                        message: "analytics.heatmap.total.mismatch",
+                        data: [
+                            "heatmapTotal": heatmapTotal,
+                            "packetTotal": result.summary.totalPackets
+                        ]
+                    )
+                }
+            }
         }
     }
 
     private func applyAggregationResult(_ result: AnalyticsAggregationResult) {
-        summary = result.summary
-        series = result.series
-        heatmap = result.heatmap
-        histogram = result.histogram
-        topTalkers = result.topTalkers
-        topDestinations = result.topDestinations
-        topDigipeaters = result.topDigipeaters
+        viewState.summary = result.summary
+        viewState.series = result.series
+        viewState.heatmap = result.heatmap
+        viewState.histogram = result.histogram
+        viewState.topTalkers = result.topTalkers
+        viewState.topDestinations = result.topDestinations
+        viewState.topDigipeaters = result.topDigipeaters
     }
 
-    private func rebuildGraph(reason: String) {
+    private func rebuildGraph(reason: String) async {
+        let packetSnapshot = packets
+        let includeViaSnapshot = includeViaDigipeaters
+        let minEdgeSnapshot = minEdgeCount
+        let maxNodesSnapshot = maxNodes
         let key = GraphCacheKey(
-            includeVia: includeViaDigipeaters,
-            minEdgeCount: minEdgeCount,
-            maxNodes: maxNodes,
-            packetCount: packets.count,
-            lastTimestamp: packets.map { $0.timestamp }.max()
+            includeVia: includeViaSnapshot,
+            minEdgeCount: minEdgeSnapshot,
+            maxNodes: maxNodesSnapshot,
+            packetCount: packetSnapshot.count,
+            lastTimestamp: packetSnapshot.map { $0.timestamp }.max()
         )
 
         if let cached = graphCache[key] {
-            graphModel = cached
-            graphNote = cached.droppedNodesCount > 0 ? "Showing top \(maxNodes) nodes" : nil
+            applyGraphModel(cached)
             prepareLayout(reason: "graphCache")
             return
         }
 
-        Telemetry.breadcrumb(
-            category: "graph.build.start",
+        telemetryLimiter.breadcrumb(
+            category: "graph.build.started",
             message: "Graph build started",
             data: [
-                TelemetryContext.packetCount: packets.count,
-                "includeVia": includeViaDigipeaters,
-                "minEdgeCount": minEdgeCount,
-                "maxNodes": maxNodes,
+                TelemetryContext.packetCount: packetSnapshot.count,
+                "includeVia": includeViaSnapshot,
+                "minEdgeCount": minEdgeSnapshot,
+                "maxNodes": maxNodesSnapshot,
                 "reason": reason
             ]
         )
 
-        let start = Date()
-        let model = NetworkGraphBuilder.build(
-            packets: packets,
-            options: NetworkGraphBuilder.Options(
-                includeViaDigipeaters: includeViaDigipeaters,
-                minimumEdgeCount: minEdgeCount,
-                maxNodes: maxNodes
+        graphTask?.cancel()
+        graphTask = Task.detached(priority: .userInitiated) {
+            let start = Date()
+            let model = NetworkGraphBuilder.build(
+                packets: packetSnapshot,
+                options: NetworkGraphBuilder.Options(
+                    includeViaDigipeaters: includeViaSnapshot,
+                    minimumEdgeCount: minEdgeSnapshot,
+                    maxNodes: maxNodesSnapshot
+                )
             )
-        )
-        graphCache[key] = model
-        graphModel = model
-        graphNote = model.droppedNodesCount > 0 ? "Showing top \(maxNodes) nodes" : nil
+            let duration = Date().timeIntervalSince(start) * 1000
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                guard !Task.isCancelled else { return }
+                self.graphCache[key] = model
+                self.applyGraphModel(model)
+                self.telemetryLimiter.breadcrumb(
+                    category: "graph.build.finished",
+                    message: "Graph build finished",
+                    data: [
+                        "durationMs": duration,
+                        "nodeCount": model.nodes.count,
+                        "edgeCount": model.edges.count
+                    ]
+                )
 
-        let duration = Date().timeIntervalSince(start) * 1000
-        Telemetry.breadcrumb(
-            category: "graph.build.end",
-            message: "Graph build finished",
-            data: [
-                "durationMs": duration,
-                "nodeCount": model.nodes.count,
-                "edgeCount": model.edges.count
-            ]
-        )
+                if packetSnapshot.isEmpty == false && model.nodes.isEmpty {
+                    Telemetry.capture(
+                        message: "graph.build.empty",
+                        data: [
+                            "packetCount": packetSnapshot.count,
+                            "includeVia": includeViaSnapshot,
+                            "minEdgeCount": minEdgeSnapshot
+                        ]
+                    )
+                }
 
-        if packets.isEmpty == false && model.nodes.isEmpty {
-            Telemetry.capture(
-                message: "graph.build.empty",
-                data: [
-                    "packetCount": packets.count,
-                    "includeVia": includeViaDigipeaters,
-                    "minEdgeCount": minEdgeCount
-                ]
-            )
+                self.prepareLayout(reason: "graphBuild")
+            }
         }
+    }
 
-        prepareLayout(reason: "graphBuild")
+    private func applyGraphModel(_ model: GraphModel) {
+        viewState.graphModel = model
+        viewState.graphNote = model.droppedNodesCount > 0 ? "Showing top \(maxNodes) nodes" : nil
     }
 
     private func prepareLayout(reason: String) {
-        guard !graphModel.nodes.isEmpty else {
-            nodePositions = []
+        layoutTask?.cancel()
+        guard !viewState.graphModel.nodes.isEmpty else {
+            viewState.nodePositions = []
             layoutState = nil
-            layoutTicker?.cancel()
-            layoutTicker = nil
+            viewState.layoutEnergy = 0
             return
         }
 
         let previous = layoutState?.positions ?? [:]
-        layoutState = ForceLayoutEngine.initialize(nodes: graphModel.nodes, previous: previous, seed: graphLayoutSeed)
-        startLayoutTicker(reason: reason)
-    }
-
-    private func startLayoutTicker(reason: String) {
-        layoutTicker?.cancel()
-        layoutTickCount = 0
-
-        layoutTicker = Timer
-            .publish(every: 1.0 / 30.0, on: .main, in: .common)
-            .autoconnect()
-            .sink { [weak self] _ in
-                self?.tickLayout(reason: reason)
-            }
-    }
-
-    private func tickLayout(reason: String) {
-        guard let state = layoutState else { return }
-
-        let start = Date()
-        let updated = ForceLayoutEngine.tick(
-            model: graphModel,
-            state: state,
-            iterations: AnalyticsStyle.Graph.layoutIterationsPerTick,
-            repulsion: AnalyticsStyle.Graph.repulsionStrength,
-            springStrength: AnalyticsStyle.Graph.springStrength,
-            springLength: AnalyticsStyle.Graph.springLength,
-            damping: AnalyticsStyle.Graph.layoutCooling,
-            timeStep: AnalyticsStyle.Graph.layoutTimeStep
+        let initialState = ForceLayoutEngine.initialize(
+            nodes: viewState.graphModel.nodes,
+            previous: previous,
+            seed: graphLayoutSeed
         )
+        layoutState = initialState
+        startLayoutTask(reason: reason, initialState: initialState)
+    }
 
-        layoutState = updated
-        layoutEnergy = updated.energy
+    private func startLayoutTask(reason: String, initialState: ForceLayoutState) {
+        layoutTickCount = 0
+        let model = viewState.graphModel
+        layoutTask = Task.detached(priority: .utility) { [weak self] in
+            var state = initialState
+            while !Task.isCancelled {
+                let start = Date()
+                let updated = ForceLayoutEngine.tick(
+                    model: model,
+                    state: state,
+                    iterations: AnalyticsStyle.Graph.layoutIterationsPerTick,
+                    repulsion: AnalyticsStyle.Graph.repulsionStrength,
+                    springStrength: AnalyticsStyle.Graph.springStrength,
+                    springLength: AnalyticsStyle.Graph.springLength,
+                    damping: AnalyticsStyle.Graph.layoutCooling,
+                    timeStep: AnalyticsStyle.Graph.layoutTimeStep
+                )
+                state = updated
 
-        nodePositions = graphModel.nodes.compactMap { node in
-            guard let position = updated.positions[node.id] else { return nil }
-            return NodePosition(id: node.id, x: Double(position.x), y: Double(position.y))
+                let positions = model.nodes.compactMap { node -> NodePosition? in
+                    guard let position = updated.positions[node.id] else { return nil }
+                    return NodePosition(id: node.id, x: Double(position.x), y: Double(position.y))
+                }
+
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.layoutState = updated
+                    self.viewState.layoutEnergy = updated.energy
+                    if self.shouldPublishLayout(newPositions: positions) {
+                        self.viewState.nodePositions = positions
+                    }
+
+                    if positions.contains(where: { !$0.x.isFinite || !$0.y.isFinite }) {
+                        Telemetry.capture(
+                            message: "graph.layout.invalid",
+                            data: [
+                                "nodeCount": model.nodes.count,
+                                "edgeCount": model.edges.count
+                            ]
+                        )
+                    }
+
+                    self.layoutTickCount += 1
+                    if self.layoutTickCount.isMultiple(of: 10) {
+                        let duration = Date().timeIntervalSince(start) * 1000
+                        self.telemetryLimiter.breadcrumb(
+                            category: "layout.tick",
+                            message: "Layout tick",
+                            data: [
+                                "iterationCount": AnalyticsStyle.Graph.layoutIterationsPerTick,
+                                "energy": updated.energy,
+                                "durationMs": duration,
+                                "reason": reason
+                            ]
+                        )
+                    }
+
+                    if updated.energy < AnalyticsStyle.Graph.layoutEnergyThreshold {
+                        self.layoutTask?.cancel()
+                    }
+
+                    self.reconcileSelectionAfterLayout()
+                }
+
+                do {
+                    try await Task.sleep(for: .milliseconds(66))
+                } catch {
+                    return
+                }
+            }
         }
-
-        if nodePositions.contains(where: { !$0.x.isFinite || !$0.y.isFinite }) {
-            Telemetry.capture(
-                message: "graph.layout.invalid",
-                data: [
-                    "nodeCount": graphModel.nodes.count,
-                    "edgeCount": graphModel.edges.count
-                ]
-            )
-        }
-
-        layoutTickCount += 1
-        if layoutTickCount.isMultiple(of: 10) {
-            let duration = Date().timeIntervalSince(start) * 1000
-            Telemetry.breadcrumb(
-                category: "layout.tick",
-                message: "Layout tick",
-                data: [
-                    "iterationCount": AnalyticsStyle.Graph.layoutIterationsPerTick,
-                    "energy": updated.energy,
-                    "durationMs": duration,
-                    "reason": reason
-                ]
-            )
-        }
-
-        if updated.energy < AnalyticsStyle.Graph.layoutEnergyThreshold {
-            layoutTicker?.cancel()
-            layoutTicker = nil
-        }
-
-        reconcileSelectionAfterLayout()
     }
 
     private func updateSelectionState() {
-        selectedNodeIDs = selectionState.selectedIDs
+        viewState.selectedNodeIDs = selectionState.selectedIDs
         selectionState.normalizePrimary()
-        selectedNodeID = selectionState.primarySelectionID
+        viewState.selectedNodeID = selectionState.primarySelectionID
         captureMissingSelectionIfNeeded()
     }
 
     private func captureMissingSelectionIfNeeded() {
-        let availableIDs = Set(graphModel.nodes.map { $0.id })
-        let missing = selectedNodeIDs.subtracting(availableIDs)
+        let availableIDs = Set(viewState.graphModel.nodes.map { $0.id })
+        let missing = viewState.selectedNodeIDs.subtracting(availableIDs)
         guard !missing.isEmpty else { return }
         Telemetry.capture(
             message: "graph.selection.missingNode",
@@ -432,7 +506,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     private func reconcileSelectionAfterLayout() {
-        let availableIDs = Set(graphModel.nodes.map { $0.id })
+        let availableIDs = Set(viewState.graphModel.nodes.map { $0.id })
         let missing = selectionState.selectedIDs.subtracting(availableIDs)
         guard !missing.isEmpty else { return }
         Telemetry.capture(
@@ -455,6 +529,28 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             break
         }
     }
+
+    private func shouldPublishLayout(newPositions: [NodePosition]) -> Bool {
+        guard newPositions.count == viewState.nodePositions.count else { return true }
+        let epsilon = AnalyticsStyle.Graph.layoutPublishThreshold
+        for position in newPositions {
+            guard let existing = viewState.nodePositions.first(where: { $0.id == position.id }) else {
+                return true
+            }
+            let dx = existing.x - position.x
+            let dy = existing.y - position.y
+            if abs(dx) > epsilon || abs(dy) > epsilon {
+                return true
+            }
+        }
+        return false
+    }
+
+    #if DEBUG
+    private func debugLog(_ message: String) {
+        print("[AnalyticsDashboardViewModel] \(message)")
+    }
+    #endif
 }
 
 private struct AggregationCacheKey: Hashable {
@@ -472,23 +568,54 @@ private struct GraphCacheKey: Hashable {
     let lastTimestamp: Date?
 }
 
-private final class Debouncer {
-    private let delay: TimeInterval
-    private var workItem: DispatchWorkItem?
-
-    init(delay: TimeInterval) {
-        self.delay = delay
-    }
-
-    func schedule(_ block: @escaping () -> Void) {
-        workItem?.cancel()
-        let item = DispatchWorkItem(block: block)
-        workItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
-    }
-}
-
 struct GraphInspectorDetails: Hashable, Sendable {
     let node: NetworkGraphNode
     let neighbors: [GraphNeighborStat]
+}
+
+private enum AnalyticsInputHasher {
+    static func hash(bucket: TimeBucket, includeVia: Bool, packetCount: Int, lastTimestamp: Date?) -> Int {
+        var hasher = Hasher()
+        hasher.combine(bucket)
+        hasher.combine(includeVia)
+        hasher.combine(packetCount)
+        hasher.combine(lastTimestamp?.timeIntervalSince1970 ?? 0)
+        return hasher.finalize()
+    }
+}
+
+private final class TelemetryRateLimiter {
+    private let minimumInterval: TimeInterval
+    private var lastFire: Date?
+
+    init(minimumInterval: TimeInterval) {
+        self.minimumInterval = minimumInterval
+    }
+
+    func breadcrumb(category: String, message: String, data: [String: Any]) {
+        let now = Date()
+        if let lastFire, now.timeIntervalSince(lastFire) < minimumInterval {
+            return
+        }
+        lastFire = now
+        Telemetry.breadcrumb(category: category, message: message, data: data)
+    }
+}
+
+private struct RecomputeLoopDetector {
+    private var lastReason: String?
+    private var lastTimestamp: Date?
+    private var count: Int = 0
+
+    mutating func record(reason: String) -> Bool {
+        let now = Date()
+        if lastReason == reason, let lastTimestamp, now.timeIntervalSince(lastTimestamp) < 0.5 {
+            count += 1
+        } else {
+            count = 1
+        }
+        lastReason = reason
+        lastTimestamp = now
+        return count >= 4
+    }
 }

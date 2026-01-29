@@ -13,6 +13,8 @@ struct ConsoleView: View {
     let onClear: () -> Void
 
     @State private var autoScroll = true
+    @State private var isUserNearBottom = true
+    @State private var scrollViewHeight: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -57,12 +59,38 @@ struct ConsoleView: View {
                                     .id(line.id)
                             }
                         }
+                        Color.clear
+                            .frame(height: 1)
+                            .id("bottom")
+                            .background(
+                                GeometryReader { geometry in
+                                    Color.clear
+                                        .preference(
+                                            key: ConsoleScrollBottomPreferenceKey.self,
+                                            value: geometry.frame(in: .named("consoleScroll")).maxY
+                                        )
+                                }
+                            )
                     }
                     .padding()
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .coordinateSpace(name: "consoleScroll")
+                .background(
+                    GeometryReader { geometry in
+                        Color.clear
+                            .onAppear { scrollViewHeight = geometry.size.height }
+                            .onChange(of: geometry.size.height) { _, newValue in
+                                scrollViewHeight = newValue
+                            }
+                    }
+                )
+                .onPreferenceChange(ConsoleScrollBottomPreferenceKey.self) { bottomY in
+                    let distanceFromBottom = bottomY - scrollViewHeight
+                    isUserNearBottom = distanceFromBottom <= 24
+                }
                 .onChange(of: lines.count) { _, _ in
-                    guard autoScroll, let lastLine = lines.last else { return }
+                    guard autoScroll, isUserNearBottom, let lastLine = lines.last else { return }
                     Task { @MainActor in
                         // Avoid triggering scroll/layout during the same update transaction.
                         await Task.yield()
@@ -129,5 +157,13 @@ struct ConsoleLineView: View {
         let hash = abs(callsign.hashValue)
         let hue = Double(hash % 256) / 255.0
         return Color(hue: hue, saturation: callsignSaturation, brightness: callsignBrightness)
+    }
+}
+
+private struct ConsoleScrollBottomPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }

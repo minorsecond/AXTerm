@@ -8,7 +8,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         return calendar
     }
 
-    func testChangingBucketTriggersSeriesRecompute() {
+    func testChangingBucketTriggersSeriesRecompute() async {
         let date1 = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
         let date2 = makeDate(year: 2026, month: 2, day: 18, hour: 7, minute: 5, second: 0)
         let packets = [
@@ -28,15 +28,15 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         )
 
         viewModel.updatePackets(packets)
-        drainMainQueue()
-        XCTAssertEqual(viewModel.series.packetsPerBucket.count, 2)
+        await waitFor(condition: { viewModel.viewState.series.packetsPerBucket.count == 2 })
+        XCTAssertEqual(viewModel.viewState.series.packetsPerBucket.count, 2)
 
         viewModel.bucket = .day
-        drainMainQueue()
-        XCTAssertEqual(viewModel.series.packetsPerBucket.count, 1)
+        await waitFor(condition: { viewModel.viewState.series.packetsPerBucket.count == 1 })
+        XCTAssertEqual(viewModel.viewState.series.packetsPerBucket.count, 1)
     }
 
-    func testTogglingIncludeViaTriggersGraphRecompute() {
+    func testTogglingIncludeViaTriggersGraphRecompute() async {
         let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
         let packets = [
             makePacket(timestamp: timestamp, from: "alpha", to: "beta", via: ["dig1"])
@@ -54,15 +54,15 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         )
 
         viewModel.updatePackets(packets)
-        drainMainQueue()
-        XCTAssertEqual(viewModel.graphModel.edges.count, 1)
+        await waitFor(condition: { viewModel.viewState.graphModel.edges.count == 1 })
+        XCTAssertEqual(viewModel.viewState.graphModel.edges.count, 1)
 
         viewModel.includeViaDigipeaters = true
-        drainMainQueue()
-        XCTAssertEqual(viewModel.graphModel.edges.count, 2)
+        await waitFor(condition: { viewModel.viewState.graphModel.edges.count == 2 })
+        XCTAssertEqual(viewModel.viewState.graphModel.edges.count, 2)
     }
 
-    func testMinEdgeCountFiltersEdges() {
+    func testMinEdgeCountFiltersEdges() async {
         let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
         let packets = [
             makePacket(timestamp: timestamp, from: "alpha", to: "beta"),
@@ -82,13 +82,13 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         )
 
         viewModel.updatePackets(packets)
-        drainMainQueue()
-        XCTAssertEqual(viewModel.graphModel.edges.count, 2)
+        await waitFor(condition: { viewModel.viewState.graphModel.edges.count == 2 })
+        XCTAssertEqual(viewModel.viewState.graphModel.edges.count, 2)
 
         viewModel.minEdgeCount = 2
-        drainMainQueue()
-        XCTAssertEqual(viewModel.graphModel.edges.count, 1)
-        XCTAssertEqual(viewModel.graphModel.edges.first?.sourceID, "ALPHA")
+        await waitFor(condition: { viewModel.viewState.graphModel.edges.count == 1 })
+        XCTAssertEqual(viewModel.viewState.graphModel.edges.count, 1)
+        XCTAssertEqual(viewModel.viewState.graphModel.edges.first?.sourceID, "ALPHA")
     }
 
     func testSelectionUpdatesDoNotCrash() {
@@ -104,22 +104,27 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         )
 
         viewModel.handleNodeClick("alpha", isShift: false)
-        XCTAssertEqual(viewModel.selectedNodeID, "alpha")
-        XCTAssertEqual(viewModel.selectedNodeIDs, ["alpha"])
+        XCTAssertEqual(viewModel.viewState.selectedNodeID, "alpha")
+        XCTAssertEqual(viewModel.viewState.selectedNodeIDs, ["alpha"])
 
         viewModel.updateHover(for: "alpha")
-        XCTAssertEqual(viewModel.hoveredNodeID, "alpha")
+        XCTAssertEqual(viewModel.viewState.hoveredNodeID, "alpha")
 
         viewModel.handleBackgroundClick()
-        XCTAssertNil(viewModel.selectedNodeID)
-    }
-
-    private func drainMainQueue() {
-        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        XCTAssertNil(viewModel.viewState.selectedNodeID)
     }
 }
 
 private extension AnalyticsDashboardViewModelTests {
+    func waitFor(condition: @escaping @Sendable () -> Bool) async {
+        let timeout = Date().addingTimeInterval(1.0)
+        while Date() < timeout {
+            if condition() { return }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        XCTFail("Condition not met before timeout.")
+    }
+
     func makeDate(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int) -> Date {
         calendar.date(from: DateComponents(
             calendar: calendar,
