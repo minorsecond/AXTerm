@@ -523,6 +523,75 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private func applyGraphModel(_ model: GraphModel) {
         viewState.graphModel = model
         viewState.graphNote = model.droppedNodesCount > 0 ? "Showing top \(maxNodes) nodes" : nil
+        updateNetworkHealth()
+    }
+
+    private func updateNetworkHealth() {
+        let health = NetworkHealthCalculator.calculate(
+            graphModel: viewState.graphModel,
+            packets: packets
+        )
+        viewState.networkHealth = health
+    }
+
+    /// Returns the ID of the primary hub (highest degree node) if available
+    func primaryHubNodeID() -> String? {
+        viewState.networkHealth.metrics.topRelayCallsign.flatMap { callsign in
+            viewState.graphModel.nodes.first { $0.callsign == callsign }?.id
+        }
+    }
+
+    /// Returns IDs of stations active in the last 10 minutes
+    func activeNodeIDs() -> Set<String> {
+        let recentCutoff = Date().addingTimeInterval(-600) // 10 minutes
+        let recentPackets = packets.filter { $0.timestamp >= recentCutoff }
+        var activeCallsigns: Set<String> = []
+        for packet in recentPackets {
+            if let from = packet.from?.call { activeCallsigns.insert(from) }
+            if let to = packet.to?.call { activeCallsigns.insert(to) }
+        }
+        // Map callsigns to node IDs
+        return Set(viewState.graphModel.nodes.filter { activeCallsigns.contains($0.callsign) }.map { $0.id })
+    }
+
+    /// Generates a text summary of network health for export
+    func exportNetworkSummary() -> String {
+        let health = viewState.networkHealth
+        let metrics = health.metrics
+        var lines: [String] = []
+
+        lines.append("AXTerm Network Health Summary")
+        lines.append("Generated: \(ISO8601DateFormatter().string(from: Date()))")
+        lines.append("")
+        lines.append("Overall Health: \(health.rating.rawValue) (\(health.score)/100)")
+        lines.append("")
+        lines.append("Metrics:")
+        lines.append("  Total stations heard: \(metrics.totalStations)")
+        lines.append("  Active stations (10m): \(metrics.activeStations)")
+        lines.append("  Total packets: \(metrics.totalPackets)")
+        lines.append("  Packet rate: \(String(format: "%.2f", metrics.packetRate)) packets/min")
+        lines.append("  Largest cluster: \(Int(metrics.largestComponentPercent))% of network")
+        lines.append("  Top relay concentration: \(Int(metrics.topRelayConcentration))%")
+        if let relay = metrics.topRelayCallsign {
+            lines.append("  Top relay: \(relay)")
+        }
+        lines.append("  Isolated nodes: \(metrics.isolatedNodes)")
+        lines.append("")
+
+        if !health.warnings.isEmpty {
+            lines.append("Warnings:")
+            for warning in health.warnings {
+                lines.append("  [\(warning.severity.rawValue.uppercased())] \(warning.title): \(warning.detail)")
+            }
+            lines.append("")
+        }
+
+        lines.append("Health Score Breakdown:")
+        for reason in health.reasons {
+            lines.append("  - \(reason)")
+        }
+
+        return lines.joined(separator: "\n")
     }
 
     private func prepareLayout(reason: String) {

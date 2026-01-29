@@ -61,8 +61,23 @@ struct AnalyticsGraphView: View {
                 if let hoverNodeID,
                    let hoverPoint,
                    let node = graphModel.nodes.first(where: { $0.id == hoverNodeID }) {
+                    // hoverPoint is in drawable space (top-left origin, in points).
+                    // SwiftUI uses bottom-left origin, so flip Y.
+                    // Position tooltip away from node center so it doesn't block clicks.
+                    let tooltipOffset: CGFloat = 24
+                    let tooltipWidth: CGFloat = 110
+                    let tooltipHeight: CGFloat = 60
+                    let flippedY = geometry.size.height - hoverPoint.y
+
+                    // Determine best quadrant for tooltip (prefer upper-right, adjust if near edges)
+                    let nearRightEdge = hoverPoint.x + tooltipOffset + tooltipWidth > geometry.size.width - 8
+                    let nearTopEdge = flippedY - tooltipOffset - tooltipHeight < 8
+
+                    let xOffset = nearRightEdge ? -(tooltipOffset + tooltipWidth / 2) : (tooltipOffset + tooltipWidth / 2)
+                    let yOffset = nearTopEdge ? (tooltipOffset + tooltipHeight / 2) : -(tooltipOffset + tooltipHeight / 2)
+
                     GraphTooltipView(node: node)
-                        .position(x: hoverPoint.x + 12, y: hoverPoint.y - 12)
+                        .position(x: hoverPoint.x + xOffset, y: flippedY + yOffset)
                 }
             }
         }
@@ -501,7 +516,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             selectionRect = rect
             onSelectionRect(rect)
         } else {
-            camera.pan(by: delta)
+            camera.pan(by: delta, viewSize: view?.bounds.size)
             requestInteractionRedraw()
         }
     }
@@ -549,7 +564,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             let zoomDelta = 1 - (delta.height * sensitivity)
             camera.zoom(at: location, scaleDelta: zoomDelta, view: view)
         } else {
-            camera.pan(by: CGSize(width: -delta.width, height: -delta.height))
+            camera.pan(by: CGSize(width: -delta.width, height: -delta.height), viewSize: view?.bounds.size)
         }
         requestInteractionRedraw()
     }
@@ -952,6 +967,9 @@ private struct GraphCamera {
     private var targetScale: CGFloat = 1
     private var targetOffset: CGSize = .zero
 
+    /// Maximum pan distance from center (as fraction of view size)
+    private static let maxPanFraction: CGFloat = 0.6
+
     var isSettled: Bool {
         abs(scale - targetScale) < AnalyticsStyle.Graph.cameraSnapScaleEpsilon &&
         abs(offset.width - targetOffset.width) < AnalyticsStyle.Graph.cameraSnapOffsetEpsilon &&
@@ -965,9 +983,22 @@ private struct GraphCamera {
         targetOffset = .zero
     }
 
-    mutating func pan(by delta: CGSize) {
+    mutating func pan(by delta: CGSize, viewSize: CGSize? = nil) {
         targetOffset.width += delta.width
         targetOffset.height += delta.height
+        clampOffset(viewSize: viewSize)
+    }
+
+    /// Clamps target offset so the graph cannot be panned off-screen
+    private mutating func clampOffset(viewSize: CGSize?) {
+        guard let viewSize, viewSize.width > 0, viewSize.height > 0 else { return }
+        // Allow panning up to maxPanFraction of view size in any direction
+        // Scale the limit inversely with zoom - when zoomed out, allow less panning
+        let effectiveScale = max(scale, targetScale)
+        let maxPanX = viewSize.width * Self.maxPanFraction * effectiveScale
+        let maxPanY = viewSize.height * Self.maxPanFraction * effectiveScale
+        targetOffset.width = targetOffset.width.clamped(to: -maxPanX...maxPanX)
+        targetOffset.height = targetOffset.height.clamped(to: -maxPanY...maxPanY)
     }
 
     mutating func zoom(at location: CGPoint, scaleDelta: CGFloat, view: MTKView?) {
@@ -982,6 +1013,7 @@ private struct GraphCamera {
         targetOffset.width = (targetOffset.width + translated.x) * ratio - translated.x
         targetOffset.height = (targetOffset.height + translated.y) * ratio - translated.y
         targetScale = newScale
+        clampOffset(viewSize: viewSize)
     }
 
     mutating func focus(on normalized: SIMD2<Float>, size: CGSize) {

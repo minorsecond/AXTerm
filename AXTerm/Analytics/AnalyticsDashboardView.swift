@@ -224,11 +224,32 @@ struct AnalyticsDashboardView: View {
                     viewModel.setMyCallsignForLayout(newValue)
                 }
 
-                GraphInspectorView(details: viewModel.selectedNodeDetails()) {
-                    viewModel.handleBackgroundClick()
-                } onFocus: {
-                    focusNodeID = viewModel.viewState.selectedNodeID
-                }
+                GraphInspectorView(
+                    details: viewModel.selectedNodeDetails(),
+                    networkHealth: viewModel.viewState.networkHealth,
+                    onClear: {
+                        viewModel.handleBackgroundClick()
+                    },
+                    onFocus: {
+                        focusNodeID = viewModel.viewState.selectedNodeID
+                    },
+                    onFocusPrimaryHub: {
+                        if let hubID = viewModel.primaryHubNodeID() {
+                            viewModel.handleNodeClick(hubID, isShift: false)
+                            focusNodeID = hubID
+                        }
+                    },
+                    onShowActiveNodes: {
+                        let activeIDs = viewModel.activeNodeIDs()
+                        viewModel.handleSelectionRect(activeIDs, isShift: false)
+                    },
+                    onExportSummary: {
+                        let summary = viewModel.exportNetworkSummary()
+                        let pasteboard = NSPasteboard.general
+                        pasteboard.clearContents()
+                        pasteboard.setString(summary, forType: .string)
+                    }
+                )
                 .frame(width: AnalyticsStyle.Layout.inspectorWidth)
             }
 
@@ -608,6 +629,35 @@ private struct ChartTooltip: View {
 
 private struct GraphInspectorView: View {
     let details: GraphInspectorDetails?
+    let networkHealth: NetworkHealth
+    let onClear: () -> Void
+    let onFocus: () -> Void
+    let onFocusPrimaryHub: () -> Void
+    let onShowActiveNodes: () -> Void
+    let onExportSummary: () -> Void
+
+    var body: some View {
+        if let details {
+            // Node details view when a node is selected
+            NodeDetailsView(
+                details: details,
+                onClear: onClear,
+                onFocus: onFocus
+            )
+        } else {
+            // Network Health view when no node is selected
+            NetworkHealthView(
+                health: networkHealth,
+                onFocusPrimaryHub: onFocusPrimaryHub,
+                onShowActiveNodes: onShowActiveNodes,
+                onExportSummary: onExportSummary
+            )
+        }
+    }
+}
+
+private struct NodeDetailsView: View {
+    let details: GraphInspectorDetails
     let onClear: () -> Void
     let onFocus: () -> Void
 
@@ -616,43 +666,37 @@ private struct GraphInspectorView: View {
             Text("Inspector")
                 .font(.headline)
 
-            if let details {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(details.node.callsign)
-                        .font(.title3.weight(.semibold))
+            VStack(alignment: .leading, spacing: 8) {
+                Text(details.node.callsign)
+                    .font(.title3.weight(.semibold))
 
-                    MetricRow(title: "Packets in", value: details.node.inCount)
-                    MetricRow(title: "Packets out", value: details.node.outCount)
-                    MetricRow(title: "Bytes in", value: details.node.inBytes)
-                    MetricRow(title: "Bytes out", value: details.node.outBytes)
-                    MetricRow(title: "Degree", value: details.node.degree)
+                MetricRow(title: "Packets in", value: details.node.inCount)
+                MetricRow(title: "Packets out", value: details.node.outCount)
+                MetricRow(title: "Bytes in", value: details.node.inBytes)
+                MetricRow(title: "Bytes out", value: details.node.outBytes)
+                MetricRow(title: "Degree", value: details.node.degree)
 
-                    Divider().padding(.vertical, 4)
+                Divider().padding(.vertical, 4)
 
-                    Text("Top neighbors")
-                        .font(.caption)
-                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-
-                    if details.neighbors.isEmpty {
-                        Text("No neighbors")
-                            .font(.caption)
-                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                    } else {
-                        ForEach(details.neighbors.prefix(5), id: \.id) { neighbor in
-                            HStack {
-                                Text(neighbor.id)
-                                Spacer()
-                                Text("\(neighbor.weight)")
-                                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                            }
-                            .font(.caption)
-                        }
-                    }
-                }
-            } else {
-                Text("Select a node to inspect details.")
+                Text("Top neighbors")
                     .font(.caption)
                     .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+
+                if details.neighbors.isEmpty {
+                    Text("No neighbors")
+                        .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                } else {
+                    ForEach(details.neighbors.prefix(5), id: \.id) { neighbor in
+                        HStack {
+                            Text(neighbor.id)
+                            Spacer()
+                            Text("\(neighbor.weight)")
+                                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        }
+                        .font(.caption)
+                    }
+                }
             }
 
             Spacer(minLength: 0)
@@ -662,7 +706,6 @@ private struct GraphInspectorView: View {
                     onFocus()
                 }
                 .buttonStyle(.bordered)
-                .disabled(details == nil)
 
                 Button("Clear") {
                     onClear()

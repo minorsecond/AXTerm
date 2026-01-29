@@ -22,6 +22,7 @@ struct AnalyticsViewState: Hashable, Sendable {
     var selectedNodeID: String?
     var selectedNodeIDs: Set<String>
     var hoveredNodeID: String?
+    var networkHealth: NetworkHealth
 
     static let empty = AnalyticsViewState(
         summary: nil,
@@ -37,6 +38,7 @@ struct AnalyticsViewState: Hashable, Sendable {
         graphNote: nil,
         selectedNodeID: nil,
         selectedNodeIDs: [],
-        hoveredNodeID: nil
+        hoveredNodeID: nil,
+        networkHealth: .empty
     )
 }
