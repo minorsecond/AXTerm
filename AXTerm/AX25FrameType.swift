@@ -18,4 +18,23 @@ enum FrameType: String, Hashable, Codable, CaseIterable {
     var displayName: String {
         rawValue
     }
+
+    var shortLabel: String {
+        rawValue
+    }
+
+    var helpText: String {
+        switch self {
+        case .ui:
+            return "UI-frame (unnumbered information payload)"
+        case .i:
+            return "I-frame (user data)"
+        case .s:
+            return "S-frame (supervisory control)"
+        case .u:
+            return "U-frame (unnumbered control)"
+        case .unknown:
+            return "Unknown frame type"
+        }
+    }
 }

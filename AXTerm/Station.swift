@@ -9,6 +9,12 @@ import Foundation
 
 /// Represents a heard station for MHeard tracking
 struct Station: Identifiable, Hashable {
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+
     let call: String
     var lastHeard: Date?
     var heardCount: Int
@@ -27,10 +33,13 @@ struct Station: Identifiable, Hashable {
         var parts: [String] = []
         parts.append("\(heardCount) pkt\(heardCount == 1 ? "" : "s")")
         if let date = lastHeard {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "HH:mm:ss"
-            parts.append(formatter.string(from: date))
+            parts.append(Self.timeFormatter.string(from: date))
         }
         return parts.joined(separator: " | ")
+    }
+
+    var lastViaDisplay: String {
+        guard !lastVia.isEmpty else { return "" }
+        return lastVia.joined(separator: ", ")
     }
 }

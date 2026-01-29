@@ -8,8 +8,8 @@
 import Foundation
 
 /// Represents a line in the console view
-struct ConsoleLine: Identifiable, Hashable {
-    enum Kind: String, Hashable {
+struct ConsoleLine: Identifiable, Hashable, Sendable {
+    enum Kind: String, Hashable, Sendable {
         case system
         case error
         case packet

@@ -6,6 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		9B1C3E6C2F3A000100000003 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1C3E6C2F3A000100000002 /* GRDB */; };
+		9B1C3E6C2F3A000100000004 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1C3E6C2F3A000100000002 /* GRDB */; };
+		9B1C3E6C2F3A000100000007 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1C3E6C2F3A000100000006 /* Sentry */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		3487E8AB2F2AA2A800DF0172 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -27,6 +33,8 @@
 		3487E89D2F2AA2A700DF0172 /* AXTerm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AXTerm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		3487E8AA2F2AA2A800DF0172 /* AXTermTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AXTermTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3487E8B42F2AA2A800DF0172 /* AXTermUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AXTermUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AABBCC112F3B000000000001 /* AXTerm-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AXTerm-Debug.xcconfig"; sourceTree = "<group>"; };
+		AABBCC112F3B000000000002 /* AXTerm-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AXTerm-Release.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -52,6 +60,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9B1C3E6C2F3A000100000003 /* GRDB in Frameworks */,
+				9B1C3E6C2F3A000100000007 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -59,6 +69,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9B1C3E6C2F3A000100000004 /* GRDB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -75,6 +86,8 @@
 		3487E8942F2AA2A700DF0172 = {
 			isa = PBXGroup;
 			children = (
+				AABBCC112F3B000000000001 /* AXTerm-Debug.xcconfig */,
+				AABBCC112F3B000000000002 /* AXTerm-Release.xcconfig */,
 				3487E89F2F2AA2A700DF0172 /* AXTerm */,
 				3487E8AD2F2AA2A800DF0172 /* AXTermTests */,
 				3487E8B72F2AA2A800DF0172 /* AXTermUITests */,
@@ -112,6 +125,8 @@
 			);
 			name = AXTerm;
 			packageProductDependencies = (
+				9B1C3E6C2F3A000100000002 /* GRDB */,
+				9B1C3E6C2F3A000100000006 /* Sentry */,
 			);
 			productName = AXTerm;
 			productReference = 3487E89D2F2AA2A700DF0172 /* AXTerm.app */;
@@ -135,6 +150,7 @@
 			);
 			name = AXTermTests;
 			packageProductDependencies = (
+				9B1C3E6C2F3A000100000002 /* GRDB */,
 			);
 			productName = AXTermTests;
 			productReference = 3487E8AA2F2AA2A800DF0172 /* AXTermTests.xctest */;
@@ -195,6 +211,10 @@
 			);
 			mainGroup = 3487E8942F2AA2A700DF0172;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				9B1C3E6C2F3A000100000001 /* XCRemoteSwiftPackageReference "GRDB" */,
+				9B1C3E6C2F3A000100000005 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3487E89E2F2AA2A700DF0172 /* Products */;
 			projectDirPath = "";
@@ -389,6 +409,7 @@
 		};
 		3487E8BF2F2AA2A800DF0172 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = AABBCC112F3B000000000001 /* AXTerm-Debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -411,6 +432,11 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AXTerm needs local network access to connect to local packet-radio services (e.g., Direwolf KISS TCP) running on this Mac or on the LAN.";
+				INFOPLIST_KEY_SentryDSN = "$(SENTRY_DSN)";
+				INFOPLIST_KEY_SentryDebug = "$(SENTRY_DEBUG)";
+				INFOPLIST_KEY_SentryEnvironment = "$(SENTRY_ENVIRONMENT)";
+				INFOPLIST_KEY_SentryProfilesSampleRate = "$(SENTRY_PROFILES_SAMPLE_RATE)";
+				INFOPLIST_KEY_SentryTracesSampleRate = "$(SENTRY_TRACES_SAMPLE_RATE)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -430,6 +456,7 @@
 		};
 		3487E8C02F2AA2A800DF0172 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = AABBCC112F3B000000000002 /* AXTerm-Release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -452,6 +479,11 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AXTerm needs local network access to connect to local packet-radio services (e.g., Direwolf KISS TCP) running on this Mac or on the LAN.";
+				INFOPLIST_KEY_SentryDSN = "$(SENTRY_DSN)";
+				INFOPLIST_KEY_SentryDebug = "$(SENTRY_DEBUG)";
+				INFOPLIST_KEY_SentryEnvironment = "$(SENTRY_ENVIRONMENT)";
+				INFOPLIST_KEY_SentryProfilesSampleRate = "$(SENTRY_PROFILES_SAMPLE_RATE)";
+				INFOPLIST_KEY_SentryTracesSampleRate = "$(SENTRY_TRACES_SAMPLE_RATE)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -585,6 +617,38 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		9B1C3E6C2F3A000100000001 /* XCRemoteSwiftPackageReference "GRDB" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/groue/GRDB.swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 6.29.0;
+			};
+		};
+		9B1C3E6C2F3A000100000005 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.2.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		9B1C3E6C2F3A000100000002 /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9B1C3E6C2F3A000100000001 /* XCRemoteSwiftPackageReference "GRDB" */;
+			productName = GRDB;
+		};
+		9B1C3E6C2F3A000100000006 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9B1C3E6C2F3A000100000005 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 3487E8952F2AA2A700DF0172 /* Project object */;
 }

@@ -1,0 +1,24 @@
+//
+//  AXTerm-Debug.xcconfig
+//  AXTerm
+//
+//  Build settings for Debug configuration.
+//
+
+// MARK: - Sentry Configuration
+
+// Note: Use $(/) to escape the // in URLs so they are not interpreted as comments.
+// The DSN URL contains the public key and project ID for Sentry error reporting.
+SENTRY_DSN = https:/$(/)87147bb8450faa84e947bc14d48c710d@o4510791186776064.ingest.us.sentry.io/4510791187759104
+
+// Environment tag sent to Sentry to distinguish events by build type.
+SENTRY_ENVIRONMENT = development
+
+// Enable Sentry debug logging in Debug builds for easier troubleshooting.
+SENTRY_DEBUG = YES
+
+// Sample rate for performance traces (1.0 = 100% in Debug for full visibility).
+SENTRY_TRACES_SAMPLE_RATE = 1.0
+
+// Sample rate for continuous profiling (1.0 = 100% in Debug).
+SENTRY_PROFILES_SAMPLE_RATE = 1.0

@@ -7,53 +7,210 @@
 
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct PacketInspectorView: View {
     let packet: Packet
+    var isPinned: Bool
+    var onTogglePin: (() -> Void)?
+    var onFilterStation: ((String) -> Void)?
     var onClose: (() -> Void)?
 
-    init(packet: Packet, onClose: (() -> Void)? = nil) {
+    private enum PayloadViewMode: String, CaseIterable {
+        case hex = "Hex"
+        case ascii = "ASCII"
+    }
+
+    private enum InspectorTab: String, CaseIterable {
+        case summary = "Summary"
+        case payload = "Payload"
+        case raw = "Raw"
+    }
+
+    init(
+        packet: Packet,
+        isPinned: Bool = false,
+        onTogglePin: (() -> Void)? = nil,
+        onFilterStation: ((String) -> Void)? = nil,
+        onClose: (() -> Void)? = nil
+    ) {
         self.packet = packet
+        self.isPinned = isPinned
+        self.onTogglePin = onTogglePin
+        self.onFilterStation = onFilterStation
         self.onClose = onClose
     }
 
     @Environment(\.dismiss) private var dismiss
+    @State private var payloadViewMode: PayloadViewMode = .hex
+    @State private var selectedTab: InspectorTab = .summary
+    @State private var renderFullPayload: Bool = false
+    @State private var renderFullRaw: Bool = false
+    @State private var findQuery: String = ""
+    @FocusState private var isFindFocused: Bool
+    @State private var copyFeedback: CopyFeedback?
+
+    private let payloadPreviewLimit: Int = 2048
+    private let rawPreviewLimit: Int = 2048
+
+    private enum CopyFeedback: Equatable {
+        case info
+        case infoHex
+        case ascii
+        case json
+        case rawHex
+        case frequency(String)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack {
-                Text("Packet Inspector")
-                    .font(.headline)
-
-                Spacer()
-
-                Button("Close") {
-                    onClose?()
-                    dismiss()
-                }
-                .keyboardShortcut(.cancelAction)
-            }
-            .padding()
-            .background(.bar)
+            header
 
             Divider()
 
-            // Content
+            Picker("Inspector Tab", selection: $selectedTab) {
+                ForEach(InspectorTab.allCases, id: \.self) { tab in
+                    Text(tab.rawValue)
+                        .tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding([.horizontal, .top])
+
+            Divider()
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    addressSection
-                    frameSection
-                    infoSection
-                    rawSection
+                    switch selectedTab {
+                    case .summary:
+                        summaryTab
+                    case .payload:
+                        payloadTab
+                    case .raw:
+                        rawTab
+                    }
                 }
                 .padding()
             }
         }
-        .frame(minWidth: 500, idealWidth: 600, minHeight: 400, idealHeight: 500)
+        .frame(minWidth: 560, idealWidth: 700, minHeight: 420, idealHeight: 540)
     }
 
-    // MARK: - Sections
+    // MARK: - Header
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(packet.fromDisplay)
+                        .font(.title3.weight(.semibold))
+                    Image(systemName: "arrow.right")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text(packet.toDisplay)
+                        .font(.title3.weight(.semibold))
+                }
+
+                HStack(spacing: 10) {
+                    FrameTypeBadge(text: packet.frameType.shortLabel)
+                        .help(packet.frameType.helpText)
+                    Text(packet.timestamp, style: .date)
+                        .foregroundStyle(.secondary)
+                    Text(packet.timestamp, style: .time)
+                        .foregroundStyle(.secondary)
+                }
+                .font(.subheadline)
+            }
+
+            Spacer()
+
+            Button {
+                onTogglePin?()
+            } label: {
+                Image(systemName: isPinned ? "pin.fill" : "pin")
+            }
+            .buttonStyle(.bordered)
+            .help(isPinned ? "Unpin Packet" : "Pin Packet")
+
+            Button("Close") {
+                onClose?()
+                dismiss()
+            }
+            .keyboardShortcut(.cancelAction)
+            .help("Close inspector")
+        }
+        .padding()
+        .background(.bar)
+    }
+
+    // MARK: - Tabs
+
+    private var summaryTab: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            addressSection
+            pathSection
+            frameSection
+            actionSection
+            detectionSection
+        }
+    }
+
+    private var payloadTab: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            payloadToolbar
+            payloadFindBar
+            payloadContent
+        }
+    }
+
+    private var rawTab: some View {
+        GroupBox("Raw AX.25") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("\(packet.rawAx25.count) bytes")
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Button("Copy Hex") {
+                        performCopy(PayloadFormatter.hexString(packet.rawAx25), feedback: .rawHex)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    copyBadge(for: .rawHex)
+                }
+
+                if packet.rawAx25.count > rawPreviewLimit && !renderFullRaw {
+                    HStack(spacing: 12) {
+                        Label("Showing first \(rawPreviewLimit) bytes", systemImage: "eye")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Render full") {
+                            renderFullRaw = true
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+
+                ScrollView {
+                    Text(rawText)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 220)
+                .padding(8)
+                .background(.background.secondary)
+                .cornerRadius(6)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+    }
+
+    // MARK: - Summary Sections
 
     private var addressSection: some View {
         GroupBox("Addresses") {
@@ -74,20 +231,42 @@ struct PacketInspectorView: View {
                         .textSelection(.enabled)
                 }
 
-                if !packet.via.isEmpty {
-                    GridRow {
-                        Text("Via:")
-                            .foregroundStyle(.secondary)
-                        Text(packet.viaDisplay)
-                            .font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled)
-                    }
-                }
-
                 GridRow {
                     Text("Time:")
                         .foregroundStyle(.secondary)
                     Text(packet.timestamp, style: .date) + Text(" ") + Text(packet.timestamp, style: .time)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+    }
+
+    private var pathSection: some View {
+        GroupBox("Path") {
+            VStack(alignment: .leading, spacing: 8) {
+                if packet.via.isEmpty {
+                    Text("Direct (no digipeaters)")
+                        .foregroundStyle(.secondary)
+                } else {
+                    HStack(spacing: 6) {
+                        ForEach(packet.via) { address in
+                            PathChip(address: address)
+                        }
+                    }
+                }
+
+                if !packet.via.isEmpty {
+                    Text("Heard via: \(packet.viaDisplay)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    let repeated = packet.via.filter { $0.repeated }
+                    if !repeated.isEmpty {
+                        Text("Repeated: \(repeated.map { $0.display }.joined(separator: ", "))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -125,81 +304,269 @@ struct PacketInspectorView: View {
         }
     }
 
-    private var infoSection: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
+    private var actionSection: some View {
+        GroupBox("Actions") {
+            HStack(spacing: 10) {
+                HStack(spacing: 6) {
+                    Button("Copy Info") {
+                        performCopy(packet.infoText ?? "", feedback: .info)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(packet.infoText == nil)
+
+                    copyBadge(for: .info)
+                }
+
+                HStack(spacing: 6) {
+                    Button("Copy Hex") {
+                        performCopy(PayloadFormatter.hexString(packet.info), feedback: .infoHex)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    copyBadge(for: .infoHex)
+                }
+
+                HStack(spacing: 6) {
+                    Button("Copy ASCII") {
+                        performCopy(PayloadFormatter.asciiString(packet.info), feedback: .ascii)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    copyBadge(for: .ascii)
+                }
+
+                HStack(spacing: 6) {
+                    Button("Copy JSON") {
+                        if let json = PacketExport(packet: packet).jsonString() {
+                            performCopy(json, feedback: .json)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    copyBadge(for: .json)
+                }
+
+                Button("Save JSON...") {
+                    saveJSON()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+    }
+
+    private var detectionSection: some View {
+        let summary = payloadTokenSummary
+        return GroupBox("Detected") {
+            VStack(alignment: .leading, spacing: 10) {
+                if summary.isEmpty {
+                    Text("No tokens detected.")
+                        .foregroundStyle(.secondary)
+                }
+
+                if !summary.callsigns.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Callsigns")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 80), spacing: 8)], alignment: .leading, spacing: 8) {
+                            ForEach(summary.callsigns, id: \.self) { callsign in
+                                Button(callsign) {
+                                    onFilterStation?(callsign)
+                                }
+                                .buttonStyle(.link)
+                            }
+                        }
+                    }
+                }
+
+                if !summary.frequencies.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Frequencies")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], alignment: .leading, spacing: 8) {
+                            ForEach(summary.frequencies, id: \.self) { freq in
+                                HStack(spacing: 6) {
+                                    Button("Copy \(freq) MHz") {
+                                        performCopy(freq, feedback: .frequency(freq))
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+
+                                    copyBadge(for: .frequency(freq))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !summary.urls.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Links")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        ForEach(summary.urls, id: \.self) { url in
+                            Text(url)
+                                .font(.system(.body, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+    }
+
+    // MARK: - Payload Tab
+
+    private var payloadToolbar: some View {
+        GroupBox("Payload") {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("Info (\(packet.info.count) bytes)")
+                    Picker("Payload View", selection: $payloadViewMode) {
+                        ForEach(PayloadViewMode.allCases, id: \.self) { mode in
+                            Text(mode.rawValue)
+                                .tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 180)
 
                     Spacer()
 
-                    if packet.infoText != nil {
-                        Button("Copy") {
-                            copyToClipboard(packet.infoText ?? "")
+                    HStack(spacing: 6) {
+                        Button("Copy Info") {
+                            performCopy(packet.infoText ?? "", feedback: .info)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(packet.infoText == nil)
+
+                        copyBadge(for: .info)
+                    }
+
+                    HStack(spacing: 6) {
+                        Button("Copy Hex") {
+                            performCopy(PayloadFormatter.hexString(packet.info), feedback: .infoHex)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        copyBadge(for: .infoHex)
+                    }
+
+                    HStack(spacing: 6) {
+                        Button("Copy ASCII") {
+                            performCopy(PayloadFormatter.asciiString(packet.info), feedback: .ascii)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        copyBadge(for: .ascii)
+                    }
+                }
+
+                HStack {
+                    Text("\(packet.info.count) bytes")
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    if packet.info.count > payloadPreviewLimit && !renderFullPayload {
+                        Button("Render full") {
+                            renderFullPayload = true
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                     }
                 }
-
-                if let text = packet.infoText {
-                    ScrollView {
-                        Text(text)
-                            .font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 150)
-                    .padding(8)
-                    .background(.background.secondary)
-                    .cornerRadius(4)
-                } else if packet.info.isEmpty {
-                    Text("(empty)")
-                        .foregroundStyle(.secondary)
-                        .italic()
-                } else {
-                    Text("(binary data)")
-                        .foregroundStyle(.secondary)
-                        .italic()
-                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)
         }
     }
 
-    private var rawSection: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Raw AX.25")
+    private var payloadFindBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Find in payload", text: $findQuery)
+                .textFieldStyle(.roundedBorder)
+                .focused($isFindFocused)
 
-                    Spacer()
-
-                    Button("Copy Hex") {
-                        copyToClipboard(hexString(packet.rawAx25))
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-
-                ScrollView {
-                    Text(hexString(packet.rawAx25))
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 100)
-                .padding(8)
-                .background(.background.secondary)
-                .cornerRadius(4)
+            Button("Find") {
+                isFindFocused = true
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
+            .keyboardShortcut("f", modifiers: [.command])
         }
+        .frame(maxHeight: 260)
+        .padding(8)
+        .background(.background.secondary)
+        .cornerRadius(6)
+    }
+
+    private var payloadContent: some View {
+        ScrollView {
+            if findQuery.isEmpty {
+                Text(payloadText)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text(highlightedPayload)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(maxHeight: 260)
+        .padding(8)
+        .background(.background.secondary)
+        .cornerRadius(6)
     }
 
     // MARK: - Helpers
+
+    private var payloadTokenSummary: PayloadTokenSummary {
+        guard let text = packet.infoText, !text.isEmpty else {
+            return PayloadTokenSummary(callsigns: [], frequencies: [], urls: [])
+        }
+        return PayloadTokenExtractor.summarize(text: text)
+    }
+
+    private var payloadText: String {
+        let data = payloadData
+        switch payloadViewMode {
+        case .hex:
+            return PayloadFormatter.hexString(data)
+        case .ascii:
+            return PayloadFormatter.asciiString(data)
+        }
+    }
+
+    private var highlightedPayload: AttributedString {
+        PayloadSearchHighlighter.highlight(text: payloadText, query: findQuery)
+    }
+
+    private var payloadData: Data {
+        if renderFullPayload {
+            return packet.info
+        }
+        return packet.info.prefix(payloadPreviewLimit)
+    }
+
+    private var rawText: String {
+        let data = renderFullRaw ? packet.rawAx25 : packet.rawAx25.prefix(rawPreviewLimit)
+        return PayloadFormatter.hexString(data)
+    }
 
     private func pidDescription(_ pid: UInt8) -> String {
         switch pid {
@@ -221,22 +588,105 @@ struct PacketInspectorView: View {
         }
     }
 
-    private func hexString(_ data: Data) -> String {
-        var result = ""
-        for (index, byte) in data.enumerated() {
-            if index > 0 && index % 16 == 0 {
-                result += "\n"
-            } else if index > 0 {
-                result += " "
-            }
-            result += String(format: "%02X", byte)
-        }
-        return result
+    private func performCopy(_ string: String, feedback: CopyFeedback) {
+        ClipboardWriter.copy(string)
+        showCopyFeedback(feedback)
     }
 
-    private func copyToClipboard(_ s: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(s, forType: .string)
+    private func showCopyFeedback(_ feedback: CopyFeedback) {
+        withAnimation(.easeInOut(duration: 0.12)) {
+            copyFeedback = feedback
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            if copyFeedback == feedback {
+                withAnimation(.easeInOut(duration: 0.12)) {
+                    copyFeedback = nil
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func copyBadge(for feedback: CopyFeedback) -> some View {
+        if copyFeedback == feedback {
+            Text("Copied")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .transition(.opacity)
+        }
+    }
+
+    private func saveJSON() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "packet-\(packet.id.uuidString.prefix(8)).json"
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try PacketExport(packet: packet).writeJSON(to: url)
+            } catch {
+                NSSound.beep()
+            }
+        }
+    }
+}
+
+private struct PathChip: View {
+    let address: AX25Address
+
+    var body: some View {
+        Text(address.display)
+            .font(.system(.caption, design: .monospaced))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(address.repeated ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.15))
+            )
+            .foregroundStyle(address.repeated ? .primary : .secondary)
+    }
+}
+
+private enum PayloadSearchHighlighter {
+    static func highlight(text: String, query: String) -> AttributedString {
+        guard !query.isEmpty else { return AttributedString(text) }
+
+        let nsText = text as NSString
+        let lowerText = text.lowercased() as NSString
+        let lowerQuery = query.lowercased()
+        let result = NSMutableAttributedString(string: text)
+
+        var searchRange = NSRange(location: 0, length: nsText.length)
+        while true {
+            let foundRange = lowerText.range(of: lowerQuery, options: [], range: searchRange)
+            if foundRange.location == NSNotFound {
+                break
+            }
+            result.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.35), range: foundRange)
+            let nextLocation = foundRange.location + foundRange.length
+            if nextLocation >= nsText.length {
+                break
+            }
+            searchRange = NSRange(location: nextLocation, length: nsText.length - nextLocation)
+        }
+
+        return AttributedString(result)
+    }
+}
+
+private struct FrameTypeBadge: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(.caption, design: .monospaced).weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .foregroundStyle(.primary)
     }
 }
 
@@ -248,7 +698,7 @@ struct PacketInspectorView: View {
             via: [AX25Address(call: "WIDE1", ssid: 1, repeated: true)],
             frameType: .ui,
             pid: 0xF0,
-            info: "!4903.50N/07201.75W-Test packet".data(using: .ascii)!,
+            info: "CQ CQ http://example.com 145.050 N0CALL".data(using: .ascii) ?? Data(),
             rawAx25: Data([0x82, 0xA0, 0xA4, 0xA6, 0x40, 0x40])
         )
     )
