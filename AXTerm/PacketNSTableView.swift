@@ -11,7 +11,8 @@ import SwiftUI
 struct PacketNSTableView: NSViewRepresentable {
     struct Constants {
         static let autosaveName = "PacketTable"
-        static let autoresizingColumnIdentifier: ColumnIdentifier = .info
+        static let defaultColumnOrder: [ColumnIdentifier] = [.time, .from, .to, .via, .type, .info]
+        static let infoColumnIdentifier: ColumnIdentifier = .info
     }
 
     enum ColumnIdentifier: String, CaseIterable {
@@ -49,8 +50,7 @@ struct PacketNSTableView: NSViewRepresentable {
         tableView.delegate = context.coordinator
         tableView.target = context.coordinator
         tableView.doubleAction = #selector(Coordinator.handleDoubleClick(_:))
-        tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
-        tableView.autoresizesAllColumnsToFit = false
+        tableView.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         tableView.allowsColumnResizing = true
         tableView.autosaveName = Constants.autosaveName
         tableView.autosaveTableColumns = true
@@ -64,6 +64,7 @@ struct PacketNSTableView: NSViewRepresentable {
 
         context.coordinator.attach(tableView: tableView)
         configureColumns(for: tableView)
+        sizeColumnsToFitContent(in: tableView)
 
         let scrollView = NSScrollView()
         scrollView.documentView = tableView
@@ -78,6 +79,7 @@ struct PacketNSTableView: NSViewRepresentable {
         guard let tableView = nsView.documentView as? NSTableView else { return }
         let rowViewModels = packets.map { PacketRowViewModel.fromPacket($0) }
         context.coordinator.update(rows: rowViewModels, packets: packets, selection: selection)
+        sizeColumnsToFitContent(in: tableView)
     }
 
     private func configureColumns(for tableView: NSTableView) {
@@ -97,9 +99,8 @@ struct PacketNSTableView: NSViewRepresentable {
         tableView.addTableColumn(viaColumn)
         tableView.addTableColumn(typeColumn)
         tableView.addTableColumn(infoColumn)
-        // The autoresizingColumn is required for Finder-style fill behavior so Info expands
-        // to consume remaining width when the window grows.
-        tableView.autoresizingColumn = infoColumn
+        // With .lastColumnOnlyAutoresizingStyle, the trailing column expands to fill
+        // remaining width like Finder. Keep Info last to make it the expanding column.
     }
 
     private func makeColumn(id: ColumnIdentifier, title: String, minWidth: CGFloat, width: CGFloat) -> NSTableColumn {
@@ -142,6 +143,25 @@ struct PacketNSTableView: NSViewRepresentable {
         UserDefaults.standard.removeObject(forKey: defaultsKey)
     }
     #endif
+
+    private func sizeColumnsToFitContent(in tableView: NSTableView) {
+        guard !tableView.tableColumns.isEmpty else { return }
+        // Avoid overriding persisted user widths; autosaved columns take precedence.
+        guard !hasAutosavedColumns(for: tableView) else { return }
+        let rows = packets.map { PacketRowViewModel.fromPacket($0) }
+        let measurements = PacketTableColumnSizer(rows: rows)
+        for column in tableView.tableColumns {
+            guard let identifier = ColumnIdentifier(rawValue: column.identifier.rawValue) else { continue }
+            let targetWidth = measurements.width(for: identifier)
+            column.width = max(column.minWidth, targetWidth)
+        }
+    }
+
+    private func hasAutosavedColumns(for tableView: NSTableView) -> Bool {
+        guard let autosaveName = tableView.autosaveName else { return false }
+        let defaultsKey = "NSTableView Columns \(autosaveName)"
+        return UserDefaults.standard.object(forKey: defaultsKey) != nil
+    }
 }
 
 extension PacketNSTableView {
@@ -324,6 +344,70 @@ extension PacketNSTableView {
             }
 
             return field
+        }
+    }
+}
+
+private struct PacketTableColumnSizer {
+    let rows: [PacketRowViewModel]
+
+    func width(for column: PacketNSTableView.ColumnIdentifier) -> CGFloat {
+        let headerWidth = columnHeaderWidth(for: column)
+        let contentWidth = columnContentWidth(for: column)
+        let maxWidth = columnMaxWidth(for: column)
+        return min(max(headerWidth, contentWidth) + 12, maxWidth)
+    }
+
+    private func columnHeaderWidth(for column: PacketNSTableView.ColumnIdentifier) -> CGFloat {
+        let title: String
+        switch column {
+        case .time: title = "Time"
+        case .from: title = "From"
+        case .to: title = "To"
+        case .via: title = "Via"
+        case .type: title = "Type"
+        case .info: title = "Info"
+        }
+        return title.size(withAttributes: [.font: NSFont.systemFont(ofSize: NSFont.systemFontSize)]).width
+    }
+
+    private func columnContentWidth(for column: PacketNSTableView.ColumnIdentifier) -> CGFloat {
+        let font: NSFont
+        let values: [String]
+        switch column {
+        case .time:
+            font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+            values = rows.map { $0.timeText }
+        case .from:
+            font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            values = rows.map { $0.fromText }
+        case .to:
+            font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            values = rows.map { $0.toText }
+        case .via:
+            font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            values = rows.map { $0.viaText }
+        case .type:
+            font = .systemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            values = rows.map { $0.typeIcon }
+        case .info:
+            font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            values = rows.map { $0.infoText }
+        }
+        let measured = values.reduce(CGFloat.zero) { current, value in
+            let width = value.size(withAttributes: [.font: font]).width
+            return max(current, width)
+        }
+        return measured
+    }
+
+    private func columnMaxWidth(for column: PacketNSTableView.ColumnIdentifier) -> CGFloat {
+        switch column {
+        case .time: return 140
+        case .from, .to: return 200
+        case .via: return 180
+        case .type: return 80
+        case .info: return 600
         }
     }
 }

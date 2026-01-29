@@ -19,6 +19,10 @@ final class PacketNSTableViewTests: XCTestCase {
     }
 
     func testAutoresizingColumnIdentifierIsInfo() {
-        XCTAssertEqual(PacketNSTableView.Constants.autoresizingColumnIdentifier, .info)
+        XCTAssertEqual(PacketNSTableView.Constants.infoColumnIdentifier, .info)
+    }
+
+    func testDefaultColumnOrderMatchesExpectedSequence() {
+        XCTAssertEqual(PacketNSTableView.Constants.defaultColumnOrder, [.time, .from, .to, .via, .type, .info])
     }
 }
