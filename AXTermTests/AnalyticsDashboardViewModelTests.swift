@@ -1,23 +1,16 @@
-//
-//  AnalyticsDashboardViewModelTests.swift
-//  AXTermTests
-//
-//  Created by AXTerm on 2026-02-21.
-//
-
 import XCTest
 @testable import AXTerm
 
 final class AnalyticsDashboardViewModelTests: XCTestCase {
     private var calendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
         return calendar
     }
 
     func testChangingBucketTriggersSeriesRecompute() {
         let date1 = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
-        let date2 = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 5, second: 0)
+        let date2 = makeDate(year: 2026, month: 2, day: 18, hour: 7, minute: 5, second: 0)
         let packets = [
             makePacket(timestamp: date1, from: "alpha", to: "beta"),
             makePacket(timestamp: date2, from: "alpha", to: "beta")
@@ -25,21 +18,25 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
 
         let viewModel = AnalyticsDashboardViewModel(
             calendar: calendar,
-            bucket: .fiveMinutes,
+            bucket: .hour,
             includeViaDigipeaters: false,
             minEdgeCount: 1,
+            maxNodes: 10,
             packetDebounce: .zero,
+            graphDebounce: .zero,
             packetScheduler: .main
         )
 
         viewModel.updatePackets(packets)
+        drainMainQueue()
         XCTAssertEqual(viewModel.series.packetsPerBucket.count, 2)
 
-        viewModel.bucket = .hour
+        viewModel.bucket = .day
+        drainMainQueue()
         XCTAssertEqual(viewModel.series.packetsPerBucket.count, 1)
     }
 
-    func testTogglingIncludeViaTriggersEdgeRecompute() {
+    func testTogglingIncludeViaTriggersGraphRecompute() {
         let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
         let packets = [
             makePacket(timestamp: timestamp, from: "alpha", to: "beta", via: ["dig1"])
@@ -50,23 +47,27 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             bucket: .fiveMinutes,
             includeViaDigipeaters: false,
             minEdgeCount: 1,
+            maxNodes: 10,
             packetDebounce: .zero,
+            graphDebounce: .zero,
             packetScheduler: .main
         )
 
         viewModel.updatePackets(packets)
-        XCTAssertEqual(viewModel.edges.count, 1)
+        drainMainQueue()
+        XCTAssertEqual(viewModel.graphModel.edges.count, 1)
 
         viewModel.includeViaDigipeaters = true
-        XCTAssertEqual(viewModel.edges.count, 2)
+        drainMainQueue()
+        XCTAssertEqual(viewModel.graphModel.edges.count, 2)
     }
 
     func testMinEdgeCountFiltersEdges() {
         let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
         let packets = [
             makePacket(timestamp: timestamp, from: "alpha", to: "beta"),
-            makePacket(timestamp: timestamp, from: "alpha", to: "beta"),
-            makePacket(timestamp: timestamp, from: "beta", to: "gamma")
+            makePacket(timestamp: timestamp.addingTimeInterval(1), from: "alpha", to: "beta"),
+            makePacket(timestamp: timestamp.addingTimeInterval(2), from: "beta", to: "gamma")
         ]
 
         let viewModel = AnalyticsDashboardViewModel(
@@ -74,16 +75,20 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             bucket: .fiveMinutes,
             includeViaDigipeaters: false,
             minEdgeCount: 1,
+            maxNodes: 10,
             packetDebounce: .zero,
+            graphDebounce: .zero,
             packetScheduler: .main
         )
 
         viewModel.updatePackets(packets)
-        XCTAssertEqual(viewModel.edges.count, 2)
+        drainMainQueue()
+        XCTAssertEqual(viewModel.graphModel.edges.count, 2)
 
         viewModel.minEdgeCount = 2
-        XCTAssertEqual(viewModel.edges.count, 1)
-        XCTAssertEqual(viewModel.edges.first?.source, "alpha")
+        drainMainQueue()
+        XCTAssertEqual(viewModel.graphModel.edges.count, 1)
+        XCTAssertEqual(viewModel.graphModel.edges.first?.sourceID, "ALPHA")
     }
 
     func testSelectionUpdatesDoNotCrash() {
@@ -92,7 +97,9 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             bucket: .fiveMinutes,
             includeViaDigipeaters: false,
             minEdgeCount: 1,
+            maxNodes: 10,
             packetDebounce: .zero,
+            graphDebounce: .zero,
             packetScheduler: .main
         )
 
@@ -100,17 +107,15 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedNodeID, "alpha")
         XCTAssertEqual(viewModel.selectedNodeIDs, ["alpha"])
 
-        viewModel.updateHover(for: "alpha", isHovering: true)
+        viewModel.updateHover(for: "alpha")
         XCTAssertEqual(viewModel.hoveredNodeID, "alpha")
-
-        viewModel.handleNodeDoubleClick("alpha", isShift: false)
-        XCTAssertNotNil(viewModel.stationInspector)
-
-        viewModel.updateHover(for: "alpha", isHovering: false)
-        XCTAssertNil(viewModel.hoveredNodeID)
 
         viewModel.handleBackgroundClick()
         XCTAssertNil(viewModel.selectedNodeID)
+    }
+
+    private func drainMainQueue() {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
     }
 }
 
