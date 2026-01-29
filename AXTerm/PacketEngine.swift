@@ -661,3 +661,37 @@ private extension ConsoleEntryRecord.Level {
         }
     }
 }
+
+@MainActor
+final class AnalyticsViewModel: ObservableObject {
+    @Published private(set) var summary: AnalyticsSummary?
+
+    func recompute(packets: [Packet]) {
+        Telemetry.breadcrumb(
+            category: "analytics.recompute.start",
+            message: "Recomputing analytics summary",
+            data: [TelemetryContext.packetCount: packets.count]
+        )
+        let uniqueStations = AnalyticsEngine.uniqueStationsCount(packets: packets)
+        let summary = Telemetry.measure(
+            name: "analytics.computeSummary",
+            data: [
+                TelemetryContext.packetCount: packets.count,
+                TelemetryContext.uniqueStations: uniqueStations
+            ]
+        ) {
+            AnalyticsEngine.computeSummary(packets: packets)
+        }
+        self.summary = summary
+
+        if summary.infoTextRatio.isNaN || summary.totalPayloadBytes < 0 {
+            Telemetry.capture(
+                message: "analytics.summary.invalid",
+                data: [
+                    "infoTextRatio": summary.infoTextRatio,
+                    "totalPayloadBytes": summary.totalPayloadBytes
+                ]
+            )
+        }
+    }
+}
