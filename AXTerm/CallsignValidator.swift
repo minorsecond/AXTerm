@@ -8,7 +8,7 @@
 import Foundation
 
 enum CallsignValidator {
-    private static let callsignPattern = "^[A-Z0-9]{1,6}(?:-[0-9]{1,2})?$"
+    nonisolated static let callsignPattern = "^[A-Z0-9]{1,6}(?:-[0-9]{1,2})?$"
 
     nonisolated static func normalize(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()

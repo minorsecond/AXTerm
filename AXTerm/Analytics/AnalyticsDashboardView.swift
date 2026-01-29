@@ -11,7 +11,7 @@ struct AnalyticsDashboardView: View {
     @ObservedObject var packetEngine: PacketEngine
     @StateObject private var viewModel: AnalyticsDashboardViewModel
 
-    init(packetEngine: PacketEngine, viewModel: AnalyticsDashboardViewModel = AnalyticsDashboardViewModel()) {
+    @MainActor init(packetEngine: PacketEngine, viewModel: AnalyticsDashboardViewModel = AnalyticsDashboardViewModel()) {
         self.packetEngine = packetEngine
         _viewModel = StateObject(wrappedValue: viewModel)
     }
@@ -256,7 +256,7 @@ private struct AnalyticsGraphView: View {
             .onAppear {
                 viewModel.updateLayout(size: proxy.size)
             }
-            .onChange(of: proxy.size) { newSize in
+            .onChange(of: proxy.size) { _, newSize in
                 viewModel.updateLayout(size: newSize)
             }
         }
