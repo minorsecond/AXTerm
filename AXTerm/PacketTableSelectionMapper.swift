@@ -20,7 +20,16 @@ struct PacketRowViewModel: Identifiable, Hashable {
     let isLowSignal: Bool
 
     static func fromPacket(_ packet: Packet) -> PacketRowViewModel {
-        PacketRowViewModel(
+        let fullInfoText: String = {
+            if let t = packet.infoText {
+                return t.replacingOccurrences(of: "\r", with: " ")
+                        .replacingOccurrences(of: "\n", with: " ")
+            }
+            if packet.info.isEmpty { return "" }
+            return "[\(packet.info.count) bytes]"
+        }()
+
+        return PacketRowViewModel(
             id: packet.id,
             timeText: packet.timestamp.formatted(date: .omitted, time: .standard),
             fromText: packet.fromDisplay,
@@ -28,8 +37,11 @@ struct PacketRowViewModel: Identifiable, Hashable {
             viaText: packet.viaDisplay,
             typeIcon: packet.frameType.icon,
             typeTooltip: packet.frameType.displayName,
-            infoText: packet.infoPreview,
-            infoTooltip: packet.infoTooltip,
+
+            infoText: fullInfoText,
+
+            infoTooltip: packet.infoText ?? fullInfoText,
+
             isLowSignal: packet.isLowSignal
         )
     }
