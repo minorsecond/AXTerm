@@ -53,6 +53,16 @@ struct Packet: Identifiable, Hashable, Sendable {
     var typeDisplay: String {
         frameType.displayName
     }
+    
+    var infoDisplay: String {
+        if let text = infoText {
+            return text
+                .replacingOccurrences(of: "\r", with: " ")
+                .replacingOccurrences(of: "\n", with: " ")
+        }
+        if info.isEmpty { return "" }
+        return "[\(info.count) bytes]"
+    }
 
     var infoPreview: String {
         if let text = infoText {

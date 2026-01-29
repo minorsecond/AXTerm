@@ -15,7 +15,7 @@ struct PacketTableView: View {
     let onCopyRawHex: (Packet) -> Void
 
     var body: some View {
-        PacketTableNSTableView(
+        PacketNSTableView(
             packets: packets,
             selection: $selection,
             onInspectSelection: onInspectSelection,
