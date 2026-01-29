@@ -8,7 +8,7 @@
 import Foundation
 
 /// Represents an AX.25 address (callsign + SSID)
-struct AX25Address: Hashable, Codable, Identifiable {
+struct AX25Address: Hashable, Codable, Identifiable, Sendable {
     let call: String
     let ssid: Int
     let repeated: Bool

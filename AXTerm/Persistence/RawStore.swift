@@ -7,7 +7,7 @@
 
 import Foundation
 
-protocol RawStore {
+protocol RawStore: Sendable {
     func append(_ entry: RawEntryRecord) throws
     func loadRecent(limit: Int) throws -> [RawEntryRecord]
     func deleteAll() throws

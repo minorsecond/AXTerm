@@ -12,6 +12,10 @@ struct AXTermApp: App {
     @NSApplicationDelegateAdaptor(AXTermAppDelegate.self) private var appDelegate
     @StateObject private var settings: AppSettingsStore
     @StateObject private var inspectionRouter: PacketInspectionRouter
+    /// Controls MenuBarExtra visibility via @AppStorage to avoid feedback loops.
+    /// @Published bindings to MenuBarExtra(isInserted:) cause SwiftUI scene updates
+    /// to trigger Combine publishes, creating an infinite invalidation loop.
+    @AppStorage(AppSettingsStore.runInMenuBarKey) private var runInMenuBar = AppSettingsStore.defaultRunInMenuBar
     private let packetStore: PacketStore?
     private let consoleStore: ConsoleStore?
     private let rawStore: RawStore?
@@ -25,6 +29,10 @@ struct AXTermApp: App {
         _settings = StateObject(wrappedValue: settingsStore)
         let router = PacketInspectionRouter()
         _inspectionRouter = StateObject(wrappedValue: router)
+
+        SentryManager.shared.startIfEnabled(settings: settingsStore)
+        SentryManager.shared.addBreadcrumb(category: "app.lifecycle", message: "App init", level: .info, data: nil)
+
         let queue = try? DatabaseManager.makeDatabaseQueue()
         let packetStore = queue.map { SQLitePacketStore(dbQueue: $0) }
         let consoleStore = queue.map { SQLiteConsoleStore(dbQueue: $0) }
@@ -51,6 +59,7 @@ struct AXTermApp: App {
             watchRecorder: watchRecorder,
             notificationScheduler: notificationScheduler
         )
+        SentryManager.shared.setConnectionTags(host: settingsStore.host, port: settingsStore.portValue)
         if settingsStore.autoConnectOnLaunch {
             self.client.connect(host: settingsStore.host, port: settingsStore.portValue)
         }
@@ -88,7 +97,7 @@ struct AXTermApp: App {
             DiagnosticsView(settings: settings, eventStore: eventStore)
         }
 
-        MenuBarExtra("AXTerm", systemImage: "antenna.radiowaves.left.and.right", isInserted: $settings.runInMenuBar) {
+        MenuBarExtra("AXTerm", systemImage: "antenna.radiowaves.left.and.right", isInserted: $runInMenuBar) {
             MenuBarView(
                 client: client,
                 settings: settings,

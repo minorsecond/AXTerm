@@ -8,6 +8,7 @@
 import Foundation
 import UserNotifications
 import AppKit
+import Combine
 
 enum NotificationAction {
     static let watchCategory = "WATCH_HIT"
@@ -57,6 +58,13 @@ final class UserNotificationScheduler: NotificationScheduling {
             return
         }
 
+        SentryManager.shared.addBreadcrumb(
+            category: "notifications",
+            message: "Schedule watch notification",
+            level: .info,
+            data: ["packetID": packet.id.uuidString]
+        )
+
         let content = UNMutableNotificationContent()
         content.title = "Watch hit: \(packet.fromDisplay) → \(packet.toDisplay)"
         content.body = packet.infoPreview.isEmpty ? "Packet received" : packet.infoPreview
@@ -89,6 +97,9 @@ final class NotificationAuthorizationManager {
             let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
             return granted
         } catch {
+            await MainActor.run {
+                SentryManager.shared.captureNotificationFailure("requestAuthorization", error: error)
+            }
             return false
         }
     }
@@ -134,19 +145,23 @@ final class PacketInspectionRouter: ObservableObject {
     @Published private(set) var shouldOpenMainWindow = false
 
     func requestOpenMainWindow() {
+        SentryManager.shared.addBreadcrumb(category: "ui.routing", message: "Request open main window", level: .info, data: nil)
         shouldOpenMainWindow = true
     }
 
     func requestOpenPacket(id: Packet.ID) {
+        SentryManager.shared.breadcrumbInspectorRouteRequest(packetID: id)
         requestedPacketID = id
         shouldOpenMainWindow = true
     }
 
     func consumeOpenWindowRequest() {
+        SentryManager.shared.addBreadcrumb(category: "ui.routing", message: "Consume open main window request", level: .info, data: nil)
         shouldOpenMainWindow = false
     }
 
     func consumePacketRequest() {
+        SentryManager.shared.breadcrumbInspectorRouteRequest(packetID: requestedPacketID)
         requestedPacketID = nil
     }
 }

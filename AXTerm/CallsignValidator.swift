@@ -10,11 +10,11 @@ import Foundation
 enum CallsignValidator {
     private static let callsignPattern = "^[A-Z0-9]{1,6}(?:-[0-9]{1,2})?$"
 
-    static func normalize(_ value: String) -> String {
+    nonisolated static func normalize(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
     }
 
-    static func isValid(_ value: String) -> Bool {
+    nonisolated static func isValid(_ value: String) -> Bool {
         let normalized = normalize(value)
         guard !normalized.isEmpty else { return false }
         guard normalized.rangeOfCharacter(from: .letters) != nil else { return false }

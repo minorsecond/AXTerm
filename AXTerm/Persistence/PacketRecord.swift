@@ -107,7 +107,8 @@ struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Hashable {
             pid: pidValue,
             info: info,
             rawAx25: raw,
-            kissEndpoint: endpoint
+            kissEndpoint: endpoint,
+            infoText: infoText
         )
     }
 }

@@ -38,7 +38,7 @@ struct PacketFilters: Equatable {
 }
 
 /// Raw data chunk for the Raw view
-struct RawChunk: Identifiable, Hashable {
+struct RawChunk: Identifiable, Hashable, Sendable {
     let id: UUID
     let timestamp: Date
     let data: Data
@@ -76,6 +76,7 @@ final class PacketEngine: ObservableObject {
     private let packetStore: PacketStore?
     private let consoleStore: ConsoleStore?
     private let rawStore: RawStore?
+    private let persistenceWorker: PersistenceWorker?
     private let eventLogger: EventLogger?
     private let watchMatcher: WatchMatching
     private let watchRecorder: WatchEventRecording?
@@ -126,6 +127,7 @@ final class PacketEngine: ObservableObject {
         self.packetStore = packetStore
         self.consoleStore = consoleStore
         self.rawStore = rawStore
+        self.persistenceWorker = PersistenceWorker(packetStore: packetStore, consoleStore: consoleStore, rawStore: rawStore)
         self.eventLogger = eventLogger
         self.watchMatcher = watchMatcher ?? WatchRuleMatcher(settings: settings)
         self.watchRecorder = watchRecorder
@@ -142,6 +144,8 @@ final class PacketEngine: ObservableObject {
         lastError = nil
         connectedHost = host
         connectedPort = port
+        SentryManager.shared.breadcrumbConnectAttempt(host: host, port: port)
+        SentryManager.shared.setConnectionTags(host: host, port: port)
         eventLogger?.log(level: .info, category: .connection, message: "Connecting to \(host):\(port)", metadata: nil)
 
         let nwHost = NWEndpoint.Host(host)
@@ -150,6 +154,7 @@ final class PacketEngine: ObservableObject {
             lastError = "Invalid port \(port)"
             addErrorLine("Connection failed: invalid port \(port)", category: .connection)
             eventLogger?.log(level: .error, category: .connection, message: "Connection failed: invalid port \(port)", metadata: nil)
+            SentryManager.shared.captureConnectionFailure("Connection failed: invalid port \(port)")
             return
         }
 
@@ -177,6 +182,7 @@ final class PacketEngine: ObservableObject {
         status = .disconnected
         connectedHost = nil
         connectedPort = nil
+        SentryManager.shared.breadcrumbDisconnect()
     }
 
     private func handleConnectionState(_ state: NWConnection.State, host: String, port: UInt16) {
@@ -185,6 +191,7 @@ final class PacketEngine: ObservableObject {
             status = .connected
             addSystemLine("Connected to \(host):\(port)", category: .connection)
             eventLogger?.log(level: .info, category: .connection, message: "Connected to \(host):\(port)", metadata: nil)
+            SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Connected", level: .info, data: nil)
             startReceiving()
 
         case .failed(let error):
@@ -192,15 +199,18 @@ final class PacketEngine: ObservableObject {
             lastError = error.localizedDescription
             addErrorLine("Connection failed: \(error.localizedDescription)", category: .connection)
             eventLogger?.log(level: .error, category: .connection, message: "Connection failed: \(error.localizedDescription)", metadata: nil)
+            SentryManager.shared.captureConnectionFailure("Connection failed: \(error.localizedDescription)", error: error)
 
         case .cancelled:
             status = .disconnected
             addSystemLine("Disconnected", category: .connection)
             eventLogger?.log(level: .info, category: .connection, message: "Disconnected", metadata: nil)
+            SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Cancelled", level: .info, data: nil)
 
         case .waiting(let error):
             lastError = error.localizedDescription
             eventLogger?.log(level: .warning, category: .connection, message: "Waiting: \(error.localizedDescription)", metadata: nil)
+            SentryManager.shared.captureConnectionFailure("Connection waiting: \(error.localizedDescription)", error: error)
 
         default:
             break
@@ -257,6 +267,7 @@ final class PacketEngine: ObservableObject {
                 message: "Failed to decode AX.25 frame",
                 metadata: ["byteCount": "\(ax25Data.count)"]
             )
+            SentryManager.shared.captureDecodeFailure(byteCount: ax25Data.count)
             return
         }
 
@@ -277,6 +288,7 @@ final class PacketEngine: ObservableObject {
             kissEndpoint: endpoint
         )
 
+        SentryManager.shared.breadcrumbDecodeSuccessSampled(packet: packet)
         handleIncomingPacket(packet)
     }
 
@@ -403,6 +415,8 @@ final class PacketEngine: ObservableObject {
     private func handleWatchMatch(for packet: Packet) {
         let match = watchMatcher.match(packet: packet)
         guard match.hasMatches else { return }
+        let matchCount = match.matchedCallsigns.count + match.matchedKeywords.count
+        SentryManager.shared.breadcrumbWatchHit(packet: packet, matchCount: matchCount)
         watchRecorder?.recordWatchHit(packet: packet, match: match)
         notificationScheduler?.scheduleWatchNotification(packet: packet, match: match)
     }
@@ -414,18 +428,14 @@ final class PacketEngine: ObservableObject {
     }
 
     func loadPersistedPackets() {
-        guard settings.persistHistory, let packetStore else { return }
+        guard settings.persistHistory, let persistenceWorker else { return }
         let limit = min(settings.retentionLimit, maxPackets)
-        DispatchQueue.global(qos: .utility).async { [weak self, packetStore] in
+        Task {
             do {
-                let records = try packetStore.loadRecent(limit: limit)
-                let packets = records.map { $0.toPacket() }
-                let pinnedIDs = Set(records.filter { $0.pinned }.map(\.id))
-                Task { @MainActor in
-                    self?.applyLoadedPackets(packets, pinnedIDs: pinnedIDs)
-                }
+                let result = try await persistenceWorker.loadPackets(limit: limit)
+                applyLoadedPackets(result.packets, pinnedIDs: result.pinnedIDs)
             } catch {
-                return
+                SentryManager.shared.capturePersistenceFailure("loadRecent packets", errorDescription: error.localizedDescription)
             }
         }
     }
@@ -437,33 +447,25 @@ final class PacketEngine: ObservableObject {
     }
 
     func loadPersistedConsole() {
-        guard settings.persistHistory, let consoleStore else { return }
+        guard settings.persistHistory, let persistenceWorker else { return }
         let limit = min(settings.consoleRetentionLimit, maxConsoleLines)
-        DispatchQueue.global(qos: .utility).async { [weak self, consoleStore] in
+        Task {
             do {
-                let records = try consoleStore.loadRecent(limit: limit)
-                let lines = records.reversed().map { $0.toConsoleLine() }
-                Task { @MainActor in
-                    self?.consoleLines = lines
-                }
+                consoleLines = try await persistenceWorker.loadConsole(limit: limit)
             } catch {
-                return
+                SentryManager.shared.capturePersistenceFailure("loadRecent console", errorDescription: error.localizedDescription)
             }
         }
     }
 
     func loadPersistedRaw() {
-        guard settings.persistHistory, let rawStore else { return }
+        guard settings.persistHistory, let persistenceWorker else { return }
         let limit = min(settings.rawRetentionLimit, maxRawChunks)
-        DispatchQueue.global(qos: .utility).async { [weak self, rawStore] in
+        Task {
             do {
-                let records = try rawStore.loadRecent(limit: limit)
-                let chunks = records.reversed().map { $0.toRawChunk() }
-                Task { @MainActor in
-                    self?.rawChunks = chunks
-                }
+                rawChunks = try await persistenceWorker.loadRaw(limit: limit)
             } catch {
-                return
+                SentryManager.shared.capturePersistenceFailure("loadRecent raw", errorDescription: error.localizedDescription)
             }
         }
     }
@@ -477,14 +479,13 @@ final class PacketEngine: ObservableObject {
     }
 
     private func persistPacket(_ packet: Packet) {
-        guard settings.persistHistory, let packetStore else { return }
+        guard settings.persistHistory, let persistenceWorker else { return }
         let retentionLimit = settings.retentionLimit
-        DispatchQueue.global(qos: .utility).async {
+        Task {
             do {
-                try packetStore.save(packet)
-                try packetStore.pruneIfNeeded(retentionLimit: retentionLimit)
+                try await persistenceWorker.savePacket(packet, retentionLimit: retentionLimit)
             } catch {
-                return
+                SentryManager.shared.capturePersistenceFailure("save/prune packet", errorDescription: error.localizedDescription)
             }
         }
     }
@@ -495,7 +496,7 @@ final class PacketEngine: ObservableObject {
         packetID: UUID? = nil,
         byteCount: Int? = nil
     ) {
-        guard settings.persistHistory, let consoleStore else { return }
+        guard settings.persistHistory, let persistenceWorker else { return }
         let metadata = ConsoleEntryMetadata(from: line.from, to: line.to)
         let metadataJSON = metadata.hasValues ? DeterministicJSON.encode(metadata) : nil
         let entry = ConsoleEntryRecord(
@@ -509,18 +510,17 @@ final class PacketEngine: ObservableObject {
             byteCount: byteCount
         )
         let retentionLimit = settings.consoleRetentionLimit
-        DispatchQueue.global(qos: .utility).async { [consoleStore] in
+        Task {
             do {
-                try consoleStore.append(entry)
-                try consoleStore.pruneIfNeeded(retentionLimit: retentionLimit)
+                try await persistenceWorker.appendConsole(entry, retentionLimit: retentionLimit)
             } catch {
-                return
+                SentryManager.shared.capturePersistenceFailure("append/prune console", errorDescription: error.localizedDescription)
             }
         }
     }
 
     private func persistRawChunk(_ chunk: RawChunk) {
-        guard settings.persistHistory, let rawStore else { return }
+        guard settings.persistHistory, let persistenceWorker else { return }
         let entry = RawEntryRecord(
             id: chunk.id,
             createdAt: chunk.timestamp,
@@ -533,23 +533,22 @@ final class PacketEngine: ObservableObject {
             metadataJSON: nil
         )
         let retentionLimit = settings.rawRetentionLimit
-        DispatchQueue.global(qos: .utility).async { [rawStore] in
+        Task {
             do {
-                try rawStore.append(entry)
-                try rawStore.pruneIfNeeded(retentionLimit: retentionLimit)
+                try await persistenceWorker.appendRaw(entry, retentionLimit: retentionLimit)
             } catch {
-                return
+                SentryManager.shared.capturePersistenceFailure("append/prune raw", errorDescription: error.localizedDescription)
             }
         }
     }
 
     private func persistPinned(id: Packet.ID, pinned: Bool) {
-        guard settings.persistHistory, let packetStore else { return }
-        DispatchQueue.global(qos: .utility).async {
+        guard settings.persistHistory, let persistenceWorker else { return }
+        Task {
             do {
-                try packetStore.setPinned(packetId: id, pinned: pinned)
+                try await persistenceWorker.setPinned(packetId: id, pinned: pinned)
             } catch {
-                return
+                SentryManager.shared.capturePersistenceFailure("setPinned", errorDescription: error.localizedDescription)
             }
         }
     }
@@ -586,56 +585,56 @@ final class PacketEngine: ObservableObject {
     }
 
     private func prunePersistedHistory(limit: Int) {
-        guard settings.persistHistory, let packetStore else { return }
-        DispatchQueue.global(qos: .utility).async {
+        guard settings.persistHistory, let persistenceWorker else { return }
+        Task {
             do {
-                try packetStore.pruneIfNeeded(retentionLimit: limit)
+                try await persistenceWorker.prunePackets(retentionLimit: limit)
             } catch {
-                return
+                SentryManager.shared.capturePersistenceFailure("prune packets", errorDescription: error.localizedDescription)
             }
         }
     }
 
     private func prunePersistedConsole(limit: Int) {
-        guard settings.persistHistory, let consoleStore else { return }
-        DispatchQueue.global(qos: .utility).async {
+        guard settings.persistHistory, let persistenceWorker else { return }
+        Task {
             do {
-                try consoleStore.pruneIfNeeded(retentionLimit: limit)
+                try await persistenceWorker.pruneConsole(retentionLimit: limit)
             } catch {
-                return
+                SentryManager.shared.capturePersistenceFailure("prune console", errorDescription: error.localizedDescription)
             }
         }
     }
 
     private func prunePersistedRaw(limit: Int) {
-        guard settings.persistHistory, let rawStore else { return }
-        DispatchQueue.global(qos: .utility).async {
+        guard settings.persistHistory, let persistenceWorker else { return }
+        Task {
             do {
-                try rawStore.pruneIfNeeded(retentionLimit: limit)
+                try await persistenceWorker.pruneRaw(retentionLimit: limit)
             } catch {
-                return
+                SentryManager.shared.capturePersistenceFailure("prune raw", errorDescription: error.localizedDescription)
             }
         }
     }
 
     private func clearPersistedConsole() {
-        guard settings.persistHistory, let consoleStore else { return }
-        DispatchQueue.global(qos: .utility).async {
+        guard settings.persistHistory, let persistenceWorker else { return }
+        Task {
             do {
-                try consoleStore.deleteAll()
+                try await persistenceWorker.deleteAllConsole()
             } catch {
-                return
+                SentryManager.shared.capturePersistenceFailure("deleteAll console", errorDescription: error.localizedDescription)
             }
         }
     }
 
     private func clearPersistedRaw() {
-        guard settings.persistHistory, let rawStore else { return }
-        DispatchQueue.global(qos: .utility).async {
+        guard settings.persistHistory, let persistenceWorker else { return }
+        Task {
             do {
-                try rawStore.deleteAll()
+                try await persistenceWorker.deleteAllRaw()
             } catch {
-                return
+                SentryManager.shared.capturePersistenceFailure("deleteAll raw", errorDescription: error.localizedDescription)
             }
         }
     }

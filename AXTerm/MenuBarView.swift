@@ -48,10 +48,9 @@ struct MenuBarView: View {
                 NSApp.terminate(nil)
             }
         }
-        .onChange(of: inspectionRouter.shouldOpenMainWindow) { _, shouldOpen in
-            guard shouldOpen else { return }
-            openMainWindow()
-            inspectionRouter.consumeOpenWindowRequest()
+        .task(id: inspectionRouter.shouldOpenMainWindow) {
+            guard inspectionRouter.shouldOpenMainWindow else { return }
+            await handleOpenWindowRequest()
         }
     }
 
@@ -110,6 +109,14 @@ struct MenuBarView: View {
     private func openMainWindow() {
         openWindow(id: "main")
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @MainActor
+    private func handleOpenWindowRequest() async {
+        // Ensure this happens outside of SwiftUI's view-update transaction.
+        await Task.yield()
+        openMainWindow()
+        inspectionRouter.consumeOpenWindowRequest()
     }
 
     private func openPreferences() {

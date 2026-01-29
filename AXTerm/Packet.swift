@@ -8,7 +8,7 @@
 import Foundation
 
 /// Represents a decoded AX.25 packet
-struct Packet: Identifiable, Hashable {
+struct Packet: Identifiable, Hashable, Sendable {
     static let infoPreviewLimit: Int = 60
 
     let id: UUID
@@ -20,11 +20,12 @@ struct Packet: Identifiable, Hashable {
     let control: UInt8
     let pid: UInt8?
     let info: Data
+    /// Cached text decoding of `info` (if mostly printable ASCII).
+    let infoText: String?
     let rawAx25: Data
     let kissEndpoint: KISSEndpoint?
 
-    /// Info field as text if mostly printable ASCII
-    var infoText: String? {
+    nonisolated static func computeInfoText(from info: Data) -> String? {
         guard !info.isEmpty else { return nil }
         let printableCount = info.filter { $0 >= 0x20 && $0 < 0x7F || $0 == 0x0A || $0 == 0x0D }.count
         let ratio = Double(printableCount) / Double(info.count)
@@ -95,7 +96,8 @@ struct Packet: Identifiable, Hashable {
         pid: UInt8? = nil,
         info: Data = Data(),
         rawAx25: Data = Data(),
-        kissEndpoint: KISSEndpoint? = nil
+        kissEndpoint: KISSEndpoint? = nil,
+        infoText: String? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -106,12 +108,13 @@ struct Packet: Identifiable, Hashable {
         self.control = control
         self.pid = pid
         self.info = info
+        self.infoText = infoText ?? Self.computeInfoText(from: info)
         self.rawAx25 = rawAx25
         self.kissEndpoint = kissEndpoint
     }
 }
 
-struct KISSEndpoint: Hashable {
+struct KISSEndpoint: Hashable, Sendable {
     let host: String
     let port: UInt16
 

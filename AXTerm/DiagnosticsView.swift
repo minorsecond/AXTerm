@@ -8,6 +8,7 @@
 import SwiftUI
 import AppKit
 import Combine
+import UniformTypeIdentifiers
 
 @MainActor
 final class DiagnosticsViewModel: ObservableObject {
@@ -50,7 +51,7 @@ final class DiagnosticsViewModel: ObservableObject {
         makeReportJSON(limit: exportLimit) { [weak self] json in
             guard let json else { return }
             let panel = NSSavePanel()
-            panel.allowedFileTypes = ["json"]
+            panel.allowedContentTypes = [.json]
             panel.nameFieldStringValue = "AXTerm-Diagnostics.json"
             panel.canCreateDirectories = true
             panel.begin { response in

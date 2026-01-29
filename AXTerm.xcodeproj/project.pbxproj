@@ -6,6 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		9B1C3E6C2F3A000100000003 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1C3E6C2F3A000100000002 /* GRDB */; };
+		9B1C3E6C2F3A000100000004 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1C3E6C2F3A000100000002 /* GRDB */; };
+		9B1C3E6C2F3A000100000007 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1C3E6C2F3A000100000006 /* Sentry */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		3487E8AB2F2AA2A800DF0172 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -53,6 +59,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				9B1C3E6C2F3A000100000003 /* GRDB in Frameworks */,
+				9B1C3E6C2F3A000100000007 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -72,11 +79,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
-
-/* Begin PBXBuildFile section */
-		9B1C3E6C2F3A000100000003 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1C3E6C2F3A000100000002 /* GRDB */; };
-		9B1C3E6C2F3A000100000004 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1C3E6C2F3A000100000002 /* GRDB */; };
-/* End PBXBuildFile section */
 
 /* Begin PBXGroup section */
 		3487E8942F2AA2A700DF0172 = {
@@ -120,6 +122,7 @@
 			name = AXTerm;
 			packageProductDependencies = (
 				9B1C3E6C2F3A000100000002 /* GRDB */,
+				9B1C3E6C2F3A000100000006 /* Sentry */,
 			);
 			productName = AXTerm;
 			productReference = 3487E89D2F2AA2A700DF0172 /* AXTerm.app */;
@@ -204,13 +207,14 @@
 			);
 			mainGroup = 3487E8942F2AA2A700DF0172;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				9B1C3E6C2F3A000100000001 /* XCRemoteSwiftPackageReference "GRDB" */,
+				9B1C3E6C2F3A000100000005 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3487E89E2F2AA2A700DF0172 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
-			packageReferences = (
-				9B1C3E6C2F3A000100000001 /* XCRemoteSwiftPackageReference "GRDB.swift" */,
-			);
 			targets = (
 				3487E89C2F2AA2A700DF0172 /* AXTerm */,
 				3487E8A92F2AA2A800DF0172 /* AXTermTests */,
@@ -218,25 +222,6 @@
 			);
 		};
 /* End PBXProject section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		9B1C3E6C2F3A000100000001 /* XCRemoteSwiftPackageReference "GRDB.swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/groue/GRDB.swift";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 6.29.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		9B1C3E6C2F3A000100000002 /* GRDB */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 9B1C3E6C2F3A000100000001 /* XCRemoteSwiftPackageReference "GRDB.swift" */;
-			productName = GRDB;
-		};
-/* End XCSwiftPackageProductDependency section */
 
 /* Begin PBXResourcesBuildPhase section */
 		3487E89B2F2AA2A700DF0172 /* Resources */ = {
@@ -442,6 +427,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AXTerm needs local network access to connect to local packet-radio services (e.g., Direwolf KISS TCP) running on this Mac or on the LAN.";
+				INFOPLIST_KEY_SentryDSN = "$(SENTRY_DSN)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -450,6 +436,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.rosswardrup.AXTerm;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
+				SENTRY_DSN = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -483,6 +470,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AXTerm needs local network access to connect to local packet-radio services (e.g., Direwolf KISS TCP) running on this Mac or on the LAN.";
+				INFOPLIST_KEY_SentryDSN = "$(SENTRY_DSN)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -491,6 +479,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.rosswardrup.AXTerm;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
+				SENTRY_DSN = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -616,6 +605,38 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		9B1C3E6C2F3A000100000001 /* XCRemoteSwiftPackageReference "GRDB" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/groue/GRDB.swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 6.29.0;
+			};
+		};
+		9B1C3E6C2F3A000100000005 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.2.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		9B1C3E6C2F3A000100000002 /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9B1C3E6C2F3A000100000001 /* XCRemoteSwiftPackageReference "GRDB" */;
+			productName = GRDB;
+		};
+		9B1C3E6C2F3A000100000006 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9B1C3E6C2F3A000100000005 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 3487E8952F2AA2A700DF0172 /* Project object */;
 }

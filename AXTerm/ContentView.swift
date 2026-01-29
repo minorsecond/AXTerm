@@ -27,6 +27,9 @@ struct ContentView: View {
     @State private var inspectorSelection: PacketInspectorSelection?
     @FocusState private var isSearchFocused: Bool
     @State private var didLoadHistory = false
+    @State private var didLoadConsoleHistory = false
+    @State private var didLoadRawHistory = false
+    @State private var selectionSyncTask: Task<Void, Never>?
 
     init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter) {
         _client = StateObject(wrappedValue: client)
@@ -55,6 +58,7 @@ struct ContentView: View {
                         client.selectedStationCall = call
                     },
                     onClose: {
+                        SentryManager.shared.addBreadcrumb(category: "ui.inspector", message: "Inspector closed", level: .info, data: ["packetID": selection.id.uuidString])
                         inspectorSelection = nil
                     }
                 )
@@ -66,13 +70,29 @@ struct ContentView: View {
         .task {
             guard !didLoadHistory else { return }
             didLoadHistory = true
-            client.loadPersistedHistory()
+            SentryManager.shared.addBreadcrumb(category: "app.lifecycle", message: "Main UI ready", level: .info, data: nil)
+            // Keep startup responsive: load the main (Packets) view history first.
+            client.loadPersistedPackets()
         }
-        .onChange(of: inspectionRouter.requestedPacketID) { _, newValue in
-            guard let newValue else { return }
-            inspectorSelection = PacketInspectorSelection(id: newValue)
-            selection = [newValue]
-            inspectionRouter.consumePacketRequest()
+        .task(id: selectedNav) {
+            switch selectedNav {
+            case .packets:
+                return
+            case .console:
+                guard !didLoadConsoleHistory else { return }
+                didLoadConsoleHistory = true
+                await Task.yield()
+                client.loadPersistedConsole()
+            case .raw:
+                guard !didLoadRawHistory else { return }
+                didLoadRawHistory = true
+                await Task.yield()
+                client.loadPersistedRaw()
+            }
+        }
+        .task(id: inspectionRouter.requestedPacketID) {
+            guard let packetID = inspectionRouter.requestedPacketID else { return }
+            await openInspectorFromRouterRequest(packetID: packetID)
         }
         .focusedValue(\.searchFocus, SearchFocusAction { isSearchFocused = true })
         .focusedValue(\.toggleConnection, ToggleConnectionAction { toggleConnection() })
@@ -196,14 +216,16 @@ struct ContentView: View {
             }
         )
         .onChange(of: selection) { _, newSelection in
-            if newSelection.isEmpty {
+            guard newSelection.isEmpty else { return }
+            deferSelectionMutation {
+                SentryManager.shared.addBreadcrumb(category: "ui.selection", message: "Selection cleared", level: .info, data: nil)
                 inspectorSelection = nil
             }
         }
-        .onChange(of: searchText) { _, _ in syncSelection(with: rows) }
-        .onChange(of: filters) { _, _ in syncSelection(with: rows) }
-        .onChange(of: client.selectedStationCall) { _, _ in syncSelection(with: rows) }
-        .onChange(of: client.packets) { _, _ in syncSelection(with: rows) }
+        .onChange(of: searchText) { _, _ in scheduleSelectionSync(with: rows) }
+        .onChange(of: filters) { _, _ in scheduleSelectionSync(with: rows) }
+        .onChange(of: client.selectedStationCall) { _, _ in scheduleSelectionSync(with: rows) }
+        .onChange(of: client.packets) { _, _ in scheduleSelectionSync(with: rows) }
     }
 
     // MARK: - Toolbar
@@ -361,7 +383,10 @@ struct ContentView: View {
         ) else {
             return
         }
-        inspectorSelection = selection
+        deferSelectionMutation {
+            SentryManager.shared.addBreadcrumb(category: "ui.inspector", message: "Inspector opened", level: .info, data: ["packetID": selection.id.uuidString])
+            inspectorSelection = selection
+        }
     }
 
     private var filteredPackets: [Packet] {
@@ -383,6 +408,42 @@ struct ContentView: View {
         }
     }
 
+    @MainActor
+    private func openInspectorFromRouterRequest(packetID: Packet.ID) async {
+        // Ensure this happens outside of SwiftUI's view-update transaction.
+        await Task.yield()
+
+        SentryManager.shared.addBreadcrumb(
+            category: "ui.routing",
+            message: "Apply inspector route",
+            level: .info,
+            data: ["packetID": packetID.uuidString]
+        )
+
+        if inspectorSelection?.id != packetID {
+            inspectorSelection = PacketInspectorSelection(id: packetID)
+        }
+        if selection != [packetID] {
+            selection = [packetID]
+        }
+        inspectionRouter.consumePacketRequest()
+    }
+
+    private func scheduleSelectionSync(with packets: [Packet]) {
+        selectionSyncTask?.cancel()
+        selectionSyncTask = Task { @MainActor in
+            await Task.yield()
+            syncSelection(with: packets)
+        }
+    }
+
+    private func deferSelectionMutation(_ mutation: @MainActor @escaping () -> Void) {
+        selectionSyncTask?.cancel()
+        selectionSyncTask = Task { @MainActor in
+            await Task.yield()
+            mutation()
+        }
+    }
 }
 
 #Preview {

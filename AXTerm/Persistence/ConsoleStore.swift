@@ -7,7 +7,7 @@
 
 import Foundation
 
-protocol ConsoleStore {
+protocol ConsoleStore: Sendable {
     func append(_ entry: ConsoleEntryRecord) throws
     func loadRecent(limit: Int) throws -> [ConsoleEntryRecord]
     func deleteAll() throws

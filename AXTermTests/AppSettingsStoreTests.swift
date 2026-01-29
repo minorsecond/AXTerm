@@ -6,6 +6,7 @@
 //
 
 import XCTest
+import Combine
 @testable import AXTerm
 
 final class AppSettingsStoreTests: XCTestCase {
@@ -45,5 +46,60 @@ final class AppSettingsStoreTests: XCTestCase {
         let store = AppSettingsStore(defaults: defaults)
         store.myCallsign = "n0call-7"
         XCTAssertEqual(store.myCallsign, "N0CALL-7")
+    }
+
+    // MARK: - runInMenuBar Regression Tests
+
+    /// Verifies runInMenuBar reads default value when key is absent.
+    func testRunInMenuBarDefaultsToFalse() {
+        let suiteName = "AXTermTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        let store = AppSettingsStore(defaults: defaults)
+        XCTAssertEqual(store.runInMenuBar, AppSettingsStore.defaultRunInMenuBar)
+    }
+
+    /// Verifies runInMenuBar writes to UserDefaults.
+    func testRunInMenuBarPersistsToDefaults() {
+        let suiteName = "AXTermTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        let store = AppSettingsStore(defaults: defaults)
+
+        store.runInMenuBar = true
+        XCTAssertTrue(defaults.bool(forKey: AppSettingsStore.runInMenuBarKey))
+
+        store.runInMenuBar = false
+        XCTAssertFalse(defaults.bool(forKey: AppSettingsStore.runInMenuBarKey))
+    }
+
+    /// Verifies runInMenuBar reads persisted value on init.
+    func testRunInMenuBarReadsPersistedValue() {
+        let suiteName = "AXTermTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        defaults.set(true, forKey: AppSettingsStore.runInMenuBarKey)
+
+        let store = AppSettingsStore(defaults: defaults)
+        XCTAssertTrue(store.runInMenuBar)
+    }
+
+    /// Verifies that reading runInMenuBar does not trigger objectWillChange.
+    /// This is critical: MenuBarExtra(isInserted:) reads during scene updates,
+    /// and triggering Combine publishes during reads causes infinite loops.
+    func testRunInMenuBarReadDoesNotPublish() {
+        let suiteName = "AXTermTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+        let store = AppSettingsStore(defaults: defaults)
+
+        var publishCount = 0
+        let cancellable = store.objectWillChange.sink { _ in
+            publishCount += 1
+        }
+
+        // Read the value multiple times
+        _ = store.runInMenuBar
+        _ = store.runInMenuBar
+        _ = store.runInMenuBar
+
+        XCTAssertEqual(publishCount, 0, "Reading runInMenuBar must not trigger objectWillChange")
+        cancellable.cancel()
     }
 }

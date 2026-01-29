@@ -8,7 +8,7 @@
 import Foundation
 import GRDB
 
-final class SQLitePacketStore: PacketStore {
+final class SQLitePacketStore: PacketStore, @unchecked Sendable {
     private let dbQueue: DatabaseQueue
 
     init(dbQueue: DatabaseQueue) {

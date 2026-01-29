@@ -63,7 +63,10 @@ struct RawView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .onChange(of: chunks.count) { _, _ in
-                    if autoScroll, let lastChunk = chunks.last {
+                    guard autoScroll, let lastChunk = chunks.last else { return }
+                    Task { @MainActor in
+                        // Avoid triggering scroll/layout during the same update transaction.
+                        await Task.yield()
                         withAnimation(.easeOut(duration: 0.1)) {
                             proxy.scrollTo(lastChunk.id, anchor: .bottom)
                         }

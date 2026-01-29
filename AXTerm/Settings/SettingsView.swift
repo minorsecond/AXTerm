@@ -21,6 +21,8 @@ struct SettingsView: View {
     @State private var clearFeedback: String?
     @State private var notificationFeedback: String?
     @State private var launchAtLoginFeedback: String?
+    /// Uses @AppStorage directly to avoid feedback loops with MenuBarExtra scene updates.
+    @AppStorage(AppSettingsStore.runInMenuBarKey) private var runInMenuBar = AppSettingsStore.defaultRunInMenuBar
 
     private let retentionStep = 1_000
 
@@ -216,7 +218,7 @@ struct SettingsView: View {
             }
 
             Section("Menu Bar") {
-                Toggle("Run in menu bar", isOn: $settings.runInMenuBar)
+                Toggle("Run in menu bar", isOn: $runInMenuBar)
                 Toggle("Launch at login", isOn: $settings.launchAtLogin)
                 if let feedback = launchAtLoginFeedback {
                     Text(feedback)
@@ -245,6 +247,25 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+            }
+
+            Section("Sentry") {
+                Toggle("Enable Sentry reporting", isOn: $settings.sentryEnabled)
+
+                Toggle("Send connection details (host/port tags)", isOn: $settings.sentrySendConnectionDetails)
+                    .disabled(!settings.sentryEnabled)
+
+                Toggle("Send packet contents", isOn: $settings.sentrySendPacketContents)
+                    .disabled(!settings.sentryEnabled)
+
+                Text("Packet contents are off by default. When off, events include only minimal packet metadata (frame type, byte count, from/to, via count).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                let config = SentryConfiguration.load(settings: settings)
+                Text(config.dsn == nil ? "DSN: Not configured" : "DSN: Configured")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -294,6 +315,15 @@ struct SettingsView: View {
         }
         .onChange(of: settings.launchAtLogin) { _, newValue in
             updateLaunchAtLogin(enabled: newValue)
+        }
+        .onChange(of: settings.sentryEnabled) { _, _ in
+            SentryManager.shared.startIfEnabled(settings: settings)
+        }
+        .onChange(of: settings.sentrySendPacketContents) { _, _ in
+            SentryManager.shared.startIfEnabled(settings: settings)
+        }
+        .onChange(of: settings.sentrySendConnectionDetails) { _, _ in
+            SentryManager.shared.startIfEnabled(settings: settings)
         }
     }
 
@@ -353,7 +383,10 @@ struct SettingsView: View {
             }
         } catch {
             launchAtLoginFeedback = "Launch at login failed"
-            settings.launchAtLogin = SMAppService.mainApp.status == .enabled
+            // Avoid publishing changes synchronously from within the `.onChange` transaction.
+            DispatchQueue.main.async {
+                settings.launchAtLogin = SMAppService.mainApp.status == .enabled
+            }
         }
     }
 
@@ -363,11 +396,13 @@ struct SettingsView: View {
                 .font(.subheadline)
 
             ForEach(settings.watchCallsigns.indices, id: \.self) { index in
+                let value = settings.watchCallsigns.indices.contains(index) ? settings.watchCallsigns[index] : ""
                 HStack {
                     TextField("Callsign", text: bindingForWatchCallsign(at: index))
                         .textFieldStyle(.roundedBorder)
 
                     Button {
+                        guard settings.watchCallsigns.indices.contains(index) else { return }
                         settings.watchCallsigns.remove(at: index)
                     } label: {
                         Image(systemName: "minus.circle")
@@ -376,7 +411,7 @@ struct SettingsView: View {
                     .accessibilityLabel("Remove callsign")
                 }
 
-                if !settings.watchCallsigns[index].isEmpty && !CallsignValidator.isValid(settings.watchCallsigns[index]) {
+                if !value.isEmpty && !CallsignValidator.isValid(value) {
                     Text("Invalid callsign.")
                         .font(.caption)
                         .foregroundStyle(.red)
@@ -400,6 +435,7 @@ struct SettingsView: View {
                         .textFieldStyle(.roundedBorder)
 
                     Button {
+                        guard settings.watchKeywords.indices.contains(index) else { return }
                         settings.watchKeywords.remove(at: index)
                     } label: {
                         Image(systemName: "minus.circle")

@@ -20,6 +20,7 @@ protocol WatchMatching {
     func match(packet: Packet) -> WatchMatch
 }
 
+@MainActor
 final class WatchRuleMatcher: WatchMatching {
     private let settings: AppSettingsStore
 
@@ -75,6 +76,7 @@ protocol WatchEventRecording {
     func recordWatchHit(packet: Packet, match: WatchMatch)
 }
 
+@MainActor
 final class EventLogWatchRecorder: WatchEventRecording {
     private let store: EventLogStore
     private let settings: AppSettingsStore
@@ -102,10 +104,11 @@ final class EventLogWatchRecorder: WatchEventRecording {
             metadataJSON: DeterministicJSON.encodeDictionary(metadata)
         )
 
-        DispatchQueue.global(qos: .utility).async { [store, settings] in
+        let retentionLimit = settings.eventRetentionLimit
+        DispatchQueue.global(qos: .utility).async { [store, retentionLimit] in
             do {
                 try store.append(entry)
-                try store.pruneIfNeeded(retentionLimit: settings.eventRetentionLimit)
+                try store.pruneIfNeeded(retentionLimit: retentionLimit)
             } catch {
                 return
             }

@@ -62,7 +62,10 @@ struct ConsoleView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .onChange(of: lines.count) { _, _ in
-                    if autoScroll, let lastLine = lines.last {
+                    guard autoScroll, let lastLine = lines.last else { return }
+                    Task { @MainActor in
+                        // Avoid triggering scroll/layout during the same update transaction.
+                        await Task.yield()
                         withAnimation(.easeOut(duration: 0.1)) {
                             proxy.scrollTo(lastLine.id, anchor: .bottom)
                         }

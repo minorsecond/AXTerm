@@ -8,7 +8,7 @@
 import Foundation
 import GRDB
 
-final class SQLiteRawStore: RawStore {
+final class SQLiteRawStore: RawStore, @unchecked Sendable {
     private let dbQueue: DatabaseQueue
 
     init(dbQueue: DatabaseQueue) {

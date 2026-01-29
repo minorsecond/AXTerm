@@ -8,10 +8,12 @@
 import Foundation
 import OSLog
 
+@MainActor
 protocol EventLogger {
     func log(level: AppEventRecord.Level, category: AppEventRecord.Category, message: String, metadata: [String: String]?)
 }
 
+@MainActor
 final class DatabaseEventLogger: EventLogger {
     private let store: EventLogStore
     private let settings: AppSettingsStore
@@ -35,10 +37,11 @@ final class DatabaseEventLogger: EventLogger {
 
         logToOSLog(entry)
 
-        DispatchQueue.global(qos: .utility).async { [store, settings] in
+        let retentionLimit = settings.eventRetentionLimit
+        DispatchQueue.global(qos: .utility).async { [store, retentionLimit] in
             do {
                 try store.append(entry)
-                try store.pruneIfNeeded(retentionLimit: settings.eventRetentionLimit)
+                try store.pruneIfNeeded(retentionLimit: retentionLimit)
             } catch {
                 return
             }
@@ -57,6 +60,7 @@ final class DatabaseEventLogger: EventLogger {
     }
 }
 
+@MainActor
 final class NoopEventLogger: EventLogger {
     func log(level: AppEventRecord.Level, category: AppEventRecord.Category, message: String, metadata: [String: String]?) {
         return
