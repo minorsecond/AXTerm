@@ -21,6 +21,8 @@ struct NetworkHealth: Hashable, Sendable {
     let warnings: [NetworkWarning]
     /// Packet activity over recent time window for sparkline
     let activityTrend: [Int]
+    /// Detailed score breakdown for explainability
+    let scoreBreakdown: HealthScoreBreakdown
 
     static let empty = NetworkHealth(
         score: 0,
@@ -28,7 +30,49 @@ struct NetworkHealth: Hashable, Sendable {
         reasons: [],
         metrics: .empty,
         warnings: [],
-        activityTrend: []
+        activityTrend: [],
+        scoreBreakdown: .empty
+    )
+}
+
+/// Detailed breakdown of how the health score is calculated.
+/// Used for the "How this score is calculated" tooltip.
+struct HealthScoreBreakdown: Hashable, Sendable {
+    let activityScore: Double
+    let activityWeight: Double
+    let freshnessScore: Double
+    let freshnessWeight: Double
+    let connectivityScore: Double
+    let connectivityWeight: Double
+    let redundancyScore: Double
+    let redundancyWeight: Double
+    let stabilityScore: Double
+    let stabilityWeight: Double
+
+    var components: [(name: String, score: Double, weight: Double, contribution: Double)] {
+        [
+            ("Activity", activityScore, activityWeight, activityScore * activityWeight / 100),
+            ("Freshness", freshnessScore, freshnessWeight, freshnessScore * freshnessWeight / 100),
+            ("Connectivity", connectivityScore, connectivityWeight, connectivityScore * connectivityWeight / 100),
+            ("Redundancy", redundancyScore, redundancyWeight, redundancyScore * redundancyWeight / 100),
+            ("Stability", stabilityScore, stabilityWeight, stabilityScore * stabilityWeight / 100)
+        ]
+    }
+
+    var formulaDescription: String {
+        """
+        Score = (Activity × \(Int(activityWeight))%) + (Freshness × \(Int(freshnessWeight))%) + \
+        (Connectivity × \(Int(connectivityWeight))%) + (Redundancy × \(Int(redundancyWeight))%) + \
+        (Stability × \(Int(stabilityWeight))%)
+        """
+    }
+
+    static let empty = HealthScoreBreakdown(
+        activityScore: 0, activityWeight: 25,
+        freshnessScore: 0, freshnessWeight: 20,
+        connectivityScore: 0, connectivityWeight: 25,
+        redundancyScore: 0, redundancyWeight: 20,
+        stabilityScore: 0, stabilityWeight: 10
     )
 }
 
@@ -123,7 +167,7 @@ enum NetworkHealthCalculator {
             now: now
         )
 
-        let (score, reasons) = calculateScore(metrics: metrics, graphModel: graphModel)
+        let (score, reasons, breakdown) = calculateScore(metrics: metrics, graphModel: graphModel)
         let warnings = generateWarnings(metrics: metrics, graphModel: graphModel)
         let trend = calculateActivityTrend(
             packets: packets,
@@ -138,7 +182,8 @@ enum NetworkHealthCalculator {
             reasons: reasons,
             metrics: metrics,
             warnings: warnings,
-            activityTrend: trend
+            activityTrend: trend,
+            scoreBreakdown: breakdown
         )
     }
 
@@ -275,7 +320,7 @@ enum NetworkHealthCalculator {
     private static func calculateScore(
         metrics: NetworkHealthMetrics,
         graphModel: GraphModel
-    ) -> (Int, [String]) {
+    ) -> (Int, [String], HealthScoreBreakdown) {
         var reasons: [String] = []
 
         // Activity score (0-100): Based on packet rate
@@ -351,7 +396,21 @@ enum NetworkHealthCalculator {
             }
         }
 
-        return (finalScore, Array(reasons.prefix(3)))
+        // Build score breakdown for explainability
+        let breakdown = HealthScoreBreakdown(
+            activityScore: activityScore,
+            activityWeight: Weights.activity * 100,
+            freshnessScore: freshnessScore,
+            freshnessWeight: Weights.freshness * 100,
+            connectivityScore: connectivityScore,
+            connectivityWeight: Weights.connectivity * 100,
+            redundancyScore: redundancyScore,
+            redundancyWeight: Weights.redundancy * 100,
+            stabilityScore: stabilityScore,
+            stabilityWeight: Weights.stability * 100
+        )
+
+        return (finalScore, Array(reasons.prefix(3)), breakdown)
     }
 
     private static func generateWarnings(

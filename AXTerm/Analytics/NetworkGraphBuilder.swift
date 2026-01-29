@@ -70,19 +70,11 @@ struct NetworkGraphBuilder {
         let filteredEdges = undirectedEdges
             .filter { $0.value.count >= max(1, options.minimumEdgeCount) }
 
-        let specialDestinations = Set([
-            "ID", "BEACON", "CQ", "QST", "SK", "CQ DX", "QSO", "TEST", "RELAY",
-            "WIDEn", "WIDE1", "WIDE2", "TRACE", "TEMP", "GATE", "ECHO"
-        ].map { $0.uppercased() })
-        func isSpecialDestination(_ id: String) -> Bool {
-            let upper = id.uppercased()
-            if specialDestinations.contains(upper) { return true }
-            if upper.hasPrefix("WIDE") && upper.count <= 6 { return true }
-            return false
-        }
-
+        // Filter edges to only include valid amateur radio callsigns
+        // This excludes non-callsign entities like BEACON, ID, WIDE1-1, etc.
         let edgesExcludingSpecial = filteredEdges.filter { key, _ in
-            !isSpecialDestination(key.source) && !isSpecialDestination(key.target)
+            CallsignValidator.isValidCallsign(key.source) &&
+            CallsignValidator.isValidCallsign(key.target)
         }
 
         var adjacency: [String: [GraphNeighborStat]] = [:]

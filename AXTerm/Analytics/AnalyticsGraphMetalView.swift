@@ -26,6 +26,7 @@ struct AnalyticsGraphView: View {
     @State private var selectionRect: CGRect?
     @State private var hoverPoint: CGPoint?
     @State private var hoverNodeID: String?
+    @State private var cameraState: CameraState = CameraState(scale: 1, offset: .zero)
 
     var body: some View {
         GeometryReader { geometry in
@@ -49,7 +50,10 @@ struct AnalyticsGraphView: View {
                     onSelectionRect: { rect in
                         selectionRect = rect
                     },
-                    onFocusHandled: onFocusHandled
+                    onFocusHandled: onFocusHandled,
+                    onCameraUpdate: { newState in
+                        cameraState = newState
+                    }
                 )
 
                 if let selectionRect {
@@ -57,6 +61,18 @@ struct AnalyticsGraphView: View {
                     let flipped = CGRect(x: selectionRect.minX, y: h - selectionRect.maxY, width: selectionRect.width, height: selectionRect.height)
                     SelectionRectView(rect: flipped)
                 }
+
+                // Node labels overlay
+                NodeLabelsOverlay(
+                    graphModel: graphModel,
+                    nodePositions: nodePositions,
+                    selectedNodeIDs: selectedNodeIDs,
+                    hoveredNodeID: hoveredNodeID,
+                    myCallsign: myCallsign,
+                    cameraState: cameraState,
+                    viewSize: geometry.size
+                )
+                .allowsHitTesting(false)
 
                 if let hoverNodeID,
                    let hoverPoint,
@@ -90,6 +106,140 @@ struct AnalyticsGraphView: View {
     }
 }
 
+/// Lightweight state for camera position used by label overlay.
+struct CameraState: Equatable {
+    var scale: CGFloat
+    var offset: CGSize
+}
+
+/// Overlay that renders callsign suffix labels near nodes.
+private struct NodeLabelsOverlay: View {
+    let graphModel: GraphModel
+    let nodePositions: [NodePosition]
+    let selectedNodeIDs: Set<String>
+    let hoveredNodeID: String?
+    let myCallsign: String
+    let cameraState: CameraState
+    let viewSize: CGSize
+
+    private let minZoomForLabels: CGFloat = 0.6
+    private let maxLabelsAtLowZoom: Int = 12
+
+    var body: some View {
+        Canvas { context, size in
+            guard cameraState.scale >= minZoomForLabels else { return }
+
+            let normalizedCallsign = CallsignMatcher.normalize(myCallsign)
+            let positionMap = Dictionary(uniqueKeysWithValues: nodePositions.map { ($0.id, $0) })
+            let inset = AnalyticsStyle.Layout.graphInset
+
+            // Sort nodes by priority for label display
+            let sortedNodes = graphModel.nodes.sorted { lhs, rhs in
+                labelPriority(for: lhs) > labelPriority(for: rhs)
+            }
+
+            // Determine max labels based on zoom
+            let zoomProgress = min(1, (cameraState.scale - minZoomForLabels) / 0.6)
+            let maxLabels = maxLabelsAtLowZoom + Int(CGFloat(graphModel.nodes.count - maxLabelsAtLowZoom) * zoomProgress)
+
+            var drawnRects: [CGRect] = []
+
+            for node in sortedNodes.prefix(maxLabels) {
+                guard let position = positionMap[node.id] else { continue }
+                guard CallsignValidator.isValidCallsign(node.callsign) else { continue }
+
+                let suffix = CallsignValidator.extractSuffix(node.callsign)
+
+                // Calculate screen position
+                let screenPos = normalizedToScreen(
+                    normalized: CGPoint(x: position.x, y: position.y),
+                    viewSize: size,
+                    inset: inset,
+                    scale: cameraState.scale,
+                    offset: cameraState.offset
+                )
+
+                // Skip if off-screen
+                guard screenPos.x > 0 && screenPos.x < size.width &&
+                      screenPos.y > 0 && screenPos.y < size.height else { continue }
+
+                // Calculate label position (to the right of node)
+                let labelOffset: CGFloat = 10 * cameraState.scale
+                let labelPoint = CGPoint(x: screenPos.x + labelOffset, y: screenPos.y)
+
+                // Measure text
+                let fontSize = max(8, min(11, 9 * cameraState.scale))
+                let isSelected = selectedNodeIDs.contains(node.id)
+                let isHovered = hoveredNodeID == node.id
+                let isMyNode = CallsignMatcher.matches(candidate: node.callsign, target: normalizedCallsign)
+
+                let font = Font.system(size: fontSize, weight: isSelected || isHovered ? .semibold : .regular)
+                var text = Text(suffix).font(font)
+
+                if isSelected {
+                    text = text.foregroundColor(Color(nsColor: .controlAccentColor))
+                } else if isHovered {
+                    text = text.foregroundColor(Color(nsColor: .labelColor))
+                } else if isMyNode {
+                    text = text.foregroundColor(Color(nsColor: .systemPurple))
+                } else {
+                    text = text.foregroundColor(Color(nsColor: .secondaryLabelColor))
+                }
+
+                let resolved = context.resolve(text)
+                let textSize = resolved.measure(in: CGSize(width: 100, height: 20))
+                let labelRect = CGRect(
+                    x: labelPoint.x - 2,
+                    y: labelPoint.y - textSize.height / 2 - 1,
+                    width: textSize.width + 4,
+                    height: textSize.height + 2
+                )
+
+                // Check for collision (skip unless selected/hovered)
+                let hasCollision = drawnRects.contains { $0.intersects(labelRect.insetBy(dx: -2, dy: -1)) }
+                if hasCollision && !isSelected && !isHovered {
+                    continue
+                }
+
+                // Draw label
+                context.draw(resolved, at: labelPoint, anchor: .leading)
+                drawnRects.append(labelRect)
+            }
+        }
+    }
+
+    private func labelPriority(for node: NetworkGraphNode) -> Int {
+        var priority = node.degree * 10 + min(node.weight, 100)
+        if selectedNodeIDs.contains(node.id) { priority += 10000 }
+        if hoveredNodeID == node.id { priority += 5000 }
+        let normalizedCallsign = CallsignMatcher.normalize(myCallsign)
+        if CallsignMatcher.matches(candidate: node.callsign, target: normalizedCallsign) {
+            priority += 3000
+        }
+        return priority
+    }
+
+    private func normalizedToScreen(
+        normalized: CGPoint,
+        viewSize: CGSize,
+        inset: CGFloat,
+        scale: CGFloat,
+        offset: CGSize
+    ) -> CGPoint {
+        let width = max(1, viewSize.width - inset * 2)
+        let height = max(1, viewSize.height - inset * 2)
+        let base = CGPoint(
+            x: inset + normalized.x * width,
+            y: inset + normalized.y * height
+        )
+        let center = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+        return CGPoint(
+            x: (base.x - center.x) * scale + center.x + offset.width,
+            y: (base.y - center.y) * scale + center.y + offset.height
+        )
+    }
+}
+
 private struct GraphMetalViewRepresentable: NSViewRepresentable {
     let graphModel: GraphModel
     let nodePositions: [NodePosition]
@@ -104,6 +254,7 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
     let onHover: (String?, CGPoint?) -> Void
     let onSelectionRect: (CGRect?) -> Void
     let onFocusHandled: () -> Void
+    let onCameraUpdate: (CameraState) -> Void
 
     func makeCoordinator() -> GraphMetalCoordinator {
         GraphMetalCoordinator(
@@ -112,7 +263,8 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
             onClearSelection: onClearSelection,
             onHover: onHover,
             onSelectionRect: onSelectionRect,
-            onFocusHandled: onFocusHandled
+            onFocusHandled: onFocusHandled,
+            onCameraUpdate: onCameraUpdate
         )
     }
 
@@ -250,11 +402,19 @@ private final class GraphMetalView: MTKView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        interactionDelegate?.handleScroll(
+        // Detect if this is a trackpad scroll (momentum or precise) vs mouse wheel
+        let isTrackpad = event.hasPreciseScrollingDeltas || event.momentumPhase != []
+        let consumed = interactionDelegate?.handleScroll(
             location: convert(event.locationInWindow, from: nil),
             delta: CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY),
-            modifiers: event.modifierFlags
-        )
+            modifiers: event.modifierFlags,
+            isTrackpad: isTrackpad
+        ) ?? false
+
+        // Only pass to super (parent ScrollView) if we didn't consume the event
+        if !consumed {
+            super.scrollWheel(with: event)
+        }
     }
 
     @objc private func handleMagnify(_ recognizer: NSMagnificationGestureRecognizer) {
@@ -271,7 +431,8 @@ private protocol GraphMetalInteractionDelegate: AnyObject {
     func handleMouseDown(location: CGPoint, modifiers: NSEvent.ModifierFlags)
     func handleMouseDragged(location: CGPoint, modifiers: NSEvent.ModifierFlags)
     func handleMouseUp(location: CGPoint, modifiers: NSEvent.ModifierFlags, clickCount: Int)
-    func handleScroll(location: CGPoint, delta: CGSize, modifiers: NSEvent.ModifierFlags)
+    /// Returns true if the scroll was consumed (graph panned/zoomed), false to pass through to parent
+    func handleScroll(location: CGPoint, delta: CGSize, modifiers: NSEvent.ModifierFlags, isTrackpad: Bool) -> Bool
     func handleMagnify(magnification: CGFloat, location: CGPoint)
 }
 
@@ -311,6 +472,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     private let onHover: (String?, CGPoint?) -> Void
     private let onSelectionRect: (CGRect?) -> Void
     private let onFocusHandled: () -> Void
+    private let onCameraUpdate: (CameraState) -> Void
 
     init(
         onSelect: @escaping (String, Bool) -> Void,
@@ -318,7 +480,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         onClearSelection: @escaping () -> Void,
         onHover: @escaping (String?, CGPoint?) -> Void,
         onSelectionRect: @escaping (CGRect?) -> Void,
-        onFocusHandled: @escaping () -> Void
+        onFocusHandled: @escaping () -> Void,
+        onCameraUpdate: @escaping (CameraState) -> Void
     ) {
         self.onSelect = onSelect
         self.onSelectMany = onSelectMany
@@ -326,6 +489,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         self.onHover = onHover
         self.onSelectionRect = onSelectionRect
         self.onFocusHandled = onFocusHandled
+        self.onCameraUpdate = onCameraUpdate
         super.init()
     }
 
@@ -333,6 +497,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         self.view = view
         view.delegate = self
         setupMetal(in: view)
+        // Notify initial camera state
+        onCameraUpdate(CameraState(scale: camera.scale, offset: camera.offset))
     }
 
     func update(
@@ -368,6 +534,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         guard resetToken != lastResetToken else { return }
         lastResetToken = resetToken
         camera.reset()
+        onCameraUpdate(CameraState(scale: camera.scale, offset: camera.offset))
         requestInteractionRedraw()
     }
 
@@ -544,7 +711,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
                 onSelect(hit.id, modifiers.contains(.shift))
             } else {
                 if clickCount >= 2 {
-                    camera.reset()
+                    // Double-click on background: animated zoom-to-fit
+                    camera.zoomToFit()
                     requestInteractionRedraw()
                 }
                 if !modifiers.contains(.shift) {
@@ -557,20 +725,38 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         onSelectionRect(nil)
     }
 
-    func handleScroll(location: CGPoint, delta: CGSize, modifiers: NSEvent.ModifierFlags) {
-        let zoomModifier = modifiers.contains(.command) || modifiers.contains(.option)
-        if zoomModifier {
-            let sensitivity: CGFloat = 0.0012
-            let zoomDelta = 1 - (delta.height * sensitivity)
-            camera.zoom(at: location, scaleDelta: zoomDelta, view: view)
-        } else {
-            camera.pan(by: CGSize(width: -delta.width, height: -delta.height), viewSize: view?.bounds.size)
+    func handleScroll(location: CGPoint, delta: CGSize, modifiers: NSEvent.ModifierFlags, isTrackpad: Bool) -> Bool {
+        // Cmd modifier: pass scroll through to parent (don't handle it)
+        if modifiers.contains(.command) {
+            return false
         }
-        requestInteractionRedraw()
+
+        // Option modifier: zoom around cursor
+        if modifiers.contains(.option) {
+            let sensitivity: CGFloat = 0.002
+            // Clamp per-event zoom delta for smoother zooming
+            let clampedDelta = max(-50, min(50, delta.height))
+            let zoomDelta = 1 - (clampedDelta * sensitivity)
+            camera.zoom(at: location, scaleDelta: zoomDelta, view: view)
+            requestInteractionRedraw()
+            return true  // Consumed - don't scroll the page
+        }
+
+        if isTrackpad {
+            // Trackpad two-finger scroll: pan the graph (consume the event)
+            camera.pan(by: CGSize(width: -delta.width, height: -delta.height), viewSize: view?.bounds.size)
+            requestInteractionRedraw()
+            return true  // Consumed - don't scroll the page
+        }
+
+        // Mouse wheel without modifier: let it pass through to scroll the page
+        return false
     }
 
     func handleMagnify(magnification: CGFloat, location: CGPoint) {
-        let zoomDelta = 1 + (magnification * 0.6)
+        // Clamp magnification for smoother pinch-zoom
+        let clampedMag = max(-0.5, min(0.5, magnification))
+        let zoomDelta = 1 + (clampedMag * 0.6)
         camera.zoom(at: location, scaleDelta: zoomDelta, view: view)
         requestInteractionRedraw()
     }
@@ -813,6 +999,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         view.isPaused = false
         view.enableSetNeedsDisplay = false
         view.setNeedsDisplay(view.bounds)
+        // Notify SwiftUI of camera state changes for label overlay
+        onCameraUpdate(CameraState(scale: camera.scale, offset: camera.offset))
     }
 
     private func hitTest(at point: CGPoint, in view: MTKView) -> (id: String, screenPoint: CGPoint)? {
@@ -1030,6 +1218,18 @@ private struct GraphCamera {
             width: -(base.x - center.x) * targetScale,
             height: -(base.y - center.y) * targetScale
         )
+    }
+
+    /// Smoothly animates to zoom-to-fit (default framing showing all nodes)
+    mutating func zoomToFit() {
+        targetScale = 1.0
+        targetOffset = .zero
+    }
+
+    /// Smoothly animates reset with configurable zoom
+    mutating func animatedReset() {
+        targetScale = 1.0
+        targetOffset = .zero
     }
 
     mutating func update(deltaTime: CFTimeInterval) -> Bool {
