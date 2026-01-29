@@ -11,6 +11,7 @@ enum NavigationItem: String, Hashable, CaseIterable {
     case packets = "Packets"
     case console = "Console"
     case raw = "Raw"
+    case analytics = "Analytics"
 }
 
 struct ContentView: View {
@@ -88,6 +89,8 @@ struct ContentView: View {
                 didLoadRawHistory = true
                 await Task.yield()
                 client.loadPersistedRaw()
+            case .analytics:
+                return
             }
         }
         .task(id: inspectionRouter.requestedPacketID) {
@@ -159,6 +162,7 @@ struct ContentView: View {
         case .packets: return "list.bullet.rectangle"
         case .console: return "terminal"
         case .raw: return "doc.text"
+        case .analytics: return "chart.bar"
         }
     }
 
@@ -195,6 +199,8 @@ struct ContentView: View {
                     showDaySeparators: settings.showRawDaySeparators,
                     onClear: { client.clearRaw() }
                 )
+            case .analytics:
+                AnalyticsDashboardView(packetEngine: client)
             }
         }
     }
