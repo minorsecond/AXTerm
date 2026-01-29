@@ -195,17 +195,5 @@ private struct PacketTableCell<Content: View>: View {
         }
     }
 
-    @ViewBuilder
-    private var debugHitTestOverlay: some View {
-        if Self.debugHitTesting {
-            Rectangle()
-                .strokeBorder(.pink.opacity(0.6), lineWidth: 1)
-                .background(Color.pink.opacity(0.1))
-                .allowsHitTesting(false)
-        } else {
-            EmptyView()
-        }
-    }
-
-    private static let debugHitTesting = false
+    
 }
