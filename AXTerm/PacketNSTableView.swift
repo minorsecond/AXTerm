@@ -65,6 +65,7 @@ struct PacketNSTableView: NSViewRepresentable {
         context.coordinator.attach(tableView: tableView)
         configureColumns(for: tableView)
         sizeColumnsToFitContent(in: tableView)
+        tableView.sizeLastColumnToFit()
 
         let scrollView = NSScrollView()
         scrollView.documentView = tableView
@@ -80,6 +81,7 @@ struct PacketNSTableView: NSViewRepresentable {
         let rowViewModels = packets.map { PacketRowViewModel.fromPacket($0) }
         context.coordinator.update(rows: rowViewModels, packets: packets, selection: selection)
         sizeColumnsToFitContent(in: tableView)
+        tableView.sizeLastColumnToFit()
     }
 
     private func configureColumns(for tableView: NSTableView) {
