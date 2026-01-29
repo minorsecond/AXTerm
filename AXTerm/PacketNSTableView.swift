@@ -15,6 +15,8 @@ struct PacketNSTableView: NSViewRepresentable {
         static let infoColumnIdentifier: ColumnIdentifier = .info
     }
 
+    private static let appearance = PacketTableAppearance.current
+
     enum ColumnIdentifier: String, CaseIterable {
         case time
         case from
@@ -46,6 +48,7 @@ struct PacketNSTableView: NSViewRepresentable {
         tableView.allowsMultipleSelection = true
         tableView.allowsEmptySelection = true
         tableView.focusRingType = .none
+        tableView.rowHeight = Self.appearance.rowHeight
         tableView.dataSource = context.coordinator
         tableView.delegate = context.coordinator
         tableView.target = context.coordinator
@@ -87,12 +90,12 @@ struct PacketNSTableView: NSViewRepresentable {
     private func configureColumns(for tableView: NSTableView) {
         if !tableView.tableColumns.isEmpty { return }
 
-        let timeColumn = makeColumn(id: .time, title: "Time", minWidth: 70, width: 80)
-        let fromColumn = makeColumn(id: .from, title: "From", minWidth: 80, width: 100)
-        let toColumn = makeColumn(id: .to, title: "To", minWidth: 80, width: 100)
-        let viaColumn = makeColumn(id: .via, title: "Via", minWidth: 60, width: 120)
-        let typeColumn = makeColumn(id: .type, title: "Type", minWidth: 40, width: 50)
-        let infoColumn = makeColumn(id: .info, title: "Info", minWidth: 200, width: 400)
+        let timeColumn = makeColumn(id: .time, title: "Time", minWidth: 70, width: 80, toolTip: "Received time")
+        let fromColumn = makeColumn(id: .from, title: "From", minWidth: 80, width: 100, toolTip: "Source callsign")
+        let toColumn = makeColumn(id: .to, title: "To", minWidth: 80, width: 100, toolTip: "Destination callsign")
+        let viaColumn = makeColumn(id: .via, title: "Via", minWidth: 60, width: 120, toolTip: "Digipeater path")
+        let typeColumn = makeColumn(id: .type, title: "Type", minWidth: 40, width: 50, toolTip: "AX.25 frame type")
+        let infoColumn = makeColumn(id: .info, title: "Info", minWidth: 200, width: 400, toolTip: "Decoded payload preview")
         infoColumn.resizingMask = [.autoresizingMask, .userResizingMask]
 
         tableView.addTableColumn(timeColumn)
@@ -105,12 +108,13 @@ struct PacketNSTableView: NSViewRepresentable {
         // remaining width like Finder. Keep Info last to make it the expanding column.
     }
 
-    private func makeColumn(id: ColumnIdentifier, title: String, minWidth: CGFloat, width: CGFloat) -> NSTableColumn {
+    private func makeColumn(id: ColumnIdentifier, title: String, minWidth: CGFloat, width: CGFloat, toolTip: String) -> NSTableColumn {
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id.rawValue))
         column.title = title
         column.minWidth = minWidth
         column.width = width
         column.resizingMask = .userResizingMask
+        column.headerToolTip = toolTip
         return column
     }
 
@@ -238,6 +242,10 @@ extension PacketNSTableView {
             guard let tableColumn, rows.indices.contains(row) else { return nil }
             let rowModel = rows[row]
             let identifier = tableColumn.identifier
+            if identifier.rawValue == ColumnIdentifier.type.rawValue {
+                return makeTypePillCell(for: identifier, row: rowModel)
+            }
+
             let textField = makeTextField(for: identifier, row: rowModel)
             let cell = NSTableCellView()
             cell.identifier = identifier
@@ -247,8 +255,8 @@ extension PacketNSTableView {
             NSLayoutConstraint.activate([
                 textField.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
                 textField.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
-                textField.topAnchor.constraint(equalTo: cell.topAnchor, constant: 1),
-                textField.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -1)
+                textField.topAnchor.constraint(equalTo: cell.topAnchor, constant: PacketNSTableView.appearance.rowVerticalPadding),
+                textField.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -PacketNSTableView.appearance.rowVerticalPadding)
             ])
             return cell
         }
@@ -321,25 +329,29 @@ extension PacketNSTableView {
                 field.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
                 field.textColor = .secondaryLabelColor
                 field.alignment = .left
+                field.toolTip = row.timeText
             case ColumnIdentifier.from.rawValue:
                 field.stringValue = row.fromText
                 field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
                 field.textColor = row.isLowSignal ? .secondaryLabelColor : .labelColor
                 field.alignment = .left
+                field.toolTip = row.fromText
             case ColumnIdentifier.to.rawValue:
                 field.stringValue = row.toText
                 field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
                 field.textColor = row.isLowSignal ? .secondaryLabelColor : .labelColor
                 field.alignment = .left
+                field.toolTip = row.toText
             case ColumnIdentifier.via.rawValue:
                 field.stringValue = row.viaText
                 field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
                 field.textColor = .secondaryLabelColor
                 field.alignment = .left
+                field.toolTip = row.viaText
             case ColumnIdentifier.type.rawValue:
-                field.stringValue = row.typeIcon
-                field.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-                field.textColor = row.isLowSignal ? .secondaryLabelColor : .labelColor
+                field.stringValue = row.typeLabel
+                field.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+                field.textColor = .secondaryLabelColor
                 field.alignment = .center
                 field.toolTip = row.typeTooltip
             case ColumnIdentifier.info.rawValue:
@@ -355,7 +367,65 @@ extension PacketNSTableView {
 
             return field
         }
+
+        private func makeTypePillCell(for identifier: NSUserInterfaceItemIdentifier, row: PacketRowViewModel) -> NSTableCellView {
+            let cell = NSTableCellView()
+            cell.identifier = identifier
+            let pillView = TypePillView(text: row.typeLabel, isLowSignal: row.isLowSignal)
+            pillView.toolTip = row.typeTooltip
+            cell.addSubview(pillView)
+            pillView.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                pillView.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
+                pillView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                pillView.topAnchor.constraint(greaterThanOrEqualTo: cell.topAnchor, constant: PacketNSTableView.appearance.rowVerticalPadding),
+                pillView.bottomAnchor.constraint(lessThanOrEqualTo: cell.bottomAnchor, constant: -PacketNSTableView.appearance.rowVerticalPadding)
+            ])
+            return cell
+        }
     }
+}
+
+private final class TypePillView: NSView {
+    private let textField = NSTextField(labelWithString: "")
+
+    init(text: String, isLowSignal: Bool) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        textField.stringValue = text
+        textField.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+        textField.alignment = .center
+        textField.textColor = .secondaryLabelColor
+        textField.setContentHuggingPriority(.required, for: .horizontal)
+        textField.setContentCompressionResistancePriority(.required, for: .horizontal)
+        addSubview(textField)
+        textField.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            textField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            textField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            textField.topAnchor.constraint(equalTo: topAnchor, constant: 2),
+            textField.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2)
+        ])
+        let appearance = PacketTableAppearance.current
+        layer?.cornerRadius = appearance.pillCornerRadius ?? 6
+        layer?.borderWidth = appearance.pillBorderWidth
+        layer?.borderColor = NSColor.tertiaryLabelColor.cgColor
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
+private struct PacketTableAppearance {
+    static let current = PacketTableAppearance()
+
+    let pillBorderWidth: CGFloat = 1
+    let rowVerticalPadding: CGFloat = 2
+    let rowHeight: CGFloat = 22
+    let pillCornerRadius: CGFloat? = 6
 }
 
 private struct PacketTableColumnSizer {
@@ -398,8 +468,8 @@ private struct PacketTableColumnSizer {
             font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
             values = rows.map { $0.viaText }
         case .type:
-            font = .systemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-            values = rows.map { $0.typeIcon }
+            font = .monospacedSystemFont(ofSize: 11, weight: .medium)
+            values = rows.map { $0.typeLabel }
         case .info:
             font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
             values = rows.map { $0.infoText }

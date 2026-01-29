@@ -27,6 +27,12 @@ final class FilteringTests: XCTestCase {
                 info: "Position report".data(using: .ascii)!
             ),
             Packet(
+                from: AX25Address(call: "W1PAY"),
+                to: AX25Address(call: "APRS"),
+                frameType: .ui,
+                info: Data([0x00, 0xFF, 0x10])
+            ),
+            Packet(
                 from: AX25Address(call: "N0CALL", ssid: 1),
                 to: AX25Address(call: "W0XYZ"),
                 frameType: .i,
@@ -77,7 +83,7 @@ final class FilteringTests: XCTestCase {
 
         let filtered = PacketFilter.filter(packets: packets, search: "", filters: filters, stationCall: nil)
 
-        XCTAssertEqual(filtered.count, 2)
+        XCTAssertEqual(filtered.count, 3)
         XCTAssertTrue(filtered.allSatisfy { $0.frameType == .ui })
     }
 
@@ -107,17 +113,36 @@ final class FilteringTests: XCTestCase {
         XCTAssertEqual(filtered.count, 0)
     }
 
-    // MARK: - Only With Info Filter Tests
+    // MARK: - Payload Filter Tests
 
-    func testFilterOnlyWithInfo() {
+    func testFilterPayloadOnly() {
         let packets = createTestPackets()
         var filters = PacketFilters()
-        filters.onlyWithInfo = true
+        filters.payloadOnly = true
 
         let filtered = PacketFilter.filter(packets: packets, search: "", filters: filters, stationCall: nil)
 
-        // Only packets with non-empty, printable info
-        XCTAssertTrue(filtered.allSatisfy { $0.infoText != nil })
+        XCTAssertFalse(filtered.contains { $0.frameType == .s || $0.frameType == .u })
+        XCTAssertTrue(filtered.allSatisfy { $0.frameType == .i || $0.frameType == .ui })
+        XCTAssertTrue(filtered.filter { $0.frameType == .ui }.allSatisfy { !$0.info.isEmpty })
+    }
+
+    func testPayloadOnlyIncludesBinaryUI() {
+        let packets: [Packet] = [
+            Packet(frameType: .i, info: Data()),
+            Packet(frameType: .s),
+            Packet(frameType: .u),
+            Packet(frameType: .ui, info: Data()),
+            Packet(frameType: .ui, info: Data([0x01, 0x02, 0x03]))
+        ]
+        var filters = PacketFilters()
+        filters.payloadOnly = true
+
+        let filtered = PacketFilter.filter(packets: packets, search: "", filters: filters, stationCall: nil)
+
+        XCTAssertEqual(filtered.count, 2)
+        XCTAssertTrue(filtered.contains { $0.frameType == .i })
+        XCTAssertTrue(filtered.contains { $0.frameType == .ui && !$0.info.isEmpty })
     }
 
     func testFilterOnlyPinned() {
@@ -206,14 +231,14 @@ final class FilteringTests: XCTestCase {
         filters.showI = false
         filters.showS = false
         filters.showU = false
-        filters.onlyWithInfo = true
+        filters.payloadOnly = true
 
         let filtered = PacketFilter.filter(packets: packets, search: "APRS", filters: filters, stationCall: nil)
 
         // UI frames only, with info, matching "APRS"
-        XCTAssertEqual(filtered.count, 2)
+        XCTAssertEqual(filtered.count, 3)
         XCTAssertTrue(filtered.allSatisfy { $0.frameType == .ui })
-        XCTAssertTrue(filtered.allSatisfy { $0.infoText != nil })
+        XCTAssertTrue(filtered.allSatisfy { !$0.info.isEmpty })
     }
 
     // MARK: - PacketFilters Tests

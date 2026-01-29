@@ -13,7 +13,7 @@ struct PacketRowViewModel: Identifiable, Hashable {
     let fromText: String
     let toText: String
     let viaText: String
-    let typeIcon: String
+    let typeLabel: String
     let typeTooltip: String
     let infoText: String
     let infoTooltip: String
@@ -35,8 +35,8 @@ struct PacketRowViewModel: Identifiable, Hashable {
             fromText: packet.fromDisplay,
             toText: packet.toDisplay,
             viaText: packet.viaDisplay,
-            typeIcon: packet.frameType.icon,
-            typeTooltip: packet.frameType.displayName,
+            typeLabel: packet.frameType.shortLabel,
+            typeTooltip: packet.frameType.helpText,
 
             infoText: fullInfoText,
 
