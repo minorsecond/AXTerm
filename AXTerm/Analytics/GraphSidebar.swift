@@ -171,17 +171,22 @@ private struct SidebarOverviewContent: View {
 
     private var headerSection: some View {
         HStack {
-            Text("Network Health")
+            Text(Copy.Health.headerLabel)
                 .font(.headline)
+                .help(Copy.Health.headerTooltip)
             Spacer()
             Button(action: { showingScoreInfo.toggle() }) {
                 Image(systemName: "info.circle")
                     .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
             }
             .buttonStyle(.plain)
-            .help("How the health score is calculated")
+            .help(Copy.Health.overallScoreTooltip)
             .popover(isPresented: $showingScoreInfo, arrowEdge: .trailing) {
-                ScoreExplainerView(breakdown: health.scoreBreakdown, finalScore: health.score)
+                ScoreExplainerView(
+                    breakdown: health.scoreBreakdown,
+                    finalScore: health.score,
+                    timeframeDisplayName: health.timeframeDisplayName
+                )
             }
         }
     }
@@ -220,29 +225,34 @@ private struct SidebarOverviewContent: View {
     }
 
     private var metricsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let tf = health.timeframeDisplayName
+
+        return VStack(alignment: .leading, spacing: 8) {
             Text("Metrics")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                .help(Copy.Health.headerTooltip)
 
             LazyVGrid(columns: [
                 GridItem(.flexible(), alignment: .leading),
                 GridItem(.flexible(), alignment: .leading)
             ], spacing: 8) {
+                // Topology metrics (timeframe-dependent)
                 MetricCell(
-                    label: Copy.Health.stationsHeardLabel,
+                    label: Copy.Health.stationsHeardLabelWithTimeframe(tf),
                     value: formatNumber(health.metrics.totalStations),
-                    tooltip: Copy.Health.stationsHeardTooltip
+                    tooltip: Copy.Health.stationsHeardTooltip(tf)
                 )
+                // Activity metrics (fixed 10-minute window)
                 MetricCell(
                     label: Copy.Health.activeStationsLabel,
                     value: "\(health.metrics.activeStations)",
                     tooltip: Copy.Health.activeStationsTooltip
                 )
                 MetricCell(
-                    label: Copy.Health.totalPacketsLabel,
+                    label: Copy.Health.totalPacketsLabelWithTimeframe(tf),
                     value: formatNumber(health.metrics.totalPackets),
-                    tooltip: Copy.Health.totalPacketsTooltip
+                    tooltip: Copy.Health.totalPacketsTooltip(tf)
                 )
                 MetricCell(
                     label: Copy.Health.packetRateLabel,
@@ -250,14 +260,14 @@ private struct SidebarOverviewContent: View {
                     tooltip: Copy.Health.packetRateTooltip
                 )
                 MetricCell(
-                    label: Copy.Health.mainClusterLabel,
+                    label: Copy.Health.mainClusterLabelWithTimeframe(tf),
                     value: formatPercent(health.metrics.largestComponentPercent),
-                    tooltip: Copy.Health.mainClusterTooltip
+                    tooltip: Copy.Health.mainClusterTooltip(tf)
                 )
                 MetricCell(
-                    label: Copy.Health.topRelayShareLabel,
+                    label: Copy.Health.topRelayShareLabelWithTimeframe(tf),
                     value: formatPercent(health.metrics.topRelayConcentration),
-                    tooltip: Copy.Health.topRelayShareTooltip
+                    tooltip: Copy.Health.topRelayShareTooltip(tf)
                 )
             }
         }
@@ -311,9 +321,10 @@ private struct SidebarOverviewContent: View {
 
     private var trendSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Activity (last hour)")
+            Text(Copy.Health.activityChartLabel)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                .help(Copy.Health.activityChartTooltip)
 
             ActivitySparkline(data: health.activityTrend)
                 .frame(height: 40)
@@ -742,15 +753,17 @@ struct GraphSidebar_Previews: PreviewProvider {
                 "Moderately connected (64% in main cluster)"
             ],
             metrics: NetworkHealthMetrics(
+                // Topology metrics (timeframe-dependent)
                 totalStations: 25,
-                activeStations: 7,
                 totalPackets: 1300,
-                packetRate: 0.5,
                 largestComponentPercent: 64,
                 topRelayConcentration: 26,
                 topRelayCallsign: "DRL",
-                freshness: 0.5,
-                isolatedNodes: 2
+                isolatedNodes: 2,
+                // Activity metrics (fixed 10-minute window)
+                activeStations: 7,
+                packetRate: 0.5,
+                freshness: 0.28  // 7/25
             ),
             warnings: [
                 NetworkWarning(
@@ -763,11 +776,12 @@ struct GraphSidebar_Previews: PreviewProvider {
             activityTrend: [2, 5, 3, 8, 12, 7, 4, 6, 9, 11, 8, 5],
             scoreBreakdown: HealthScoreBreakdown(
                 activityScore: 85, activityWeight: 25,
-                freshnessScore: 53, freshnessWeight: 20,
-                connectivityScore: 85, connectivityWeight: 25,
-                redundancyScore: 70, redundancyWeight: 20,
+                freshnessScore: 28, freshnessWeight: 15,
+                connectivityScore: 64, connectivityWeight: 30,
+                redundancyScore: 100, redundancyWeight: 20,
                 stabilityScore: 100, stabilityWeight: 10
-            )
+            ),
+            timeframeDisplayName: "24h"
         )
     }
 

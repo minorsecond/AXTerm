@@ -8,6 +8,12 @@
 import Foundation
 
 /// Network health metrics and scoring model for APRS/AX.25 packet radio networks.
+///
+/// The health model uses a HYBRID time window approach:
+/// - **Topology metrics** (stations heard, packets, cluster %, relay share) depend on the user-selected timeframe
+/// - **Activity metrics** (active stations, packet rate) use a fixed 10-minute window for "current" state
+///
+/// This prevents UX whiplash when changing timeframes while keeping activity metrics stable.
 struct NetworkHealth: Hashable, Sendable {
     /// Overall health score from 0-100
     let score: Int
@@ -23,6 +29,8 @@ struct NetworkHealth: Hashable, Sendable {
     let activityTrend: [Int]
     /// Detailed score breakdown for explainability
     let scoreBreakdown: HealthScoreBreakdown
+    /// Display name for the timeframe used for topology metrics
+    let timeframeDisplayName: String
 
     static let empty = NetworkHealth(
         score: 0,
@@ -31,46 +39,62 @@ struct NetworkHealth: Hashable, Sendable {
         metrics: .empty,
         warnings: [],
         activityTrend: [],
-        scoreBreakdown: .empty
+        scoreBreakdown: .empty,
+        timeframeDisplayName: ""
     )
 }
 
 /// Detailed breakdown of how the health score is calculated.
-/// Used for the "How this score is calculated" tooltip.
+///
+/// Uses a HYBRID weighting model:
+/// - **60% Topology** (timeframe-dependent): Connectivity (30%) + Redundancy (20%) + Stability (10%)
+/// - **40% Activity** (10-minute window): Activity (25%) + Freshness (15%)
+///
+/// This ensures the score is stable when changing timeframes while still reflecting
+/// current network activity.
 struct HealthScoreBreakdown: Hashable, Sendable {
+    // Activity metrics (10-minute window) - 40% total
     let activityScore: Double
-    let activityWeight: Double
+    let activityWeight: Double      // 25%
     let freshnessScore: Double
-    let freshnessWeight: Double
-    let connectivityScore: Double
-    let connectivityWeight: Double
-    let redundancyScore: Double
-    let redundancyWeight: Double
-    let stabilityScore: Double
-    let stabilityWeight: Double
+    let freshnessWeight: Double     // 15%
 
-    var components: [(name: String, score: Double, weight: Double, contribution: Double)] {
+    // Topology metrics (timeframe-dependent) - 60% total
+    let connectivityScore: Double
+    let connectivityWeight: Double  // 30%
+    let redundancyScore: Double
+    let redundancyWeight: Double    // 20%
+    let stabilityScore: Double
+    let stabilityWeight: Double     // 10%
+
+    var components: [(name: String, score: Double, weight: Double, contribution: Double, isActivity: Bool)] {
         [
-            ("Activity", activityScore, activityWeight, activityScore * activityWeight / 100),
-            ("Freshness", freshnessScore, freshnessWeight, freshnessScore * freshnessWeight / 100),
-            ("Connectivity", connectivityScore, connectivityWeight, connectivityScore * connectivityWeight / 100),
-            ("Redundancy", redundancyScore, redundancyWeight, redundancyScore * redundancyWeight / 100),
-            ("Stability", stabilityScore, stabilityWeight, stabilityScore * stabilityWeight / 100)
+            ("Activity (10m)", activityScore, activityWeight, activityScore * activityWeight / 100, true),
+            ("Freshness (10m)", freshnessScore, freshnessWeight, freshnessScore * freshnessWeight / 100, true),
+            ("Connectivity", connectivityScore, connectivityWeight, connectivityScore * connectivityWeight / 100, false),
+            ("Redundancy", redundancyScore, redundancyWeight, redundancyScore * redundancyWeight / 100, false),
+            ("Stability", stabilityScore, stabilityWeight, stabilityScore * stabilityWeight / 100, false)
         ]
     }
 
     var formulaDescription: String {
         """
-        Score = (Activity × \(Int(activityWeight))%) + (Freshness × \(Int(freshnessWeight))%) + \
-        (Connectivity × \(Int(connectivityWeight))%) + (Redundancy × \(Int(redundancyWeight))%) + \
-        (Stability × \(Int(stabilityWeight))%)
+        Score = Activity (10m) × \(Int(activityWeight))% + Freshness (10m) × \(Int(freshnessWeight))% + \
+        Connectivity × \(Int(connectivityWeight))% + Redundancy × \(Int(redundancyWeight))% + \
+        Stability × \(Int(stabilityWeight))%
         """
     }
 
+    /// Total weight from activity metrics (10-minute window)
+    var activityTotalWeight: Double { activityWeight + freshnessWeight }
+
+    /// Total weight from topology metrics (timeframe-dependent)
+    var topologyTotalWeight: Double { connectivityWeight + redundancyWeight + stabilityWeight }
+
     static let empty = HealthScoreBreakdown(
         activityScore: 0, activityWeight: 25,
-        freshnessScore: 0, freshnessWeight: 20,
-        connectivityScore: 0, connectivityWeight: 25,
+        freshnessScore: 0, freshnessWeight: 15,
+        connectivityScore: 0, connectivityWeight: 30,
         redundancyScore: 0, redundancyWeight: 20,
         stabilityScore: 0, stabilityWeight: 10
     )
@@ -94,36 +118,47 @@ enum HealthRating: String, Hashable, Sendable {
     }
 }
 
+/// Core metrics container for network health.
+///
+/// Metrics are split into two categories based on time window:
+/// - **Topology metrics** (timeframe-dependent): totalStations, totalPackets, largestComponentPercent,
+///   topRelayConcentration, isolatedNodes
+/// - **Activity metrics** (fixed 10-minute window): activeStations, packetRate, freshness
 struct NetworkHealthMetrics: Hashable, Sendable {
-    /// Total unique stations heard this session
+    // MARK: - Topology Metrics (depend on selected timeframe)
+
+    /// Total unique stations heard during the selected timeframe
     let totalStations: Int
-    /// Stations active in the last 10 minutes
-    let activeStations: Int
-    /// Total packets received this session
+    /// Total packets received during the selected timeframe
     let totalPackets: Int
-    /// Current packet rate (packets per minute, rolling average)
-    let packetRate: Double
-    /// Percentage of nodes in the largest connected component
+    /// Percentage of nodes in the largest connected component (based on timeframe graph)
     let largestComponentPercent: Double
-    /// Percentage of traffic handled by the top relay/digipeater
+    /// Percentage of traffic handled by the top relay/digipeater (based on timeframe graph)
     let topRelayConcentration: Double
     /// Name of the top relay (if any)
     let topRelayCallsign: String?
-    /// Average node freshness (0-1, where 1 = all nodes active recently)
-    let freshness: Double
-    /// Number of isolated nodes (no connections)
+    /// Number of isolated nodes (degree == 0) in the timeframe graph
     let isolatedNodes: Int
+
+    // MARK: - Activity Metrics (fixed 10-minute window)
+
+    /// Stations active in the last 10 minutes (fixed window, independent of timeframe)
+    let activeStations: Int
+    /// Current packet rate (packets per minute over last 10 minutes)
+    let packetRate: Double
+    /// Ratio of active stations to total stations (freshness indicator)
+    let freshness: Double
 
     static let empty = NetworkHealthMetrics(
         totalStations: 0,
-        activeStations: 0,
         totalPackets: 0,
-        packetRate: 0,
         largestComponentPercent: 0,
         topRelayConcentration: 0,
         topRelayCallsign: nil,
-        freshness: 0,
-        isolatedNodes: 0
+        isolatedNodes: 0,
+        activeStations: 0,
+        packetRate: 0,
+        freshness: 0
     )
 }
 
@@ -141,36 +176,70 @@ struct NetworkWarning: Hashable, Identifiable, Sendable {
 }
 
 /// Calculates network health score and metrics from graph data and packet history.
+///
+/// Uses a HYBRID time window model:
+/// - **Topology metrics**: Based on the user-selected timeframe (via graphModel and timeframePackets)
+/// - **Activity metrics**: Always use a fixed 10-minute window (activityWindowMinutes) regardless of timeframe
+///
+/// This approach prevents UX "whiplash" when changing timeframes:
+/// - Changing 24h → 1h: topology metrics update, but "Active (10m)" stays stable
+/// - Activity-based score components remain consistent across timeframe changes
 enum NetworkHealthCalculator {
     /// Scoring weights for health index components
+    ///
+    /// HYBRID model: 60% topology (timeframe-dependent) + 40% activity (10-minute window)
     private enum Weights {
-        static let activity: Double = 0.25      // Is traffic flowing?
-        static let freshness: Double = 0.20     // Are nodes recently active?
-        static let connectivity: Double = 0.25  // Is the network well-connected?
+        // Activity metrics (10-minute window) - 40% total
+        static let activity: Double = 0.25      // Is traffic flowing right now?
+        static let freshness: Double = 0.15     // Are nodes recently active?
+
+        // Topology metrics (timeframe-dependent) - 60% total
+        static let connectivity: Double = 0.30  // Is the network well-connected?
         static let redundancy: Double = 0.20    // Is there relay diversity?
         static let stability: Double = 0.10     // Consistent packet rate?
     }
 
+    /// Fixed window for activity metrics (independent of user timeframe)
+    static let activityWindowMinutes: Int = 10
+
     /// Calculate network health from current state
+    ///
+    /// - Parameters:
+    ///   - graphModel: The network graph built from the selected timeframe's packets
+    ///   - timeframePackets: Packets within the user-selected timeframe (for topology metrics)
+    ///   - allRecentPackets: All packets in the activity window (for activity metrics, typically 10 min)
+    ///   - timeframeDisplayName: Human-readable name of the selected timeframe (e.g., "24h", "1h")
+    ///   - trendWindowMinutes: Window for sparkline (default 60 minutes)
+    ///   - trendBucketMinutes: Bucket size for sparkline (default 5 minutes)
+    ///   - now: Current time for calculations
     static func calculate(
         graphModel: GraphModel,
-        packets: [Packet],
-        recentWindowMinutes: Int = 10,
+        timeframePackets: [Packet],
+        allRecentPackets: [Packet],
+        timeframeDisplayName: String,
         trendWindowMinutes: Int = 60,
         trendBucketMinutes: Int = 5,
         now: Date = Date()
     ) -> NetworkHealth {
         let metrics = calculateMetrics(
             graphModel: graphModel,
-            packets: packets,
-            recentWindowMinutes: recentWindowMinutes,
+            timeframePackets: timeframePackets,
+            allRecentPackets: allRecentPackets,
             now: now
         )
 
-        let (score, reasons, breakdown) = calculateScore(metrics: metrics, graphModel: graphModel)
-        let warnings = generateWarnings(metrics: metrics, graphModel: graphModel)
+        let (score, reasons, breakdown) = calculateScore(
+            metrics: metrics,
+            graphModel: graphModel,
+            timeframeDisplayName: timeframeDisplayName
+        )
+        let warnings = generateWarnings(
+            metrics: metrics,
+            graphModel: graphModel,
+            timeframeDisplayName: timeframeDisplayName
+        )
         let trend = calculateActivityTrend(
-            packets: packets,
+            packets: allRecentPackets,
             windowMinutes: trendWindowMinutes,
             bucketMinutes: trendBucketMinutes,
             now: now
@@ -183,22 +252,66 @@ enum NetworkHealthCalculator {
             metrics: metrics,
             warnings: warnings,
             activityTrend: trend,
-            scoreBreakdown: breakdown
+            scoreBreakdown: breakdown,
+            timeframeDisplayName: timeframeDisplayName
         )
     }
 
-    private static func calculateMetrics(
+    /// Convenience method for backward compatibility (uses timeframePackets for both)
+    static func calculate(
         graphModel: GraphModel,
         packets: [Packet],
-        recentWindowMinutes: Int,
+        recentWindowMinutes: Int = 10,
+        trendWindowMinutes: Int = 60,
+        trendBucketMinutes: Int = 5,
+        now: Date = Date()
+    ) -> NetworkHealth {
+        // Filter packets to activity window for activity metrics
+        let activityCutoff = now.addingTimeInterval(-Double(recentWindowMinutes * 60))
+        let recentPackets = packets.filter { $0.timestamp >= activityCutoff }
+
+        return calculate(
+            graphModel: graphModel,
+            timeframePackets: packets,
+            allRecentPackets: recentPackets,
+            timeframeDisplayName: "",
+            trendWindowMinutes: trendWindowMinutes,
+            trendBucketMinutes: trendBucketMinutes,
+            now: now
+        )
+    }
+
+    /// Calculate metrics using the hybrid window model.
+    ///
+    /// - Parameters:
+    ///   - graphModel: Network graph from the selected timeframe
+    ///   - timeframePackets: Packets in the selected timeframe (for topology metrics)
+    ///   - allRecentPackets: All available packets for activity window calculation
+    ///   - now: Current time
+    private static func calculateMetrics(
+        graphModel: GraphModel,
+        timeframePackets: [Packet],
+        allRecentPackets: [Packet],
         now: Date
     ) -> NetworkHealthMetrics {
+        // TOPOLOGY METRICS (from timeframe/graph)
         let totalStations = graphModel.nodes.count
-        let totalPackets = packets.count
+        let totalPackets = timeframePackets.count
 
-        // Calculate active stations (heard in last N minutes)
-        let recentCutoff = now.addingTimeInterval(-Double(recentWindowMinutes * 60))
-        let recentPackets = packets.filter { $0.timestamp >= recentCutoff }
+        // Calculate largest connected component percentage (from timeframe graph)
+        let largestComponentPercent = calculateLargestComponentPercent(graphModel: graphModel)
+
+        // Calculate relay concentration (from timeframe graph)
+        let (topRelayPercent, topRelayCallsign) = calculateRelayConcentration(graphModel: graphModel)
+
+        // Count isolated nodes (from timeframe graph)
+        let isolatedNodes = graphModel.nodes.filter { $0.degree == 0 }.count
+
+        // ACTIVITY METRICS (fixed 10-minute window)
+        let activityCutoff = now.addingTimeInterval(-Double(activityWindowMinutes * 60))
+        let recentPackets = allRecentPackets.filter { $0.timestamp >= activityCutoff }
+
+        // Calculate active stations (heard in last 10 minutes)
         var activeCallsigns: Set<String> = []
         for packet in recentPackets {
             if let from = packet.from?.call { activeCallsigns.insert(from) }
@@ -206,32 +319,22 @@ enum NetworkHealthCalculator {
         }
         let activeStations = activeCallsigns.count
 
-        // Calculate packet rate (packets per minute over recent window)
-        let windowDuration = max(1, Double(recentWindowMinutes))
-        let packetRate = Double(recentPackets.count) / windowDuration
+        // Calculate packet rate (packets per minute over 10-minute window)
+        let packetRate = Double(recentPackets.count) / Double(activityWindowMinutes)
 
-        // Calculate largest connected component percentage
-        let largestComponentPercent = calculateLargestComponentPercent(graphModel: graphModel)
-
-        // Calculate relay concentration
-        let (topRelayPercent, topRelayCallsign) = calculateRelayConcentration(graphModel: graphModel)
-
-        // Calculate freshness (ratio of active to total stations)
+        // Calculate freshness (ratio of active stations to total stations in graph)
         let freshness = totalStations > 0 ? Double(activeStations) / Double(totalStations) : 0
-
-        // Count isolated nodes
-        let isolatedNodes = graphModel.nodes.filter { $0.degree == 0 }.count
 
         return NetworkHealthMetrics(
             totalStations: totalStations,
-            activeStations: activeStations,
             totalPackets: totalPackets,
-            packetRate: packetRate,
             largestComponentPercent: largestComponentPercent,
             topRelayConcentration: topRelayPercent,
             topRelayCallsign: topRelayCallsign,
-            freshness: freshness,
-            isolatedNodes: isolatedNodes
+            isolatedNodes: isolatedNodes,
+            activeStations: activeStations,
+            packetRate: packetRate,
+            freshness: freshness
         )
     }
 
@@ -317,13 +420,19 @@ enum NetworkHealthCalculator {
         return buckets
     }
 
+    /// Calculate health score using the hybrid model.
+    ///
+    /// Weights: 60% topology (timeframe) + 40% activity (10-minute window)
     private static func calculateScore(
         metrics: NetworkHealthMetrics,
-        graphModel: GraphModel
+        graphModel: GraphModel,
+        timeframeDisplayName: String
     ) -> (Int, [String], HealthScoreBreakdown) {
         var reasons: [String] = []
 
-        // Activity score (0-100): Based on packet rate
+        // ACTIVITY METRICS (10-minute window) - 40% total
+
+        // Activity score (0-100): Based on packet rate over 10 minutes
         // Excellent: >2 pkt/min, Good: >0.5, Fair: >0.1, Poor: <0.1
         let activityScore: Double
         switch metrics.packetRate {
@@ -335,7 +444,7 @@ enum NetworkHealthCalculator {
         default: activityScore = metrics.totalPackets > 0 ? 15 : 0
         }
         if activityScore >= 70 {
-            reasons.append("Healthy packet activity (\(String(format: "%.1f", metrics.packetRate))/min)")
+            reasons.append("Healthy activity (\(String(format: "%.1f", metrics.packetRate))/min)")
         } else if activityScore > 0 {
             reasons.append("Low packet activity")
         }
@@ -343,15 +452,18 @@ enum NetworkHealthCalculator {
         // Freshness score (0-100): Ratio of active to total stations
         let freshnessScore = metrics.freshness * 100
         if freshnessScore >= 50 {
-            reasons.append("\(metrics.activeStations) stations active recently")
+            reasons.append("\(metrics.activeStations) stations active (10m)")
         }
+
+        // TOPOLOGY METRICS (timeframe-dependent) - 60% total
 
         // Connectivity score (0-100): Largest component percentage
         let connectivityScore = metrics.largestComponentPercent
+        let tfLabel = timeframeDisplayName.isEmpty ? "" : " (\(timeframeDisplayName))"
         if connectivityScore >= 80 {
-            reasons.append("Well-connected network")
+            reasons.append("Well-connected network\(tfLabel)")
         } else if connectivityScore >= 50 && connectivityScore < 80 {
-            reasons.append("Moderately connected (\(Int(connectivityScore))% in main cluster)")
+            reasons.append("Moderately connected (\(Int(connectivityScore))%\(tfLabel))")
         }
 
         // Redundancy score (0-100): Inverse of relay concentration
@@ -368,7 +480,7 @@ enum NetworkHealthCalculator {
         }
 
         // Stability score (0-100): Based on having consistent activity
-        // For now, use a simple heuristic based on total stations vs packets
+        // Uses packets-per-station ratio from the timeframe
         let stabilityScore: Double
         if metrics.totalStations > 0 && metrics.totalPackets > 0 {
             let packetsPerStation = Double(metrics.totalPackets) / Double(metrics.totalStations)
@@ -377,7 +489,7 @@ enum NetworkHealthCalculator {
             stabilityScore = 0
         }
 
-        // Weighted final score
+        // Weighted final score (60% topology + 40% activity)
         let weightedScore =
             activityScore * Weights.activity +
             freshnessScore * Weights.freshness +
@@ -413,23 +525,26 @@ enum NetworkHealthCalculator {
         return (finalScore, Array(reasons.prefix(3)), breakdown)
     }
 
+    /// Generate warnings with explicit timeframe context to prevent misleading messages.
     private static func generateWarnings(
         metrics: NetworkHealthMetrics,
-        graphModel: GraphModel
+        graphModel: GraphModel,
+        timeframeDisplayName: String
     ) -> [NetworkWarning] {
         var warnings: [NetworkWarning] = []
+        let tfLabel = timeframeDisplayName.isEmpty ? "" : " (\(timeframeDisplayName))"
 
-        // Single-point relay dominance
+        // Single-point relay dominance (timeframe-dependent)
         if metrics.topRelayConcentration > 60, let relay = metrics.topRelayCallsign {
             warnings.append(NetworkWarning(
                 id: "relay_dominance",
                 severity: .caution,
                 title: "Single relay dominance",
-                detail: "\(relay) handles \(Int(metrics.topRelayConcentration))% of traffic"
+                detail: "\(relay) handles \(Int(metrics.topRelayConcentration))% of traffic\(tfLabel)"
             ))
         }
 
-        // Stale nodes warning
+        // Stale nodes warning (compares 10-minute activity to timeframe graph)
         if metrics.totalStations > 0 && metrics.freshness < 0.3 {
             let staleCount = metrics.totalStations - metrics.activeStations
             warnings.append(NetworkWarning(
@@ -440,33 +555,33 @@ enum NetworkHealthCalculator {
             ))
         }
 
-        // Fragmented network
+        // Fragmented network (timeframe-dependent - explicit label)
         if metrics.largestComponentPercent < 50 && graphModel.nodes.count > 5 {
             warnings.append(NetworkWarning(
                 id: "fragmented",
                 severity: .caution,
-                title: "Fragmented network",
-                detail: "Only \(Int(metrics.largestComponentPercent))% of stations connected"
+                title: "Fragmented network\(tfLabel)",
+                detail: "Only \(Int(metrics.largestComponentPercent))% of stations in main cluster"
             ))
         }
 
-        // Isolated nodes
+        // Isolated nodes (timeframe-dependent)
         if metrics.isolatedNodes > 0 {
             warnings.append(NetworkWarning(
                 id: "isolated",
                 severity: .info,
-                title: "Isolated stations",
+                title: "Isolated stations\(tfLabel)",
                 detail: "\(metrics.isolatedNodes) station\(metrics.isolatedNodes == 1 ? "" : "s") with no connections"
             ))
         }
 
-        // Low activity
+        // Low activity (10-minute window)
         if metrics.packetRate < 0.1 && metrics.totalPackets > 0 {
             warnings.append(NetworkWarning(
                 id: "low_activity",
                 severity: .info,
-                title: "Low activity",
-                detail: "Less than 6 packets per hour"
+                title: "Low activity (10m)",
+                detail: "Less than 1 packet per 10 minutes"
             ))
         }
 

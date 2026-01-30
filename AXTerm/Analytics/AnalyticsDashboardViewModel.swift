@@ -642,9 +642,17 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     private func updateNetworkHealth() {
+        let now = Date()
+        let timeframePackets = filteredPackets(now: now)
+
+        // For activity metrics, use all packets (unfiltered) to calculate 10-minute window
+        // This ensures activity metrics remain stable when changing timeframe
         let health = NetworkHealthCalculator.calculate(
             graphModel: viewState.graphModel,
-            packets: packets
+            timeframePackets: timeframePackets,
+            allRecentPackets: packets,
+            timeframeDisplayName: timeframe.displayName,
+            now: now
         )
         viewState.networkHealth = health
     }

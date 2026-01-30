@@ -108,54 +108,89 @@ enum GraphCopy {
     // MARK: Network Health Metrics
 
     enum Health {
-        static let overallScoreTooltip = "Composite health score (0–100) based on activity, freshness, connectivity, redundancy, and stability. Higher is better."
-        static let scoreExperimentalNote = "This score is experimental and may not reflect all network conditions."
+        // Header / overall score
+        static let headerLabel = "Network Health"
+        static let headerTooltip = "Summary of network connectivity (based on selected timeframe) and current activity (last 10 minutes)."
+        static let overallScoreTooltip = "Composite health score (0–100). 60% topology (selected timeframe) + 40% activity (last 10 minutes). Higher is better."
+        static let scoreExperimentalNote = "This score combines historical structure and current activity."
 
-        static let stationsHeardLabel = "Stations Heard"
-        static let stationsHeardTooltip = "Total unique amateur radio stations observed in the current timeframe."
+        // MARK: Topology Metrics (timeframe-dependent)
+        // These labels include a placeholder for the timeframe suffix
 
-        static let activeStationsLabel = "Active (10m)"
-        static let activeStationsTooltip = "Stations that have sent or received at least one packet in the last 10 minutes."
+        static let stationsHeardLabel = "Stations"
+        static func stationsHeardLabelWithTimeframe(_ tf: String) -> String {
+            tf.isEmpty ? "Stations Heard" : "Stations (\(tf))"
+        }
+        static func stationsHeardTooltip(_ tf: String) -> String {
+            "Unique stations observed during the \(tf.isEmpty ? "selected timeframe" : tf) window."
+        }
 
-        static let totalPacketsLabel = "Total Packets"
-        static let totalPacketsTooltip = "Total AX.25 frames received during this session."
-
-        static let packetRateLabel = "Packets/min"
-        static let packetRateTooltip = "Average packet rate over the last 10 minutes."
+        static let totalPacketsLabel = "Packets"
+        static func totalPacketsLabelWithTimeframe(_ tf: String) -> String {
+            tf.isEmpty ? "Total Packets" : "Packets (\(tf))"
+        }
+        static func totalPacketsTooltip(_ tf: String) -> String {
+            "Total AX.25 frames received during the \(tf.isEmpty ? "selected timeframe" : tf) window."
+        }
 
         static let mainClusterLabel = "Main Cluster"
-        static let mainClusterTooltip = "Percentage of stations in the largest connected group. Higher values indicate a well-connected network."
+        static func mainClusterLabelWithTimeframe(_ tf: String) -> String {
+            tf.isEmpty ? "Main Cluster" : "Cluster (\(tf))"
+        }
+        static func mainClusterTooltip(_ tf: String) -> String {
+            "Percentage of stations in the largest connected group during the \(tf.isEmpty ? "selected timeframe" : tf) window. Higher values indicate a well-connected network."
+        }
 
         static let topRelayShareLabel = "Top Relay"
-        static let topRelayShareTooltip = "Percentage of connections involving the busiest relay station. Lower values indicate better redundancy."
+        static func topRelayShareLabelWithTimeframe(_ tf: String) -> String {
+            tf.isEmpty ? "Top Relay" : "Relay (\(tf))"
+        }
+        static func topRelayShareTooltip(_ tf: String) -> String {
+            "Share of connections involving the busiest relay during the \(tf.isEmpty ? "selected timeframe" : tf) window. Lower values indicate better redundancy."
+        }
+
+        // MARK: Activity Metrics (fixed 10-minute window)
+
+        static let activeStationsLabel = "Active (10m)"
+        static let activeStationsTooltip = "Stations that have sent or received at least one packet in the last 10 minutes. Independent of selected timeframe."
+
+        static let packetRateLabel = "Rate (10m)"
+        static let packetRateTooltip = "Packets per minute over the last 10 minutes. Independent of selected timeframe."
+
+        // MARK: Other
 
         static let activityChartLabel = "Activity (1 hour)"
         static let activityChartTooltip = "Packet activity over the last 60 minutes, in 5-minute intervals."
 
         static let freshnessLabel = "Freshness"
-        static let freshnessTooltip = "Ratio of recently active stations to total stations heard."
+        static let freshnessTooltip = "Ratio of recently active stations (10m) to total stations in the selected timeframe."
 
         static let isolatedNodesLabel = "Isolated"
-        static let isolatedNodesTooltip = "Stations with no observed connections to other stations."
+        static let isolatedNodesTooltip = "Stations with no observed connections during the selected timeframe."
     }
 
     // MARK: Score Breakdown
 
     enum ScoreBreakdown {
-        static let activityLabel = "Activity"
-        static let activityTooltip = "Based on packet rate. Higher traffic indicates an active network."
+        static let headerLabel = "Score Breakdown"
+        static let headerTooltip = "Health score components: 60% topology (selected timeframe) + 40% activity (last 10 minutes)."
 
-        static let freshnessLabel = "Freshness"
-        static let freshnessTooltip = "Ratio of stations active in the last 10 minutes to total stations."
+        // Activity metrics (10-minute window) - 40% total
+        static let activityLabel = "Activity (10m)"
+        static let activityTooltip = "Based on packet rate over the last 10 minutes. Higher traffic indicates an active network."
 
+        static let freshnessLabel = "Freshness (10m)"
+        static let freshnessTooltip = "Ratio of stations active in the last 10 minutes to total stations in the timeframe."
+
+        // Topology metrics (timeframe-dependent) - 60% total
         static let connectivityLabel = "Connectivity"
-        static let connectivityTooltip = "Based on the size of the largest connected cluster."
+        static let connectivityTooltip = "Based on the size of the largest connected cluster in the selected timeframe."
 
         static let redundancyLabel = "Redundancy"
-        static let redundancyTooltip = "Lower relay concentration means better path diversity."
+        static let redundancyTooltip = "Lower relay concentration means better path diversity. Based on selected timeframe."
 
         static let stabilityLabel = "Stability"
-        static let stabilityTooltip = "Based on packets per station ratio."
+        static let stabilityTooltip = "Based on packets per station ratio during the selected timeframe."
     }
 
     // MARK: Warnings

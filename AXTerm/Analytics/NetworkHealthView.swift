@@ -55,8 +55,9 @@ struct NetworkHealthView: View {
 
     private var headerSection: some View {
         HStack {
-            Text("Network Health")
+            Text(GraphCopy.Health.headerLabel)
                 .font(.headline)
+                .help(GraphCopy.Health.headerTooltip)
             Spacer()
             Button(action: { showingScoreInfo.toggle() }) {
                 Image(systemName: "info.circle")
@@ -65,7 +66,11 @@ struct NetworkHealthView: View {
             .buttonStyle(.plain)
             .help("How this score is calculated")
             .popover(isPresented: $showingScoreInfo, arrowEdge: .trailing) {
-                ScoreExplainerView(breakdown: health.scoreBreakdown, finalScore: health.score)
+                ScoreExplainerView(
+                    breakdown: health.scoreBreakdown,
+                    finalScore: health.score,
+                    timeframeDisplayName: health.timeframeDisplayName
+                )
             }
         }
     }
@@ -108,44 +113,49 @@ struct NetworkHealthView: View {
     }
 
     private var metricsGrid: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let tf = health.timeframeDisplayName
+
+        return VStack(alignment: .leading, spacing: 8) {
             Text("Metrics")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                .help(GraphCopy.Health.headerTooltip)
 
             LazyVGrid(columns: [
                 GridItem(.flexible(), spacing: 8),
                 GridItem(.flexible(), spacing: 8)
             ], spacing: 6) {
+                // Topology metrics (timeframe-dependent)
                 MetricCell(
-                    label: "Stations heard",
+                    label: GraphCopy.Health.stationsHeardLabelWithTimeframe(tf),
                     value: "\(health.metrics.totalStations)",
-                    tooltip: "Total unique amateur radio stations observed in the current timeframe."
+                    tooltip: GraphCopy.Health.stationsHeardTooltip(tf)
                 )
+                // Activity metrics (fixed 10-minute window)
                 MetricCell(
-                    label: "Active (10m)",
+                    label: GraphCopy.Health.activeStationsLabel,
                     value: "\(health.metrics.activeStations)",
-                    tooltip: "Stations that have transmitted or been addressed in the last 10 minutes."
+                    tooltip: GraphCopy.Health.activeStationsTooltip
                 )
                 MetricCell(
-                    label: "Total packets",
+                    label: GraphCopy.Health.totalPacketsLabelWithTimeframe(tf),
                     value: formatNumber(health.metrics.totalPackets),
-                    tooltip: "Total AX.25 frames received during this session."
+                    tooltip: GraphCopy.Health.totalPacketsTooltip(tf)
                 )
                 MetricCell(
-                    label: "Packets/min",
+                    label: GraphCopy.Health.packetRateLabel,
                     value: String(format: "%.1f", health.metrics.packetRate),
-                    tooltip: "Rolling average packet rate over the last 10 minutes."
+                    tooltip: GraphCopy.Health.packetRateTooltip
                 )
                 MetricCell(
-                    label: "Main cluster",
-                    value: "\(Int(health.metrics.largestComponentPercent))%",
-                    tooltip: "Percentage of stations in the largest connected component. Higher values indicate a well-connected network."
+                    label: GraphCopy.Health.mainClusterLabelWithTimeframe(tf),
+                    value: formatPercent(health.metrics.largestComponentPercent),
+                    tooltip: GraphCopy.Health.mainClusterTooltip(tf)
                 )
                 MetricCell(
-                    label: "Top relay share",
-                    value: "\(Int(health.metrics.topRelayConcentration))%",
-                    tooltip: "Percentage of connections involving the most-connected station. High values may indicate single-point dependency."
+                    label: GraphCopy.Health.topRelayShareLabelWithTimeframe(tf),
+                    value: formatPercent(health.metrics.topRelayConcentration),
+                    tooltip: GraphCopy.Health.topRelayShareTooltip(tf)
                 )
             }
         }
@@ -165,9 +175,10 @@ struct NetworkHealthView: View {
 
     private var trendSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Activity (last hour)")
+            Text(GraphCopy.Health.activityChartLabel)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                .help(GraphCopy.Health.activityChartTooltip)
 
             SparklineView(values: health.activityTrend)
                 .frame(height: 32)
@@ -313,6 +324,20 @@ struct NetworkHealthView: View {
             return String(format: "%.1fk", Double(value) / 1000)
         }
         return "\(value)"
+    }
+
+    /// Dynamic percentage formatting per HIG:
+    /// ≥10%: 0 decimals, <10%: 1 decimal, <1%: 2 decimals
+    private func formatPercent(_ value: Double) -> String {
+        if value >= 10 {
+            return "\(Int(value.rounded()))%"
+        } else if value >= 1 {
+            return String(format: "%.1f%%", value)
+        } else if value > 0 {
+            return String(format: "%.2f%%", value)
+        } else {
+            return "0%"
+        }
     }
 }
 
@@ -483,29 +508,45 @@ private struct SparklineView: View {
 struct ScoreExplainerView: View {
     let breakdown: HealthScoreBreakdown
     let finalScore: Int
+    var timeframeDisplayName: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("How this score is calculated")
                 .font(.headline)
 
-            Text("The Network Health score is a weighted combination of five metrics:")
-                .font(.caption)
-                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            // Explain the hybrid model
+            VStack(alignment: .leading, spacing: 4) {
+                Text("The health score uses a hybrid model:")
+                    .font(.caption)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+
+                HStack(spacing: 8) {
+                    Label("40% Activity (10m)", systemImage: "bolt.fill")
+                        .font(.caption2)
+                        .foregroundStyle(Color(nsColor: .systemBlue))
+                    Label(topologyLabel, systemImage: "network")
+                        .font(.caption2)
+                        .foregroundStyle(Color(nsColor: .systemGreen))
+                }
+            }
 
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(breakdown.components, id: \.name) { component in
                     HStack {
+                        Circle()
+                            .fill(component.isActivity ? Color(nsColor: .systemBlue) : Color(nsColor: .systemGreen))
+                            .frame(width: 6, height: 6)
                         Text(component.name)
                             .font(.caption.weight(.medium))
-                            .frame(width: 80, alignment: .leading)
+                            .frame(width: 90, alignment: .leading)
                         Text("\(Int(component.weight))%")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                             .frame(width: 30, alignment: .trailing)
                         ProgressView(value: component.score / 100)
                             .progressViewStyle(.linear)
-                            .frame(width: 60)
+                            .frame(width: 50)
                         Text("\(Int(component.score))")
                             .font(.caption.monospacedDigit())
                             .frame(width: 25, alignment: .trailing)
@@ -521,6 +562,8 @@ struct ScoreExplainerView: View {
                 Text(breakdown.formulaDescription)
                     .font(.caption2.monospaced())
                     .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.8)
             }
 
             HStack {
@@ -531,9 +574,19 @@ struct ScoreExplainerView: View {
                     .font(.caption.weight(.semibold).monospacedDigit())
             }
             .padding(.top, 4)
+
+            Text(GraphCopy.Health.scoreExperimentalNote)
+                .font(.caption2)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                .italic()
         }
         .padding(12)
-        .frame(width: 300)
+        .frame(width: 320)
+    }
+
+    private var topologyLabel: String {
+        let tf = timeframeDisplayName.isEmpty ? "timeframe" : timeframeDisplayName
+        return "60% Topology (\(tf))"
     }
 }
 
@@ -552,32 +605,35 @@ struct NetworkHealthView_Previews: PreviewProvider {
                     "Well-connected network"
                 ],
                 metrics: NetworkHealthMetrics(
+                    // Topology metrics (timeframe-dependent)
                     totalStations: 15,
-                    activeStations: 8,
                     totalPackets: 234,
-                    packetRate: 1.2,
                     largestComponentPercent: 85,
                     topRelayConcentration: 35,
                     topRelayCallsign: "W5ABC-10",
-                    freshness: 0.53,
-                    isolatedNodes: 1
+                    isolatedNodes: 1,
+                    // Activity metrics (fixed 10-minute window)
+                    activeStations: 8,
+                    packetRate: 1.2,
+                    freshness: 0.53
                 ),
                 warnings: [
                     NetworkWarning(
                         id: "isolated",
                         severity: .info,
-                        title: "Isolated stations",
+                        title: "Isolated stations (24h)",
                         detail: "1 station with no connections"
                     )
                 ],
                 activityTrend: [2, 5, 3, 8, 12, 7, 4, 6, 9, 11, 8, 5],
                 scoreBreakdown: HealthScoreBreakdown(
                     activityScore: 85, activityWeight: 25,
-                    freshnessScore: 53, freshnessWeight: 20,
-                    connectivityScore: 85, connectivityWeight: 25,
+                    freshnessScore: 53, freshnessWeight: 15,
+                    connectivityScore: 85, connectivityWeight: 30,
                     redundancyScore: 70, redundancyWeight: 20,
                     stabilityScore: 100, stabilityWeight: 10
-                )
+                ),
+                timeframeDisplayName: "24h"
             ),
             onFocusPrimaryHub: {},
             onShowActiveNodes: {},
