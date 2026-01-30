@@ -87,6 +87,7 @@ struct AnalyticsGraphView: View {
                    let nodePos = nodePositions.first(where: { $0.id == hoverNodeID }) {
                     let tooltipPosition = Self.calculateTooltipPosition(
                         nodePos: nodePos,
+                        allPositions: nodePositions,
                         viewSize: geometry.size,
                         cameraState: cameraState
                     )
@@ -103,10 +104,12 @@ struct AnalyticsGraphView: View {
         }
     }
 
-    /// Calculates the optimal tooltip position near a node, avoiding edges.
+    /// Calculates the optimal tooltip position near a node, avoiding edges and other nodes.
     /// Uses the same coordinate transformation as normalizedToScreen for accurate placement.
+    /// Tries all four quadrants and picks the one with fewest obstructions.
     private static func calculateTooltipPosition(
         nodePos: NodePosition,
+        allPositions: [NodePosition],
         viewSize: CGSize,
         cameraState: CameraState
     ) -> CGPoint {
@@ -114,59 +117,110 @@ struct AnalyticsGraphView: View {
         let width = max(1, viewSize.width - inset * 2)
         let height = max(1, viewSize.height - inset * 2)
 
-        // Use exact same formula as normalizedToScreen for node position
-        let base = CGPoint(
-            x: inset + nodePos.x * width,
-            y: inset + nodePos.y * height
-        )
-        let center = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
-        let screenX = (base.x - center.x) * cameraState.scale + center.x + cameraState.offset.width
-        let screenY = (base.y - center.y) * cameraState.scale + center.y + cameraState.offset.height
+        // Helper to convert normalized position to screen coordinates
+        func toScreen(_ pos: NodePosition) -> CGPoint {
+            let base = CGPoint(
+                x: inset + pos.x * width,
+                y: inset + pos.y * height
+            )
+            let center = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+            return CGPoint(
+                x: (base.x - center.x) * cameraState.scale + center.x + cameraState.offset.width,
+                y: (base.y - center.y) * cameraState.scale + center.y + cameraState.offset.height
+            )
+        }
+
+        let nodeScreen = toScreen(nodePos)
 
         // Tooltip sizing - keep compact
         let tooltipWidth: CGFloat = 100
         let tooltipHeight: CGFloat = 55
-        let tooltipGap: CGFloat = 4  // Minimal gap from node edge
 
-        // Use a small fixed offset from node center (just enough to clear the node)
-        let nodeOffset: CGFloat = 8 * cameraState.scale + tooltipGap
-
-        // Smart positioning: prefer upper-right, but adjust to stay in bounds
+        // Offset from node center
+        let nodeOffset: CGFloat = 12 * cameraState.scale
         let margin: CGFloat = 6
 
-        // Calculate available space in each direction
-        let spaceRight = viewSize.width - screenX - margin
-        let spaceLeft = screenX - margin
-        let spaceTop = screenY - margin
-        let spaceBottom = viewSize.height - screenY - margin
+        // Get screen positions of nearby nodes (within reasonable distance)
+        let maxCheckDistance: CGFloat = 150
+        let otherNodeScreens: [CGPoint] = allPositions
+            .filter { $0.id != nodePos.id }
+            .map { toScreen($0) }
+            .filter { pt in
+                let dx = pt.x - nodeScreen.x
+                let dy = pt.y - nodeScreen.y
+                return sqrt(dx * dx + dy * dy) < maxCheckDistance
+            }
 
-        // Determine horizontal position - position tooltip edge near node, not center
-        let tooltipX: CGFloat
-        if spaceRight >= nodeOffset + tooltipWidth / 2 {
-            // Place to the right: tooltip's left edge near node
-            tooltipX = screenX + nodeOffset + tooltipWidth / 2
-        } else if spaceLeft >= nodeOffset + tooltipWidth / 2 {
-            // Place to the left: tooltip's right edge near node
-            tooltipX = screenX - nodeOffset - tooltipWidth / 2
-        } else {
-            // Centered horizontally when no room on sides
-            tooltipX = min(max(tooltipWidth / 2 + margin, screenX), viewSize.width - tooltipWidth / 2 - margin)
+        // Define the four candidate positions (quadrants)
+        struct Candidate {
+            let x: CGFloat
+            let y: CGFloat
+            let edgePenalty: CGFloat  // How much it clips edges
+            let nodePenalty: Int      // How many nodes it overlaps
         }
 
-        // Determine vertical position - position tooltip edge near node
-        let tooltipY: CGFloat
-        if spaceTop >= nodeOffset + tooltipHeight / 2 {
-            // Place above: tooltip's bottom edge near node
-            tooltipY = screenY - nodeOffset - tooltipHeight / 2
-        } else if spaceBottom >= nodeOffset + tooltipHeight / 2 {
-            // Place below: tooltip's top edge near node
-            tooltipY = screenY + nodeOffset + tooltipHeight / 2
-        } else {
-            // Centered vertically when no room above/below
-            tooltipY = min(max(tooltipHeight / 2 + margin, screenY), viewSize.height - tooltipHeight / 2 - margin)
+        // Calculate candidate positions for each quadrant
+        let candidates: [(CGFloat, CGFloat)] = [
+            (nodeScreen.x + nodeOffset + tooltipWidth / 2, nodeScreen.y - nodeOffset - tooltipHeight / 2),  // Top-right
+            (nodeScreen.x - nodeOffset - tooltipWidth / 2, nodeScreen.y - nodeOffset - tooltipHeight / 2),  // Top-left
+            (nodeScreen.x + nodeOffset + tooltipWidth / 2, nodeScreen.y + nodeOffset + tooltipHeight / 2),  // Bottom-right
+            (nodeScreen.x - nodeOffset - tooltipWidth / 2, nodeScreen.y + nodeOffset + tooltipHeight / 2),  // Bottom-left
+        ]
+
+        // Score each candidate
+        var bestCandidate: (x: CGFloat, y: CGFloat) = candidates[0]
+        var bestScore: CGFloat = .infinity
+
+        for (candidateX, candidateY) in candidates {
+            // Calculate edge penalty (how much tooltip would be clipped)
+            var edgePenalty: CGFloat = 0
+            let left = candidateX - tooltipWidth / 2
+            let right = candidateX + tooltipWidth / 2
+            let top = candidateY - tooltipHeight / 2
+            let bottom = candidateY + tooltipHeight / 2
+
+            if left < margin { edgePenalty += margin - left }
+            if right > viewSize.width - margin { edgePenalty += right - (viewSize.width - margin) }
+            if top < margin { edgePenalty += margin - top }
+            if bottom > viewSize.height - margin { edgePenalty += bottom - (viewSize.height - margin) }
+
+            // Calculate node overlap penalty
+            let tooltipRect = CGRect(
+                x: candidateX - tooltipWidth / 2,
+                y: candidateY - tooltipHeight / 2,
+                width: tooltipWidth,
+                height: tooltipHeight
+            )
+
+            var nodePenalty: CGFloat = 0
+            let nodeRadius: CGFloat = 12 * cameraState.scale  // Approximate node visual radius
+            for otherScreen in otherNodeScreens {
+                // Check if node center is inside or very close to tooltip rect
+                let expandedRect = tooltipRect.insetBy(dx: -nodeRadius, dy: -nodeRadius)
+                if expandedRect.contains(otherScreen) {
+                    // Weight by how centered the node is in the tooltip (worse if dead center)
+                    let dx = abs(otherScreen.x - candidateX)
+                    let dy = abs(otherScreen.y - candidateY)
+                    let centeredness = 1.0 - (dx + dy) / (tooltipWidth + tooltipHeight)
+                    nodePenalty += 50 * centeredness  // High penalty for overlapping nodes
+                }
+            }
+
+            // Combined score (lower is better)
+            // Edge penalty is weighted higher since clipping looks worse than covering a node
+            let score = edgePenalty * 2 + nodePenalty
+
+            if score < bestScore {
+                bestScore = score
+                bestCandidate = (candidateX, candidateY)
+            }
         }
 
-        return CGPoint(x: tooltipX, y: tooltipY)
+        // Final clamping to ensure tooltip stays fully visible
+        let finalX = max(tooltipWidth / 2 + margin, min(bestCandidate.x, viewSize.width - tooltipWidth / 2 - margin))
+        let finalY = max(tooltipHeight / 2 + margin, min(bestCandidate.y, viewSize.height - tooltipHeight / 2 - margin))
+
+        return CGPoint(x: finalX, y: finalY)
     }
 }
 
