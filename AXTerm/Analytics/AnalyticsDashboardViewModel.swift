@@ -586,38 +586,38 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     // MARK: - Focus Mode Actions
 
-    /// Selects the primary hub, enables focus mode, and performs a single animated fit.
+    /// Selects the primary hub, sets it as anchor, enables focus mode, and fits.
     ///
-    /// Design: "Primary Hub" is split into distinct behaviors:
-    /// 1. Selects the hub node (based on current hubMetric)
-    /// 2. Enables focus mode (k-hop neighborhood filtering)
-    /// 3. Performs ONE animated fit-to-selection
-    /// 4. After that, NO auto-zoom unless user explicitly presses Fit
-    ///
-    /// This prevents the camera from "fighting" user pan/zoom.
+    /// Design: "Focus Primary Hub" does:
+    /// 1. Finds hub node (based on current hubMetric)
+    /// 2. Sets it as focus ANCHOR (independent from selection)
+    /// 3. Also selects it (for inspection convenience)
+    /// 4. Enables focus mode (k-hop neighborhood filtering)
+    /// 5. Performs ONE animated fit
     func selectPrimaryHub() {
-        guard let hubID = primaryHubNodeID() else { return }
+        guard let hubID = primaryHubNodeID(),
+              let hubNode = viewState.graphModel.nodes.first(where: { $0.id == hubID }) else { return }
 
-        // Select the hub node
+        // Set as focus anchor
+        focusState.setAnchor(nodeID: hubID, displayName: hubNode.callsign)
+
+        // Also select it for inspection convenience
         _ = GraphSelectionReducer.reduce(
             state: &selectionState,
             action: .clickNode(id: hubID, isShift: false)
         )
         updateSelectionState()
 
-        // Enable focus mode
-        focusState.isFocusEnabled = true
-
         // Recompute filtered graph
         recomputeFilteredGraph()
 
-        // Request a single fit-to-selection
-        focusState.didAutoFitForCurrentSelection = true
+        // Request a single fit
+        focusState.didAutoFitForCurrentAnchor = true
         fitToSelectionRequest = UUID()
 
         Telemetry.breadcrumb(
             category: "graph.focusHub",
-            message: "Primary hub selected with focus mode",
+            message: "Primary hub set as focus anchor",
             data: [
                 "hubID": hubID,
                 "metric": focusState.hubMetric.rawValue,
@@ -626,20 +626,54 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         )
     }
 
-    /// Toggles focus mode on/off.
-    /// When enabled with a selection, filters graph to k-hop neighborhood.
-    func toggleFocusMode() {
-        focusState.isFocusEnabled.toggle()
-        focusState.didAutoFitForCurrentSelection = false
+    /// Sets the currently selected node as the focus anchor.
+    /// Only works if exactly one node is selected.
+    func setSelectedAsAnchor() {
+        guard let selectedID = viewState.selectedNodeID,
+              let selectedNode = viewState.graphModel.nodes.first(where: { $0.id == selectedID }) else { return }
+
+        focusState.setAnchor(nodeID: selectedID, displayName: selectedNode.callsign)
         recomputeFilteredGraph()
+
+        // Fit to the new focus area
+        fitToSelectionRequest = UUID()
+        focusState.didAutoFitForCurrentAnchor = true
+
+        Telemetry.breadcrumb(
+            category: "graph.setAnchor",
+            message: "Selected node set as focus anchor",
+            data: [
+                "anchorID": selectedID,
+                "maxHops": focusState.maxHops
+            ]
+        )
     }
 
-    /// Sets focus mode explicitly.
-    func setFocusMode(_ enabled: Bool) {
-        guard focusState.isFocusEnabled != enabled else { return }
-        focusState.isFocusEnabled = enabled
-        focusState.didAutoFitForCurrentSelection = false
+    /// Clears focus mode and anchor, showing all nodes.
+    func clearFocus() {
+        focusState.clearFocus()
         recomputeFilteredGraph()
+
+        // Fit to show all nodes
+        fitToSelectionRequest = UUID()
+
+        Telemetry.breadcrumb(
+            category: "graph.clearFocus",
+            message: "Focus mode cleared"
+        )
+    }
+
+    /// Toggles focus mode on/off.
+    /// When enabled without an anchor, uses current selection as anchor.
+    func toggleFocusMode() {
+        if focusState.isFocusEnabled {
+            clearFocus()
+        } else if let selectedID = viewState.selectedNodeID,
+                  let selectedNode = viewState.graphModel.nodes.first(where: { $0.id == selectedID }) {
+            focusState.setAnchor(nodeID: selectedID, displayName: selectedNode.callsign)
+            recomputeFilteredGraph()
+            fitToSelectionRequest = UUID()
+        }
     }
 
     /// Updates the max hops for focus filtering.
@@ -656,25 +690,26 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         focusState.hubMetric = metric
     }
 
-    /// Explicit fit-to-selection camera action.
+    /// Explicit fit-to-view camera action.
     /// Computes bounding box of visible nodes and fits camera.
-    func requestFitToSelection() {
+    func requestFitToView() {
         fitToSelectionRequest = UUID()
     }
 
     /// Explicit reset camera action.
     /// Returns camera to default zoom/pan (zoom = 1, offset = 0).
-    func requestCameraReset() {
+    /// Does NOT affect selection or focus.
+    func requestResetView() {
         resetCameraRequest = UUID()
     }
 
-    /// Recomputes the filtered graph based on current selection and focus state.
-    /// Called when selection, focus mode, or maxHops changes.
+    /// Recomputes the filtered graph based on anchor and focus state.
+    /// Focus is based on ANCHOR node, not selection.
     private func recomputeFilteredGraph() {
-        if focusState.isFocusEnabled && !viewState.selectedNodeIDs.isEmpty {
+        if focusState.isFocusEnabled, let anchorID = focusState.anchorNodeID {
             filteredGraph = GraphAlgorithms.filterToKHop(
                 model: viewState.graphModel,
-                selectedNodeIDs: viewState.selectedNodeIDs,
+                selectedNodeIDs: Set([anchorID]),
                 maxHops: focusState.maxHops
             )
         } else {
@@ -682,7 +717,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             filteredGraph = FilteredGraphResult(
                 visibleNodeIDs: Set(viewState.graphModel.nodes.map { $0.id }),
                 visibleEdgeKeys: Set(viewState.graphModel.edges.map { FocusEdgeKey($0.sourceID, $0.targetID) }),
-                focusNodeID: viewState.selectedNodeID,
+                focusNodeID: nil,
                 hopDistances: [:]
             )
         }
@@ -764,7 +799,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
         // Reset auto-fit flag when selection changes (unless via selectPrimaryHub)
         // This ensures explicit selection changes don't trigger unwanted auto-fits
-        focusState.didAutoFitForCurrentSelection = false
+        focusState.didAutoFitForCurrentAnchor = false
 
         // Recompute filtered graph when selection changes
         recomputeFilteredGraph()

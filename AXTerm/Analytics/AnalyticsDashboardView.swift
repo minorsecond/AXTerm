@@ -15,6 +15,7 @@ struct AnalyticsDashboardView: View {
     @StateObject private var viewModel: AnalyticsDashboardViewModel
     @State private var graphResetToken = UUID()
     @State private var focusNodeID: String?
+    @State private var sidebarTab: GraphSidebarTab = .overview
 
     init(packetEngine: PacketEngine, settings: AppSettingsStore, viewModel: AnalyticsDashboardViewModel) {
         self.packetEngine = packetEngine
@@ -229,75 +230,97 @@ struct AnalyticsDashboardView: View {
 
     private var graphSection: some View {
         AnalyticsCard(title: "Network graph") {
-            HStack(alignment: .top, spacing: AnalyticsStyle.Layout.cardSpacing) {
-                AnalyticsGraphView(
-                    graphModel: viewModel.viewState.graphModel,
-                    nodePositions: viewModel.viewState.nodePositions,
-                    selectedNodeIDs: viewModel.viewState.selectedNodeIDs,
-                    hoveredNodeID: viewModel.viewState.hoveredNodeID,
-                    myCallsign: settings.myCallsign,
-                    resetToken: graphResetToken,
-                    focusNodeID: focusNodeID,
-                    fitToSelectionRequest: viewModel.fitToSelectionRequest,
-                    resetCameraRequest: viewModel.resetCameraRequest,
-                    visibleNodeIDs: viewModel.filteredGraph.visibleNodeIDs,
-                    onSelect: { nodeID, isShift in
-                        viewModel.handleNodeClick(nodeID, isShift: isShift)
+            VStack(spacing: 8) {
+                // Graph toolbar (HIG: single canonical location for view controls)
+                GraphToolbar(
+                    focusState: $viewModel.focusState,
+                    selectedNodeCount: viewModel.viewState.selectedNodeIDs.count,
+                    onFitToView: {
+                        viewModel.requestFitToView()
                     },
-                    onSelectMany: { nodeIDs, isShift in
-                        viewModel.handleSelectionRect(nodeIDs, isShift: isShift)
+                    onResetView: {
+                        viewModel.requestResetView()
                     },
                     onClearSelection: {
                         viewModel.handleBackgroundClick()
                     },
-                    onHover: { nodeID in
-                        viewModel.updateHover(for: nodeID)
+                    onClearFocus: {
+                        viewModel.clearFocus()
                     },
-                    onFocusHandled: {
-                        focusNodeID = nil
+                    onChangeAnchor: {
+                        viewModel.setSelectedAsAnchor()
                     }
                 )
-                .frame(minHeight: AnalyticsStyle.Layout.graphHeight)
-                .onAppear {
-                    viewModel.setMyCallsignForLayout(settings.myCallsign)
-                }
-                .onChange(of: settings.myCallsign) { _, newValue in
-                    viewModel.setMyCallsignForLayout(newValue)
-                }
 
-                GraphInspectorView(
-                    details: viewModel.selectedNodeDetails(),
-                    networkHealth: viewModel.viewState.networkHealth,
-                    onClear: {
-                        viewModel.handleBackgroundClick()
-                    },
-                    onFocus: {
-                        focusNodeID = viewModel.viewState.selectedNodeID
-                    },
-                    onFocusPrimaryHub: {
-                        // Use the new selectPrimaryHub which handles selection,
-                        // focus mode enable, and single auto-fit
-                        viewModel.selectPrimaryHub()
-                    },
-                    onShowActiveNodes: {
-                        let activeIDs = viewModel.activeNodeIDs()
-                        viewModel.handleSelectionRect(activeIDs, isShift: false)
-                    },
-                    onExportSummary: {
-                        let summary = viewModel.exportNetworkSummary()
-                        let pasteboard = NSPasteboard.general
-                        pasteboard.clearContents()
-                        pasteboard.setString(summary, forType: .string)
-                    },
-                    focusState: $viewModel.focusState,
-                    onFitToSelection: {
-                        viewModel.requestFitToSelection()
-                    },
-                    onResetCamera: {
-                        viewModel.requestCameraReset()
+                // Graph and sidebar
+                HStack(alignment: .top, spacing: AnalyticsStyle.Layout.cardSpacing) {
+                    AnalyticsGraphView(
+                        graphModel: viewModel.viewState.graphModel,
+                        nodePositions: viewModel.viewState.nodePositions,
+                        selectedNodeIDs: viewModel.viewState.selectedNodeIDs,
+                        hoveredNodeID: viewModel.viewState.hoveredNodeID,
+                        myCallsign: settings.myCallsign,
+                        resetToken: graphResetToken,
+                        focusNodeID: focusNodeID,
+                        fitToSelectionRequest: viewModel.fitToSelectionRequest,
+                        resetCameraRequest: viewModel.resetCameraRequest,
+                        visibleNodeIDs: viewModel.filteredGraph.visibleNodeIDs,
+                        onSelect: { nodeID, isShift in
+                            viewModel.handleNodeClick(nodeID, isShift: isShift)
+                            // Switch to Inspector tab when a node is selected
+                            if !isShift {
+                                sidebarTab = .inspector
+                            }
+                        },
+                        onSelectMany: { nodeIDs, isShift in
+                            viewModel.handleSelectionRect(nodeIDs, isShift: isShift)
+                        },
+                        onClearSelection: {
+                            viewModel.handleBackgroundClick()
+                        },
+                        onHover: { nodeID in
+                            viewModel.updateHover(for: nodeID)
+                        },
+                        onFocusHandled: {
+                            focusNodeID = nil
+                        }
+                    )
+                    .frame(minHeight: AnalyticsStyle.Layout.graphHeight)
+                    .onAppear {
+                        viewModel.setMyCallsignForLayout(settings.myCallsign)
                     }
-                )
-                .frame(width: AnalyticsStyle.Layout.inspectorWidth)
+                    .onChange(of: settings.myCallsign) { _, newValue in
+                        viewModel.setMyCallsignForLayout(newValue)
+                    }
+
+                    // New tabbed sidebar (HIG: stable, always-present)
+                    GraphSidebar(
+                        selectedTab: $sidebarTab,
+                        networkHealth: viewModel.viewState.networkHealth,
+                        onFocusPrimaryHub: {
+                            viewModel.selectPrimaryHub()
+                            sidebarTab = .inspector
+                        },
+                        onShowActiveNodes: {
+                            let activeIDs = viewModel.activeNodeIDs()
+                            viewModel.handleSelectionRect(activeIDs, isShift: false)
+                        },
+                        onExportSummary: {
+                            let summary = viewModel.exportNetworkSummary()
+                            let pasteboard = NSPasteboard.general
+                            pasteboard.clearContents()
+                            pasteboard.setString(summary, forType: .string)
+                        },
+                        selectedNodeDetails: viewModel.selectedNodeDetails(),
+                        onSetAsAnchor: {
+                            viewModel.setSelectedAsAnchor()
+                        },
+                        onClearSelection: {
+                            viewModel.handleBackgroundClick()
+                        },
+                        hubMetric: $viewModel.focusState.hubMetric
+                    )
+                }
             }
 
             if let note = viewModel.viewState.graphNote {
@@ -307,18 +330,8 @@ struct AnalyticsDashboardView: View {
                     .padding(.top, 4)
             }
 
-            HStack {
-                Text("Click to select, Shift-drag to select, drag to pan, ⌘ or Opt + scroll to zoom, Esc clears")
-                    .font(.caption)
-                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                Spacer()
-                Button("Reset view") {
-                    graphResetToken = UUID()
-                    viewModel.resetGraphView()
-                }
-                .buttonStyle(.bordered)
-            }
-            .padding(.top, 4)
+            // Keyboard shortcuts hint
+            Text("Click to select, Shift-drag to select, drag to pan, ⌘ or Opt + scroll to zoom, Esc clears")
                 .font(.caption)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 .padding(.top, 4)
@@ -896,128 +909,8 @@ private struct ChartTooltip: View {
     }
 }
 
-private struct GraphInspectorView: View {
-    let details: GraphInspectorDetails?
-    let networkHealth: NetworkHealth
-    let onClear: () -> Void
-    let onFocus: () -> Void
-    let onFocusPrimaryHub: () -> Void
-    let onShowActiveNodes: () -> Void
-    let onExportSummary: () -> Void
-
-    // Focus mode controls
-    @Binding var focusState: GraphFocusState
-    let onFitToSelection: () -> Void
-    let onResetCamera: () -> Void
-
-    /// Fixed height to prevent layout shifts when switching between views
-    private let fixedHeight: CGFloat = 520
-
-    var body: some View {
-        // Use a fixed frame to prevent layout shifts when switching between views
-        Group {
-            if let details {
-                // Node details view when a node is selected
-                NodeDetailsView(
-                    details: details,
-                    onClear: onClear,
-                    onFocus: onFocus
-                )
-            } else {
-                // Network Health view when no node is selected
-                NetworkHealthView(
-                    health: networkHealth,
-                    onFocusPrimaryHub: onFocusPrimaryHub,
-                    onShowActiveNodes: onShowActiveNodes,
-                    onExportSummary: onExportSummary,
-                    focusState: $focusState,
-                    onFitToSelection: onFitToSelection,
-                    onResetCamera: onResetCamera
-                )
-            }
-        }
-        .frame(height: fixedHeight, alignment: .top)
-    }
-}
-
-private struct NodeDetailsView: View {
-    let details: GraphInspectorDetails
-    let onClear: () -> Void
-    let onFocus: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Inspector")
-                .font(.headline)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(details.node.callsign)
-                    .font(.title3.weight(.semibold))
-
-                MetricRow(title: "Packets in", value: details.node.inCount)
-                MetricRow(title: "Packets out", value: details.node.outCount)
-                MetricRow(title: "Bytes in", value: details.node.inBytes)
-                MetricRow(title: "Bytes out", value: details.node.outBytes)
-                MetricRow(title: "Degree", value: details.node.degree)
-
-                Divider().padding(.vertical, 4)
-
-                Text("Top neighbors")
-                    .font(.caption)
-                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-
-                if details.neighbors.isEmpty {
-                    Text("No neighbors")
-                        .font(.caption)
-                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                } else {
-                    ForEach(details.neighbors.prefix(5), id: \.id) { neighbor in
-                        HStack {
-                            Text(neighbor.id)
-                            Spacer()
-                            Text("\(neighbor.weight)")
-                                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                        }
-                        .font(.caption)
-                    }
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            HStack {
-                Button("Focus") {
-                    onFocus()
-                }
-                .buttonStyle(.bordered)
-
-                Button("Clear") {
-                    onClear()
-                }
-                .buttonStyle(.bordered)
-            }
-        }
-        .padding(12)
-        .background(AnalyticsStyle.Colors.neutralFill)
-        .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
-    }
-}
-
-private struct MetricRow: View {
-    let title: String
-    let value: Int
-
-    var body: some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Text(value.formatted())
-                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                .monospacedDigit()
-        }
-        .font(.caption)
-    }
-}
+// Old GraphInspectorView, NodeDetailsView, and MetricRow removed
+// Now using GraphSidebar component with tabbed Overview/Inspector
 
 private struct FilterControlGroup<Content: View>: View {
     let title: String

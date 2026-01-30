@@ -45,23 +45,53 @@ enum HubMetric: String, CaseIterable, Identifiable, Sendable {
 
 // MARK: - Graph Focus State
 
-/// State for graph focus mode and k-hop filtering
+/// State for graph focus mode and k-hop filtering.
+///
+/// Key design decision: Focus anchor is INDEPENDENT from selection.
+/// - Selection = "What am I inspecting?" (shown in Inspector)
+/// - Focus anchor = "What am I filtering around?" (filters visible graph)
+///
+/// Users can select different nodes while maintaining focus on an anchor.
 struct GraphFocusState: Equatable, Sendable {
     /// Whether focus mode is enabled (filters graph to k-hop neighborhood)
     var isFocusEnabled: Bool = false
 
-    /// Number of hops from selected node to include (1-6)
+    /// The node ID that serves as the center of the focus filter.
+    /// This is independent from selection - you can inspect other nodes
+    /// while keeping focus anchored to this node.
+    var anchorNodeID: String?
+
+    /// Display name for the anchor node (callsign)
+    var anchorDisplayName: String?
+
+    /// Number of hops from anchor node to include (1-6)
     var maxHops: Int = 2
 
     /// Metric used to select the primary hub
     var hubMetric: HubMetric = .degree
 
-    /// Flag to prevent auto-fit after Primary Hub action
-    /// Reset when user explicitly changes selection or toggles focus
-    var didAutoFitForCurrentSelection: Bool = false
+    /// Flag to prevent auto-fit after setting anchor
+    /// Reset when user explicitly changes anchor
+    var didAutoFitForCurrentAnchor: Bool = false
 
     /// Valid range for maxHops
     static let hopRange: ClosedRange<Int> = 1...6
+
+    /// Clears focus mode and anchor
+    mutating func clearFocus() {
+        isFocusEnabled = false
+        anchorNodeID = nil
+        anchorDisplayName = nil
+        didAutoFitForCurrentAnchor = false
+    }
+
+    /// Sets a new anchor and enables focus mode
+    mutating func setAnchor(nodeID: String, displayName: String) {
+        anchorNodeID = nodeID
+        anchorDisplayName = displayName
+        isFocusEnabled = true
+        didAutoFitForCurrentAnchor = false
+    }
 }
 
 // MARK: - Filtered Graph Result

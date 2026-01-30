@@ -479,7 +479,8 @@ private struct SparklineView: View {
 }
 
 /// Popover view explaining how the health score is calculated.
-private struct ScoreExplainerView: View {
+/// Used by GraphSidebar's Overview tab.
+struct ScoreExplainerView: View {
     let breakdown: HealthScoreBreakdown
     let finalScore: Int
 
