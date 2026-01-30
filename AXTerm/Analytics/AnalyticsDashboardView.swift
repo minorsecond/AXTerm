@@ -16,6 +16,7 @@ struct AnalyticsDashboardView: View {
     @State private var graphResetToken = UUID()
     @State private var focusNodeID: String?
     @State private var sidebarTab: GraphSidebarTab = .overview
+    @State private var showExportToast = false
 
     init(packetEngine: PacketEngine, settings: AppSettingsStore, viewModel: AnalyticsDashboardViewModel) {
         self.packetEngine = packetEngine
@@ -62,6 +63,26 @@ struct AnalyticsDashboardView: View {
                 reduceTransparency: reduceTransparency
             ) {
                 filterSection
+            }
+
+            // Export toast notification
+            if showExportToast {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text(GraphCopy.QuickActions.exportSuccessMessage)
+                            .font(.callout.weight(.medium))
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+                    .padding(.bottom, 20)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .onAppear {
@@ -242,7 +263,8 @@ struct AnalyticsDashboardView: View {
                         viewModel.requestResetView()
                     },
                     onClearSelection: {
-                        viewModel.handleBackgroundClick()
+                        // Clear selection AND fit to nodes (per UX spec)
+                        viewModel.clearSelectionAndFit()
                     },
                     onClearFocus: {
                         viewModel.clearFocus()
@@ -310,13 +332,24 @@ struct AnalyticsDashboardView: View {
                             let pasteboard = NSPasteboard.general
                             pasteboard.clearContents()
                             pasteboard.setString(summary, forType: .string)
+                            // Show toast feedback
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showExportToast = true
+                            }
+                            // Auto-hide after 2 seconds
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showExportToast = false
+                                }
+                            }
                         },
                         selectedNodeDetails: viewModel.selectedNodeDetails(),
                         onSetAsAnchor: {
                             viewModel.setSelectedAsAnchor()
                         },
                         onClearSelection: {
-                            viewModel.handleBackgroundClick()
+                            // Clear selection AND fit to nodes (per UX spec)
+                            viewModel.clearSelectionAndFit()
                         },
                         hubMetric: $viewModel.focusState.hubMetric
                     )

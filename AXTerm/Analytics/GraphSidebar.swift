@@ -9,9 +9,12 @@
 //  - Uses segmented control for tab switching
 //  - Selection changes do not cause layout shifts
 //  - Both tabs are always rendered, visibility controlled by tab state
+//  - All copy centralized in GraphCopy.swift
 //
 
 import SwiftUI
+
+private typealias Copy = GraphCopy
 
 // MARK: - Sidebar Tab
 
@@ -227,36 +230,50 @@ private struct SidebarOverviewContent: View {
                 GridItem(.flexible(), alignment: .leading)
             ], spacing: 8) {
                 MetricCell(
-                    label: "Stations heard",
+                    label: Copy.Health.stationsHeardLabel,
                     value: formatNumber(health.metrics.totalStations),
-                    tooltip: "Total unique callsigns observed in this time window"
+                    tooltip: Copy.Health.stationsHeardTooltip
                 )
                 MetricCell(
-                    label: "Active (10m)",
+                    label: Copy.Health.activeStationsLabel,
                     value: "\(health.metrics.activeStations)",
-                    tooltip: "Stations with packets in the last 10 minutes"
+                    tooltip: Copy.Health.activeStationsTooltip
                 )
                 MetricCell(
-                    label: "Total packets",
+                    label: Copy.Health.totalPacketsLabel,
                     value: formatNumber(health.metrics.totalPackets),
-                    tooltip: "Number of packets processed"
+                    tooltip: Copy.Health.totalPacketsTooltip
                 )
                 MetricCell(
-                    label: "Packets/min",
+                    label: Copy.Health.packetRateLabel,
                     value: String(format: "%.1f", health.metrics.packetRate),
-                    tooltip: "Average packet rate over the selected time window"
+                    tooltip: Copy.Health.packetRateTooltip
                 )
                 MetricCell(
-                    label: "Main cluster",
-                    value: "\(health.metrics.largestComponentPercent)%",
-                    tooltip: "Percentage of stations in the largest connected component"
+                    label: Copy.Health.mainClusterLabel,
+                    value: formatPercent(health.metrics.largestComponentPercent),
+                    tooltip: Copy.Health.mainClusterTooltip
                 )
                 MetricCell(
-                    label: "Top relay share",
-                    value: "\(health.metrics.topRelayConcentration)%",
-                    tooltip: "Traffic concentration through the busiest relay node"
+                    label: Copy.Health.topRelayShareLabel,
+                    value: formatPercent(health.metrics.topRelayConcentration),
+                    tooltip: Copy.Health.topRelayShareTooltip
                 )
             }
+        }
+    }
+
+    /// Dynamic percentage formatting per HIG:
+    /// ≥10%: 0 decimals, <10%: 1 decimal, <1%: 2 decimals
+    private func formatPercent(_ value: Double) -> String {
+        if value >= 10 {
+            return "\(Int(value.rounded()))%"
+        } else if value >= 1 {
+            return String(format: "%.1f%%", value)
+        } else if value > 0 {
+            return String(format: "%.2f%%", value)
+        } else {
+            return "0%"
         }
     }
 
@@ -314,12 +331,13 @@ private struct SidebarOverviewContent: View {
                 Button(action: onFocusPrimaryHub) {
                     HStack {
                         Image(systemName: "scope")
-                        Text("Focus Primary Hub")
+                        Text(Copy.QuickActions.focusPrimaryHubLabel)
                     }
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
-                .help("Select and focus on the most connected node")
+                .help(Copy.QuickActions.focusPrimaryHubTooltip)
+                .accessibilityLabel(Copy.QuickActions.focusPrimaryHubAccessibility)
 
                 // Hub metric picker button
                 Button(action: { showingHubMetricPicker.toggle() }) {
@@ -327,52 +345,58 @@ private struct SidebarOverviewContent: View {
                         .font(.caption2)
                 }
                 .buttonStyle(.bordered)
-                .help("Choose how to identify the primary hub")
+                .help(Copy.HubMetric.pickerTooltip)
                 .popover(isPresented: $showingHubMetricPicker, arrowEdge: .bottom) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Hub Metric")
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
-
-                        Picker("", selection: $hubMetric) {
-                            ForEach(HubMetric.allCases) { metric in
-                                VStack(alignment: .leading) {
-                                    Text(metric.rawValue)
-                                    Text(metric.description)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .tag(metric)
-                            }
-                        }
-                        .pickerStyle(.radioGroup)
-                        .labelsHidden()
-                    }
-                    .padding(12)
-                    .frame(width: 180)
+                    hubMetricPickerContent
                 }
             }
 
             Button(action: onShowActiveNodes) {
                 HStack {
                     Image(systemName: "antenna.radiowaves.left.and.right")
-                    Text("Show Active Stations")
+                    Text(Copy.QuickActions.showActiveNodesLabel)
                 }
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .help("Select all stations active in the last 10 minutes")
+            .help(Copy.QuickActions.showActiveNodesTooltip)
+            .accessibilityLabel(Copy.QuickActions.showActiveNodesAccessibility)
 
             Button(action: onExportSummary) {
                 HStack {
                     Image(systemName: "square.and.arrow.up")
-                    Text("Export Summary")
+                    Text(Copy.QuickActions.exportSummaryLabel)
                 }
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
-            .help("Copy network health summary to clipboard")
+            .help(Copy.QuickActions.exportSummaryTooltip)
+            .accessibilityLabel(Copy.QuickActions.exportSummaryAccessibility)
         }
+    }
+
+    private var hubMetricPickerContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(Copy.HubMetric.pickerLabel)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Picker("", selection: $hubMetric) {
+                ForEach(HubMetric.allCases) { metric in
+                    VStack(alignment: .leading) {
+                        Text(metric.rawValue)
+                        Text(metric.description)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .tag(metric)
+                }
+            }
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
+        }
+        .padding(12)
+        .frame(width: 180)
     }
 
     // MARK: - Helpers
@@ -417,7 +441,7 @@ private struct SidebarInspectorContent: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 // Header
-                Text("Inspector")
+                Text(Copy.Inspector.tabLabel)
                     .font(.headline)
 
                 // Node callsign
@@ -429,29 +453,29 @@ private struct SidebarInspectorContent: View {
                 // Metrics
                 VStack(alignment: .leading, spacing: 6) {
                     InspectorMetricRow(
-                        title: "Packets in",
+                        title: Copy.Inspector.packetsInLabel,
                         value: details.node.inCount,
-                        tooltip: "Number of packets received by this station"
+                        tooltip: Copy.Inspector.packetsInTooltip
                     )
                     InspectorMetricRow(
-                        title: "Packets out",
+                        title: Copy.Inspector.packetsOutLabel,
                         value: details.node.outCount,
-                        tooltip: "Number of packets sent by this station"
+                        tooltip: Copy.Inspector.packetsOutTooltip
                     )
                     InspectorMetricRow(
-                        title: "Bytes in",
+                        title: Copy.Inspector.bytesInLabel,
                         value: details.node.inBytes,
-                        tooltip: "Total bytes received"
+                        tooltip: Copy.Inspector.bytesInTooltip
                     )
                     InspectorMetricRow(
-                        title: "Bytes out",
+                        title: Copy.Inspector.bytesOutLabel,
                         value: details.node.outBytes,
-                        tooltip: "Total bytes sent"
+                        tooltip: Copy.Inspector.bytesOutTooltip
                     )
                     InspectorMetricRow(
-                        title: "Degree",
+                        title: Copy.Inspector.degreeLabel,
                         value: details.node.degree,
-                        tooltip: "Number of direct connections to other stations"
+                        tooltip: Copy.Inspector.degreeTooltip
                     )
                 }
 
@@ -459,12 +483,13 @@ private struct SidebarInspectorContent: View {
 
                 // Top neighbors
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Top neighbors")
+                    Text(Copy.Inspector.neighborsLabel)
                         .font(.caption.weight(.medium))
                         .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        .help(Copy.Inspector.neighborsTooltip)
 
                     if details.neighbors.isEmpty {
-                        Text("No neighbors")
+                        Text(Copy.HubMetric.noNeighborsFound)
                             .font(.caption)
                             .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                             .padding(.vertical, 4)
@@ -490,22 +515,24 @@ private struct SidebarInspectorContent: View {
                     Button(action: onSetAsAnchor) {
                         HStack {
                             Image(systemName: "scope")
-                            Text("Set as Focus Anchor")
+                            Text(Copy.Focus.setAsAnchorLabel)
                         }
                         .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
-                    .help("Filter the graph to show only nodes within N hops of this station")
+                    .help(Copy.Focus.setAsAnchorTooltip)
+                    .accessibilityLabel(Copy.Focus.setAsAnchorAccessibility)
 
                     Button(action: onClearSelection) {
                         HStack {
                             Image(systemName: "xmark")
-                            Text("Clear Selection")
+                            Text(Copy.Toolbar.clearSelectionLabel + " Selection")
                         }
                         .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
-                    .help("Deselect this node")
+                    .help(Copy.Selection.nodeChipClearTooltip)
+                    .accessibilityLabel(Copy.Selection.clearButtonAccessibility)
                 }
             }
             .padding(12)
@@ -523,11 +550,11 @@ private struct SidebarInspectorContent: View {
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary.opacity(0.5))
 
             VStack(spacing: 4) {
-                Text("No Selection")
+                Text(Copy.Inspector.noSelectionTitle)
                     .font(.headline)
                     .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
 
-                Text("Click a node in the graph\nto view its details.")
+                Text(Copy.Inspector.noSelectionMessage)
                     .font(.caption)
                     .foregroundStyle(AnalyticsStyle.Colors.textSecondary.opacity(0.8))
                     .multilineTextAlignment(.center)

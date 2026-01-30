@@ -232,6 +232,20 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         updateSelectionState()
     }
 
+    /// Clears selection entirely and fits view to all visible nodes.
+    /// Called from toolbar "Clear" button and sidebar "Clear Selection" button.
+    func clearSelectionAndFit() {
+        _ = GraphSelectionReducer.reduce(state: &selectionState, action: .clickBackground)
+        updateSelectionState()
+        // Fit to visible nodes after clearing
+        fitToSelectionRequest = UUID()
+
+        Telemetry.breadcrumb(
+            category: "graph.clearSelection",
+            message: "Selection cleared and fit to view requested"
+        )
+    }
+
     func updateHover(for nodeID: String?) {
         viewState.hoveredNodeID = nodeID
     }
@@ -594,9 +608,15 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     /// 3. Also selects it (for inspection convenience)
     /// 4. Enables focus mode (k-hop neighborhood filtering)
     /// 5. Performs ONE animated fit
+    /// 6. Shows status message if neighborhood is small
     func selectPrimaryHub() {
+        let metricName = focusState.hubMetric.rawValue
         guard let hubID = primaryHubNodeID(),
-              let hubNode = viewState.graphModel.nodes.first(where: { $0.id == hubID }) else { return }
+              let hubNode = viewState.graphModel.nodes.first(where: { $0.id == hubID }) else {
+            // No hub found - graph might be empty
+            logger.warning("No primary hub found for metric \(metricName)")
+            return
+        }
 
         // Set as focus anchor
         focusState.setAnchor(nodeID: hubID, displayName: hubNode.callsign)
@@ -611,6 +631,13 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         // Recompute filtered graph
         recomputeFilteredGraph()
 
+        // Log if neighborhood is small for debugging
+        let neighborCount = filteredGraph.visibleNodeIDs.count - 1 // exclude anchor
+        let maxHops = focusState.maxHops
+        if neighborCount == 0 {
+            logger.info("Hub \(hubID) has no neighbors in \(maxHops)-hop neighborhood")
+        }
+
         // Request a single fit
         focusState.didAutoFitForCurrentAnchor = true
         fitToSelectionRequest = UUID()
@@ -620,8 +647,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             message: "Primary hub set as focus anchor",
             data: [
                 "hubID": hubID,
-                "metric": focusState.hubMetric.rawValue,
-                "maxHops": focusState.maxHops
+                "metric": metricName,
+                "maxHops": maxHops,
+                "visibleNodes": filteredGraph.visibleNodeIDs.count
             ]
         )
     }

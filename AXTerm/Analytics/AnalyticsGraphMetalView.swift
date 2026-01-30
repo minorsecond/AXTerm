@@ -332,7 +332,7 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
         context.coordinator.handle(focusNodeID: focusNodeID)
         context.coordinator.handle(
             fitToSelectionRequest: fitToSelectionRequest,
-            selectedNodeIDs: selectedNodeIDs,
+            visibleNodeIDs: visibleNodeIDs,
             nodePositions: nodePositions
         )
         context.coordinator.handle(resetCameraRequest: resetCameraRequest)
@@ -623,20 +623,22 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         requestInteractionRedraw()
     }
 
-    /// Handles fit-to-selection requests: computes bounding box of selected nodes and fits camera.
+    /// Handles fit-to-view requests: computes bounding box of visible nodes and fits camera.
+    /// Always fits to all visible nodes (respecting focus filter), NOT to selection.
     func handle(
         fitToSelectionRequest: UUID?,
-        selectedNodeIDs: Set<String>,
+        visibleNodeIDs: Set<String>,
         nodePositions: [NodePosition]
     ) {
         guard fitToSelectionRequest != lastFitToSelectionRequest else { return }
         lastFitToSelectionRequest = fitToSelectionRequest
         guard fitToSelectionRequest != nil, let view else { return }
 
-        // Compute bounding box of selected nodes (or all nodes if none selected)
-        let targetNodeIDs = selectedNodeIDs.isEmpty
+        // Fit to all visible nodes (respecting focus filter)
+        // If visibleNodeIDs is empty, fall back to all nodes
+        let targetNodeIDs = visibleNodeIDs.isEmpty
             ? Set(nodePositions.map { $0.id })
-            : selectedNodeIDs
+            : visibleNodeIDs
 
         guard let bounds = GraphAlgorithms.boundingBox(
             visibleNodeIDs: targetNodeIDs,

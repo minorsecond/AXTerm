@@ -10,9 +10,12 @@
 //  - Clear focus state indicator with settings popover
 //  - Selection count with clear action
 //  - No duplicate controls elsewhere in the UI
+//  - All copy centralized in GraphCopy.swift
 //
 
 import SwiftUI
+
+private typealias Copy = GraphCopy
 
 // MARK: - Graph Toolbar
 
@@ -57,18 +60,20 @@ struct GraphToolbar: View {
     private var viewControlsGroup: some View {
         HStack(spacing: 4) {
             Button(action: onFitToView) {
-                Label("Fit", systemImage: "arrow.up.left.and.arrow.down.right")
+                Label(Copy.Toolbar.fitToNodesLabel, systemImage: "arrow.up.left.and.arrow.down.right")
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(.borderless)
-            .help("Adjust zoom to fit all visible nodes")
+            .help(Copy.Toolbar.fitToNodesTooltip)
+            .accessibilityLabel(Copy.Toolbar.fitToNodesAccessibility)
 
             Button(action: onResetView) {
-                Label("Reset", systemImage: "arrow.counterclockwise")
+                Label(Copy.Toolbar.resetViewLabel, systemImage: "arrow.counterclockwise")
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(.borderless)
-            .help("Reset pan and zoom to default. Does not affect selection or focus.")
+            .help(Copy.Toolbar.resetViewTooltip)
+            .accessibilityLabel(Copy.Toolbar.resetViewAccessibility)
         }
         .font(.system(size: 12))
     }
@@ -111,42 +116,42 @@ struct GraphToolbar: View {
                     .foregroundStyle(Color.secondary)
             }
             .buttonStyle(.plain)
-            .help("Exit focus mode and show all nodes")
+            .help(Copy.Focus.clearFocusTooltip)
+            .accessibilityLabel(Copy.Focus.clearFocusAccessibility)
         }
     }
 
     private var focusPillLabel: String {
         let name = focusState.anchorDisplayName ?? focusState.anchorNodeID ?? "Unknown"
-        return "\(name) (\(focusState.maxHops))"
+        let hopText = focusState.maxHops == 1 ? "1 hop" : "\(focusState.maxHops) hops"
+        return "\(name) (\(hopText))"
     }
 
     private var focusPillTooltip: String {
         let name = focusState.anchorDisplayName ?? focusState.anchorNodeID ?? "Unknown"
-        return "Graph filtered to \(focusState.maxHops) hops from \(name). Click to change settings."
+        return String(format: Copy.Focus.focusPillTooltipTemplate, focusState.maxHops, name)
+    }
+
+    private var focusPillAccessibility: String {
+        let name = focusState.anchorDisplayName ?? focusState.anchorNodeID ?? "Unknown"
+        return String(format: Copy.Focus.focusPillAccessibilityTemplate, focusState.maxHops, name)
     }
 
     // MARK: - Selection Indicator
 
     private var selectionIndicator: some View {
         HStack(spacing: 6) {
-            Text(selectionLabel)
+            Text(Copy.Selection.countLabel(selectedNodeCount))
                 .font(.system(size: 11))
                 .foregroundStyle(Color.secondary)
 
             Button(action: onClearSelection) {
-                Text("Clear")
+                Text(Copy.Toolbar.clearSelectionLabel)
                     .font(.system(size: 11, weight: .medium))
             }
             .buttonStyle(.borderless)
-            .help("Deselect all nodes")
-        }
-    }
-
-    private var selectionLabel: String {
-        if selectedNodeCount == 1 {
-            return "1 node selected"
-        } else {
-            return "\(selectedNodeCount) nodes selected"
+            .help(Copy.Selection.clearButtonTooltip)
+            .accessibilityLabel(Copy.Selection.clearButtonAccessibility)
         }
     }
 }
@@ -173,7 +178,7 @@ private struct FocusSettingsPopover: View {
 
             // Hop count stepper
             HStack {
-                Text("Hops:")
+                Text(Copy.Focus.hopCountLabel + ":")
                     .font(.system(size: 12))
                 Spacer()
                 Stepper(
@@ -186,7 +191,7 @@ private struct FocusSettingsPopover: View {
                 }
                 .controlSize(.small)
             }
-            .help("Number of connection hops to include from the anchor node")
+            .help(Copy.Focus.hopCountTooltip)
 
             Divider()
 
@@ -194,14 +199,14 @@ private struct FocusSettingsPopover: View {
             Button(action: onChangeAnchor) {
                 HStack {
                     Image(systemName: "arrow.triangle.2.circlepath")
-                    Text("Use Selected as Anchor")
+                    Text(Copy.Focus.useSelectedAsAnchorLabel)
                 }
                 .font(.system(size: 11))
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .help("Set the currently selected node as the focus anchor")
+            .help(Copy.Focus.useSelectedAsAnchorTooltip)
         }
         .padding(12)
         .frame(width: 200)
