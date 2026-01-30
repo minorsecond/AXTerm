@@ -32,6 +32,14 @@ final class AppSettingsStore: ObservableObject {
     static let sentrySendPacketContentsKey = "sentrySendPacketContents"
     static let sentrySendConnectionDetailsKey = "sentrySendConnectionDetails"
 
+    // Analytics settings keys
+    static let analyticsTimeframeKey = "analyticsTimeframe"
+    static let analyticsBucketKey = "analyticsBucket"
+    static let analyticsIncludeViaKey = "analyticsIncludeVia"
+    static let analyticsMinEdgeCountKey = "analyticsMinEdgeCount"
+    static let analyticsMaxNodesKey = "analyticsMaxNodes"
+    static let analyticsHubMetricKey = "analyticsHubMetric"
+
     static let defaultHost = "localhost"
     static let defaultPort = 8001
     static let defaultRetention = 50_000
@@ -53,6 +61,14 @@ final class AppSettingsStore: ObservableObject {
     static let defaultSentryEnabled = false
     static let defaultSentrySendPacketContents = false
     static let defaultSentrySendConnectionDetails = false
+
+    // Analytics defaults (packet-radio optimized)
+    static let defaultAnalyticsTimeframe = "twentyFourHours"  // 24h captures daily activity patterns
+    static let defaultAnalyticsBucket = "auto"
+    static let defaultAnalyticsIncludeVia = true  // Digipeater paths are essential for packet networks
+    static let defaultAnalyticsMinEdgeCount = 2   // Filters single-packet noise
+    static let defaultAnalyticsMaxNodes = 150
+    static let defaultAnalyticsHubMetric = "Degree"  // Matches HubMetric.degree.rawValue
 
     @Published var host: String {
         didSet {
@@ -208,6 +224,50 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistSentrySendConnectionDetails() }
     }
 
+    // MARK: - Analytics Settings
+
+    @Published var analyticsTimeframe: String {
+        didSet { persistAnalyticsTimeframe() }
+    }
+
+    @Published var analyticsBucket: String {
+        didSet { persistAnalyticsBucket() }
+    }
+
+    @Published var analyticsIncludeVia: Bool {
+        didSet { persistAnalyticsIncludeVia() }
+    }
+
+    @Published var analyticsMinEdgeCount: Int {
+        didSet {
+            let clamped = max(1, min(10, analyticsMinEdgeCount))
+            guard clamped == analyticsMinEdgeCount else {
+                deferUpdate { [weak self, clamped] in
+                    self?.analyticsMinEdgeCount = clamped
+                }
+                return
+            }
+            persistAnalyticsMinEdgeCount()
+        }
+    }
+
+    @Published var analyticsMaxNodes: Int {
+        didSet {
+            let clamped = max(10, min(500, analyticsMaxNodes))
+            guard clamped == analyticsMaxNodes else {
+                deferUpdate { [weak self, clamped] in
+                    self?.analyticsMaxNodes = clamped
+                }
+                return
+            }
+            persistAnalyticsMaxNodes()
+        }
+    }
+
+    @Published var analyticsHubMetric: String {
+        didSet { persistAnalyticsHubMetric() }
+    }
+
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -234,6 +294,14 @@ final class AppSettingsStore: ObservableObject {
         let storedSentrySendPacketContents = defaults.object(forKey: Self.sentrySendPacketContentsKey) as? Bool ?? Self.defaultSentrySendPacketContents
         let storedSentrySendConnectionDetails = defaults.object(forKey: Self.sentrySendConnectionDetailsKey) as? Bool ?? Self.defaultSentrySendConnectionDetails
 
+        // Analytics settings
+        let storedAnalyticsTimeframe = defaults.string(forKey: Self.analyticsTimeframeKey) ?? Self.defaultAnalyticsTimeframe
+        let storedAnalyticsBucket = defaults.string(forKey: Self.analyticsBucketKey) ?? Self.defaultAnalyticsBucket
+        let storedAnalyticsIncludeVia = defaults.object(forKey: Self.analyticsIncludeViaKey) as? Bool ?? Self.defaultAnalyticsIncludeVia
+        let storedAnalyticsMinEdgeCount = defaults.object(forKey: Self.analyticsMinEdgeCountKey) as? Int ?? Self.defaultAnalyticsMinEdgeCount
+        let storedAnalyticsMaxNodes = defaults.object(forKey: Self.analyticsMaxNodesKey) as? Int ?? Self.defaultAnalyticsMaxNodes
+        let storedAnalyticsHubMetric = defaults.string(forKey: Self.analyticsHubMetricKey) ?? Self.defaultAnalyticsHubMetric
+
         self.host = Self.sanitizeHost(storedHost)
         self.port = Self.sanitizePort(storedPort)
         self.retentionLimit = Self.sanitizeRetention(storedRetention)
@@ -255,6 +323,14 @@ final class AppSettingsStore: ObservableObject {
         self.sentryEnabled = storedSentryEnabled
         self.sentrySendPacketContents = storedSentrySendPacketContents
         self.sentrySendConnectionDetails = storedSentrySendConnectionDetails
+
+        // Analytics settings
+        self.analyticsTimeframe = storedAnalyticsTimeframe
+        self.analyticsBucket = storedAnalyticsBucket
+        self.analyticsIncludeVia = storedAnalyticsIncludeVia
+        self.analyticsMinEdgeCount = max(1, min(10, storedAnalyticsMinEdgeCount))
+        self.analyticsMaxNodes = max(10, min(500, storedAnalyticsMaxNodes))
+        self.analyticsHubMetric = storedAnalyticsHubMetric
     }
 
     var portValue: UInt16 {
@@ -383,5 +459,31 @@ final class AppSettingsStore: ObservableObject {
 
     private func persistSentrySendConnectionDetails() {
         defaults.set(sentrySendConnectionDetails, forKey: Self.sentrySendConnectionDetailsKey)
+    }
+
+    // MARK: - Analytics Settings Persistence
+
+    private func persistAnalyticsTimeframe() {
+        defaults.set(analyticsTimeframe, forKey: Self.analyticsTimeframeKey)
+    }
+
+    private func persistAnalyticsBucket() {
+        defaults.set(analyticsBucket, forKey: Self.analyticsBucketKey)
+    }
+
+    private func persistAnalyticsIncludeVia() {
+        defaults.set(analyticsIncludeVia, forKey: Self.analyticsIncludeViaKey)
+    }
+
+    private func persistAnalyticsMinEdgeCount() {
+        defaults.set(analyticsMinEdgeCount, forKey: Self.analyticsMinEdgeCountKey)
+    }
+
+    private func persistAnalyticsMaxNodes() {
+        defaults.set(analyticsMaxNodes, forKey: Self.analyticsMaxNodesKey)
+    }
+
+    private func persistAnalyticsHubMetric() {
+        defaults.set(analyticsHubMetric, forKey: Self.analyticsHubMetricKey)
     }
 }

@@ -13,6 +13,10 @@ import os
 @MainActor
 final class AnalyticsDashboardViewModel: ObservableObject {
     private let logger = Logger(subsystem: "AXTerm", category: "Analytics")
+
+    /// Reference to settings store for persistence (optional for backward compat)
+    private weak var settingsStore: AppSettingsStore?
+
     @Published var timeframe: AnalyticsTimeframe {
         didSet {
             guard timeframe != oldValue else { return }
@@ -20,6 +24,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             updateResolvedBucket(reason: "timeframe")
             scheduleAggregation(reason: "timeframe")
             scheduleGraphBuild(reason: "timeframe")
+            persistTimeframe()
         }
     }
     @Published var bucketSelection: AnalyticsBucketSelection {
@@ -28,6 +33,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             trackFilterChange(reason: "bucket")
             updateResolvedBucket(reason: "bucket")
             scheduleAggregation(reason: "bucket")
+            persistBucket()
         }
     }
     @Published private(set) var resolvedBucket: TimeBucket
@@ -57,6 +63,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             trackFilterChange(reason: "includeVia")
             scheduleAggregation(reason: "includeVia")
             scheduleGraphBuild(reason: "includeVia")
+            persistIncludeVia()
         }
     }
     @Published var minEdgeCount: Int {
@@ -69,6 +76,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             guard minEdgeCount != oldValue else { return }
             trackFilterChange(reason: "minEdgeCount")
             scheduleGraphBuild(reason: "minEdgeCount")
+            persistMinEdgeCount()
         }
     }
     @Published var maxNodes: Int {
@@ -81,6 +89,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             guard maxNodes != oldValue else { return }
             trackFilterChange(reason: "maxNodes")
             scheduleGraphBuild(reason: "maxNodes")
+            persistMaxNodes()
         }
     }
 
@@ -123,39 +132,103 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private var loopDetection = RecomputeLoopDetector()
     private var isActive = false
 
+    /// Creates the view model, optionally loading persisted settings.
+    ///
+    /// - Parameters:
+    ///   - settingsStore: If provided, settings are loaded from and persisted to this store.
+    ///   - calendar: Calendar for date calculations.
+    ///   - packetDebounce: Debounce interval for packet aggregation.
+    ///   - graphDebounce: Debounce interval for graph building.
+    ///   - packetScheduler: RunLoop for packet processing.
     init(
+        settingsStore: AppSettingsStore? = nil,
         calendar: Calendar = .current,
-        timeframe: AnalyticsTimeframe = .oneHour,
-        bucketSelection: AnalyticsBucketSelection = .auto,
-        includeViaDigipeaters: Bool = false,
-        minEdgeCount: Int = 1,
-        maxNodes: Int? = nil,
         packetDebounce: TimeInterval = 0.25,
         graphDebounce: TimeInterval = 0.4,
         packetScheduler: RunLoop = .main
     ) {
+        self.settingsStore = settingsStore
         self.calendar = calendar
-        self.timeframe = timeframe
-        self.bucketSelection = bucketSelection
-        self.includeViaDigipeaters = includeViaDigipeaters
-        self.minEdgeCount = AnalyticsInputNormalizer.minEdgeCount(minEdgeCount)
-        self.maxNodes = AnalyticsInputNormalizer.maxNodes(maxNodes ?? AnalyticsStyle.Graph.maxNodesDefault)
-        let defaultRange = timeframe.dateInterval(
+
+        // Load from settings store or use defaults
+        let loadedTimeframe = Self.loadTimeframe(from: settingsStore)
+        let loadedBucket = Self.loadBucketSelection(from: settingsStore)
+        let loadedIncludeVia = settingsStore?.analyticsIncludeVia ?? AppSettingsStore.defaultAnalyticsIncludeVia
+        let loadedMinEdgeCount = settingsStore?.analyticsMinEdgeCount ?? AppSettingsStore.defaultAnalyticsMinEdgeCount
+        let loadedMaxNodes = settingsStore?.analyticsMaxNodes ?? AppSettingsStore.defaultAnalyticsMaxNodes
+        let loadedHubMetric = Self.loadHubMetric(from: settingsStore)
+
+        // Compute default range for bucket resolution
+        let defaultRange = loadedTimeframe.dateInterval(
             now: Date(),
             customStart: Date().addingTimeInterval(-3600),
             customEnd: Date()
         )
+        let initialChartWidth: CGFloat = 640
+
+        // Initialize all stored properties first (required before accessing self)
+        self.timeframe = loadedTimeframe
+        self.bucketSelection = loadedBucket
+        self.includeViaDigipeaters = loadedIncludeVia
+        self.minEdgeCount = AnalyticsInputNormalizer.minEdgeCount(loadedMinEdgeCount)
+        self.maxNodes = AnalyticsInputNormalizer.maxNodes(loadedMaxNodes)
         self.customRangeStart = defaultRange.start
         self.customRangeEnd = defaultRange.end
-        self.resolvedBucket = bucketSelection.resolvedBucket(
-            for: timeframe,
-            chartWidth: chartWidth,
+        self.resolvedBucket = loadedBucket.resolvedBucket(
+            for: loadedTimeframe,
+            chartWidth: initialChartWidth,
             customRange: defaultRange
         )
         self.aggregationScheduler = CoalescingScheduler(delay: .milliseconds(Int(packetDebounce * 1000)))
         self.graphScheduler = CoalescingScheduler(delay: .milliseconds(Int(graphDebounce * 1000)))
+
+        // Now that all stored properties are initialized, we can access self
+        self.focusState.hubMetric = loadedHubMetric
+
         bindPackets(packetScheduler: packetScheduler)
         bindFocusState()
+    }
+
+    // MARK: - Settings Persistence Helpers
+
+    private static func loadTimeframe(from store: AppSettingsStore?) -> AnalyticsTimeframe {
+        guard let store else { return .twentyFourHours }
+        return AnalyticsTimeframe(rawValue: store.analyticsTimeframe) ?? .twentyFourHours
+    }
+
+    private static func loadBucketSelection(from store: AppSettingsStore?) -> AnalyticsBucketSelection {
+        guard let store else { return .auto }
+        return AnalyticsBucketSelection(rawValue: store.analyticsBucket) ?? .auto
+    }
+
+    private static func loadHubMetric(from store: AppSettingsStore?) -> HubMetric {
+        guard let store else { return .degree }
+        // HubMetric raw values are capitalized ("Degree", "Traffic", "Bridges")
+        return HubMetric(rawValue: store.analyticsHubMetric) ?? .degree
+    }
+
+    private func persistTimeframe() {
+        settingsStore?.analyticsTimeframe = timeframe.rawValue
+    }
+
+    private func persistBucket() {
+        settingsStore?.analyticsBucket = bucketSelection.rawValue
+    }
+
+    private func persistIncludeVia() {
+        settingsStore?.analyticsIncludeVia = includeViaDigipeaters
+    }
+
+    private func persistMinEdgeCount() {
+        settingsStore?.analyticsMinEdgeCount = minEdgeCount
+    }
+
+    private func persistMaxNodes() {
+        settingsStore?.analyticsMaxNodes = maxNodes
+    }
+
+    private func persistHubMetric() {
+        settingsStore?.analyticsHubMetric = focusState.hubMetric.rawValue
     }
 
     func updatePackets(_ packets: [Packet]) {
@@ -716,6 +789,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     func setHubMetric(_ metric: HubMetric) {
         guard focusState.hubMetric != metric else { return }
         focusState.hubMetric = metric
+        persistHubMetric()
     }
 
     /// Explicit fit-to-view camera action.

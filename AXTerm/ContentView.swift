@@ -31,12 +31,14 @@ struct ContentView: View {
     @State private var didLoadConsoleHistory = false
     @State private var didLoadRawHistory = false
     @State private var selectionMutationScheduler = SelectionMutationScheduler()
-    @StateObject private var analyticsViewModel = AnalyticsDashboardViewModel()
+    @StateObject private var analyticsViewModel: AnalyticsDashboardViewModel
 
     init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter) {
         _client = StateObject(wrappedValue: client)
         _settings = ObservedObject(wrappedValue: settings)
         _inspectionRouter = ObservedObject(wrappedValue: inspectionRouter)
+        // Initialize analytics view model with settings store for persistence
+        _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(settingsStore: settings))
     }
 
     var body: some View {
