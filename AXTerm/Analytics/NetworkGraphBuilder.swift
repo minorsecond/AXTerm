@@ -167,6 +167,16 @@ struct NetworkGraphBuilder {
                         agg.hasViaPath = true
                         viaPathEdges[key] = agg
                     }
+
+                    // Also add digipeaters to nodeStats so they appear as nodes
+                    for digiKey in viaKeys {
+                        var digiStats = nodeStats[digiKey, default: NodeAggregate()]
+                        digiStats.inCount += 1  // Count as "relayed through"
+                        digiStats.outCount += 1
+                        digiStats.inBytes += event.payloadBytes
+                        digiStats.outBytes += event.payloadBytes
+                        nodeStats[digiKey] = digiStats
+                    }
                 }
             }
         }
@@ -405,8 +415,13 @@ struct NetworkGraphBuilder {
             relationships[observer] = observerRels
         }
 
-        // PHASE 4: Build nodes from edges
-        let activeNodeIDs = Set(classifiedEdges.flatMap { [$0.sourceID, $0.targetID] })
+        // PHASE 4: Build nodes from all stations heard in the timeframe (not just from edges)
+        // CRITICAL FIX: Previously, nodes were built only from edges, which caused stations
+        // to disappear when includeViaDigipeaters was OFF (because heardVia edges weren't created).
+        // Now we build nodes from nodeStats, which tracks ALL stations seen in packets.
+        // This ensures the local station and all heard stations are always present,
+        // regardless of whether they have qualifying edges.
+        let activeNodeIDs = Set(nodeStats.keys)
         var nodes: [NetworkGraphNode] = []
         nodes.reserveCapacity(activeNodeIDs.count)
 
@@ -590,12 +605,14 @@ struct NetworkGraphBuilder {
             )
         }
 
-        let activeNodeIDs = Set(edgesExcludingSpecial.flatMap { [$0.key.source, $0.key.target] })
+        // Build nodes from all stations heard in the timeframe (not just from edges)
+        // This ensures stations are present even when filters remove all their edges.
+        let activeNodeIDs = Set(nodeStats.keys).filter { CallsignValidator.isValidCallsign($0) }
         var nodes: [NetworkGraphNode] = []
         nodes.reserveCapacity(activeNodeIDs.count)
 
         for id in activeNodeIDs {
-            guard let stats = nodeStats[id] else { continue }
+            let stats = nodeStats[id] ?? NodeAggregate()
             let neighbors = adjacency[id] ?? []
             let totalWeight = stats.inCount + stats.outCount
             // Get display callsign - in station mode, use base; in ssid mode, use full

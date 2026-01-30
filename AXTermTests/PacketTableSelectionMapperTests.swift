@@ -13,8 +13,8 @@ final class PacketTableSelectionMapperTests: XCTestCase {
         let firstID = UUID()
         let secondID = UUID()
         let rows = [
-            PacketRowViewModel(id: firstID, timeText: "", fromText: "", toText: "", viaText: "", typeIcon: "", typeTooltip: "", infoText: "", infoTooltip: "", isLowSignal: false),
-            PacketRowViewModel(id: secondID, timeText: "", fromText: "", toText: "", viaText: "", typeIcon: "", typeTooltip: "", infoText: "", infoTooltip: "", isLowSignal: false)
+            PacketRowViewModel(id: firstID, timeText: "", fromText: "", toText: "", viaText: "", typeLabel: "", typeTooltip: "", infoText: "", infoTooltip: "", isLowSignal: false),
+            PacketRowViewModel(id: secondID, timeText: "", fromText: "", toText: "", viaText: "", typeLabel: "", typeTooltip: "", infoText: "", infoTooltip: "", isLowSignal: false)
         ]
         let mapper = PacketTableSelectionMapper(rows: rows)
 
@@ -27,8 +27,8 @@ final class PacketTableSelectionMapperTests: XCTestCase {
         let firstID = UUID()
         let secondID = UUID()
         let rows = [
-            PacketRowViewModel(id: firstID, timeText: "", fromText: "", toText: "", viaText: "", typeIcon: "", typeTooltip: "", infoText: "", infoTooltip: "", isLowSignal: false),
-            PacketRowViewModel(id: secondID, timeText: "", fromText: "", toText: "", viaText: "", typeIcon: "", typeTooltip: "", infoText: "", infoTooltip: "", isLowSignal: false)
+            PacketRowViewModel(id: firstID, timeText: "", fromText: "", toText: "", viaText: "", typeLabel: "", typeTooltip: "", infoText: "", infoTooltip: "", isLowSignal: false),
+            PacketRowViewModel(id: secondID, timeText: "", fromText: "", toText: "", viaText: "", typeLabel: "", typeTooltip: "", infoText: "", infoTooltip: "", isLowSignal: false)
         ]
         let mapper = PacketTableSelectionMapper(rows: rows)
 
@@ -40,10 +40,10 @@ final class PacketTableSelectionMapperTests: XCTestCase {
     func testIndexesStableAfterInsertAtTop() {
         let selectedID = UUID()
         let rows = [
-            PacketRowViewModel(id: selectedID, timeText: "", fromText: "", toText: "", viaText: "", typeIcon: "", typeTooltip: "", infoText: "", infoTooltip: "", isLowSignal: false)
+            PacketRowViewModel(id: selectedID, timeText: "", fromText: "", toText: "", viaText: "", typeLabel: "", typeTooltip: "", infoText: "", infoTooltip: "", isLowSignal: false)
         ]
         let mapper = PacketTableSelectionMapper(rows: rows)
-        let insertedRow = PacketRowViewModel(id: UUID(), timeText: "", fromText: "", toText: "", viaText: "", typeIcon: "", typeTooltip: "", infoText: "", infoTooltip: "", isLowSignal: false)
+        let insertedRow = PacketRowViewModel(id: UUID(), timeText: "", fromText: "", toText: "", viaText: "", typeLabel: "", typeTooltip: "", infoText: "", infoTooltip: "", isLowSignal: false)
         let updatedMapper = PacketTableSelectionMapper(rows: [insertedRow] + rows)
 
         let originalIndexes = mapper.indexes(for: [selectedID])
@@ -56,7 +56,7 @@ final class PacketTableSelectionMapperTests: XCTestCase {
     func testPacketIDForRowReturnsCorrectID() {
         let firstID = UUID()
         let rows = [
-            PacketRowViewModel(id: firstID, timeText: "", fromText: "", toText: "", viaText: "", typeIcon: "", typeTooltip: "", infoText: "", infoTooltip: "", isLowSignal: false)
+            PacketRowViewModel(id: firstID, timeText: "", fromText: "", toText: "", viaText: "", typeLabel: "", typeTooltip: "", infoText: "", infoTooltip: "", isLowSignal: false)
         ]
         let mapper = PacketTableSelectionMapper(rows: rows)
 

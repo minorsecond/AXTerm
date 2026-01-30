@@ -229,8 +229,8 @@ final class ObservabilityTests: XCTestCase {
             "invalidString": "not a number"
         ])
 
-        XCTAssertEqual(mock.double(forKey: "doubleValue"), 0.75, accuracy: 0.001)
-        XCTAssertEqual(mock.double(forKey: "stringDouble"), 0.5, accuracy: 0.001)
+        XCTAssertEqual(mock.double(forKey: "doubleValue")!, 0.75, accuracy: 0.001)
+        XCTAssertEqual(mock.double(forKey: "stringDouble")!, 0.5, accuracy: 0.001)
         XCTAssertNil(mock.double(forKey: "invalidString"))
         XCTAssertNil(mock.double(forKey: "missing"))
     }

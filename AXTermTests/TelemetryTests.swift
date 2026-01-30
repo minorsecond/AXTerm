@@ -59,6 +59,8 @@ private final class FakeTelemetryBackend: TelemetryBackend {
         NSObject()
     }
 
+    func updateSpan(_ span: TelemetrySpanToken?, data: [String: Any]) {}
+
     func finishSpan(_ span: TelemetrySpanToken?, status: TelemetrySpanStatus) {}
 
     func capture(error _: Error, message _: String, data _: [String: Any]?) {}

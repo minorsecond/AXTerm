@@ -9,6 +9,7 @@ import XCTest
 import Combine
 @testable import AXTerm
 
+@MainActor
 final class AppSettingsStoreTests: XCTestCase {
     func testHostValidationDefaultsToLocalhost() {
         XCTAssertEqual(AppSettingsStore.sanitizeHost("   "), AppSettingsStore.defaultHost)

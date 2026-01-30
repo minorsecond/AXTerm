@@ -8,6 +8,7 @@
 import XCTest
 @testable import AXTerm
 
+@MainActor
 final class EventLoggerTests: XCTestCase {
     func testDatabaseLoggerWritesEvent() async {
         let store = MockEventLogStore()

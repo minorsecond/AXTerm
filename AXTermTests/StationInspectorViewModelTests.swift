@@ -38,10 +38,16 @@ final class StationInspectorViewModelTests: XCTestCase {
 
         let viewModel = StationInspectorViewModel(stationID: "alpha", packets: packets, edges: edges)
 
-        XCTAssertEqual(
-            viewModel.stats.topPeers.map { ($0.stationID, $0.count) },
-            [("beta", 3), ("gamma", 3), ("epsilon", 2), ("delta", 1)]
-        )
+        let topPeers = viewModel.stats.topPeers
+        XCTAssertEqual(topPeers.count, 4)
+        XCTAssertEqual(topPeers[0].stationID, "beta")
+        XCTAssertEqual(topPeers[0].count, 3)
+        XCTAssertEqual(topPeers[1].stationID, "gamma")
+        XCTAssertEqual(topPeers[1].count, 3)
+        XCTAssertEqual(topPeers[2].stationID, "epsilon")
+        XCTAssertEqual(topPeers[2].count, 2)
+        XCTAssertEqual(topPeers[3].stationID, "delta")
+        XCTAssertEqual(topPeers[3].count, 1)
     }
 }
 
