@@ -268,6 +268,8 @@ struct AnalyticsDashboardView: View {
                     },
                     onClearFocus: {
                         viewModel.clearFocus()
+                        // Switch to Overview tab when exiting focus mode
+                        sidebarTab = .overview
                     },
                     onChangeAnchor: {
                         viewModel.setSelectedAsAnchor()

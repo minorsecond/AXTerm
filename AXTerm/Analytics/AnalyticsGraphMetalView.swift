@@ -846,13 +846,14 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     }
 
     func handleScroll(location: CGPoint, delta: CGSize, modifiers: NSEvent.ModifierFlags, isTrackpad: Bool) -> Bool {
-        // Cmd modifier: pass scroll through to parent (don't handle it)
-        if modifiers.contains(.command) {
-            return false
-        }
+        // HIG-compliant scroll behavior:
+        // - Regular scroll (no modifier): passes through to page ScrollView
+        // - ⌘ or Option + scroll: zooms the graph
+        // - Pinch gesture: zooms (handled by handleMagnify)
+        // - Click + drag: pans (handled by handleMouseDragged)
 
-        // Option modifier: zoom around cursor
-        if modifiers.contains(.option) {
+        // ⌘ or Option modifier: zoom around cursor
+        if modifiers.contains(.command) || modifiers.contains(.option) {
             let sensitivity: CGFloat = 0.002
             // Clamp per-event zoom delta for smoother zooming
             let clampedDelta = max(-50, min(50, delta.height))
@@ -862,14 +863,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             return true  // Consumed - don't scroll the page
         }
 
-        if isTrackpad {
-            // Trackpad two-finger scroll: pan the graph (consume the event)
-            camera.pan(by: CGSize(width: -delta.width, height: -delta.height), viewSize: view?.bounds.size)
-            requestInteractionRedraw()
-            return true  // Consumed - don't scroll the page
-        }
-
-        // Mouse wheel without modifier: let it pass through to scroll the page
+        // No modifier: let scroll pass through to the parent ScrollView
+        // This allows users to scroll the page normally when the cursor is over the graph
         return false
     }
 

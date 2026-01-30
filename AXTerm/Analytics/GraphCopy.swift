@@ -15,13 +15,15 @@ enum GraphCopy {
     // MARK: Toolbar Actions
 
     enum Toolbar {
-        static let fitToNodesLabel = "Fit to Nodes"
-        static let fitToNodesTooltip = "Zoom to fit all visible nodes in the viewport."
+        // Fit: Zooms to show all visible nodes at optimal size
+        static let fitToNodesLabel = "Fit"
+        static let fitToNodesTooltip = "Zoom to fit all visible nodes. Adjusts zoom level to show the entire graph."
         static let fitToNodesAccessibility = "Fit all visible nodes in view"
 
-        static let resetViewLabel = "Reset View"
-        static let resetViewTooltip = "Reset pan and zoom to default. Does not affect selection or focus."
-        static let resetViewAccessibility = "Reset view to default position and zoom"
+        // Reset: Returns to the default 1:1 zoom and centered position
+        static let resetViewLabel = "Home"
+        static let resetViewTooltip = "Return to default zoom (1:1) and center position."
+        static let resetViewAccessibility = "Reset to default view"
 
         static let clearSelectionLabel = "Clear"
         static let clearSelectionTooltip = "Deselect all nodes."

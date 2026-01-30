@@ -59,6 +59,7 @@ struct GraphToolbar: View {
 
     private var viewControlsGroup: some View {
         HStack(spacing: 4) {
+            // Fit: Zooms to show all visible nodes at optimal size
             Button(action: onFitToView) {
                 Label(Copy.Toolbar.fitToNodesLabel, systemImage: "arrow.up.left.and.arrow.down.right")
                     .labelStyle(.iconOnly)
@@ -67,8 +68,9 @@ struct GraphToolbar: View {
             .help(Copy.Toolbar.fitToNodesTooltip)
             .accessibilityLabel(Copy.Toolbar.fitToNodesAccessibility)
 
+            // Home: Returns to default 1:1 zoom and centered position
             Button(action: onResetView) {
-                Label(Copy.Toolbar.resetViewLabel, systemImage: "arrow.counterclockwise")
+                Label(Copy.Toolbar.resetViewLabel, systemImage: "house")
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(.borderless)
