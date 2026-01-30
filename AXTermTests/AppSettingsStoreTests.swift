@@ -12,17 +12,17 @@ import Combine
 @MainActor
 final class AppSettingsStoreTests: XCTestCase {
     private func withIsolatedDefaults(_ body: (UserDefaults) -> Void) {
-        let defaults = UserDefaults.standard
-        let domain = Bundle.main.bundleIdentifier ?? "com.rosswardrup.AXTerm"
-        let snapshot = defaults.persistentDomain(forName: domain)
-        defaults.removePersistentDomain(forName: domain)
-        defer {
-            if let snapshot = snapshot {
-                defaults.setPersistentDomain(snapshot, forName: domain)
-            } else {
-                defaults.removePersistentDomain(forName: domain)
-            }
+        let suiteName = "AXTermTests.AppSettingsStore.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Unable to create isolated UserDefaults suite \(suiteName)")
+            return
         }
+
+        defaults.removePersistentDomain(forName: suiteName)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
         body(defaults)
     }
 

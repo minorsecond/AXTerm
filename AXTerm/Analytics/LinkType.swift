@@ -10,26 +10,26 @@ import Foundation
 
 /// Relationship type for edges in the network graph.
 ///
-/// The graph distinguishes three types of connections to help users understand
-/// what kind of communication is occurring:
+/// The graph distinguishes connection evidence tiers to avoid lying about reachability:
 ///
-/// - **DirectPeer**: Confirmed endpoint-to-endpoint packet exchange
-/// - **HeardDirect**: Likely direct RF reception (no digipeaters in path)
-/// - **HeardVia**: Observed only through digipeater paths
-///
-/// This classification prevents users from incorrectly inferring RF reachability
-/// from digipeater-mediated traffic.
+/// - **DirectPeer**: Confirmed bidirectional endpoint-to-endpoint exchange (no digipeaters)
+/// - **HeardMutual**: Mutual direct RF decode evidence (both stations heard each other directly)
+/// - **HeardDirect**: One-way direct RF decode evidence (A heard B directly; may not be mutual)
+/// - **HeardVia**: Observed via digipeater paths (not proof of direct RF)
+/// - **Infrastructure**: BEACON/ID/BBS/etc. traffic (subdued)
 enum LinkType: String, Hashable, Sendable, CaseIterable {
-    /// Confirmed endpoint-to-endpoint packet exchange.
-    /// Both stations appear as from/to in packets without intermediate digipeaters.
+    /// Confirmed endpoint-to-endpoint packet exchange (bidirectional, no digipeaters).
     case directPeer = "Direct Peer"
 
-    /// Likely direct RF reception.
-    /// Station was heard without digipeaters in the path, indicating probable direct RF link.
+    /// Mutual direct RF decode evidence (both directions observed directly, no digipeaters).
+    /// This is the strongest “connectivity” signal for practical RF reachability.
+    case heardMutual = "Heard Mutual"
+
+    /// One-way direct RF reception evidence (no digipeaters).
+    /// This means the observer decoded the sender directly, but reciprocity is unknown.
     case heardDirect = "Heard Direct"
 
-    /// Observed through digipeater paths.
-    /// Station was only seen via digipeaters; not proof of direct RF reception.
+    /// Observed through digipeater paths (not proof of direct RF reception).
     case heardVia = "Heard Via"
 
     /// Infrastructure traffic (BEACON, ID, BBS).
@@ -40,35 +40,37 @@ enum LinkType: String, Hashable, Sendable, CaseIterable {
     var description: String {
         switch self {
         case .directPeer:
-            return "Endpoint-to-endpoint traffic"
+            return "Bidirectional endpoint traffic (no digipeaters)"
+        case .heardMutual:
+            return "Mutual direct RF decode (likely workable)"
         case .heardDirect:
-            return "Decoded directly (likely RF)"
+            return "One-way direct RF decode (not necessarily mutual)"
         case .heardVia:
-            return "Observed via digipeaters"
+            return "Observed via digipeaters (not direct RF proof)"
         case .infrastructure:
             return "BEACON/ID/BBS traffic"
         }
     }
 
-    /// Visual priority (lower = drawn on top)
+    /// Visual priority (lower = drawn on top / emphasized)
     var renderPriority: Int {
         switch self {
         case .directPeer: return 0
-        case .heardDirect: return 1
-        case .heardVia: return 2
-        case .infrastructure: return 3
+        case .heardMutual: return 1
+        case .heardDirect: return 2
+        case .heardVia: return 3
+        case .infrastructure: return 4
         }
     }
 }
 
 /// Graph view mode for filtering which link types are displayed.
 enum GraphViewMode: String, Hashable, Sendable, CaseIterable, Identifiable {
-    /// Show direct peer exchanges and likely direct RF links.
-    /// Best for understanding "who can I work directly?"
+    /// Show direct connectivity evidence.
+    /// Best for “who can I probably work directly?”
     case connectivity = "Connectivity"
 
-    /// Emphasize digipeater paths and network routing.
-    /// Shows how packets flow through the network.
+    /// Emphasize digipeater-mediated paths and routing visibility.
     case routing = "Routing"
 
     /// Show all connection types with clear visual hierarchy.
@@ -104,8 +106,10 @@ enum GraphViewMode: String, Hashable, Sendable, CaseIterable, Identifiable {
     var visibleLinkTypes: Set<LinkType> {
         switch self {
         case .connectivity:
-            return [.directPeer, .heardDirect]
+            // Direct RF evidence + confirmed endpoint exchange
+            return [.directPeer, .heardMutual, .heardDirect]
         case .routing:
+            // Routing emphasis: include digipeater-mediated observations + direct peer exchanges
             return [.directPeer, .heardVia]
         case .all:
             return Set(LinkType.allCases)
@@ -116,11 +120,11 @@ enum GraphViewMode: String, Hashable, Sendable, CaseIterable, Identifiable {
     var emphasizedLinkTypes: Set<LinkType> {
         switch self {
         case .connectivity:
-            return [.directPeer]
+            return [.heardMutual, .directPeer]
         case .routing:
             return [.heardVia]
         case .all:
-            return [.directPeer]
+            return [.directPeer, .heardMutual]
         }
     }
 }
@@ -132,8 +136,8 @@ struct ClassifiedEdge: Hashable, Sendable {
     let sourceID: String
     let targetID: String
     let linkType: LinkType
-    let weight: Int           // Packet count
-    let bytes: Int            // Total payload bytes
+    let weight: Int           // Packet count (or evidence count)
+    let bytes: Int            // Total payload bytes (where applicable)
     let lastHeard: Date?      // Most recent packet timestamp
     let viaDigipeaters: [String]  // For heardVia: which digipeaters were in path
 }
@@ -145,7 +149,7 @@ struct StationRelationship: Hashable, Sendable, Identifiable {
     let packetCount: Int
     let lastHeard: Date?
     let viaDigipeaters: [String]  // For heardVia only
-    let score: Double         // HeardDirect eligibility score (0-1)
+    let score: Double         // HeardDirect eligibility score (0-1) (also used for HeardMutual)
 }
 
 // MARK: - HeardDirect Scoring
@@ -177,7 +181,10 @@ enum HeardDirectScoring {
     /// Maximum recency boost
     static let maxRecencyBoost: Double = 0.15
 
-    /// Minimum score to qualify as HeardDirect
+    /// Minimum score to qualify as "strong" HeardDirect.
+    ///
+    /// NOTE: We still show weaker one-way HeardDirect edges for visibility,
+    /// but this threshold gates “confident” edges and certain promotions.
     static let minimumScore: Double = 0.25
 
     /// Calculate HeardDirect score for a station.
