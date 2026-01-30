@@ -605,9 +605,9 @@ struct NetworkGraphBuilder {
             )
         }
 
-        // Build nodes from all stations heard in the timeframe (not just from edges)
-        // This ensures stations are present even when filters remove all their edges.
-        let activeNodeIDs = Set(nodeStats.keys).filter { CallsignValidator.isValidCallsign($0) }
+        // Build nodes from the filtered edge set so view filters affect both edges and nodes.
+        let activeNodeIDs = Set(edgesExcludingSpecial.keys.flatMap { [$0.source, $0.target] })
+            .filter { CallsignValidator.isValidCallsign($0) }
         var nodes: [NetworkGraphNode] = []
         nodes.reserveCapacity(activeNodeIDs.count)
 

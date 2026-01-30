@@ -10,7 +10,8 @@ final class AnalyticsAggregatorTests: XCTestCase {
     }
 
     func testBucketingCountsAcrossBoundaries() {
-        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        let seed = Date(timeIntervalSince1970: 1_700_000_000)
+        let base = calendar.dateInterval(of: .hour, for: seed)?.start ?? seed
         let packets = [
             makePacket(timestamp: base.addingTimeInterval(60 * 5), from: "K9ALP", to: "W5BRV"),
             makePacket(timestamp: base.addingTimeInterval(60 * 55), from: "K9ALP", to: "W5BRV"),

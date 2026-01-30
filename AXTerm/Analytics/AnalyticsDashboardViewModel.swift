@@ -1052,6 +1052,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
 
         let positions = RadialGraphLayout.layout(model: model, myCallsign: myCallsignForLayout)
+        assert(positions.count == model.nodes.count, "Layout dropped nodes: \(positions.count)/\(model.nodes.count)")
         layoutKey = key
         layoutCache[key] = positions
         viewState.nodePositions = positions

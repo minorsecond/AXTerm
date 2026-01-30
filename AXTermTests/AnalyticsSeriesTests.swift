@@ -54,9 +54,12 @@ final class AnalyticsSeriesTests: XCTestCase {
             calendar: calendar
         )
 
-        XCTAssertEqual(series.packetsPerBucket.map(\.bucket), [date1, date2])
-        XCTAssertEqual(series.bytesPerBucket.map(\.bucket), [date1, date2])
-        XCTAssertEqual(series.uniqueStationsPerBucket.map(\.bucket), [date1, date2])
+        let expected1 = TimeBucket.fiveMinutes.normalizedStart(for: date1, calendar: calendar)
+        let expected2 = TimeBucket.fiveMinutes.normalizedStart(for: date2, calendar: calendar)
+
+        XCTAssertEqual(series.packetsPerBucket.map(\.bucket), [expected1, expected2])
+        XCTAssertEqual(series.bytesPerBucket.map(\.bucket), [expected1, expected2])
+        XCTAssertEqual(series.uniqueStationsPerBucket.map(\.bucket), [expected1, expected2])
         XCTAssertEqual(Set(series.packetsPerBucket.map(\.bucket)).count, series.packetsPerBucket.count)
     }
 

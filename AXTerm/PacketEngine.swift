@@ -144,6 +144,15 @@ final class PacketEngine: ObservableObject {
     func connect(host: String = "localhost", port: UInt16 = 8001) {
         disconnect()
 
+        guard port > 0 else {
+            status = .failed
+            lastError = "Invalid port \(port)"
+            addErrorLine("Connection failed: invalid port \(port)", category: .connection)
+            eventLogger?.log(level: .error, category: .connection, message: "Connection failed: invalid port \(port)", metadata: nil)
+            SentryManager.shared.captureConnectionFailure("Connection failed: invalid port \(port)")
+            return
+        }
+
         status = .connecting
         lastError = nil
         connectedHost = host

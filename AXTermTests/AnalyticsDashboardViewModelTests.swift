@@ -19,6 +19,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         ]
 
         let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
         settings.analyticsBucket = "hour"
         settings.analyticsIncludeVia = false
         settings.analyticsMinEdgeCount = 1
@@ -31,6 +32,9 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             graphDebounce: 0,
             packetScheduler: .main
         )
+        viewModel.setActive(true)
+        viewModel.customRangeStart = date1.addingTimeInterval(-60)
+        viewModel.customRangeEnd = date2.addingTimeInterval(60)
 
         viewModel.updatePackets(packets)
         await waitFor { viewModel.viewState.series.packetsPerBucket.count == 2 }
@@ -51,6 +55,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         ]
 
         let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
         settings.analyticsBucket = "fiveMinutes"
         settings.analyticsIncludeVia = false
         settings.analyticsMinEdgeCount = 1
@@ -63,6 +68,9 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             graphDebounce: 0,
             packetScheduler: .main
         )
+        viewModel.setActive(true)
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-60)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(60)
 
         viewModel.updatePackets(packets)
         await waitFor { viewModel.viewState.graphModel.edges.count == 1 }
@@ -82,6 +90,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         ]
 
         let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
         settings.analyticsBucket = "fiveMinutes"
         settings.analyticsIncludeVia = false
         settings.analyticsMinEdgeCount = 1
@@ -94,6 +103,9 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             graphDebounce: 0,
             packetScheduler: .main
         )
+        viewModel.setActive(true)
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-60)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(60)
 
         viewModel.updatePackets(packets)
         await waitFor { viewModel.viewState.graphModel.edges.count == 2 }
@@ -107,6 +119,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
 
     func testSelectionUpdatesDoNotCrash() {
         let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
         settings.analyticsBucket = "fiveMinutes"
         settings.analyticsIncludeVia = false
         settings.analyticsMinEdgeCount = 1
@@ -119,6 +132,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             graphDebounce: 0,
             packetScheduler: .main
         )
+        viewModel.setActive(true)
 
         viewModel.handleNodeClick("alpha", isShift: false)
         XCTAssertEqual(viewModel.viewState.selectedNodeID, "alpha")

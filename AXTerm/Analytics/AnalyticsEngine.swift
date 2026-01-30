@@ -59,10 +59,15 @@ enum AnalyticsEngine {
             }
         }
 
+        let bucketKeys = packetCounts.keys.sorted()
+        let packets = bucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: packetCounts[$0, default: 0]) }
+        let bytes = bucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: payloadBytes[$0, default: 0]) }
+        let unique = bucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: uniqueStations[$0]?.count ?? 0) }
+
         return AnalyticsSeries(
-            packetsPerBucket: points(from: packetCounts),
-            bytesPerBucket: points(from: payloadBytes),
-            uniqueStationsPerBucket: points(from: uniqueStations.mapValues { $0.count })
+            packetsPerBucket: packets,
+            bytesPerBucket: bytes,
+            uniqueStationsPerBucket: unique
         )
     }
 

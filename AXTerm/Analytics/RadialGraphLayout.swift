@@ -45,10 +45,11 @@ enum RadialGraphLayout {
         let edges = model.edges
         guard !nodes.isEmpty else { return [] }
 
+        let nodeByID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+
         let normalizedMy = myCallsign.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
             .split(separator: "-").first.map(String.init) ?? ""
 
-        // Pick center: my node by base callsign, else highest degree
         let centerID: String = {
             if !normalizedMy.isEmpty,
                let my = nodes.first(where: { baseCallsign($0.callsign) == normalizedMy }) {
@@ -57,26 +58,32 @@ enum RadialGraphLayout {
             return nodes.max(by: { $0.degree < $1.degree })?.id ?? nodes[0].id
         }()
 
-        // Adjacency: neighbor -> [(nodeID, edgeWeight)]
+        // neighbors
         var neighbors: [String: [(id: String, weight: Int)]] = [:]
+        neighbors.reserveCapacity(nodes.count)
         for n in nodes { neighbors[n.id] = [] }
-        for e in edges {
-            if e.sourceID != e.targetID {
-                neighbors[e.sourceID, default: []].append((e.targetID, e.weight))
-                neighbors[e.targetID, default: []].append((e.sourceID, e.weight))
-            }
+        for e in edges where e.sourceID != e.targetID {
+            neighbors[e.sourceID, default: []].append((e.targetID, e.weight))
+            neighbors[e.targetID, default: []].append((e.sourceID, e.weight))
         }
 
-        // BFS by hop distance; collect (nodeID, hop, totalEdgeWeight, degree)
+        // BFS
         var hopRings: [Int: [(id: String, weight: Int, degree: Int)]] = [:]
         var visited = Set<String>()
+        visited.reserveCapacity(nodes.count)
+
         var queue: [(id: String, hop: Int)] = [(centerID, 0)]
+        var qIndex = 0
         visited.insert(centerID)
-        while !queue.isEmpty {
-            let (id, hop) = queue.removeFirst()
-            let node = nodes.first(where: { $0.id == id })!
+
+        while qIndex < queue.count {
+            let (id, hop) = queue[qIndex]
+            qIndex += 1
+
+            guard let node = nodeByID[id] else { continue }
             let totalWeight = (neighbors[id] ?? []).reduce(0) { $0 + $1.weight }
             hopRings[hop, default: []].append((id, totalWeight, node.degree))
+
             for (nid, _) in neighbors[id] ?? [] {
                 if visited.insert(nid).inserted {
                     queue.append((nid, hop + 1))
@@ -84,9 +91,14 @@ enum RadialGraphLayout {
             }
         }
 
-        // Order within each ring: by weight desc, then degree desc, then id
+        // nodes not reached by BFS (disconnected in the *view graph*)
+        let unreachable = nodes.map(\.id).filter { !visited.contains($0) }
+
+        // order rings
         let maxHop = hopRings.keys.max() ?? 0
         var ordered: [(id: String, hop: Int)] = []
+        ordered.reserveCapacity(nodes.count)
+
         for h in 0...maxHop {
             let ring = hopRings[h] ?? []
             let sorted = ring.sorted { a, b in
@@ -97,14 +109,30 @@ enum RadialGraphLayout {
             ordered.append(contentsOf: sorted.map { ($0.id, h) })
         }
 
-        // Place on concentric rings in [0,1]; center at (0.5, 0.5)
+        // append unreachable as a final ring (maxHop+1)
+        if !unreachable.isEmpty {
+            let islandHop = maxHop + 1
+            let sortedIslands = unreachable.sorted()
+            ordered.append(contentsOf: sortedIslands.map { ($0, islandHop) })
+        }
+
+        // place
         let margin: Double = 0.12
         let centerX = 0.5
         let centerY = 0.5
         let maxR = 0.5 - margin
+
+        let effectiveMaxHop = max(maxHop + (unreachable.isEmpty ? 0 : 1), 1)
+
         var positions: [NodePosition] = []
         positions.reserveCapacity(ordered.count)
+
         var ringIndexByHop: [Int: Int] = [:]
+
+        // precompute ring sizes
+        var ringCounts: [Int: Int] = [:]
+        for (_, hop) in ordered { ringCounts[hop, default: 0] += 1 }
+
         for (id, hop) in ordered {
             let x: Double
             let y: Double
@@ -112,19 +140,25 @@ enum RadialGraphLayout {
                 x = centerX
                 y = centerY
             } else {
-                let ringCount = hopRings[hop]?.count ?? 1
+                let ringCount = ringCounts[hop] ?? 1
                 let idx = ringIndexByHop[hop] ?? 0
                 ringIndexByHop[hop] = idx + 1
+
                 let angleStep = ringCount > 1 ? (2.0 * .pi) / Double(ringCount) : 0
                 let angle = angleStep * Double(idx) + (Double(hop).truncatingRemainder(dividingBy: 2) * 0.5)
-                let r = maxR * (Double(hop) / max(1, Double(maxHop)))
+
+                let r = maxR * (Double(hop) / Double(effectiveMaxHop))
                 x = centerX + r * cos(angle)
                 y = centerY + r * sin(angle)
             }
+
             let clampedX = min(1 - margin, max(margin, x))
             let clampedY = min(1 - margin, max(margin, y))
             positions.append(NodePosition(id: id, x: clampedX, y: clampedY))
         }
+
+        // This should now always be true
+        assert(positions.count == model.nodes.count, "Layout dropped nodes: \(positions.count)/\(model.nodes.count)")
         return positions
     }
 

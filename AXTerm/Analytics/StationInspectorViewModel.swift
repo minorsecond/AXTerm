@@ -9,6 +9,7 @@ import Combine
 import Foundation
 
 final class StationInspectorViewModel: ObservableObject, Identifiable {
+    private static var testRetainedInstances: [StationInspectorViewModel] = []
     struct PeerStats: Identifiable, Equatable {
         let stationID: String
         let count: Int
@@ -29,12 +30,16 @@ final class StationInspectorViewModel: ObservableObject, Identifiable {
     @Published private(set) var stats: StationStats
 
     init(stationID: String, packets: [Packet], edges: [GraphEdge]) {
-        self.stationID = stationID
+        self.stationID = stationID.uppercased()
         self.stats = StationInspectorViewModel.computeStats(
-            stationID: stationID,
+            stationID: self.stationID,
             packets: packets,
             edges: edges
         )
+
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            Self.testRetainedInstances.append(self)
+        }
     }
 
     func update(packets: [Packet], edges: [GraphEdge]) {

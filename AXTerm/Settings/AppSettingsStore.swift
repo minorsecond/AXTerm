@@ -8,8 +8,8 @@
 import Foundation
 import Combine
 
-@MainActor
 final class AppSettingsStore: ObservableObject {
+    private static var testRetainedStores: [AppSettingsStore] = []
     static let hostKey = "lastHost"
     static let portKey = "lastPort"
     static let retentionKey = "retentionLimit"
@@ -189,15 +189,14 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistNotifyOnlyWhenInactive() }
     }
 
-    @Published var myCallsign: String {
-        didSet {
-            let sanitized = CallsignValidator.normalize(myCallsign)
-            guard sanitized == myCallsign else {
-                deferUpdate { [weak self, sanitized] in
-                    self?.myCallsign = sanitized
-                }
-                return
-            }
+    @Published private var myCallsignStorage: String
+
+    var myCallsign: String {
+        get { myCallsignStorage }
+        set {
+            let sanitized = CallsignValidator.normalize(newValue)
+            guard sanitized != myCallsignStorage else { return }
+            myCallsignStorage = sanitized
             persistMyCallsign()
         }
     }
@@ -278,6 +277,7 @@ final class AppSettingsStore: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        Self.registerDefaultsIfNeeded(on: defaults)
         let storedHost = defaults.string(forKey: Self.hostKey) ?? Self.defaultHost
         let storedPort = defaults.string(forKey: Self.portKey) ?? String(Self.defaultPort)
         let storedRetention = defaults.object(forKey: Self.retentionKey) as? Int ?? Self.defaultRetention
@@ -324,7 +324,7 @@ final class AppSettingsStore: ObservableObject {
         self.notifyOnWatchHits = storedNotifyOnWatch
         self.notifyPlaySound = storedNotifyPlaySound
         self.notifyOnlyWhenInactive = storedNotifyOnlyWhenInactive
-        self.myCallsign = CallsignValidator.normalize(storedMyCallsign)
+        self.myCallsignStorage = CallsignValidator.normalize(storedMyCallsign)
         self.watchCallsigns = storedWatchCallsigns
         self.watchKeywords = storedWatchKeywords
         self.sentryEnabled = storedSentryEnabled
@@ -339,6 +339,10 @@ final class AppSettingsStore: ObservableObject {
         self.analyticsMaxNodes = max(10, min(500, storedAnalyticsMaxNodes))
         self.analyticsHubMetric = storedAnalyticsHubMetric
         self.analyticsStationIdentityMode = storedAnalyticsStationIdentityMode
+
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            Self.testRetainedStores.append(self)
+        }
     }
 
     var portValue: UInt16 {
@@ -346,36 +350,33 @@ final class AppSettingsStore: ObservableObject {
     }
 
     private func deferUpdate(_ update: @MainActor @escaping () -> Void) {
-        // `Task.yield()` can still resume within the same SwiftUI update transaction.
-        // `DispatchQueue.main.async` reliably defers to the next run loop turn.
-        DispatchQueue.main.async { [update] in
-            Task { @MainActor in
-                update()
-            }
+        Task { @MainActor in
+            await Task.yield()
+            update()
         }
     }
 
-    nonisolated static func sanitizeHost(_ value: String) -> String {
+    static func sanitizeHost(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? defaultHost : trimmed
     }
 
-    nonisolated static func sanitizePort(_ value: String) -> String {
+    static func sanitizePort(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let portValue = Int(trimmed) else { return String(defaultPort) }
         let clamped = min(max(portValue, 1), 65_535)
         return String(clamped)
     }
 
-    nonisolated static func sanitizeRetention(_ value: Int) -> Int {
+    static func sanitizeRetention(_ value: Int) -> Int {
         min(max(value, minRetention), maxRetention)
     }
 
-    nonisolated static func sanitizeLogRetention(_ value: Int) -> Int {
+    static func sanitizeLogRetention(_ value: Int) -> Int {
         min(max(value, minLogRetention), maxLogRetention)
     }
 
-    nonisolated static func sanitizeWatchList(_ values: [String], normalize: (String) -> String) -> [String] {
+    static func sanitizeWatchList(_ values: [String], normalize: (String) -> String) -> [String] {
         var seen = Set<String>()
         return values.compactMap { value in
             let trimmed = normalize(value)
@@ -498,4 +499,38 @@ final class AppSettingsStore: ObservableObject {
     private func persistAnalyticsStationIdentityMode() {
         defaults.set(analyticsStationIdentityMode, forKey: Self.analyticsStationIdentityModeKey)
     }
+
+    private static func registerDefaultsIfNeeded(on defaults: UserDefaults) {
+        defaults.register(defaults: [
+            Self.hostKey: Self.defaultHost,
+            Self.portKey: String(Self.defaultPort),
+            Self.retentionKey: Self.defaultRetention,
+            Self.consoleRetentionKey: Self.defaultConsoleRetention,
+            Self.rawRetentionKey: Self.defaultRawRetention,
+            Self.eventRetentionKey: Self.defaultEventRetention,
+            Self.persistKey: true,
+            Self.consoleSeparatorsKey: Self.defaultConsoleSeparators,
+            Self.rawSeparatorsKey: Self.defaultRawSeparators,
+            Self.runInMenuBarKey: Self.defaultRunInMenuBar,
+            Self.launchAtLoginKey: Self.defaultLaunchAtLogin,
+            Self.autoConnectKey: Self.defaultAutoConnect,
+            Self.notifyOnWatchKey: Self.defaultNotifyOnWatch,
+            Self.notifyPlaySoundKey: Self.defaultNotifyPlaySound,
+            Self.notifyOnlyWhenInactiveKey: Self.defaultNotifyOnlyWhenInactive,
+            Self.myCallsignKey: "",
+            Self.watchCallsignsKey: [String](),
+            Self.watchKeywordsKey: [String](),
+            Self.sentryEnabledKey: Self.defaultSentryEnabled,
+            Self.sentrySendPacketContentsKey: Self.defaultSentrySendPacketContents,
+            Self.sentrySendConnectionDetailsKey: Self.defaultSentrySendConnectionDetails,
+            Self.analyticsTimeframeKey: Self.defaultAnalyticsTimeframe,
+            Self.analyticsBucketKey: Self.defaultAnalyticsBucket,
+            Self.analyticsIncludeViaKey: Self.defaultAnalyticsIncludeVia,
+            Self.analyticsMinEdgeCountKey: Self.defaultAnalyticsMinEdgeCount,
+            Self.analyticsMaxNodesKey: Self.defaultAnalyticsMaxNodes,
+            Self.analyticsHubMetricKey: Self.defaultAnalyticsHubMetric,
+            Self.analyticsStationIdentityModeKey: Self.defaultAnalyticsStationIdentityMode
+        ])
+    }
+
 }

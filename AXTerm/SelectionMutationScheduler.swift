@@ -15,6 +15,7 @@ final class SelectionMutationScheduler {
         task?.cancel()
         task = Task { @MainActor in
             await Task.yield()
+            await Task.yield()
             mutation()
         }
     }

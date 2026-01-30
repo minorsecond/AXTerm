@@ -27,7 +27,10 @@ struct AnalyticsAggregator {
         let heatmap = computeHeatmap(events: events, calendar: calendar)
         let histogram = computeHistogram(events: events, binCount: options.histogramBinCount)
 
-        let topTalkers = rankTop(stations: events.compactMap { $0.from }, limit: options.topLimit)
+        let topTalkers = rankTop(
+            stations: events.compactMap { $0.from } + events.compactMap { $0.to },
+            limit: options.topLimit
+        )
         let topDestinations = rankTop(stations: events.compactMap { $0.to }, limit: options.topLimit)
         let topDigipeaters = rankTop(stations: events.flatMap { $0.via }, limit: options.topLimit)
 

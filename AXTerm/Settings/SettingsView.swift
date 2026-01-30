@@ -46,7 +46,10 @@ struct SettingsView: View {
 
             Section("Identity") {
                 VStack(alignment: .leading, spacing: 6) {
-                    TextField("My Callsign", text: $settings.myCallsign)
+                    TextField("My Callsign", text: Binding(
+                        get: { settings.myCallsign },
+                        set: { settings.myCallsign = $0 }
+                    ))
                         .textFieldStyle(.roundedBorder)
 
                     Text("Used to highlight your node in the graph.")
