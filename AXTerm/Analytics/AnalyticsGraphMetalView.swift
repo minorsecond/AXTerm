@@ -83,29 +83,15 @@ struct AnalyticsGraphView: View {
                 .allowsHitTesting(false)
 
                 if let hoverNodeID,
-                   let hoverPoint,
-                   let node = graphModel.nodes.first(where: { $0.id == hoverNodeID }) {
-                    // hoverPoint is in drawable space (top-left origin, in points).
-                    // SwiftUI uses bottom-left origin, so flip Y.
-                    // Position tooltip close to node but not overlapping.
-                    let tooltipGap: CGFloat = 8  // Small gap from node edge
-                    let tooltipWidth: CGFloat = 110
-                    let tooltipHeight: CGFloat = 60
-                    let flippedY = geometry.size.height - hoverPoint.y
-
-                    // Estimate node radius (use average since we don't have exact weight here)
-                    let estimatedNodeRadius: CGFloat = 10 * cameraState.scale
-                    let tooltipOffset = estimatedNodeRadius + tooltipGap
-
-                    // Determine best quadrant for tooltip (prefer upper-right, adjust if near edges)
-                    let nearRightEdge = hoverPoint.x + tooltipOffset + tooltipWidth > geometry.size.width - 8
-                    let nearTopEdge = flippedY - tooltipOffset - tooltipHeight < 8
-
-                    let xOffset = nearRightEdge ? -(tooltipOffset + tooltipWidth / 2) : (tooltipOffset + tooltipWidth / 2)
-                    let yOffset = nearTopEdge ? (tooltipOffset + tooltipHeight / 2) : -(tooltipOffset + tooltipHeight / 2)
-
+                   let node = graphModel.nodes.first(where: { $0.id == hoverNodeID }),
+                   let nodePos = nodePositions.first(where: { $0.id == hoverNodeID }) {
+                    let tooltipPosition = Self.calculateTooltipPosition(
+                        nodePos: nodePos,
+                        viewSize: geometry.size,
+                        cameraState: cameraState
+                    )
                     GraphTooltipView(node: node)
-                        .position(x: hoverPoint.x + xOffset, y: flippedY + yOffset)
+                        .position(tooltipPosition)
                 }
             }
         }
@@ -115,6 +101,72 @@ struct AnalyticsGraphView: View {
         .onExitCommand {
             onClearSelection()
         }
+    }
+
+    /// Calculates the optimal tooltip position near a node, avoiding edges.
+    /// Uses the same coordinate transformation as normalizedToScreen for accurate placement.
+    private static func calculateTooltipPosition(
+        nodePos: NodePosition,
+        viewSize: CGSize,
+        cameraState: CameraState
+    ) -> CGPoint {
+        let inset = AnalyticsStyle.Layout.graphInset
+        let width = max(1, viewSize.width - inset * 2)
+        let height = max(1, viewSize.height - inset * 2)
+
+        // Use exact same formula as normalizedToScreen for node position
+        let base = CGPoint(
+            x: inset + nodePos.x * width,
+            y: inset + nodePos.y * height
+        )
+        let center = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+        let screenX = (base.x - center.x) * cameraState.scale + center.x + cameraState.offset.width
+        let screenY = (base.y - center.y) * cameraState.scale + center.y + cameraState.offset.height
+
+        // Tooltip sizing - keep compact
+        let tooltipWidth: CGFloat = 100
+        let tooltipHeight: CGFloat = 55
+        let tooltipGap: CGFloat = 4  // Minimal gap from node edge
+
+        // Use a small fixed offset from node center (just enough to clear the node)
+        let nodeOffset: CGFloat = 8 * cameraState.scale + tooltipGap
+
+        // Smart positioning: prefer upper-right, but adjust to stay in bounds
+        let margin: CGFloat = 6
+
+        // Calculate available space in each direction
+        let spaceRight = viewSize.width - screenX - margin
+        let spaceLeft = screenX - margin
+        let spaceTop = screenY - margin
+        let spaceBottom = viewSize.height - screenY - margin
+
+        // Determine horizontal position - position tooltip edge near node, not center
+        let tooltipX: CGFloat
+        if spaceRight >= nodeOffset + tooltipWidth / 2 {
+            // Place to the right: tooltip's left edge near node
+            tooltipX = screenX + nodeOffset + tooltipWidth / 2
+        } else if spaceLeft >= nodeOffset + tooltipWidth / 2 {
+            // Place to the left: tooltip's right edge near node
+            tooltipX = screenX - nodeOffset - tooltipWidth / 2
+        } else {
+            // Centered horizontally when no room on sides
+            tooltipX = min(max(tooltipWidth / 2 + margin, screenX), viewSize.width - tooltipWidth / 2 - margin)
+        }
+
+        // Determine vertical position - position tooltip edge near node
+        let tooltipY: CGFloat
+        if spaceTop >= nodeOffset + tooltipHeight / 2 {
+            // Place above: tooltip's bottom edge near node
+            tooltipY = screenY - nodeOffset - tooltipHeight / 2
+        } else if spaceBottom >= nodeOffset + tooltipHeight / 2 {
+            // Place below: tooltip's top edge near node
+            tooltipY = screenY + nodeOffset + tooltipHeight / 2
+        } else {
+            // Centered vertically when no room above/below
+            tooltipY = min(max(tooltipHeight / 2 + margin, screenY), viewSize.height - tooltipHeight / 2 - margin)
+        }
+
+        return CGPoint(x: tooltipX, y: tooltipY)
     }
 }
 
