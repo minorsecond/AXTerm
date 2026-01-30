@@ -125,7 +125,7 @@ struct NetworkHealthView: View {
                 GridItem(.flexible(), spacing: 8),
                 GridItem(.flexible(), spacing: 8)
             ], spacing: 6) {
-                // Topology metrics (timeframe-dependent)
+                // Topology metrics (canonical graph, timeframe-dependent)
                 MetricCell(
                     label: GraphCopy.Health.stationsHeardLabelWithTimeframe(tf),
                     value: "\(health.metrics.totalStations)",
@@ -138,9 +138,9 @@ struct NetworkHealthView: View {
                     tooltip: GraphCopy.Health.activeStationsTooltip
                 )
                 MetricCell(
-                    label: GraphCopy.Health.totalPacketsLabelWithTimeframe(tf),
-                    value: formatNumber(health.metrics.totalPackets),
-                    tooltip: GraphCopy.Health.totalPacketsTooltip(tf)
+                    label: GraphCopy.Health.mainClusterLabelWithTimeframe(tf),
+                    value: formatPercent(health.metrics.largestComponentPercent),
+                    tooltip: GraphCopy.Health.mainClusterTooltip(tf)
                 )
                 MetricCell(
                     label: GraphCopy.Health.packetRateLabel,
@@ -148,14 +148,14 @@ struct NetworkHealthView: View {
                     tooltip: GraphCopy.Health.packetRateTooltip
                 )
                 MetricCell(
-                    label: GraphCopy.Health.mainClusterLabelWithTimeframe(tf),
-                    value: formatPercent(health.metrics.largestComponentPercent),
-                    tooltip: GraphCopy.Health.mainClusterTooltip(tf)
+                    label: GraphCopy.Health.connectivityRatioLabelWithTimeframe(tf),
+                    value: formatPercent(health.metrics.connectivityRatio),
+                    tooltip: GraphCopy.Health.connectivityRatioTooltip(tf)
                 )
                 MetricCell(
-                    label: GraphCopy.Health.topRelayShareLabelWithTimeframe(tf),
-                    value: formatPercent(health.metrics.topRelayConcentration),
-                    tooltip: GraphCopy.Health.topRelayShareTooltip(tf)
+                    label: GraphCopy.Health.isolationReductionLabelWithTimeframe(tf),
+                    value: formatPercent(health.metrics.isolationReduction),
+                    tooltip: GraphCopy.Health.isolationReductionTooltip(tf)
                 )
             }
         }
@@ -600,18 +600,20 @@ struct NetworkHealthView_Previews: PreviewProvider {
                 score: 72,
                 rating: .good,
                 reasons: [
-                    "Healthy packet activity (1.2/min)",
-                    "8 stations active recently",
-                    "Well-connected network"
+                    "Well-connected network (24h)",
+                    "8 stations active (10m)",
+                    "Healthy traffic (1.2/min)"
                 ],
                 metrics: NetworkHealthMetrics(
-                    // Topology metrics (timeframe-dependent)
+                    // Topology metrics (canonical graph, timeframe-dependent)
                     totalStations: 15,
                     totalPackets: 234,
                     largestComponentPercent: 85,
-                    topRelayConcentration: 35,
-                    topRelayCallsign: "W5ABC-10",
+                    connectivityRatio: 12.4,
+                    isolationReduction: 93.3,
                     isolatedNodes: 1,
+                    topRelayCallsign: "W5ABC-10",
+                    topRelayConcentration: 35,
                     // Activity metrics (fixed 10-minute window)
                     activeStations: 8,
                     packetRate: 1.2,
@@ -627,11 +629,9 @@ struct NetworkHealthView_Previews: PreviewProvider {
                 ],
                 activityTrend: [2, 5, 3, 8, 12, 7, 4, 6, 9, 11, 8, 5],
                 scoreBreakdown: HealthScoreBreakdown(
-                    activityScore: 85, activityWeight: 25,
-                    freshnessScore: 53, freshnessWeight: 15,
-                    connectivityScore: 85, connectivityWeight: 30,
-                    redundancyScore: 70, redundancyWeight: 20,
-                    stabilityScore: 100, stabilityWeight: 10
+                    c1MainClusterPct: 85, c2ConnectivityPct: 12.4, c3IsolationReduction: 93.3, topologyScore: 49.7,
+                    a1ActiveNodesPct: 53.3, a2PacketRateScore: 100, packetRatePerMin: 1.2, activityScore: 72,
+                    totalNodes: 15, activeNodes10m: 8, isolatedNodes: 1, finalScore: 72
                 ),
                 timeframeDisplayName: "24h"
             ),

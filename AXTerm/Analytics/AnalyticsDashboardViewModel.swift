@@ -645,13 +645,15 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         let now = Date()
         let timeframePackets = filteredPackets(now: now)
 
-        // For activity metrics, use all packets (unfiltered) to calculate 10-minute window
-        // This ensures activity metrics remain stable when changing timeframe
+        // Network Health uses a CANONICAL graph (minEdge=2, no max nodes) that ignores view filters.
+        // This ensures the health score is stable under Min Edge slider and Max Node count changes.
+        // Only timeframe, includeViaDigipeaters toggle, and time passing affect the score.
         let health = NetworkHealthCalculator.calculate(
             graphModel: viewState.graphModel,
             timeframePackets: timeframePackets,
             allRecentPackets: packets,
             timeframeDisplayName: timeframe.displayName,
+            includeViaDigipeaters: includeViaDigipeaters,
             now: now
         )
         viewState.networkHealth = health

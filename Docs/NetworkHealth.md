@@ -1,76 +1,100 @@
-# Network Health Metrics
+# Network Health Scoring
 
-This document describes the Network Health panel in AXTerm's Analytics view, including how metrics are computed, what time windows they use, and the rationale behind the hybrid approach.
+This document describes AXTerm's composite network health scoring system.
 
 ## Overview
 
-The Network Health panel provides a real-time summary of packet radio network status. It uses a **hybrid time window model** to balance historical context with current activity:
+Network Health provides a 0-100 score indicating the overall health and activity of the observed packet radio network. The score uses a **hybrid time window model** and a **canonical topology graph** to ensure stability and accuracy.
 
-- **Topology metrics** depend on the user-selected timeframe (15m, 1h, 6h, 24h, 7d, or custom)
-- **Activity metrics** use a fixed 10-minute window, independent of the selected timeframe
+## Key Design Principles
 
-This design prevents UX "whiplash" when users change timeframes. Activity metrics remain stable while topology metrics update to reflect the new historical window.
+### 1. Canonical Topology Graph
 
-## Time Window Categories
+Health topology metrics are computed from a **canonical graph** that:
+- Uses `canonicalMinEdge = 2` (fixed, not the view slider)
+- Has no max-node limit (shows full network topology)
+- Applies the `includeViaDigipeaters` toggle
+- **Ignores** view-only filters (Min Edge slider, Max Node count)
 
-### Topology Metrics (Timeframe-Dependent)
+This ensures the health score remains stable when users adjust view filters.
 
-These metrics reflect the network's structure and history based on the selected timeframe:
+### 2. Hybrid Time Windows
 
-| Metric | Label | Description |
-|--------|-------|-------------|
-| Stations Heard | `Stations (24h)` | Unique stations observed during the selected timeframe |
-| Total Packets | `Packets (24h)` | AX.25 frames received during the selected timeframe |
-| Main Cluster | `Cluster (24h)` | Percentage of stations in the largest connected component |
-| Top Relay Share | `Relay (24h)` | Share of connections involving the busiest digipeater |
-| Isolated Stations | - | Stations with no observed connections in the timeframe |
+- **Topology metrics**: Based on user-selected timeframe (e.g., 24h, 1h)
+- **Activity metrics**: Fixed 10-minute window (unless timeframe < 10m)
 
-### Activity Metrics (Fixed 10-Minute Window)
+This prevents UX "whiplash" when changing timeframes - activity metrics stay stable.
 
-These metrics reflect the network's **current** state, independent of the selected timeframe:
+### 3. Stability via EMA Smoothing
 
-| Metric | Label | Description |
-|--------|-------|-------------|
-| Active Stations | `Active (10m)` | Stations that sent or received packets in the last 10 minutes |
-| Packet Rate | `Rate (10m)` | Packets per minute over the last 10 minutes |
-| Freshness | - | Ratio of active (10m) stations to total stations in timeframe |
-
-## Health Score Calculation
-
-The overall health score (0-100) uses a weighted hybrid model:
-
+Packet rate uses Exponential Moving Average (EMA) smoothing to prevent spiky behavior:
 ```
-Score = Activity (10m) × 25% + Freshness (10m) × 15% +
-        Connectivity × 30% + Redundancy × 20% + Stability × 10%
+smoothedRate = α × currentRate + (1-α) × previousRate
+α = 0.25
 ```
 
-### Component Breakdown
+## Formula
 
-**Activity Metrics (40% total)**
-- **Activity (25%)**: Based on packet rate. Higher traffic = more active network.
-  - Excellent (100): >2 pkt/min
-  - Good (85): 1-2 pkt/min
-  - Fair (70): 0.5-1 pkt/min
-  - Low (50): 0.2-0.5 pkt/min
-  - Poor (30): 0.05-0.2 pkt/min
+### Topology Score (60% of final)
 
-- **Freshness (15%)**: Ratio of active stations (10m) to total stations (timeframe).
-  - Score = freshness × 100
+```
+TopologyScore = 0.5×C1 + 0.3×C2 + 0.2×C3
+```
 
-**Topology Metrics (60% total)**
-- **Connectivity (30%)**: Percentage of stations in the largest connected component.
-  - Score = largestComponentPercent (0-100)
+Where:
+- **C1 (Main Cluster %)**: Largest connected component / total nodes × 100
+- **C2 (Connectivity Ratio %)**: actualEdges / possibleEdges × 100 (capped at 100)
+  - `possibleEdges = n×(n-1)/2` for undirected graph
+- **C3 (Isolation Reduction)**: 100 - (% isolated nodes)
+  - Higher is better; 100 means no isolated stations
 
-- **Redundancy (20%)**: Inverse of relay concentration. Lower concentration = better.
-  - ≤30% concentration: 100
-  - 31-50%: 70
-  - 51-70%: 40
-  - >70%: 20
+### Activity Score (40% of final)
 
-- **Stability (10%)**: Packets per station ratio during the timeframe.
-  - Score = min(100, packetsPerStation × 10)
+```
+ActivityScore = 0.6×A1 + 0.4×A2
+```
 
-### Rating Thresholds
+Where:
+- **A1 (Active Nodes %)**: Stations heard in last 10m / total nodes × 100
+- **A2 (Packet Rate Score)**: min(100, packetRate / idealRate × 100)
+  - `idealRate = 1.0 packets/minute`
+
+### Final Score
+
+```
+NetworkHealthScore = round(0.6×TopologyScore + 0.4×ActivityScore)
+```
+
+## Metrics Reference
+
+### Topology Metrics (Timeframe-Dependent, Canonical Graph)
+
+| Metric | Description | Weight |
+|--------|-------------|--------|
+| C1: Main Cluster | % of nodes in largest connected component | 30% of final |
+| C2: Connectivity | % of possible edges that exist | 18% of final |
+| C3: Isolation Reduction | 100 - % isolated nodes (higher = better) | 12% of final |
+
+### Activity Metrics (10-Minute Window)
+
+| Metric | Description | Weight |
+|--------|-------------|--------|
+| A1: Active Nodes | % of stations heard in last 10 minutes | 24% of final |
+| A2: Packet Rate | Normalized rate (ideal = 1.0 pkt/min), EMA-smoothed | 16% of final |
+
+## Stability Guarantees
+
+The health score is **stable under view filter changes**:
+
+| Setting | Affects Health? |
+|---------|-----------------|
+| Timeframe selector | ✅ Yes (topology metrics) |
+| Include Via Digipeaters toggle | ✅ Yes (canonical graph) |
+| Time passing | ✅ Yes (activity metrics) |
+| Min Edge slider | ❌ No (view-only) |
+| Max Node count | ❌ No (view-only) |
+
+## Rating Thresholds
 
 | Score | Rating |
 |-------|--------|
@@ -82,75 +106,80 @@ Score = Activity (10m) × 25% + Freshness (10m) × 15% +
 
 ## Warnings
 
-Warnings are generated based on specific threshold conditions. Each warning includes the relevant time window in its detail text:
+The system generates contextual warnings:
 
 | Warning | Condition | Time Window |
 |---------|-----------|-------------|
-| Single relay dominance | Top relay >60% of traffic | Timeframe |
-| Stale stations | Freshness <0.3 | Hybrid (compares 10m to timeframe) |
-| Fragmented network | Main cluster <50% (with >5 stations) | Timeframe |
-| Isolated stations | Any nodes with degree == 0 | Timeframe |
-| Low activity | Packet rate <0.1/min | 10-minute |
+| Single relay dominance | >60% of traffic through one station | Timeframe |
+| Stale stations | <30% freshness | Hybrid (10m vs timeframe) |
+| Fragmented network | <50% in main cluster (with >5 stations) | Timeframe |
+| Isolated stations | Nodes with degree=0 in canonical graph | Timeframe |
+| Low activity | <0.1 packets/minute | 10-minute |
 
 ## UI Labels and Tooltips
 
 ### Label Format
 
-Topology metrics include the timeframe in their label when space permits:
-- `Stations (24h)` instead of `Stations Heard`
-- `Cluster (24h)` instead of `Main Cluster`
+Topology metrics include the timeframe in their label:
+- `Stations (24h)` - Unique stations in canonical graph
+- `Cluster (24h)` - C1: Main cluster percentage
+- `Connect (24h)` - C2: Connectivity ratio
+- `Isolation (24h)` - C3: Isolation reduction
 
 Activity metrics always show `(10m)`:
-- `Active (10m)`
-- `Rate (10m)`
+- `Active (10m)` - A1: Active nodes percentage
+- `Rate (10m)` - A2: Packet rate (EMA-smoothed)
 
-### Tooltip Content
+### Key Tooltip Messages
 
-Each metric has a tooltip explaining:
-1. What the metric measures
-2. What time window it uses
-3. How to interpret the value
+- **Header**: "Composite score combining network topology (selected timeframe) and recent activity (last 10 minutes). View filters (Min Edge, Max Nodes) don't affect this score."
+- **Main Cluster**: "C1: Percentage of stations in the largest connected group. Computed from canonical graph (minEdge=2)."
+- **Connectivity**: "C2: Percentage of possible links that exist. Formula: actualEdges / possibleEdges × 100."
+- **Active (10m)**: "A1: Percentage of stations heard in the last 10 minutes. Independent of selected timeframe."
+- **Rate (10m)**: "A2: Packets per minute, EMA-smoothed for stability. Normalized to ideal rate of 1.0 pkt/min."
 
-Example tooltips:
-- **Stations (24h)**: "Unique stations observed during the 24h window."
-- **Active (10m)**: "Stations that have sent or received at least one packet in the last 10 minutes. Independent of selected timeframe."
-- **Main Cluster (24h)**: "Percentage of stations in the largest connected group during the 24h window. Higher values indicate a well-connected network."
+## Implementation Notes
 
-## Rationale
-
-### Why Hybrid Windows?
-
-**Problem**: Users changing timeframes saw confusing metric swings. Switching from 24h to 1h could make a healthy network look "unhealthy" simply because fewer stations were active in the shorter window.
-
-**Solution**:
-- Keep activity metrics (Active, Rate) on a fixed 10-minute window so they always reflect "now"
-- Keep topology metrics (Cluster, Relay, Stations) on the selected timeframe so users can analyze historical patterns
-- The health score balances both (60% topology + 40% activity) so it remains meaningful regardless of timeframe selection
-
-### Design Principles
-
-1. **Transparency**: Labels always show which time window a metric uses
-2. **Stability**: Activity metrics don't jump when changing timeframe
-3. **Consistency**: The same metric always uses the same window type
-4. **Explainability**: The score breakdown shows how each component contributes
-
-## Test Checklist
-
-Use these checks to verify the implementation works correctly:
-
-- [ ] Change timeframe 24h → 1h: topology metrics update, "Active (10m)" stays stable
-- [ ] Health score changes but does not whiplash without explanation
-- [ ] Tooltips match displayed windows and calculations
-- [ ] Percentage formatting uses dynamic precision (≥10%: 0 decimals, <10%: 1 decimal, <1%: 2 decimals)
-- [ ] Warnings include timeframe context in detail text
-- [ ] Score explainer popover shows hybrid model breakdown with color coding
-
-## Files
+### Files
 
 | File | Purpose |
 |------|---------|
-| `NetworkHealthModel.swift` | Data models and calculation logic |
+| `NetworkHealthModel.swift` | Data models, formula, and calculation logic |
 | `GraphCopy.swift` | UI strings, labels, and tooltips |
 | `GraphSidebar.swift` | Sidebar UI rendering |
 | `NetworkHealthView.swift` | Score explainer popover |
 | `AnalyticsDashboardViewModel.swift` | Integration with view model |
+
+### Caching
+
+Health is recalculated when:
+- Graph model changes
+- Timeframe changes
+- `includeViaDigipeaters` toggle changes
+
+The canonical graph is built on-demand for each calculation using `NetworkHealthCalculator.buildCanonicalGraph()`.
+
+### Performance
+
+- Graph building: O(E) where E = packet count
+- BFS for largest component: O(V + E)
+- Connectivity ratio: O(1) using edge count
+- EMA smoothing: O(1) per update
+
+## References
+
+Composite health scoring approach inspired by network monitoring systems such as [Optigo Networks](https://optigo.net/), which aggregate multiple health checks into a single score.
+
+## Test Checklist
+
+- [ ] Health score stable under Min Edge slider changes
+- [ ] Health score stable under Max Node count changes
+- [ ] Topology metrics update when timeframe changes
+- [ ] Activity metrics stay on 10m window (unless TF < 10m)
+- [ ] `includeViaDigipeaters` toggle changes topology metrics appropriately
+- [ ] Tooltips accurately describe behavior and mention canonical graph
+- [ ] No main-thread stalls when packets stream in
+- [ ] EMA smoothing prevents packet rate spikes
+- [ ] Warnings include correct timeframe labels
+- [ ] Score explainer popover shows C1/C2/C3/A1/A2 breakdown
+- [ ] Percentage formatting uses dynamic precision (≥10%: 0 decimals, <10%: 1 decimal, <1%: 2 decimals)

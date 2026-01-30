@@ -14,9 +14,292 @@ struct NetworkGraphBuilder {
         let maxNodes: Int
     }
 
+    // MARK: - Standard Graph Building
+
     static func build(packets: [Packet], options: Options) -> GraphModel {
         let events = packets.map { PacketEvent(packet: $0) }
         return build(events: events, options: options)
+    }
+
+    // MARK: - Classified Graph Building (Part B)
+
+    /// Build a classified graph with edges categorized by relationship type.
+    ///
+    /// Relationship types:
+    /// - **DirectPeer**: Endpoint-to-endpoint packet exchange (from=S, to=P or vice versa)
+    /// - **HeardDirect**: Packets decoded with no via path (direct RF likely)
+    /// - **HeardVia**: Packets only observed through digipeater paths
+    ///
+    /// See Docs/NetworkGraphSemantics.md for full documentation.
+    static func buildClassified(packets: [Packet], options: Options, now: Date = Date()) -> ClassifiedGraphModel {
+        let events = packets.map { PacketEvent(packet: $0) }
+        return buildClassified(events: events, options: options, now: now)
+    }
+
+    static func buildClassified(events: [PacketEvent], options: Options, now: Date = Date()) -> ClassifiedGraphModel {
+        guard !events.isEmpty else { return .empty }
+
+        // Track different relationship types separately
+        var directPeerEdges: [UndirectedKey: ClassifiedEdgeAggregate] = [:]
+        var heardDirectData: [String: [String: HeardDirectAggregate]] = [:] // observer -> sender -> data
+        var heardViaData: [String: [String: HeardViaAggregate]] = [:] // observer -> sender -> data
+        var nodeStats: [String: NodeAggregate] = [:]
+
+        for event in events {
+            guard let from = event.from, let to = event.to else { continue }
+            guard CallsignValidator.isValidCallsign(from) else { continue }
+            guard CallsignValidator.isValidCallsign(to) else { continue }
+
+            // Check if this is infrastructure traffic
+            let isInfrastructure = event.frameType == .ui && (
+                to.uppercased() == "ID" ||
+                to.uppercased() == "BEACON" ||
+                to.uppercased().hasPrefix("BBS")
+            )
+
+            // Update node stats
+            var fromStats = nodeStats[from, default: NodeAggregate()]
+            fromStats.outCount += 1
+            fromStats.outBytes += event.payloadBytes
+            nodeStats[from] = fromStats
+
+            var toStats = nodeStats[to, default: NodeAggregate()]
+            toStats.inCount += 1
+            toStats.inBytes += event.payloadBytes
+            nodeStats[to] = toStats
+
+            if event.via.isEmpty {
+                // Direct packet (no digipeaters)
+                if !isInfrastructure {
+                    // This is a DirectPeer edge
+                    let key = UndirectedKey(lhs: from, rhs: to)
+                    var agg = directPeerEdges[key, default: ClassifiedEdgeAggregate()]
+                    agg.count += 1
+                    agg.bytes += event.payloadBytes
+                    agg.lastHeard = max(agg.lastHeard ?? .distantPast, event.timestamp)
+                    directPeerEdges[key] = agg
+                }
+
+                // Also track as HeardDirect (from -> to means 'to' received directly from 'from')
+                // The receiver 'to' heard 'from' directly
+                var toHeardDirect = heardDirectData[to, default: [:]]
+                var fromAgg = toHeardDirect[from, default: HeardDirectAggregate()]
+                fromAgg.count += 1
+                fromAgg.lastHeard = max(fromAgg.lastHeard ?? .distantPast, event.timestamp)
+                // Track distinct 5-minute buckets
+                let bucket = Int(event.timestamp.timeIntervalSince1970 / 300)
+                fromAgg.distinctBuckets.insert(bucket)
+                toHeardDirect[from] = fromAgg
+                heardDirectData[to] = toHeardDirect
+            } else {
+                // Packet with via path (digipeaters)
+                if options.includeViaDigipeaters {
+                    // Track HeardVia relationships
+                    // The final destination 'to' heard 'from' via digipeaters
+                    var toHeardVia = heardViaData[to, default: [:]]
+                    var fromAgg = toHeardVia[from, default: HeardViaAggregate()]
+                    fromAgg.count += 1
+                    fromAgg.lastHeard = max(fromAgg.lastHeard ?? .distantPast, event.timestamp)
+                    for digi in event.via {
+                        fromAgg.viaDigipeaters[digi, default: 0] += 1
+                    }
+                    toHeardVia[from] = fromAgg
+                    heardViaData[to] = toHeardVia
+
+                    // Also build edges through the path for graph visualization
+                    let path = [from] + event.via + [to]
+                    for i in 0..<(path.count - 1) {
+                        let source = path[i]
+                        let target = path[i + 1]
+                        guard CallsignValidator.isValidCallsign(source),
+                              CallsignValidator.isValidCallsign(target) else { continue }
+
+                        let key = UndirectedKey(lhs: source, rhs: target)
+                        var agg = directPeerEdges[key, default: ClassifiedEdgeAggregate()]
+                        agg.count += 1
+                        agg.bytes += event.payloadBytes
+                        agg.lastHeard = max(agg.lastHeard ?? .distantPast, event.timestamp)
+                        agg.hasViaPath = true
+                        directPeerEdges[key] = agg
+                    }
+                }
+            }
+        }
+
+        // Build classified edges
+        var classifiedEdges: [ClassifiedEdge] = []
+
+        // Add DirectPeer edges
+        for (key, agg) in directPeerEdges {
+            guard agg.count >= options.minimumEdgeCount else { continue }
+            let linkType: LinkType = agg.hasViaPath ? .heardVia : .directPeer
+            classifiedEdges.append(ClassifiedEdge(
+                sourceID: key.source,
+                targetID: key.target,
+                linkType: linkType,
+                weight: agg.count,
+                bytes: agg.bytes,
+                lastHeard: agg.lastHeard,
+                viaDigipeaters: []
+            ))
+        }
+
+        // Build station relationships for adjacency
+        var relationships: [String: [StationRelationship]] = [:]
+
+        // Add HeardDirect relationships
+        for (observer, senders) in heardDirectData {
+            var observerRels = relationships[observer, default: []]
+            for (sender, agg) in senders {
+                let age = now.timeIntervalSince(agg.lastHeard ?? now)
+                let score = HeardDirectScoring.calculateScore(
+                    directHeardCount: agg.count,
+                    directHeardMinutes: agg.distinctBuckets.count,
+                    lastDirectHeardAge: age
+                )
+
+                if score >= HeardDirectScoring.minimumScore {
+                    observerRels.append(StationRelationship(
+                        id: sender,
+                        linkType: .heardDirect,
+                        packetCount: agg.count,
+                        lastHeard: agg.lastHeard,
+                        viaDigipeaters: [],
+                        score: score
+                    ))
+                }
+            }
+            relationships[observer] = observerRels
+        }
+
+        // Add HeardVia relationships
+        for (observer, senders) in heardViaData {
+            var observerRels = relationships[observer, default: []]
+            for (sender, agg) in senders {
+                // Skip if already in HeardDirect
+                if observerRels.contains(where: { $0.id == sender && $0.linkType == .heardDirect }) {
+                    continue
+                }
+
+                // Get top digipeaters
+                let topDigis = agg.viaDigipeaters
+                    .sorted { $0.value > $1.value }
+                    .prefix(3)
+                    .map { $0.key }
+
+                observerRels.append(StationRelationship(
+                    id: sender,
+                    linkType: .heardVia,
+                    packetCount: agg.count,
+                    lastHeard: agg.lastHeard,
+                    viaDigipeaters: topDigis,
+                    score: 0
+                ))
+            }
+            relationships[observer] = observerRels
+        }
+
+        // Add DirectPeer relationships from edges
+        for edge in classifiedEdges where edge.linkType == .directPeer {
+            // Add to both nodes
+            for (nodeID, peerID) in [(edge.sourceID, edge.targetID), (edge.targetID, edge.sourceID)] {
+                var nodeRels = relationships[nodeID, default: []]
+                if !nodeRels.contains(where: { $0.id == peerID && $0.linkType == .directPeer }) {
+                    nodeRels.append(StationRelationship(
+                        id: peerID,
+                        linkType: .directPeer,
+                        packetCount: edge.weight,
+                        lastHeard: edge.lastHeard,
+                        viaDigipeaters: [],
+                        score: 1.0
+                    ))
+                }
+                relationships[nodeID] = nodeRels
+            }
+        }
+
+        // Build nodes from edges
+        let activeNodeIDs = Set(classifiedEdges.flatMap { [$0.sourceID, $0.targetID] })
+        var nodes: [NetworkGraphNode] = []
+        nodes.reserveCapacity(activeNodeIDs.count)
+
+        for id in activeNodeIDs {
+            let stats = nodeStats[id] ?? NodeAggregate()
+            let nodeRels = relationships[id] ?? []
+            let node = NetworkGraphNode(
+                id: id,
+                callsign: id,
+                weight: stats.inCount + stats.outCount,
+                inCount: stats.inCount,
+                outCount: stats.outCount,
+                inBytes: stats.inBytes,
+                outBytes: stats.outBytes,
+                degree: nodeRels.filter { $0.linkType == .directPeer }.count
+            )
+            nodes.append(node)
+        }
+
+        // Sort by weight descending
+        nodes.sort { lhs, rhs in
+            if lhs.weight != rhs.weight {
+                return lhs.weight > rhs.weight
+            }
+            return lhs.id.localizedCaseInsensitiveCompare(rhs.id) == .orderedAscending
+        }
+
+        // Cap nodes
+        let maxNodes = max(1, options.maxNodes)
+        let keptNodes = Array(nodes.prefix(maxNodes))
+        let keptIDs = Set(keptNodes.map { $0.id })
+        let droppedCount = max(0, nodes.count - keptNodes.count)
+
+        // Filter edges and relationships to kept nodes
+        let filteredEdges = classifiedEdges
+            .filter { keptIDs.contains($0.sourceID) && keptIDs.contains($0.targetID) }
+            .sorted { lhs, rhs in
+                if lhs.weight != rhs.weight {
+                    return lhs.weight > rhs.weight
+                }
+                return lhs.sourceID < rhs.sourceID
+            }
+
+        let filteredRelationships = relationships.reduce(into: [String: [StationRelationship]]()) { result, entry in
+            let (id, rels) = entry
+            guard keptIDs.contains(id) else { return }
+            let keptRels = rels
+                .filter { keptIDs.contains($0.id) }
+                .sorted { lhs, rhs in
+                    // Sort by link type priority, then by packet count
+                    if lhs.linkType.renderPriority != rhs.linkType.renderPriority {
+                        return lhs.linkType.renderPriority < rhs.linkType.renderPriority
+                    }
+                    return lhs.packetCount > rhs.packetCount
+                }
+            result[id] = keptRels
+        }
+
+        // Update node degrees based on filtered relationships
+        let finalNodes = keptNodes.map { node in
+            let rels = filteredRelationships[node.id] ?? []
+            let directPeerCount = rels.filter { $0.linkType == .directPeer }.count
+            return NetworkGraphNode(
+                id: node.id,
+                callsign: node.callsign,
+                weight: node.weight,
+                inCount: node.inCount,
+                outCount: node.outCount,
+                inBytes: node.inBytes,
+                outBytes: node.outBytes,
+                degree: directPeerCount
+            )
+        }
+
+        return ClassifiedGraphModel(
+            nodes: finalNodes,
+            edges: filteredEdges,
+            adjacency: filteredRelationships,
+            droppedNodesCount: droppedCount
+        )
     }
 
     static func build(events: [PacketEvent], options: Options) -> GraphModel {
@@ -202,4 +485,25 @@ private struct NodeAggregate {
     var outCount: Int = 0
     var inBytes: Int = 0
     var outBytes: Int = 0
+}
+
+// MARK: - Classified Graph Aggregates
+
+private struct ClassifiedEdgeAggregate {
+    var count: Int = 0
+    var bytes: Int = 0
+    var lastHeard: Date?
+    var hasViaPath: Bool = false
+}
+
+private struct HeardDirectAggregate {
+    var count: Int = 0
+    var lastHeard: Date?
+    var distinctBuckets: Set<Int> = []
+}
+
+private struct HeardViaAggregate {
+    var count: Int = 0
+    var lastHeard: Date?
+    var viaDigipeaters: [String: Int] = [:]
 }
