@@ -39,6 +39,7 @@ final class AppSettingsStore: ObservableObject {
     static let analyticsMinEdgeCountKey = "analyticsMinEdgeCount"
     static let analyticsMaxNodesKey = "analyticsMaxNodes"
     static let analyticsHubMetricKey = "analyticsHubMetric"
+    static let analyticsStationIdentityModeKey = "analyticsStationIdentityMode"
 
     static let defaultHost = "localhost"
     static let defaultPort = 8001
@@ -69,6 +70,7 @@ final class AppSettingsStore: ObservableObject {
     static let defaultAnalyticsMinEdgeCount = 2   // Filters single-packet noise
     static let defaultAnalyticsMaxNodes = 150
     static let defaultAnalyticsHubMetric = "Degree"  // Matches HubMetric.degree.rawValue
+    static let defaultAnalyticsStationIdentityMode = "station"  // Group SSIDs by default
 
     @Published var host: String {
         didSet {
@@ -268,6 +270,10 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistAnalyticsHubMetric() }
     }
 
+    @Published var analyticsStationIdentityMode: String {
+        didSet { persistAnalyticsStationIdentityMode() }
+    }
+
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -301,6 +307,7 @@ final class AppSettingsStore: ObservableObject {
         let storedAnalyticsMinEdgeCount = defaults.object(forKey: Self.analyticsMinEdgeCountKey) as? Int ?? Self.defaultAnalyticsMinEdgeCount
         let storedAnalyticsMaxNodes = defaults.object(forKey: Self.analyticsMaxNodesKey) as? Int ?? Self.defaultAnalyticsMaxNodes
         let storedAnalyticsHubMetric = defaults.string(forKey: Self.analyticsHubMetricKey) ?? Self.defaultAnalyticsHubMetric
+        let storedAnalyticsStationIdentityMode = defaults.string(forKey: Self.analyticsStationIdentityModeKey) ?? Self.defaultAnalyticsStationIdentityMode
 
         self.host = Self.sanitizeHost(storedHost)
         self.port = Self.sanitizePort(storedPort)
@@ -331,6 +338,7 @@ final class AppSettingsStore: ObservableObject {
         self.analyticsMinEdgeCount = max(1, min(10, storedAnalyticsMinEdgeCount))
         self.analyticsMaxNodes = max(10, min(500, storedAnalyticsMaxNodes))
         self.analyticsHubMetric = storedAnalyticsHubMetric
+        self.analyticsStationIdentityMode = storedAnalyticsStationIdentityMode
     }
 
     var portValue: UInt16 {
@@ -485,5 +493,9 @@ final class AppSettingsStore: ObservableObject {
 
     private func persistAnalyticsHubMetric() {
         defaults.set(analyticsHubMetric, forKey: Self.analyticsHubMetricKey)
+    }
+
+    private func persistAnalyticsStationIdentityMode() {
+        defaults.set(analyticsStationIdentityMode, forKey: Self.analyticsStationIdentityModeKey)
     }
 }

@@ -93,6 +93,22 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
     }
 
+    /// Station identity mode for SSID grouping in the network graph.
+    /// When `.station`, ANH, ANH-1, ANH-15 all map to a single "ANH" node.
+    /// When `.ssid`, each SSID gets its own node.
+    @Published var stationIdentityMode: StationIdentityMode {
+        didSet {
+            guard stationIdentityMode != oldValue else { return }
+            trackFilterChange(reason: "stationIdentityMode")
+            // Identity mode affects node identity, so we need to rebuild the graph
+            // and invalidate layout cache (node IDs change)
+            layoutKey = nil
+            layoutCache.removeAll()
+            scheduleGraphBuild(reason: "stationIdentityMode")
+            persistStationIdentityMode()
+        }
+    }
+
     @Published private(set) var viewState: AnalyticsViewState = .empty
 
     // MARK: - Focus Mode State
@@ -157,6 +173,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         let loadedMinEdgeCount = settingsStore?.analyticsMinEdgeCount ?? AppSettingsStore.defaultAnalyticsMinEdgeCount
         let loadedMaxNodes = settingsStore?.analyticsMaxNodes ?? AppSettingsStore.defaultAnalyticsMaxNodes
         let loadedHubMetric = Self.loadHubMetric(from: settingsStore)
+        let loadedStationIdentityMode = Self.loadStationIdentityMode(from: settingsStore)
 
         // Compute default range for bucket resolution
         let defaultRange = loadedTimeframe.dateInterval(
@@ -172,6 +189,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         self.includeViaDigipeaters = loadedIncludeVia
         self.minEdgeCount = AnalyticsInputNormalizer.minEdgeCount(loadedMinEdgeCount)
         self.maxNodes = AnalyticsInputNormalizer.maxNodes(loadedMaxNodes)
+        self.stationIdentityMode = loadedStationIdentityMode
         self.customRangeStart = defaultRange.start
         self.customRangeEnd = defaultRange.end
         self.resolvedBucket = loadedBucket.resolvedBucket(
@@ -207,6 +225,11 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         return HubMetric(rawValue: store.analyticsHubMetric) ?? .degree
     }
 
+    private static func loadStationIdentityMode(from store: AppSettingsStore?) -> StationIdentityMode {
+        guard let store else { return .station }
+        return StationIdentityMode(rawValue: store.analyticsStationIdentityMode) ?? .station
+    }
+
     private func persistTimeframe() {
         settingsStore?.analyticsTimeframe = timeframe.rawValue
     }
@@ -225,6 +248,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func persistMaxNodes() {
         settingsStore?.analyticsMaxNodes = maxNodes
+    }
+
+    private func persistStationIdentityMode() {
+        settingsStore?.analyticsStationIdentityMode = stationIdentityMode.rawValue
     }
 
     private func persistHubMetric() {
@@ -559,11 +586,13 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         let includeViaSnapshot = includeViaDigipeaters
         let minEdgeSnapshot = minEdgeCount
         let maxNodesSnapshot = maxNodes
+        let identityModeSnapshot = stationIdentityMode
         let key = GraphCacheKey(
             timeframe: timeframe,
             includeVia: includeViaSnapshot,
             minEdgeCount: minEdgeSnapshot,
             maxNodes: maxNodesSnapshot,
+            stationIdentityMode: identityModeSnapshot,
             packetCount: packetSnapshot.count,
             lastTimestamp: packetSnapshot.map { $0.timestamp }.max(),
             customStart: customRangeStart,
@@ -597,7 +626,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                 options: NetworkGraphBuilder.Options(
                     includeViaDigipeaters: includeViaSnapshot,
                     minimumEdgeCount: minEdgeSnapshot,
-                    maxNodes: maxNodesSnapshot
+                    maxNodes: maxNodesSnapshot,
+                    stationIdentityMode: identityModeSnapshot
                 )
             )
             let duration = Date().timeIntervalSince(start) * 1000
@@ -986,6 +1016,7 @@ private struct GraphCacheKey: Hashable {
     let includeVia: Bool
     let minEdgeCount: Int
     let maxNodes: Int
+    let stationIdentityMode: StationIdentityMode
     let packetCount: Int
     let lastTimestamp: Date?
     let customStart: Date

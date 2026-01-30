@@ -79,6 +79,96 @@ struct NetworkGraphBuilderTests {
         #expect(model.droppedNodesCount == 2)
     }
 
+    // MARK: - Station Identity Mode Tests
+
+    @Test
+    func stationModeGroupsSSIDsIntoSingleNode() {
+        let base = Date(timeIntervalSince1970: 1_700_140_000)
+        let packets = [
+            // ANH and ANH-1 and ANH-15 should all become a single "ANH" node
+            makePacket(timestamp: base, from: "ANH", to: "DRL"),
+            makePacket(timestamp: base.addingTimeInterval(1), from: "ANH-1", to: "DRL"),
+            makePacket(timestamp: base.addingTimeInterval(2), from: "ANH-15", to: "DRL")
+        ]
+
+        let model = NetworkGraphBuilder.build(
+            packets: packets,
+            options: NetworkGraphBuilder.Options(
+                includeViaDigipeaters: false,
+                minimumEdgeCount: 1,
+                maxNodes: 10,
+                stationIdentityMode: .station
+            )
+        )
+
+        // Should have 2 nodes: ANH (grouped) and DRL
+        #expect(model.nodes.count == 2)
+        #expect(model.nodes.map { $0.id }.contains("ANH"))
+        #expect(model.nodes.map { $0.id }.contains("DRL"))
+
+        // Find the ANH node and check its grouped SSIDs
+        let anhNode = model.nodes.first { $0.id == "ANH" }
+        #expect(anhNode != nil)
+        #expect(anhNode?.groupedSSIDs.count == 3)
+        #expect(anhNode?.groupedSSIDs.contains("ANH") == true)
+        #expect(anhNode?.groupedSSIDs.contains("ANH-1") == true)
+        #expect(anhNode?.groupedSSIDs.contains("ANH-15") == true)
+
+        // Packet counts should aggregate
+        #expect(anhNode?.outCount == 3)
+    }
+
+    @Test
+    func ssidModeShowsSeparateNodes() {
+        let base = Date(timeIntervalSince1970: 1_700_150_000)
+        let packets = [
+            // In SSID mode, ANH and ANH-15 should be separate nodes
+            makePacket(timestamp: base, from: "ANH", to: "DRL"),
+            makePacket(timestamp: base.addingTimeInterval(1), from: "ANH-15", to: "DRL")
+        ]
+
+        let model = NetworkGraphBuilder.build(
+            packets: packets,
+            options: NetworkGraphBuilder.Options(
+                includeViaDigipeaters: false,
+                minimumEdgeCount: 1,
+                maxNodes: 10,
+                stationIdentityMode: .ssid
+            )
+        )
+
+        // Should have 3 nodes: ANH, ANH-15, and DRL
+        #expect(model.nodes.count == 3)
+        #expect(model.nodes.map { $0.id }.contains("ANH"))
+        #expect(model.nodes.map { $0.id }.contains("ANH-15"))
+        #expect(model.nodes.map { $0.id }.contains("DRL"))
+    }
+
+    @Test
+    func ssidZeroTreatedAsNoSSID() {
+        let base = Date(timeIntervalSince1970: 1_700_160_000)
+        let packets = [
+            // ANH-0 should be normalized to ANH in station mode
+            makePacket(timestamp: base, from: "ANH-0", to: "DRL"),
+            makePacket(timestamp: base.addingTimeInterval(1), from: "ANH", to: "DRL")
+        ]
+
+        let modelStation = NetworkGraphBuilder.build(
+            packets: packets,
+            options: NetworkGraphBuilder.Options(
+                includeViaDigipeaters: false,
+                minimumEdgeCount: 1,
+                maxNodes: 10,
+                stationIdentityMode: .station
+            )
+        )
+
+        // ANH-0 and ANH should both be "ANH" in station mode
+        #expect(modelStation.nodes.count == 2)
+        let anhNode = modelStation.nodes.first { $0.id == "ANH" }
+        #expect(anhNode?.outCount == 2)
+    }
+
     private func makePacket(
         timestamp: Date,
         from: String,

@@ -455,9 +455,30 @@ private struct SidebarInspectorContent: View {
                 Text(Copy.Inspector.tabLabel)
                     .font(.headline)
 
-                // Node callsign
-                Text(details.node.callsign)
-                    .font(.title3.weight(.semibold))
+                // Node callsign with grouped SSID indicator
+                HStack(alignment: .center, spacing: 6) {
+                    Text(details.node.callsign)
+                        .font(.title3.weight(.semibold))
+
+                    // Show badge if multiple SSIDs are grouped
+                    if details.node.isGroupedStation {
+                        Text("\(details.node.groupedSSIDs.count)")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor)
+                            .clipShape(Capsule())
+                            .help(String(format: Copy.StationIdentity.groupedBadgeTooltipTemplate,
+                                         details.node.groupedSSIDs.count,
+                                         details.node.groupedSSIDs.joined(separator: ", ")))
+                    }
+                }
+
+                // Grouped SSIDs section (if multiple)
+                if details.node.isGroupedStation {
+                    groupedSSIDsSection(details.node.groupedSSIDs)
+                }
 
                 Divider()
 
@@ -547,6 +568,24 @@ private struct SidebarInspectorContent: View {
                 }
             }
             .padding(12)
+        }
+    }
+
+    // MARK: - Grouped SSIDs
+
+    private func groupedSSIDsSection(_ ssids: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(Copy.StationIdentity.inspectorGroupedHeader)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                .help(Copy.StationIdentity.inspectorGroupedTooltip)
+
+            // Use a simple comma-separated list for compact display
+            Text(ssids.joined(separator: ", "))
+                .font(.caption2.monospaced())
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -789,14 +828,15 @@ struct GraphSidebar_Previews: PreviewProvider {
     static var previewDetails: GraphInspectorDetails {
         GraphInspectorDetails(
             node: NetworkGraphNode(
-                id: "W0ARP-10",
-                callsign: "W0ARP-10",
+                id: "W0ARP",
+                callsign: "W0ARP",
                 weight: 66,
                 inCount: 0,
                 outCount: 66,
                 inBytes: 0,
                 outBytes: 727,
-                degree: 3
+                degree: 3,
+                groupedSSIDs: ["W0ARP", "W0ARP-1", "W0ARP-10", "W0ARP-15"]  // Grouped SSIDs
             ),
             neighbors: [
                 GraphNeighborStat(id: "N0XCR", weight: 44, bytes: 512),

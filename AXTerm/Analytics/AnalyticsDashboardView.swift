@@ -140,6 +140,23 @@ struct AnalyticsDashboardView: View {
                     .toggleStyle(.switch)
                     .fixedSize()
 
+                // Station Identity Mode picker
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(GraphCopy.StationIdentity.pickerLabel)
+                        .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    Picker("", selection: $viewModel.stationIdentityMode) {
+                        Text(StationIdentityMode.station.shortName)
+                            .tag(StationIdentityMode.station)
+                        Text(StationIdentityMode.ssid.shortName)
+                            .tag(StationIdentityMode.ssid)
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                    .controlSize(.small)
+                    .help(viewModel.stationIdentityMode.tooltip)
+                }
+
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Min edge count")
                         .font(.caption)

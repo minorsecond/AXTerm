@@ -328,6 +328,27 @@ enum GraphCopy {
         static let lastHeardTemplate = "Last: %@"
     }
 
+    // MARK: Station Identity Mode
+
+    enum StationIdentity {
+        static let pickerLabel = "Station Identity"
+        static let pickerTooltip = "Choose how to identify stations in the graph. Group SSIDs combines all SSIDs under a base callsign; Split by SSID shows each SSID as a separate node."
+
+        static let stationLabel = "Group by Station"
+        static let stationShortLabel = "Station"
+        static let stationDescription = "Combine SSIDs"
+        static let stationTooltip = "Group all SSIDs under one station node. ANH, ANH-1, and ANH-15 appear as a single \"ANH\" node."
+
+        static let ssidLabel = "Split by SSID"
+        static let ssidShortLabel = "SSID"
+        static let ssidDescription = "Separate nodes"
+        static let ssidTooltip = "Show each SSID as a separate node. ANH and ANH-15 appear as distinct nodes."
+
+        static let groupedBadgeTooltipTemplate = "%d SSIDs grouped under this station: %@"
+        static let inspectorGroupedHeader = "Grouped SSIDs"
+        static let inspectorGroupedTooltip = "All SSID variants observed for this station during the selected timeframe."
+    }
+
     // MARK: Sidebar Tabs
 
     enum Sidebar {

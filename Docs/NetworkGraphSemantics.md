@@ -225,6 +225,86 @@ By explicitly modeling relationship types:
 3. Users know which stations are only reachable via digipeaters
 4. No false implications about RF reachability
 
+## Station Identity Mode (SSID Grouping)
+
+The network graph supports two modes for identifying stations:
+
+### Group by Station (Default)
+
+**Setting**: Station Identity → "Station"
+
+In this mode, all SSID variants of a callsign are combined into a single node:
+- ANH, ANH-1, ANH-15 → single "ANH" node
+- W0ARP, W0ARP-10, W0ARP-15 → single "W0ARP" node
+
+**Benefits**:
+- Cleaner graph with fewer nodes
+- Shows true station activity regardless of SSID
+- Default for most packet radio analysis
+
+**Inspector display**:
+- Shows badge with count of grouped SSIDs (e.g., "4")
+- Lists all grouped SSIDs under "Grouped SSIDs" section
+- Packet counts aggregate across all SSIDs
+
+### Split by SSID
+
+**Setting**: Station Identity → "SSID"
+
+In this mode, each SSID is treated as a separate entity:
+- ANH and ANH-15 are distinct nodes
+- W0ARP-10 and W0ARP-15 are distinct nodes
+
+**Benefits**:
+- See per-SSID activity patterns
+- Identify which SSID variants are most active
+- Useful for diagnosing specific device configurations
+
+**When to use**:
+- Analyzing specific SSID behavior
+- Troubleshooting device configurations
+- Seeing full SSID detail in the network
+
+### SSID Parsing Rules
+
+The callsign parser follows AX.25 conventions:
+
+| Input | Base | SSID | Mode: Station | Mode: SSID |
+|-------|------|------|---------------|------------|
+| ANH | ANH | nil | "ANH" | "ANH" |
+| ANH-1 | ANH | 1 | "ANH" | "ANH-1" |
+| ANH-15 | ANH | 15 | "ANH" | "ANH-15" |
+| ANH-0 | ANH | nil | "ANH" | "ANH" |
+| N0CALL | N0CALL | nil | "N0CALL" | "N0CALL" |
+
+Notes:
+- SSID must be 0-15 (AX.25 spec)
+- SSID-0 is treated as no SSID
+- Callsigns are case-insensitive (normalized to uppercase)
+
+### Effect on Other Features
+
+| Feature | Effect of Identity Mode |
+|---------|------------------------|
+| Node count | Grouped = fewer nodes |
+| Edge count | Grouped = fewer edges (combined traffic) |
+| Inspector | Shows grouped SSIDs when applicable |
+| Network Health | Node counts reflect identity mode |
+| Selection | Selecting a grouped node selects all SSIDs |
+| Layout cache | Invalidated when mode changes |
+| Graph cache | Keyed by identity mode |
+
+### Implementation Details
+
+| File | Purpose |
+|------|---------|
+| `StationIdentity.swift` | `StationIdentityMode` enum, `CallsignParser`, `StationKey` |
+| `NetworkGraphBuilder.swift` | Aggregates by identity key |
+| `GraphModel.swift` | `NetworkGraphNode.groupedSSIDs` property |
+| `GraphSidebar.swift` | Displays grouped SSIDs in inspector |
+| `AnalyticsDashboardView.swift` | UI picker for identity mode |
+| `AppSettingsStore.swift` | Persistence of identity mode |
+
 ## Implementation Files
 
 | File | Purpose |
@@ -233,6 +313,7 @@ By explicitly modeling relationship types:
 | `NetworkGraphBuilder.swift` | Builds classified graph with edge types |
 | `GraphCopy.swift` | UI strings for relationship types |
 | `GraphSidebar.swift` | Inspector with relationship sections |
+| `StationIdentity.swift` | SSID parsing and station identity mode |
 
 ## Test Checklist
 
@@ -246,3 +327,14 @@ By explicitly modeling relationship types:
 - [ ] Focus mode has clear exit mechanism
 - [ ] Min Edge slider affects view but not inspector counts
 - [ ] Include Via Digipeaters toggle affects Heard Via edges
+
+### SSID Grouping Tests
+
+- [ ] Station mode groups ANH, ANH-1, ANH-15 into single "ANH" node
+- [ ] SSID mode shows ANH and ANH-15 as separate nodes
+- [ ] Toggling mode invalidates layout cache
+- [ ] Inspector shows grouped SSIDs badge when count > 1
+- [ ] Inspector lists all grouped SSIDs in section
+- [ ] Packet counts aggregate correctly in Station mode
+- [ ] Setting persists across app restarts
+- [ ] Graph cache keys include identity mode

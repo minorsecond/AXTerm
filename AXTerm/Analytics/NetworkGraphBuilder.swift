@@ -12,6 +12,19 @@ struct NetworkGraphBuilder {
         let includeViaDigipeaters: Bool
         let minimumEdgeCount: Int
         let maxNodes: Int
+        let stationIdentityMode: StationIdentityMode
+
+        init(
+            includeViaDigipeaters: Bool,
+            minimumEdgeCount: Int,
+            maxNodes: Int,
+            stationIdentityMode: StationIdentityMode = .station
+        ) {
+            self.includeViaDigipeaters = includeViaDigipeaters
+            self.minimumEdgeCount = minimumEdgeCount
+            self.maxNodes = maxNodes
+            self.stationIdentityMode = stationIdentityMode
+        }
     }
 
     // MARK: - Standard Graph Building
@@ -39,16 +52,32 @@ struct NetworkGraphBuilder {
     static func buildClassified(events: [PacketEvent], options: Options, now: Date = Date()) -> ClassifiedGraphModel {
         guard !events.isEmpty else { return .empty }
 
+        let identityMode = options.stationIdentityMode
+
+        // Helper: get identity key for a callsign based on mode
+        func identityKey(for callsign: String) -> String {
+            CallsignParser.identityKey(for: callsign, mode: identityMode)
+        }
+
         // Track different relationship types separately
         var directPeerEdges: [UndirectedKey: ClassifiedEdgeAggregate] = [:]
         var heardDirectData: [String: [String: HeardDirectAggregate]] = [:] // observer -> sender -> data
         var heardViaData: [String: [String: HeardViaAggregate]] = [:] // observer -> sender -> data
         var nodeStats: [String: NodeAggregate] = [:]
+        var identityMembers: [String: Set<String>] = [:]
 
         for event in events {
-            guard let from = event.from, let to = event.to else { continue }
-            guard CallsignValidator.isValidCallsign(from) else { continue }
-            guard CallsignValidator.isValidCallsign(to) else { continue }
+            guard let rawFrom = event.from, let rawTo = event.to else { continue }
+            guard CallsignValidator.isValidCallsign(rawFrom) else { continue }
+            guard CallsignValidator.isValidCallsign(rawTo) else { continue }
+
+            // Convert to identity keys
+            let from = identityKey(for: rawFrom)
+            let to = identityKey(for: rawTo)
+
+            // Track members
+            identityMembers[from, default: []].insert(rawFrom.uppercased())
+            identityMembers[to, default: []].insert(rawTo.uppercased())
 
             // Check if this is infrastructure traffic
             let isInfrastructure = event.frameType == .ui && (
@@ -94,20 +123,27 @@ struct NetworkGraphBuilder {
             } else {
                 // Packet with via path (digipeaters)
                 if options.includeViaDigipeaters {
+                    // Convert via callsigns to identity keys
+                    let viaKeys = event.via.map { identityKey(for: $0) }
+                    // Track via members
+                    for (i, rawVia) in event.via.enumerated() {
+                        identityMembers[viaKeys[i], default: []].insert(rawVia.uppercased())
+                    }
+
                     // Track HeardVia relationships
                     // The final destination 'to' heard 'from' via digipeaters
                     var toHeardVia = heardViaData[to, default: [:]]
                     var fromAgg = toHeardVia[from, default: HeardViaAggregate()]
                     fromAgg.count += 1
                     fromAgg.lastHeard = max(fromAgg.lastHeard ?? .distantPast, event.timestamp)
-                    for digi in event.via {
-                        fromAgg.viaDigipeaters[digi, default: 0] += 1
+                    for digiKey in viaKeys {
+                        fromAgg.viaDigipeaters[digiKey, default: 0] += 1
                     }
                     toHeardVia[from] = fromAgg
                     heardViaData[to] = toHeardVia
 
                     // Also build edges through the path for graph visualization
-                    let path = [from] + event.via + [to]
+                    let path = [from] + viaKeys + [to]
                     for i in 0..<(path.count - 1) {
                         let source = path[i]
                         let target = path[i + 1]
@@ -226,6 +262,8 @@ struct NetworkGraphBuilder {
         for id in activeNodeIDs {
             let stats = nodeStats[id] ?? NodeAggregate()
             let nodeRels = relationships[id] ?? []
+            let members = identityMembers[id] ?? [id]
+            let groupedSSIDs = Array(members).sorted()
             let node = NetworkGraphNode(
                 id: id,
                 callsign: id,
@@ -234,7 +272,8 @@ struct NetworkGraphBuilder {
                 outCount: stats.outCount,
                 inBytes: stats.inBytes,
                 outBytes: stats.outBytes,
-                degree: nodeRels.filter { $0.linkType == .directPeer }.count
+                degree: nodeRels.filter { $0.linkType == .directPeer }.count,
+                groupedSSIDs: groupedSSIDs
             )
             nodes.append(node)
         }
@@ -290,7 +329,8 @@ struct NetworkGraphBuilder {
                 outCount: node.outCount,
                 inBytes: node.inBytes,
                 outBytes: node.outBytes,
-                degree: directPeerCount
+                degree: directPeerCount,
+                groupedSSIDs: node.groupedSSIDs
             )
         }
 
@@ -305,14 +345,38 @@ struct NetworkGraphBuilder {
     static func build(events: [PacketEvent], options: Options) -> GraphModel {
         guard !events.isEmpty else { return .empty }
 
+        let identityMode = options.stationIdentityMode
+
+        // Helper: get identity key for a callsign based on mode
+        func identityKey(for callsign: String) -> String {
+            CallsignParser.identityKey(for: callsign, mode: identityMode)
+        }
+
         var directedEdges: [DirectedKey: EdgeAggregate] = [:]
         var nodeStats: [String: NodeAggregate] = [:]
+        // Track which raw SSIDs belong to each identity key (for display)
+        var identityMembers: [String: Set<String>] = [:]
 
         for event in events {
-            guard let from = event.from, let to = event.to else { continue }
+            guard let rawFrom = event.from, let rawTo = event.to else { continue }
+
+            // Convert callsigns to identity keys
+            let from = identityKey(for: rawFrom)
+            let to = identityKey(for: rawTo)
+
+            // Track members
+            identityMembers[from, default: []].insert(rawFrom.uppercased())
+            identityMembers[to, default: []].insert(rawTo.uppercased())
+
             let path: [String]
             if options.includeViaDigipeaters {
-                path = [from] + event.via + [to]
+                // Also convert via callsigns to identity keys
+                let viaKeys = event.via.map { identityKey(for: $0) }
+                // Track via members
+                for (i, rawVia) in event.via.enumerated() {
+                    identityMembers[viaKeys[i], default: []].insert(rawVia.uppercased())
+                }
+                path = [from] + viaKeys + [to]
             } else {
                 path = [from, to]
             }
@@ -355,6 +419,7 @@ struct NetworkGraphBuilder {
 
         // Filter edges to only include valid amateur radio callsigns
         // This excludes non-callsign entities like BEACON, ID, WIDE1-1, etc.
+        // Note: We check the identity key (which is the base callsign in station mode)
         let edgesExcludingSpecial = filteredEdges.filter { key, _ in
             CallsignValidator.isValidCallsign(key.source) &&
             CallsignValidator.isValidCallsign(key.target)
@@ -378,15 +443,21 @@ struct NetworkGraphBuilder {
             guard let stats = nodeStats[id] else { continue }
             let neighbors = adjacency[id] ?? []
             let totalWeight = stats.inCount + stats.outCount
+            // Get display callsign - in station mode, use base; in ssid mode, use full
+            let displayCallsign = id
+            // Get grouped SSIDs for this node
+            let members = identityMembers[id] ?? [id]
+            let groupedSSIDs = Array(members).sorted()
             let node = NetworkGraphNode(
                 id: id,
-                callsign: id,
+                callsign: displayCallsign,
                 weight: totalWeight,
                 inCount: stats.inCount,
                 outCount: stats.outCount,
                 inBytes: stats.inBytes,
                 outBytes: stats.outBytes,
-                degree: neighbors.count
+                degree: neighbors.count,
+                groupedSSIDs: groupedSSIDs
             )
             nodes.append(node)
         }
@@ -442,7 +513,8 @@ struct NetworkGraphBuilder {
                 outCount: node.outCount,
                 inBytes: node.inBytes,
                 outBytes: node.outBytes,
-                degree: neighbors.count
+                degree: neighbors.count,
+                groupedSSIDs: node.groupedSSIDs
             )
         }
 
