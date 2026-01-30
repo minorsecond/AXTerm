@@ -136,44 +136,6 @@ struct AnalyticsDashboardView: View {
                     .controlSize(.small)
                 }
 
-                Toggle("Include via digipeaters", isOn: $viewModel.includeViaDigipeaters)
-                    .toggleStyle(.switch)
-                    .fixedSize()
-
-                // Station Identity Mode picker
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(GraphCopy.StationIdentity.pickerLabel)
-                        .font(.caption)
-                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                    Picker("", selection: $viewModel.stationIdentityMode) {
-                        Text(StationIdentityMode.station.shortName)
-                            .tag(StationIdentityMode.station)
-                        Text(StationIdentityMode.ssid.shortName)
-                            .tag(StationIdentityMode.ssid)
-                    }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .controlSize(.small)
-                    .help(viewModel.stationIdentityMode.tooltip)
-                }
-
-                // Graph View Mode picker
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(GraphCopy.ViewMode.pickerLabel)
-                        .font(.caption)
-                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                    Picker("", selection: $viewModel.graphViewMode) {
-                        ForEach(GraphViewMode.allCases) { mode in
-                            Label(mode.rawValue, systemImage: mode.icon)
-                                .tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .controlSize(.small)
-                    .help(viewModel.graphViewMode.description)
-                }
-
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Min edge count")
                         .font(.caption)
@@ -284,7 +246,10 @@ struct AnalyticsDashboardView: View {
     }
 
     private var graphSection: some View {
-        AnalyticsCard(title: "Network graph") {
+        AnalyticsCardWithControls(title: "Network graph") {
+            // Right-aligned controls in header
+            networkGraphHeaderControls
+        } content: {
             VStack(spacing: 8) {
                 // Graph toolbar (HIG: single canonical location for view controls)
                 GraphToolbar(
@@ -407,6 +372,60 @@ struct AnalyticsDashboardView: View {
         }
     }
 
+    // MARK: - Network Graph Header Controls
+
+    /// Controls scoped to the Network Graph card: View Mode and Station Identity.
+    /// These settings affect only the graph visualization, not global analytics or Network Health.
+    private var networkGraphHeaderControls: some View {
+        HStack(spacing: 16) {
+            // Include via digipeaters toggle
+            Toggle(isOn: $viewModel.includeViaDigipeaters) {
+                Text(GraphCopy.GraphControls.includeViaLabel)
+                    .font(.caption)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .help(GraphCopy.GraphControls.includeViaTooltip)
+
+            Divider()
+                .frame(height: 20)
+
+            // View Mode: Connectivity | Routing | All
+            HStack(spacing: 4) {
+                Text(GraphCopy.ViewMode.pickerLabel)
+                    .font(.caption)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                Picker("", selection: $viewModel.graphViewMode) {
+                    ForEach(GraphViewMode.allCases) { mode in
+                        Text(mode.rawValue)
+                            .tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .controlSize(.small)
+            }
+            .help(GraphCopy.ViewMode.pickerTooltip)
+
+            // Station Identity: Station | SSID
+            HStack(spacing: 4) {
+                Text(GraphCopy.StationIdentity.pickerLabel)
+                    .font(.caption)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                Picker("", selection: $viewModel.stationIdentityMode) {
+                    Text(StationIdentityMode.station.shortName)
+                        .tag(StationIdentityMode.station)
+                    Text(StationIdentityMode.ssid.shortName)
+                        .tag(StationIdentityMode.ssid)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .controlSize(.small)
+            }
+            .help(GraphCopy.StationIdentity.pickerTooltip)
+        }
+    }
+
     private var metricColumns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: AnalyticsStyle.Layout.cardSpacing), count: AnalyticsStyle.Layout.metricColumns)
     }
@@ -430,6 +449,44 @@ private struct AnalyticsCard<Content: View>: View {
             if let title {
                 Text(title)
                     .font(.title3.weight(.semibold))
+            }
+            content
+        }
+        .padding(AnalyticsStyle.Layout.cardPadding)
+        .background(
+            RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius)
+                .fill(AnalyticsStyle.Colors.cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius)
+                .stroke(AnalyticsStyle.Colors.cardStroke, lineWidth: 1)
+        )
+    }
+}
+
+private struct AnalyticsCardWithControls<Content: View, Controls: View>: View {
+    let title: String
+    @ViewBuilder var controls: Controls
+    @ViewBuilder var content: Content
+
+    init(
+        title: String,
+        @ViewBuilder controls: () -> Controls,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.controls = controls()
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AnalyticsStyle.Layout.cardSpacing) {
+            // Header with title and controls
+            HStack(alignment: .center, spacing: 16) {
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                controls
             }
             content
         }

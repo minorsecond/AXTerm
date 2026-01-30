@@ -250,8 +250,8 @@ enum GraphCopy {
     // MARK: Graph View Modes
 
     enum ViewMode {
-        static let pickerLabel = "View Mode"
-        static let pickerTooltip = "Choose what type of connections to display in the graph."
+        static let pickerLabel = "View"
+        static let pickerTooltip = "Changes which link types are shown in the network graph. Does not affect Network Health."
 
         static let connectivityLabel = "Connectivity"
         static let connectivityDescription = "Direct connections"
@@ -331,8 +331,8 @@ enum GraphCopy {
     // MARK: Station Identity Mode
 
     enum StationIdentity {
-        static let pickerLabel = "Station Identity"
-        static let pickerTooltip = "Choose how to identify stations in the graph. Group SSIDs combines all SSIDs under a base callsign; Split by SSID shows each SSID as a separate node."
+        static let pickerLabel = "Identity"
+        static let pickerTooltip = "Groups stations by base callsign or displays each SSID separately."
 
         static let stationLabel = "Group by Station"
         static let stationShortLabel = "Station"
@@ -347,6 +347,19 @@ enum GraphCopy {
         static let groupedBadgeTooltipTemplate = "%d SSIDs grouped under this station: %@"
         static let inspectorGroupedHeader = "Grouped SSIDs"
         static let inspectorGroupedTooltip = "All SSID variants observed for this station during the selected timeframe."
+    }
+
+    // MARK: Graph Controls (Network Graph Card Header)
+
+    enum GraphControls {
+        static let includeViaLabel = "Include via digipeaters"
+        static let includeViaTooltip = "Shows links observed through digipeater paths in Routing/All views."
+
+        static let minEdgeCountLabel = "Min edge"
+        static let minEdgeCountTooltip = "Minimum packets required to display a connection in the graph (view only)."
+
+        static let maxNodesLabel = "Max"
+        static let maxNodesTooltip = "Limits visible nodes to keep the graph readable (view only)."
     }
 
     // MARK: Sidebar Tabs
