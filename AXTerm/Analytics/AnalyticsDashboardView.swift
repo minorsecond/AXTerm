@@ -157,6 +157,23 @@ struct AnalyticsDashboardView: View {
                     .help(viewModel.stationIdentityMode.tooltip)
                 }
 
+                // Graph View Mode picker
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(GraphCopy.ViewMode.pickerLabel)
+                        .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    Picker("", selection: $viewModel.graphViewMode) {
+                        ForEach(GraphViewMode.allCases) { mode in
+                            Label(mode.rawValue, systemImage: mode.icon)
+                                .tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                    .controlSize(.small)
+                    .help(viewModel.graphViewMode.description)
+                }
+
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Min edge count")
                         .font(.caption)

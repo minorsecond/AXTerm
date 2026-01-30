@@ -16,6 +16,9 @@ struct AnalyticsViewState: Hashable, Sendable {
     var topDestinations: [RankRow]
     var topDigipeaters: [RankRow]
     var graphModel: GraphModel
+    /// Classified graph model with typed edges (DirectPeer, HeardDirect, SeenVia).
+    /// Used for inspector display and relationship classification.
+    var classifiedGraphModel: ClassifiedGraphModel
     var nodePositions: [NodePosition]
     var layoutEnergy: Double
     var graphNote: String?
@@ -33,6 +36,7 @@ struct AnalyticsViewState: Hashable, Sendable {
         topDestinations: [],
         topDigipeaters: [],
         graphModel: .empty,
+        classifiedGraphModel: .empty,
         nodePositions: [],
         layoutEnergy: 0,
         graphNote: nil,

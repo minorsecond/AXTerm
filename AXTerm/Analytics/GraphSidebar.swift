@@ -513,30 +513,8 @@ private struct SidebarInspectorContent: View {
 
                 Divider()
 
-                // Top neighbors
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(Copy.Inspector.neighborsLabel)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                        .help(Copy.Inspector.neighborsTooltip)
-
-                    if details.neighbors.isEmpty {
-                        Text(Copy.HubMetric.noNeighborsFound)
-                            .font(.caption)
-                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                            .padding(.vertical, 4)
-                    } else {
-                        ForEach(details.neighbors.prefix(5), id: \.id) { neighbor in
-                            HStack {
-                                Text(neighbor.id)
-                                Spacer()
-                                Text("\(neighbor.weight)")
-                                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                            }
-                            .font(.caption)
-                        }
-                    }
-                }
+                // Classified relationship sections
+                relationshipSections(details)
 
                 Spacer(minLength: 0)
 
@@ -568,6 +546,129 @@ private struct SidebarInspectorContent: View {
                 }
             }
             .padding(12)
+        }
+    }
+
+    // MARK: - Relationship Sections
+
+    @ViewBuilder
+    private func relationshipSections(_ details: GraphInspectorDetails) -> some View {
+        // Direct Peers section
+        if !details.directPeers.isEmpty {
+            relationshipSection(
+                title: Copy.Inspector.directPeersSection,
+                tooltip: Copy.Inspector.directPeersSectionTooltip,
+                relationships: details.directPeers,
+                icon: "arrow.left.arrow.right",
+                iconColor: Color(nsColor: .systemGreen)
+            )
+        }
+
+        // Heard Direct section
+        if !details.heardDirect.isEmpty {
+            relationshipSection(
+                title: Copy.Inspector.heardDirectSection,
+                tooltip: Copy.Inspector.heardDirectSectionTooltip,
+                relationships: details.heardDirect,
+                icon: "antenna.radiowaves.left.and.right",
+                iconColor: Color(nsColor: .systemBlue)
+            )
+        }
+
+        // Seen Via section
+        if !details.seenVia.isEmpty {
+            relationshipSection(
+                title: Copy.Inspector.heardViaSection,
+                tooltip: Copy.Inspector.heardViaSectionTooltip,
+                relationships: details.seenVia,
+                icon: "arrow.triangle.branch",
+                iconColor: Color(nsColor: .systemOrange)
+            )
+        }
+
+        // Show empty state if no relationships at all
+        if details.directPeers.isEmpty && details.heardDirect.isEmpty && details.seenVia.isEmpty {
+            Text(Copy.HubMetric.noNeighborsFound)
+                .font(.caption)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                .padding(.vertical, 4)
+        }
+    }
+
+    private func relationshipSection(
+        title: String,
+        tooltip: String,
+        relationships: [StationRelationship],
+        icon: String,
+        iconColor: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.caption)
+                    .foregroundStyle(iconColor)
+                Text(title)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                Text("(\(relationships.count))")
+                    .font(.caption2)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary.opacity(0.7))
+            }
+            .help(tooltip)
+
+            ForEach(relationships.prefix(5)) { rel in
+                relationshipRow(rel)
+            }
+
+            if relationships.count > 5 {
+                Text("+ \(relationships.count - 5) more")
+                    .font(.caption2)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary.opacity(0.7))
+            }
+        }
+        .padding(.bottom, 8)
+    }
+
+    private func relationshipRow(_ rel: StationRelationship) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(rel.id)
+                    .font(.caption)
+                Spacer()
+                Text("\(rel.packetCount)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            }
+
+            // Show via digipeaters for heardVia relationships
+            if rel.linkType == .heardVia && !rel.viaDigipeaters.isEmpty {
+                Text(String(format: Copy.Inspector.viaDigipeaterTemplate, rel.viaDigipeaters.joined(separator: ", ")))
+                    .font(.caption2)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary.opacity(0.7))
+            }
+
+            // Show last heard time if available
+            if let lastHeard = rel.lastHeard {
+                Text(String(format: Copy.Inspector.lastHeardTemplate, relativeTimeString(lastHeard)))
+                    .font(.caption2)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary.opacity(0.7))
+            }
+        }
+    }
+
+    private func relativeTimeString(_ date: Date) -> String {
+        let interval = Date().timeIntervalSince(date)
+        if interval < 60 {
+            return "just now"
+        } else if interval < 3600 {
+            let minutes = Int(interval / 60)
+            return "\(minutes)m ago"
+        } else if interval < 86400 {
+            let hours = Int(interval / 3600)
+            return "\(hours)h ago"
+        } else {
+            let days = Int(interval / 86400)
+            return "\(days)d ago"
         }
     }
 
@@ -842,6 +943,18 @@ struct GraphSidebar_Previews: PreviewProvider {
                 GraphNeighborStat(id: "N0XCR", weight: 44, bytes: 512),
                 GraphNeighborStat(id: "KC0LDY", weight: 11, bytes: 128),
                 GraphNeighborStat(id: "WB4CIW", weight: 11, bytes: 128)
+            ],
+            directPeers: [
+                StationRelationship(id: "N0XCR", linkType: .directPeer, packetCount: 44, lastHeard: Date().addingTimeInterval(-300), viaDigipeaters: [], score: 1.0),
+                StationRelationship(id: "KC0LDY", linkType: .directPeer, packetCount: 11, lastHeard: Date().addingTimeInterval(-600), viaDigipeaters: [], score: 1.0)
+            ],
+            heardDirect: [
+                StationRelationship(id: "WB4CIW", linkType: .heardDirect, packetCount: 8, lastHeard: Date().addingTimeInterval(-120), viaDigipeaters: [], score: 0.75),
+                StationRelationship(id: "K0EPI", linkType: .heardDirect, packetCount: 5, lastHeard: Date().addingTimeInterval(-900), viaDigipeaters: [], score: 0.45)
+            ],
+            seenVia: [
+                StationRelationship(id: "DRL", linkType: .heardVia, packetCount: 15, lastHeard: Date().addingTimeInterval(-180), viaDigipeaters: ["K0NTS-7", "W0ARP-10"], score: 0),
+                StationRelationship(id: "ANH", linkType: .heardVia, packetCount: 3, lastHeard: Date().addingTimeInterval(-3600), viaDigipeaters: ["DRL"], score: 0)
             ]
         )
     }

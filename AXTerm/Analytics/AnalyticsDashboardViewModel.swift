@@ -109,6 +109,20 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
     }
 
+    /// Graph view mode controls which edge types are visible.
+    /// - `.connectivity`: Shows DirectPeer and HeardDirect edges (who can you reach directly?)
+    /// - `.routing`: Shows DirectPeer and SeenVia edges (how do packets flow?)
+    /// - `.all`: Shows all edge types
+    @Published var graphViewMode: GraphViewMode = .connectivity {
+        didSet {
+            guard graphViewMode != oldValue else { return }
+            trackFilterChange(reason: "graphViewMode")
+            // View mode only affects edge filtering, not the underlying classified graph.
+            // Recompute the filtered view graph from the cached classified model.
+            applyViewModeFilter()
+        }
+    }
+
     @Published private(set) var viewState: AnalyticsViewState = .empty
 
     // MARK: - Focus Mode State
@@ -140,6 +154,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private var myCallsignForLayout: String = ""
     private var aggregationCache: [AggregationCacheKey: AnalyticsAggregationResult] = [:]
     private var graphCache: [GraphCacheKey: GraphModel] = [:]
+    private var classifiedGraphCache: [GraphCacheKey: ClassifiedGraphModel] = [:]
     private let aggregationScheduler: CoalescingScheduler
     private let graphScheduler: CoalescingScheduler
     private var aggregationTask: Task<Void, Never>?
@@ -373,7 +388,20 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             return nil
         }
         let neighbors = viewState.graphModel.adjacency[selectedNodeID] ?? []
-        return GraphInspectorDetails(node: node, neighbors: neighbors)
+
+        // Get classified relationships from the classified graph model
+        let relationships = viewState.classifiedGraphModel.relationships(for: selectedNodeID)
+        let directPeers = relationships.filter { $0.linkType == .directPeer }
+        let heardDirect = relationships.filter { $0.linkType == .heardDirect }
+        let seenVia = relationships.filter { $0.linkType == .heardVia }
+
+        return GraphInspectorDetails(
+            node: node,
+            neighbors: neighbors,
+            directPeers: directPeers,
+            heardDirect: heardDirect,
+            seenVia: seenVia
+        )
     }
 
     deinit {
@@ -599,6 +627,14 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             customEnd: customRangeEnd
         )
 
+        // Check cache for classified graph
+        if let cachedClassified = classifiedGraphCache[key] {
+            applyClassifiedGraphModel(cachedClassified)
+            prepareLayout(reason: "graphCache")
+            return
+        }
+
+        // Fallback to legacy cache for backwards compatibility
         if let cached = graphCache[key] {
             applyGraphModel(cached)
             prepareLayout(reason: "graphCache")
@@ -621,33 +657,35 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         graphTask?.cancel()
         graphTask = Task.detached(priority: .userInitiated) {
             let start = Date()
-            let model = NetworkGraphBuilder.build(
+            // Build the classified graph with typed edges
+            let classifiedModel = NetworkGraphBuilder.buildClassified(
                 packets: packetSnapshot,
                 options: NetworkGraphBuilder.Options(
                     includeViaDigipeaters: includeViaSnapshot,
                     minimumEdgeCount: minEdgeSnapshot,
                     maxNodes: maxNodesSnapshot,
                     stationIdentityMode: identityModeSnapshot
-                )
+                ),
+                now: now
             )
             let duration = Date().timeIntervalSince(start) * 1000
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 guard !Task.isCancelled else { return }
-                self.graphCache[key] = model
-                self.applyGraphModel(model)
+                self.classifiedGraphCache[key] = classifiedModel
+                self.applyClassifiedGraphModel(classifiedModel)
                 self.telemetryLimiter.breadcrumb(
                     category: "graph.build.finished",
                     message: "Graph build finished",
                     data: [
                         "durationMs": duration,
-                        "nodeCount": model.nodes.count,
-                        "edgeCount": model.edges.count
+                        "nodeCount": classifiedModel.nodes.count,
+                        "edgeCount": classifiedModel.edges.count
                     ]
                 )
 
-                if packetSnapshot.isEmpty == false && model.nodes.isEmpty {
+                if packetSnapshot.isEmpty == false && classifiedModel.nodes.isEmpty {
                     Telemetry.capture(
                         message: "graph.build.empty",
                         data: [
@@ -661,6 +699,94 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                 self.prepareLayout(reason: "graphBuild")
             }
         }
+    }
+
+    /// Applies a classified graph model, filtering edges based on the current view mode.
+    private func applyClassifiedGraphModel(_ classifiedModel: ClassifiedGraphModel) {
+        // Store the full classified model for inspector use
+        viewState.classifiedGraphModel = classifiedModel
+
+        // Filter edges based on view mode and convert to GraphModel for rendering
+        let viewModel = deriveViewGraph(from: classifiedModel)
+        viewState.graphModel = viewModel
+        viewState.graphNote = classifiedModel.droppedNodesCount > 0 ? "Showing top \(maxNodes) nodes" : nil
+        updateNetworkHealth()
+        // Recompute filtered graph when underlying model changes
+        recomputeFilteredGraph()
+    }
+
+    /// Derives a GraphModel from a ClassifiedGraphModel by filtering edges based on view mode.
+    private func deriveViewGraph(from classifiedModel: ClassifiedGraphModel) -> GraphModel {
+        let visibleTypes = graphViewMode.visibleLinkTypes
+        let filteredEdges = classifiedModel.edges
+            .filter { visibleTypes.contains($0.linkType) }
+            .map { edge in
+                NetworkGraphEdge(
+                    sourceID: edge.sourceID,
+                    targetID: edge.targetID,
+                    weight: edge.weight,
+                    bytes: edge.bytes
+                )
+            }
+
+        // Build adjacency from filtered edges
+        var adjacency: [String: [GraphNeighborStat]] = [:]
+        for edge in filteredEdges {
+            adjacency[edge.sourceID, default: []].append(
+                GraphNeighborStat(id: edge.targetID, weight: edge.weight, bytes: edge.bytes)
+            )
+            adjacency[edge.targetID, default: []].append(
+                GraphNeighborStat(id: edge.sourceID, weight: edge.weight, bytes: edge.bytes)
+            )
+        }
+
+        // Recalculate degrees based on filtered edges
+        let nodeIDs = Set(classifiedModel.nodes.map { $0.id })
+        let updatedNodes = classifiedModel.nodes.map { node in
+            let neighbors = adjacency[node.id] ?? []
+            return NetworkGraphNode(
+                id: node.id,
+                callsign: node.callsign,
+                weight: node.weight,
+                inCount: node.inCount,
+                outCount: node.outCount,
+                inBytes: node.inBytes,
+                outBytes: node.outBytes,
+                degree: neighbors.count,
+                groupedSSIDs: node.groupedSSIDs
+            )
+        }
+
+        // Sort adjacency by weight
+        let sortedAdjacency = adjacency.mapValues { neighbors in
+            neighbors.sorted { lhs, rhs in
+                if lhs.weight != rhs.weight {
+                    return lhs.weight > rhs.weight
+                }
+                return lhs.id < rhs.id
+            }
+        }
+
+        return GraphModel(
+            nodes: updatedNodes,
+            edges: filteredEdges.sorted { lhs, rhs in
+                if lhs.weight != rhs.weight {
+                    return lhs.weight > rhs.weight
+                }
+                return lhs.sourceID < rhs.sourceID
+            },
+            adjacency: sortedAdjacency,
+            droppedNodesCount: classifiedModel.droppedNodesCount
+        )
+    }
+
+    /// Reapplies the view mode filter to the current classified graph.
+    /// Called when graphViewMode changes without rebuilding the underlying graph.
+    private func applyViewModeFilter() {
+        guard !viewState.classifiedGraphModel.nodes.isEmpty else { return }
+        let viewModel = deriveViewGraph(from: viewState.classifiedGraphModel)
+        viewState.graphModel = viewModel
+        recomputeFilteredGraph()
     }
 
     private func applyGraphModel(_ model: GraphModel) {
@@ -1026,6 +1152,27 @@ private struct GraphCacheKey: Hashable {
 struct GraphInspectorDetails: Hashable, Sendable {
     let node: NetworkGraphNode
     let neighbors: [GraphNeighborStat]
+
+    /// Classified relationships grouped by link type.
+    /// Used for the new inspector sections: Direct Peers, Heard Direct, Seen Via.
+    let directPeers: [StationRelationship]
+    let heardDirect: [StationRelationship]
+    let seenVia: [StationRelationship]
+
+    /// Creates inspector details with classified relationships.
+    init(
+        node: NetworkGraphNode,
+        neighbors: [GraphNeighborStat],
+        directPeers: [StationRelationship] = [],
+        heardDirect: [StationRelationship] = [],
+        seenVia: [StationRelationship] = []
+    ) {
+        self.node = node
+        self.neighbors = neighbors
+        self.directPeers = directPeers
+        self.heardDirect = heardDirect
+        self.seenVia = seenVia
+    }
 }
 
 private enum AnalyticsInputHasher {

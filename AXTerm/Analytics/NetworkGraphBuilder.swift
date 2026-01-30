@@ -59,10 +59,19 @@ struct NetworkGraphBuilder {
             CallsignParser.identityKey(for: callsign, mode: identityMode)
         }
 
-        // Track different relationship types separately
-        var directPeerEdges: [UndirectedKey: ClassifiedEdgeAggregate] = [:]
+        // PHASE 1: Collect directional endpoint traffic for DirectPeer detection
+        // DirectPeer requires BIDIRECTIONAL endpoint traffic: A→B AND B→A both exist
+        var directionalEndpointTraffic: [DirectedKey: DirectionalTrafficAggregate] = [:]
+
+        // Track HeardDirect data (one-way direct reception, no via path)
         var heardDirectData: [String: [String: HeardDirectAggregate]] = [:] // observer -> sender -> data
+
+        // Track HeardVia data (observed via digipeaters only)
         var heardViaData: [String: [String: HeardViaAggregate]] = [:] // observer -> sender -> data
+
+        // Track via path edges for graph visualization (digipeater links)
+        var viaPathEdges: [UndirectedKey: ClassifiedEdgeAggregate] = [:]
+
         var nodeStats: [String: NodeAggregate] = [:]
         var identityMembers: [String: Set<String>] = [:]
 
@@ -79,7 +88,7 @@ struct NetworkGraphBuilder {
             identityMembers[from, default: []].insert(rawFrom.uppercased())
             identityMembers[to, default: []].insert(rawTo.uppercased())
 
-            // Check if this is infrastructure traffic
+            // Check if this is infrastructure traffic (excluded from DirectPeer)
             let isInfrastructure = event.frameType == .ui && (
                 to.uppercased() == "ID" ||
                 to.uppercased() == "BEACON" ||
@@ -98,95 +107,129 @@ struct NetworkGraphBuilder {
             nodeStats[to] = toStats
 
             if event.via.isEmpty {
-                // Direct packet (no digipeaters)
+                // Direct packet (no digipeaters in path)
+                // This is endpoint traffic for DirectPeer detection
                 if !isInfrastructure {
-                    // This is a DirectPeer edge
-                    let key = UndirectedKey(lhs: from, rhs: to)
-                    var agg = directPeerEdges[key, default: ClassifiedEdgeAggregate()]
+                    let directedKey = DirectedKey(source: from, target: to)
+                    var agg = directionalEndpointTraffic[directedKey, default: DirectionalTrafficAggregate()]
                     agg.count += 1
                     agg.bytes += event.payloadBytes
                     agg.lastHeard = max(agg.lastHeard ?? .distantPast, event.timestamp)
-                    directPeerEdges[key] = agg
+                    directionalEndpointTraffic[directedKey] = agg
                 }
 
-                // Also track as HeardDirect (from -> to means 'to' received directly from 'from')
-                // The receiver 'to' heard 'from' directly
+                // Track as HeardDirect: 'to' heard 'from' directly (no via path)
                 var toHeardDirect = heardDirectData[to, default: [:]]
                 var fromAgg = toHeardDirect[from, default: HeardDirectAggregate()]
                 fromAgg.count += 1
                 fromAgg.lastHeard = max(fromAgg.lastHeard ?? .distantPast, event.timestamp)
-                // Track distinct 5-minute buckets
+                // Track distinct 5-minute buckets for scoring
                 let bucket = Int(event.timestamp.timeIntervalSince1970 / 300)
                 fromAgg.distinctBuckets.insert(bucket)
                 toHeardDirect[from] = fromAgg
                 heardDirectData[to] = toHeardDirect
             } else {
                 // Packet with via path (digipeaters)
+                // Convert via callsigns to identity keys
+                let viaKeys = event.via.compactMap { rawVia -> String? in
+                    guard CallsignValidator.isValidCallsign(rawVia) else { return nil }
+                    return identityKey(for: rawVia)
+                }
+
+                // Track via members
+                for (i, rawVia) in event.via.enumerated() where i < viaKeys.count {
+                    identityMembers[viaKeys[i], default: []].insert(rawVia.uppercased())
+                }
+
+                // Track HeardVia: 'to' heard 'from' via digipeaters
+                var toHeardVia = heardViaData[to, default: [:]]
+                var fromAgg = toHeardVia[from, default: HeardViaAggregate()]
+                fromAgg.count += 1
+                fromAgg.lastHeard = max(fromAgg.lastHeard ?? .distantPast, event.timestamp)
+                for digiKey in viaKeys {
+                    fromAgg.viaDigipeaters[digiKey, default: 0] += 1
+                }
+                toHeardVia[from] = fromAgg
+                heardViaData[to] = toHeardVia
+
+                // Build edges through the via path for graph visualization (only if enabled)
                 if options.includeViaDigipeaters {
-                    // Convert via callsigns to identity keys
-                    let viaKeys = event.via.map { identityKey(for: $0) }
-                    // Track via members
-                    for (i, rawVia) in event.via.enumerated() {
-                        identityMembers[viaKeys[i], default: []].insert(rawVia.uppercased())
-                    }
-
-                    // Track HeardVia relationships
-                    // The final destination 'to' heard 'from' via digipeaters
-                    var toHeardVia = heardViaData[to, default: [:]]
-                    var fromAgg = toHeardVia[from, default: HeardViaAggregate()]
-                    fromAgg.count += 1
-                    fromAgg.lastHeard = max(fromAgg.lastHeard ?? .distantPast, event.timestamp)
-                    for digiKey in viaKeys {
-                        fromAgg.viaDigipeaters[digiKey, default: 0] += 1
-                    }
-                    toHeardVia[from] = fromAgg
-                    heardViaData[to] = toHeardVia
-
-                    // Also build edges through the path for graph visualization
                     let path = [from] + viaKeys + [to]
                     for i in 0..<(path.count - 1) {
                         let source = path[i]
                         let target = path[i + 1]
-                        guard CallsignValidator.isValidCallsign(source),
-                              CallsignValidator.isValidCallsign(target) else { continue }
 
                         let key = UndirectedKey(lhs: source, rhs: target)
-                        var agg = directPeerEdges[key, default: ClassifiedEdgeAggregate()]
+                        var agg = viaPathEdges[key, default: ClassifiedEdgeAggregate()]
                         agg.count += 1
                         agg.bytes += event.payloadBytes
                         agg.lastHeard = max(agg.lastHeard ?? .distantPast, event.timestamp)
                         agg.hasViaPath = true
-                        directPeerEdges[key] = agg
+                        viaPathEdges[key] = agg
                     }
                 }
             }
         }
 
-        // Build classified edges
-        var classifiedEdges: [ClassifiedEdge] = []
+        // PHASE 2: Classify edges based on relationship type
 
-        // Add DirectPeer edges
-        for (key, agg) in directPeerEdges {
-            guard agg.count >= options.minimumEdgeCount else { continue }
-            let linkType: LinkType = agg.hasViaPath ? .heardVia : .directPeer
-            classifiedEdges.append(ClassifiedEdge(
-                sourceID: key.source,
-                targetID: key.target,
-                linkType: linkType,
-                weight: agg.count,
-                bytes: agg.bytes,
-                lastHeard: agg.lastHeard,
-                viaDigipeaters: []
-            ))
+        var classifiedEdges: [ClassifiedEdge] = []
+        var directPeerKeys: Set<UndirectedKey> = []
+
+        // DirectPeer edges: Require BIDIRECTIONAL endpoint traffic (A→B AND B→A)
+        // Group directed keys into undirected pairs and check for bidirectionality
+        var undirectedEndpointTraffic: [UndirectedKey: BidirectionalTrafficAggregate] = [:]
+        for (directedKey, agg) in directionalEndpointTraffic {
+            let undirectedKey = UndirectedKey(lhs: directedKey.source, rhs: directedKey.target)
+            var biAgg = undirectedEndpointTraffic[undirectedKey, default: BidirectionalTrafficAggregate()]
+            // Track traffic in each direction
+            if directedKey.source == undirectedKey.source {
+                // source → target direction
+                biAgg.forwardCount += agg.count
+                biAgg.forwardBytes += agg.bytes
+            } else {
+                // target → source direction
+                biAgg.reverseCount += agg.count
+                biAgg.reverseBytes += agg.bytes
+            }
+            biAgg.lastHeard = max(biAgg.lastHeard ?? .distantPast, agg.lastHeard ?? .distantPast)
+            undirectedEndpointTraffic[undirectedKey] = biAgg
         }
 
-        // Build station relationships for adjacency
-        var relationships: [String: [StationRelationship]] = [:]
+        // Create DirectPeer edges only for BIDIRECTIONAL traffic
+        for (key, biAgg) in undirectedEndpointTraffic {
+            let totalCount = biAgg.forwardCount + biAgg.reverseCount
+            guard totalCount >= options.minimumEdgeCount else { continue }
 
-        // Add HeardDirect relationships
+            // CRITICAL: DirectPeer requires traffic in BOTH directions
+            let isBidirectional = biAgg.forwardCount >= 1 && biAgg.reverseCount >= 1
+
+            if isBidirectional {
+                directPeerKeys.insert(key)
+                classifiedEdges.append(ClassifiedEdge(
+                    sourceID: key.source,
+                    targetID: key.target,
+                    linkType: .directPeer,
+                    weight: totalCount,
+                    bytes: biAgg.forwardBytes + biAgg.reverseBytes,
+                    lastHeard: biAgg.lastHeard,
+                    viaDigipeaters: []
+                ))
+            }
+        }
+
+        // HeardDirect edges: One-way direct reception that meets scoring thresholds
+        // Collapse directional HeardDirect data into undirected edges
+        var heardDirectEdges: [UndirectedKey: HeardDirectEdgeAggregate] = [:]
+
         for (observer, senders) in heardDirectData {
-            var observerRels = relationships[observer, default: []]
             for (sender, agg) in senders {
+                let key = UndirectedKey(lhs: observer, rhs: sender)
+
+                // Skip if this pair is already a DirectPeer
+                if directPeerKeys.contains(key) { continue }
+
+                // Calculate HeardDirect score
                 let age = now.timeIntervalSince(agg.lastHeard ?? now)
                 let score = HeardDirectScoring.calculateScore(
                     directHeardCount: agg.count,
@@ -194,7 +237,132 @@ struct NetworkGraphBuilder {
                     lastDirectHeardAge: age
                 )
 
-                if score >= HeardDirectScoring.minimumScore {
+                guard score >= HeardDirectScoring.minimumScore else { continue }
+
+                var edgeAgg = heardDirectEdges[key, default: HeardDirectEdgeAggregate()]
+                edgeAgg.count += agg.count
+                edgeAgg.lastHeard = max(edgeAgg.lastHeard ?? .distantPast, agg.lastHeard ?? .distantPast)
+                edgeAgg.score = max(edgeAgg.score, score)
+                heardDirectEdges[key] = edgeAgg
+            }
+        }
+
+        // Add HeardDirect edges to classified edges
+        for (key, agg) in heardDirectEdges {
+            guard agg.count >= options.minimumEdgeCount else { continue }
+            classifiedEdges.append(ClassifiedEdge(
+                sourceID: key.source,
+                targetID: key.target,
+                linkType: .heardDirect,
+                weight: agg.count,
+                bytes: 0, // HeardDirect doesn't track bytes (it's reception evidence, not endpoint traffic)
+                lastHeard: agg.lastHeard,
+                viaDigipeaters: []
+            ))
+        }
+
+        // SeenVia (HeardVia) edges: Observed only through digipeaters
+        // Only create if includeViaDigipeaters is enabled
+        if options.includeViaDigipeaters {
+            var seenViaEdges: [UndirectedKey: SeenViaEdgeAggregate] = [:]
+
+            for (observer, senders) in heardViaData {
+                for (sender, agg) in senders {
+                    let key = UndirectedKey(lhs: observer, rhs: sender)
+
+                    // Skip if this pair is a DirectPeer or HeardDirect
+                    if directPeerKeys.contains(key) { continue }
+                    if heardDirectEdges.keys.contains(key) { continue }
+
+                    var edgeAgg = seenViaEdges[key, default: SeenViaEdgeAggregate()]
+                    edgeAgg.count += agg.count
+                    edgeAgg.lastHeard = max(edgeAgg.lastHeard ?? .distantPast, agg.lastHeard ?? .distantPast)
+                    // Merge digipeater counts
+                    for (digi, count) in agg.viaDigipeaters {
+                        edgeAgg.viaDigipeaters[digi, default: 0] += count
+                    }
+                    seenViaEdges[key] = edgeAgg
+                }
+            }
+
+            // Add SeenVia edges
+            for (key, agg) in seenViaEdges {
+                guard agg.count >= options.minimumEdgeCount else { continue }
+                let topDigis = agg.viaDigipeaters
+                    .sorted { $0.value > $1.value }
+                    .prefix(3)
+                    .map { $0.key }
+
+                classifiedEdges.append(ClassifiedEdge(
+                    sourceID: key.source,
+                    targetID: key.target,
+                    linkType: .heardVia,
+                    weight: agg.count,
+                    bytes: 0,
+                    lastHeard: agg.lastHeard,
+                    viaDigipeaters: topDigis
+                ))
+            }
+
+            // Add via path edges (digipeater link edges for routing visualization)
+            for (key, agg) in viaPathEdges {
+                guard agg.count >= options.minimumEdgeCount else { continue }
+                // Skip if already covered by another edge type
+                if directPeerKeys.contains(key) { continue }
+                if heardDirectEdges.keys.contains(key) { continue }
+                if seenViaEdges.keys.contains(key) { continue }
+
+                classifiedEdges.append(ClassifiedEdge(
+                    sourceID: key.source,
+                    targetID: key.target,
+                    linkType: .heardVia,
+                    weight: agg.count,
+                    bytes: agg.bytes,
+                    lastHeard: agg.lastHeard,
+                    viaDigipeaters: []
+                ))
+            }
+        }
+
+        // PHASE 3: Build station relationships for adjacency (inspector display)
+        var relationships: [String: [StationRelationship]] = [:]
+
+        // Add DirectPeer relationships
+        for edge in classifiedEdges where edge.linkType == .directPeer {
+            for (nodeID, peerID) in [(edge.sourceID, edge.targetID), (edge.targetID, edge.sourceID)] {
+                var nodeRels = relationships[nodeID, default: []]
+                if !nodeRels.contains(where: { $0.id == peerID && $0.linkType == .directPeer }) {
+                    nodeRels.append(StationRelationship(
+                        id: peerID,
+                        linkType: .directPeer,
+                        packetCount: edge.weight,
+                        lastHeard: edge.lastHeard,
+                        viaDigipeaters: [],
+                        score: 1.0
+                    ))
+                }
+                relationships[nodeID] = nodeRels
+            }
+        }
+
+        // Add HeardDirect relationships (with score)
+        for (observer, senders) in heardDirectData {
+            var observerRels = relationships[observer, default: []]
+            for (sender, agg) in senders {
+                // Skip if already a DirectPeer
+                let key = UndirectedKey(lhs: observer, rhs: sender)
+                if directPeerKeys.contains(key) { continue }
+
+                let age = now.timeIntervalSince(agg.lastHeard ?? now)
+                let score = HeardDirectScoring.calculateScore(
+                    directHeardCount: agg.count,
+                    directHeardMinutes: agg.distinctBuckets.count,
+                    lastDirectHeardAge: age
+                )
+
+                guard score >= HeardDirectScoring.minimumScore else { continue }
+
+                if !observerRels.contains(where: { $0.id == sender && $0.linkType == .heardDirect }) {
                     observerRels.append(StationRelationship(
                         id: sender,
                         linkType: .heardDirect,
@@ -208,16 +376,18 @@ struct NetworkGraphBuilder {
             relationships[observer] = observerRels
         }
 
-        // Add HeardVia relationships
+        // Add HeardVia relationships (with digipeater info)
         for (observer, senders) in heardViaData {
             var observerRels = relationships[observer, default: []]
             for (sender, agg) in senders {
-                // Skip if already in HeardDirect
+                let key = UndirectedKey(lhs: observer, rhs: sender)
+
+                // Skip if already a DirectPeer or HeardDirect
+                if directPeerKeys.contains(key) { continue }
                 if observerRels.contains(where: { $0.id == sender && $0.linkType == .heardDirect }) {
                     continue
                 }
 
-                // Get top digipeaters
                 let topDigis = agg.viaDigipeaters
                     .sorted { $0.value > $1.value }
                     .prefix(3)
@@ -235,26 +405,7 @@ struct NetworkGraphBuilder {
             relationships[observer] = observerRels
         }
 
-        // Add DirectPeer relationships from edges
-        for edge in classifiedEdges where edge.linkType == .directPeer {
-            // Add to both nodes
-            for (nodeID, peerID) in [(edge.sourceID, edge.targetID), (edge.targetID, edge.sourceID)] {
-                var nodeRels = relationships[nodeID, default: []]
-                if !nodeRels.contains(where: { $0.id == peerID && $0.linkType == .directPeer }) {
-                    nodeRels.append(StationRelationship(
-                        id: peerID,
-                        linkType: .directPeer,
-                        packetCount: edge.weight,
-                        lastHeard: edge.lastHeard,
-                        viaDigipeaters: [],
-                        score: 1.0
-                    ))
-                }
-                relationships[nodeID] = nodeRels
-            }
-        }
-
-        // Build nodes from edges
+        // PHASE 4: Build nodes from edges
         let activeNodeIDs = Set(classifiedEdges.flatMap { [$0.sourceID, $0.targetID] })
         var nodes: [NetworkGraphNode] = []
         nodes.reserveCapacity(activeNodeIDs.count)
@@ -296,6 +447,10 @@ struct NetworkGraphBuilder {
         let filteredEdges = classifiedEdges
             .filter { keptIDs.contains($0.sourceID) && keptIDs.contains($0.targetID) }
             .sorted { lhs, rhs in
+                // Sort by link type priority, then by weight
+                if lhs.linkType.renderPriority != rhs.linkType.renderPriority {
+                    return lhs.linkType.renderPriority < rhs.linkType.renderPriority
+                }
                 if lhs.weight != rhs.weight {
                     return lhs.weight > rhs.weight
                 }
@@ -575,6 +730,36 @@ private struct HeardDirectAggregate {
 }
 
 private struct HeardViaAggregate {
+    var count: Int = 0
+    var lastHeard: Date?
+    var viaDigipeaters: [String: Int] = [:]
+}
+
+// MARK: - Bidirectional Traffic Tracking (for DirectPeer detection)
+
+private struct DirectionalTrafficAggregate {
+    var count: Int = 0
+    var bytes: Int = 0
+    var lastHeard: Date?
+}
+
+private struct BidirectionalTrafficAggregate {
+    var forwardCount: Int = 0
+    var forwardBytes: Int = 0
+    var reverseCount: Int = 0
+    var reverseBytes: Int = 0
+    var lastHeard: Date?
+}
+
+// MARK: - Edge Aggregates for Classified Graph
+
+private struct HeardDirectEdgeAggregate {
+    var count: Int = 0
+    var lastHeard: Date?
+    var score: Double = 0
+}
+
+private struct SeenViaEdgeAggregate {
     var count: Int = 0
     var lastHeard: Date?
     var viaDigipeaters: [String: Int] = [:]
