@@ -363,6 +363,7 @@ final class PacketEngine: ObservableObject {
             via: decoded.via,
             frameType: decoded.frameType,
             control: decoded.control,
+            controlByte1: decoded.controlByte1,
             pid: decoded.pid,
             info: decoded.info,
             rawAx25: ax25Data,

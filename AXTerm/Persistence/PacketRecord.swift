@@ -40,6 +40,17 @@ struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Hashable {
     var pinned: Bool
     var tags: String?
 
+    // AX.25 Control Field decoded columns
+    var ax25FrameClass: String?     // "I", "S", "U", or "unknown"
+    var ax25SType: String?          // "RR", "RNR", "REJ", "SREJ" (S-frames only)
+    var ax25UType: String?          // "UI", "SABM", etc. (U-frames only)
+    var ax25Ns: Int?                // N(S) for I-frames
+    var ax25Nr: Int?                // N(R) for I/S frames
+    var ax25Pf: Int?                // Poll/Final bit (0/1)
+    var ax25Ctl0: Int?              // Raw first control byte
+    var ax25Ctl1: Int?              // Raw second control byte (if present)
+    var ax25IsExtended: Int?        // Extended mode flag (0/1)
+
     init(packet: Packet, endpoint: KISSEndpoint) throws {
         guard (1...65_535).contains(Int(endpoint.port)) else {
             throw PacketRecordError.invalidPort(Int(endpoint.port))
@@ -84,6 +95,18 @@ struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Hashable {
         self.kissPort = Int(endpoint.port)
         self.pinned = false
         self.tags = nil
+
+        // Decode control field
+        let decoded = AX25ControlFieldDecoder.decode(control: packet.control, controlByte1: packet.controlByte1)
+        self.ax25FrameClass = decoded.frameClass.rawValue
+        self.ax25SType = decoded.sType?.rawValue
+        self.ax25UType = decoded.uType?.rawValue
+        self.ax25Ns = decoded.ns
+        self.ax25Nr = decoded.nr
+        self.ax25Pf = decoded.pf
+        self.ax25Ctl0 = decoded.ctl0.map { Int($0) }
+        self.ax25Ctl1 = decoded.ctl1.map { Int($0) }
+        self.ax25IsExtended = decoded.isExtended ? 1 : 0
     }
 
     func toPacket() -> Packet {
@@ -94,6 +117,7 @@ struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Hashable {
         let raw = rawAx25Bytes.isEmpty ? PacketEncoding.decodeHex(rawAx25Hex) : rawAx25Bytes
         let frame = FrameType(rawValue: frameType) ?? .unknown
         let control = PacketEncoding.decodeControl(controlHex)
+        let controlByte1 = ax25Ctl1.map { UInt8(clamping: $0) }
         let pidValue = pid.flatMap { UInt8(clamping: $0) }
         let endpoint = KISSEndpoint(host: kissHost, port: UInt16(clamping: kissPort))
         return Packet(
@@ -104,6 +128,7 @@ struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Hashable {
             via: via,
             frameType: frame,
             control: control,
+            controlByte1: controlByte1,
             pid: pidValue,
             info: info,
             rawAx25: raw,

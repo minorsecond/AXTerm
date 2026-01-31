@@ -18,6 +18,8 @@ struct Packet: Identifiable, Hashable, Sendable {
     let via: [AX25Address]
     let frameType: FrameType
     let control: UInt8
+    /// Second control byte (used for I-frames in modulo-8 mode)
+    let controlByte1: UInt8?
     let pid: UInt8?
     let info: Data
     /// Cached text decoding of `info` (if mostly printable ASCII).
@@ -127,6 +129,11 @@ struct Packet: Identifiable, Hashable, Sendable {
         PayloadFormatter.hexString(info)
     }
 
+    /// Decoded control field information
+    var controlFieldDecoded: AX25ControlFieldDecoded {
+        AX25ControlFieldDecoder.decode(control: control, controlByte1: controlByte1)
+    }
+
     init(
         id: UUID = UUID(),
         timestamp: Date = Date(),
@@ -135,6 +142,7 @@ struct Packet: Identifiable, Hashable, Sendable {
         via: [AX25Address] = [],
         frameType: FrameType = .unknown,
         control: UInt8 = 0,
+        controlByte1: UInt8? = nil,
         pid: UInt8? = nil,
         info: Data = Data(),
         rawAx25: Data = Data(),
@@ -148,6 +156,7 @@ struct Packet: Identifiable, Hashable, Sendable {
         self.via = via
         self.frameType = frameType
         self.control = control
+        self.controlByte1 = controlByte1
         self.pid = pid
         self.info = info
         self.infoText = infoText ?? Self.computeInfoText(from: info)
