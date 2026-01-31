@@ -1,0 +1,329 @@
+//
+//  NetRomRoutesViewModel.swift
+//  AXTerm
+//
+//  ViewModel for the NET/ROM Routes page displaying neighbors, routes, and link quality.
+//
+
+import Combine
+import Foundation
+
+/// Tab selection for the Routes page.
+enum NetRomRoutesTab: String, CaseIterable, Identifiable {
+    case neighbors = "Neighbors"
+    case routes = "Routes"
+    case linkQuality = "Link Quality"
+
+    var id: String { rawValue }
+
+    var icon: String {
+        switch self {
+        case .neighbors: return "person.2"
+        case .routes: return "arrow.triangle.branch"
+        case .linkQuality: return "chart.bar"
+        }
+    }
+}
+
+/// Display model for a neighbor row.
+struct NeighborDisplayInfo: Identifiable, Hashable {
+    let id: String
+    let callsign: String
+    let quality: Int
+    let qualityPercent: Double
+    let sourceType: String
+    let lastSeen: Date
+    let lastSeenRelative: String
+    let obsolescenceCount: Int
+
+    init(from info: NeighborInfo) {
+        self.id = info.call
+        self.callsign = info.call
+        self.quality = info.quality
+        self.qualityPercent = Double(info.quality) / 255.0 * 100.0
+        self.sourceType = info.sourceType
+        self.lastSeen = info.lastSeen
+        self.lastSeenRelative = Self.formatRelativeTime(info.lastSeen)
+        self.obsolescenceCount = info.obsolescenceCount
+    }
+
+    private static func formatRelativeTime(_ date: Date) -> String {
+        let now = Date()
+        let interval = now.timeIntervalSince(date)
+
+        if interval < 60 {
+            return "Just now"
+        } else if interval < 3600 {
+            let minutes = Int(interval / 60)
+            return "\(minutes)m ago"
+        } else if interval < 86400 {
+            let hours = Int(interval / 3600)
+            return "\(hours)h ago"
+        } else {
+            let days = Int(interval / 86400)
+            return "\(days)d ago"
+        }
+    }
+}
+
+/// Display model for a route row.
+struct RouteDisplayInfo: Identifiable, Hashable {
+    let id: String
+    let destination: String
+    let nextHop: String
+    let quality: Int
+    let qualityPercent: Double
+    let sourceType: String
+    let path: [String]
+    let pathSummary: String
+    let hopCount: Int
+
+    init(from info: RouteInfo) {
+        self.id = "\(info.destination)→\(info.origin)"
+        self.destination = info.destination
+        self.nextHop = info.path.first ?? info.origin
+        self.quality = info.quality
+        self.qualityPercent = Double(info.quality) / 255.0 * 100.0
+        self.sourceType = info.sourceType
+        self.path = info.path
+        self.pathSummary = info.path.isEmpty ? info.origin : info.path.joined(separator: " → ")
+        self.hopCount = max(1, info.path.count)
+    }
+}
+
+/// Display model for a link stat row.
+struct LinkStatDisplayInfo: Identifiable, Hashable {
+    let id: String
+    let fromCall: String
+    let toCall: String
+    let quality: Int
+    let qualityPercent: Double
+    let dfEstimate: Double?
+    let drEstimate: Double?
+    let etx: Double?
+    let duplicateCount: Int
+    let lastUpdated: Date
+    let lastUpdatedRelative: String
+
+    init(from record: LinkStatRecord) {
+        self.id = "\(record.fromCall)→\(record.toCall)"
+        self.fromCall = record.fromCall
+        self.toCall = record.toCall
+        self.quality = record.quality
+        self.qualityPercent = Double(record.quality) / 255.0 * 100.0
+        self.dfEstimate = record.dfEstimate
+        self.drEstimate = record.drEstimate
+
+        // Calculate ETX if both df and dr are available
+        if let df = record.dfEstimate, let dr = record.drEstimate, df > 0, dr > 0 {
+            self.etx = 1.0 / (df * dr)
+        } else if let df = record.dfEstimate, df > 0 {
+            self.etx = 1.0 / df
+        } else {
+            self.etx = nil
+        }
+
+        self.duplicateCount = record.duplicateCount
+        self.lastUpdated = record.lastUpdated
+        self.lastUpdatedRelative = Self.formatRelativeTime(record.lastUpdated)
+    }
+
+    private static func formatRelativeTime(_ date: Date) -> String {
+        let now = Date()
+        let interval = now.timeIntervalSince(date)
+
+        if interval < 60 {
+            return "Just now"
+        } else if interval < 3600 {
+            let minutes = Int(interval / 60)
+            return "\(minutes)m ago"
+        } else if interval < 86400 {
+            let hours = Int(interval / 3600)
+            return "\(hours)h ago"
+        } else {
+            let days = Int(interval / 86400)
+            return "\(days)d ago"
+        }
+    }
+}
+
+/// ViewModel for the NET/ROM Routes page.
+@MainActor
+final class NetRomRoutesViewModel: ObservableObject {
+    @Published var selectedTab: NetRomRoutesTab = .neighbors
+    @Published var searchText: String = ""
+    @Published var routingMode: NetRomRoutingMode = .hybrid
+
+    @Published private(set) var neighbors: [NeighborDisplayInfo] = []
+    @Published private(set) var routes: [RouteDisplayInfo] = []
+    @Published private(set) var linkStats: [LinkStatDisplayInfo] = []
+
+    @Published private(set) var isLoading = false
+    @Published private(set) var lastRefresh: Date?
+
+    private weak var integration: NetRomIntegration?
+    private var refreshTimer: Timer?
+
+    init(integration: NetRomIntegration?) {
+        self.integration = integration
+        startAutoRefresh()
+    }
+
+    deinit {
+        refreshTimer?.invalidate()
+    }
+
+    // MARK: - Filtered Data
+
+    var filteredNeighbors: [NeighborDisplayInfo] {
+        guard !searchText.isEmpty else { return neighbors }
+        let query = searchText.uppercased()
+        return neighbors.filter { $0.callsign.uppercased().contains(query) }
+    }
+
+    var filteredRoutes: [RouteDisplayInfo] {
+        guard !searchText.isEmpty else { return routes }
+        let query = searchText.uppercased()
+        return routes.filter {
+            $0.destination.uppercased().contains(query) ||
+            $0.nextHop.uppercased().contains(query) ||
+            $0.pathSummary.uppercased().contains(query)
+        }
+    }
+
+    var filteredLinkStats: [LinkStatDisplayInfo] {
+        guard !searchText.isEmpty else { return linkStats }
+        let query = searchText.uppercased()
+        return linkStats.filter {
+            $0.fromCall.uppercased().contains(query) ||
+            $0.toCall.uppercased().contains(query)
+        }
+    }
+
+    // MARK: - Actions
+
+    func refresh() {
+        guard let integration else { return }
+
+        isLoading = true
+
+        // Update mode if changed
+        if integration.currentMode != routingMode {
+            integration.setMode(routingMode)
+        }
+
+        // Fetch current data
+        let rawNeighbors = integration.currentNeighbors()
+        let rawRoutes = integration.currentRoutes()
+        let rawLinkStats = integration.exportLinkStats()
+
+        // Convert to display models
+        neighbors = rawNeighbors.map { NeighborDisplayInfo(from: $0) }
+        routes = rawRoutes.map { RouteDisplayInfo(from: $0) }
+        linkStats = rawLinkStats.map { LinkStatDisplayInfo(from: $0) }
+
+        lastRefresh = Date()
+        isLoading = false
+    }
+
+    func setMode(_ mode: NetRomRoutingMode) {
+        routingMode = mode
+        integration?.setMode(mode)
+        refresh()
+    }
+
+    // MARK: - Export
+
+    func copyNeighborsAsJSON() -> String {
+        let data = filteredNeighbors.map { neighbor -> [String: Any] in
+            [
+                "callsign": neighbor.callsign,
+                "quality": neighbor.quality,
+                "qualityPercent": String(format: "%.1f", neighbor.qualityPercent),
+                "sourceType": neighbor.sourceType,
+                "lastSeen": ISO8601DateFormatter().string(from: neighbor.lastSeen),
+                "obsolescenceCount": neighbor.obsolescenceCount
+            ]
+        }
+        return formatJSON(data)
+    }
+
+    func copyNeighborsAsCSV() -> String {
+        var lines = ["Callsign,Quality,Quality %,Source,Last Seen,Obsolescence"]
+        for n in filteredNeighbors {
+            lines.append("\(n.callsign),\(n.quality),\(String(format: "%.1f", n.qualityPercent)),\(n.sourceType),\(ISO8601DateFormatter().string(from: n.lastSeen)),\(n.obsolescenceCount)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    func copyRoutesAsJSON() -> String {
+        let data = filteredRoutes.map { route -> [String: Any] in
+            [
+                "destination": route.destination,
+                "nextHop": route.nextHop,
+                "quality": route.quality,
+                "qualityPercent": String(format: "%.1f", route.qualityPercent),
+                "sourceType": route.sourceType,
+                "path": route.path,
+                "hopCount": route.hopCount
+            ]
+        }
+        return formatJSON(data)
+    }
+
+    func copyRoutesAsCSV() -> String {
+        var lines = ["Destination,Next Hop,Quality,Quality %,Source,Path,Hops"]
+        for r in filteredRoutes {
+            let pathStr = r.path.joined(separator: " > ")
+            lines.append("\(r.destination),\(r.nextHop),\(r.quality),\(String(format: "%.1f", r.qualityPercent)),\(r.sourceType),\"\(pathStr)\",\(r.hopCount)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    func copyLinkStatsAsJSON() -> String {
+        let data = filteredLinkStats.map { stat -> [String: Any] in
+            var dict: [String: Any] = [
+                "from": stat.fromCall,
+                "to": stat.toCall,
+                "quality": stat.quality,
+                "qualityPercent": String(format: "%.1f", stat.qualityPercent),
+                "duplicateCount": stat.duplicateCount,
+                "lastUpdated": ISO8601DateFormatter().string(from: stat.lastUpdated)
+            ]
+            if let df = stat.dfEstimate { dict["dfEstimate"] = String(format: "%.3f", df) }
+            if let dr = stat.drEstimate { dict["drEstimate"] = String(format: "%.3f", dr) }
+            if let etx = stat.etx { dict["etx"] = String(format: "%.2f", etx) }
+            return dict
+        }
+        return formatJSON(data)
+    }
+
+    func copyLinkStatsAsCSV() -> String {
+        var lines = ["From,To,Quality,Quality %,df,dr,ETX,Duplicates,Last Updated"]
+        for s in filteredLinkStats {
+            let df = s.dfEstimate.map { String(format: "%.3f", $0) } ?? ""
+            let dr = s.drEstimate.map { String(format: "%.3f", $0) } ?? ""
+            let etx = s.etx.map { String(format: "%.2f", $0) } ?? ""
+            lines.append("\(s.fromCall),\(s.toCall),\(s.quality),\(String(format: "%.1f", s.qualityPercent)),\(df),\(dr),\(etx),\(s.duplicateCount),\(ISO8601DateFormatter().string(from: s.lastUpdated))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    // MARK: - Private
+
+    private func startAutoRefresh() {
+        refresh()
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refresh()
+            }
+        }
+    }
+
+    private func formatJSON(_ data: [[String: Any]]) -> String {
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys]) else {
+            return "[]"
+        }
+        return String(data: jsonData, encoding: .utf8) ?? "[]"
+    }
+}

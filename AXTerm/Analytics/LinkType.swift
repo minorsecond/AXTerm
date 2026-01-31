@@ -67,7 +67,7 @@ enum LinkType: String, Hashable, Sendable, CaseIterable {
 /// Graph view mode for filtering which link types are displayed.
 enum GraphViewMode: String, Hashable, Sendable, CaseIterable, Identifiable {
     /// Show direct connectivity evidence.
-    /// Best for “who can I probably work directly?”
+    /// Best for "who can I probably work directly?"
     case connectivity = "Connectivity"
 
     /// Emphasize digipeater-mediated paths and routing visibility.
@@ -75,6 +75,15 @@ enum GraphViewMode: String, Hashable, Sendable, CaseIterable, Identifiable {
 
     /// Show all connection types with clear visual hierarchy.
     case all = "All"
+
+    /// NET/ROM classic mode: only explicit broadcast-derived routes.
+    case netromClassic = "NET/ROM (Classic)"
+
+    /// NET/ROM inference mode: passively inferred routes from packet observations.
+    case netromInferred = "NET/ROM (Inferred)"
+
+    /// NET/ROM hybrid mode: combines classic broadcasts with passive inference.
+    case netromHybrid = "NET/ROM (Hybrid)"
 
     var id: String { rawValue }
 
@@ -87,6 +96,12 @@ enum GraphViewMode: String, Hashable, Sendable, CaseIterable, Identifiable {
             return "Packet flow paths"
         case .all:
             return "Everything"
+        case .netromClassic:
+            return "NET/ROM broadcast routes"
+        case .netromInferred:
+            return "NET/ROM inferred routes"
+        case .netromHybrid:
+            return "NET/ROM combined routes"
         }
     }
 
@@ -99,6 +114,12 @@ enum GraphViewMode: String, Hashable, Sendable, CaseIterable, Identifiable {
             return "point.3.connected.trianglepath.dotted"
         case .all:
             return "network"
+        case .netromClassic:
+            return "arrow.triangle.branch"
+        case .netromInferred:
+            return "wand.and.stars"
+        case .netromHybrid:
+            return "arrow.triangle.merge"
         }
     }
 
@@ -113,6 +134,9 @@ enum GraphViewMode: String, Hashable, Sendable, CaseIterable, Identifiable {
             return [.directPeer, .heardVia]
         case .all:
             return Set(LinkType.allCases)
+        case .netromClassic, .netromInferred, .netromHybrid:
+            // NET/ROM modes show all edge types; filtering is handled by NET/ROM data source
+            return Set(LinkType.allCases)
         }
     }
 
@@ -125,6 +149,32 @@ enum GraphViewMode: String, Hashable, Sendable, CaseIterable, Identifiable {
             return [.heardVia]
         case .all:
             return [.directPeer, .heardMutual]
+        case .netromClassic, .netromInferred, .netromHybrid:
+            return [.directPeer]
+        }
+    }
+
+    /// Whether this mode uses NET/ROM as the data source instead of packet-based graph building.
+    var isNetRomMode: Bool {
+        switch self {
+        case .netromClassic, .netromInferred, .netromHybrid:
+            return true
+        case .connectivity, .routing, .all:
+            return false
+        }
+    }
+
+    /// Corresponding NET/ROM routing mode for NET/ROM-based graph view modes.
+    var netRomRoutingMode: NetRomRoutingMode? {
+        switch self {
+        case .netromClassic:
+            return .classic
+        case .netromInferred:
+            return .inference
+        case .netromHybrid:
+            return .hybrid
+        case .connectivity, .routing, .all:
+            return nil
         }
     }
 }

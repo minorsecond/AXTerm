@@ -12,6 +12,7 @@ enum NavigationItem: String, Hashable, CaseIterable {
     case console = "Console"
     case raw = "Raw"
     case analytics = "Analytics"
+    case routes = "Routes"
 }
 
 struct ContentView: View {
@@ -94,6 +95,9 @@ struct ContentView: View {
                 client.loadPersistedRaw()
             case .analytics:
                 return
+            case .routes:
+                // Routes view handles its own data loading
+                return
             }
         }
         .task(id: inspectionRouter.requestedPacketID) {
@@ -166,6 +170,7 @@ struct ContentView: View {
         case .console: return "terminal"
         case .raw: return "doc.text"
         case .analytics: return "chart.bar"
+        case .routes: return "arrow.triangle.branch"
         }
     }
 
@@ -204,6 +209,8 @@ struct ContentView: View {
                 )
             case .analytics:
                 AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel)
+            case .routes:
+                NetRomRoutesView(integration: client.netRomIntegration)
             }
         }
     }

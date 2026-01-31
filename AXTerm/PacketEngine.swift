@@ -8,6 +8,7 @@
 import Combine
 import CoreGraphics
 import Foundation
+import GRDB
 import Network
 
 /// Connection status for the KISS TCP client
@@ -85,6 +86,32 @@ final class PacketEngine: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
     private let packetInsertSubject = PassthroughSubject<Packet, Never>()
 
+    // MARK: - NET/ROM Integration
+
+    /// NET/ROM routing integration for passive route inference and link quality estimation.
+    /// Observes all incoming packets to build routing tables.
+    private(set) var netRomIntegration: NetRomIntegration?
+
+    /// NET/ROM persistence for saving/loading routing state.
+    private var netRomPersistence: NetRomPersistence?
+
+    /// Timer for periodic NET/ROM snapshot saving.
+    private var netRomSnapshotTimer: Timer?
+
+    /// Counter for packets since last snapshot (for packet-count-based saves).
+    private var netRomPacketsSinceSnapshot: Int = 0
+
+    /// Configuration for NET/ROM snapshot saving.
+    private enum NetRomSnapshotConfig {
+        static let saveIntervalSeconds: TimeInterval = 60  // Save every 60 seconds
+        static let saveAfterPacketCount: Int = 500         // Or after 500 packets
+    }
+
+    #if DEBUG
+    /// Debug packet counter for throttled logging
+    private var netRomObserveCount: Int = 0
+    #endif
+
     // MARK: - Published State
 
     @Published private(set) var status: ConnectionStatus = .disconnected
@@ -120,7 +147,8 @@ final class PacketEngine: ObservableObject {
         eventLogger: EventLogger? = nil,
         watchMatcher: WatchMatching? = nil,
         watchRecorder: WatchEventRecording? = nil,
-        notificationScheduler: NotificationScheduling? = nil
+        notificationScheduler: NotificationScheduling? = nil,
+        databaseWriter: (any GRDB.DatabaseWriter)? = nil
     ) {
         self.maxPackets = maxPackets
         self.maxConsoleLines = maxConsoleLines
@@ -134,9 +162,34 @@ final class PacketEngine: ObservableObject {
         self.watchMatcher = watchMatcher ?? WatchRuleMatcher(settings: settings)
         self.watchRecorder = watchRecorder
         self.notificationScheduler = notificationScheduler
+
+        // Initialize NET/ROM persistence
+        if let writer = databaseWriter {
+            self.netRomPersistence = try? NetRomPersistence(database: writer)
+        }
+
+        // Initialize NET/ROM integration for passive route inference
+        let myCallsign = settings.myCallsign
+        if !myCallsign.isEmpty {
+            self.netRomIntegration = NetRomIntegration(
+                localCallsign: myCallsign,
+                mode: .hybrid  // Use hybrid mode for best passive inference
+            )
+
+            // Load persisted NET/ROM state if available
+            loadNetRomSnapshot()
+
+            // Start periodic snapshot timer
+            startNetRomSnapshotTimer()
+        }
+
         configureStationSubscription()
         observeSettings()
         loadPersistedPackets(reason: "startup")
+    }
+
+    deinit {
+        netRomSnapshotTimer?.invalidate()
     }
 
     // MARK: - Connection Management
@@ -433,6 +486,9 @@ final class PacketEngine: ObservableObject {
         insertPacketSorted(packet)
         packetInsertSubject.send(packet)
 
+        // Feed packet to NET/ROM integration for route inference
+        observePacketForNetRom(packet)
+
         if let text = packet.infoText {
             let line = ConsoleLine.packet(
                 from: packet.fromDisplay,
@@ -445,6 +501,28 @@ final class PacketEngine: ObservableObject {
 
         persistPacket(packet)
         handleWatchMatch(for: packet)
+    }
+
+    /// Feed a packet to NET/ROM integration for passive route inference.
+    /// Called from handleIncomingPacket for live packets.
+    private func observePacketForNetRom(_ packet: Packet) {
+        guard let integration = netRomIntegration else { return }
+
+        integration.observePacket(packet, timestamp: packet.timestamp, isDuplicate: false)
+
+        // Check if we should save based on packet count
+        checkNetRomPacketCountSave()
+
+        #if DEBUG
+        netRomObserveCount += 1
+        // Throttle debug logging to first 5 packets then every 100
+        if netRomObserveCount <= 5 || netRomObserveCount % 100 == 0 {
+            let fromDisplay = packet.from?.display ?? "?"
+            let toDisplay = packet.to?.display ?? "?"
+            let viaPath = packet.via.map { $0.display }.joined(separator: ",")
+            print("[NETROM] observe #\(netRomObserveCount): \(fromDisplay) → \(toDisplay) via=[\(viaPath)]")
+        }
+        #endif
     }
 
     private func handleWatchMatch(for packet: Packet) {
@@ -744,6 +822,110 @@ final class PacketEngine: ObservableObject {
             } catch {
                 SentryManager.shared.capturePersistenceFailure("deleteAll raw", errorDescription: error.localizedDescription)
             }
+        }
+    }
+
+    // MARK: - NET/ROM Persistence
+
+    /// Load NET/ROM snapshot on startup if valid.
+    private func loadNetRomSnapshot() {
+        guard let persistence = netRomPersistence,
+              let integration = netRomIntegration else { return }
+
+        do {
+            // Check if snapshot is valid (within TTL)
+            guard try persistence.isSnapshotValid(currentDate: Date(), expectedConfigHash: nil) else {
+                #if DEBUG
+                print("[NETROM] Snapshot expired or invalid, starting fresh")
+                #endif
+                return
+            }
+
+            // Load persisted state
+            let neighbors = try persistence.loadNeighbors()
+            let routes = try persistence.loadRoutes()
+            let linkStats = try persistence.loadLinkStats()
+
+            // Import link stats into the integration
+            integration.importLinkStats(linkStats)
+
+            #if DEBUG
+            print("[NETROM] Loaded snapshot: \(neighbors.count) neighbors, \(routes.count) routes, \(linkStats.count) link stats")
+            #endif
+
+            SentryManager.shared.addBreadcrumb(
+                category: "netrom.persistence",
+                message: "Loaded NET/ROM snapshot",
+                level: .info,
+                data: [
+                    "neighbors": neighbors.count,
+                    "routes": routes.count,
+                    "linkStats": linkStats.count
+                ]
+            )
+        } catch {
+            SentryManager.shared.capturePersistenceFailure("load netrom snapshot", errorDescription: error.localizedDescription)
+        }
+    }
+
+    /// Save NET/ROM snapshot to persistence.
+    private func saveNetRomSnapshot() {
+        guard let persistence = netRomPersistence,
+              let integration = netRomIntegration else { return }
+
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+
+            do {
+                // Get current state from integration (on main actor)
+                let neighbors = await MainActor.run { integration.currentNeighbors() }
+                let routes = await MainActor.run { integration.currentRoutes() }
+                let linkStats = await MainActor.run { integration.exportLinkStats() }
+
+                // Generate a stable packet ID for high-water mark
+                let lastPacketID = await MainActor.run { Int64(self.packets.count) }
+
+                // Save atomically
+                try persistence.saveSnapshot(
+                    neighbors: neighbors,
+                    routes: routes,
+                    linkStats: linkStats,
+                    lastPacketID: lastPacketID,
+                    configHash: nil
+                )
+
+                #if DEBUG
+                await MainActor.run {
+                    print("[NETROM] Saved snapshot: \(neighbors.count) neighbors, \(routes.count) routes, \(linkStats.count) link stats")
+                }
+                #endif
+            } catch {
+                await MainActor.run {
+                    SentryManager.shared.capturePersistenceFailure("save netrom snapshot", errorDescription: error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// Start the periodic snapshot timer.
+    private func startNetRomSnapshotTimer() {
+        netRomSnapshotTimer?.invalidate()
+        netRomSnapshotTimer = Timer.scheduledTimer(
+            withTimeInterval: NetRomSnapshotConfig.saveIntervalSeconds,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.saveNetRomSnapshot()
+            }
+        }
+    }
+
+    /// Check if we should save based on packet count.
+    private func checkNetRomPacketCountSave() {
+        netRomPacketsSinceSnapshot += 1
+        if netRomPacketsSinceSnapshot >= NetRomSnapshotConfig.saveAfterPacketCount {
+            netRomPacketsSinceSnapshot = 0
+            saveNetRomSnapshot()
         }
     }
 }
