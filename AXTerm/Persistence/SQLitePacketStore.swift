@@ -79,6 +79,16 @@ final class SQLitePacketStore: PacketStore, @unchecked Sendable {
             try PacketRecord.fetchCount(db)
         }
     }
+
+    /// Load all packets in chronological order (oldest first) for replay.
+    /// Used by debug rebuild functionality.
+    func loadAllChronological() throws -> [PacketRecord] {
+        try dbQueue.read { db in
+            try PacketRecord
+                .order(Column("receivedAt").asc)
+                .fetchAll(db)
+        }
+    }
 }
 
 enum PacketStoreError: Error {

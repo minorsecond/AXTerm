@@ -1025,7 +1025,144 @@ final class PacketEngine: ObservableObject {
             saveNetRomSnapshot()
         }
     }
+
+    // MARK: - Debug: Full Rebuild from Packets
+
+    #if DEBUG
+    /// Rebuild all NET/ROM routing data from scratch by replaying all packets.
+    /// This clears existing neighbors, routes, and link stats, then replays every
+    /// packet in the database through the NET/ROM integration.
+    ///
+    /// - Parameter progress: Optional callback for progress updates (0.0-1.0)
+    /// - Returns: A summary of the rebuild results
+    func debugRebuildNetRomFromPackets(progress: ((Double) -> Void)? = nil) async -> DebugRebuildResult {
+        guard let persistence = netRomPersistence,
+              let integration = netRomIntegration,
+              let packetStore = packetStore as? SQLitePacketStore else {
+            return DebugRebuildResult(
+                success: false,
+                packetsProcessed: 0,
+                neighborsFound: 0,
+                routesFound: 0,
+                linkStatsFound: 0,
+                errorMessage: "Missing persistence, integration, or packet store"
+            )
+        }
+
+        print("[DEBUG:REBUILD] Starting full NET/ROM rebuild from packets...")
+
+        // Step 1: Clear persistence
+        do {
+            try persistence.clearAll()
+            print("[DEBUG:REBUILD] ✓ Cleared persistence tables")
+        } catch {
+            return DebugRebuildResult(
+                success: false,
+                packetsProcessed: 0,
+                neighborsFound: 0,
+                routesFound: 0,
+                linkStatsFound: 0,
+                errorMessage: "Failed to clear persistence: \(error.localizedDescription)"
+            )
+        }
+
+        // Step 2: Reset integration state
+        integration.reset()
+        print("[DEBUG:REBUILD] ✓ Reset integration state")
+
+        // Step 3: Load all packets from database
+        let packetRecords: [PacketRecord]
+        do {
+            packetRecords = try packetStore.loadAllChronological()
+            print("[DEBUG:REBUILD] ✓ Loaded \(packetRecords.count) packets from database")
+        } catch {
+            return DebugRebuildResult(
+                success: false,
+                packetsProcessed: 0,
+                neighborsFound: 0,
+                routesFound: 0,
+                linkStatsFound: 0,
+                errorMessage: "Failed to load packets: \(error.localizedDescription)"
+            )
+        }
+
+        // Step 4: Replay all packets through integration
+        let total = packetRecords.count
+        var processed = 0
+
+        for record in packetRecords {
+            let packet = record.toPacket()
+            integration.observePacket(packet, timestamp: packet.timestamp, isDuplicate: false)
+
+            processed += 1
+            if processed % 100 == 0 || processed == total {
+                let pct = Double(processed) / Double(max(1, total))
+                progress?(pct)
+
+                if processed % 500 == 0 {
+                    print("[DEBUG:REBUILD] Processed \(processed)/\(total) packets (\(Int(pct * 100))%)")
+                }
+            }
+        }
+
+        print("[DEBUG:REBUILD] ✓ Replayed \(processed) packets")
+
+        // Step 5: Get results
+        let neighbors = integration.currentNeighbors()
+        let routes = integration.currentRoutes()
+        let linkStats = integration.exportLinkStats()
+
+        print("[DEBUG:REBUILD] Results:")
+        print("[DEBUG:REBUILD]   - Neighbors: \(neighbors.count)")
+        print("[DEBUG:REBUILD]   - Routes: \(routes.count)")
+        print("[DEBUG:REBUILD]   - Link Stats: \(linkStats.count)")
+
+        // Step 6: Save to persistence
+        do {
+            try persistence.saveSnapshot(
+                neighbors: neighbors,
+                routes: routes,
+                linkStats: linkStats,
+                lastPacketID: Int64(total),
+                configHash: nil
+            )
+            print("[DEBUG:REBUILD] ✓ Saved rebuilt state to persistence")
+        } catch {
+            return DebugRebuildResult(
+                success: false,
+                packetsProcessed: processed,
+                neighborsFound: neighbors.count,
+                routesFound: routes.count,
+                linkStatsFound: linkStats.count,
+                errorMessage: "Failed to save persistence: \(error.localizedDescription)"
+            )
+        }
+
+        print("[DEBUG:REBUILD] ✓ Rebuild complete!")
+
+        return DebugRebuildResult(
+            success: true,
+            packetsProcessed: processed,
+            neighborsFound: neighbors.count,
+            routesFound: routes.count,
+            linkStatsFound: linkStats.count,
+            errorMessage: nil
+        )
+    }
+    #endif
 }
+
+#if DEBUG
+/// Result of a debug rebuild operation.
+struct DebugRebuildResult {
+    let success: Bool
+    let packetsProcessed: Int
+    let neighborsFound: Int
+    let routesFound: Int
+    let linkStatsFound: Int
+    let errorMessage: String?
+}
+#endif
 
 private struct ConsoleEntryMetadata: Codable {
     let from: String?

@@ -13,8 +13,8 @@ import SwiftUI
 struct NetRomRoutesView: View {
     @StateObject private var viewModel: NetRomRoutesViewModel
 
-    init(integration: NetRomIntegration?) {
-        _viewModel = StateObject(wrappedValue: NetRomRoutesViewModel(integration: integration))
+    init(integration: NetRomIntegration?, packetEngine: PacketEngine? = nil) {
+        _viewModel = StateObject(wrappedValue: NetRomRoutesViewModel(integration: integration, packetEngine: packetEngine))
     }
 
     var body: some View {
@@ -89,6 +89,11 @@ struct NetRomRoutesView: View {
             .menuStyle(.borderlessButton)
             .frame(width: 30)
             .help("Export data")
+
+            #if DEBUG
+            // Debug rebuild button
+            debugRebuildButton
+            #endif
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -142,13 +147,13 @@ struct NetRomRoutesView: View {
                     }
                     .width(min: 60, ideal: 80)
 
-                    TableColumn("Decay") { neighbor in
-                        Text(neighbor.decayDisplayString)
-                            .foregroundStyle(.secondary)
-                            .help(NeighborDisplayInfo.decayTooltip)
-                            .accessibilityLabel(neighbor.decayAccessibilityLabel)
+                    TableColumn("Freshness") { neighbor in
+                        Text(neighbor.freshnessDisplayString)
+                            .foregroundColor(neighbor.freshnessColor)
+                            .help(NeighborDisplayInfo.freshnessTooltip)
+                            .accessibilityLabel(neighbor.freshnessAccessibilityLabel)
                     }
-                    .width(min: 40, ideal: 60)
+                    .width(min: 50, ideal: 70)
                 }
                 .tableStyle(.inset(alternatesRowBackgrounds: true))
             }
@@ -209,13 +214,13 @@ struct NetRomRoutesView: View {
                     }
                     .width(min: 60, ideal: 80)
 
-                    TableColumn("Decay") { route in
-                        Text(route.decayDisplayString)
-                            .foregroundStyle(.secondary)
-                            .help(RouteDisplayInfo.decayTooltip)
-                            .accessibilityLabel(route.decayAccessibilityLabel)
+                    TableColumn("Freshness") { route in
+                        Text(route.freshnessDisplayString)
+                            .foregroundColor(route.freshnessColor)
+                            .help(RouteDisplayInfo.freshnessTooltip)
+                            .accessibilityLabel(route.freshnessAccessibilityLabel)
                     }
-                    .width(min: 40, ideal: 60)
+                    .width(min: 50, ideal: 70)
                 }
                 .tableStyle(.inset(alternatesRowBackgrounds: true))
             }
@@ -300,13 +305,13 @@ struct NetRomRoutesView: View {
                     }
                     .width(min: 60, ideal: 80)
 
-                    TableColumn("Decay") { stat in
-                        Text(stat.decayDisplayString)
-                            .foregroundStyle(.secondary)
-                            .help(LinkStatDisplayInfo.decayTooltip)
-                            .accessibilityLabel(stat.decayAccessibilityLabel)
+                    TableColumn("Freshness") { stat in
+                        Text(stat.freshnessDisplayString)
+                            .foregroundColor(stat.freshnessColor)
+                            .help(LinkStatDisplayInfo.freshnessTooltip)
+                            .accessibilityLabel(stat.freshnessAccessibilityLabel)
                     }
-                    .width(min: 40, ideal: 60)
+                    .width(min: 50, ideal: 70)
                 }
                 .tableStyle(.inset(alternatesRowBackgrounds: true))
             }
@@ -341,6 +346,61 @@ struct NetRomRoutesView: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
+
+    // MARK: - Debug Rebuild
+
+    #if DEBUG
+    @State private var showRebuildResult = false
+
+    @ViewBuilder
+    private var debugRebuildButton: some View {
+        if viewModel.isRebuilding {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("\(Int(viewModel.rebuildProgress * 100))%")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            .frame(width: 80)
+        } else {
+            Button {
+                viewModel.debugRebuildFromPackets()
+            } label: {
+                Label("Rebuild", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!viewModel.canRebuild)
+            .help("DEBUG: Rebuild all NET/ROM data from packets database")
+            .onChange(of: viewModel.lastRebuildResult) { _, newValue in
+                if newValue != nil {
+                    showRebuildResult = true
+                    // Auto-dismiss after 5 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                        showRebuildResult = false
+                    }
+                }
+            }
+            .popover(isPresented: $showRebuildResult) {
+                if let result = viewModel.lastRebuildResult {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Rebuild Result")
+                            .font(.headline)
+                        Text(result)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("(auto-dismisses in 5s)")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding()
+                    .frame(width: 260)
+                }
+            }
+        }
+    }
+    #endif
 }
 
 // MARK: - Supporting Views
@@ -418,6 +478,6 @@ struct SourceTypeBadge: View {
 // MARK: - Preview
 
 #Preview {
-    NetRomRoutesView(integration: nil)
+    NetRomRoutesView(integration: nil, packetEngine: nil)
         .frame(width: 900, height: 500)
 }

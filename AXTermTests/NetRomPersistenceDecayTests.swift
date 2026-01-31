@@ -2,12 +2,12 @@
 //  NetRomPersistenceDecayTests.swift
 //  AXTermTests
 //
-//  TDD tests for persistence + timestamp integrity with the time-based decay model.
+//  TDD tests for persistence + timestamp integrity with the time-based freshness model.
 //
 //  These tests verify that:
 //  - Timestamps are preserved correctly through persistence
 //  - Invalid timestamps are normalized (never show "739648d ago")
-//  - Decay calculations work correctly after loading from persistence
+//  - Freshness calculations work correctly after loading from persistence
 //
 
 import XCTest
@@ -16,11 +16,12 @@ import GRDB
 
 final class NetRomPersistenceDecayTests: XCTestCase {
 
-    // MARK: - TTL Constants
+    // MARK: - Freshness Constants (30-minute TTL with 5-minute plateau)
 
-    let neighborTTL: TimeInterval = 15 * 60
-    let routeTTL: TimeInterval = 15 * 60
-    let linkStatTTL: TimeInterval = 15 * 60
+    let neighborTTL: TimeInterval = 30 * 60
+    let routeTTL: TimeInterval = 30 * 60
+    let linkStatTTL: TimeInterval = 30 * 60
+    let plateau: TimeInterval = 5 * 60
 
     // MARK: - Test Fixtures
 
@@ -269,30 +270,30 @@ final class NetRomPersistenceDecayTests: XCTestCase {
             "LinkStat timestamp should be preserved through snapshot cycle")
     }
 
-    // MARK: - Decay After Persistence Load
+    // MARK: - Freshness After Persistence Load
 
-    /// Test that decay calculations work correctly after loading from persistence.
-    func testDecayCalculationAfterLoad() throws {
+    /// Test that freshness calculations work correctly after loading from persistence.
+    func testFreshnessCalculationAfterLoad() throws {
         // Arrange: Save neighbor at baseTime
         let neighbor = makeNeighbor(call: "W1TEST", quality: 200, lastSeen: baseTime)
         try persistence.saveNeighbors([neighbor], lastPacketID: 100, snapshotTimestamp: baseTime)
 
-        // Act: Load at baseTime + TTL/2
-        let loadTime = baseTime.addingTimeInterval(neighborTTL / 2)
+        // Act: Load at baseTime + 5 min (end of plateau)
+        let loadTime = baseTime.addingTimeInterval(plateau)
         let loaded = try persistence.loadNeighbors()
 
         XCTAssertEqual(loaded.count, 1)
         let loadedNeighbor = loaded[0]
 
-        // Calculate decay at load time
-        let decay = loadedNeighbor.decayFraction(now: loadTime, ttl: neighborTTL)
+        // Calculate freshness at load time
+        let freshness = loadedNeighbor.freshness(now: loadTime, ttl: neighborTTL, plateau: plateau)
 
-        // Assert: Decay should be ~50% since we're at TTL/2
-        XCTAssertEqual(decay, 0.5, accuracy: 0.05,
-            "Decay should be ~50% at TTL/2 after load")
+        // Assert: Freshness should be ~95% at end of plateau
+        XCTAssertEqual(freshness, 0.95, accuracy: 0.02,
+            "Freshness should be ~95% at end of plateau after load")
     }
 
-    /// Test that expired entries return 0% decay after load.
+    /// Test that expired entries return 0% freshness after load.
     func testExpiredEntriesAfterLoad() throws {
         // Arrange: Save neighbor at baseTime
         let neighbor = makeNeighbor(call: "W1TEST", quality: 200, lastSeen: baseTime)
@@ -305,18 +306,18 @@ final class NetRomPersistenceDecayTests: XCTestCase {
         XCTAssertEqual(loaded.count, 1)
         let loadedNeighbor = loaded[0]
 
-        // Calculate decay at load time
-        let decay = loadedNeighbor.decayFraction(now: loadTime, ttl: neighborTTL)
+        // Calculate freshness at load time
+        let freshness = loadedNeighbor.freshness(now: loadTime, ttl: neighborTTL, plateau: plateau)
 
-        // Assert: Decay should be 0% (expired)
-        XCTAssertEqual(decay, 0.0, accuracy: 0.01,
-            "Decay should be 0% when past TTL after load")
+        // Assert: Freshness should be 0% (expired)
+        XCTAssertEqual(freshness, 0.0, accuracy: 0.01,
+            "Freshness should be 0% when past TTL after load")
     }
 
     // MARK: - Display Integration
 
-    /// Test that decay display strings work correctly after persistence load.
-    func testDecayDisplayAfterLoad() throws {
+    /// Test that freshness display strings work correctly after persistence load.
+    func testFreshnessDisplayAfterLoad() throws {
         // Arrange: Save with known timestamp
         let neighbor = makeNeighbor(call: "W1DISP", quality: 200, lastSeen: baseTime)
         try persistence.saveNeighbors([neighbor], lastPacketID: 100, snapshotTimestamp: baseTime)
@@ -326,14 +327,34 @@ final class NetRomPersistenceDecayTests: XCTestCase {
         XCTAssertEqual(loaded.count, 1)
         let loadedNeighbor = loaded[0]
 
-        // At various times
-        let displayAtT0 = loadedNeighbor.decayDisplayString(now: baseTime, ttl: neighborTTL)
+        // At various times (using freshness model)
+        let displayAtT0 = loadedNeighbor.freshnessDisplayString(now: baseTime, ttl: neighborTTL, plateau: plateau)
         XCTAssertEqual(displayAtT0, "100%", "At T0, display should be '100%'")
 
-        let displayAtHalf = loadedNeighbor.decayDisplayString(now: baseTime.addingTimeInterval(neighborTTL / 2), ttl: neighborTTL)
-        XCTAssertEqual(displayAtHalf, "50%", "At TTL/2, display should be '50%'")
+        let displayAtPlateau = loadedNeighbor.freshnessDisplayString(now: baseTime.addingTimeInterval(plateau), ttl: neighborTTL, plateau: plateau)
+        XCTAssertEqual(displayAtPlateau, "95%", "At end of plateau, display should be '95%'")
 
-        let displayAtTTL = loadedNeighbor.decayDisplayString(now: baseTime.addingTimeInterval(neighborTTL), ttl: neighborTTL)
+        let displayAtTTL = loadedNeighbor.freshnessDisplayString(now: baseTime.addingTimeInterval(neighborTTL), ttl: neighborTTL, plateau: plateau)
         XCTAssertEqual(displayAtTTL, "0%", "At TTL, display should be '0%'")
+    }
+
+    // MARK: - Legacy Decay Tests (Deprecated API Compatibility)
+
+    /// Test that deprecated decay methods still work for backwards compatibility.
+    func testLegacyDecayMethodsStillWork() throws {
+        let neighbor = makeNeighbor(call: "W1LEGACY", quality: 200, lastSeen: baseTime)
+        try persistence.saveNeighbors([neighbor], lastPacketID: 100, snapshotTimestamp: baseTime)
+
+        let loaded = try persistence.loadNeighbors()
+        XCTAssertEqual(loaded.count, 1)
+        let loadedNeighbor = loaded[0]
+
+        // The deprecated decayFraction method should still work (uses linear decay)
+        let legacyTTL: TimeInterval = 15 * 60
+        let halfTime = baseTime.addingTimeInterval(legacyTTL / 2)
+        let decay = loadedNeighbor.decayFraction(now: halfTime, ttl: legacyTTL)
+
+        XCTAssertEqual(decay, 0.5, accuracy: 0.05,
+            "Legacy decayFraction should still work with linear decay")
     }
 }

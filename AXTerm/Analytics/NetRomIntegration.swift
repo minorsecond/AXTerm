@@ -94,6 +94,13 @@ final class NetRomIntegration {
         // Always update link quality estimator
         linkEstimator.observePacket(packet, timestamp: timestamp, isDuplicate: isDuplicate)
 
+        // Check for NET/ROM broadcast packets (PID 0xCF to NODES)
+        // These are processed in all modes since they're explicit routing information
+        if let broadcastResult = NetRomBroadcastParser.parse(packet: packet) {
+            processNetRomBroadcast(broadcastResult)
+            return // Don't double-process as regular packet
+        }
+
         // Get current link quality for the sender
         let rawFrom = packet.from?.display ?? ""
         let normalizedFrom = CallsignValidator.normalize(rawFrom)
@@ -117,6 +124,56 @@ final class NetRomIntegration {
             }
             passiveInference?.observePacket(packet, timestamp: timestamp)
         }
+    }
+
+    /// Process a parsed NET/ROM broadcast, adding the sender as a neighbor and updating routes.
+    private func processNetRomBroadcast(_ result: NetRomBroadcastResult) {
+        let normalizedOrigin = CallsignValidator.normalize(result.originCallsign)
+        guard !normalizedOrigin.isEmpty else { return }
+
+        #if DEBUG
+        print("[NETROM:INTEGRATION] Processing NET/ROM broadcast from \(normalizedOrigin) with \(result.entries.count) entries")
+        #endif
+
+        // First, ensure the broadcast sender is registered as a neighbor
+        // NET/ROM broadcasts are always direct (no digipeating), so the sender is a neighbor
+        let syntheticPacket = Packet(
+            timestamp: result.timestamp,
+            from: AX25Address(call: normalizedOrigin),
+            to: AX25Address(call: localCallsign),
+            via: [],
+            frameType: .ui,
+            control: 0,
+            pid: NetRomBroadcastParser.netromPID,
+            info: Data(),
+            rawAx25: Data(),
+            kissEndpoint: nil,
+            infoText: nil
+        )
+
+        // Register as neighbor with high quality (broadcast reception implies good link)
+        let observedQuality = linkQualityForNeighbor(normalizedOrigin)
+        router.observePacket(syntheticPacket, observedQuality: max(observedQuality, 200), direction: .incoming, timestamp: result.timestamp)
+
+        // Convert broadcast entries to RouteInfo and feed to router
+        let routeInfos = result.entries.map { entry in
+            RouteInfo(
+                destination: CallsignValidator.normalize(entry.destinationCallsign),
+                origin: normalizedOrigin,
+                quality: entry.quality,
+                path: [normalizedOrigin, CallsignValidator.normalize(entry.destinationCallsign)],
+                lastUpdated: result.timestamp,
+                sourceType: "broadcast"
+            )
+        }
+
+        // Process the broadcast routes through the router
+        router.broadcastRoutes(
+            from: normalizedOrigin,
+            quality: 255, // Broadcast sender quality - actual route quality is in each entry
+            destinations: routeInfos,
+            timestamp: result.timestamp
+        )
     }
 
     /// Process an explicit NET/ROM broadcast (classic routing).
@@ -264,6 +321,39 @@ final class NetRomIntegration {
 
     func exportRoutes() -> [RouteInfo] {
         router.currentRoutes()
+    }
+
+    // MARK: - Reset (Debug)
+
+    /// Reset all routing state. Used by debug rebuild functionality.
+    /// Creates fresh router and link estimator instances.
+    func reset(localCallsign: String? = nil) {
+        let callsign = localCallsign ?? self.localCallsign
+
+        // Create fresh router
+        let newRouter = NetRomRouter(localCallsign: callsign, config: routerConfig)
+
+        // Replace the router reference - this requires making router a var
+        // Since router is let, we need a different approach
+        // We'll clear the existing data by importing empty arrays
+        router.importNeighbors([])
+        router.importRoutes([])
+
+        // Create fresh link estimator
+        linkEstimator = LinkQualityEstimator(config: linkConfig)
+
+        // Recreate passive inference if needed
+        if mode == .inference || mode == .hybrid {
+            passiveInference = NetRomPassiveInference(
+                router: router,
+                localCallsign: callsign,
+                config: inferenceConfig
+            )
+        }
+
+        #if DEBUG
+        print("[NETROM:INTEGRATION] Reset complete - cleared all neighbors, routes, and link stats")
+        #endif
     }
 
     // MARK: - Private Helpers

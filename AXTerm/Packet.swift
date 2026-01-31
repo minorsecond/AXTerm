@@ -55,6 +55,10 @@ struct Packet: Identifiable, Hashable, Sendable {
     }
     
     var infoDisplay: String {
+        // Check for NET/ROM broadcast first
+        if let netromSummary = netRomBroadcastSummary {
+            return netromSummary
+        }
         if let text = infoText {
             return text
                 .replacingOccurrences(of: "\r", with: " ")
@@ -65,6 +69,10 @@ struct Packet: Identifiable, Hashable, Sendable {
     }
 
     var infoPreview: String {
+        // Check for NET/ROM broadcast first
+        if let netromSummary = netRomBroadcastSummary {
+            return netromSummary.wordSafeTruncate(limit: Self.infoPreviewLimit)
+        }
         if let text = infoText {
             let trimmed = text.replacingOccurrences(of: "\r", with: " ")
                               .replacingOccurrences(of: "\n", with: " ")
@@ -74,6 +82,30 @@ struct Packet: Identifiable, Hashable, Sendable {
             return ""
         }
         return "[\(info.count) bytes]"
+    }
+
+    /// Returns a human-readable summary if this is a NET/ROM broadcast packet.
+    var netRomBroadcastSummary: String? {
+        guard isNetRomBroadcast else { return nil }
+        if let result = NetRomBroadcastParser.parse(packet: self) {
+            let count = result.entries.count
+            let routeWord = count == 1 ? "route" : "routes"
+            return "NET/ROM broadcast: \(count) \(routeWord)"
+        }
+        return nil
+    }
+
+    /// Returns true if this packet is a NET/ROM routing broadcast (PID 0xCF to NODES).
+    var isNetRomBroadcast: Bool {
+        guard let pid = pid, pid == NetRomBroadcastParser.netromPID else { return false }
+        guard let toCall = to?.call.uppercased(), toCall == "NODES" else { return false }
+        return true
+    }
+
+    /// Returns parsed NET/ROM broadcast entries if this is a valid broadcast packet.
+    var netRomBroadcastResult: NetRomBroadcastResult? {
+        guard isNetRomBroadcast else { return nil }
+        return NetRomBroadcastParser.parse(packet: self)
     }
 
     var infoTooltip: String {

@@ -210,7 +210,7 @@ struct ContentView: View {
             case .analytics:
                 AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel)
             case .routes:
-                NetRomRoutesView(integration: client.netRomIntegration)
+                NetRomRoutesView(integration: client.netRomIntegration, packetEngine: client)
             }
         }
     }

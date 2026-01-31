@@ -7,6 +7,7 @@
 
 import Combine
 import Foundation
+import SwiftUI
 
 /// Tab selection for the Routes page.
 enum NetRomRoutesTab: String, CaseIterable, Identifiable {
@@ -35,19 +36,25 @@ struct NeighborDisplayInfo: Identifiable, Hashable {
     let lastSeen: Date
     let lastSeenRelative: String
 
-    /// Time-based decay fraction (0.0-1.0).
-    let decayFraction: Double
+    /// Time-based freshness fraction (0.0-1.0).
+    let freshness: Double
 
-    /// Decay as percentage string (e.g., "75%").
-    let decayDisplayString: String
+    /// Freshness as percentage string (e.g., "95%").
+    let freshnessDisplayString: String
 
-    /// Decay mapped to 0-255 scale.
-    let decay255: Int
+    /// Freshness mapped to 0-255 scale.
+    let freshness255: Int
 
-    /// Default TTL for neighbor decay (15 minutes).
-    private static let defaultTTL: TimeInterval = 15 * 60
+    /// Freshness status label (Fresh, Recent, Stale, Expired).
+    let freshnessStatus: String
 
-    init(from info: NeighborInfo, now: Date, ttl: TimeInterval = NeighborDisplayInfo.defaultTTL) {
+    /// Default TTL for neighbor freshness (30 minutes).
+    private static let defaultTTL: TimeInterval = FreshnessCalculator.defaultTTL
+
+    /// Default plateau duration (5 minutes).
+    private static let defaultPlateau: TimeInterval = FreshnessCalculator.defaultPlateau
+
+    init(from info: NeighborInfo, now: Date, ttl: TimeInterval = NeighborDisplayInfo.defaultTTL, plateau: TimeInterval = NeighborDisplayInfo.defaultPlateau) {
         self.id = info.call
         self.callsign = info.call
         self.quality = info.quality
@@ -56,10 +63,11 @@ struct NeighborDisplayInfo: Identifiable, Hashable {
         self.lastSeen = info.lastSeen
         self.lastSeenRelative = Self.formatRelativeTime(info.lastSeen, now: now)
 
-        // Compute time-based decay
-        self.decayFraction = info.decayFraction(now: now, ttl: ttl)
-        self.decayDisplayString = info.decayDisplayString(now: now, ttl: ttl)
-        self.decay255 = info.decay255(now: now, ttl: ttl)
+        // Compute time-based freshness using plateau + smoothstep curve
+        self.freshness = info.freshness(now: now, ttl: ttl, plateau: plateau)
+        self.freshnessDisplayString = info.freshnessDisplayString(now: now, ttl: ttl, plateau: plateau)
+        self.freshness255 = info.freshness255(now: now, ttl: ttl, plateau: plateau)
+        self.freshnessStatus = info.freshnessStatus(now: now, ttl: ttl, plateau: plateau)
     }
 
     private static func formatRelativeTime(_ date: Date, now: Date) -> String {
@@ -81,13 +89,45 @@ struct NeighborDisplayInfo: Identifiable, Hashable {
         }
     }
 
+    /// Apple HIG tooltip for neighbor freshness column.
+    static let freshnessTooltip = FreshnessTooltips.neighbors
+
+    /// Accessibility label for this neighbor's freshness.
+    var freshnessAccessibilityLabel: String {
+        FreshnessAccessibility.neighbor(freshness, callsign: callsign)
+    }
+
+    /// Color for freshness display.
+    var freshnessColor: SwiftUI.Color {
+        FreshnessColors.color(for: freshness)
+    }
+
+    // MARK: Legacy Decay Properties (Deprecated)
+
+    /// Time-based decay fraction (0.0-1.0).
+    /// - Note: Deprecated. Use `freshness` instead.
+    @available(*, deprecated, message: "Use freshness instead")
+    var decayFraction: Double { freshness }
+
+    /// Decay as percentage string (e.g., "75%").
+    /// - Note: Deprecated. Use `freshnessDisplayString` instead.
+    @available(*, deprecated, message: "Use freshnessDisplayString instead")
+    var decayDisplayString: String { freshnessDisplayString }
+
+    /// Decay mapped to 0-255 scale.
+    /// - Note: Deprecated. Use `freshness255` instead.
+    @available(*, deprecated, message: "Use freshness255 instead")
+    var decay255: Int { freshness255 }
+
     /// Apple HIG tooltip for neighbor decay column.
-    static let decayTooltip = DecayTooltips.neighbors
+    /// - Note: Deprecated. Use `freshnessTooltip` instead.
+    @available(*, deprecated, message: "Use freshnessTooltip instead")
+    static let decayTooltip = FreshnessTooltips.neighbors
 
     /// Accessibility label for this neighbor's decay.
-    var decayAccessibilityLabel: String {
-        DecayAccessibility.neighborDecay(decayFraction, callsign: callsign)
-    }
+    /// - Note: Deprecated. Use `freshnessAccessibilityLabel` instead.
+    @available(*, deprecated, message: "Use freshnessAccessibilityLabel instead")
+    var decayAccessibilityLabel: String { freshnessAccessibilityLabel }
 }
 
 /// Display model for a route row.
@@ -104,19 +144,25 @@ struct RouteDisplayInfo: Identifiable, Hashable {
     let lastUpdated: Date
     let lastUpdatedRelative: String
 
-    /// Time-based decay fraction (0.0-1.0).
-    let decayFraction: Double
+    /// Time-based freshness fraction (0.0-1.0).
+    let freshness: Double
 
-    /// Decay as percentage string (e.g., "75%").
-    let decayDisplayString: String
+    /// Freshness as percentage string (e.g., "95%").
+    let freshnessDisplayString: String
 
-    /// Decay mapped to 0-255 scale.
-    let decay255: Int
+    /// Freshness mapped to 0-255 scale.
+    let freshness255: Int
 
-    /// Default TTL for route decay (15 minutes).
-    private static let defaultTTL: TimeInterval = 15 * 60
+    /// Freshness status label (Fresh, Recent, Stale, Expired).
+    let freshnessStatus: String
 
-    init(from info: RouteInfo, now: Date, ttl: TimeInterval = RouteDisplayInfo.defaultTTL) {
+    /// Default TTL for route freshness (30 minutes).
+    private static let defaultTTL: TimeInterval = FreshnessCalculator.defaultTTL
+
+    /// Default plateau duration (5 minutes).
+    private static let defaultPlateau: TimeInterval = FreshnessCalculator.defaultPlateau
+
+    init(from info: RouteInfo, now: Date, ttl: TimeInterval = RouteDisplayInfo.defaultTTL, plateau: TimeInterval = RouteDisplayInfo.defaultPlateau) {
         self.id = "\(info.destination)→\(info.origin)"
         self.destination = info.destination
         self.nextHop = info.path.first ?? info.origin
@@ -129,9 +175,11 @@ struct RouteDisplayInfo: Identifiable, Hashable {
         self.lastUpdated = info.lastUpdated
         self.lastUpdatedRelative = Self.formatRelativeTime(info.lastUpdated, now: now)
 
-        self.decayFraction = info.decayFraction(now: now, ttl: ttl)
-        self.decayDisplayString = info.decayDisplayString(now: now, ttl: ttl)
-        self.decay255 = info.decay255(now: now, ttl: ttl)
+        // Compute time-based freshness using plateau + smoothstep curve
+        self.freshness = info.freshness(now: now, ttl: ttl, plateau: plateau)
+        self.freshnessDisplayString = info.freshnessDisplayString(now: now, ttl: ttl, plateau: plateau)
+        self.freshness255 = info.freshness255(now: now, ttl: ttl, plateau: plateau)
+        self.freshnessStatus = info.freshnessStatus(now: now, ttl: ttl, plateau: plateau)
     }
 
     private static func formatRelativeTime(_ date: Date, now: Date) -> String {
@@ -153,13 +201,45 @@ struct RouteDisplayInfo: Identifiable, Hashable {
         }
     }
 
+    /// Apple HIG tooltip for route freshness column.
+    static let freshnessTooltip = FreshnessTooltips.routes
+
+    /// Accessibility label for this route's freshness.
+    var freshnessAccessibilityLabel: String {
+        FreshnessAccessibility.route(freshness, destination: destination)
+    }
+
+    /// Color for freshness display.
+    var freshnessColor: SwiftUI.Color {
+        FreshnessColors.color(for: freshness)
+    }
+
+    // MARK: Legacy Decay Properties (Deprecated)
+
+    /// Time-based decay fraction (0.0-1.0).
+    /// - Note: Deprecated. Use `freshness` instead.
+    @available(*, deprecated, message: "Use freshness instead")
+    var decayFraction: Double { freshness }
+
+    /// Decay as percentage string (e.g., "75%").
+    /// - Note: Deprecated. Use `freshnessDisplayString` instead.
+    @available(*, deprecated, message: "Use freshnessDisplayString instead")
+    var decayDisplayString: String { freshnessDisplayString }
+
+    /// Decay mapped to 0-255 scale.
+    /// - Note: Deprecated. Use `freshness255` instead.
+    @available(*, deprecated, message: "Use freshness255 instead")
+    var decay255: Int { freshness255 }
+
     /// Apple HIG tooltip for route decay column.
-    static let decayTooltip = DecayTooltips.routes
+    /// - Note: Deprecated. Use `freshnessTooltip` instead.
+    @available(*, deprecated, message: "Use freshnessTooltip instead")
+    static let decayTooltip = FreshnessTooltips.routes
 
     /// Accessibility label for this route's decay.
-    var decayAccessibilityLabel: String {
-        DecayAccessibility.routeDecay(decayFraction, destination: destination)
-    }
+    /// - Note: Deprecated. Use `freshnessAccessibilityLabel` instead.
+    @available(*, deprecated, message: "Use freshnessAccessibilityLabel instead")
+    var decayAccessibilityLabel: String { freshnessAccessibilityLabel }
 }
 
 /// Display model for a link stat row.
@@ -176,19 +256,25 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
     let lastUpdated: Date
     let lastUpdatedRelative: String
 
-    /// Time-based decay fraction (0.0-1.0).
-    let decayFraction: Double
+    /// Time-based freshness fraction (0.0-1.0).
+    let freshness: Double
 
-    /// Decay as percentage string (e.g., "75%").
-    let decayDisplayString: String
+    /// Freshness as percentage string (e.g., "95%").
+    let freshnessDisplayString: String
 
-    /// Decay mapped to 0-255 scale.
-    let decay255: Int
+    /// Freshness mapped to 0-255 scale.
+    let freshness255: Int
 
-    /// Default TTL for link stat decay (15 minutes).
-    private static let defaultTTL: TimeInterval = 15 * 60
+    /// Freshness status label (Fresh, Recent, Stale, Expired).
+    let freshnessStatus: String
 
-    init(from record: LinkStatRecord, now: Date, ttl: TimeInterval = LinkStatDisplayInfo.defaultTTL) {
+    /// Default TTL for link stat freshness (30 minutes).
+    private static let defaultTTL: TimeInterval = FreshnessCalculator.defaultTTL
+
+    /// Default plateau duration (5 minutes).
+    private static let defaultPlateau: TimeInterval = FreshnessCalculator.defaultPlateau
+
+    init(from record: LinkStatRecord, now: Date, ttl: TimeInterval = LinkStatDisplayInfo.defaultTTL, plateau: TimeInterval = LinkStatDisplayInfo.defaultPlateau) {
         self.id = "\(record.fromCall)→\(record.toCall)"
         self.fromCall = record.fromCall
         self.toCall = record.toCall
@@ -210,10 +296,11 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
         self.lastUpdated = record.lastUpdated
         self.lastUpdatedRelative = Self.formatRelativeTime(record.lastUpdated, now: now)
 
-        // Compute time-based decay
-        self.decayFraction = record.decayFraction(now: now, ttl: ttl)
-        self.decayDisplayString = record.decayDisplayString(now: now, ttl: ttl)
-        self.decay255 = record.decay255(now: now, ttl: ttl)
+        // Compute time-based freshness using plateau + smoothstep curve
+        self.freshness = record.freshness(now: now, ttl: ttl, plateau: plateau)
+        self.freshnessDisplayString = record.freshnessDisplayString(now: now, ttl: ttl, plateau: plateau)
+        self.freshness255 = record.freshness255(now: now, ttl: ttl, plateau: plateau)
+        self.freshnessStatus = record.freshnessStatus(now: now, ttl: ttl, plateau: plateau)
     }
 
     private static func formatRelativeTime(_ date: Date, now: Date) -> String {
@@ -235,13 +322,45 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
         }
     }
 
+    /// Apple HIG tooltip for link stat freshness column.
+    static let freshnessTooltip = FreshnessTooltips.linkStats
+
+    /// Accessibility label for this link stat's freshness.
+    var freshnessAccessibilityLabel: String {
+        FreshnessAccessibility.linkStat(freshness, from: fromCall, to: toCall)
+    }
+
+    /// Color for freshness display.
+    var freshnessColor: Color {
+        FreshnessColors.color(for: freshness)
+    }
+
+    // MARK: Legacy Decay Properties (Deprecated)
+
+    /// Time-based decay fraction (0.0-1.0).
+    /// - Note: Deprecated. Use `freshness` instead.
+    @available(*, deprecated, message: "Use freshness instead")
+    var decayFraction: Double { freshness }
+
+    /// Decay as percentage string (e.g., "75%").
+    /// - Note: Deprecated. Use `freshnessDisplayString` instead.
+    @available(*, deprecated, message: "Use freshnessDisplayString instead")
+    var decayDisplayString: String { freshnessDisplayString }
+
+    /// Decay mapped to 0-255 scale.
+    /// - Note: Deprecated. Use `freshness255` instead.
+    @available(*, deprecated, message: "Use freshness255 instead")
+    var decay255: Int { freshness255 }
+
     /// Apple HIG tooltip for link stat decay column.
-    static let decayTooltip = DecayTooltips.linkQuality
+    /// - Note: Deprecated. Use `freshnessTooltip` instead.
+    @available(*, deprecated, message: "Use freshnessTooltip instead")
+    static let decayTooltip = FreshnessTooltips.linkStats
 
     /// Accessibility label for this link stat's decay.
-    var decayAccessibilityLabel: String {
-        DecayAccessibility.linkStatDecay(decayFraction, from: fromCall, to: toCall)
-    }
+    /// - Note: Deprecated. Use `freshnessAccessibilityLabel` instead.
+    @available(*, deprecated, message: "Use freshnessAccessibilityLabel instead")
+    var decayAccessibilityLabel: String { freshnessAccessibilityLabel }
 }
 
 /// ViewModel for the NET/ROM Routes page.
@@ -258,12 +377,20 @@ final class NetRomRoutesViewModel: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var lastRefresh: Date?
 
+    #if DEBUG
+    @Published private(set) var isRebuilding = false
+    @Published private(set) var rebuildProgress: Double = 0
+    @Published private(set) var lastRebuildResult: String?
+    #endif
+
     private weak var integration: NetRomIntegration?
+    private weak var packetEngine: PacketEngine?
     private let clock: ClockProviding
     private var refreshTimer: Timer?
 
-    init(integration: NetRomIntegration?, clock: ClockProviding = SystemClock()) {
+    init(integration: NetRomIntegration?, packetEngine: PacketEngine? = nil, clock: ClockProviding = SystemClock()) {
         self.integration = integration
+        self.packetEngine = packetEngine
         self.clock = clock
         startAutoRefresh()
     }
@@ -430,17 +557,18 @@ final class NetRomRoutesViewModel: ObservableObject {
                 "qualityPercent": String(format: "%.1f", neighbor.qualityPercent),
                 "sourceType": neighbor.sourceType,
                 "lastSeen": ISO8601DateFormatter().string(from: neighbor.lastSeen),
-                "decayPercent": neighbor.decayDisplayString,
-                "decay255": neighbor.decay255
+                "freshnessPercent": neighbor.freshnessDisplayString,
+                "freshness255": neighbor.freshness255,
+                "freshnessStatus": neighbor.freshnessStatus
             ]
         }
         return formatJSON(data)
     }
 
     func copyNeighborsAsCSV() -> String {
-        var lines = ["Callsign,Quality,Quality %,Source,Last Seen,Decay %,Decay 0-255"]
+        var lines = ["Callsign,Quality,Quality %,Source,Last Seen,Freshness %,Freshness 0-255,Status"]
         for n in filteredNeighbors {
-            lines.append("\(n.callsign),\(n.quality),\(String(format: "%.1f", n.qualityPercent)),\(n.sourceType),\(ISO8601DateFormatter().string(from: n.lastSeen)),\(n.decayDisplayString),\(n.decay255)")
+            lines.append("\(n.callsign),\(n.quality),\(String(format: "%.1f", n.qualityPercent)),\(n.sourceType),\(ISO8601DateFormatter().string(from: n.lastSeen)),\(n.freshnessDisplayString),\(n.freshness255),\(n.freshnessStatus)")
         }
         return lines.joined(separator: "\n")
     }
@@ -456,18 +584,19 @@ final class NetRomRoutesViewModel: ObservableObject {
                 "path": route.path,
                 "hopCount": route.hopCount,
                 "lastUpdated": ISO8601DateFormatter().string(from: route.lastUpdated),
-                "decayPercent": route.decayDisplayString,
-                "decay255": route.decay255
+                "freshnessPercent": route.freshnessDisplayString,
+                "freshness255": route.freshness255,
+                "freshnessStatus": route.freshnessStatus
             ]
         }
         return formatJSON(data)
     }
 
     func copyRoutesAsCSV() -> String {
-        var lines = ["Destination,Next Hop,Quality,Quality %,Source,Path,Hops,Last Updated,Decay %,Decay 0-255"]
+        var lines = ["Destination,Next Hop,Quality,Quality %,Source,Path,Hops,Last Updated,Freshness %,Freshness 0-255,Status"]
         for r in filteredRoutes {
             let pathStr = r.path.joined(separator: " > ")
-            lines.append("\(r.destination),\(r.nextHop),\(r.quality),\(String(format: "%.1f", r.qualityPercent)),\(r.sourceType),\"\(pathStr)\",\(r.hopCount),\(ISO8601DateFormatter().string(from: r.lastUpdated)),\(r.decayDisplayString),\(r.decay255)")
+            lines.append("\(r.destination),\(r.nextHop),\(r.quality),\(String(format: "%.1f", r.qualityPercent)),\(r.sourceType),\"\(pathStr)\",\(r.hopCount),\(ISO8601DateFormatter().string(from: r.lastUpdated)),\(r.freshnessDisplayString),\(r.freshness255),\(r.freshnessStatus)")
         }
         return lines.joined(separator: "\n")
     }
@@ -481,8 +610,9 @@ final class NetRomRoutesViewModel: ObservableObject {
                 "qualityPercent": String(format: "%.1f", stat.qualityPercent),
                 "duplicateCount": stat.duplicateCount,
                 "lastUpdated": ISO8601DateFormatter().string(from: stat.lastUpdated),
-                "decayPercent": stat.decayDisplayString,
-                "decay255": stat.decay255
+                "freshnessPercent": stat.freshnessDisplayString,
+                "freshness255": stat.freshness255,
+                "freshnessStatus": stat.freshnessStatus
             ]
             if let df = stat.dfEstimate { dict["dfEstimate"] = String(format: "%.3f", df) }
             if let dr = stat.drEstimate { dict["drEstimate"] = String(format: "%.3f", dr) }
@@ -493,15 +623,63 @@ final class NetRomRoutesViewModel: ObservableObject {
     }
 
     func copyLinkStatsAsCSV() -> String {
-        var lines = ["From,To,Quality,Quality %,df,dr,ETX,Duplicates,Last Updated,Decay %,Decay 0-255"]
+        var lines = ["From,To,Quality,Quality %,df,dr,ETX,Duplicates,Last Updated,Freshness %,Freshness 0-255,Status"]
         for s in filteredLinkStats {
             let df = s.dfEstimate.map { String(format: "%.3f", $0) } ?? ""
             let dr = s.drEstimate.map { String(format: "%.3f", $0) } ?? ""
             let etx = s.etx.map { String(format: "%.2f", $0) } ?? ""
-            lines.append("\(s.fromCall),\(s.toCall),\(s.quality),\(String(format: "%.1f", s.qualityPercent)),\(df),\(dr),\(etx),\(s.duplicateCount),\(ISO8601DateFormatter().string(from: s.lastUpdated)),\(s.decayDisplayString),\(s.decay255)")
+            lines.append("\(s.fromCall),\(s.toCall),\(s.quality),\(String(format: "%.1f", s.qualityPercent)),\(df),\(dr),\(etx),\(s.duplicateCount),\(ISO8601DateFormatter().string(from: s.lastUpdated)),\(s.freshnessDisplayString),\(s.freshness255),\(s.freshnessStatus)")
         }
         return lines.joined(separator: "\n")
     }
+
+    // MARK: - Debug Rebuild
+
+    #if DEBUG
+    /// Rebuild all NET/ROM data from scratch by replaying all packets in the database.
+    func debugRebuildFromPackets() {
+        guard let engine = packetEngine else {
+            lastRebuildResult = "Error: PacketEngine not available"
+            return
+        }
+
+        isRebuilding = true
+        rebuildProgress = 0
+        lastRebuildResult = nil
+
+        Task {
+            let result = await engine.debugRebuildNetRomFromPackets { [weak self] progress in
+                Task { @MainActor in
+                    self?.rebuildProgress = progress
+                }
+            }
+
+            await MainActor.run {
+                isRebuilding = false
+
+                if result.success {
+                    lastRebuildResult = """
+                    Rebuild complete!
+                    • Packets processed: \(result.packetsProcessed)
+                    • Neighbors: \(result.neighborsFound)
+                    • Routes: \(result.routesFound)
+                    • Link Stats: \(result.linkStatsFound)
+                    """
+                } else {
+                    lastRebuildResult = "Rebuild failed: \(result.errorMessage ?? "Unknown error")"
+                }
+
+                // Refresh the view
+                refresh()
+            }
+        }
+    }
+
+    /// Whether debug rebuild is available.
+    var canRebuild: Bool {
+        packetEngine != nil && !isRebuilding
+    }
+    #endif
 
     // MARK: - Private
 
