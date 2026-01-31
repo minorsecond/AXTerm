@@ -318,15 +318,21 @@ final class NetRomPersistence {
     }
 
     func loadLinkStats() throws -> [LinkStatRecord] {
-        try database.read { db in
+        let now = Date()
+
+        return try database.read { db in
             // Deterministic ordering: fromCall asc, then toCall asc
             let records = try LinkStatDBRecord.order(Column("fromCall").asc, Column("toCall").asc).fetchAll(db)
             return records.map { record in
-                LinkStatRecord(
+                // Sanitize timestamp: reject Date.distantPast, epoch 0, or very old dates
+                let rawDate = Date(timeIntervalSince1970: record.lastUpdated)
+                let sanitizedDate = Self.sanitizeTimestamp(rawDate, fallback: now)
+
+                return LinkStatRecord(
                     fromCall: record.fromCall,
                     toCall: record.toCall,
                     quality: record.quality,
-                    lastUpdated: Date(timeIntervalSince1970: record.lastUpdated),
+                    lastUpdated: sanitizedDate,
                     dfEstimate: record.dfEstimate,
                     drEstimate: record.drEstimate,
                     duplicateCount: record.dupCount,
@@ -334,6 +340,23 @@ final class NetRomPersistence {
                 )
             }
         }
+    }
+
+    /// Sanitize a timestamp - replace truly invalid timestamps with the fallback.
+    /// Invalid timestamps are: Date.distantPast (year 0001), epoch 0 (1970), negative values,
+    /// or dates unreasonably far in the past (> 10 years).
+    private static func sanitizeTimestamp(_ date: Date, fallback: Date) -> Date {
+        // Date.distantPast is year 0001, which is ~2000 years ago
+        // Check for truly ancient dates (more than 10 years old as an upper bound)
+        let tenYearsAgo = fallback.addingTimeInterval(-10 * 365 * 24 * 60 * 60)
+        if date < tenYearsAgo {
+            return fallback
+        }
+        // Handle epoch 0 and negative values
+        if date.timeIntervalSince1970 <= 0 {
+            return fallback
+        }
+        return date
     }
 
     // MARK: - Full Snapshot (Atomic Transaction)

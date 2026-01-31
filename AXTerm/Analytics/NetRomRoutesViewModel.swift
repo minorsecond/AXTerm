@@ -36,22 +36,40 @@ struct NeighborDisplayInfo: Identifiable, Hashable {
     let lastSeenRelative: String
     let obsolescenceCount: Int
 
-    init(from info: NeighborInfo) {
+    /// Time-based decay fraction (0.0-1.0).
+    let decayFraction: Double
+
+    /// Decay as percentage string (e.g., "75%").
+    let decayDisplayString: String
+
+    /// Decay mapped to 0-255 scale.
+    let decay255: Int
+
+    /// Default TTL for neighbor decay (15 minutes).
+    private static let defaultTTL: TimeInterval = 15 * 60
+
+    init(from info: NeighborInfo, now: Date = Date(), ttl: TimeInterval = NeighborDisplayInfo.defaultTTL) {
         self.id = info.call
         self.callsign = info.call
         self.quality = info.quality
         self.qualityPercent = Double(info.quality) / 255.0 * 100.0
         self.sourceType = info.sourceType
         self.lastSeen = info.lastSeen
-        self.lastSeenRelative = Self.formatRelativeTime(info.lastSeen)
+        self.lastSeenRelative = Self.formatRelativeTime(info.lastSeen, now: now)
         self.obsolescenceCount = info.obsolescenceCount
+
+        // Compute time-based decay
+        self.decayFraction = info.decayFraction(now: now, ttl: ttl)
+        self.decayDisplayString = info.decayDisplayString(now: now, ttl: ttl)
+        self.decay255 = info.decay255(now: now, ttl: ttl)
     }
 
-    private static func formatRelativeTime(_ date: Date) -> String {
-        let now = Date()
+    private static func formatRelativeTime(_ date: Date, now: Date = Date()) -> String {
         let interval = now.timeIntervalSince(date)
 
-        if interval < 60 {
+        if interval < 0 {
+            return "Future"
+        } else if interval < 60 {
             return "Just now"
         } else if interval < 3600 {
             let minutes = Int(interval / 60)
@@ -63,6 +81,14 @@ struct NeighborDisplayInfo: Identifiable, Hashable {
             let days = Int(interval / 86400)
             return "\(days)d ago"
         }
+    }
+
+    /// Apple HIG tooltip for neighbor decay column.
+    static let decayTooltip = DecayTooltips.neighbors
+
+    /// Accessibility label for this neighbor's decay.
+    var decayAccessibilityLabel: String {
+        DecayAccessibility.neighborDecay(decayFraction, callsign: callsign)
     }
 }
 
@@ -105,7 +131,19 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
     let lastUpdated: Date
     let lastUpdatedRelative: String
 
-    init(from record: LinkStatRecord) {
+    /// Time-based decay fraction (0.0-1.0).
+    let decayFraction: Double
+
+    /// Decay as percentage string (e.g., "75%").
+    let decayDisplayString: String
+
+    /// Decay mapped to 0-255 scale.
+    let decay255: Int
+
+    /// Default TTL for link stat decay (15 minutes).
+    private static let defaultTTL: TimeInterval = 15 * 60
+
+    init(from record: LinkStatRecord, now: Date = Date(), ttl: TimeInterval = LinkStatDisplayInfo.defaultTTL) {
         self.id = "\(record.fromCall)→\(record.toCall)"
         self.fromCall = record.fromCall
         self.toCall = record.toCall
@@ -125,14 +163,20 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
 
         self.duplicateCount = record.duplicateCount
         self.lastUpdated = record.lastUpdated
-        self.lastUpdatedRelative = Self.formatRelativeTime(record.lastUpdated)
+        self.lastUpdatedRelative = Self.formatRelativeTime(record.lastUpdated, now: now)
+
+        // Compute time-based decay
+        self.decayFraction = record.decayFraction(now: now, ttl: ttl)
+        self.decayDisplayString = record.decayDisplayString(now: now, ttl: ttl)
+        self.decay255 = record.decay255(now: now, ttl: ttl)
     }
 
-    private static func formatRelativeTime(_ date: Date) -> String {
-        let now = Date()
+    private static func formatRelativeTime(_ date: Date, now: Date = Date()) -> String {
         let interval = now.timeIntervalSince(date)
 
-        if interval < 60 {
+        if interval < 0 {
+            return "Future"
+        } else if interval < 60 {
             return "Just now"
         } else if interval < 3600 {
             let minutes = Int(interval / 60)
@@ -144,6 +188,14 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
             let days = Int(interval / 86400)
             return "\(days)d ago"
         }
+    }
+
+    /// Apple HIG tooltip for link stat decay column.
+    static let decayTooltip = DecayTooltips.linkQuality
+
+    /// Accessibility label for this link stat's decay.
+    var decayAccessibilityLabel: String {
+        DecayAccessibility.linkStatDecay(decayFraction, from: fromCall, to: toCall)
     }
 }
 
