@@ -1,0 +1,119 @@
+# Local AI tooling
+CLAUDE.md
+
+DerivedDataTest/
+
+# ---------------------------------------
+# macOS
+# ---------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# ---------------------------------------
+# Xcode
+# ---------------------------------------
+## User settings / per-user workspace data
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+## Derived data & build products
+DerivedData/
+build/
+Build/
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.dSYM.tar
+*.xcresult
+
+## Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+## Xcode playground files can generate these
+*.playground
+
+# ---------------------------------------
+# Swift Package Manager
+# ---------------------------------------
+.build/
+.swiftpm/
+Package.resolved
+# (Keep Package.resolved for apps if you want fully pinned deps; ignore for libraries)
+
+# ---------------------------------------
+# CocoaPods
+# ---------------------------------------
+Pods/
+# keep this if you use CocoaPods:
+!Podfile
+!Podfile.lock
+
+# ---------------------------------------
+# Carthage
+# ---------------------------------------
+Carthage/Build/
+
+# ---------------------------------------
+# Accio
+# ---------------------------------------
+Dependencies/
+.accio/
+
+# ---------------------------------------
+# fastlane
+# ---------------------------------------
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+
+# ---------------------------------------
+# Instruments / profiling
+# ---------------------------------------
+*.trace
+
+# ---------------------------------------
+# Logs
+# ---------------------------------------
+*.log
+
+# ---------------------------------------
+# Secrets / env
+# ---------------------------------------
+.env
+.env.*
+*.p12
+*.mobileprovision
+*.cer
+*.crt
+*.key
+*.pem
+
+# ---------------------------------------
+# Crash dumps
+# ---------------------------------------
+*.crash
+
+# ---------------------------------------
+# AppCode / JetBrains
+# ---------------------------------------
+.idea/
+*.iml
+
+# ---------------------------------------
+# VS Code
+# ---------------------------------------
+.vscode/
+
+# ---------------------------------------
+# SwiftLint / SwiftFormat (optional)
+# ---------------------------------------
+.swiftlint_cache/
+.swiftformat
+

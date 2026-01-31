@@ -13,7 +13,7 @@ final class StationsSidebarTests: XCTestCase {
     func testStationsSeedFromPersistedPacketsOnInit() async {
         let settings = makeSettings(persistHistory: true)
         let store = MockPacketStore()
-        let endpoint = KISSEndpoint(host: "localhost", port: 8001)
+        let endpoint = KISSEndpoint(host: "localhost", port: 8001)!
 
         let earlier = Date(timeIntervalSince1970: 1_700_000_000)
         let later = Date(timeIntervalSince1970: 1_700_000_100)

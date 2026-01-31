@@ -38,6 +38,7 @@ extension UNUserNotificationCenter: NotificationCenterScheduling {
 }
 
 final class UserNotificationScheduler: NotificationScheduling {
+    private static var testRetainedInstances: [UserNotificationScheduler] = []
     private let center: NotificationCenterScheduling
     private let settings: AppSettingsStore
     private let appState: AppStateProviding
@@ -50,6 +51,10 @@ final class UserNotificationScheduler: NotificationScheduling {
         self.center = center
         self.settings = settings
         self.appState = appState
+
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            Self.testRetainedInstances.append(self)
+        }
     }
 
     func scheduleWatchNotification(packet: Packet, match: WatchMatch) {
@@ -141,8 +146,15 @@ final class NotificationAuthorizationManager {
 
 @MainActor
 final class PacketInspectionRouter: ObservableObject {
+    private static var testRetainedInstances: [PacketInspectionRouter] = []
     @Published private(set) var requestedPacketID: Packet.ID?
     @Published private(set) var shouldOpenMainWindow = false
+
+    init() {
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            Self.testRetainedInstances.append(self)
+        }
+    }
 
     func requestOpenMainWindow() {
         SentryManager.shared.addBreadcrumb(category: "ui.routing", message: "Request open main window", level: .info, data: nil)

@@ -1,15 +1,14 @@
-import Foundation
-import Testing
+import XCTest
 @testable import AXTerm
 
-struct NetworkGraphBuilderTests {
-    @Test
-    func minEdgeCountFiltersEdgesAndNodes() {
+final class NetworkGraphBuilderTests: XCTestCase {
+
+    func testMinEdgeCountFiltersEdgesAndNodes() {
         let base = Date(timeIntervalSince1970: 1_700_100_000)
         let packets = [
-            makePacket(timestamp: base, from: "ALPHA", to: "BRAVO"),
-            makePacket(timestamp: base.addingTimeInterval(1), from: "ALPHA", to: "BRAVO"),
-            makePacket(timestamp: base.addingTimeInterval(2), from: "ALPHA", to: "CHARLIE")
+            makePacket(timestamp: base, from: "K9ALP", to: "W5BRV"),
+            makePacket(timestamp: base.addingTimeInterval(1), from: "K9ALP", to: "W5BRV"),
+            makePacket(timestamp: base.addingTimeInterval(2), from: "K9ALP", to: "N3CHR")
         ]
 
         let model = NetworkGraphBuilder.build(
@@ -17,16 +16,15 @@ struct NetworkGraphBuilderTests {
             options: NetworkGraphBuilder.Options(includeViaDigipeaters: false, minimumEdgeCount: 2, maxNodes: 10)
         )
 
-        #expect(model.edges.count == 1)
-        #expect(model.nodes.count == 2)
-        #expect(model.nodes.map { $0.id }.sorted() == ["ALPHA", "BRAVO"])
+        XCTAssertEqual(model.edges.count, 1)
+        XCTAssertEqual(model.nodes.count, 2)
+        XCTAssertEqual(model.nodes.map { $0.id }.sorted(), ["K9ALP", "W5BRV"])
     }
 
-    @Test
-    func includeViaDigipeatersAddsNodesAndEdges() {
+    func testIncludeViaDigipeatersAddsNodesAndEdges() {
         let base = Date(timeIntervalSince1970: 1_700_110_000)
         let packets = [
-            makePacket(timestamp: base, from: "ALPHA", to: "BRAVO", via: ["DIGI"]) 
+            makePacket(timestamp: base, from: "K9ALP", to: "W5BRV", via: ["N0DIG"])
         ]
 
         let modelWithoutVia = NetworkGraphBuilder.build(
@@ -39,33 +37,31 @@ struct NetworkGraphBuilderTests {
             options: NetworkGraphBuilder.Options(includeViaDigipeaters: true, minimumEdgeCount: 1, maxNodes: 10)
         )
 
-        #expect(modelWithoutVia.nodes.count == 2)
-        #expect(modelWithVia.nodes.count == 3)
-        #expect(modelWithVia.edges.count == 2)
+        XCTAssertEqual(modelWithoutVia.nodes.count, 2)
+        XCTAssertEqual(modelWithVia.nodes.count, 3)
+        XCTAssertEqual(modelWithVia.edges.count, 2)
     }
 
-    @Test
-    func stableNodeIDsAcrossRebuilds() {
+    func testStableNodeIDsAcrossRebuilds() {
         let base = Date(timeIntervalSince1970: 1_700_120_000)
         let packets = [
-            makePacket(timestamp: base, from: "ALPHA", to: "BRAVO"),
-            makePacket(timestamp: base.addingTimeInterval(5), from: "BRAVO", to: "CHARLIE")
+            makePacket(timestamp: base, from: "K9ALP", to: "W5BRV"),
+            makePacket(timestamp: base.addingTimeInterval(5), from: "W5BRV", to: "N3CHR")
         ]
 
         let options = NetworkGraphBuilder.Options(includeViaDigipeaters: false, minimumEdgeCount: 1, maxNodes: 10)
         let modelA = NetworkGraphBuilder.build(packets: packets, options: options)
         let modelB = NetworkGraphBuilder.build(packets: packets, options: options)
 
-        #expect(modelA.nodes.map { $0.id }.sorted() == modelB.nodes.map { $0.id }.sorted())
+        XCTAssertEqual(modelA.nodes.map { $0.id }.sorted(), modelB.nodes.map { $0.id }.sorted())
     }
 
-    @Test
-    func maxNodesCappingDeterministic() {
+    func testMaxNodesCappingDeterministic() {
         let base = Date(timeIntervalSince1970: 1_700_130_000)
         let packets = [
-            makePacket(timestamp: base, from: "ALPHA", to: "BRAVO"),
-            makePacket(timestamp: base.addingTimeInterval(1), from: "ALPHA", to: "BRAVO"),
-            makePacket(timestamp: base.addingTimeInterval(2), from: "CHARLIE", to: "DELTA")
+            makePacket(timestamp: base, from: "K9ALP", to: "W5BRV"),
+            makePacket(timestamp: base.addingTimeInterval(1), from: "K9ALP", to: "W5BRV"),
+            makePacket(timestamp: base.addingTimeInterval(2), from: "N3CHR", to: "W4DEL")
         ]
 
         let model = NetworkGraphBuilder.build(
@@ -73,10 +69,97 @@ struct NetworkGraphBuilderTests {
             options: NetworkGraphBuilder.Options(includeViaDigipeaters: false, minimumEdgeCount: 1, maxNodes: 2)
         )
 
-        #expect(model.nodes.count == 2)
-        #expect(model.nodes.map { $0.id }.sorted().contains("ALPHA"))
-        #expect(model.nodes.map { $0.id }.sorted().contains("BRAVO"))
-        #expect(model.droppedNodesCount == 2)
+        XCTAssertEqual(model.nodes.count, 2)
+        XCTAssertTrue(model.nodes.map { $0.id }.sorted().contains("K9ALP"))
+        XCTAssertTrue(model.nodes.map { $0.id }.sorted().contains("W5BRV"))
+        XCTAssertEqual(model.droppedNodesCount, 2)
+    }
+
+    // MARK: - Station Identity Mode Tests
+
+    func testStationModeGroupsSSIDsIntoSingleNode() {
+        let base = Date(timeIntervalSince1970: 1_700_140_000)
+        let packets = [
+            // W6ANH and W6ANH-1 and W6ANH-15 should all become a single "W6ANH" node
+            makePacket(timestamp: base, from: "W6ANH", to: "N4DRL"),
+            makePacket(timestamp: base.addingTimeInterval(1), from: "W6ANH-1", to: "N4DRL"),
+            makePacket(timestamp: base.addingTimeInterval(2), from: "W6ANH-15", to: "N4DRL")
+        ]
+
+        let model = NetworkGraphBuilder.build(
+            packets: packets,
+            options: NetworkGraphBuilder.Options(
+                includeViaDigipeaters: false,
+                minimumEdgeCount: 1,
+                maxNodes: 10,
+                stationIdentityMode: .station
+            )
+        )
+
+        // Should have 2 nodes: W6ANH (grouped) and N4DRL
+        XCTAssertEqual(model.nodes.count, 2)
+        XCTAssertTrue(model.nodes.map { $0.id }.contains("W6ANH"))
+        XCTAssertTrue(model.nodes.map { $0.id }.contains("N4DRL"))
+
+        // Find the W6ANH node and check its grouped SSIDs
+        let anhNode = model.nodes.first { $0.id == "W6ANH" }
+        XCTAssertNotNil(anhNode)
+        XCTAssertEqual(anhNode?.groupedSSIDs.count, 3)
+        XCTAssertTrue(anhNode?.groupedSSIDs.contains("W6ANH") == true)
+        XCTAssertTrue(anhNode?.groupedSSIDs.contains("W6ANH-1") == true)
+        XCTAssertTrue(anhNode?.groupedSSIDs.contains("W6ANH-15") == true)
+
+        // Packet counts should aggregate
+        XCTAssertEqual(anhNode?.outCount, 3)
+    }
+
+    func testSSIDModeShowsSeparateNodes() {
+        let base = Date(timeIntervalSince1970: 1_700_150_000)
+        let packets = [
+            // In SSID mode, W6ANH and W6ANH-15 should be separate nodes
+            makePacket(timestamp: base, from: "W6ANH", to: "N4DRL"),
+            makePacket(timestamp: base.addingTimeInterval(1), from: "W6ANH-15", to: "N4DRL")
+        ]
+
+        let model = NetworkGraphBuilder.build(
+            packets: packets,
+            options: NetworkGraphBuilder.Options(
+                includeViaDigipeaters: false,
+                minimumEdgeCount: 1,
+                maxNodes: 10,
+                stationIdentityMode: .ssid
+            )
+        )
+
+        // Should have 3 nodes: W6ANH, W6ANH-15, and N4DRL
+        XCTAssertEqual(model.nodes.count, 3)
+        XCTAssertTrue(model.nodes.map { $0.id }.contains("W6ANH"))
+        XCTAssertTrue(model.nodes.map { $0.id }.contains("W6ANH-15"))
+        XCTAssertTrue(model.nodes.map { $0.id }.contains("N4DRL"))
+    }
+
+    func testSSIDZeroTreatedAsNoSSID() {
+        let base = Date(timeIntervalSince1970: 1_700_160_000)
+        let packets = [
+            // W6ANH-0 should be normalized to W6ANH in station mode
+            makePacket(timestamp: base, from: "W6ANH-0", to: "N4DRL"),
+            makePacket(timestamp: base.addingTimeInterval(1), from: "W6ANH", to: "N4DRL")
+        ]
+
+        let modelStation = NetworkGraphBuilder.build(
+            packets: packets,
+            options: NetworkGraphBuilder.Options(
+                includeViaDigipeaters: false,
+                minimumEdgeCount: 1,
+                maxNodes: 10,
+                stationIdentityMode: .station
+            )
+        )
+
+        // W6ANH-0 and W6ANH should both be "W6ANH" in station mode
+        XCTAssertEqual(modelStation.nodes.count, 2)
+        let anhNode = modelStation.nodes.first { $0.id == "W6ANH" }
+        XCTAssertEqual(anhNode?.outCount, 2)
     }
 
     private func makePacket(

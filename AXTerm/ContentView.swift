@@ -12,6 +12,7 @@ enum NavigationItem: String, Hashable, CaseIterable {
     case console = "Console"
     case raw = "Raw"
     case analytics = "Analytics"
+    case routes = "Routes"
 }
 
 struct ContentView: View {
@@ -31,12 +32,14 @@ struct ContentView: View {
     @State private var didLoadConsoleHistory = false
     @State private var didLoadRawHistory = false
     @State private var selectionMutationScheduler = SelectionMutationScheduler()
-    @StateObject private var analyticsViewModel = AnalyticsDashboardViewModel()
+    @StateObject private var analyticsViewModel: AnalyticsDashboardViewModel
 
     init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter) {
         _client = StateObject(wrappedValue: client)
         _settings = ObservedObject(wrappedValue: settings)
         _inspectionRouter = ObservedObject(wrappedValue: inspectionRouter)
+        // Initialize analytics view model with settings store for persistence
+        _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(settingsStore: settings))
     }
 
     var body: some View {
@@ -91,6 +94,9 @@ struct ContentView: View {
                 await Task.yield()
                 client.loadPersistedRaw()
             case .analytics:
+                return
+            case .routes:
+                // Routes view handles its own data loading
                 return
             }
         }
@@ -164,6 +170,7 @@ struct ContentView: View {
         case .console: return "terminal"
         case .raw: return "doc.text"
         case .analytics: return "chart.bar"
+        case .routes: return "arrow.triangle.branch"
         }
     }
 
@@ -201,7 +208,9 @@ struct ContentView: View {
                     onClear: { client.clearRaw() }
                 )
             case .analytics:
-                AnalyticsDashboardView(packetEngine: client, viewModel: analyticsViewModel)
+                AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel)
+            case .routes:
+                NetRomRoutesView(integration: client.netRomIntegration, packetEngine: client, settings: settings)
             }
         }
     }

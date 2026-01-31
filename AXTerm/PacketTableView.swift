@@ -55,23 +55,29 @@ struct PacketTableView: View {
                 .padding([.top, .trailing], 12)
             }
         }
-        .onChange(of: packets) { _, newValue in
-            guard !newValue.isEmpty else {
+        .onChange(of: packets) { _, newPackets in
+            guard !newPackets.isEmpty else {
                 pendingNewPackets = 0
                 lastTopPacketID = nil
                 return
             }
 
+            // Snapshot old top BEFORE we update it
+            let previousTopID = lastTopPacketID
+
             if isAtTop || followNewest {
+                // User is following live: no “new packets” badge
                 pendingNewPackets = 0
-                lastTopPacketID = newValue.first?.id
             } else {
-                let nextCount = countNewPackets(previousTopID: lastTopPacketID, packets: newValue)
+                // User is scrolled away: count how many items got inserted above their current top row
+                let nextCount = countNewPackets(previousTopID: previousTopID, packets: newPackets)
                 if nextCount > 0 {
                     pendingNewPackets += nextCount
                 }
-                lastTopPacketID = newValue.first?.id
             }
+
+            // Update for next change
+            lastTopPacketID = newPackets.first?.id
         }
         .onChange(of: isAtTop) { _, newValue in
             if newValue {
@@ -80,6 +86,11 @@ struct PacketTableView: View {
                 lastTopPacketID = packets.first?.id
             } else {
                 followNewest = false
+            }
+        }
+        .onAppear {
+            if lastTopPacketID == nil {
+                lastTopPacketID = packets.first?.id
             }
         }
     }

@@ -11,24 +11,79 @@ import SwiftUI
 
 struct AnalyticsDashboardView: View {
     @ObservedObject var packetEngine: PacketEngine
+    @ObservedObject var settings: AppSettingsStore
     @StateObject private var viewModel: AnalyticsDashboardViewModel
     @State private var graphResetToken = UUID()
     @State private var focusNodeID: String?
+    @State private var sidebarTab: GraphSidebarTab = .overview
+    @State private var showExportToast = false
 
-    init(packetEngine: PacketEngine, viewModel: AnalyticsDashboardViewModel) {
+    init(packetEngine: PacketEngine, settings: AppSettingsStore, viewModel: AnalyticsDashboardViewModel) {
         self.packetEngine = packetEngine
+        self.settings = settings
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 
+    @State private var scrollOffset: CGFloat = 0
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: AnalyticsStyle.Layout.sectionSpacing) {
-                filterSection
-                summarySection
-                chartsSection
-                graphSection
+        ZStack(alignment: .top) {
+            // Main scrollable content
+            ScrollView {
+                VStack(alignment: .leading, spacing: AnalyticsStyle.Layout.sectionSpacing) {
+                    // Spacer for the floating header
+                    Color.clear
+                        .frame(height: filterSectionHeight)
+
+                    summarySection
+                    chartsSection
+                    graphSection
+                }
+                .padding(AnalyticsStyle.Layout.pagePadding)
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(
+                            key: ScrollOffsetPreferenceKey.self,
+                            value: geo.frame(in: .named("scroll")).minY
+                        )
+                    }
+                )
             }
-            .padding(AnalyticsStyle.Layout.pagePadding)
+            .scrollDisabled(false)
+            .defaultScrollAnchor(.top)  // Prevent scroll jumping on layout changes
+            .coordinateSpace(name: "scroll")
+            .onPreferenceChange(ScrollOffsetPreferenceKey.self) { value in
+                scrollOffset = -value
+            }
+
+            // Floating glass control bar
+            FloatingControlBar(
+                scrollOffset: scrollOffset,
+                reduceTransparency: reduceTransparency
+            ) {
+                filterSection
+            }
+
+            // Export toast notification
+            if showExportToast {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text(GraphCopy.QuickActions.exportSuccessMessage)
+                            .font(.callout.weight(.medium))
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+                    .padding(.bottom, 20)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .onAppear {
             viewModel.trackDashboardOpened()
@@ -46,22 +101,43 @@ struct AnalyticsDashboardView: View {
         }
     }
 
-    private var filterSection: some View {
-        AnalyticsCard {
-            HStack(alignment: .center, spacing: AnalyticsStyle.Layout.cardSpacing) {
-                Picker("Bucket", selection: $viewModel.bucket) {
-                    ForEach(TimeBucket.allCases, id: \.self) { bucket in
-                        Text(bucket.displayName).tag(bucket)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 280)
+    /// Estimated height of the filter section for the spacer
+    private var filterSectionHeight: CGFloat {
+        viewModel.timeframe == .custom ? 100 : 60
+    }
 
-                Toggle("Include via digipeaters", isOn: $viewModel.includeViaDigipeaters)
-                    .toggleStyle(.switch)
+    private var filterSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Main controls row - wraps on narrow windows
+            FlowLayout(spacing: 12) {
+                FilterControlGroup(title: "Timeframe") {
+                    Picker("Timeframe", selection: $viewModel.timeframe) {
+                        ForEach(AnalyticsTimeframe.allCases, id: \.self) { timeframe in
+                            Text(timeframe.displayName)
+                                .lineLimit(1)
+                                .tag(timeframe)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                    .controlSize(.small)
+                }
+
+                FilterControlGroup(title: "Bucket") {
+                    Picker("Bucket", selection: $viewModel.bucketSelection) {
+                        ForEach(AnalyticsBucketSelection.allCases, id: \.self) { bucket in
+                            Text(bucket.displayName)
+                                .lineLimit(1)
+                                .tag(bucket)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                    .controlSize(.small)
+                }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Minimum edge count")
+                    Text("Min edge count")
                         .font(.caption)
                         .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                     HStack(spacing: 8) {
@@ -73,26 +149,38 @@ struct AnalyticsDashboardView: View {
                             in: 1...10,
                             step: 1
                         )
+                        .frame(width: 100)
                         Text("\(viewModel.minEdgeCount)")
                             .font(.caption.monospacedDigit())
-                            .frame(width: 24, alignment: .trailing)
+                            .frame(width: 20, alignment: .trailing)
                     }
                 }
-                .frame(maxWidth: 220)
 
                 Stepper(value: $viewModel.maxNodes, in: AnalyticsStyle.Graph.minNodes...300, step: 10) {
-                    Text("Max nodes: \(viewModel.maxNodes)")
+                    Text("Max: \(viewModel.maxNodes)")
                         .font(.caption)
                         .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 }
+                .fixedSize()
 
-                Spacer()
+                Spacer(minLength: 0)
 
                 Button("Reset") {
                     graphResetToken = UUID()
                     viewModel.resetGraphView()
                 }
                 .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            if viewModel.timeframe == .custom {
+                HStack(spacing: 12) {
+                    DatePicker("Start", selection: $viewModel.customRangeStart, displayedComponents: [.date, .hourAndMinute])
+                        .datePickerStyle(.compact)
+                    DatePicker("End", selection: $viewModel.customRangeEnd, displayedComponents: [.date, .hourAndMinute])
+                        .datePickerStyle(.compact)
+                }
+                .font(.caption)
             }
         }
     }
@@ -120,15 +208,18 @@ struct AnalyticsDashboardView: View {
         AnalyticsCard(title: "Charts") {
             LazyVGrid(columns: chartColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
                 ChartCard(title: "Packets over time") {
-                    TimeSeriesChart(points: viewModel.viewState.series.packetsPerBucket, valueLabel: "Packets", bucket: viewModel.bucket)
+                    TimeSeriesChart(points: viewModel.viewState.series.packetsPerBucket, valueLabel: "Packets", bucket: viewModel.resolvedBucket)
+                        .background(ChartWidthReader { width in
+                            viewModel.updateChartWidth(width)
+                        })
                 }
 
                 ChartCard(title: "Bytes over time") {
-                    TimeSeriesChart(points: viewModel.viewState.series.bytesPerBucket, valueLabel: "Bytes", bucket: viewModel.bucket)
+                    TimeSeriesChart(points: viewModel.viewState.series.bytesPerBucket, valueLabel: "Bytes", bucket: viewModel.resolvedBucket)
                 }
 
                 ChartCard(title: "Unique stations over time") {
-                    TimeSeriesChart(points: viewModel.viewState.series.uniqueStationsPerBucket, valueLabel: "Stations", bucket: viewModel.bucket)
+                    TimeSeriesChart(points: viewModel.viewState.series.uniqueStationsPerBucket, valueLabel: "Stations", bucket: viewModel.resolvedBucket)
                 }
 
                 ChartCard(title: "Traffic intensity (hour vs day)", height: AnalyticsStyle.Layout.heatmapHeight) {
@@ -155,36 +246,115 @@ struct AnalyticsDashboardView: View {
     }
 
     private var graphSection: some View {
-        AnalyticsCard(title: "Network graph") {
-            HStack(alignment: .top, spacing: AnalyticsStyle.Layout.cardSpacing) {
-                AnalyticsGraphView(
-                    graphModel: viewModel.viewState.graphModel,
-                    nodePositions: viewModel.viewState.nodePositions,
-                    selectedNodeIDs: viewModel.viewState.selectedNodeIDs,
-                    hoveredNodeID: viewModel.viewState.hoveredNodeID,
-                    resetToken: graphResetToken,
-                    focusNodeID: focusNodeID,
-                    onSelect: { nodeID, isShift in
-                        viewModel.handleNodeClick(nodeID, isShift: isShift)
+        AnalyticsCardWithControls(title: "Network graph") {
+            // Right-aligned controls in header
+            networkGraphHeaderControls
+        } content: {
+            VStack(spacing: 8) {
+                // Graph toolbar (HIG: single canonical location for view controls)
+                GraphToolbar(
+                    focusState: $viewModel.focusState,
+                    selectedNodeCount: viewModel.viewState.selectedNodeIDs.count,
+                    onFitToView: {
+                        viewModel.requestFitToView()
+                    },
+                    onResetView: {
+                        viewModel.requestResetView()
                     },
                     onClearSelection: {
-                        viewModel.handleBackgroundClick()
+                        // Clear selection AND fit to nodes (per UX spec)
+                        viewModel.clearSelectionAndFit()
                     },
-                    onHover: { nodeID in
-                        viewModel.updateHover(for: nodeID)
+                    onClearFocus: {
+                        viewModel.clearFocus()
+                        // Switch to Overview tab when exiting focus mode
+                        sidebarTab = .overview
                     },
-                    onFocusHandled: {
-                        focusNodeID = nil
+                    onChangeAnchor: {
+                        viewModel.setSelectedAsAnchor()
                     }
                 )
-                .frame(minHeight: AnalyticsStyle.Layout.graphHeight)
 
-                GraphInspectorView(details: viewModel.selectedNodeDetails()) {
-                    viewModel.handleBackgroundClick()
-                } onFocus: {
-                    focusNodeID = viewModel.viewState.selectedNodeID
+                // Graph and sidebar
+                HStack(alignment: .top, spacing: AnalyticsStyle.Layout.cardSpacing) {
+                    AnalyticsGraphView(
+                        graphModel: viewModel.viewState.graphModel,
+                        nodePositions: viewModel.viewState.nodePositions,
+                        selectedNodeIDs: viewModel.viewState.selectedNodeIDs,
+                        hoveredNodeID: viewModel.viewState.hoveredNodeID,
+                        myCallsign: settings.myCallsign,
+                        resetToken: graphResetToken,
+                        focusNodeID: focusNodeID,
+                        fitToSelectionRequest: viewModel.fitToSelectionRequest,
+                        resetCameraRequest: viewModel.resetCameraRequest,
+                        visibleNodeIDs: viewModel.filteredGraph.visibleNodeIDs,
+                        onSelect: { nodeID, isShift in
+                            viewModel.handleNodeClick(nodeID, isShift: isShift)
+                            // Switch to Inspector tab when a node is selected
+                            if !isShift {
+                                sidebarTab = .inspector
+                            }
+                        },
+                        onSelectMany: { nodeIDs, isShift in
+                            viewModel.handleSelectionRect(nodeIDs, isShift: isShift)
+                        },
+                        onClearSelection: {
+                            viewModel.handleBackgroundClick()
+                        },
+                        onHover: { nodeID in
+                            viewModel.updateHover(for: nodeID)
+                        },
+                        onFocusHandled: {
+                            focusNodeID = nil
+                        }
+                    )
+                    .frame(minHeight: AnalyticsStyle.Layout.graphHeight)
+                    .onAppear {
+                        viewModel.setMyCallsignForLayout(settings.myCallsign)
+                    }
+                    .onChange(of: settings.myCallsign) { _, newValue in
+                        viewModel.setMyCallsignForLayout(newValue)
+                    }
+
+                    // New tabbed sidebar (HIG: stable, always-present)
+                    GraphSidebar(
+                        selectedTab: $sidebarTab,
+                        networkHealth: viewModel.viewState.networkHealth,
+                        onFocusPrimaryHub: {
+                            viewModel.selectPrimaryHub()
+                            sidebarTab = .inspector
+                        },
+                        onShowActiveNodes: {
+                            let activeIDs = viewModel.activeNodeIDs()
+                            viewModel.handleSelectionRect(activeIDs, isShift: false)
+                        },
+                        onExportSummary: {
+                            let summary = viewModel.exportNetworkSummary()
+                            let pasteboard = NSPasteboard.general
+                            pasteboard.clearContents()
+                            pasteboard.setString(summary, forType: .string)
+                            // Show toast feedback
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showExportToast = true
+                            }
+                            // Auto-hide after 2 seconds
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showExportToast = false
+                                }
+                            }
+                        },
+                        selectedNodeDetails: viewModel.selectedNodeDetails(),
+                        onSetAsAnchor: {
+                            viewModel.setSelectedAsAnchor()
+                        },
+                        onClearSelection: {
+                            // Clear selection AND fit to nodes (per UX spec)
+                            viewModel.clearSelectionAndFit()
+                        },
+                        hubMetric: $viewModel.focusState.hubMetric
+                    )
                 }
-                .frame(width: AnalyticsStyle.Layout.inspectorWidth)
             }
 
             if let note = viewModel.viewState.graphNote {
@@ -194,10 +364,65 @@ struct AnalyticsDashboardView: View {
                     .padding(.top, 4)
             }
 
-            Text("Click to select, shift-click to add, pinch to zoom, scroll or drag to pan, Esc clears")
+            // Keyboard shortcuts hint
+            Text("Click to select, Shift-drag to select, drag to pan, ⌘ or Opt + scroll to zoom, Esc clears")
                 .font(.caption)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 .padding(.top, 4)
+        }
+    }
+
+    // MARK: - Network Graph Header Controls
+
+    /// Controls scoped to the Network Graph card: View Mode and Station Identity.
+    /// These settings affect only the graph visualization, not global analytics or Network Health.
+    private var networkGraphHeaderControls: some View {
+        HStack(spacing: 16) {
+            // Include via digipeaters toggle
+            Toggle(isOn: $viewModel.includeViaDigipeaters) {
+                Text(GraphCopy.GraphControls.includeViaLabel)
+                    .font(.caption)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .help(GraphCopy.GraphControls.includeViaTooltip)
+
+            Divider()
+                .frame(height: 20)
+
+            // View Mode: Connectivity | Routing | All
+            HStack(spacing: 4) {
+                Text(GraphCopy.ViewMode.pickerLabel)
+                    .font(.caption)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                Picker("", selection: $viewModel.graphViewMode) {
+                    ForEach(GraphViewMode.allCases) { mode in
+                        Text(mode.rawValue)
+                            .tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .controlSize(.small)
+            }
+            .help(GraphCopy.ViewMode.pickerTooltip)
+
+            // Station Identity: Station | SSID
+            HStack(spacing: 4) {
+                Text(GraphCopy.StationIdentity.pickerLabel)
+                    .font(.caption)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                Picker("", selection: $viewModel.stationIdentityMode) {
+                    Text(StationIdentityMode.station.shortName)
+                        .tag(StationIdentityMode.station)
+                    Text(StationIdentityMode.ssid.shortName)
+                        .tag(StationIdentityMode.ssid)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .controlSize(.small)
+            }
+            .help(GraphCopy.StationIdentity.pickerTooltip)
         }
     }
 
@@ -224,6 +449,44 @@ private struct AnalyticsCard<Content: View>: View {
             if let title {
                 Text(title)
                     .font(.title3.weight(.semibold))
+            }
+            content
+        }
+        .padding(AnalyticsStyle.Layout.cardPadding)
+        .background(
+            RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius)
+                .fill(AnalyticsStyle.Colors.cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius)
+                .stroke(AnalyticsStyle.Colors.cardStroke, lineWidth: 1)
+        )
+    }
+}
+
+private struct AnalyticsCardWithControls<Content: View, Controls: View>: View {
+    let title: String
+    @ViewBuilder var controls: Controls
+    @ViewBuilder var content: Content
+
+    init(
+        title: String,
+        @ViewBuilder controls: () -> Controls,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.controls = controls()
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AnalyticsStyle.Layout.cardSpacing) {
+            // Header with title and controls
+            HStack(alignment: .center, spacing: 16) {
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                controls
             }
             content
         }
@@ -278,8 +541,14 @@ private struct ChartCard<Content: View>: View {
                 .frame(height: height)
         }
         .padding(12)
-        .background(AnalyticsStyle.Colors.neutralFill)
-        .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
+        .background(
+            RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius)
+                .fill(AnalyticsStyle.Colors.cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius)
+                .stroke(AnalyticsStyle.Colors.cardStroke, lineWidth: 1)
+        )
     }
 }
 
@@ -288,12 +557,27 @@ private struct TimeSeriesChart: View {
     let valueLabel: String
     let bucket: TimeBucket
     @State private var selectedPoint: AnalyticsSeriesPoint?
+    @State private var hoverLocation: CGPoint?
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    private static let dateTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
 
     var body: some View {
         if points.isEmpty {
             EmptyChartPlaceholder(text: "No data")
         } else {
-                Chart {
+            Chart {
                 ForEach(points, id: \.bucket) { point in
                     if #available(macOS 13.0, *) {
                         LineMark(
@@ -310,13 +594,41 @@ private struct TimeSeriesChart: View {
                         .foregroundStyle(AnalyticsStyle.Colors.accent)
                     }
                 }
+
+                // Highlight selected point with a rule mark
+                if let selectedPoint {
+                    RuleMark(x: .value("Selected", selectedPoint.bucket))
+                        .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 2]))
+
+                    PointMark(
+                        x: .value("Time", selectedPoint.bucket),
+                        y: .value(valueLabel, selectedPoint.value)
+                    )
+                    .foregroundStyle(AnalyticsStyle.Colors.accent)
+                    .symbolSize(60)
+                }
             }
             .chartYScale(domain: .automatic(includesZero: true))
             .chartXAxis {
-                AxisMarks(values: .stride(by: bucket.axisStride.component, count: bucket.axisStride.count))
+                AxisMarks(values: .automatic(desiredCount: 5)) { value in
+                    AxisGridLine()
+                        .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                    AxisValueLabel(format: xAxisFormat(for: bucket), centered: false)
+                        .font(.caption2)
+                        .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                }
             }
             .chartYAxis {
-                AxisMarks(values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount))
+                AxisMarks(values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount)) { _ in
+                    AxisGridLine()
+                        .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                    AxisValueLabel()
+                        .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                }
+            }
+            .chartPlotStyle { plotArea in
+                plotArea.background(AnalyticsStyle.Colors.chartPlotBackground)
             }
             .chartOverlay { proxy in
                 GeometryReader { geometry in
@@ -324,11 +636,13 @@ private struct TimeSeriesChart: View {
                         .onHover { isHovering in
                             if !isHovering {
                                 selectedPoint = nil
+                                hoverLocation = nil
                             }
                         }
                         .onContinuousHover { phase in
                             switch phase {
                             case let .active(location):
+                                hoverLocation = location
                                 if let date: Date = proxy.value(atX: location.x) {
                                     let closest = points.min { lhs, rhs in
                                         abs(lhs.bucket.timeIntervalSince(date)) < abs(rhs.bucket.timeIntervalSince(date))
@@ -337,16 +651,86 @@ private struct TimeSeriesChart: View {
                                 }
                             case .ended:
                                 selectedPoint = nil
+                                hoverLocation = nil
                             }
                         }
                         .overlay(alignment: .topLeading) {
-                            if let selectedPoint {
-                                ChartTooltip(text: "\(valueLabel): \(selectedPoint.value)")
-                                    .offset(x: 6, y: 6)
+                            if let selectedPoint, let hoverLocation {
+                                TimeSeriesChartTooltip(
+                                    point: selectedPoint,
+                                    valueLabel: valueLabel,
+                                    bucket: bucket
+                                )
+                                .position(
+                                    x: min(max(hoverLocation.x, 60), geometry.size.width - 60),
+                                    y: max(hoverLocation.y - 40, 30)
+                                )
                             }
                         }
                 }
             }
+            .animation(.easeInOut(duration: 0.3), value: points.map { $0.value })
+            .padding(.horizontal, 4)
+        }
+    }
+
+    /// Returns a compact time format for x-axis labels based on bucket size
+    private func xAxisFormat(for bucket: TimeBucket) -> Date.FormatStyle {
+        switch bucket {
+        case .tenSeconds, .minute, .fiveMinutes, .fifteenMinutes:
+            // Short time format: "2:30 PM" or "14:30"
+            return .dateTime.hour(.defaultDigits(amPM: .abbreviated)).minute(.twoDigits)
+        case .hour:
+            // Hour only: "2 PM" or "14:00"
+            return .dateTime.hour(.defaultDigits(amPM: .abbreviated))
+        case .day:
+            // Date only: "Jan 15"
+            return .dateTime.month(.abbreviated).day()
+        }
+    }
+}
+
+private struct TimeSeriesChartTooltip: View {
+    let point: AnalyticsSeriesPoint
+    let valueLabel: String
+    let bucket: TimeBucket
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    private static let dateTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(formattedTime)
+                .font(.caption2)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            Text("\(valueLabel): \(point.value)")
+                .font(.caption.weight(.medium))
+        }
+        .padding(6)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(nsColor: .windowBackgroundColor))
+                .shadow(radius: 2)
+        )
+    }
+
+    private var formattedTime: String {
+        switch bucket {
+        case .minute, .fiveMinutes, .fifteenMinutes:
+            return Self.timeFormatter.string(from: point.bucket)
+        default:
+            return Self.dateTimeFormatter.string(from: point.bucket)
         }
     }
 }
@@ -354,6 +738,7 @@ private struct TimeSeriesChart: View {
 private struct HistogramChart: View {
     let data: HistogramData
     @State private var selectedBin: HistogramBin?
+    @State private var hoverLocation: CGPoint?
 
     var body: some View {
         if data.bins.isEmpty {
@@ -365,35 +750,81 @@ private struct HistogramChart: View {
                         x: .value("Payload", bin.label),
                         y: .value("Count", bin.count)
                     )
-                    .foregroundStyle(AnalyticsStyle.Colors.accent)
+                    .foregroundStyle(selectedBin?.label == bin.label
+                        ? AnalyticsStyle.Colors.accent
+                        : AnalyticsStyle.Colors.accent.opacity(0.8))
+                    .opacity(selectedBin == nil || selectedBin?.label == bin.label ? 1 : 0.5)
                 }
             }
             .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: AnalyticsStyle.Histogram.maxLabelCount))
+                AxisMarks(values: .automatic(desiredCount: AnalyticsStyle.Histogram.maxLabelCount)) { _ in
+                    AxisGridLine()
+                        .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                    AxisValueLabel()
+                        .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                }
+            }
+            .chartYAxis {
+                AxisMarks(values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount)) { _ in
+                    AxisGridLine()
+                        .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                    AxisValueLabel()
+                        .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                }
+            }
+            .chartPlotStyle { plotArea in
+                plotArea.background(AnalyticsStyle.Colors.chartPlotBackground)
             }
             .chartOverlay { proxy in
-                GeometryReader { _ in
+                GeometryReader { geometry in
                     Rectangle().fill(Color.clear).contentShape(Rectangle())
                         .onContinuousHover { phase in
                             switch phase {
                             case let .active(location):
+                                hoverLocation = location
                                 if let label: String = proxy.value(atX: location.x) {
                                     let bin = data.bins.first(where: { $0.label == label })
                                     selectedBin = bin
                                 }
                             case .ended:
                                 selectedBin = nil
+                                hoverLocation = nil
                             }
                         }
                         .overlay(alignment: .topLeading) {
-                            if let selectedBin {
-                                ChartTooltip(text: "Count: \(selectedBin.count)")
-                                    .offset(x: 6, y: 6)
+                            if let selectedBin, let hoverLocation {
+                                HistogramChartTooltip(bin: selectedBin)
+                                    .position(
+                                        x: min(max(hoverLocation.x, 60), geometry.size.width - 60),
+                                        y: max(hoverLocation.y - 40, 30)
+                                    )
                             }
                         }
                 }
             }
+            .animation(.easeInOut(duration: 0.3), value: data.bins.map { $0.count })
+            .padding(.horizontal, 4)
         }
+    }
+}
+
+private struct HistogramChartTooltip: View {
+    let bin: HistogramBin
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(bin.lowerBound)–\(bin.upperBound) bytes")
+                .font(.caption2)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            Text("\(bin.count) packets")
+                .font(.caption.weight(.medium))
+        }
+        .padding(6)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(nsColor: .windowBackgroundColor))
+                .shadow(radius: 2)
+        )
     }
 }
 
@@ -421,66 +852,157 @@ private struct TopListView: View {
 
 private struct HeatmapView: View {
     let data: HeatmapData
+    @State private var hoveredCell: HeatmapHoverInfo?
+
+    private struct HeatmapHoverInfo: Equatable {
+        let row: Int
+        let col: Int
+        let value: Int
+        let xLabel: String
+        let yLabel: String
+        let position: CGPoint
+    }
 
     var body: some View {
         if data.matrix.isEmpty {
             EmptyChartPlaceholder(text: "No data")
         } else {
             GeometryReader { proxy in
-                Canvas { context, size in
-                    let rows = data.matrix.count
-                    let cols = data.matrix.first?.count ?? 0
-                    guard rows > 0, cols > 0 else { return }
+                let rows = data.matrix.count
+                let cols = data.matrix.first?.count ?? 0
+                let labelWidth = AnalyticsStyle.Heatmap.labelWidth
+                let labelHeight = AnalyticsStyle.Heatmap.labelHeight
+                let gridWidth = Swift.max(1, proxy.size.width - labelWidth)
+                let gridHeight = Swift.max(1, proxy.size.height - labelHeight)
+                let cellWidth = gridWidth / CGFloat(cols)
+                let cellHeight = gridHeight / CGFloat(rows)
 
-                    let labelWidth = AnalyticsStyle.Heatmap.labelWidth
-                    let labelHeight = AnalyticsStyle.Heatmap.labelHeight
-                    let gridWidth = Swift.max(1, size.width - labelWidth)
-                    let gridHeight = Swift.max(1, size.height - labelHeight)
-                    let cellWidth = gridWidth / CGFloat(cols)
-                    let cellHeight = gridHeight / CGFloat(rows)
-                    let maxValue = Swift.max(1, data.matrix.flatMap { $0 }.max() ?? 1)
+                ZStack(alignment: .topLeading) {
+                    Canvas { context, size in
+                        guard rows > 0, cols > 0 else { return }
+                        let maxValue = Swift.max(1, data.matrix.flatMap { $0 }.max() ?? 1)
 
-                    for row in 0..<rows {
-                        for col in 0..<cols {
-                            let value = data.matrix[row][col]
-                            let alpha = AnalyticsStyle.Heatmap.minAlpha + (AnalyticsStyle.Heatmap.maxAlpha - AnalyticsStyle.Heatmap.minAlpha) * (Double(value) / Double(maxValue))
-                            let rect = CGRect(
-                                x: labelWidth + CGFloat(col) * cellWidth,
-                                y: CGFloat(row) * cellHeight,
-                                width: cellWidth,
-                                height: cellHeight
+                        for row in 0..<rows {
+                            for col in 0..<cols {
+                                let value = data.matrix[row][col]
+                                let alpha = AnalyticsStyle.Heatmap.minAlpha + (AnalyticsStyle.Heatmap.maxAlpha - AnalyticsStyle.Heatmap.minAlpha) * (Double(value) / Double(maxValue))
+                                let rect = CGRect(
+                                    x: labelWidth + CGFloat(col) * cellWidth,
+                                    y: CGFloat(row) * cellHeight,
+                                    width: cellWidth,
+                                    height: cellHeight
+                                )
+                                let path = Path(roundedRect: rect, cornerRadius: AnalyticsStyle.Heatmap.cellCornerRadius)
+                                context.fill(path, with: .color(AnalyticsStyle.Colors.accent.opacity(alpha)))
+
+                                // Draw highlight border for hovered cell
+                                if let hovered = hoveredCell, hovered.row == row, hovered.col == col {
+                                    context.stroke(
+                                        Path(roundedRect: rect.insetBy(dx: 1, dy: 1), cornerRadius: AnalyticsStyle.Heatmap.cellCornerRadius),
+                                        with: .color(Color(nsColor: .labelColor)),
+                                        lineWidth: 2
+                                    )
+                                }
+                            }
+                        }
+
+                        let xStride = Swift.max(1, cols / AnalyticsStyle.Heatmap.labelStride)
+                        for col in stride(from: 0, to: cols, by: xStride) {
+                            let text = Text(data.xLabels[col])
+                                .font(.system(size: 9))
+                                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            let position = CGPoint(
+                                x: labelWidth + CGFloat(col) * cellWidth + AnalyticsStyle.Heatmap.labelPadding,
+                                y: gridHeight + AnalyticsStyle.Heatmap.labelPadding
                             )
-                            let path = Path(roundedRect: rect, cornerRadius: AnalyticsStyle.Heatmap.cellCornerRadius)
-                            context.fill(path, with: .color(AnalyticsStyle.Colors.accent.opacity(alpha)))
+                            context.draw(text, at: position, anchor: .topLeading)
+                        }
+
+                        let yStride = Swift.max(1, rows / AnalyticsStyle.Heatmap.labelStride)
+                        for row in stride(from: 0, to: rows, by: yStride) {
+                            let text = Text(data.yLabels[row])
+                                .font(.system(size: 9))
+                                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            let position = CGPoint(
+                                x: AnalyticsStyle.Heatmap.labelPadding,
+                                y: CGFloat(row) * cellHeight + AnalyticsStyle.Heatmap.labelPadding
+                            )
+                            context.draw(text, at: position, anchor: .topLeading)
                         }
                     }
 
-                    let xStride = Swift.max(1, cols / AnalyticsStyle.Heatmap.labelStride)
-                    for col in stride(from: 0, to: cols, by: xStride) {
-                        let text = Text(data.xLabels[col])
-                            .font(.system(size: 9))
-                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                        let position = CGPoint(
-                            x: labelWidth + CGFloat(col) * cellWidth + AnalyticsStyle.Heatmap.labelPadding,
-                            y: gridHeight + AnalyticsStyle.Heatmap.labelPadding
-                        )
-                        context.draw(text, at: position, anchor: .topLeading)
-                    }
+                    // Invisible hit area for hover detection
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case let .active(location):
+                                // Check if we're in the grid area
+                                let gridX = location.x - labelWidth
+                                let gridY = location.y
+                                guard gridX >= 0, gridY >= 0, gridY < gridHeight else {
+                                    hoveredCell = nil
+                                    return
+                                }
+                                let col = Int(gridX / cellWidth)
+                                let row = Int(gridY / cellHeight)
+                                guard row >= 0, row < rows, col >= 0, col < cols else {
+                                    hoveredCell = nil
+                                    return
+                                }
+                                let value = data.matrix[row][col]
+                                let xLabel = col < data.xLabels.count ? data.xLabels[col] : ""
+                                let yLabel = row < data.yLabels.count ? data.yLabels[row] : ""
+                                hoveredCell = HeatmapHoverInfo(
+                                    row: row,
+                                    col: col,
+                                    value: value,
+                                    xLabel: xLabel,
+                                    yLabel: yLabel,
+                                    position: location
+                                )
+                            case .ended:
+                                hoveredCell = nil
+                            }
+                        }
 
-                    let yStride = Swift.max(1, rows / AnalyticsStyle.Heatmap.labelStride)
-                    for row in stride(from: 0, to: rows, by: yStride) {
-                        let text = Text(data.yLabels[row])
-                            .font(.system(size: 9))
-                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                        let position = CGPoint(
-                            x: AnalyticsStyle.Heatmap.labelPadding,
-                            y: CGFloat(row) * cellHeight + AnalyticsStyle.Heatmap.labelPadding
+                    // Tooltip overlay
+                    if let hovered = hoveredCell {
+                        HeatmapTooltip(
+                            xLabel: hovered.xLabel,
+                            yLabel: hovered.yLabel,
+                            value: hovered.value
                         )
-                        context.draw(text, at: position, anchor: .topLeading)
+                        .position(
+                            x: min(hovered.position.x + 50, proxy.size.width - 60),
+                            y: max(hovered.position.y - 30, 30)
+                        )
                     }
                 }
             }
         }
+    }
+}
+
+private struct HeatmapTooltip: View {
+    let xLabel: String
+    let yLabel: String
+    let value: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(yLabel), \(xLabel)")
+                .font(.caption2)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            Text("\(value) packets")
+                .font(.caption.weight(.medium))
+        }
+        .padding(6)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(nsColor: .windowBackgroundColor))
+                .shadow(radius: 2)
+        )
     }
 }
 
@@ -513,449 +1035,155 @@ private struct ChartTooltip: View {
     }
 }
 
-private struct GraphTooltipView: View {
-    let node: NetworkGraphNode
+// Old GraphInspectorView, NodeDetailsView, and MetricRow removed
+// Now using GraphSidebar component with tabbed Overview/Inspector
+
+private struct FilterControlGroup<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(node.callsign)
-                .font(.caption.weight(.semibold))
-            Text("Packets: \(node.weight)")
-                .font(.caption2)
-            Text("Bytes: \((node.inBytes + node.outBytes).formatted())")
-                .font(.caption2)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            content
         }
-        .padding(6)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color(nsColor: .windowBackgroundColor))
-                .shadow(radius: 2)
-        )
     }
 }
 
-private struct AnalyticsGraphView: View {
-    let graphModel: GraphModel
-    let nodePositions: [NodePosition]
-    let selectedNodeIDs: Set<String>
-    let hoveredNodeID: String?
-    let resetToken: UUID
-    let focusNodeID: String?
-    let onSelect: (String, Bool) -> Void
-    let onClearSelection: () -> Void
-    let onHover: (String?) -> Void
-    let onFocusHandled: () -> Void
-
-    @State private var viewport = GraphViewport()
+private struct ChartWidthReader: View {
+    let onChange: (CGFloat) -> Void
 
     var body: some View {
         GeometryReader { proxy in
-            let render = GraphRenderData(model: graphModel, positions: nodePositions)
-            let map = render.positionMap(size: proxy.size, viewport: viewport)
-            ZStack {
-                Canvas { context, size in
-                    let selection = selectedNodeIDs
-
-                    let focusIDs: Set<String> = {
-                        if !selection.isEmpty {
-                            return selection
-                        }
-                        if let hoveredNodeID {
-                            return [hoveredNodeID]
-                        }
-                        return []
-                    }()
-
-                    for edge in graphModel.edges {
-                        guard let source = map[edge.sourceID], let target = map[edge.targetID] else { continue }
-                        let isRelated = focusIDs.isEmpty || focusIDs.contains(edge.sourceID) || focusIDs.contains(edge.targetID)
-                        var path = Path()
-                        path.move(to: source)
-                        path.addLine(to: target)
-                        let thickness = render.edgeThickness(for: edge.weight)
-                        let alpha = render.edgeAlpha(for: edge.weight) * (isRelated ? 1.0 : 0.2)
-                        context.stroke(path, with: .color(AnalyticsStyle.Colors.graphEdge.opacity(alpha)), lineWidth: thickness)
-                    }
-
-                    for node in graphModel.nodes {
-                        guard let position = map[node.id] else { continue }
-                        let radius = render.nodeRadius(for: node.weight)
-                        let isSelected = selectedNodeIDs.contains(node.id)
-                        let isHovered = hoveredNodeID == node.id
-                        let fill = isSelected ? AnalyticsStyle.Colors.accent : (isHovered ? AnalyticsStyle.Colors.graphNode : AnalyticsStyle.Colors.graphNodeMuted)
-                        let rect = CGRect(x: position.x - radius, y: position.y - radius, width: radius * 2, height: radius * 2)
-                        context.fill(Path(ellipseIn: rect), with: .color(fill))
-                        if isSelected || isHovered {
-                            context.stroke(
-                                Path(ellipseIn: rect.insetBy(dx: -AnalyticsStyle.Graph.selectionGlowWidth / 3, dy: -AnalyticsStyle.Graph.selectionGlowWidth / 3)),
-                                with: .color(AnalyticsStyle.Colors.accent.opacity(isSelected ? 0.7 : 0.35)),
-                                lineWidth: AnalyticsStyle.Graph.selectionGlowWidth / 2
-                            )
-                        }
-                        if isSelected {
-                            context.stroke(
-                                Path(ellipseIn: rect.insetBy(dx: -AnalyticsStyle.Graph.selectionGlowWidth / 2, dy: -AnalyticsStyle.Graph.selectionGlowWidth / 2)),
-                                with: .color(AnalyticsStyle.Colors.accent.opacity(0.6)),
-                                lineWidth: AnalyticsStyle.Graph.selectionGlowWidth
-                            )
-                        }
+            Color.clear
+                .onAppear {
+                    // Defer to next run loop to avoid modifying state during view update
+                    DispatchQueue.main.async {
+                        onChange(proxy.size.width)
                     }
                 }
-
-                if let hoveredNodeID = hoveredNodeID,
-                   let node = graphModel.nodes.first(where: { $0.id == hoveredNodeID }),
-                   let position = map[hoveredNodeID] {
-                    GraphTooltipView(node: node)
-                        .position(x: position.x + 12, y: position.y - 12)
-                }
-
-                GraphInteractionView(
-                    onHover: { location in
-                        onHover(hitTestNode(at: location, in: proxy.size)?.0)
-                    },
-                    onClick: { location, isShift, clickCount in
-                        if let (nodeID, _) = hitTestNode(at: location, in: proxy.size) {
-                            onSelect(nodeID, isShift)
-                        } else {
-                            if clickCount >= 2 {
-                                viewport = GraphViewport()
-                            }
-                            onClearSelection()
-                        }
-                    },
-                    onDrag: { delta in
-                        viewport.offset.width += delta.width
-                        viewport.offset.height += delta.height
-                    },
-                    onScroll: { delta, _ in
-                        viewport.offset.width -= delta.width
-                        viewport.offset.height -= delta.height
-                    },
-                    onMagnify: { magnification, location in
-                        let scaleDelta = 1 + magnification
-                        let newScale = (viewport.scale * scaleDelta).clamped(to: AnalyticsStyle.Graph.zoomRange)
-                        viewport.zoom(at: location, size: proxy.size, newScale: newScale)
+                .onChange(of: proxy.size.width) { _, newValue in
+                    // Defer to next run loop to avoid modifying state during view update
+                    DispatchQueue.main.async {
+                        onChange(newValue)
                     }
-                )
-            }
-            .background(AnalyticsStyle.Colors.neutralFill)
-            .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
-            .focusable()
-            .onExitCommand {
-                onClearSelection()
-            }
-            .onChange(of: resetToken) { _, _ in
-                viewport = GraphViewport()
-            }
-            .onChange(of: focusNodeID) { _, newValue in
-                guard let newValue = newValue, nodePositions.contains(where: { $0.id == newValue }) else { return }
-                viewport.scale = AnalyticsStyle.Graph.focusScale
-                let map = GraphRenderData(model: graphModel, positions: nodePositions).positionMap(size: proxy.size, viewport: GraphViewport())
-                if let focused = map[newValue] {
-                    let center = CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2)
-                    viewport.offset = CGSize(width: center.x - focused.x, height: center.y - focused.y)
                 }
-                onFocusHandled()
-            }
+        }
+    }
+}
+
+// MARK: - Flow Layout for Responsive Controls
+
+/// A layout that wraps content to the next row when it doesn't fit.
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = layout(subviews: subviews, proposal: proposal)
+        return result.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = layout(subviews: subviews, proposal: proposal)
+        for (index, position) in result.positions.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y),
+                proposal: .unspecified
+            )
         }
     }
 
-    private func hitTestNode(at location: CGPoint?, in size: CGSize) -> (String, CGFloat)? {
-        guard let location else { return nil }
-        let render = GraphRenderData(model: graphModel, positions: nodePositions)
-        let map = render.positionMap(size: size, viewport: viewport)
-        var closest: (String, CGFloat)?
-        for node in graphModel.nodes {
-            guard let position = map[node.id] else { continue }
-            let distance = hypot(position.x - location.x, position.y - location.y)
-            if distance <= AnalyticsStyle.Graph.nodeHitRadius {
-                if let existing = closest {
-                    if distance < existing.1 {
-                        closest = (node.id, distance)
-                    }
+    private func layout(subviews: Subviews, proposal: ProposedViewSize) -> (size: CGSize, positions: [CGPoint]) {
+        let maxWidth = proposal.width ?? .infinity
+        var positions: [CGPoint] = []
+        var currentX: CGFloat = 0
+        var currentY: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var totalWidth: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+
+            if currentX + size.width > maxWidth && currentX > 0 {
+                // Move to next row
+                currentX = 0
+                currentY += rowHeight + spacing
+                rowHeight = 0
+            }
+
+            positions.append(CGPoint(x: currentX, y: currentY))
+            currentX += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            totalWidth = max(totalWidth, currentX - spacing)
+        }
+
+        totalHeight = currentY + rowHeight
+        return (CGSize(width: totalWidth, height: totalHeight), positions)
+    }
+}
+
+// MARK: - Floating Control Bar
+
+/// Preference key for tracking scroll offset
+private struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+/// Floating glass control bar that sticks to the top of the scroll view.
+/// Uses material blur when available, falls back to solid background for accessibility.
+private struct FloatingControlBar<Content: View>: View {
+    let scrollOffset: CGFloat
+    let reduceTransparency: Bool
+    @ViewBuilder let content: Content
+
+    /// Threshold in points before the bar transitions to "scrolled" state
+    private let scrollThreshold: CGFloat = 12
+    /// Corner radius for the pill-shaped bar
+    private let cornerRadius: CGFloat = 14
+
+    private var isScrolled: Bool {
+        scrollOffset > scrollThreshold
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            content
+                .padding(.horizontal, AnalyticsStyle.Layout.pagePadding)
+                .padding(.vertical, 10)
+        }
+        .background(
+            Group {
+                if reduceTransparency {
+                    // Solid background for accessibility
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(Color(nsColor: .windowBackgroundColor))
                 } else {
-                    closest = (node.id, distance)
+                    // Glass effect with material blur - more opaque for better readability
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(.regularMaterial)
+                        .opacity(isScrolled ? 1 : 0.92)
                 }
             }
-        }
-        return closest
-    }
-}
-
-private struct GraphInspectorView: View {
-    let details: GraphInspectorDetails?
-    let onClear: () -> Void
-    let onFocus: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Inspector")
-                .font(.headline)
-
-            if let details {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(details.node.callsign)
-                        .font(.title3.weight(.semibold))
-
-                    MetricRow(title: "Packets in", value: details.node.inCount)
-                    MetricRow(title: "Packets out", value: details.node.outCount)
-                    MetricRow(title: "Bytes in", value: details.node.inBytes)
-                    MetricRow(title: "Bytes out", value: details.node.outBytes)
-                    MetricRow(title: "Degree", value: details.node.degree)
-
-                    Divider().padding(.vertical, 4)
-
-                    Text("Top neighbors")
-                        .font(.caption)
-                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-
-                    if details.neighbors.isEmpty {
-                        Text("No neighbors")
-                            .font(.caption)
-                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                    } else {
-                        ForEach(details.neighbors.prefix(5), id: \.id) { neighbor in
-                            HStack {
-                                Text(neighbor.id)
-                                Spacer()
-                                Text("\(neighbor.weight)")
-                                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                            }
-                            .font(.caption)
-                        }
-                    }
-                }
-            } else {
-                Text("Select a node to inspect details.")
-                    .font(.caption)
-                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-            }
-
-            Spacer(minLength: 0)
-
-            HStack {
-                Button("Focus") {
-                    onFocus()
-                }
-                .buttonStyle(.bordered)
-                .disabled(details == nil)
-
-                Button("Clear") {
-                    onClear()
-                }
-                .buttonStyle(.bordered)
-            }
-        }
-        .padding(12)
-        .background(AnalyticsStyle.Colors.neutralFill)
-        .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
-    }
-}
-
-private struct MetricRow: View {
-    let title: String
-    let value: Int
-
-    var body: some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Text(value.formatted())
-                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                .monospacedDigit()
-        }
-        .font(.caption)
-    }
-}
-
-private struct GraphViewport: Hashable {
-    var scale: CGFloat = 1
-    var offset: CGSize = .zero
-
-    mutating func zoom(at location: CGPoint, size: CGSize, newScale: CGFloat) {
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let translated = CGPoint(x: location.x - center.x - offset.width, y: location.y - center.y - offset.height)
-        let scaleRatio = newScale / scale
-        offset.width = (offset.width + translated.x) * scaleRatio - translated.x
-        offset.height = (offset.height + translated.y) * scaleRatio - translated.y
-        scale = newScale
-    }
-}
-
-private struct GraphRenderData {
-    let model: GraphModel
-    let positions: [NodePosition]
-    private let minNodeWeight: Int
-    private let maxNodeWeight: Int
-    private let maxEdgeWeight: Int
-
-    init(model: GraphModel, positions: [NodePosition]) {
-        self.model = model
-        self.positions = positions
-        let nodeWeights = model.nodes.map { $0.weight }
-        self.minNodeWeight = Swift.max(1, nodeWeights.min() ?? 1)
-        self.maxNodeWeight = Swift.max(minNodeWeight, nodeWeights.max() ?? minNodeWeight)
-        self.maxEdgeWeight = Swift.max(1, model.edges.map { $0.weight }.max() ?? 1)
-    }
-
-    func positionMap(size: CGSize, viewport: GraphViewport) -> [String: CGPoint] {
-        let inset = AnalyticsStyle.Layout.graphInset
-        let width = Swift.max(1, size.width - inset * 2)
-        let height = Swift.max(1, size.height - inset * 2)
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-
-        var map: [String: CGPoint] = [:]
-        for position in positions {
-            let base = CGPoint(
-                x: inset + CGFloat(position.x) * width,
-                y: inset + CGFloat(position.y) * height
-            )
-            let scaled = CGPoint(
-                x: (base.x - center.x) * viewport.scale + center.x + viewport.offset.width,
-                y: (base.y - center.y) * viewport.scale + center.y + viewport.offset.height
-            )
-            map[position.id] = scaled
-        }
-        return map
-    }
-
-    func nodeRadius(for weight: Int) -> CGFloat {
-        let logMin = log(Double(minNodeWeight))
-        let logMax = log(Double(maxNodeWeight))
-        let logValue = log(Double(Swift.max(weight, 1)))
-        let t = logMax == logMin ? 0.5 : (logValue - logMin) / (logMax - logMin)
-        let range = AnalyticsStyle.Graph.nodeRadiusRange
-        return range.lowerBound + CGFloat(t) * (range.upperBound - range.lowerBound)
-    }
-
-    func edgeThickness(for weight: Int) -> CGFloat {
-        let t = CGFloat(weight) / CGFloat(maxEdgeWeight)
-        let range = AnalyticsStyle.Graph.edgeThicknessRange
-        return range.lowerBound + t * (range.upperBound - range.lowerBound)
-    }
-
-    func edgeAlpha(for weight: Int) -> Double {
-        let t = Double(weight) / Double(maxEdgeWeight)
-        let range = AnalyticsStyle.Graph.edgeAlphaRange
-        return range.lowerBound + t * (range.upperBound - range.lowerBound)
-    }
-}
-
-private struct GraphInteractionView: NSViewRepresentable {
-    let onHover: (CGPoint?) -> Void
-    let onClick: (CGPoint, Bool, Int) -> Void
-    let onDrag: (CGSize) -> Void
-    let onScroll: (CGSize, CGPoint) -> Void
-    let onMagnify: (CGFloat, CGPoint) -> Void
-
-    func makeNSView(context: Context) -> GraphInteractionNSView {
-        let view = GraphInteractionNSView()
-        view.onHover = onHover
-        view.onClick = onClick
-        view.onDrag = onDrag
-        view.onScroll = onScroll
-        view.onMagnify = onMagnify
-        return view
-    }
-
-    func updateNSView(_ nsView: GraphInteractionNSView, context: Context) {
-        nsView.onHover = onHover
-        nsView.onClick = onClick
-        nsView.onDrag = onDrag
-        nsView.onScroll = onScroll
-        nsView.onMagnify = onMagnify
-    }
-}
-
-private final class GraphInteractionNSView: NSView {
-    var onHover: ((CGPoint?) -> Void)?
-    var onClick: ((CGPoint, Bool, Int) -> Void)?
-    var onDrag: ((CGSize) -> Void)?
-    var onScroll: ((CGSize, CGPoint) -> Void)?
-    var onMagnify: ((CGFloat, CGPoint) -> Void)?
-
-    private var trackingArea: NSTrackingArea?
-    private var lastDragLocation: CGPoint?
-    private var accumulatedDrag: CGSize = .zero
-
-    override var acceptsFirstResponder: Bool { true }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        let magnifyRecognizer = NSMagnificationGestureRecognizer(target: self, action: #selector(handleMagnify(_:)))
-        addGestureRecognizer(magnifyRecognizer)
-    }
-
-    convenience init() {
-        self.init(frame: .zero)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea {
-            removeTrackingArea(trackingArea)
-        }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .inVisibleRect],
-            owner: self,
-            userInfo: nil
         )
-        addTrackingArea(area)
-        trackingArea = area
-    }
-
-    override func mouseMoved(with event: NSEvent) {
-        let location = convert(event.locationInWindow, from: nil)
-        onHover?(location)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        onHover?(nil)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        lastDragLocation = convert(event.locationInWindow, from: nil)
-        accumulatedDrag = .zero
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        let location = convert(event.locationInWindow, from: nil)
-        guard let last = lastDragLocation else { return }
-        let delta = CGSize(width: location.x - last.x, height: location.y - last.y)
-        accumulatedDrag.width += delta.width
-        accumulatedDrag.height += delta.height
-        lastDragLocation = location
-        onDrag?(delta)
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        let location = convert(event.locationInWindow, from: nil)
-        let isClick = hypot(accumulatedDrag.width, accumulatedDrag.height) < 3
-        if isClick {
-            onClick?(location, event.modifierFlags.contains(.shift), event.clickCount)
-        }
-        lastDragLocation = nil
-    }
-
-    override func scrollWheel(with event: NSEvent) {
-        let location = convert(event.locationInWindow, from: nil)
-        onScroll?(CGSize(width: event.scrollingDeltaX, height: event.scrollingDeltaY), location)
-    }
-
-    @objc private func handleMagnify(_ recognizer: NSMagnificationGestureRecognizer) {
-        let location = convert(recognizer.location(in: self), from: nil)
-        onMagnify?(recognizer.magnification, location)
-    }
-}
-
-private extension CGFloat {
-    func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
-        Swift.min(range.upperBound, Swift.max(range.lowerBound, self))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 0.5)
+        )
+        .shadow(color: .black.opacity(isScrolled ? 0.12 : 0.06), radius: isScrolled ? 8 : 4, y: 2)
+        .padding(.horizontal, AnalyticsStyle.Layout.pagePadding)
+        .padding(.top, 8)
+        .animation(.easeOut(duration: 0.2), value: isScrolled)
     }
 }

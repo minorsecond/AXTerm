@@ -1,21 +1,21 @@
 import Foundation
-import Testing
+import XCTest
 @testable import AXTerm
 
-struct AnalyticsAggregatorTests {
-    private let calendar: Calendar = {
+final class AnalyticsAggregatorTests: XCTestCase {
+    private var calendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
         return calendar
-    }()
+    }
 
-    @Test
-    func bucketingCountsAcrossBoundaries() {
-        let base = Date(timeIntervalSince1970: 1_700_000_000)
+    func testBucketingCountsAcrossBoundaries() {
+        let seed = Date(timeIntervalSince1970: 1_700_000_000)
+        let base = calendar.dateInterval(of: .hour, for: seed)?.start ?? seed
         let packets = [
-            makePacket(timestamp: base.addingTimeInterval(60 * 5), from: "ALPHA", to: "BRAVO"),
-            makePacket(timestamp: base.addingTimeInterval(60 * 55), from: "ALPHA", to: "BRAVO"),
-            makePacket(timestamp: base.addingTimeInterval(60 * 65), from: "CHARLIE", to: "BRAVO")
+            makePacket(timestamp: base.addingTimeInterval(60 * 5), from: "K9ALP", to: "W5BRV"),
+            makePacket(timestamp: base.addingTimeInterval(60 * 55), from: "K9ALP", to: "W5BRV"),
+            makePacket(timestamp: base.addingTimeInterval(60 * 65), from: "N3CHR", to: "W5BRV")
         ]
 
         let result = AnalyticsAggregator.aggregate(
@@ -26,17 +26,16 @@ struct AnalyticsAggregatorTests {
         )
 
         let counts = result.series.packetsPerBucket.map { $0.value }
-        #expect(counts.count == 2)
-        #expect(counts[0] == 2)
-        #expect(counts[1] == 1)
+        XCTAssertEqual(counts.count, 2)
+        XCTAssertEqual(counts[0], 2)
+        XCTAssertEqual(counts[1], 1)
     }
 
-    @Test
-    func bytesSumCorrect() {
+    func testBytesSumCorrect() {
         let base = Date(timeIntervalSince1970: 1_700_010_000)
         let packets = [
-            makePacket(timestamp: base, from: "ALPHA", to: "BRAVO", infoBytes: 10),
-            makePacket(timestamp: base.addingTimeInterval(60), from: "BRAVO", to: "ALPHA", infoBytes: 22)
+            makePacket(timestamp: base, from: "K9ALP", to: "W5BRV", infoBytes: 10),
+            makePacket(timestamp: base.addingTimeInterval(60), from: "W5BRV", to: "K9ALP", infoBytes: 22)
         ]
 
         let result = AnalyticsAggregator.aggregate(
@@ -46,16 +45,15 @@ struct AnalyticsAggregatorTests {
             options: AnalyticsAggregator.Options(includeViaDigipeaters: false, histogramBinCount: 4, topLimit: 3)
         )
 
-        #expect(result.summary.totalPayloadBytes == 32)
+        XCTAssertEqual(result.summary.totalPayloadBytes, 32)
     }
 
-    @Test
-    func uniqueStationsPerBucketCorrect() {
+    func testUniqueStationsPerBucketCorrect() {
         let base = Date(timeIntervalSince1970: 1_700_020_000)
         let packets = [
-            makePacket(timestamp: base, from: "ALPHA", to: "BRAVO"),
-            makePacket(timestamp: base, from: "ALPHA", to: "DELTA"),
-            makePacket(timestamp: base.addingTimeInterval(3600), from: "ECHO", to: "FOXTROT")
+            makePacket(timestamp: base, from: "K9ALP", to: "W5BRV"),
+            makePacket(timestamp: base, from: "K9ALP", to: "W4DEL"),
+            makePacket(timestamp: base.addingTimeInterval(3600), from: "K5ECH", to: "W6FOX")
         ]
 
         let result = AnalyticsAggregator.aggregate(
@@ -66,18 +64,17 @@ struct AnalyticsAggregatorTests {
         )
 
         let uniqueCounts = result.series.uniqueStationsPerBucket.map { $0.value }
-        #expect(uniqueCounts.count == 2)
-        #expect(uniqueCounts[0] == 3)
-        #expect(uniqueCounts[1] == 2)
+        XCTAssertEqual(uniqueCounts.count, 2)
+        XCTAssertEqual(uniqueCounts[0], 3)
+        XCTAssertEqual(uniqueCounts[1], 2)
     }
 
-    @Test
-    func heatmapSumMatchesPacketTotal() {
+    func testHeatmapSumMatchesPacketTotal() {
         let base = Date(timeIntervalSince1970: 1_700_030_000)
         let packets = [
-            makePacket(timestamp: base, from: "ALPHA", to: "BRAVO"),
-            makePacket(timestamp: base.addingTimeInterval(3600), from: "BRAVO", to: "CHARLIE"),
-            makePacket(timestamp: base.addingTimeInterval(7200), from: "DELTA", to: "ECHO")
+            makePacket(timestamp: base, from: "K9ALP", to: "W5BRV"),
+            makePacket(timestamp: base.addingTimeInterval(3600), from: "W5BRV", to: "N3CHR"),
+            makePacket(timestamp: base.addingTimeInterval(7200), from: "W4DEL", to: "K5ECH")
         ]
 
         let result = AnalyticsAggregator.aggregate(
@@ -88,16 +85,15 @@ struct AnalyticsAggregatorTests {
         )
 
         let heatmapTotal = result.heatmap.matrix.flatMap { $0 }.reduce(0, +)
-        #expect(heatmapTotal == result.summary.totalPackets)
+        XCTAssertEqual(heatmapTotal, result.summary.totalPackets)
     }
 
-    @Test
-    func histogramBinningCorrect() {
+    func testHistogramBinningCorrect() {
         let base = Date(timeIntervalSince1970: 1_700_040_000)
         let packets = [
-            makePacket(timestamp: base, from: "ALPHA", to: "BRAVO", infoBytes: 5),
-            makePacket(timestamp: base, from: "ALPHA", to: "BRAVO", infoBytes: 15),
-            makePacket(timestamp: base, from: "ALPHA", to: "BRAVO", infoBytes: 35)
+            makePacket(timestamp: base, from: "K9ALP", to: "W5BRV", infoBytes: 5),
+            makePacket(timestamp: base, from: "K9ALP", to: "W5BRV", infoBytes: 15),
+            makePacket(timestamp: base, from: "K9ALP", to: "W5BRV", infoBytes: 35)
         ]
 
         let result = AnalyticsAggregator.aggregate(
@@ -107,18 +103,17 @@ struct AnalyticsAggregatorTests {
             options: AnalyticsAggregator.Options(includeViaDigipeaters: false, histogramBinCount: 2, topLimit: 3)
         )
 
-        #expect(result.histogram.bins.count == 2)
-        #expect(result.histogram.bins[0].count == 2)
-        #expect(result.histogram.bins[1].count == 1)
+        XCTAssertEqual(result.histogram.bins.count, 2)
+        XCTAssertEqual(result.histogram.bins[0].count, 2)
+        XCTAssertEqual(result.histogram.bins[1].count, 1)
     }
 
-    @Test
-    func topNRankingStableForTies() {
+    func testTopNRankingStableForTies() {
         let base = Date(timeIntervalSince1970: 1_700_050_000)
         let packets = [
-            makePacket(timestamp: base, from: "BRAVO", to: "ALPHA"),
-            makePacket(timestamp: base, from: "ALPHA", to: "BRAVO"),
-            makePacket(timestamp: base, from: "CHARLIE", to: "ALPHA")
+            makePacket(timestamp: base, from: "W5BRV", to: "K9ALP"),
+            makePacket(timestamp: base, from: "K9ALP", to: "W5BRV"),
+            makePacket(timestamp: base, from: "N3CHR", to: "K9ALP")
         ]
 
         let result = AnalyticsAggregator.aggregate(
@@ -128,7 +123,7 @@ struct AnalyticsAggregatorTests {
             options: AnalyticsAggregator.Options(includeViaDigipeaters: false, histogramBinCount: 4, topLimit: 2)
         )
 
-        #expect(result.topTalkers.map { $0.label } == ["ALPHA", "BRAVO"])
+        XCTAssertEqual(result.topTalkers.map { $0.label }, ["K9ALP", "W5BRV"])
     }
 
     private func makePacket(

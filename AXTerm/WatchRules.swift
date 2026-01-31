@@ -22,10 +22,15 @@ protocol WatchMatching {
 
 @MainActor
 final class WatchRuleMatcher: WatchMatching {
+    private static var testRetainedInstances: [WatchRuleMatcher] = []
     private let settings: AppSettingsStore
 
     init(settings: AppSettingsStore) {
         self.settings = settings
+
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            Self.testRetainedInstances.append(self)
+        }
     }
 
     func match(packet: Packet) -> WatchMatch {

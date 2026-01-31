@@ -8,6 +8,7 @@
 import XCTest
 @testable import AXTerm
 
+@MainActor
 final class WatchRulesTests: XCTestCase {
     func testCallsignMatchesFromToVia() {
         let settings = makeSettings()

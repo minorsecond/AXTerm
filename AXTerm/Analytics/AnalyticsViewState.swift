@@ -16,12 +16,16 @@ struct AnalyticsViewState: Hashable, Sendable {
     var topDestinations: [RankRow]
     var topDigipeaters: [RankRow]
     var graphModel: GraphModel
+    /// Classified graph model with typed edges (DirectPeer, HeardDirect, SeenVia).
+    /// Used for inspector display and relationship classification.
+    var classifiedGraphModel: ClassifiedGraphModel
     var nodePositions: [NodePosition]
     var layoutEnergy: Double
     var graphNote: String?
     var selectedNodeID: String?
     var selectedNodeIDs: Set<String>
     var hoveredNodeID: String?
+    var networkHealth: NetworkHealth
 
     static let empty = AnalyticsViewState(
         summary: nil,
@@ -32,11 +36,13 @@ struct AnalyticsViewState: Hashable, Sendable {
         topDestinations: [],
         topDigipeaters: [],
         graphModel: .empty,
+        classifiedGraphModel: .empty,
         nodePositions: [],
         layoutEnergy: 0,
         graphNote: nil,
         selectedNodeID: nil,
         selectedNodeIDs: [],
-        hoveredNodeID: nil
+        hoveredNodeID: nil,
+        networkHealth: .empty
     )
 }
