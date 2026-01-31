@@ -126,12 +126,81 @@ final class NetRomIntegration {
 
     // MARK: - Query Methods
 
+    private var hasLoggedFirstQuery = false
+
     func currentNeighbors() -> [NeighborInfo] {
-        router.currentNeighbors()
+        let result = router.currentNeighbors()
+        #if DEBUG
+        if !hasLoggedFirstQuery {
+            print("[NETROM:INTEGRATION] currentNeighbors() returning \(result.count) neighbors")
+        }
+        #endif
+        return result
     }
 
     func currentRoutes() -> [RouteInfo] {
-        router.currentRoutes()
+        let result = router.currentRoutes()
+        #if DEBUG
+        if !hasLoggedFirstQuery {
+            print("[NETROM:INTEGRATION] currentRoutes() returning \(result.count) routes")
+            hasLoggedFirstQuery = true
+        }
+        #endif
+        return result
+    }
+
+    // MARK: - Mode-Filtered Query Methods
+
+    /// Get neighbors filtered by mode.
+    func currentNeighbors(forMode mode: NetRomRoutingMode) -> [NeighborInfo] {
+        let all = router.currentNeighbors()
+        switch mode {
+        case .classic:
+            return all.filter { $0.sourceType == "classic" }
+        case .inference:
+            return all.filter { $0.sourceType == "inferred" }
+        case .hybrid:
+            return all
+        }
+    }
+
+    /// Get routes filtered by mode.
+    func currentRoutes(forMode mode: NetRomRoutingMode) -> [RouteInfo] {
+        let all = router.currentRoutes()
+        switch mode {
+        case .classic:
+            return all.filter { $0.sourceType == "classic" || $0.sourceType == "broadcast" }
+        case .inference:
+            return all.filter { $0.sourceType == "inferred" }
+        case .hybrid:
+            return all
+        }
+    }
+
+    /// Get link stats filtered by mode (based on which neighbors are relevant).
+    func exportLinkStats(forMode mode: NetRomRoutingMode) -> [LinkStatRecord] {
+        let allStats = linkEstimator.exportLinkStats()
+        let relevantNeighbors = Set(currentNeighbors(forMode: mode).map { $0.call })
+
+        switch mode {
+        case .classic:
+            // For classic mode, include links involving classic neighbors or local callsign
+            return allStats.filter { stat in
+                relevantNeighbors.contains(stat.fromCall) ||
+                relevantNeighbors.contains(stat.toCall) ||
+                stat.fromCall == localCallsign ||
+                stat.toCall == localCallsign
+            }
+        case .inference:
+            // For inference mode, only include links involving inferred neighbors
+            // Don't include local callsign links unless they involve an inferred neighbor
+            return allStats.filter { stat in
+                relevantNeighbors.contains(stat.fromCall) ||
+                relevantNeighbors.contains(stat.toCall)
+            }
+        case .hybrid:
+            return allStats
+        }
     }
 
     func bestRouteTo(_ destination: String) -> RouteInfo? {
@@ -157,7 +226,36 @@ final class NetRomIntegration {
     }
 
     func importLinkStats(_ records: [LinkStatRecord]) {
+        #if DEBUG
+        print("[NETROM:INTEGRATION] importLinkStats called with \(records.count) records")
+        #endif
         linkEstimator.importLinkStats(records)
+        #if DEBUG
+        let exported = linkEstimator.exportLinkStats()
+        print("[NETROM:INTEGRATION] After import, exportLinkStats returns \(exported.count) records")
+        #endif
+    }
+
+    func importNeighbors(_ neighbors: [NeighborInfo]) {
+        #if DEBUG
+        print("[NETROM:INTEGRATION] importNeighbors called with \(neighbors.count) neighbors")
+        #endif
+        router.importNeighbors(neighbors)
+        #if DEBUG
+        let current = router.currentNeighbors()
+        print("[NETROM:INTEGRATION] After import, currentNeighbors returns \(current.count) neighbors")
+        #endif
+    }
+
+    func importRoutes(_ routes: [RouteInfo]) {
+        #if DEBUG
+        print("[NETROM:INTEGRATION] importRoutes called with \(routes.count) routes")
+        #endif
+        router.importRoutes(routes)
+        #if DEBUG
+        let current = router.currentRoutes()
+        print("[NETROM:INTEGRATION] After import, currentRoutes returns \(current.count) routes")
+        #endif
     }
 
     func exportNeighbors() -> [NeighborInfo] {

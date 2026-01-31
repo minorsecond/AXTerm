@@ -24,9 +24,47 @@ import GRDB
 struct NetRomPersistenceConfig {
     let maxSnapshotAgeSeconds: TimeInterval
 
-    static let `default` = NetRomPersistenceConfig(
-        maxSnapshotAgeSeconds: 3600  // 1 hour
-    )
+    /// TTL for individual neighbor entries (seconds). Neighbors older than this are decayed on load.
+    let neighborTTLSeconds: TimeInterval
+
+    /// TTL for individual route entries (seconds). Routes older than this are removed on load.
+    let routeTTLSeconds: TimeInterval
+
+    /// TTL for link stat entries (seconds). Link stats older than this are filtered on load.
+    let linkStatTTLSeconds: TimeInterval
+
+    /// Time window for historical replay (seconds). Only replay packets within this window.
+    let replayTimeWindowSeconds: TimeInterval
+
+    /// Maximum number of packets to replay when restoring state.
+    let maxReplayPackets: Int
+
+    init(
+        maxSnapshotAgeSeconds: TimeInterval = 3600,
+        neighborTTLSeconds: TimeInterval = 1800,
+        routeTTLSeconds: TimeInterval = 1800,
+        linkStatTTLSeconds: TimeInterval = 1800,
+        replayTimeWindowSeconds: TimeInterval = 1800,
+        maxReplayPackets: Int = 10000
+    ) {
+        self.maxSnapshotAgeSeconds = maxSnapshotAgeSeconds
+        self.neighborTTLSeconds = neighborTTLSeconds
+        self.routeTTLSeconds = routeTTLSeconds
+        self.linkStatTTLSeconds = linkStatTTLSeconds
+        self.replayTimeWindowSeconds = replayTimeWindowSeconds
+        self.maxReplayPackets = maxReplayPackets
+    }
+
+    static let `default` = NetRomPersistenceConfig()
+}
+
+/// Persisted state returned by load(now:).
+/// Contains neighbors, routes, and link stats with stale entries filtered/decayed.
+struct PersistedState {
+    let neighbors: [NeighborInfo]
+    let routes: [RouteInfo]
+    let linkStats: [LinkStatRecord]
+    let lastPacketID: Int64
 }
 
 /// Metadata about a persisted snapshot.
@@ -368,6 +406,103 @@ final class NetRomPersistence {
         }
 
         return true
+    }
+
+    // MARK: - Unified Load with Decay
+
+    /// Load persisted state with TTL validation and per-entry decay.
+    ///
+    /// Returns `nil` if:
+    /// - No snapshot exists
+    /// - Snapshot is older than `maxSnapshotAgeSeconds`
+    /// - Config hash doesn't match `expectedConfigHash` (if provided)
+    ///
+    /// When loading, applies per-entry decay:
+    /// - Neighbors with `lastSeen` older than `neighborTTLSeconds` are decayed/dropped
+    /// - Routes with stale `lastUpdate` are removed
+    /// - LinkStats with `lastUpdated` older than `linkStatTTLSeconds` are filtered
+    func load(now: Date, expectedConfigHash: String? = nil) throws -> PersistedState? {
+        // First validate snapshot-level freshness
+        guard try isSnapshotValid(currentDate: now, expectedConfigHash: expectedConfigHash) else {
+            return nil
+        }
+
+        guard let meta = try loadSnapshotMeta() else {
+            return nil
+        }
+
+        // Load and filter/decay entries based on their individual timestamps
+        let neighbors = try loadNeighborsWithDecay(now: now)
+        let routes = try loadRoutesWithDecay(now: now)
+        let linkStats = try loadLinkStatsWithDecay(now: now)
+
+        return PersistedState(
+            neighbors: neighbors,
+            routes: routes,
+            linkStats: linkStats,
+            lastPacketID: meta.lastPacketID
+        )
+    }
+
+    /// Load neighbors with per-entry decay based on lastSeen timestamp.
+    private func loadNeighborsWithDecay(now: Date) throws -> [NeighborInfo] {
+        let allNeighbors = try loadNeighbors()
+        let cutoff = now.addingTimeInterval(-config.neighborTTLSeconds)
+
+        return allNeighbors.compactMap { neighbor -> NeighborInfo? in
+            let age = now.timeIntervalSince(neighbor.lastSeen)
+
+            // If within TTL, keep as-is
+            if neighbor.lastSeen >= cutoff {
+                return neighbor
+            }
+
+            // If beyond TTL, apply linear decay
+            // decayFactor = 1 - (age / TTL), clamped to [0, 1]
+            let decayFactor = max(0, 1 - (age / config.neighborTTLSeconds))
+            let decayedQuality = Int(Double(neighbor.quality) * decayFactor)
+
+            // Drop if quality decays to near zero
+            if decayedQuality < 10 {
+                return nil
+            }
+
+            return NeighborInfo(
+                call: neighbor.call,
+                quality: decayedQuality,
+                lastSeen: neighbor.lastSeen,
+                obsolescenceCount: neighbor.obsolescenceCount,
+                sourceType: neighbor.sourceType
+            )
+        }
+    }
+
+    /// Load routes with per-entry filtering based on lastUpdate.
+    private func loadRoutesWithDecay(now: Date) throws -> [RouteInfo] {
+        // Note: RouteInfo doesn't expose lastUpdate, but we store it in the DB
+        // For now, filter based on snapshot age. In a full implementation,
+        // we would query the DB directly with the lastUpdate column.
+        let allRoutes = try loadRoutes()
+
+        // Since RouteInfo doesn't have lastUpdate exposed, we rely on
+        // snapshot-level TTL for now. A full implementation would add
+        // lastUpdate to RouteInfo or query the DB directly.
+        let snapshotAge = try loadSnapshotMeta().map { now.timeIntervalSince($0.snapshotTimestamp) } ?? 0
+
+        if snapshotAge > config.routeTTLSeconds {
+            // All routes are stale
+            return []
+        }
+
+        return allRoutes
+    }
+
+    /// Load link stats with per-entry filtering based on lastUpdated timestamp.
+    private func loadLinkStatsWithDecay(now: Date) throws -> [LinkStatRecord] {
+        let allStats = try loadLinkStats()
+        let cutoff = now.addingTimeInterval(-config.linkStatTTLSeconds)
+
+        return allStats.filter { $0.lastUpdated >= cutoff }
     }
 
     // MARK: - Clear

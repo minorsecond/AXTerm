@@ -29,19 +29,35 @@ final class NetRomPassiveInference {
         #endif
     }
 
+    #if DEBUG
+    private static var hasLoggedObserve = false
+    private static var inferenceCount = 0
+    #endif
+
     func observePacket(_ packet: Packet, timestamp: Date) {
         guard let rawFrom = packet.from?.display,
               let normalizedFrom = normalize(rawFrom),
               let rawTo = packet.to?.display,
-              let normalizedTo = normalize(rawTo),
-              normalizedTo == localCallsign,
-              !isInfrastructure(packet)
+              let normalizedTo = normalize(rawTo)
         else {
             return
         }
 
-        if packet.via.isEmpty {
-            router.observePacket(
+        // Skip infrastructure packets (beacons, ID)
+        guard !isInfrastructure(packet) else { return }
+
+        #if DEBUG
+        if !Self.hasLoggedObserve {
+            print("[NETROM:INFERENCE] First packet observed:")
+            print("[NETROM:INFERENCE]   from=\(normalizedFrom) to=\(normalizedTo) via=\(packet.via.map { $0.display })")
+            print("[NETROM:INFERENCE]   localCallsign=\(localCallsign)")
+            Self.hasLoggedObserve = true
+        }
+        #endif
+
+        // Case 1: Direct packet addressed to us (no via path)
+        if packet.via.isEmpty && normalizedTo == localCallsign {
+            router.observePacketInferred(
                 makeSyntheticPacket(call: normalizedFrom, timestamp: timestamp),
                 observedQuality: config.inferredBaseQuality,
                 direction: .incoming,
@@ -50,11 +66,34 @@ final class NetRomPassiveInference {
             return
         }
 
+        // Case 2: Digipeated packet (has via path)
+        // This includes both packets addressed to us AND third-party traffic
+        guard !packet.via.isEmpty else { return }
+
         let viaNormalized = packet.via.compactMap { normalize($0.display) }
         guard let nextHop = viaNormalized.last else { return }
-        guard nextHop != localCallsign, nextHop != normalizedFrom else { return }
 
-        simulateNeighborObservation(nextHop: nextHop, timestamp: timestamp)
+        // Guardrails: prevent loops and invalid routes
+        // 1. Never infer if local callsign is in via path (avoid learning through ourselves)
+        guard !viaNormalized.contains(localCallsign) else { return }
+        // 2. Never infer route to self
+        guard normalizedFrom != localCallsign else { return }
+        // 3. Never infer if nextHop equals destination (degenerate case)
+        guard nextHop != normalizedFrom else { return }
+        // 4. Never infer if nextHop is local callsign
+        guard nextHop != localCallsign else { return }
+
+        #if DEBUG
+        Self.inferenceCount += 1
+        if Self.inferenceCount <= 5 {
+            print("[NETROM:INFERENCE] inferred route dest=\(normalizedFrom) via=\(nextHop) reason=digipeated-third-party")
+        }
+        #endif
+
+        // Create inferred neighbor from the digipeater
+        simulateNeighborObservationInferred(nextHop: nextHop, timestamp: timestamp)
+
+        // Record route evidence: route to the packet source via the last digipeater
         recordEvidence(destination: normalizedFrom, origin: nextHop, path: [nextHop, normalizedFrom], timestamp: timestamp)
     }
 
@@ -123,7 +162,7 @@ final class NetRomPassiveInference {
                 from: evidence.origin,
                 quality: effectiveQuality,
                 destinations: [
-                    RouteInfo(destination: evidence.destination, origin: evidence.origin, quality: effectiveQuality, path: evidence.path)
+                    RouteInfo(destination: evidence.destination, origin: evidence.origin, quality: effectiveQuality, path: evidence.path, sourceType: "inferred")
                 ],
                 timestamp: timestamp
             )
@@ -148,6 +187,31 @@ final class NetRomPassiveInference {
             infoText: "INFER"
         )
         router.observePacket(
+            synthetic,
+            observedQuality: config.inferredBaseQuality,
+            direction: .incoming,
+            timestamp: timestamp
+        )
+    }
+
+    private func simulateNeighborObservationInferred(nextHop: String, timestamp: Date) {
+        let neighborAddress = AX25Address(call: nextHop)
+        let localAddress = AX25Address(call: localCallsign)
+        guard !neighborAddress.call.isEmpty, !localAddress.call.isEmpty else { return }
+        let synthetic = Packet(
+            timestamp: timestamp,
+            from: neighborAddress,
+            to: localAddress,
+            via: [],
+            frameType: .ui,
+            control: 0,
+            pid: nil,
+            info: Data(),
+            rawAx25: Data(),
+            kissEndpoint: nil,
+            infoText: "INFER"
+        )
+        router.observePacketInferred(
             synthetic,
             observedQuality: config.inferredBaseQuality,
             direction: .incoming,

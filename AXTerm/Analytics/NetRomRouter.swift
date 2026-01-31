@@ -79,6 +79,7 @@ private struct NeighborRecord {
     var pathQuality: Int
     var lastUpdate: Date
     var obsolescenceCount: Int
+    var sourceType: String  // "classic" or "inferred"
 }
 
 private struct RouteRecord {
@@ -88,6 +89,7 @@ private struct RouteRecord {
     var path: [String]
     var lastHeard: Date
     var obsolescenceCount: Int
+    var sourceType: String  // "classic", "broadcast", or "inferred"
 }
 
 final class NetRomRouter {
@@ -123,15 +125,61 @@ final class NetRomRouter {
 
         switch direction {
         case .incoming:
-            updateNeighbor(call: normalizedFrom, observedQuality: observedQuality, timestamp: timestamp)
+            updateNeighbor(call: normalizedFrom, observedQuality: observedQuality, timestamp: timestamp, sourceType: "classic")
         case .outgoing:
-            updateNeighbor(call: normalizedTo, observedQuality: observedQuality, timestamp: timestamp)
+            updateNeighbor(call: normalizedTo, observedQuality: observedQuality, timestamp: timestamp, sourceType: "classic")
         }
     }
 
+    /// Observe a packet and create inferred neighbor (used by passive inference).
+    func observePacketInferred(
+        _ packet: Packet,
+        observedQuality: Int,
+        direction: PacketDirection,
+        timestamp: Date
+    ) {
+        guard let normalizedFrom = normalize(packet.from?.display),
+              let normalizedTo = normalize(packet.to?.display) else { return }
+
+        // Only direct (non-digipeated) packets count for neighbors.
+        guard packet.via.isEmpty else { return }
+        guard !isInfrastructurePacket(packet) else { return }
+
+        switch direction {
+        case .incoming:
+            updateNeighbor(call: normalizedFrom, observedQuality: observedQuality, timestamp: timestamp, sourceType: "inferred")
+        case .outgoing:
+            updateNeighbor(call: normalizedTo, observedQuality: observedQuality, timestamp: timestamp, sourceType: "inferred")
+        }
+    }
+
+    #if DEBUG
+    private static var hasLoggedBroadcast = false
+    #endif
+
     func broadcastRoutes(from origin: String, quality: Int, destinations: [RouteInfo], timestamp: Date) {
-        guard let normalizedOrigin = normalize(origin) else { return }
-        guard let neighbor = neighbors[normalizedOrigin] else { return }
+        guard let normalizedOrigin = normalize(origin) else {
+            #if DEBUG
+            if !Self.hasLoggedBroadcast {
+                print("[NETROM:ROUTER] broadcastRoutes: origin '\(origin)' failed normalization")
+            }
+            #endif
+            return
+        }
+        guard let neighbor = neighbors[normalizedOrigin] else {
+            #if DEBUG
+            if !Self.hasLoggedBroadcast {
+                print("[NETROM:ROUTER] broadcastRoutes: origin '\(normalizedOrigin)' is NOT a neighbor")
+                print("[NETROM:ROUTER]   Current neighbors: \(neighbors.keys.sorted())")
+                Self.hasLoggedBroadcast = true
+            }
+            #endif
+            return
+        }
+
+        #if DEBUG
+        print("[NETROM:ROUTER] broadcastRoutes: processing \(destinations.count) destinations from \(normalizedOrigin)")
+        #endif
 
         for advertised in destinations {
             guard let normalizedDestination = normalize(advertised.destination) else { continue }
@@ -140,7 +188,12 @@ final class NetRomRouter {
             if advertised.path.contains(where: { normalize($0) == localCallsign }) { continue }
 
             let combined = combinedQuality(broadcastQuality: advertised.quality, pathQuality: neighbor.pathQuality)
-            guard combined >= config.minimumRouteQuality else { continue }
+            guard combined >= config.minimumRouteQuality else {
+                #if DEBUG
+                print("[NETROM:ROUTER]   Route to \(normalizedDestination) rejected: quality \(combined) < min \(config.minimumRouteQuality)")
+                #endif
+                continue
+            }
 
             var normalizedPath = advertised.path.compactMap { normalize($0) }
             if normalizedPath.first != normalizedOrigin {
@@ -148,12 +201,20 @@ final class NetRomRouter {
             }
             if normalizedPath.contains(localCallsign) { continue }
 
+            // Determine sourceType: use the advertised sourceType, but ensure inferred routes stay inferred
+            let effectiveSourceType = advertised.sourceType.isEmpty ? "broadcast" : advertised.sourceType
+
+            #if DEBUG
+            print("[NETROM:ROUTER]   ✓ Storing route: \(normalizedDestination) via \(normalizedOrigin) quality=\(combined) source=\(effectiveSourceType)")
+            #endif
+
             storeRoute(
                 destination: normalizedDestination,
                 origin: normalizedOrigin,
                 quality: combined,
                 path: normalizedPath,
-                timestamp: timestamp
+                timestamp: timestamp,
+                sourceType: effectiveSourceType
             )
         }
     }
@@ -162,7 +223,7 @@ final class NetRomRouter {
         neighbors
             .values
             .sorted(by: neighborSort)
-            .map { NeighborInfo(call: $0.call, quality: $0.pathQuality, lastSeen: $0.lastUpdate, obsolescenceCount: $0.obsolescenceCount, sourceType: "classic") }
+            .map { NeighborInfo(call: $0.call, quality: $0.pathQuality, lastSeen: $0.lastUpdate, obsolescenceCount: $0.obsolescenceCount, sourceType: $0.sourceType) }
     }
 
     func currentRoutes() -> [RouteInfo] {
@@ -170,7 +231,7 @@ final class NetRomRouter {
         return sortedDestinations.flatMap { destination in
             let bucket = routesByDestination[destination] ?? []
             return bucket.map { route in
-                RouteInfo(destination: destination, origin: route.origin, quality: route.quality, path: route.path, sourceType: "broadcast")
+                RouteInfo(destination: destination, origin: route.origin, quality: route.quality, path: route.path, sourceType: route.sourceType)
             }
         }
     }
@@ -203,6 +264,59 @@ final class NetRomRouter {
         return currentRoutes().first { $0.destination == normalized }
     }
 
+    // MARK: - Import from Persistence
+
+    func importNeighbors(_ infos: [NeighborInfo]) {
+        for info in infos {
+            let normalized = CallsignValidator.normalize(info.call)
+            guard !normalized.isEmpty, normalized != localCallsign else { continue }
+            neighbors[normalized] = NeighborRecord(
+                call: normalized,
+                pathQuality: info.quality,
+                lastUpdate: info.lastSeen,
+                obsolescenceCount: info.obsolescenceCount,
+                sourceType: info.sourceType
+            )
+        }
+    }
+
+    func importRoutes(_ infos: [RouteInfo]) {
+        #if DEBUG
+        print("[NETROM:ROUTER] importRoutes called with \(infos.count) routes")
+        for (i, info) in infos.prefix(5).enumerated() {
+            print("[NETROM:ROUTER]   [\(i)] \(info.destination) via \(info.origin) quality=\(info.quality)")
+        }
+        if infos.count > 5 { print("[NETROM:ROUTER]   ... and \(infos.count - 5) more") }
+        #endif
+
+        for info in infos {
+            let normalizedDest = CallsignValidator.normalize(info.destination)
+            guard !normalizedDest.isEmpty, normalizedDest != localCallsign else { continue }
+            let normalizedPath = info.path.map { CallsignValidator.normalize($0) }
+            let record = RouteRecord(
+                destination: normalizedDest,
+                origin: info.origin,
+                quality: info.quality,
+                path: normalizedPath,
+                lastHeard: Date(), // Routes don't persist lastHeard, use now
+                obsolescenceCount: config.obsolescenceInit,
+                sourceType: info.sourceType
+            )
+            var bucket = routesByDestination[normalizedDest] ?? []
+            if let existingIndex = bucket.firstIndex(where: { $0.origin == info.origin }) {
+                bucket[existingIndex] = record
+            } else {
+                bucket.append(record)
+            }
+            bucket.sort(by: routeSort)
+            routesByDestination[normalizedDest] = bucket
+        }
+
+        #if DEBUG
+        print("[NETROM:ROUTER] After import, routesByDestination has \(routesByDestination.count) destinations")
+        #endif
+    }
+
     func purgeStaleRoutes(currentDate: Date) {
         var refreshedRoutes: [String: [RouteRecord]] = [:]
         for (destination, routeList) in routesByDestination {
@@ -233,19 +347,24 @@ final class NetRomRouter {
 
     // MARK: - Private helpers
 
-    private func updateNeighbor(call: String, observedQuality: Int, timestamp: Date) {
+    private func updateNeighbor(call: String, observedQuality: Int, timestamp: Date, sourceType: String = "classic") {
         guard call != localCallsign else { return }
         var candidate = neighbors[call] ?? NeighborRecord(
             call: call,
             pathQuality: config.neighborBaseQuality,
             lastUpdate: timestamp,
-            obsolescenceCount: config.obsolescenceInit
+            obsolescenceCount: config.obsolescenceInit,
+            sourceType: sourceType
         )
         let normalizedQuality = clampQuality(observedQuality)
         let boostedQuality = min(NetRomConfig.maximumRouteQuality, max(candidate.pathQuality, normalizedQuality) + config.neighborIncrement)
         candidate.pathQuality = boostedQuality
         candidate.lastUpdate = timestamp
         candidate.obsolescenceCount = config.obsolescenceInit
+        // Don't overwrite classic with inferred
+        if candidate.sourceType != "classic" {
+            candidate.sourceType = sourceType
+        }
         neighbors[call] = candidate
     }
 
@@ -254,7 +373,8 @@ final class NetRomRouter {
         origin: String,
         quality: Int,
         path: [String],
-        timestamp: Date
+        timestamp: Date,
+        sourceType: String = "broadcast"
     ) {
         var bucket = routesByDestination[destination] ?? []
         if let existingIndex = bucket.firstIndex(where: { $0.origin == origin }) {
@@ -263,6 +383,10 @@ final class NetRomRouter {
             existing.path = path
             existing.lastHeard = timestamp
             existing.obsolescenceCount = config.obsolescenceInit
+            // Don't overwrite classic/broadcast with inferred
+            if existing.sourceType == "inferred" && sourceType != "inferred" {
+                existing.sourceType = sourceType
+            }
             bucket[existingIndex] = existing
         } else {
             let newRoute = RouteRecord(
@@ -271,7 +395,8 @@ final class NetRomRouter {
                 quality: quality,
                 path: path,
                 lastHeard: timestamp,
-                obsolescenceCount: config.obsolescenceInit
+                obsolescenceCount: config.obsolescenceInit,
+                sourceType: sourceType
             )
             bucket.append(newRoute)
         }

@@ -202,8 +202,18 @@ final class NetRomRoutesViewModel: ObservableObject {
 
     // MARK: - Actions
 
+    private var hasLoggedFirstRefresh = false
+
     func refresh() {
-        guard let integration else { return }
+        guard let integration else {
+            #if DEBUG
+            if !hasLoggedFirstRefresh {
+                print("[NETROM:VIEWMODEL] ❌ refresh() called but integration is nil")
+                hasLoggedFirstRefresh = true
+            }
+            #endif
+            return
+        }
 
         isLoading = true
 
@@ -212,10 +222,50 @@ final class NetRomRoutesViewModel: ObservableObject {
             integration.setMode(routingMode)
         }
 
-        // Fetch current data
-        let rawNeighbors = integration.currentNeighbors()
-        let rawRoutes = integration.currentRoutes()
-        let rawLinkStats = integration.exportLinkStats()
+        // Fetch current data filtered by mode
+        let rawNeighbors = integration.currentNeighbors(forMode: routingMode)
+        let rawRoutes = integration.currentRoutes(forMode: routingMode)
+        let rawLinkStats = integration.exportLinkStats(forMode: routingMode)
+
+        #if DEBUG
+        if !hasLoggedFirstRefresh {
+            print("[NETROM:VIEWMODEL] ========== First Refresh ==========")
+            print("[NETROM:VIEWMODEL] Mode: \(routingMode)")
+            print("[NETROM:VIEWMODEL] Raw data from integration:")
+            print("[NETROM:VIEWMODEL]   - Neighbors: \(rawNeighbors.count)")
+            for (i, n) in rawNeighbors.prefix(3).enumerated() {
+                print("[NETROM:VIEWMODEL]     [\(i)] \(n.call) quality=\(n.quality) source=\(n.sourceType)")
+            }
+            if rawNeighbors.count > 3 { print("[NETROM:VIEWMODEL]     ... and \(rawNeighbors.count - 3) more") }
+
+            print("[NETROM:VIEWMODEL]   - Routes: \(rawRoutes.count)")
+            for (i, r) in rawRoutes.prefix(3).enumerated() {
+                print("[NETROM:VIEWMODEL]     [\(i)] \(r.destination) via \(r.origin) quality=\(r.quality)")
+            }
+            if rawRoutes.count > 3 { print("[NETROM:VIEWMODEL]     ... and \(rawRoutes.count - 3) more") }
+
+            print("[NETROM:VIEWMODEL]   - LinkStats: \(rawLinkStats.count)")
+            for (i, s) in rawLinkStats.prefix(3).enumerated() {
+                print("[NETROM:VIEWMODEL]     [\(i)] \(s.fromCall)→\(s.toCall) quality=\(s.quality)")
+            }
+            if rawLinkStats.count > 3 { print("[NETROM:VIEWMODEL]     ... and \(rawLinkStats.count - 3) more") }
+
+            if rawNeighbors.isEmpty {
+                print("[NETROM:VIEWMODEL] ⚠️ Neighbors is EMPTY - this means:")
+                print("[NETROM:VIEWMODEL]    - No direct packets (via.isEmpty) have been observed")
+                print("[NETROM:VIEWMODEL]    - OR neighbors were not imported from persistence")
+            }
+
+            if rawRoutes.isEmpty {
+                print("[NETROM:VIEWMODEL] ⚠️ Routes is EMPTY - this means:")
+                print("[NETROM:VIEWMODEL]    - No NET/ROM broadcasts received")
+                print("[NETROM:VIEWMODEL]    - OR routes were not imported from persistence")
+            }
+
+            print("[NETROM:VIEWMODEL] ========== End First Refresh ==========")
+            hasLoggedFirstRefresh = true
+        }
+        #endif
 
         // Convert to display models
         neighbors = rawNeighbors.map { NeighborDisplayInfo(from: $0) }

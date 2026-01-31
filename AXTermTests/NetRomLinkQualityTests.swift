@@ -608,4 +608,285 @@ final class NetRomLinkQualityTests: XCTestCase {
         XCTAssertEqual(estimator.linkQuality(from: "W0ABC", to: "N0CALL"), 200)
         XCTAssertEqual(estimator.linkQuality(from: "W1XYZ", to: "N0CALL"), 150)
     }
+
+    // MARK: - ETX Formula Verification (CRITICAL TDD TESTS)
+
+    func testETXFormulaMapping_PerfectDelivery() {
+        // Given: df = 1.0, dr = 1.0 (assumed for unidirectional)
+        // ETX = 1 / (df * dr) = 1
+        // Quality = 255 / ETX = 255
+
+        var estimator = makeEstimator()
+        let now = Date(timeIntervalSince1970: 1_700_110_000)
+        testClock = now
+
+        // 100% successful transmissions (no duplicates)
+        for i in 0..<50 {
+            let ts = now.addingTimeInterval(Double(i))
+            testClock = ts
+            estimator.observePacket(makePacket(from: "W0PERFECT", to: "N0CALL", timestamp: ts), timestamp: ts, isDuplicate: false)
+        }
+
+        let quality = estimator.linkQuality(from: "W0PERFECT", to: "N0CALL")
+
+        // With perfect delivery (df ≈ 1.0), quality should approach 255
+        XCTAssertGreaterThan(quality, 230, "Perfect delivery should yield quality > 230")
+        XCTAssertLessThanOrEqual(quality, 255, "Quality should not exceed 255")
+    }
+
+    func testETXFormulaMapping_50PercentDelivery() {
+        // Given: df ≈ 0.5 (50% duplicates indicate 50% first-transmission success)
+        // Quality ≈ 255 * 0.5 = 127
+
+        var estimator = makeEstimator()
+        let now = Date(timeIntervalSince1970: 1_700_120_000)
+        testClock = now
+
+        // 50% duplicates
+        for i in 0..<100 {
+            let ts = now.addingTimeInterval(Double(i) * 0.2)
+            testClock = ts
+            let isDup = i % 2 == 0  // 50% duplicates
+            estimator.observePacket(makePacket(from: "W0HALF", to: "N0CALL", timestamp: ts), timestamp: ts, isDuplicate: isDup)
+        }
+
+        let quality = estimator.linkQuality(from: "W0HALF", to: "N0CALL")
+        let stats = estimator.linkStats(from: "W0HALF", to: "N0CALL")
+
+        // dfEstimate should be approximately 0.5
+        if let df = stats.dfEstimate {
+            XCTAssertEqual(df, 0.5, accuracy: 0.1, "df should be approximately 0.5 with 50% duplicates")
+        }
+
+        // Due to EWMA smoothing from initial value, the quality may not be exactly 127
+        // but should be in the range of 100-170
+        XCTAssertGreaterThan(quality, 80, "Quality with 50% delivery should be > 80")
+        XCTAssertLessThan(quality, 180, "Quality with 50% delivery should be < 180")
+    }
+
+    func testETXFormulaMapping_HighDuplicates() {
+        // Given: heavy duplicates (df ≈ 0.2)
+        // Quality ≈ 255 * 0.2 = 51
+
+        var estimator = makeEstimator()
+        let now = Date(timeIntervalSince1970: 1_700_130_000)
+        testClock = now
+
+        // 80% duplicates (20% success rate)
+        for i in 0..<100 {
+            let ts = now.addingTimeInterval(Double(i) * 0.2)
+            testClock = ts
+            let isDup = i % 5 != 0  // 80% duplicates
+            estimator.observePacket(makePacket(from: "W0LOW", to: "N0CALL", timestamp: ts), timestamp: ts, isDuplicate: isDup)
+        }
+
+        let quality = estimator.linkQuality(from: "W0LOW", to: "N0CALL")
+
+        // Should be low but non-zero
+        XCTAssertLessThan(quality, 100, "Quality with 20% delivery should be < 100")
+        XCTAssertGreaterThan(quality, 0, "Quality should not be zero with some successful transmissions")
+    }
+
+    // MARK: - Unidirectional Fallback (CRITICAL)
+
+    func testUnidirectionalFallback_NoReverseEvidence() {
+        // Feed only A→B packets (no reverse evidence).
+        // ASSERT that linkQuality(A,B) > 0
+        // ASSERT that linkQuality(B,A) is 0 (no data)
+        // ASSERT that drop of reverse evidence does not crash
+
+        var estimator = makeEstimator()
+        let now = Date(timeIntervalSince1970: 1_700_140_000)
+        testClock = now
+
+        // Only A→B packets
+        for i in 0..<30 {
+            let ts = now.addingTimeInterval(Double(i))
+            testClock = ts
+            estimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: ts), timestamp: ts)
+        }
+
+        let forwardQuality = estimator.linkQuality(from: "W0ABC", to: "N0CALL")
+        let reverseQuality = estimator.linkQuality(from: "N0CALL", to: "W0ABC")
+
+        XCTAssertGreaterThan(forwardQuality, 0, "Forward direction should have quality")
+        XCTAssertEqual(reverseQuality, 0, "Reverse direction should have no quality without evidence")
+
+        // Verify no crash when querying stats for non-existent direction
+        let reverseStats = estimator.linkStats(from: "N0CALL", to: "W0ABC")
+        XCTAssertEqual(reverseStats.observationCount, 0, "No observations in reverse direction")
+        XCTAssertNil(reverseStats.dfEstimate, "No df estimate for reverse direction")
+    }
+
+    func testUnidirectionalFallback_AsymmetricLinks() {
+        // Real radio links can be asymmetric - A can hear B but B cannot hear A
+        // This is common with different antenna heights, power levels, or terrain
+
+        var estimator = makeEstimator()
+        let now = Date(timeIntervalSince1970: 1_700_150_000)
+        testClock = now
+
+        // Strong A→B link (high power station to low power)
+        for i in 0..<30 {
+            let ts = now.addingTimeInterval(Double(i))
+            testClock = ts
+            estimator.observePacket(makePacket(from: "W0HIGH", to: "K1LOW", timestamp: ts), timestamp: ts, isDuplicate: false)
+        }
+
+        // Weak B→A link (low power station has many retries)
+        for i in 30..<60 {
+            let ts = now.addingTimeInterval(Double(i))
+            testClock = ts
+            let isDup = i % 3 == 0  // 33% duplicates
+            estimator.observePacket(makePacket(from: "K1LOW", to: "W0HIGH", timestamp: ts), timestamp: ts, isDuplicate: isDup)
+        }
+
+        let highToLowQuality = estimator.linkQuality(from: "W0HIGH", to: "K1LOW")
+        let lowToHighQuality = estimator.linkQuality(from: "K1LOW", to: "W0HIGH")
+
+        // Links should be asymmetric
+        XCTAssertGreaterThan(highToLowQuality, lowToHighQuality, "High-power to low-power should be better quality")
+        XCTAssertGreaterThan(highToLowQuality, 200, "Strong link should have high quality")
+        XCTAssertLessThan(lowToHighQuality, highToLowQuality - 30, "Weak link should be noticeably worse")
+    }
+
+    // MARK: - EWMA with Fake Clock (CRITICAL)
+
+    func testEWMASmoothingWithFakeClock_Deterministic() {
+        // Simulate an initial stream of clean packets → record quality.
+        // Introduce a short burst of degraded/duplicate packets → ASSERT quality drops moderately.
+        // After resumption of clean packets → ASSERT quality recovers gradually.
+        // ASSERT that behavior is reproducible with a fake clock.
+
+        func runWithFakeClock() -> (beforeBurst: Int, afterBurst: Int, afterRecovery: Int) {
+            testClock = Date(timeIntervalSince1970: 1_700_160_000)
+            var estimator = makeEstimator()
+            let start = Date(timeIntervalSince1970: 1_700_160_000)
+
+            // Phase 1: Clean packets (establish baseline)
+            for i in 0..<30 {
+                let ts = start.addingTimeInterval(Double(i))
+                testClock = ts
+                estimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: ts), timestamp: ts, isDuplicate: false)
+            }
+            let beforeBurst = estimator.linkQuality(from: "W0ABC", to: "N0CALL")
+
+            // Phase 2: Bad burst (heavy duplicates)
+            for i in 30..<45 {
+                let ts = start.addingTimeInterval(Double(i))
+                testClock = ts
+                estimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: ts), timestamp: ts, isDuplicate: true)
+            }
+            let afterBurst = estimator.linkQuality(from: "W0ABC", to: "N0CALL")
+
+            // Phase 3: Recovery (clean packets)
+            for i in 45..<80 {
+                let ts = start.addingTimeInterval(Double(i))
+                testClock = ts
+                estimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: ts), timestamp: ts, isDuplicate: false)
+            }
+            let afterRecovery = estimator.linkQuality(from: "W0ABC", to: "N0CALL")
+
+            return (beforeBurst, afterBurst, afterRecovery)
+        }
+
+        let run1 = runWithFakeClock()
+        let run2 = runWithFakeClock()
+
+        // Verify determinism
+        XCTAssertEqual(run1.beforeBurst, run2.beforeBurst, "Before burst should be identical")
+        XCTAssertEqual(run1.afterBurst, run2.afterBurst, "After burst should be identical")
+        XCTAssertEqual(run1.afterRecovery, run2.afterRecovery, "After recovery should be identical")
+
+        // Verify behavior
+        XCTAssertLessThan(run1.afterBurst, run1.beforeBurst, "Quality should drop after burst")
+        XCTAssertGreaterThan(run1.afterRecovery, run1.afterBurst, "Quality should recover after clean traffic")
+        XCTAssertGreaterThan(run1.afterRecovery, run1.beforeBurst - 30, "Should approach full recovery")
+    }
+
+    // MARK: - Duplicate Stream Comparison (CRITICAL)
+
+    func testDuplicateStreamComparison_MeaningfulQualityGap() {
+        // Create two streams:
+        // - Stream 1: mostly unique packets
+        // - Stream 2: heavy duplicates in short window
+        // ASSERT that quality(Stream2) < quality(Stream1) with meaningful gap (>30 points)
+
+        let now = Date(timeIntervalSince1970: 1_700_170_000)
+
+        // Stream 1: Clean (5% duplicates)
+        var cleanEstimator = makeEstimator()
+        testClock = now
+        for i in 0..<100 {
+            let ts = now.addingTimeInterval(Double(i) * 0.2)
+            testClock = ts
+            let isDup = i % 20 == 0  // 5% duplicates
+            cleanEstimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: ts), timestamp: ts, isDuplicate: isDup)
+        }
+        let cleanQuality = cleanEstimator.linkQuality(from: "W0ABC", to: "N0CALL")
+
+        // Stream 2: Heavy duplicates (60%)
+        var heavyDupEstimator = makeEstimator()
+        testClock = now
+        for i in 0..<100 {
+            let ts = now.addingTimeInterval(Double(i) * 0.2)
+            testClock = ts
+            let isDup = i % 5 != 0  // 60% duplicates
+            heavyDupEstimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: ts), timestamp: ts, isDuplicate: isDup)
+        }
+        let heavyDupQuality = heavyDupEstimator.linkQuality(from: "W0ABC", to: "N0CALL")
+
+        // Verify meaningful gap
+        XCTAssertLessThan(heavyDupQuality, cleanQuality, "Heavy duplicate stream should have lower quality")
+        XCTAssertGreaterThan(cleanQuality - heavyDupQuality, 30, "Quality gap should be meaningful (>30 points)")
+    }
+
+    // MARK: - Full Determinism Verification
+
+    func testFullDeterminism_ComplexScenario() {
+        // Feed the exact same input twice (same timestamps, same duplicates).
+        // ASSERT that linkQuality outputs are identical.
+        // Also verify LinkStats are identical.
+
+        func runComplexScenario() -> (quality: Int, stats: LinkStats) {
+            testClock = Date(timeIntervalSince1970: 1_700_180_000)
+            var estimator = makeEstimator()
+            let start = Date(timeIntervalSince1970: 1_700_180_000)
+
+            // Mix of clean and duplicate packets
+            for i in 0..<50 {
+                let ts = start.addingTimeInterval(Double(i) * 0.5)
+                testClock = ts
+                // Pattern: clean, clean, dup, clean, dup
+                let isDup = i % 5 == 2 || i % 5 == 4
+                estimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: ts), timestamp: ts, isDuplicate: isDup)
+            }
+
+            // Add some packets to a second link
+            for i in 50..<70 {
+                let ts = start.addingTimeInterval(Double(i) * 0.5)
+                testClock = ts
+                estimator.observePacket(makePacket(from: "W1XYZ", to: "N0CALL", timestamp: ts), timestamp: ts, isDuplicate: i % 3 == 0)
+            }
+
+            let quality = estimator.linkQuality(from: "W0ABC", to: "N0CALL")
+            let stats = estimator.linkStats(from: "W0ABC", to: "N0CALL")
+
+            return (quality, stats)
+        }
+
+        let run1 = runComplexScenario()
+        let run2 = runComplexScenario()
+
+        XCTAssertEqual(run1.quality, run2.quality, "Quality must be identical for identical inputs")
+        XCTAssertEqual(run1.stats.observationCount, run2.stats.observationCount, "Observation count must match")
+        XCTAssertEqual(run1.stats.duplicateCount, run2.stats.duplicateCount, "Duplicate count must match")
+        XCTAssertEqual(run1.stats.ewmaQuality, run2.stats.ewmaQuality, "EWMA quality must match")
+
+        if let df1 = run1.stats.dfEstimate, let df2 = run2.stats.dfEstimate {
+            XCTAssertEqual(df1, df2, accuracy: 0.0001, "dfEstimate must be identical")
+        } else {
+            XCTAssertEqual(run1.stats.dfEstimate, run2.stats.dfEstimate, "dfEstimate nil state must match")
+        }
+    }
 }

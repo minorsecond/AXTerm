@@ -340,7 +340,7 @@ private struct DirectionalLinkStats {
             dfEstimate: df,
             drEstimate: nil, // Reverse probability requires bidirectional analysis
             ewmaQuality: quality,
-            lastUpdate: total > 0 ? lastUpdated : nil
+            lastUpdate: lastUpdated
         )
     }
 }

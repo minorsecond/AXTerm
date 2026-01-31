@@ -829,14 +829,55 @@ final class PacketEngine: ObservableObject {
 
     /// Load NET/ROM snapshot on startup if valid.
     private func loadNetRomSnapshot() {
-        guard let persistence = netRomPersistence,
-              let integration = netRomIntegration else { return }
+        #if DEBUG
+        print("[NETROM:STARTUP] ========== Loading NET/ROM Snapshot ==========")
+        #endif
+
+        guard let persistence = netRomPersistence else {
+            #if DEBUG
+            print("[NETROM:STARTUP] ❌ netRomPersistence is nil - persistence not initialized")
+            #endif
+            return
+        }
+
+        guard let integration = netRomIntegration else {
+            #if DEBUG
+            print("[NETROM:STARTUP] ❌ netRomIntegration is nil - integration not initialized")
+            #endif
+            return
+        }
+
+        #if DEBUG
+        print("[NETROM:STARTUP] ✓ Persistence and Integration initialized")
+        print("[NETROM:STARTUP] Local callsign: '\(settings.myCallsign)'")
+        #endif
 
         do {
+            // Check snapshot metadata first
+            let meta = try persistence.loadSnapshotMeta()
+            #if DEBUG
+            if let meta = meta {
+                print("[NETROM:STARTUP] Snapshot metadata found:")
+                print("[NETROM:STARTUP]   - lastPacketID: \(meta.lastPacketID)")
+                print("[NETROM:STARTUP]   - configHash: \(meta.configHash ?? "nil")")
+                print("[NETROM:STARTUP]   - snapshotTimestamp: \(meta.snapshotTimestamp)")
+                let age = Date().timeIntervalSince(meta.snapshotTimestamp)
+                print("[NETROM:STARTUP]   - age: \(Int(age)) seconds (\(Int(age / 3600)) hours)")
+            } else {
+                print("[NETROM:STARTUP] ⚠️ No snapshot metadata found in database")
+            }
+            #endif
+
             // Check if snapshot is valid (within TTL)
-            guard try persistence.isSnapshotValid(currentDate: Date(), expectedConfigHash: nil) else {
+            let isValid = try persistence.isSnapshotValid(currentDate: Date(), expectedConfigHash: nil)
+            #if DEBUG
+            print("[NETROM:STARTUP] Snapshot valid check: \(isValid)")
+            #endif
+
+            guard isValid else {
                 #if DEBUG
-                print("[NETROM] Snapshot expired or invalid, starting fresh")
+                print("[NETROM:STARTUP] ❌ Snapshot expired or invalid, starting fresh")
+                print("[NETROM:STARTUP] (maxSnapshotAgeSeconds = 3600 by default)")
                 #endif
                 return
             }
@@ -846,11 +887,46 @@ final class PacketEngine: ObservableObject {
             let routes = try persistence.loadRoutes()
             let linkStats = try persistence.loadLinkStats()
 
-            // Import link stats into the integration
+            #if DEBUG
+            print("[NETROM:STARTUP] Raw data loaded from SQLite:")
+            print("[NETROM:STARTUP]   - Neighbors: \(neighbors.count)")
+            for (i, n) in neighbors.prefix(5).enumerated() {
+                print("[NETROM:STARTUP]     [\(i)] \(n.call) quality=\(n.quality) lastSeen=\(n.lastSeen) source=\(n.sourceType)")
+            }
+            if neighbors.count > 5 { print("[NETROM:STARTUP]     ... and \(neighbors.count - 5) more") }
+
+            print("[NETROM:STARTUP]   - Routes: \(routes.count)")
+            for (i, r) in routes.prefix(5).enumerated() {
+                print("[NETROM:STARTUP]     [\(i)] \(r.destination) via \(r.origin) quality=\(r.quality)")
+            }
+            if routes.count > 5 { print("[NETROM:STARTUP]     ... and \(routes.count - 5) more") }
+
+            print("[NETROM:STARTUP]   - LinkStats: \(linkStats.count)")
+            for (i, s) in linkStats.prefix(5).enumerated() {
+                print("[NETROM:STARTUP]     [\(i)] \(s.fromCall)→\(s.toCall) quality=\(s.quality) lastUpdated=\(s.lastUpdated)")
+            }
+            if linkStats.count > 5 { print("[NETROM:STARTUP]     ... and \(linkStats.count - 5) more") }
+            #endif
+
+            // Import all data into the integration
+            integration.importNeighbors(neighbors)
+            integration.importRoutes(routes)
             integration.importLinkStats(linkStats)
 
             #if DEBUG
-            print("[NETROM] Loaded snapshot: \(neighbors.count) neighbors, \(routes.count) routes, \(linkStats.count) link stats")
+            print("[NETROM:STARTUP] ✓ All data imported into integration")
+
+            // Verify what's actually in the integration now
+            let integrationNeighbors = integration.currentNeighbors()
+            let integrationRoutes = integration.currentRoutes()
+            let integrationLinkStats = integration.exportLinkStats()
+
+            print("[NETROM:STARTUP] Integration state AFTER import:")
+            print("[NETROM:STARTUP]   - Neighbors in integration: \(integrationNeighbors.count)")
+            print("[NETROM:STARTUP]   - Routes in integration: \(integrationRoutes.count)")
+            print("[NETROM:STARTUP]   - LinkStats in integration: \(integrationLinkStats.count)")
+
+            print("[NETROM:STARTUP] ========== Snapshot Load Complete ==========")
             #endif
 
             SentryManager.shared.addBreadcrumb(
@@ -864,6 +940,9 @@ final class PacketEngine: ObservableObject {
                 ]
             )
         } catch {
+            #if DEBUG
+            print("[NETROM:STARTUP] ❌ Error loading snapshot: \(error)")
+            #endif
             SentryManager.shared.capturePersistenceFailure("load netrom snapshot", errorDescription: error.localizedDescription)
         }
     }
@@ -871,7 +950,12 @@ final class PacketEngine: ObservableObject {
     /// Save NET/ROM snapshot to persistence.
     private func saveNetRomSnapshot() {
         guard let persistence = netRomPersistence,
-              let integration = netRomIntegration else { return }
+              let integration = netRomIntegration else {
+            #if DEBUG
+            print("[NETROM:SAVE] ❌ Cannot save - persistence or integration is nil")
+            #endif
+            return
+        }
 
         Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
@@ -885,6 +969,16 @@ final class PacketEngine: ObservableObject {
                 // Generate a stable packet ID for high-water mark
                 let lastPacketID = await MainActor.run { Int64(self.packets.count) }
 
+                #if DEBUG
+                await MainActor.run {
+                    print("[NETROM:SAVE] Saving snapshot:")
+                    print("[NETROM:SAVE]   - Neighbors: \(neighbors.count)")
+                    print("[NETROM:SAVE]   - Routes: \(routes.count)")
+                    print("[NETROM:SAVE]   - LinkStats: \(linkStats.count)")
+                    print("[NETROM:SAVE]   - lastPacketID: \(lastPacketID)")
+                }
+                #endif
+
                 // Save atomically
                 try persistence.saveSnapshot(
                     neighbors: neighbors,
@@ -896,11 +990,14 @@ final class PacketEngine: ObservableObject {
 
                 #if DEBUG
                 await MainActor.run {
-                    print("[NETROM] Saved snapshot: \(neighbors.count) neighbors, \(routes.count) routes, \(linkStats.count) link stats")
+                    print("[NETROM:SAVE] ✓ Snapshot saved successfully")
                 }
                 #endif
             } catch {
                 await MainActor.run {
+                    #if DEBUG
+                    print("[NETROM:SAVE] ❌ Error saving snapshot: \(error)")
+                    #endif
                     SentryManager.shared.capturePersistenceFailure("save netrom snapshot", errorDescription: error.localizedDescription)
                 }
             }

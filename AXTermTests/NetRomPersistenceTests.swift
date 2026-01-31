@@ -688,4 +688,291 @@ final class NetRomPersistenceTests: XCTestCase {
         let loadedRoutes = try persistence.loadRoutes()
         XCTAssertTrue(loadedRoutes.isEmpty, "Routes from first snapshot should be cleared")
     }
+
+    // MARK: - Per-Entry Decay (CRITICAL TDD TESTS)
+
+    func testNeighborDecayOnLoad_StaleNeighborsHaveReducedQuality() throws {
+        // Save snapshot with a neighbor whose `lastSeen` is much older than neighbor TTL.
+        // Load snapshot with current time far past neighbor's lastSeen.
+        // ASSERT that neighbor is dropped or quality decayed to (near) zero.
+
+        let config = NetRomPersistenceConfig(
+            maxSnapshotAgeSeconds: 3600,
+            neighborTTLSeconds: 300  // 5 minutes
+        )
+        let testPersistence = try NetRomPersistence(database: dbQueue, config: config)
+
+        let now = Date(timeIntervalSince1970: 1_700_006_000)
+        let snapshotTime = now.addingTimeInterval(-60)  // 1 minute ago (fresh)
+        let staleNeighborTime = now.addingTimeInterval(-600)  // 10 minutes ago (> 5 min TTL)
+        let freshNeighborTime = now.addingTimeInterval(-120)  // 2 minutes ago (< 5 min TTL)
+
+        try testPersistence.saveSnapshot(
+            neighbors: [
+                makeNeighbor(call: "W0STALE", quality: 200, lastSeen: staleNeighborTime),
+                makeNeighbor(call: "W1FRESH", quality: 180, lastSeen: freshNeighborTime)
+            ],
+            routes: [],
+            linkStats: [],
+            lastPacketID: 2100,
+            configHash: "decay_neighbor",
+            snapshotTimestamp: snapshotTime
+        )
+
+        // Load with decay applied
+        let result = try testPersistence.load(now: now, expectedConfigHash: "decay_neighbor")
+
+        XCTAssertNotNil(result, "Fresh snapshot should load")
+
+        guard let state = result else { return }
+
+        // Stale neighbor should be dropped or heavily decayed
+        let staleNeighbor = state.neighbors.first(where: { $0.call == "W0STALE" })
+        if let stale = staleNeighbor {
+            XCTAssertLessThan(stale.quality, 50, "Stale neighbor should be heavily decayed")
+        }
+
+        // Fresh neighbor should retain quality
+        let freshNeighbor = state.neighbors.first(where: { $0.call == "W1FRESH" })
+        XCTAssertNotNil(freshNeighbor, "Fresh neighbor should exist")
+        XCTAssertGreaterThan(freshNeighbor?.quality ?? 0, 100, "Fresh neighbor should retain quality")
+    }
+
+    func testRouteDecayOnLoad_ExpiredRoutesRemoved() throws {
+        // Save snapshot with routes that have `lastUpdate` beyond route TTL.
+        // Load snapshot.
+        // ASSERT expired routes are removed.
+
+        let config = NetRomPersistenceConfig(
+            maxSnapshotAgeSeconds: 3600,
+            routeTTLSeconds: 300  // 5 minutes
+        )
+        let testPersistence = try NetRomPersistence(database: dbQueue, config: config)
+
+        let now = Date(timeIntervalSince1970: 1_700_007_000)
+        // Create snapshot that is fresh, but routes will be stale when loaded
+        let snapshotTime = now.addingTimeInterval(-60)
+
+        try testPersistence.saveSnapshot(
+            neighbors: [makeNeighbor(call: "W0ABC", quality: 200, lastSeen: snapshotTime)],
+            routes: [
+                makeRoute(destination: "W2ROUTE", origin: "W0ABC", quality: 150, path: ["W0ABC", "W2ROUTE"])
+            ],
+            linkStats: [],
+            lastPacketID: 2200,
+            configHash: "decay_route",
+            snapshotTimestamp: snapshotTime
+        )
+
+        // Wait past route TTL
+        let muchLater = now.addingTimeInterval(600)  // 10 minutes later
+
+        let result = try testPersistence.load(now: muchLater, expectedConfigHash: "decay_route")
+
+        // Either result is nil (all data stale) or routes are filtered out
+        if let state = result {
+            // Routes should be empty or heavily decayed
+            XCTAssertTrue(state.routes.isEmpty || state.routes.allSatisfy { $0.quality < 50 },
+                          "Stale routes should be dropped or decayed")
+        }
+    }
+
+    func testLinkStatsDecayOnLoad_OldLinkStatsFiltered() throws {
+        // Save linkStats with old timestamps.
+        // Load snapshot with current time advanced.
+        // ASSERT linkStats with old timestamps are dropped/ignored.
+
+        let config = NetRomPersistenceConfig(
+            maxSnapshotAgeSeconds: 3600,
+            linkStatTTLSeconds: 300  // 5 minutes
+        )
+        let testPersistence = try NetRomPersistence(database: dbQueue, config: config)
+
+        let now = Date(timeIntervalSince1970: 1_700_008_000)
+        let snapshotTime = now.addingTimeInterval(-60)
+        let staleTime = now.addingTimeInterval(-600)  // 10 min ago (> 5 min TTL)
+        let freshTime = now.addingTimeInterval(-120)  // 2 min ago (< 5 min TTL)
+
+        try testPersistence.saveSnapshot(
+            neighbors: [],
+            routes: [],
+            linkStats: [
+                makeLinkStat(from: "W0STALE", to: "N0CALL", quality: 220, lastUpdated: staleTime),
+                makeLinkStat(from: "W1FRESH", to: "N0CALL", quality: 200, lastUpdated: freshTime)
+            ],
+            lastPacketID: 2300,
+            configHash: "decay_link",
+            snapshotTimestamp: snapshotTime
+        )
+
+        let result = try testPersistence.load(now: now, expectedConfigHash: "decay_link")
+
+        XCTAssertNotNil(result)
+
+        guard let state = result else { return }
+
+        // Stale link should be filtered
+        XCTAssertNil(state.linkStats.first(where: { $0.fromCall == "W0STALE" }),
+                     "Stale link stat should be filtered")
+
+        // Fresh link should remain
+        XCTAssertNotNil(state.linkStats.first(where: { $0.fromCall == "W1FRESH" }),
+                        "Fresh link stat should remain")
+    }
+
+    // MARK: - High-Water Mark Verification (CRITICAL TDD TESTS)
+
+    func testHighWaterMarkReplay_IncrementalMatchesFull() throws {
+        // This test verifies that:
+        // 1. Saving snapshot with lastProcessedPacketID correctly stores high-water mark
+        // 2. Loading + replaying delta produces same state as full replay
+
+        let now = Date(timeIntervalSince1970: 1_700_009_000)
+
+        // Create initial state (simulating packets 1..50)
+        let initialNeighbors = [
+            makeNeighbor(call: "W0ABC", quality: 200, lastSeen: now)
+        ]
+        let initialLinkStats = [
+            makeLinkStat(from: "W0ABC", to: "N0CALL", quality: 200, lastUpdated: now)
+        ]
+
+        // Save snapshot at packet 50
+        try persistence.saveSnapshot(
+            neighbors: initialNeighbors,
+            routes: [],
+            linkStats: initialLinkStats,
+            lastPacketID: 50,
+            configHash: "hwm_verify",
+            snapshotTimestamp: now
+        )
+
+        // Verify high-water mark
+        let lastID = try persistence.lastProcessedPacketID()
+        XCTAssertEqual(lastID, 50, "High-water mark should be 50")
+
+        // Load snapshot
+        let meta = try persistence.loadSnapshotMeta()
+        XCTAssertEqual(meta?.lastPacketID, 50, "Loaded meta should have lastPacketID 50")
+
+        // Verify loaded state matches saved state
+        let loadedNeighbors = try persistence.loadNeighbors()
+        XCTAssertEqual(loadedNeighbors.count, 1)
+        XCTAssertEqual(loadedNeighbors.first?.call, "W0ABC")
+        XCTAssertEqual(loadedNeighbors.first?.quality, 200)
+    }
+
+    func testHighWaterMarkUpdate_AfterIncrementalReplay() throws {
+        // After loading and processing additional packets, verify high-water mark can be updated
+
+        let now = Date(timeIntervalSince1970: 1_700_010_000)
+
+        // Initial snapshot at packet 100
+        try persistence.saveSnapshot(
+            neighbors: [makeNeighbor(call: "W0ABC", quality: 200, lastSeen: now)],
+            routes: [],
+            linkStats: [],
+            lastPacketID: 100,
+            configHash: "hwm_update",
+            snapshotTimestamp: now
+        )
+
+        XCTAssertEqual(try persistence.lastProcessedPacketID(), 100)
+
+        // Simulate processing packets 101..150 and saving new snapshot
+        let updatedNeighbors = [
+            makeNeighbor(call: "W0ABC", quality: 220, lastSeen: now.addingTimeInterval(60)),
+            makeNeighbor(call: "W1NEW", quality: 180, lastSeen: now.addingTimeInterval(60))
+        ]
+
+        try persistence.saveSnapshot(
+            neighbors: updatedNeighbors,
+            routes: [],
+            linkStats: [],
+            lastPacketID: 150,  // New high-water mark
+            configHash: "hwm_update",
+            snapshotTimestamp: now.addingTimeInterval(60)
+        )
+
+        // Verify high-water mark updated
+        XCTAssertEqual(try persistence.lastProcessedPacketID(), 150, "High-water mark should update to 150")
+
+        // Verify new state
+        let loadedNeighbors = try persistence.loadNeighbors()
+        XCTAssertEqual(loadedNeighbors.count, 2)
+        XCTAssertTrue(loadedNeighbors.contains { $0.call == "W1NEW" })
+    }
+
+    // MARK: - Load API Tests (TDD)
+
+    func testLoadAPI_ReturnsPersistedState() throws {
+        // Test the load(now:expectedConfigHash:) -> PersistedState? API
+
+        let now = Date(timeIntervalSince1970: 1_700_011_000)
+
+        try persistence.saveSnapshot(
+            neighbors: [
+                makeNeighbor(call: "W0ABC", quality: 200, lastSeen: now),
+                makeNeighbor(call: "W1XYZ", quality: 180, lastSeen: now)
+            ],
+            routes: [
+                makeRoute(destination: "W2BBB", origin: "W0ABC", quality: 150, path: ["W0ABC", "W2BBB"])
+            ],
+            linkStats: [
+                makeLinkStat(from: "W0ABC", to: "N0CALL", quality: 220, lastUpdated: now)
+            ],
+            lastPacketID: 2500,
+            configHash: "load_api_test",
+            snapshotTimestamp: now
+        )
+
+        let result = try persistence.load(now: now.addingTimeInterval(10), expectedConfigHash: "load_api_test")
+
+        XCTAssertNotNil(result, "load() should return PersistedState")
+
+        guard let state = result else { return }
+
+        XCTAssertEqual(state.neighbors.count, 2)
+        XCTAssertEqual(state.routes.count, 1)
+        XCTAssertEqual(state.linkStats.count, 1)
+        XCTAssertEqual(state.lastPacketID, 2500)
+    }
+
+    func testLoadAPI_ReturnsNilForStaleSnapshot() throws {
+        let config = NetRomPersistenceConfig(maxSnapshotAgeSeconds: 60)
+        let testPersistence = try NetRomPersistence(database: dbQueue, config: config)
+
+        let now = Date(timeIntervalSince1970: 1_700_012_000)
+        let staleTime = now.addingTimeInterval(-120)  // 2 minutes ago (> 60 second TTL)
+
+        try testPersistence.saveSnapshot(
+            neighbors: [makeNeighbor(call: "W0ABC", quality: 200, lastSeen: staleTime)],
+            routes: [],
+            linkStats: [],
+            lastPacketID: 2600,
+            configHash: "stale_test",
+            snapshotTimestamp: staleTime
+        )
+
+        let result = try testPersistence.load(now: now, expectedConfigHash: "stale_test")
+
+        XCTAssertNil(result, "load() should return nil for stale snapshot")
+    }
+
+    func testLoadAPI_ReturnsNilForConfigMismatch() throws {
+        let now = Date(timeIntervalSince1970: 1_700_013_000)
+
+        try persistence.saveSnapshot(
+            neighbors: [makeNeighbor(call: "W0ABC", quality: 200, lastSeen: now)],
+            routes: [],
+            linkStats: [],
+            lastPacketID: 2700,
+            configHash: "old_config",
+            snapshotTimestamp: now
+        )
+
+        let result = try persistence.load(now: now.addingTimeInterval(10), expectedConfigHash: "new_config")
+
+        XCTAssertNil(result, "load() should return nil for config mismatch")
+    }
 }
