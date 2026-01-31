@@ -34,7 +34,9 @@ final class NetRomIntegration {
     private let inferenceConfig: NetRomInferenceConfig
     private let linkConfig: LinkQualityConfig
 
+    #if DEBUG
     private static var retainedForTests: [NetRomIntegration] = []
+    #endif
 
     init(
         localCallsign: String,
@@ -60,9 +62,9 @@ final class NetRomIntegration {
             )
         }
 
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil || NSClassFromString("XCTestCase") != nil {
-            Self.retainedForTests.append(self)
-        }
+        #if DEBUG
+        Self.retainedForTests.append(self)
+        #endif
     }
 
     // MARK: - Mode Management

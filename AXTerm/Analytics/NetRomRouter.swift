@@ -39,6 +39,16 @@ struct NeighborInfo: Equatable {
     let call: String
     let quality: Int
     let lastSeen: Date
+    let obsolescenceCount: Int
+    let sourceType: String
+
+    init(call: String, quality: Int, lastSeen: Date, obsolescenceCount: Int = 1, sourceType: String = "classic") {
+        self.call = call
+        self.quality = quality
+        self.lastSeen = lastSeen
+        self.obsolescenceCount = obsolescenceCount
+        self.sourceType = sourceType
+    }
 }
 
 /// Public route snapshot exposed to router tests / graph queries.
@@ -47,6 +57,15 @@ struct RouteInfo: Equatable {
     let origin: String
     let quality: Int
     let path: [String]
+    let sourceType: String
+
+    init(destination: String, origin: String, quality: Int, path: [String], sourceType: String = "broadcast") {
+        self.destination = destination
+        self.origin = origin
+        self.quality = quality
+        self.path = path
+        self.sourceType = sourceType
+    }
 }
 
 /// Path summary for best path lookups.
@@ -74,7 +93,9 @@ private struct RouteRecord {
 final class NetRomRouter {
     let localCallsign: String
     let config: NetRomConfig
+    #if DEBUG
     private static var retainedForTests: [NetRomRouter] = []
+    #endif
 
     private var neighbors: [String: NeighborRecord] = [:]
     private var routesByDestination: [String: [RouteRecord]] = [:]
@@ -82,9 +103,9 @@ final class NetRomRouter {
     init(localCallsign: String, config: NetRomConfig = .default) {
         self.localCallsign = CallsignValidator.normalize(localCallsign)
         self.config = config
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil || NSClassFromString("XCTestCase") != nil {
-            Self.retainedForTests.append(self)
-        }
+        #if DEBUG
+        Self.retainedForTests.append(self)
+        #endif
     }
 
     func observePacket(
@@ -141,7 +162,7 @@ final class NetRomRouter {
         neighbors
             .values
             .sorted(by: neighborSort)
-            .map { NeighborInfo(call: $0.call, quality: $0.pathQuality, lastSeen: $0.lastUpdate) }
+            .map { NeighborInfo(call: $0.call, quality: $0.pathQuality, lastSeen: $0.lastUpdate, obsolescenceCount: $0.obsolescenceCount, sourceType: "classic") }
     }
 
     func currentRoutes() -> [RouteInfo] {
@@ -149,7 +170,7 @@ final class NetRomRouter {
         return sortedDestinations.flatMap { destination in
             let bucket = routesByDestination[destination] ?? []
             return bucket.map { route in
-                RouteInfo(destination: destination, origin: route.origin, quality: route.quality, path: route.path)
+                RouteInfo(destination: destination, origin: route.origin, quality: route.quality, path: route.path, sourceType: "broadcast")
             }
         }
     }

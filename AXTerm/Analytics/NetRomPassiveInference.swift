@@ -12,7 +12,9 @@ import Foundation
 @MainActor
 final class NetRomPassiveInference {
     let config: NetRomInferenceConfig
+    #if DEBUG
     private static var retainedForTests: [NetRomPassiveInference] = []
+    #endif
 
     private let router: NetRomRouter
     private let localCallsign: String
@@ -22,9 +24,9 @@ final class NetRomPassiveInference {
         self.router = router
         self.localCallsign = CallsignValidator.normalize(localCallsign)
         self.config = config
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil || NSClassFromString("XCTestCase") != nil {
-            Self.retainedForTests.append(self)
-        }
+        #if DEBUG
+        Self.retainedForTests.append(self)
+        #endif
     }
 
     func observePacket(_ packet: Packet, timestamp: Date) {

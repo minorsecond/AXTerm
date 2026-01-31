@@ -2,7 +2,19 @@
 //  NetRomPersistence.swift
 //  AXTerm
 //
-//  Created by Codex on 1/30/26.
+//  SQLite persistence for NET/ROM routing state using GRDB.
+//
+//  Design principles:
+//  - Persist DERIVED state (neighbors, routes, link stats) for fast startup
+//  - saveSnapshot() uses a SINGLE transaction for atomicity
+//  - High-water mark (lastProcessedPacketID) enables replay of only new packets
+//  - TTL invalidation: maxSnapshotAgeSeconds constant in config
+//  - Config hash invalidation: if config changes, reject stale snapshot
+//
+//  Deterministic ordering:
+//  - Neighbors: sorted by desc quality, then callsign
+//  - Routes: sorted by destination asc, then quality desc
+//  - Link stats: sorted by fromCall, then toCall
 //
 
 import Foundation
@@ -31,6 +43,8 @@ private struct NeighborRecord: Codable, FetchableRecord, PersistableRecord {
     let call: String
     let quality: Int
     let lastSeen: Double  // TimeInterval since 1970
+    let obsolescenceCount: Int
+    let sourceType: String
 }
 
 /// GRDB record for routes table.
@@ -41,6 +55,8 @@ private struct RouteRecord: Codable, FetchableRecord, PersistableRecord {
     let origin: String
     let quality: Int
     let pathJson: String
+    let sourceType: String
+    let lastUpdate: Double  // TimeInterval since 1970
 }
 
 /// GRDB record for link stats table.
@@ -51,6 +67,10 @@ private struct LinkStatDBRecord: Codable, FetchableRecord, PersistableRecord {
     let toCall: String
     let quality: Int
     let lastUpdated: Double  // TimeInterval since 1970
+    let dfEstimate: Double?
+    let drEstimate: Double?
+    let dupCount: Int
+    let ewmaQuality: Int
 }
 
 /// GRDB record for snapshot metadata.
@@ -67,15 +87,17 @@ private struct SnapshotMetaRecord: Codable, FetchableRecord, PersistableRecord {
 final class NetRomPersistence {
     private let database: DatabaseWriter
     private let config: NetRomPersistenceConfig
+    #if DEBUG
     private static var retainedForTests: [NetRomPersistence] = []
+    #endif
 
     init(database: DatabaseWriter, config: NetRomPersistenceConfig = .default) throws {
         self.database = database
         self.config = config
         try createTables()
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil || NSClassFromString("XCTestCase") != nil {
-            Self.retainedForTests.append(self)
-        }
+        #if DEBUG
+        Self.retainedForTests.append(self)
+        #endif
     }
 
     // MARK: - Table Creation
@@ -86,6 +108,8 @@ final class NetRomPersistence {
                 t.column("call", .text).primaryKey()
                 t.column("quality", .integer).notNull()
                 t.column("lastSeen", .double).notNull()
+                t.column("obsolescenceCount", .integer).notNull().defaults(to: 1)
+                t.column("sourceType", .text).notNull().defaults(to: "classic")
             }
 
             try db.create(table: "netrom_routes", ifNotExists: true) { t in
@@ -93,6 +117,8 @@ final class NetRomPersistence {
                 t.column("origin", .text).notNull()
                 t.column("quality", .integer).notNull()
                 t.column("pathJson", .text).notNull()
+                t.column("sourceType", .text).notNull().defaults(to: "broadcast")
+                t.column("lastUpdate", .double).notNull().defaults(to: 0)
                 t.primaryKey(["destination", "origin"])
             }
 
@@ -101,6 +127,10 @@ final class NetRomPersistence {
                 t.column("toCall", .text).notNull()
                 t.column("quality", .integer).notNull()
                 t.column("lastUpdated", .double).notNull()
+                t.column("dfEstimate", .double)
+                t.column("drEstimate", .double)
+                t.column("dupCount", .integer).notNull().defaults(to: 0)
+                t.column("ewmaQuality", .integer).notNull().defaults(to: 0)
                 t.primaryKey(["fromCall", "toCall"])
             }
 
@@ -127,7 +157,9 @@ final class NetRomPersistence {
                 let record = NeighborRecord(
                     call: neighbor.call,
                     quality: neighbor.quality,
-                    lastSeen: neighbor.lastSeen.timeIntervalSince1970
+                    lastSeen: neighbor.lastSeen.timeIntervalSince1970,
+                    obsolescenceCount: neighbor.obsolescenceCount,
+                    sourceType: neighbor.sourceType
                 )
                 try record.insert(db)
             }
@@ -137,12 +169,15 @@ final class NetRomPersistence {
 
     func loadNeighbors() throws -> [NeighborInfo] {
         try database.read { db in
+            // Deterministic ordering: desc quality, then callsign asc
             let records = try NeighborRecord.order(Column("quality").desc, Column("call").asc).fetchAll(db)
             return records.map { record in
                 NeighborInfo(
                     call: record.call,
                     quality: record.quality,
-                    lastSeen: Date(timeIntervalSince1970: record.lastSeen)
+                    lastSeen: Date(timeIntervalSince1970: record.lastSeen),
+                    obsolescenceCount: record.obsolescenceCount,
+                    sourceType: record.sourceType
                 )
             }
         }
@@ -164,7 +199,9 @@ final class NetRomPersistence {
                     destination: route.destination,
                     origin: route.origin,
                     quality: route.quality,
-                    pathJson: pathJson
+                    pathJson: pathJson,
+                    sourceType: route.sourceType,
+                    lastUpdate: Date().timeIntervalSince1970
                 )
                 try record.insert(db)
             }
@@ -174,6 +211,7 @@ final class NetRomPersistence {
 
     func loadRoutes() throws -> [RouteInfo] {
         try database.read { db in
+            // Deterministic ordering: destination asc, then quality desc
             let records = try RouteRecord.order(Column("destination").asc, Column("quality").desc).fetchAll(db)
             return records.map { record in
                 let path = (try? JSONDecoder().decode([String].self, from: Data(record.pathJson.utf8))) ?? []
@@ -181,7 +219,8 @@ final class NetRomPersistence {
                     destination: record.destination,
                     origin: record.origin,
                     quality: record.quality,
-                    path: path
+                    path: path,
+                    sourceType: record.sourceType
                 )
             }
         }
@@ -202,7 +241,11 @@ final class NetRomPersistence {
                     fromCall: stat.fromCall,
                     toCall: stat.toCall,
                     quality: stat.quality,
-                    lastUpdated: stat.lastUpdated.timeIntervalSince1970
+                    lastUpdated: stat.lastUpdated.timeIntervalSince1970,
+                    dfEstimate: stat.dfEstimate,
+                    drEstimate: stat.drEstimate,
+                    dupCount: stat.duplicateCount,
+                    ewmaQuality: stat.quality
                 )
                 try record.insert(db)
             }
@@ -212,19 +255,24 @@ final class NetRomPersistence {
 
     func loadLinkStats() throws -> [LinkStatRecord] {
         try database.read { db in
+            // Deterministic ordering: fromCall asc, then toCall asc
             let records = try LinkStatDBRecord.order(Column("fromCall").asc, Column("toCall").asc).fetchAll(db)
             return records.map { record in
                 LinkStatRecord(
                     fromCall: record.fromCall,
                     toCall: record.toCall,
                     quality: record.quality,
-                    lastUpdated: Date(timeIntervalSince1970: record.lastUpdated)
+                    lastUpdated: Date(timeIntervalSince1970: record.lastUpdated),
+                    dfEstimate: record.dfEstimate,
+                    drEstimate: record.drEstimate,
+                    duplicateCount: record.dupCount,
+                    observationCount: 0  // Not stored, but can be reconstructed
                 )
             }
         }
     }
 
-    // MARK: - Full Snapshot
+    // MARK: - Full Snapshot (Atomic Transaction)
 
     func saveSnapshot(
         neighbors: [NeighborInfo],
@@ -235,7 +283,7 @@ final class NetRomPersistence {
         snapshotTimestamp: Date = Date()
     ) throws {
         try database.write { db in
-            // Clear all tables
+            // Clear all tables in single transaction
             try db.execute(sql: "DELETE FROM netrom_neighbors")
             try db.execute(sql: "DELETE FROM netrom_routes")
             try db.execute(sql: "DELETE FROM link_stats")
@@ -245,7 +293,9 @@ final class NetRomPersistence {
                 let record = NeighborRecord(
                     call: neighbor.call,
                     quality: neighbor.quality,
-                    lastSeen: neighbor.lastSeen.timeIntervalSince1970
+                    lastSeen: neighbor.lastSeen.timeIntervalSince1970,
+                    obsolescenceCount: neighbor.obsolescenceCount,
+                    sourceType: neighbor.sourceType
                 )
                 try record.insert(db)
             }
@@ -257,7 +307,9 @@ final class NetRomPersistence {
                     destination: route.destination,
                     origin: route.origin,
                     quality: route.quality,
-                    pathJson: pathJson
+                    pathJson: pathJson,
+                    sourceType: route.sourceType,
+                    lastUpdate: snapshotTimestamp.timeIntervalSince1970
                 )
                 try record.insert(db)
             }
@@ -268,12 +320,16 @@ final class NetRomPersistence {
                     fromCall: stat.fromCall,
                     toCall: stat.toCall,
                     quality: stat.quality,
-                    lastUpdated: stat.lastUpdated.timeIntervalSince1970
+                    lastUpdated: stat.lastUpdated.timeIntervalSince1970,
+                    dfEstimate: stat.dfEstimate,
+                    drEstimate: stat.drEstimate,
+                    dupCount: stat.duplicateCount,
+                    ewmaQuality: stat.quality
                 )
                 try record.insert(db)
             }
 
-            // Save metadata
+            // Save metadata (atomically with data)
             try saveMetaInternal(db: db, lastPacketID: lastPacketID, configHash: configHash, timestamp: snapshotTimestamp)
         }
     }
@@ -300,7 +356,7 @@ final class NetRomPersistence {
     func isSnapshotValid(currentDate: Date, expectedConfigHash: String?) throws -> Bool {
         guard let meta = try loadSnapshotMeta() else { return false }
 
-        // Check age
+        // Check age (TTL invalidation)
         let age = currentDate.timeIntervalSince(meta.snapshotTimestamp)
         if age > config.maxSnapshotAgeSeconds {
             return false
