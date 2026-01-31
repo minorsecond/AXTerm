@@ -331,6 +331,10 @@ struct NetworkGraphBuilder {
 
         // One-way HeardDirect edges (undirected display edge, but evidence is directional)
         // We collapse to an undirected edge for rendering simplicity, while inspector remains directional via adjacency.
+        func meetsHeardDirectMinimum(_ agg: HeardDirectAggregate) -> Bool {
+            // Keep trivial one-off receptions out of the graph, but allow light evidence.
+            return agg.count >= 2 || agg.distinctBuckets.count >= 2
+        }
         var heardDirectEdges: [UndirectedKey: HeardDirectEdgeAggregate] = [:]
 
         for (observer, senders) in heardDirectData {
@@ -341,9 +345,7 @@ struct NetworkGraphBuilder {
                 if directPeerKeys.contains(uKey) { continue }
                 if heardMutualKeys.contains(uKey) { continue }
 
-                // Show *any* direct decode evidence (count >= 1)
-                guard agg.count >= 1 else { continue }
-
+                guard meetsHeardDirectMinimum(agg) else { continue }
                 let age = now.timeIntervalSince(agg.lastHeard ?? now)
                 let score = HeardDirectScoring.calculateScore(
                     directHeardCount: agg.count,
@@ -505,15 +507,13 @@ struct NetworkGraphBuilder {
                 if directPeerKeys.contains(uKey) { continue }
                 if heardMutualKeys.contains(uKey) { continue }
 
+                guard meetsHeardDirectMinimum(agg) else { continue }
                 let age = now.timeIntervalSince(agg.lastHeard ?? now)
                 let score = HeardDirectScoring.calculateScore(
                     directHeardCount: agg.count,
                     directHeardMinutes: agg.distinctBuckets.count,
                     lastDirectHeardAge: age
                 )
-
-                // Show even weak evidence (count>=1); score may be 0.
-                guard agg.count >= 1 else { continue }
 
                 if !observerRels.contains(where: { $0.id == sender && $0.linkType == .heardDirect }) {
                     observerRels.append(

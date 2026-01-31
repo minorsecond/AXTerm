@@ -57,13 +57,15 @@ struct RouteInfo: Equatable {
     let origin: String
     let quality: Int
     let path: [String]
+    let lastUpdated: Date
     let sourceType: String
 
-    init(destination: String, origin: String, quality: Int, path: [String], sourceType: String = "broadcast") {
+    init(destination: String, origin: String, quality: Int, path: [String], lastUpdated: Date, sourceType: String = "broadcast") {
         self.destination = destination
         self.origin = origin
         self.quality = quality
         self.path = path
+        self.lastUpdated = lastUpdated
         self.sourceType = sourceType
     }
 }
@@ -231,7 +233,7 @@ final class NetRomRouter {
         return sortedDestinations.flatMap { destination in
             let bucket = routesByDestination[destination] ?? []
             return bucket.map { route in
-                RouteInfo(destination: destination, origin: route.origin, quality: route.quality, path: route.path, sourceType: route.sourceType)
+                RouteInfo(destination: destination, origin: route.origin, quality: route.quality, path: route.path, lastUpdated: route.lastHeard, sourceType: route.sourceType)
             }
         }
     }
@@ -298,7 +300,7 @@ final class NetRomRouter {
                 origin: info.origin,
                 quality: info.quality,
                 path: normalizedPath,
-                lastHeard: Date(), // Routes don't persist lastHeard, use now
+                lastHeard: info.lastUpdated,
                 obsolescenceCount: config.obsolescenceInit,
                 sourceType: info.sourceType
             )

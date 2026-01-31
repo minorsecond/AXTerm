@@ -445,7 +445,7 @@ final class NetRomRealisticWiringTests: XCTestCase {
             from: "W0ABC",
             quality: 250,
             destinations: [
-                RouteInfo(destination: "K1TARGET", origin: "W0ABC", quality: 250, path: ["W0ABC"], sourceType: "broadcast")
+                RouteInfo(destination: "K1TARGET", origin: "W0ABC", quality: 250, path: ["W0ABC"], lastUpdated: baseTime.addingTimeInterval(20), sourceType: "broadcast")
             ],
             timestamp: baseTime.addingTimeInterval(200)
         )

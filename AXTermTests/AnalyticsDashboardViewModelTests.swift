@@ -3,6 +3,11 @@ import XCTest
 
 @MainActor
 final class AnalyticsDashboardViewModelTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        Telemetry.setBackend(NoOpTelemetryBackend())
+    }
+
     private var calendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
@@ -51,7 +56,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
     func testTogglingIncludeViaTriggersGraphRecompute() async {
         let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
         let packets = [
-            makePacket(timestamp: timestamp, from: "alpha", to: "beta", via: ["dig1"])
+            makePacket(timestamp: timestamp, from: "A1PHA", to: "B2ETA", via: ["D1G"])
         ]
 
         let settings = makeSettings()
@@ -68,6 +73,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             graphDebounce: 0,
             packetScheduler: .main
         )
+        viewModel.graphViewMode = .all
         viewModel.setActive(true)
         viewModel.customRangeStart = timestamp.addingTimeInterval(-60)
         viewModel.customRangeEnd = timestamp.addingTimeInterval(60)
@@ -77,22 +83,20 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.viewState.graphModel.edges.count, 1)
 
         viewModel.includeViaDigipeaters = true
-        await waitFor { viewModel.viewState.graphModel.edges.count == 2 }
-        XCTAssertEqual(viewModel.viewState.graphModel.edges.count, 2)
+        await waitFor { viewModel.viewState.graphModel.edges.count == 3 }
+        XCTAssertEqual(viewModel.viewState.graphModel.edges.count, 3)
     }
 
     func testMinEdgeCountFiltersEdges() async {
         let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
         let packets = [
-            makePacket(timestamp: timestamp, from: "alpha", to: "beta"),
-            makePacket(timestamp: timestamp.addingTimeInterval(1), from: "alpha", to: "beta"),
-            makePacket(timestamp: timestamp.addingTimeInterval(2), from: "beta", to: "gamma")
+            makePacket(timestamp: timestamp, from: "A1PHA", to: "B2ETA", via: ["D1G"])
         ]
 
         let settings = makeSettings()
         settings.analyticsTimeframe = "custom"
         settings.analyticsBucket = "fiveMinutes"
-        settings.analyticsIncludeVia = false
+        settings.analyticsIncludeVia = true
         settings.analyticsMinEdgeCount = 1
         settings.analyticsMaxNodes = 10
 
@@ -103,18 +107,19 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             graphDebounce: 0,
             packetScheduler: .main
         )
+        viewModel.graphViewMode = .all
         viewModel.setActive(true)
         viewModel.customRangeStart = timestamp.addingTimeInterval(-60)
         viewModel.customRangeEnd = timestamp.addingTimeInterval(60)
 
         viewModel.updatePackets(packets)
-        await waitFor { viewModel.viewState.graphModel.edges.count == 2 }
-        XCTAssertEqual(viewModel.viewState.graphModel.edges.count, 2)
+        await waitFor { viewModel.viewState.graphModel.edges.count == 3 }
+        XCTAssertEqual(viewModel.viewState.graphModel.edges.count, 3)
 
         viewModel.minEdgeCount = 2
         await waitFor { viewModel.viewState.graphModel.edges.count == 1 }
         XCTAssertEqual(viewModel.viewState.graphModel.edges.count, 1)
-        XCTAssertEqual(viewModel.viewState.graphModel.edges.first?.sourceID, "ALPHA")
+        XCTAssertEqual(viewModel.viewState.graphModel.edges.first?.sourceID, "A1PHA")
     }
 
     func testSelectionUpdatesDoNotCrash() {
@@ -132,7 +137,6 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             graphDebounce: 0,
             packetScheduler: .main
         )
-        viewModel.setActive(true)
 
         viewModel.handleNodeClick("alpha", isShift: false)
         XCTAssertEqual(viewModel.viewState.selectedNodeID, "alpha")

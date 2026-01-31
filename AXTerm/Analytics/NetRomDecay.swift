@@ -12,11 +12,11 @@
 //
 //  Apple HIG Tooltips:
 //  - Neighbors: "Freshness indicates how recently this neighbor was heard.
-//               100% means heard within the TTL window; 0% means aged out."
+//               100% means seen within TTL; lower values fade toward expired."
 //  - Routes: "Route freshness is based on the last time this path was reinforced.
 //            Older evidence yields lower freshness."
-//  - Decay: "Decay is a time-based freshness score computed from last observation
-//           relative to TTL. It helps you gauge how stale this entry is."
+//  - Decay: "Decay is a time-based freshness score computed from last observation relative to TTL.
+//           It helps you gauge how stale this entry is."
 //
 
 import Foundation
@@ -174,6 +174,30 @@ extension NeighborInfo {
     }
 }
 
+// MARK: - RouteInfo Decay Extension
+
+extension RouteInfo {
+    /// Compute decay fraction based on lastUpdated timestamp.
+    ///
+    /// - Parameters:
+    ///   - now: The current time.
+    ///   - ttl: The time-to-live duration for routes.
+    /// - Returns: A value from 0.0 (expired) to 1.0 (just seen).
+    func decayFraction(now: Date, ttl: TimeInterval) -> Double {
+        DecayCalculator.decayFraction(lastSeen: lastUpdated, now: now, ttl: ttl)
+    }
+
+    /// Compute decay mapped to 0-255 scale.
+    func decay255(now: Date, ttl: TimeInterval) -> Int {
+        DecayCalculator.decay255(fraction: decayFraction(now: now, ttl: ttl))
+    }
+
+    /// Get decay as a display percentage string.
+    func decayDisplayString(now: Date, ttl: TimeInterval) -> String {
+        DecayCalculator.decayDisplayString(fraction: decayFraction(now: now, ttl: ttl))
+    }
+}
+
 // MARK: - Route Decay Wrapper
 
 /// Wrapper for RouteInfo that includes lastUpdated timestamp for decay calculation.
@@ -235,22 +259,16 @@ extension LinkStatRecord {
 /// - Provide clear purpose and example
 enum DecayTooltips {
     /// Tooltip for the Neighbors decay/freshness column.
-    static let neighbors = """
-        Freshness indicates how recently this neighbor was heard. \
-        100% means seen within the TTL window; lower values fade toward expired.
-        """
+    static let neighbors = "Freshness indicates how recently this neighbor was heard. 100% means seen within TTL; lower values fade toward expired."
 
     /// Tooltip for the Routes decay/freshness column.
-    static let routes = """
-        Route freshness is based on the last time this path was reinforced. \
-        Older evidence yields lower freshness.
-        """
+    static let routes = "Route freshness is based on the last time this path was reinforced. Older evidence yields lower freshness."
+
+    /// Tooltip for the Decay column.
+    static let decay = "Decay is a time-based freshness score computed from last observation relative to TTL. It helps you gauge how stale this entry is."
 
     /// Tooltip for the Link Quality decay column.
-    static let linkQuality = """
-        Decay is a time-based freshness score computed from last observation \
-        relative to TTL. It helps you gauge how stale this entry is.
-        """
+    static let linkQuality = "Freshness indicates how recently link statistics were updated. Newer stats appear fresher; older stats fade toward expired."
 
     /// Short tooltip for decay column header.
     static let decayHeader = """
@@ -265,42 +283,27 @@ enum DecayAccessibility {
     /// Generate accessibility label for a neighbor's decay.
     static func neighborDecay(_ fraction: Double, callsign: String) -> String {
         let percent = Int(round(fraction * 100))
-        if percent >= 90 {
-            return "Neighbor \(callsign) freshness: \(percent) percent, recently heard"
-        } else if percent >= 50 {
-            return "Neighbor \(callsign) freshness: \(percent) percent"
-        } else if percent > 0 {
-            return "Neighbor \(callsign) freshness: \(percent) percent, getting stale"
-        } else {
-            return "Neighbor \(callsign) freshness: expired"
+        if percent > 0 {
+            return "Neighbor \(callsign) freshness is \(percent) percent."
         }
+        return "Neighbor \(callsign) freshness is expired."
     }
 
     /// Generate accessibility label for a route's decay.
     static func routeDecay(_ fraction: Double, destination: String) -> String {
         let percent = Int(round(fraction * 100))
-        if percent >= 90 {
-            return "Route to \(destination) freshness: \(percent) percent, recently reinforced"
-        } else if percent >= 50 {
-            return "Route to \(destination) freshness: \(percent) percent"
-        } else if percent > 0 {
-            return "Route to \(destination) freshness: \(percent) percent, getting stale"
-        } else {
-            return "Route to \(destination) freshness: expired"
+        if percent > 0 {
+            return "Route to \(destination) freshness is \(percent) percent."
         }
+        return "Route to \(destination) freshness is expired."
     }
 
     /// Generate accessibility label for a link stat's decay.
     static func linkStatDecay(_ fraction: Double, from: String, to: String) -> String {
         let percent = Int(round(fraction * 100))
-        if percent >= 90 {
-            return "Link from \(from) to \(to) freshness: \(percent) percent, recently observed"
-        } else if percent >= 50 {
-            return "Link from \(from) to \(to) freshness: \(percent) percent"
-        } else if percent > 0 {
-            return "Link from \(from) to \(to) freshness: \(percent) percent, getting stale"
-        } else {
-            return "Link from \(from) to \(to) freshness: expired"
+        if percent > 0 {
+            return "Link from \(from) to \(to) freshness is \(percent) percent."
         }
+        return "Link from \(from) to \(to) freshness is expired."
     }
 }

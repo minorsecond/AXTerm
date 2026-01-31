@@ -39,8 +39,8 @@ final class NetRomStaleSnapshotTests: XCTestCase {
         NeighborInfo(call: call, quality: quality, lastSeen: lastSeen, obsolescenceCount: obsolescenceCount, sourceType: sourceType)
     }
 
-    private func makeRoute(destination: String, origin: String, quality: Int, path: [String], sourceType: String = "broadcast") -> RouteInfo {
-        RouteInfo(destination: destination, origin: origin, quality: quality, path: path, sourceType: sourceType)
+    private func makeRoute(destination: String, origin: String, quality: Int, path: [String], lastUpdated: Date = Date(timeIntervalSince1970: 1_700_000_000), sourceType: String = "broadcast") -> RouteInfo {
+        RouteInfo(destination: destination, origin: origin, quality: quality, path: path, lastUpdated: lastUpdated, sourceType: sourceType)
     }
 
     private func makeLinkStat(from: String, to: String, quality: Int, lastUpdated: Date, dfEstimate: Double? = nil, drEstimate: Double? = nil, dupCount: Int = 0, observationCount: Int = 1) -> LinkStatRecord {
@@ -93,7 +93,7 @@ final class NetRomStaleSnapshotTests: XCTestCase {
                 makeNeighbor(call: "W1XYZ", quality: 180, lastSeen: recentTimestamp)
             ],
             routes: [
-                makeRoute(destination: "W2BBB", origin: "W0ABC", quality: 150, path: ["W0ABC", "W2BBB"])
+                makeRoute(destination: "W2BBB", origin: "W0ABC", quality: 150, path: ["W0ABC", "W2BBB"], lastUpdated: recentTimestamp)
             ],
             linkStats: [
                 makeLinkStat(from: "W0ABC", to: "N0CALL", quality: 220, lastUpdated: recentTimestamp)
@@ -148,7 +148,7 @@ final class NetRomStaleSnapshotTests: XCTestCase {
 
         try persistence.saveSnapshot(
             neighbors: [makeNeighbor(call: "W0ABC", quality: 200, lastSeen: now)],
-            routes: [makeRoute(destination: "W2BBB", origin: "W0ABC", quality: 150, path: ["W0ABC", "W2BBB"])],
+            routes: [makeRoute(destination: "W2BBB", origin: "W0ABC", quality: 150, path: ["W0ABC", "W2BBB"], lastUpdated: now)],
             linkStats: [makeLinkStat(from: "W0ABC", to: "N0CALL", quality: 220, lastUpdated: now)],
             lastPacketID: 800,
             configHash: configHash,
@@ -227,23 +227,17 @@ final class NetRomStaleSnapshotTests: XCTestCase {
         let now = Date(timeIntervalSince1970: 1_700_120_000)
         let snapshotTime = now.addingTimeInterval(-60)  // 1 minute ago
 
-        // Note: RouteInfo doesn't have lastUpdate in the struct, but persistence stores it
-        // The test assumes routes are saved with lastUpdate = snapshotTimestamp or similar
-
         try testPersistence.saveSnapshot(
             neighbors: [makeNeighbor(call: "W0ABC", quality: 200, lastSeen: now)],
             routes: [
-                makeRoute(destination: "W2STALE", origin: "W0ABC", quality: 150, path: ["W0ABC", "W2STALE"]),
-                makeRoute(destination: "W3FRESH", origin: "W0ABC", quality: 140, path: ["W0ABC", "W3FRESH"])
+                makeRoute(destination: "W2STALE", origin: "W0ABC", quality: 150, path: ["W0ABC", "W2STALE"], lastUpdated: snapshotTime),
+                makeRoute(destination: "W3FRESH", origin: "W0ABC", quality: 140, path: ["W0ABC", "W3FRESH"], lastUpdated: snapshotTime)
             ],
             linkStats: [],
             lastPacketID: 1000,
             configHash: "route_decay",
             snapshotTimestamp: snapshotTime
         )
-
-        // To properly test route decay, we need a way to set per-route lastUpdate
-        // For now, test that load(now:) applies route TTL rules
 
         let muchLater = now.addingTimeInterval(600)  // 10 minutes later
         let result = try testPersistence.load(now: muchLater, expectedConfigHash: "route_decay")

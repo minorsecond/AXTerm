@@ -264,7 +264,7 @@ final class NetRomPersistence {
                     quality: route.quality,
                     pathJson: pathJson,
                     sourceType: route.sourceType,
-                    lastUpdate: Date().timeIntervalSince1970
+                    lastUpdate: route.lastUpdated.timeIntervalSince1970
                 )
                 try record.insert(db)
             }
@@ -283,6 +283,7 @@ final class NetRomPersistence {
                     origin: record.origin,
                     quality: record.quality,
                     path: path,
+                    lastUpdated: Date(timeIntervalSince1970: record.lastUpdate),
                     sourceType: record.sourceType
                 )
             }
@@ -317,9 +318,7 @@ final class NetRomPersistence {
         }
     }
 
-    func loadLinkStats() throws -> [LinkStatRecord] {
-        let now = Date()
-
+    func loadLinkStats(now: Date) throws -> [LinkStatRecord] {
         return try database.read { db in
             // Deterministic ordering: fromCall asc, then toCall asc
             let records = try LinkStatDBRecord.order(Column("fromCall").asc, Column("toCall").asc).fetchAll(db)
@@ -342,17 +341,16 @@ final class NetRomPersistence {
         }
     }
 
+    func loadLinkStats() throws -> [LinkStatRecord] {
+        try loadLinkStats(now: Date())
+    }
+
     /// Sanitize a timestamp - replace truly invalid timestamps with the fallback.
-    /// Invalid timestamps are: Date.distantPast (year 0001), epoch 0 (1970), negative values,
-    /// or dates unreasonably far in the past (> 10 years).
+    /// Invalid timestamps are: Date.distantPast (year 0001), epoch 0 (1970), or negative values.
     private static func sanitizeTimestamp(_ date: Date, fallback: Date) -> Date {
-        // Date.distantPast is year 0001, which is ~2000 years ago
-        // Check for truly ancient dates (more than 10 years old as an upper bound)
-        let tenYearsAgo = fallback.addingTimeInterval(-10 * 365 * 24 * 60 * 60)
-        if date < tenYearsAgo {
+        if date == Date.distantPast {
             return fallback
         }
-        // Handle epoch 0 and negative values
         if date.timeIntervalSince1970 <= 0 {
             return fallback
         }
@@ -396,7 +394,7 @@ final class NetRomPersistence {
                     quality: route.quality,
                     pathJson: pathJson,
                     sourceType: route.sourceType,
-                    lastUpdate: snapshotTimestamp.timeIntervalSince1970
+                    lastUpdate: route.lastUpdated.timeIntervalSince1970
                 )
                 try record.insert(db)
             }
@@ -529,27 +527,16 @@ final class NetRomPersistence {
 
     /// Load routes with per-entry filtering based on lastUpdate.
     private func loadRoutesWithDecay(now: Date) throws -> [RouteInfo] {
-        // Note: RouteInfo doesn't expose lastUpdate, but we store it in the DB
-        // For now, filter based on snapshot age. In a full implementation,
-        // we would query the DB directly with the lastUpdate column.
         let allRoutes = try loadRoutes()
 
-        // Since RouteInfo doesn't have lastUpdate exposed, we rely on
-        // snapshot-level TTL for now. A full implementation would add
-        // lastUpdate to RouteInfo or query the DB directly.
-        let snapshotAge = try loadSnapshotMeta().map { now.timeIntervalSince($0.snapshotTimestamp) } ?? 0
+        let cutoff = now.addingTimeInterval(-config.routeTTLSeconds)
 
-        if snapshotAge > config.routeTTLSeconds {
-            // All routes are stale
-            return []
-        }
-
-        return allRoutes
+        return allRoutes.filter { $0.lastUpdated >= cutoff }
     }
 
     /// Load link stats with per-entry filtering based on lastUpdated timestamp.
     private func loadLinkStatsWithDecay(now: Date) throws -> [LinkStatRecord] {
-        let allStats = try loadLinkStats()
+        let allStats = try loadLinkStats(now: now)
         let cutoff = now.addingTimeInterval(-config.linkStatTTLSeconds)
 
         return allStats.filter { $0.lastUpdated >= cutoff }

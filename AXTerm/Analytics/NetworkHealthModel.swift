@@ -273,6 +273,7 @@ enum NetworkHealthCalculator {
             canonicalGraph: canonicalGraph,
             timeframePackets: timeframePackets,
             allRecentPackets: allRecentPackets,
+            includeViaDigipeaters: includeViaDigipeaters,
             now: now
         )
 
@@ -350,14 +351,21 @@ enum NetworkHealthCalculator {
         canonicalGraph: GraphModel,
         timeframePackets: [Packet],
         allRecentPackets: [Packet],
+        includeViaDigipeaters: Bool,
         now: Date
     ) -> NetworkHealthMetrics {
         // TOPOLOGY METRICS (from canonical graph)
-        let totalNodes = canonicalGraph.nodes.count
+        let totalNodes = calculateTotalStations(
+            packets: timeframePackets,
+            includeViaDigipeaters: includeViaDigipeaters
+        )
         let totalPackets = timeframePackets.count
 
         // C1: Main Cluster % = largest connected component / total nodes × 100
-        let c1MainClusterPct = calculateLargestComponentPercent(graph: canonicalGraph)
+        let c1MainClusterPct = calculateLargestComponentPercent(
+            graph: canonicalGraph,
+            totalNodesOverride: totalNodes
+        )
 
         // C2: Connectivity Ratio % = actualEdges / possibleEdges × 100
         let actualEdges = canonicalGraph.edges.count
@@ -367,7 +375,8 @@ enum NetworkHealthCalculator {
             : 0
 
         // C3: Isolation Reduction = 100 - (% isolated nodes)
-        let isolatedCount = canonicalGraph.nodes.filter { $0.degree == 0 }.count
+        let graphNodeIDs = Set(canonicalGraph.nodes.map(\.id))
+        let isolatedCount = max(0, totalNodes - graphNodeIDs.count)
         let isolatedPct = totalNodes > 0 ? Double(isolatedCount) / Double(totalNodes) * 100 : 0
         let c3IsolationReduction = 100 - isolatedPct
 
@@ -457,8 +466,11 @@ enum NetworkHealthCalculator {
         )
     }
 
-    private static func calculateLargestComponentPercent(graph: GraphModel) -> Double {
-        guard !graph.nodes.isEmpty else { return 0 }
+    private static func calculateLargestComponentPercent(
+        graph: GraphModel,
+        totalNodesOverride: Int
+    ) -> Double {
+        guard !graph.nodes.isEmpty, totalNodesOverride > 0 else { return 0 }
 
         // Build adjacency set for BFS
         var adjacency: [String: Set<String>] = [:]
@@ -491,7 +503,35 @@ enum NetworkHealthCalculator {
             largestComponentSize = max(largestComponentSize, componentSize)
         }
 
-        return Double(largestComponentSize) / Double(graph.nodes.count) * 100
+        return Double(largestComponentSize) / Double(totalNodesOverride) * 100
+    }
+
+    private static func calculateTotalStations(
+        packets: [Packet],
+        includeViaDigipeaters: Bool
+    ) -> Int {
+        guard !packets.isEmpty else { return 0 }
+
+        var stations: Set<String> = []
+
+        for packet in packets {
+            if let from = packet.from?.call, CallsignValidator.isValidCallsign(from) {
+                stations.insert(CallsignParser.identityKey(for: from, mode: .station))
+            }
+            if let to = packet.to?.call, CallsignValidator.isValidCallsign(to) {
+                stations.insert(CallsignParser.identityKey(for: to, mode: .station))
+            }
+            if includeViaDigipeaters {
+                for via in packet.via {
+                    let call = via.call
+                    if CallsignValidator.isValidCallsign(call) {
+                        stations.insert(CallsignParser.identityKey(for: call, mode: .station))
+                    }
+                }
+            }
+        }
+
+        return stations.count
     }
 
     private static func calculateRelayConcentration(graph: GraphModel) -> (Double, String?) {

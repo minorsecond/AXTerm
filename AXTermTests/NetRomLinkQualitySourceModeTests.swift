@@ -48,6 +48,30 @@ final class NetRomLinkQualitySourceModeTests: XCTestCase {
         )
     }
 
+    func testKISSvsAGWPEConfigDifferences() {
+        let kissConfig = LinkQualityConfig(
+            source: .kiss,
+            slidingWindowSeconds: 300,
+            ewmaAlpha: 0.1,
+            initialDeliveryRatio: 0.5,
+            maxObservationsPerLink: 100,
+            excludeServiceDestinations: true
+        )
+        let agwpeConfig = LinkQualityConfig(
+            source: .agwpe,
+            slidingWindowSeconds: 300,
+            ewmaAlpha: 0.1,
+            initialDeliveryRatio: 0.5,
+            maxObservationsPerLink: 100,
+            excludeServiceDestinations: true
+        )
+
+        XCTAssertEqual(kissConfig.ingestionDedupWindow, 0.25)
+        XCTAssertEqual(agwpeConfig.ingestionDedupWindow, 0.0)
+        XCTAssertEqual(kissConfig.retryDuplicateWindow, 2.0)
+        XCTAssertEqual(agwpeConfig.retryDuplicateWindow, 2.0)
+    }
+
     /// Create byte-identical packets (same rawAx25 data) at different timestamps.
     private func makeIdenticalPackets(
         from: String,

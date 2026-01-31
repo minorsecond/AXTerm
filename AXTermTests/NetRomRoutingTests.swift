@@ -127,7 +127,8 @@ final class NetRomRoutingTests: XCTestCase {
             destination: "W1BBB",
             origin: neighbor,
             quality: broadcastQuality,
-            path: [neighbor, "W1BBB"]
+            path: [neighbor, "W1BBB"],
+            lastUpdated: now
         )
         router.broadcastRoutes(
             from: neighbor,
@@ -159,8 +160,8 @@ final class NetRomRoutingTests: XCTestCase {
         )
 
         let routesToPublish = [
-            RouteInfo(destination: localCallsign, origin: neighbor, quality: 200, path: [neighbor, localCallsign]),
-            RouteInfo(destination: "W2CCC", origin: neighbor, quality: 200, path: [neighbor, "W2CCC"])
+            RouteInfo(destination: localCallsign, origin: neighbor, quality: 200, path: [neighbor, localCallsign], lastUpdated: now),
+            RouteInfo(destination: "W2CCC", origin: neighbor, quality: 200, path: [neighbor, "W2CCC"], lastUpdated: now)
         ]
         router.broadcastRoutes(from: neighbor, quality: 200, destinations: routesToPublish, timestamp: now.addingTimeInterval(1))
 
@@ -188,7 +189,7 @@ final class NetRomRoutingTests: XCTestCase {
                 from: origin,
                 quality: advertisedQualities[index],
                 destinations: [
-                    RouteInfo(destination: destination, origin: origin, quality: advertisedQualities[index], path: [origin, destination])
+                    RouteInfo(destination: destination, origin: origin, quality: advertisedQualities[index], path: [origin, destination], lastUpdated: timestamp.addingTimeInterval(0.5))
                 ],
                 timestamp: timestamp.addingTimeInterval(0.5)
             )
@@ -211,7 +212,7 @@ final class NetRomRoutingTests: XCTestCase {
             from: lowQualityOrigin,
             quality: 5,
             destinations: [
-                RouteInfo(destination: destination, origin: lowQualityOrigin, quality: 5, path: [lowQualityOrigin, destination])
+                RouteInfo(destination: destination, origin: lowQualityOrigin, quality: 5, path: [lowQualityOrigin, destination], lastUpdated: lowQualityTime)
             ],
             timestamp: lowQualityTime
         )
@@ -234,7 +235,7 @@ final class NetRomRoutingTests: XCTestCase {
             from: neighbor,
             quality: 200,
             destinations: [
-                RouteInfo(destination: "W3EEE", origin: neighbor, quality: 200, path: [neighbor, "W3EEE"])
+                RouteInfo(destination: "W3EEE", origin: neighbor, quality: 200, path: [neighbor, "W3EEE"], lastUpdated: now)
             ],
             timestamp: now.addingTimeInterval(1)
         )
@@ -259,7 +260,7 @@ final class NetRomRoutingTests: XCTestCase {
                 from: neighbor,
                 quality: 200 - (index * 20),
                 destinations: [
-                    RouteInfo(destination: "W4FFF", origin: neighbor, quality: 200 - (index * 20), path: [neighbor, "W4FFF"])
+                    RouteInfo(destination: "W4FFF", origin: neighbor, quality: 200 - (index * 20), path: [neighbor, "W4FFF"], lastUpdated: timestamp.addingTimeInterval(Double(index) + 0.5))
                 ],
                 timestamp: timestamp.addingTimeInterval(Double(index) + 0.5)
             )

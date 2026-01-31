@@ -44,8 +44,8 @@ final class NetRomPersistenceTests: XCTestCase {
         NeighborInfo(call: call, quality: quality, lastSeen: lastSeen, obsolescenceCount: obsolescenceCount, sourceType: sourceType)
     }
 
-    private func makeRoute(destination: String, origin: String, quality: Int, path: [String], sourceType: String = "broadcast") -> RouteInfo {
-        RouteInfo(destination: destination, origin: origin, quality: quality, path: path, sourceType: sourceType)
+    private func makeRoute(destination: String, origin: String, quality: Int, path: [String], lastUpdated: Date = Date(timeIntervalSince1970: 1_700_000_000), sourceType: String = "broadcast") -> RouteInfo {
+        RouteInfo(destination: destination, origin: origin, quality: quality, path: path, lastUpdated: lastUpdated, sourceType: sourceType)
     }
 
     private func makeLinkStat(from: String, to: String, quality: Int, lastUpdated: Date, dfEstimate: Double? = nil, drEstimate: Double? = nil, dupCount: Int = 0, observationCount: Int = 1) -> LinkStatRecord {
@@ -916,7 +916,7 @@ final class NetRomPersistenceTests: XCTestCase {
                 makeNeighbor(call: "W1XYZ", quality: 180, lastSeen: now)
             ],
             routes: [
-                makeRoute(destination: "W2BBB", origin: "W0ABC", quality: 150, path: ["W0ABC", "W2BBB"])
+                makeRoute(destination: "W2BBB", origin: "W0ABC", quality: 150, path: ["W0ABC", "W2BBB"], lastUpdated: now)
             ],
             linkStats: [
                 makeLinkStat(from: "W0ABC", to: "N0CALL", quality: 220, lastUpdated: now)

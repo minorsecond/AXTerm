@@ -23,6 +23,9 @@ import Foundation
 
 /// Configuration for link quality estimation.
 struct LinkQualityConfig: Equatable {
+    /// Capture source type for ingestion semantics.
+    let source: CaptureSourceType
+
     /// Sliding window duration for observations (seconds).
     let slidingWindowSeconds: TimeInterval
 
@@ -39,17 +42,23 @@ struct LinkQualityConfig: Equatable {
     /// Default is true - service destinations are not valid callsigns for routing purposes.
     let excludeServiceDestinations: Bool
 
-    // TODO: Add PacketIngestSource enum (kiss, agwpe, unknown) and source-specific configs
-    // TODO: Add ingestionDedupeWindowMs for AGWPE source
-    // TODO: Add skipIngestionDedupe flag for KISS source (Direwolf has built-in de-dupe)
+    /// Ingestion de-duplication window (seconds).
+    var ingestionDedupWindow: TimeInterval {
+        source == .kiss ? 0.25 : 0.0
+    }
+
+    /// Retry duplicate window (seconds).
+    var retryDuplicateWindow: TimeInterval { 2.0 }
 
     init(
+        source: CaptureSourceType = .kiss,
         slidingWindowSeconds: TimeInterval,
         ewmaAlpha: Double,
         initialDeliveryRatio: Double,
         maxObservationsPerLink: Int,
         excludeServiceDestinations: Bool = true
     ) {
+        self.source = source
         self.slidingWindowSeconds = slidingWindowSeconds
         self.ewmaAlpha = ewmaAlpha
         self.initialDeliveryRatio = initialDeliveryRatio
@@ -58,6 +67,7 @@ struct LinkQualityConfig: Equatable {
     }
 
     static let `default` = LinkQualityConfig(
+        source: .kiss,
         slidingWindowSeconds: 300,
         ewmaAlpha: 0.1,  // Lower alpha = more smoothing, prevents drastic quality drops from short bursts
         initialDeliveryRatio: 0.5,
@@ -67,7 +77,7 @@ struct LinkQualityConfig: Equatable {
 
     /// Generate a hash for config invalidation purposes.
     func configHash() -> String {
-        "link_v2_\(slidingWindowSeconds)_\(ewmaAlpha)_\(initialDeliveryRatio)_\(maxObservationsPerLink)_\(excludeServiceDestinations)"
+        "link_v2_\(source)_\(slidingWindowSeconds)_\(ewmaAlpha)_\(initialDeliveryRatio)_\(maxObservationsPerLink)_\(excludeServiceDestinations)"
     }
 }
 
@@ -311,10 +321,11 @@ struct LinkQualityEstimator {
 
     /// Sanitize a timestamp - replace Date.distantPast or dates more than 1 year old with the fallback.
     private static func sanitizeTimestamp(_ date: Date, fallback: Date) -> Date {
-        // Date.distantPast is year 0001, which is ~2000 years ago
-        // Any date more than 1 year in the past is likely corrupted
-        let oneYearAgo = fallback.addingTimeInterval(-365 * 24 * 60 * 60)
-        if date < oneYearAgo {
+        // Treat only truly invalid timestamps as needing normalization.
+        if date == Date.distantPast {
+            return fallback
+        }
+        if date.timeIntervalSince1970 <= 0 {
             return fallback
         }
         return date

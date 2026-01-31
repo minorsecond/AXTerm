@@ -162,7 +162,7 @@ final class NetRomPassiveInference {
                 from: evidence.origin,
                 quality: effectiveQuality,
                 destinations: [
-                    RouteInfo(destination: evidence.destination, origin: evidence.origin, quality: effectiveQuality, path: evidence.path, sourceType: "inferred")
+                    RouteInfo(destination: evidence.destination, origin: evidence.origin, quality: effectiveQuality, path: evidence.path, lastUpdated: timestamp, sourceType: "inferred")
                 ],
                 timestamp: timestamp
             )

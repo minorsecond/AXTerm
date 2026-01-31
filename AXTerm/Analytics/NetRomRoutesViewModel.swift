@@ -34,7 +34,6 @@ struct NeighborDisplayInfo: Identifiable, Hashable {
     let sourceType: String
     let lastSeen: Date
     let lastSeenRelative: String
-    let obsolescenceCount: Int
 
     /// Time-based decay fraction (0.0-1.0).
     let decayFraction: Double
@@ -48,7 +47,7 @@ struct NeighborDisplayInfo: Identifiable, Hashable {
     /// Default TTL for neighbor decay (15 minutes).
     private static let defaultTTL: TimeInterval = 15 * 60
 
-    init(from info: NeighborInfo, now: Date = Date(), ttl: TimeInterval = NeighborDisplayInfo.defaultTTL) {
+    init(from info: NeighborInfo, now: Date, ttl: TimeInterval = NeighborDisplayInfo.defaultTTL) {
         self.id = info.call
         self.callsign = info.call
         self.quality = info.quality
@@ -56,7 +55,6 @@ struct NeighborDisplayInfo: Identifiable, Hashable {
         self.sourceType = info.sourceType
         self.lastSeen = info.lastSeen
         self.lastSeenRelative = Self.formatRelativeTime(info.lastSeen, now: now)
-        self.obsolescenceCount = info.obsolescenceCount
 
         // Compute time-based decay
         self.decayFraction = info.decayFraction(now: now, ttl: ttl)
@@ -64,7 +62,7 @@ struct NeighborDisplayInfo: Identifiable, Hashable {
         self.decay255 = info.decay255(now: now, ttl: ttl)
     }
 
-    private static func formatRelativeTime(_ date: Date, now: Date = Date()) -> String {
+    private static func formatRelativeTime(_ date: Date, now: Date) -> String {
         let interval = now.timeIntervalSince(date)
 
         if interval < 0 {
@@ -103,8 +101,22 @@ struct RouteDisplayInfo: Identifiable, Hashable {
     let path: [String]
     let pathSummary: String
     let hopCount: Int
+    let lastUpdated: Date
+    let lastUpdatedRelative: String
 
-    init(from info: RouteInfo) {
+    /// Time-based decay fraction (0.0-1.0).
+    let decayFraction: Double
+
+    /// Decay as percentage string (e.g., "75%").
+    let decayDisplayString: String
+
+    /// Decay mapped to 0-255 scale.
+    let decay255: Int
+
+    /// Default TTL for route decay (15 minutes).
+    private static let defaultTTL: TimeInterval = 15 * 60
+
+    init(from info: RouteInfo, now: Date, ttl: TimeInterval = RouteDisplayInfo.defaultTTL) {
         self.id = "\(info.destination)→\(info.origin)"
         self.destination = info.destination
         self.nextHop = info.path.first ?? info.origin
@@ -114,6 +126,39 @@ struct RouteDisplayInfo: Identifiable, Hashable {
         self.path = info.path
         self.pathSummary = info.path.isEmpty ? info.origin : info.path.joined(separator: " → ")
         self.hopCount = max(1, info.path.count)
+        self.lastUpdated = info.lastUpdated
+        self.lastUpdatedRelative = Self.formatRelativeTime(info.lastUpdated, now: now)
+
+        self.decayFraction = info.decayFraction(now: now, ttl: ttl)
+        self.decayDisplayString = info.decayDisplayString(now: now, ttl: ttl)
+        self.decay255 = info.decay255(now: now, ttl: ttl)
+    }
+
+    private static func formatRelativeTime(_ date: Date, now: Date) -> String {
+        let interval = now.timeIntervalSince(date)
+
+        if interval < 0 {
+            return "Future"
+        } else if interval < 60 {
+            return "Just now"
+        } else if interval < 3600 {
+            let minutes = Int(interval / 60)
+            return "\(minutes)m ago"
+        } else if interval < 86400 {
+            let hours = Int(interval / 3600)
+            return "\(hours)h ago"
+        } else {
+            let days = Int(interval / 86400)
+            return "\(days)d ago"
+        }
+    }
+
+    /// Apple HIG tooltip for route decay column.
+    static let decayTooltip = DecayTooltips.routes
+
+    /// Accessibility label for this route's decay.
+    var decayAccessibilityLabel: String {
+        DecayAccessibility.routeDecay(decayFraction, destination: destination)
     }
 }
 
@@ -143,7 +188,7 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
     /// Default TTL for link stat decay (15 minutes).
     private static let defaultTTL: TimeInterval = 15 * 60
 
-    init(from record: LinkStatRecord, now: Date = Date(), ttl: TimeInterval = LinkStatDisplayInfo.defaultTTL) {
+    init(from record: LinkStatRecord, now: Date, ttl: TimeInterval = LinkStatDisplayInfo.defaultTTL) {
         self.id = "\(record.fromCall)→\(record.toCall)"
         self.fromCall = record.fromCall
         self.toCall = record.toCall
@@ -171,7 +216,7 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
         self.decay255 = record.decay255(now: now, ttl: ttl)
     }
 
-    private static func formatRelativeTime(_ date: Date, now: Date = Date()) -> String {
+    private static func formatRelativeTime(_ date: Date, now: Date) -> String {
         let interval = now.timeIntervalSince(date)
 
         if interval < 0 {
@@ -214,10 +259,12 @@ final class NetRomRoutesViewModel: ObservableObject {
     @Published private(set) var lastRefresh: Date?
 
     private weak var integration: NetRomIntegration?
+    private let clock: ClockProviding
     private var refreshTimer: Timer?
 
-    init(integration: NetRomIntegration?) {
+    init(integration: NetRomIntegration?, clock: ClockProviding = SystemClock()) {
         self.integration = integration
+        self.clock = clock
         startAutoRefresh()
     }
 
@@ -268,6 +315,7 @@ final class NetRomRoutesViewModel: ObservableObject {
         }
 
         isLoading = true
+        let now = clock.now
 
         // Update mode if changed
         if integration.currentMode != routingMode {
@@ -308,7 +356,7 @@ final class NetRomRoutesViewModel: ObservableObject {
             let statsWithNilDf = rawLinkStats.filter { $0.dfEstimate == nil }.count
             let statsWithNilDr = rawLinkStats.filter { $0.drEstimate == nil }.count
             let statsWithZeroObs = rawLinkStats.filter { $0.observationCount == 0 }.count
-            let statsWithBadTimestamp = rawLinkStats.filter { Date().timeIntervalSince($0.lastUpdated) > 365 * 24 * 60 * 60 }.count
+            let statsWithBadTimestamp = rawLinkStats.filter { now.timeIntervalSince($0.lastUpdated) > 365 * 24 * 60 * 60 }.count
 
             if statsWithNilDf > 0 || statsWithNilDr > 0 || statsWithBadTimestamp > 0 {
                 print("[NETROM:VIEWMODEL] ========== Link Quality Diagnostics ==========")
@@ -358,11 +406,11 @@ final class NetRomRoutesViewModel: ObservableObject {
         #endif
 
         // Convert to display models
-        neighbors = rawNeighbors.map { NeighborDisplayInfo(from: $0) }
-        routes = rawRoutes.map { RouteDisplayInfo(from: $0) }
-        linkStats = rawLinkStats.map { LinkStatDisplayInfo(from: $0) }
+        neighbors = rawNeighbors.map { NeighborDisplayInfo(from: $0, now: now) }
+        routes = rawRoutes.map { RouteDisplayInfo(from: $0, now: now) }
+        linkStats = rawLinkStats.map { LinkStatDisplayInfo(from: $0, now: now) }
 
-        lastRefresh = Date()
+        lastRefresh = now
         isLoading = false
     }
 
@@ -382,16 +430,17 @@ final class NetRomRoutesViewModel: ObservableObject {
                 "qualityPercent": String(format: "%.1f", neighbor.qualityPercent),
                 "sourceType": neighbor.sourceType,
                 "lastSeen": ISO8601DateFormatter().string(from: neighbor.lastSeen),
-                "obsolescenceCount": neighbor.obsolescenceCount
+                "decayPercent": neighbor.decayDisplayString,
+                "decay255": neighbor.decay255
             ]
         }
         return formatJSON(data)
     }
 
     func copyNeighborsAsCSV() -> String {
-        var lines = ["Callsign,Quality,Quality %,Source,Last Seen,Obsolescence"]
+        var lines = ["Callsign,Quality,Quality %,Source,Last Seen,Decay %,Decay 0-255"]
         for n in filteredNeighbors {
-            lines.append("\(n.callsign),\(n.quality),\(String(format: "%.1f", n.qualityPercent)),\(n.sourceType),\(ISO8601DateFormatter().string(from: n.lastSeen)),\(n.obsolescenceCount)")
+            lines.append("\(n.callsign),\(n.quality),\(String(format: "%.1f", n.qualityPercent)),\(n.sourceType),\(ISO8601DateFormatter().string(from: n.lastSeen)),\(n.decayDisplayString),\(n.decay255)")
         }
         return lines.joined(separator: "\n")
     }
@@ -405,17 +454,20 @@ final class NetRomRoutesViewModel: ObservableObject {
                 "qualityPercent": String(format: "%.1f", route.qualityPercent),
                 "sourceType": route.sourceType,
                 "path": route.path,
-                "hopCount": route.hopCount
+                "hopCount": route.hopCount,
+                "lastUpdated": ISO8601DateFormatter().string(from: route.lastUpdated),
+                "decayPercent": route.decayDisplayString,
+                "decay255": route.decay255
             ]
         }
         return formatJSON(data)
     }
 
     func copyRoutesAsCSV() -> String {
-        var lines = ["Destination,Next Hop,Quality,Quality %,Source,Path,Hops"]
+        var lines = ["Destination,Next Hop,Quality,Quality %,Source,Path,Hops,Last Updated,Decay %,Decay 0-255"]
         for r in filteredRoutes {
             let pathStr = r.path.joined(separator: " > ")
-            lines.append("\(r.destination),\(r.nextHop),\(r.quality),\(String(format: "%.1f", r.qualityPercent)),\(r.sourceType),\"\(pathStr)\",\(r.hopCount)")
+            lines.append("\(r.destination),\(r.nextHop),\(r.quality),\(String(format: "%.1f", r.qualityPercent)),\(r.sourceType),\"\(pathStr)\",\(r.hopCount),\(ISO8601DateFormatter().string(from: r.lastUpdated)),\(r.decayDisplayString),\(r.decay255)")
         }
         return lines.joined(separator: "\n")
     }
@@ -428,7 +480,9 @@ final class NetRomRoutesViewModel: ObservableObject {
                 "quality": stat.quality,
                 "qualityPercent": String(format: "%.1f", stat.qualityPercent),
                 "duplicateCount": stat.duplicateCount,
-                "lastUpdated": ISO8601DateFormatter().string(from: stat.lastUpdated)
+                "lastUpdated": ISO8601DateFormatter().string(from: stat.lastUpdated),
+                "decayPercent": stat.decayDisplayString,
+                "decay255": stat.decay255
             ]
             if let df = stat.dfEstimate { dict["dfEstimate"] = String(format: "%.3f", df) }
             if let dr = stat.drEstimate { dict["drEstimate"] = String(format: "%.3f", dr) }
@@ -439,12 +493,12 @@ final class NetRomRoutesViewModel: ObservableObject {
     }
 
     func copyLinkStatsAsCSV() -> String {
-        var lines = ["From,To,Quality,Quality %,df,dr,ETX,Duplicates,Last Updated"]
+        var lines = ["From,To,Quality,Quality %,df,dr,ETX,Duplicates,Last Updated,Decay %,Decay 0-255"]
         for s in filteredLinkStats {
             let df = s.dfEstimate.map { String(format: "%.3f", $0) } ?? ""
             let dr = s.drEstimate.map { String(format: "%.3f", $0) } ?? ""
             let etx = s.etx.map { String(format: "%.2f", $0) } ?? ""
-            lines.append("\(s.fromCall),\(s.toCall),\(s.quality),\(String(format: "%.1f", s.qualityPercent)),\(df),\(dr),\(etx),\(s.duplicateCount),\(ISO8601DateFormatter().string(from: s.lastUpdated))")
+            lines.append("\(s.fromCall),\(s.toCall),\(s.quality),\(String(format: "%.1f", s.qualityPercent)),\(df),\(dr),\(etx),\(s.duplicateCount),\(ISO8601DateFormatter().string(from: s.lastUpdated)),\(s.decayDisplayString),\(s.decay255)")
         }
         return lines.joined(separator: "\n")
     }

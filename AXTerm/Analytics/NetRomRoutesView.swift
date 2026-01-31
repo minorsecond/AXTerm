@@ -143,9 +143,10 @@ struct NetRomRoutesView: View {
                     .width(min: 60, ideal: 80)
 
                     TableColumn("Decay") { neighbor in
-                        Text("\(neighbor.obsolescenceCount)")
+                        Text(neighbor.decayDisplayString)
                             .foregroundStyle(.secondary)
-                            .help("Obsolescence count: entry expires when this reaches 0")
+                            .help(NeighborDisplayInfo.decayTooltip)
+                            .accessibilityLabel(neighbor.decayAccessibilityLabel)
                     }
                     .width(min: 40, ideal: 60)
                 }
@@ -200,6 +201,21 @@ struct NetRomRoutesView: View {
                             .foregroundStyle(.secondary)
                     }
                     .width(min: 40, ideal: 50)
+
+                    TableColumn("Updated") { route in
+                        Text(route.lastUpdatedRelative)
+                            .foregroundStyle(.secondary)
+                            .help("Last updated: \(route.lastUpdated.formatted())")
+                    }
+                    .width(min: 60, ideal: 80)
+
+                    TableColumn("Decay") { route in
+                        Text(route.decayDisplayString)
+                            .foregroundStyle(.secondary)
+                            .help(RouteDisplayInfo.decayTooltip)
+                            .accessibilityLabel(route.decayAccessibilityLabel)
+                    }
+                    .width(min: 40, ideal: 60)
                 }
                 .tableStyle(.inset(alternatesRowBackgrounds: true))
             }
@@ -283,6 +299,14 @@ struct NetRomRoutesView: View {
                             .help("Last updated: \(stat.lastUpdated.formatted())")
                     }
                     .width(min: 60, ideal: 80)
+
+                    TableColumn("Decay") { stat in
+                        Text(stat.decayDisplayString)
+                            .foregroundStyle(.secondary)
+                            .help(LinkStatDisplayInfo.decayTooltip)
+                            .accessibilityLabel(stat.decayAccessibilityLabel)
+                    }
+                    .width(min: 40, ideal: 60)
                 }
                 .tableStyle(.inset(alternatesRowBackgrounds: true))
             }

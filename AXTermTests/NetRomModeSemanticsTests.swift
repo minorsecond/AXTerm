@@ -122,7 +122,7 @@ final class NetRomModeSemanticsTests: XCTestCase {
             from: "K2BBB",
             quality: 200,
             destinations: [
-                RouteInfo(destination: "K1AAA", origin: "K2BBB", quality: 200, path: ["K2BBB"], sourceType: "broadcast")
+                RouteInfo(destination: "K1AAA", origin: "K2BBB", quality: 200, path: ["K2BBB"], lastUpdated: baseTime.addingTimeInterval(1), sourceType: "broadcast")
             ],
             timestamp: baseTime.addingTimeInterval(1)
         )
@@ -358,7 +358,7 @@ final class NetRomModeSemanticsTests: XCTestCase {
             from: "W0ABC",
             quality: 200,
             destinations: [
-                RouteInfo(destination: "W1XYZ", origin: "W0ABC", quality: 200, path: ["W0ABC"], sourceType: "broadcast")
+                RouteInfo(destination: "W1XYZ", origin: "W0ABC", quality: 200, path: ["W0ABC"], lastUpdated: baseTime.addingTimeInterval(1), sourceType: "broadcast")
             ],
             timestamp: baseTime.addingTimeInterval(5)
         )
@@ -402,7 +402,7 @@ final class NetRomModeSemanticsTests: XCTestCase {
             from: "W0ABC",
             quality: 250,  // High advertised quality
             destinations: [
-                RouteInfo(destination: "K1AAA", origin: "W0ABC", quality: 250, path: ["W0ABC"], sourceType: "broadcast")
+                RouteInfo(destination: "K1AAA", origin: "W0ABC", quality: 250, path: ["W0ABC"], lastUpdated: baseTime.addingTimeInterval(1), sourceType: "broadcast")
             ],
             timestamp: baseTime.addingTimeInterval(11)
         )

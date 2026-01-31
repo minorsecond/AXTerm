@@ -48,8 +48,8 @@ final class NetRomPersistenceDecayTests: XCTestCase {
         NeighborInfo(call: call, quality: quality, lastSeen: lastSeen, obsolescenceCount: 1, sourceType: sourceType)
     }
 
-    private func makeRoute(destination: String, origin: String, quality: Int, path: [String] = [], sourceType: String = "broadcast") -> RouteInfo {
-        RouteInfo(destination: destination, origin: origin, quality: quality, path: path, sourceType: sourceType)
+    private func makeRoute(destination: String, origin: String, quality: Int, path: [String] = [], lastUpdated: Date, sourceType: String = "broadcast") -> RouteInfo {
+        RouteInfo(destination: destination, origin: origin, quality: quality, path: path, lastUpdated: lastUpdated, sourceType: sourceType)
     }
 
     private func makeLinkStat(from: String, to: String, quality: Int, lastUpdated: Date, obsCount: Int = 10) -> LinkStatRecord {
@@ -97,8 +97,8 @@ final class NetRomPersistenceDecayTests: XCTestCase {
     /// Test that route timestamps are handled correctly through persistence.
     func testPersistencePreservesRouteData() throws {
         // Arrange: Create routes
-        let route1 = makeRoute(destination: "N0DEST", origin: "W1ABC", quality: 200, path: ["W1ABC"])
-        let route2 = makeRoute(destination: "N0OTHER", origin: "W2XYZ", quality: 180, path: ["W2XYZ", "W3REL"])
+        let route1 = makeRoute(destination: "N0DEST", origin: "W1ABC", quality: 200, path: ["W1ABC"], lastUpdated: baseTime)
+        let route2 = makeRoute(destination: "N0OTHER", origin: "W2XYZ", quality: 180, path: ["W2XYZ", "W3REL"], lastUpdated: baseTime.addingTimeInterval(-60))
 
         // Act: Save and reload
         try persistence.saveRoutes([route1, route2], lastPacketID: 100, snapshotTimestamp: baseTime)
@@ -179,8 +179,8 @@ final class NetRomPersistenceDecayTests: XCTestCase {
         }
 
         // Act: Load through persistence (which should normalize)
-        let now = Date()
-        let loaded = try persistence.loadLinkStats()
+        let now = baseTime.addingTimeInterval(120)
+        let loaded = try persistence.loadLinkStats(now: now)
 
         // Assert: Invalid timestamps should be normalized
         // They should NOT be Date.distantPast or epoch 0
@@ -201,6 +201,31 @@ final class NetRomPersistenceDecayTests: XCTestCase {
         }
     }
 
+    /// Test that valid historical timestamps are preserved (not normalized away).
+    func testPersistencePreservesValidHistoricalTimestamps() throws {
+        let historical = Date(timeIntervalSince1970: 946_684_800) // 2000-01-01T00:00:00Z
+
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM link_stats")
+            try db.execute(sql: "DELETE FROM netrom_snapshot_meta")
+
+            try db.execute(sql: """
+                INSERT INTO link_stats (fromCall, toCall, quality, lastUpdated, dfEstimate, drEstimate, dupCount, ewmaQuality, obsCount)
+                VALUES ('W1HIST', 'N0CAL', 200, \(historical.timeIntervalSince1970), 0.9, NULL, 0, 200, 10)
+            """)
+
+            try db.execute(sql: """
+                INSERT INTO netrom_snapshot_meta (id, lastPacketID, configHash, snapshotTimestamp)
+                VALUES (1, 100, NULL, \(baseTime.timeIntervalSince1970))
+            """)
+        }
+
+        let loaded = try persistence.loadLinkStats(now: baseTime)
+        let stat = try XCTUnwrap(loaded.first { $0.fromCall == "W1HIST" })
+        XCTAssertEqual(stat.lastUpdated.timeIntervalSince1970, historical.timeIntervalSince1970, accuracy: 1.0,
+            "Valid historical timestamps should be preserved")
+    }
+
     /// Test that neighbor timestamps are not corrupted through full snapshot cycle.
     func testFullSnapshotCyclePreservesTimestamps() throws {
         // Arrange: Create a full snapshot
@@ -209,7 +234,7 @@ final class NetRomPersistenceDecayTests: XCTestCase {
             makeNeighbor(call: "W2XYZ", quality: 180, lastSeen: baseTime.addingTimeInterval(-450))
         ]
         let routes = [
-            makeRoute(destination: "N0DEST", origin: "W1ABC", quality: 200, path: ["W1ABC"])
+            makeRoute(destination: "N0DEST", origin: "W1ABC", quality: 200, path: ["W1ABC"], lastUpdated: baseTime)
         ]
         let linkStats = [
             makeLinkStat(from: "W1ABC", to: "N0CAL", quality: 200, lastUpdated: baseTime)

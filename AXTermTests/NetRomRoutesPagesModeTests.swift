@@ -92,7 +92,7 @@ final class NetRomRoutesPagesModeTests: XCTestCase {
             from: "W0ABC",
             quality: 200,
             destinations: [
-                RouteInfo(destination: "W1XYZ", origin: "W0ABC", quality: 200, path: ["W0ABC"], sourceType: "broadcast")
+                RouteInfo(destination: "W1XYZ", origin: "W0ABC", quality: 200, path: ["W0ABC"], lastUpdated: baseTime.addingTimeInterval(5), sourceType: "broadcast")
             ],
             timestamp: baseTime.addingTimeInterval(5)
         )
@@ -344,9 +344,9 @@ final class NetRomRoutesPagesModeTests: XCTestCase {
             from: "W0ABC",
             quality: 200,
             destinations: [
-                RouteInfo(destination: "Z0ZZZ", origin: "W0ABC", quality: 200, path: ["W0ABC"], sourceType: "broadcast"),
-                RouteInfo(destination: "A0AAA", origin: "W0ABC", quality: 150, path: ["W0ABC"], sourceType: "broadcast"),
-                RouteInfo(destination: "M0MMM", origin: "W0ABC", quality: 180, path: ["W0ABC"], sourceType: "broadcast")
+                RouteInfo(destination: "Z0ZZZ", origin: "W0ABC", quality: 200, path: ["W0ABC"], lastUpdated: baseTime.addingTimeInterval(1), sourceType: "broadcast"),
+                RouteInfo(destination: "A0AAA", origin: "W0ABC", quality: 150, path: ["W0ABC"], lastUpdated: baseTime.addingTimeInterval(1), sourceType: "broadcast"),
+                RouteInfo(destination: "M0MMM", origin: "W0ABC", quality: 180, path: ["W0ABC"], lastUpdated: baseTime.addingTimeInterval(1), sourceType: "broadcast")
             ],
             timestamp: baseTime.addingTimeInterval(1)
         )

@@ -50,8 +50,8 @@ final class NetRomDecayTests: XCTestCase {
     }
 
     /// Create a route with specified lastUpdated timestamp.
-    private func makeRoute(destination: String, origin: String, quality: Int, path: [String] = [], sourceType: String = "broadcast") -> RouteInfo {
-        RouteInfo(destination: destination, origin: origin, quality: quality, path: path, sourceType: sourceType)
+    private func makeRoute(destination: String, origin: String, quality: Int, path: [String] = [], lastUpdated: Date, sourceType: String = "broadcast") -> RouteInfo {
+        RouteInfo(destination: destination, origin: origin, quality: quality, path: path, lastUpdated: lastUpdated, sourceType: sourceType)
     }
 
     // MARK: - TEST GROUP A: Neighbor Time-Based Decay
@@ -136,7 +136,7 @@ final class NetRomDecayTests: XCTestCase {
     /// Older evidence yields lower freshness."
     func testRouteTimeBasedDecay() {
         // For routes, we need to use a RouteDecayInfo wrapper since RouteInfo doesn't have lastUpdated
-        let route = makeRoute(destination: "N0DEST", origin: "W1ABC", quality: 200, path: ["W1ABC"])
+        let route = makeRoute(destination: "N0DEST", origin: "W1ABC", quality: 200, path: ["W1ABC"], lastUpdated: baseTime)
 
         // Create a route decay info with timestamp
         let routeDecay = RouteDecayInfo(route: route, lastUpdated: baseTime)
@@ -162,11 +162,11 @@ final class NetRomDecayTests: XCTestCase {
         let inferredTTL: TimeInterval = 10 * 60  // 10 minutes (shorter for inferred)
 
         let classicRoute = RouteDecayInfo(
-            route: makeRoute(destination: "N0DEST", origin: "W1ABC", quality: 200, sourceType: "broadcast"),
+            route: makeRoute(destination: "N0DEST", origin: "W1ABC", quality: 200, lastUpdated: baseTime, sourceType: "broadcast"),
             lastUpdated: baseTime
         )
         let inferredRoute = RouteDecayInfo(
-            route: makeRoute(destination: "N0DEST", origin: "W2XYZ", quality: 180, sourceType: "inferred"),
+            route: makeRoute(destination: "N0DEST", origin: "W2XYZ", quality: 180, lastUpdated: baseTime, sourceType: "inferred"),
             lastUpdated: baseTime
         )
 
