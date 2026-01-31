@@ -35,16 +35,39 @@ struct LinkQualityConfig: Equatable {
     /// Maximum observations to retain per directional link (ring buffer bound).
     let maxObservationsPerLink: Int
 
+    /// Whether to exclude service destinations (BEACON, ID, MAIL, etc.) from link quality edges.
+    /// Default is true - service destinations are not valid callsigns for routing purposes.
+    let excludeServiceDestinations: Bool
+
+    // TODO: Add PacketIngestSource enum (kiss, agwpe, unknown) and source-specific configs
+    // TODO: Add ingestionDedupeWindowMs for AGWPE source
+    // TODO: Add skipIngestionDedupe flag for KISS source (Direwolf has built-in de-dupe)
+
+    init(
+        slidingWindowSeconds: TimeInterval,
+        ewmaAlpha: Double,
+        initialDeliveryRatio: Double,
+        maxObservationsPerLink: Int,
+        excludeServiceDestinations: Bool = true
+    ) {
+        self.slidingWindowSeconds = slidingWindowSeconds
+        self.ewmaAlpha = ewmaAlpha
+        self.initialDeliveryRatio = initialDeliveryRatio
+        self.maxObservationsPerLink = maxObservationsPerLink
+        self.excludeServiceDestinations = excludeServiceDestinations
+    }
+
     static let `default` = LinkQualityConfig(
         slidingWindowSeconds: 300,
         ewmaAlpha: 0.1,  // Lower alpha = more smoothing, prevents drastic quality drops from short bursts
         initialDeliveryRatio: 0.5,
-        maxObservationsPerLink: 100
+        maxObservationsPerLink: 100,
+        excludeServiceDestinations: true
     )
 
     /// Generate a hash for config invalidation purposes.
     func configHash() -> String {
-        "link_v1_\(slidingWindowSeconds)_\(ewmaAlpha)_\(initialDeliveryRatio)_\(maxObservationsPerLink)"
+        "link_v2_\(slidingWindowSeconds)_\(ewmaAlpha)_\(initialDeliveryRatio)_\(maxObservationsPerLink)_\(excludeServiceDestinations)"
     }
 }
 
@@ -140,6 +163,15 @@ struct LinkQualityEstimator {
         let to = CallsignValidator.normalize(rawTo)
         guard !from.isEmpty, !to.isEmpty else { return }
 
+        // Filter out service destinations (BEACON, ID, MAIL, etc.) if configured
+        // These are not valid callsigns for routing purposes
+        if config.excludeServiceDestinations {
+            guard CallsignValidator.isValidCallsign(from),
+                  CallsignValidator.isValidCallsign(to) else {
+                return
+            }
+        }
+
         let key = "\(from)→\(to)"
 
         var s = stats[key] ?? DirectionalLinkStats(
@@ -207,16 +239,23 @@ struct LinkQualityEstimator {
 
     /// Export current link statistics for persistence.
     func exportLinkStats() -> [LinkStatRecord] {
-        stats
+        let now = clock()
+        return stats
             .compactMap { (key, s) -> LinkStatRecord? in
                 let parts = key.components(separatedBy: "→")
                 guard parts.count == 2 else { return nil }
                 let linkStats = s.toLinkStats()
+
+                // Never export Date.distantPast - use current time as fallback
+                // This prevents "739648d ago" display bugs
+                let timestamp = linkStats.lastUpdate ?? now
+                let sanitizedTimestamp = Self.sanitizeTimestamp(timestamp, fallback: now)
+
                 return LinkStatRecord(
                     fromCall: parts[0],
                     toCall: parts[1],
                     quality: linkStats.ewmaQuality,
-                    lastUpdated: linkStats.lastUpdate ?? Date.distantPast,
+                    lastUpdated: sanitizedTimestamp,
                     dfEstimate: linkStats.dfEstimate,
                     drEstimate: linkStats.drEstimate,
                     duplicateCount: linkStats.duplicateCount,
@@ -228,15 +267,57 @@ struct LinkQualityEstimator {
 
     /// Import link statistics from persistence.
     mutating func importLinkStats(_ records: [LinkStatRecord]) {
+        let now = clock()
+
+        #if DEBUG
+        var sanitizedCount = 0
+        var importedCount = 0
+        #endif
+
         for record in records {
             let key = "\(record.fromCall)→\(record.toCall)"
-            let ratio = Double(record.quality) / 255.0
+            let ratio = max(0, min(1, Double(record.quality) / 255.0))
+
+            // Sanitize timestamps - replace Date.distantPast with current time
+            let sanitizedTimestamp = Self.sanitizeTimestamp(record.lastUpdated, fallback: now)
+
+            #if DEBUG
+            if record.lastUpdated != sanitizedTimestamp {
+                sanitizedCount += 1
+            }
+            importedCount += 1
+            #endif
+
             stats[key] = DirectionalLinkStats(
                 ewmaRatio: ratio,
-                lastUpdated: record.lastUpdated,
-                observations: RingBuffer(capacity: config.maxObservationsPerLink)
+                lastUpdated: sanitizedTimestamp,
+                observations: RingBuffer(capacity: config.maxObservationsPerLink),
+                // Restore df/dr estimates from persistence so they display correctly
+                restoredDfEstimate: record.dfEstimate,
+                restoredDrEstimate: record.drEstimate,
+                restoredObservationCount: record.observationCount,
+                restoredDuplicateCount: record.duplicateCount
             )
         }
+
+        #if DEBUG
+        if sanitizedCount > 0 {
+            print("[LINKQUALITY] importLinkStats: sanitized \(sanitizedCount)/\(importedCount) invalid timestamps (Date.distantPast)")
+        }
+        #endif
+    }
+
+    // MARK: - Timestamp Helpers
+
+    /// Sanitize a timestamp - replace Date.distantPast or dates more than 1 year old with the fallback.
+    private static func sanitizeTimestamp(_ date: Date, fallback: Date) -> Date {
+        // Date.distantPast is year 0001, which is ~2000 years ago
+        // Any date more than 1 year in the past is likely corrupted
+        let oneYearAgo = fallback.addingTimeInterval(-365 * 24 * 60 * 60)
+        if date < oneYearAgo {
+            return fallback
+        }
+        return date
     }
 }
 
@@ -290,6 +371,30 @@ private struct DirectionalLinkStats {
     /// Ring buffer of recent observations.
     var observations: RingBuffer<Observation>
 
+    // Restored values from persistence (used when observations ring buffer is empty after import)
+    var restoredDfEstimate: Double?
+    var restoredDrEstimate: Double?
+    var restoredObservationCount: Int
+    var restoredDuplicateCount: Int
+
+    init(
+        ewmaRatio: Double,
+        lastUpdated: Date,
+        observations: RingBuffer<Observation>,
+        restoredDfEstimate: Double? = nil,
+        restoredDrEstimate: Double? = nil,
+        restoredObservationCount: Int = 0,
+        restoredDuplicateCount: Int = 0
+    ) {
+        self.ewmaRatio = ewmaRatio
+        self.lastUpdated = lastUpdated
+        self.observations = observations
+        self.restoredDfEstimate = restoredDfEstimate
+        self.restoredDrEstimate = restoredDrEstimate
+        self.restoredObservationCount = restoredObservationCount
+        self.restoredDuplicateCount = restoredDuplicateCount
+    }
+
     /// Quality scaled to 0...255.
     /// Uses unidirectional ETX fallback: quality = 255 * df
     /// where df is the forward delivery probability estimated from unique/total ratio.
@@ -310,6 +415,12 @@ private struct DirectionalLinkStats {
         observations.append(Observation(timestamp: timestamp, isDuplicate: isDuplicate))
         lastUpdated = timestamp
 
+        // Clear restored values once we have real observations
+        restoredDfEstimate = nil
+        restoredDrEstimate = nil
+        restoredObservationCount = 0
+        restoredDuplicateCount = 0
+
         // Traditional EWMA: each observation contributes directly
         // Unique packet = 1.0 (successful first transmission)
         // Duplicate packet = 0.0 (indicates retry was needed)
@@ -326,19 +437,43 @@ private struct DirectionalLinkStats {
 
     /// Convert to public LinkStats.
     func toLinkStats() -> LinkStats {
-        let total = observations.count
-        let dups = observations.elements.filter { $0.isDuplicate }.count
-        let unique = total - dups
+        let liveTotal = observations.count
+        let liveDups = observations.elements.filter { $0.isDuplicate }.count
+        let liveUnique = liveTotal - liveDups
 
-        // df estimate: ratio of unique (non-duplicate) to total
-        // Duplicates indicate retries, so unique/total approximates first-transmission success rate
-        let df: Double? = total > 0 ? Double(unique) / Double(total) : nil
+        // Use live observations if available, otherwise use restored values
+        let total: Int
+        let dups: Int
+        let df: Double?
+        let dr: Double?
+
+        if liveTotal > 0 {
+            // We have live observations - calculate from them
+            total = liveTotal
+            dups = liveDups
+            // df estimate: ratio of unique (non-duplicate) to total
+            // Duplicates indicate retries, so unique/total approximates first-transmission success rate
+            df = Double(liveUnique) / Double(liveTotal)
+            dr = nil // Reverse probability requires bidirectional analysis (not yet implemented)
+        } else if restoredObservationCount > 0 {
+            // No live observations but we have restored data from persistence
+            total = restoredObservationCount
+            dups = restoredDuplicateCount
+            df = restoredDfEstimate
+            dr = restoredDrEstimate
+        } else {
+            // No data at all - this shouldn't happen but handle gracefully
+            total = 0
+            dups = 0
+            df = nil
+            dr = nil
+        }
 
         return LinkStats(
             observationCount: total,
             duplicateCount: dups,
             dfEstimate: df,
-            drEstimate: nil, // Reverse probability requires bidirectional analysis
+            drEstimate: dr,
             ewmaQuality: quality,
             lastUpdate: lastUpdated
         )

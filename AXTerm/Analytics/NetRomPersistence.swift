@@ -109,6 +109,7 @@ private struct LinkStatDBRecord: Codable, FetchableRecord, PersistableRecord {
     let drEstimate: Double?
     let dupCount: Int
     let ewmaQuality: Int
+    let obsCount: Int  // observation count for evidence rehydration
 }
 
 /// GRDB record for snapshot metadata.
@@ -169,6 +170,7 @@ final class NetRomPersistence {
                 t.column("drEstimate", .double)
                 t.column("dupCount", .integer).notNull().defaults(to: 0)
                 t.column("ewmaQuality", .integer).notNull().defaults(to: 0)
+                t.column("obsCount", .integer).notNull().defaults(to: 0)  // observation count for evidence rehydration
                 t.primaryKey(["fromCall", "toCall"])
             }
 
@@ -178,6 +180,29 @@ final class NetRomPersistence {
                 t.column("configHash", .text)
                 t.column("snapshotTimestamp", .double).notNull()
             }
+
+            // Migration: Add obsCount column to existing link_stats tables
+            // This handles databases created before the obsCount column was added
+            try migrateAddObsCountColumn(db)
+        }
+    }
+
+    /// Adds the obsCount column to link_stats if it doesn't exist.
+    /// For existing rows, defaults to 1 (assume at least one observation) to avoid
+    /// treating valid persisted links as having zero evidence.
+    private func migrateAddObsCountColumn(_ db: Database) throws {
+        // Check if obsCount column already exists
+        let columns = try db.columns(in: "link_stats")
+        let hasObsCount = columns.contains { $0.name == "obsCount" }
+
+        if !hasObsCount {
+            // Add the column with a default of 1 for existing rows
+            // This ensures old data isn't treated as having zero observations
+            try db.execute(sql: "ALTER TABLE link_stats ADD COLUMN obsCount INTEGER NOT NULL DEFAULT 1")
+
+            #if DEBUG
+            print("[NETROM:PERSISTENCE] Migrated link_stats table: added obsCount column")
+            #endif
         }
     }
 
@@ -283,7 +308,8 @@ final class NetRomPersistence {
                     dfEstimate: stat.dfEstimate,
                     drEstimate: stat.drEstimate,
                     dupCount: stat.duplicateCount,
-                    ewmaQuality: stat.quality
+                    ewmaQuality: stat.quality,
+                    obsCount: stat.observationCount  // Persist evidence count for rehydration
                 )
                 try record.insert(db)
             }
@@ -304,7 +330,7 @@ final class NetRomPersistence {
                     dfEstimate: record.dfEstimate,
                     drEstimate: record.drEstimate,
                     duplicateCount: record.dupCount,
-                    observationCount: 0  // Not stored, but can be reconstructed
+                    observationCount: record.obsCount  // Load persisted evidence count
                 )
             }
         }
@@ -362,7 +388,8 @@ final class NetRomPersistence {
                     dfEstimate: stat.dfEstimate,
                     drEstimate: stat.drEstimate,
                     dupCount: stat.duplicateCount,
-                    ewmaQuality: stat.quality
+                    ewmaQuality: stat.quality,
+                    obsCount: stat.observationCount  // Persist evidence count for rehydration
                 )
                 try record.insert(db)
             }

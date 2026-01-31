@@ -246,9 +246,47 @@ final class NetRomRoutesViewModel: ObservableObject {
 
             print("[NETROM:VIEWMODEL]   - LinkStats: \(rawLinkStats.count)")
             for (i, s) in rawLinkStats.prefix(3).enumerated() {
-                print("[NETROM:VIEWMODEL]     [\(i)] \(s.fromCall)→\(s.toCall) quality=\(s.quality)")
+                let dfStr = s.dfEstimate.map { String(format: "%.2f", $0) } ?? "nil"
+                let drStr = s.drEstimate.map { String(format: "%.2f", $0) } ?? "nil"
+                print("[NETROM:VIEWMODEL]     [\(i)] \(s.fromCall)→\(s.toCall) quality=\(s.quality) df=\(dfStr) dr=\(drStr) obs=\(s.observationCount)")
             }
             if rawLinkStats.count > 3 { print("[NETROM:VIEWMODEL]     ... and \(rawLinkStats.count - 3) more") }
+
+            // Diagnose link stats data quality
+            let statsWithNilDf = rawLinkStats.filter { $0.dfEstimate == nil }.count
+            let statsWithNilDr = rawLinkStats.filter { $0.drEstimate == nil }.count
+            let statsWithZeroObs = rawLinkStats.filter { $0.observationCount == 0 }.count
+            let statsWithBadTimestamp = rawLinkStats.filter { Date().timeIntervalSince($0.lastUpdated) > 365 * 24 * 60 * 60 }.count
+
+            if statsWithNilDf > 0 || statsWithNilDr > 0 || statsWithBadTimestamp > 0 {
+                print("[NETROM:VIEWMODEL] ========== Link Quality Diagnostics ==========")
+
+                if statsWithNilDf > 0 {
+                    print("[NETROM:VIEWMODEL] ℹ️ \(statsWithNilDf)/\(rawLinkStats.count) links have nil df (forward delivery ratio)")
+                    print("[NETROM:VIEWMODEL]    WHY: df requires observationCount > 0")
+                    print("[NETROM:VIEWMODEL]    FIX: Links will populate df as new packets are observed")
+                }
+
+                if statsWithNilDr > 0 {
+                    print("[NETROM:VIEWMODEL] ℹ️ \(statsWithNilDr)/\(rawLinkStats.count) links have nil dr (reverse delivery ratio)")
+                    print("[NETROM:VIEWMODEL]    WHY: dr requires bidirectional ACK analysis (not yet implemented)")
+                    print("[NETROM:VIEWMODEL]    NOTE: This is normal - AX.25 UI frames have no ACKs")
+                }
+
+                if statsWithZeroObs > 0 {
+                    print("[NETROM:VIEWMODEL] ⚠️ \(statsWithZeroObs)/\(rawLinkStats.count) links have 0 observations")
+                    print("[NETROM:VIEWMODEL]    WHY: Loaded from persistence but no new packets received")
+                    print("[NETROM:VIEWMODEL]    FIX: Observations will accumulate as new packets arrive")
+                }
+
+                if statsWithBadTimestamp > 0 {
+                    print("[NETROM:VIEWMODEL] ❌ \(statsWithBadTimestamp)/\(rawLinkStats.count) links have invalid timestamps (>1 year old)")
+                    print("[NETROM:VIEWMODEL]    WHY: Date.distantPast was used as fallback in old persistence")
+                    print("[NETROM:VIEWMODEL]    FIX: These will be sanitized on next observation or re-export")
+                }
+
+                print("[NETROM:VIEWMODEL] ========== End Diagnostics ==========")
+            }
 
             if rawNeighbors.isEmpty {
                 print("[NETROM:VIEWMODEL] ⚠️ Neighbors is EMPTY - this means:")

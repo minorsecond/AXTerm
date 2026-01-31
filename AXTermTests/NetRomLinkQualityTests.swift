@@ -624,10 +624,10 @@ final class NetRomLinkQualityTests: XCTestCase {
         for i in 0..<50 {
             let ts = now.addingTimeInterval(Double(i))
             testClock = ts
-            estimator.observePacket(makePacket(from: "W0PERFECT", to: "N0CALL", timestamp: ts), timestamp: ts, isDuplicate: false)
+            estimator.observePacket(makePacket(from: "W0PFT", to: "N0CAL", timestamp: ts), timestamp: ts, isDuplicate: false)
         }
 
-        let quality = estimator.linkQuality(from: "W0PERFECT", to: "N0CALL")
+        let quality = estimator.linkQuality(from: "W0PFT", to: "N0CAL")
 
         // With perfect delivery (df ≈ 1.0), quality should approach 255
         XCTAssertGreaterThan(quality, 230, "Perfect delivery should yield quality > 230")

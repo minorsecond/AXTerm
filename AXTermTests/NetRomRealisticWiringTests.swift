@@ -570,9 +570,10 @@ final class NetRomRealisticWiringTests: XCTestCase {
         let baseTime = Date(timeIntervalSince1970: 1_700_610_000)
 
         // First, establish a baseline with clean packets
+        // Use valid callsigns (max 4 suffix letters)
         for i in 0..<20 {
             let packet = makePacket(
-                from: "W0CLEAN",
+                from: "W0CLN",
                 to: localCallsign,
                 via: [],
                 infoText: "CLEAN\(i)",
@@ -584,7 +585,7 @@ final class NetRomRealisticWiringTests: XCTestCase {
         // Then, send duplicate bursts
         for i in 0..<20 {
             let packet = makePacket(
-                from: "W0BURST",
+                from: "W0BST",
                 to: localCallsign,
                 via: [],
                 infoText: "BURST",
@@ -596,8 +597,8 @@ final class NetRomRealisticWiringTests: XCTestCase {
         let linkStats = integration.exportLinkStats()
 
         // Find link stats for both
-        let cleanStat = linkStats.first { $0.fromCall == "W0CLEAN" }
-        let burstStat = linkStats.first { $0.fromCall == "W0BURST" }
+        let cleanStat = linkStats.first { $0.fromCall == "W0CLN" }
+        let burstStat = linkStats.first { $0.fromCall == "W0BST" }
 
         XCTAssertNotNil(cleanStat, "Should have stats for clean link")
         XCTAssertNotNil(burstStat, "Should have stats for burst link")
