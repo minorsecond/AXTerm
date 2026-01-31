@@ -12,9 +12,16 @@ import SwiftUI
 /// Main view for the NET/ROM Routes page.
 struct NetRomRoutesView: View {
     @StateObject private var viewModel: NetRomRoutesViewModel
+    @ObservedObject var settings: AppSettingsStore
+    private weak var packetEngine: PacketEngine?
 
-    init(integration: NetRomIntegration?, packetEngine: PacketEngine? = nil) {
-        _viewModel = StateObject(wrappedValue: NetRomRoutesViewModel(integration: integration, packetEngine: packetEngine))
+    @State private var showingClearConfirmation = false
+    @State private var clearFeedback: String?
+
+    init(integration: NetRomIntegration?, packetEngine: PacketEngine? = nil, settings: AppSettingsStore) {
+        self.settings = settings
+        self.packetEngine = packetEngine
+        _viewModel = StateObject(wrappedValue: NetRomRoutesViewModel(integration: integration, packetEngine: packetEngine, settings: settings))
     }
 
     var body: some View {
@@ -28,6 +35,17 @@ struct NetRomRoutesView: View {
             tabContent
         }
         .background(Color(NSColor.windowBackgroundColor))
+        .confirmationDialog(
+            "Clear all NET/ROM routing data?",
+            isPresented: $showingClearConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Clear All Routes", role: .destructive) {
+                clearRoutes()
+            }
+        } message: {
+            Text("This removes all neighbors, routes, and link quality data. New data will be collected as packets arrive.")
+        }
     }
 
     // MARK: - Toolbar
@@ -55,6 +73,11 @@ struct NetRomRoutesView: View {
             .pickerStyle(.menu)
             .frame(width: 120)
             .help("NET/ROM routing mode: Classic uses only explicit broadcasts, Inferred uses passive observation, Hybrid combines both")
+
+            // Hide expired toggle
+            Toggle("Hide expired", isOn: $settings.hideExpiredRoutes)
+                .toggleStyle(.checkbox)
+                .help("When enabled, hides entries with 0% freshness (older than TTL)")
 
             // Search field
             TextField("Search...", text: $viewModel.searchText)
@@ -90,6 +113,22 @@ struct NetRomRoutesView: View {
             .frame(width: 30)
             .help("Export data")
 
+            // Clear button
+            Button {
+                showingClearConfirmation = true
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("Clear all routing data")
+
+            // Clear feedback
+            if let feedback = clearFeedback {
+                Text(feedback)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             #if DEBUG
             // Debug rebuild button
             debugRebuildButton
@@ -97,6 +136,20 @@ struct NetRomRoutesView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    // MARK: - Actions
+
+    private func clearRoutes() {
+        packetEngine?.clearNetRomData()
+        clearFeedback = "Cleared"
+        viewModel.refresh()
+
+        // Auto-dismiss feedback after 2 seconds
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            clearFeedback = nil
+        }
     }
 
     // MARK: - Tab Content
@@ -478,6 +531,6 @@ struct SourceTypeBadge: View {
 // MARK: - Preview
 
 #Preview {
-    NetRomRoutesView(integration: nil, packetEngine: nil)
+    NetRomRoutesView(integration: nil, packetEngine: nil, settings: AppSettingsStore())
         .frame(width: 900, height: 500)
 }

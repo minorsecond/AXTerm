@@ -173,11 +173,15 @@ final class PacketEngine: ObservableObject {
         if !myCallsign.isEmpty {
             self.netRomIntegration = NetRomIntegration(
                 localCallsign: myCallsign,
-                mode: .hybrid  // Use hybrid mode for best passive inference
+                mode: .hybrid,  // Use hybrid mode for best passive inference
+                persistence: netRomPersistence  // Pass persistence for adaptive stale threshold tracking
             )
 
             // Load persisted NET/ROM state if available
             loadNetRomSnapshot()
+
+            // Prune old entries based on retention settings
+            pruneOldNetRomEntries()
 
             // Start periodic snapshot timer
             startNetRomSnapshotTimer()
@@ -1024,6 +1028,109 @@ final class PacketEngine: ObservableObject {
             netRomPacketsSinceSnapshot = 0
             saveNetRomSnapshot()
         }
+    }
+
+    // MARK: - NET/ROM Retention Management
+
+    /// Prune old NET/ROM entries based on retention settings.
+    /// This deletes entries older than the configured retention days.
+    func pruneOldNetRomEntries() {
+        guard let persistence = netRomPersistence else { return }
+
+        let retentionDays = settings.routeRetentionDays
+
+        Task.detached(priority: .utility) {
+            do {
+                let (neighbors, routes, linkStats) = try await MainActor.run {
+                    try persistence.pruneOldEntries(retentionDays: retentionDays)
+                }
+
+                #if DEBUG
+                await MainActor.run {
+                    if neighbors > 0 || routes > 0 || linkStats > 0 {
+                        print("[NETROM:PRUNE] Pruned old entries (retention: \(retentionDays) days)")
+                        print("[NETROM:PRUNE]   - Neighbors deleted: \(neighbors)")
+                        print("[NETROM:PRUNE]   - Routes deleted: \(routes)")
+                        print("[NETROM:PRUNE]   - Link stats deleted: \(linkStats)")
+                    }
+                }
+                #endif
+
+                if neighbors > 0 || routes > 0 || linkStats > 0 {
+                    await MainActor.run {
+                        SentryManager.shared.addBreadcrumb(
+                            category: "netrom.prune",
+                            message: "Pruned old NET/ROM entries",
+                            level: .info,
+                            data: [
+                                "retentionDays": retentionDays,
+                                "neighborsDeleted": neighbors,
+                                "routesDeleted": routes,
+                                "linkStatsDeleted": linkStats
+                            ]
+                        )
+                    }
+                }
+            } catch {
+                #if DEBUG
+                await MainActor.run {
+                    print("[NETROM:PRUNE] ❌ Error pruning entries: \(error)")
+                }
+                #endif
+                await MainActor.run {
+                    SentryManager.shared.capturePersistenceFailure("prune netrom entries", errorDescription: error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// Clear all NET/ROM data (neighbors, routes, link stats).
+    /// This removes all persisted and in-memory NET/ROM state.
+    func clearNetRomData() {
+        guard let persistence = netRomPersistence,
+              let integration = netRomIntegration else { return }
+
+        // Clear in-memory state
+        integration.reset()
+
+        // Clear persisted state
+        Task.detached(priority: .utility) {
+            do {
+                try await MainActor.run {
+                    try persistence.clearAll()
+                }
+
+                #if DEBUG
+                await MainActor.run {
+                    print("[NETROM:CLEAR] ✓ All NET/ROM data cleared")
+                }
+                #endif
+
+                await MainActor.run {
+                    SentryManager.shared.addBreadcrumb(
+                        category: "netrom.clear",
+                        message: "Cleared all NET/ROM data",
+                        level: .info,
+                        data: nil
+                    )
+                }
+            } catch {
+                #if DEBUG
+                await MainActor.run {
+                    print("[NETROM:CLEAR] ❌ Error clearing data: \(error)")
+                }
+                #endif
+                await MainActor.run {
+                    SentryManager.shared.capturePersistenceFailure("clear netrom data", errorDescription: error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// Get current counts of NET/ROM entries.
+    func getNetRomCounts() -> (neighbors: Int, routes: Int, linkStats: Int)? {
+        guard let persistence = netRomPersistence else { return nil }
+        return try? persistence.getCounts()
     }
 
     // MARK: - Debug: Full Rebuild from Packets

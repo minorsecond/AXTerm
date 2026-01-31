@@ -385,12 +385,57 @@ final class NetRomRoutesViewModel: ObservableObject {
 
     private weak var integration: NetRomIntegration?
     private weak var packetEngine: PacketEngine?
+    private weak var settings: AppSettingsStore?
     private let clock: ClockProviding
     private var refreshTimer: Timer?
 
-    init(integration: NetRomIntegration?, packetEngine: PacketEngine? = nil, clock: ClockProviding = SystemClock()) {
+    /// Cached origin intervals for adaptive TTL calculation
+    private var originIntervals: [String: OriginIntervalInfo] = [:]
+
+    /// Computed global TTL based on settings (in seconds)
+    private var globalStaleTTLSeconds: TimeInterval {
+        TimeInterval((settings?.globalStaleTTLHours ?? AppSettingsStore.defaultGlobalStaleTTLHours) * 3600)
+    }
+
+    /// Whether adaptive stale policy is enabled
+    private var isAdaptiveMode: Bool {
+        (settings?.stalePolicyMode ?? AppSettingsStore.defaultStalePolicyMode) == "adaptive"
+    }
+
+    /// Number of missed broadcasts before considering stale (for adaptive mode)
+    private var missedBroadcastsThreshold: Int {
+        settings?.adaptiveStaleMissedBroadcasts ?? AppSettingsStore.defaultAdaptiveStaleMissedBroadcasts
+    }
+
+    /// Whether to filter out expired entries based on settings
+    private var shouldHideExpired: Bool {
+        settings?.hideExpiredRoutes ?? AppSettingsStore.defaultHideExpiredRoutes
+    }
+
+    /// Get adaptive TTL for a specific origin, or fall back to global TTL.
+    ///
+    /// - Parameter origin: The origin callsign.
+    /// - Returns: TTL in seconds based on the origin's broadcast interval, or global TTL if unavailable.
+    private func adaptiveTTL(for origin: String) -> TimeInterval {
+        guard isAdaptiveMode else {
+            return globalStaleTTLSeconds
+        }
+
+        let normalizedOrigin = CallsignValidator.normalize(origin)
+        if let intervalInfo = originIntervals[normalizedOrigin],
+           intervalInfo.estimatedIntervalSeconds > 0 {
+            // TTL = interval * missed broadcasts threshold
+            return intervalInfo.estimatedIntervalSeconds * Double(missedBroadcastsThreshold)
+        }
+
+        // Fall back to global TTL if no interval data
+        return globalStaleTTLSeconds
+    }
+
+    init(integration: NetRomIntegration?, packetEngine: PacketEngine? = nil, settings: AppSettingsStore? = nil, clock: ClockProviding = SystemClock()) {
         self.integration = integration
         self.packetEngine = packetEngine
+        self.settings = settings
         self.clock = clock
         startAutoRefresh()
     }
@@ -402,28 +447,61 @@ final class NetRomRoutesViewModel: ObservableObject {
     // MARK: - Filtered Data
 
     var filteredNeighbors: [NeighborDisplayInfo] {
-        guard !searchText.isEmpty else { return neighbors }
-        let query = searchText.uppercased()
-        return neighbors.filter { $0.callsign.uppercased().contains(query) }
+        var result = neighbors
+
+        // Filter by expiration if enabled
+        if shouldHideExpired {
+            result = result.filter { $0.freshness > 0 }
+        }
+
+        // Filter by search text
+        if !searchText.isEmpty {
+            let query = searchText.uppercased()
+            result = result.filter { $0.callsign.uppercased().contains(query) }
+        }
+
+        return result
     }
 
     var filteredRoutes: [RouteDisplayInfo] {
-        guard !searchText.isEmpty else { return routes }
-        let query = searchText.uppercased()
-        return routes.filter {
-            $0.destination.uppercased().contains(query) ||
-            $0.nextHop.uppercased().contains(query) ||
-            $0.pathSummary.uppercased().contains(query)
+        var result = routes
+
+        // Filter by expiration if enabled
+        if shouldHideExpired {
+            result = result.filter { $0.freshness > 0 }
         }
+
+        // Filter by search text
+        if !searchText.isEmpty {
+            let query = searchText.uppercased()
+            result = result.filter {
+                $0.destination.uppercased().contains(query) ||
+                $0.nextHop.uppercased().contains(query) ||
+                $0.pathSummary.uppercased().contains(query)
+            }
+        }
+
+        return result
     }
 
     var filteredLinkStats: [LinkStatDisplayInfo] {
-        guard !searchText.isEmpty else { return linkStats }
-        let query = searchText.uppercased()
-        return linkStats.filter {
-            $0.fromCall.uppercased().contains(query) ||
-            $0.toCall.uppercased().contains(query)
+        var result = linkStats
+
+        // Filter by expiration if enabled
+        if shouldHideExpired {
+            result = result.filter { $0.freshness > 0 }
         }
+
+        // Filter by search text
+        if !searchText.isEmpty {
+            let query = searchText.uppercased()
+            result = result.filter {
+                $0.fromCall.uppercased().contains(query) ||
+                $0.toCall.uppercased().contains(query)
+            }
+        }
+
+        return result
     }
 
     // MARK: - Actions
@@ -448,6 +526,10 @@ final class NetRomRoutesViewModel: ObservableObject {
         if integration.currentMode != routingMode {
             integration.setMode(routingMode)
         }
+
+        // Load origin intervals for adaptive TTL calculation
+        let intervals = integration.getAllOriginIntervals()
+        originIntervals = Dictionary(uniqueKeysWithValues: intervals.map { ($0.origin, $0) })
 
         // Fetch current data filtered by mode
         let rawNeighbors = integration.currentNeighbors(forMode: routingMode)
@@ -532,10 +614,19 @@ final class NetRomRoutesViewModel: ObservableObject {
         }
         #endif
 
-        // Convert to display models
-        neighbors = rawNeighbors.map { NeighborDisplayInfo(from: $0, now: now) }
-        routes = rawRoutes.map { RouteDisplayInfo(from: $0, now: now) }
-        linkStats = rawLinkStats.map { LinkStatDisplayInfo(from: $0, now: now) }
+        // Convert to display models using configured TTL
+        // For neighbors and link stats, use global TTL
+        // For routes, use adaptive TTL based on origin broadcast interval if enabled
+        let globalTTL = globalStaleTTLSeconds
+        neighbors = rawNeighbors.map { NeighborDisplayInfo(from: $0, now: now, ttl: globalTTL) }
+
+        // Routes use adaptive TTL per-origin when adaptive mode is enabled
+        routes = rawRoutes.map { route in
+            let ttl = adaptiveTTL(for: route.origin)
+            return RouteDisplayInfo(from: route, now: now, ttl: ttl)
+        }
+
+        linkStats = rawLinkStats.map { LinkStatDisplayInfo(from: $0, now: now, ttl: globalTTL) }
 
         lastRefresh = now
         isLoading = false

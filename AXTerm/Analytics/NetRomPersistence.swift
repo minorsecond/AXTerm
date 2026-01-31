@@ -122,6 +122,26 @@ private struct SnapshotMetaRecord: Codable, FetchableRecord, PersistableRecord {
     let snapshotTimestamp: Double  // TimeInterval since 1970
 }
 
+/// GRDB record for tracking per-origin broadcast intervals.
+/// Used for adaptive stale threshold calculation.
+private struct OriginIntervalRecord: Codable, FetchableRecord, PersistableRecord {
+    static let databaseTableName = "netrom_origin_intervals"
+
+    let origin: String  // Primary key
+    let estimatedIntervalSeconds: Double
+    let lastBroadcastTimestamp: Double  // TimeInterval since 1970
+    let broadcastCount: Int
+    let intervalSum: Double  // Sum of intervals for rolling average
+}
+
+/// Public struct for origin interval data.
+struct OriginIntervalInfo {
+    let origin: String
+    let estimatedIntervalSeconds: TimeInterval
+    let lastBroadcast: Date
+    let broadcastCount: Int
+}
+
 /// Persistence layer for NET/ROM routing state.
 final class NetRomPersistence {
     private let database: DatabaseWriter
@@ -179,6 +199,15 @@ final class NetRomPersistence {
                 t.column("lastPacketID", .integer).notNull()
                 t.column("configHash", .text)
                 t.column("snapshotTimestamp", .double).notNull()
+            }
+
+            // Origin broadcast interval tracking for adaptive stale threshold
+            try db.create(table: "netrom_origin_intervals", ifNotExists: true) { t in
+                t.column("origin", .text).primaryKey()
+                t.column("estimatedIntervalSeconds", .double).notNull().defaults(to: 0)
+                t.column("lastBroadcastTimestamp", .double).notNull()
+                t.column("broadcastCount", .integer).notNull().defaults(to: 1)
+                t.column("intervalSum", .double).notNull().defaults(to: 0)
             }
 
             // Migration: Add obsCount column to existing link_stats tables
@@ -550,6 +579,178 @@ final class NetRomPersistence {
             try db.execute(sql: "DELETE FROM netrom_routes")
             try db.execute(sql: "DELETE FROM link_stats")
             try db.execute(sql: "DELETE FROM netrom_snapshot_meta")
+            try db.execute(sql: "DELETE FROM netrom_origin_intervals")
+        }
+    }
+
+    // MARK: - Prune (Retention Policy)
+
+    /// Delete all entries older than the specified retention period.
+    /// This is the retention prune job that runs periodically.
+    ///
+    /// - Parameters:
+    ///   - retentionDays: Number of days to retain data. Entries older than this are deleted.
+    ///   - now: Current date for calculating cutoff.
+    /// - Returns: Tuple with counts of deleted (neighbors, routes, linkStats).
+    @discardableResult
+    func pruneOldEntries(retentionDays: Int, now: Date = Date()) throws -> (neighbors: Int, routes: Int, linkStats: Int) {
+        let cutoffTimestamp = now.addingTimeInterval(-TimeInterval(retentionDays) * 24 * 60 * 60).timeIntervalSince1970
+
+        return try database.write { db in
+            // Delete old neighbors
+            let neighborsBefore = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM netrom_neighbors") ?? 0
+            try db.execute(sql: "DELETE FROM netrom_neighbors WHERE lastSeen < ?", arguments: [cutoffTimestamp])
+            let neighborsAfter = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM netrom_neighbors") ?? 0
+            let neighborsDeleted = neighborsBefore - neighborsAfter
+
+            // Delete old routes
+            let routesBefore = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM netrom_routes") ?? 0
+            try db.execute(sql: "DELETE FROM netrom_routes WHERE lastUpdate < ?", arguments: [cutoffTimestamp])
+            let routesAfter = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM netrom_routes") ?? 0
+            let routesDeleted = routesBefore - routesAfter
+
+            // Delete old link stats
+            let linkStatsBefore = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM link_stats") ?? 0
+            try db.execute(sql: "DELETE FROM link_stats WHERE lastUpdated < ?", arguments: [cutoffTimestamp])
+            let linkStatsAfter = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM link_stats") ?? 0
+            let linkStatsDeleted = linkStatsBefore - linkStatsAfter
+
+            #if DEBUG
+            if neighborsDeleted > 0 || routesDeleted > 0 || linkStatsDeleted > 0 {
+                print("[NETROM:PERSISTENCE] Pruned old entries (retention: \(retentionDays) days):")
+                print("  - Neighbors: \(neighborsDeleted) deleted")
+                print("  - Routes: \(routesDeleted) deleted")
+                print("  - Link stats: \(linkStatsDeleted) deleted")
+            }
+            #endif
+
+            return (neighbors: neighborsDeleted, routes: routesDeleted, linkStats: linkStatsDeleted)
+        }
+    }
+
+    /// Get counts of all stored entries.
+    func getCounts() throws -> (neighbors: Int, routes: Int, linkStats: Int) {
+        try database.read { db in
+            let neighbors = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM netrom_neighbors") ?? 0
+            let routes = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM netrom_routes") ?? 0
+            let linkStats = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM link_stats") ?? 0
+            return (neighbors: neighbors, routes: routes, linkStats: linkStats)
+        }
+    }
+
+    // MARK: - Origin Broadcast Interval Tracking
+
+    /// Record a broadcast from an origin station.
+    /// Updates the estimated broadcast interval using a rolling average.
+    ///
+    /// - Parameters:
+    ///   - origin: The callsign of the broadcasting station.
+    ///   - timestamp: The timestamp of the broadcast.
+    func recordBroadcast(from origin: String, timestamp: Date) throws {
+        try database.write { db in
+            let normalizedOrigin = CallsignValidator.normalize(origin)
+            guard !normalizedOrigin.isEmpty else { return }
+
+            let timestampValue = timestamp.timeIntervalSince1970
+
+            // Check for existing record
+            if let existing = try OriginIntervalRecord.fetchOne(db, key: normalizedOrigin) {
+                // Calculate interval since last broadcast
+                let intervalSinceLast = timestampValue - existing.lastBroadcastTimestamp
+
+                // Only update if interval is reasonable (> 10 seconds, < 24 hours)
+                // This filters out duplicate broadcasts and unrealistic intervals
+                if intervalSinceLast > 10 && intervalSinceLast < 86400 {
+                    let newCount = existing.broadcastCount + 1
+                    let newSum = existing.intervalSum + intervalSinceLast
+
+                    // Use exponential moving average for smoother estimates
+                    // Weight recent intervals more heavily
+                    let alpha = 0.3  // Smoothing factor
+                    let newEstimate: Double
+                    if existing.estimatedIntervalSeconds > 0 {
+                        newEstimate = alpha * intervalSinceLast + (1 - alpha) * existing.estimatedIntervalSeconds
+                    } else {
+                        newEstimate = intervalSinceLast
+                    }
+
+                    let updated = OriginIntervalRecord(
+                        origin: normalizedOrigin,
+                        estimatedIntervalSeconds: newEstimate,
+                        lastBroadcastTimestamp: timestampValue,
+                        broadcastCount: newCount,
+                        intervalSum: newSum
+                    )
+                    try updated.update(db)
+
+                    #if DEBUG
+                    print("[NETROM:PERSISTENCE] Updated broadcast interval for \(normalizedOrigin): \(String(format: "%.0f", newEstimate))s (count: \(newCount))")
+                    #endif
+                } else {
+                    // Just update the timestamp without changing interval estimate
+                    try db.execute(
+                        sql: "UPDATE netrom_origin_intervals SET lastBroadcastTimestamp = ? WHERE origin = ?",
+                        arguments: [timestampValue, normalizedOrigin]
+                    )
+                }
+            } else {
+                // First broadcast from this origin - insert new record
+                let record = OriginIntervalRecord(
+                    origin: normalizedOrigin,
+                    estimatedIntervalSeconds: 0,  // Unknown until second broadcast
+                    lastBroadcastTimestamp: timestampValue,
+                    broadcastCount: 1,
+                    intervalSum: 0
+                )
+                try record.insert(db)
+
+                #if DEBUG
+                print("[NETROM:PERSISTENCE] First broadcast recorded for \(normalizedOrigin)")
+                #endif
+            }
+        }
+    }
+
+    /// Get the estimated broadcast interval for an origin.
+    ///
+    /// - Parameter origin: The callsign of the origin station.
+    /// - Returns: The interval info, or nil if no data exists.
+    func getOriginInterval(for origin: String) throws -> OriginIntervalInfo? {
+        try database.read { db in
+            let normalizedOrigin = CallsignValidator.normalize(origin)
+            guard let record = try OriginIntervalRecord.fetchOne(db, key: normalizedOrigin) else {
+                return nil
+            }
+            return OriginIntervalInfo(
+                origin: record.origin,
+                estimatedIntervalSeconds: record.estimatedIntervalSeconds,
+                lastBroadcast: Date(timeIntervalSince1970: record.lastBroadcastTimestamp),
+                broadcastCount: record.broadcastCount
+            )
+        }
+    }
+
+    /// Get all tracked origin intervals.
+    ///
+    /// - Returns: Array of all origin interval info.
+    func getAllOriginIntervals() throws -> [OriginIntervalInfo] {
+        try database.read { db in
+            let records = try OriginIntervalRecord.order(Column("origin").asc).fetchAll(db)
+            return records.map { record in
+                OriginIntervalInfo(
+                    origin: record.origin,
+                    estimatedIntervalSeconds: record.estimatedIntervalSeconds,
+                    lastBroadcast: Date(timeIntervalSince1970: record.lastBroadcastTimestamp),
+                    broadcastCount: record.broadcastCount
+                )
+            }
+        }
+    }
+
+    /// Clear all origin interval tracking data.
+    func clearOriginIntervals() throws {
+        try database.write { db in
+            try db.execute(sql: "DELETE FROM netrom_origin_intervals")
         }
     }
 

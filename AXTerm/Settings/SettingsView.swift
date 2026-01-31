@@ -257,6 +257,122 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Routes") {
+                Toggle("Hide expired routes", isOn: $settings.hideExpiredRoutes)
+
+                Text("When enabled, routes with 0% freshness are hidden from the Routes page. All routes are still kept in the database.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("Stale policy", selection: $settings.stalePolicyMode) {
+                        Text("Adaptive (per-origin)").tag("adaptive")
+                        Text("Global (fixed TTL)").tag("global")
+                    }
+                    .pickerStyle(.segmented)
+
+                    if settings.stalePolicyMode == "adaptive" {
+                        Text("Routes are considered stale after missing multiple expected broadcasts from their origin. Each origin's broadcast interval is tracked automatically.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        HStack {
+                            Text("Missed broadcasts")
+                            Spacer()
+                            Text("\(settings.adaptiveStaleMissedBroadcasts)")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        HStack(spacing: 8) {
+                            TextField(
+                                "",
+                                value: $settings.adaptiveStaleMissedBroadcasts,
+                                format: .number
+                            )
+                            .frame(width: 60)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel("Missed broadcasts threshold")
+
+                            Stepper(
+                                "",
+                                value: $settings.adaptiveStaleMissedBroadcasts,
+                                in: AppSettingsStore.minAdaptiveStaleMissedBroadcasts...AppSettingsStore.maxAdaptiveStaleMissedBroadcasts
+                            )
+                            .labelsHidden()
+                        }
+
+                        Text("Number of missed broadcasts before a route is considered stale. Lower values detect staleness faster but may cause more false positives.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("All routes use a fixed time-based stale threshold.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        HStack {
+                            Text("Stale threshold")
+                            Spacer()
+                            Text("\(settings.globalStaleTTLHours) hour\(settings.globalStaleTTLHours == 1 ? "" : "s")")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        HStack(spacing: 8) {
+                            TextField(
+                                "",
+                                value: $settings.globalStaleTTLHours,
+                                format: .number
+                            )
+                            .frame(width: 60)
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityLabel("Stale threshold hours")
+
+                            Stepper(
+                                "",
+                                value: $settings.globalStaleTTLHours,
+                                in: AppSettingsStore.minGlobalStaleTTLHours...AppSettingsStore.maxGlobalStaleTTLHours
+                            )
+                            .labelsHidden()
+                        }
+
+                        Text("Routes older than this are considered stale. Affects freshness display and filtering.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Retention period")
+                        Spacer()
+                        Text("\(settings.routeRetentionDays) days")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack(spacing: 8) {
+                        TextField(
+                            "",
+                            value: $settings.routeRetentionDays,
+                            format: .number
+                        )
+                        .frame(width: 60)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Route retention days")
+
+                        Stepper(
+                            "",
+                            value: $settings.routeRetentionDays,
+                            in: AppSettingsStore.minRouteRetentionDays...AppSettingsStore.maxRouteRetentionDays,
+                            step: 7
+                        )
+                        .labelsHidden()
+                    }
+
+                    Text("Routes older than this are permanently deleted on app startup. Keeps database size manageable.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Sentry") {
                 Toggle("Enable Sentry reporting", isOn: $settings.sentryEnabled)
 

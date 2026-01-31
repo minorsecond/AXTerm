@@ -260,7 +260,7 @@ final class NetRomRoutesPagesModeTests: XCTestCase {
     func testViewModel_ModeChangeTriggersRefresh() {
         // Given: ViewModel
         let integration = makeIntegrationWithMixedData()
-        let viewModel = NetRomRoutesViewModel(integration: integration)
+        let viewModel = NetRomRoutesViewModel(integration: integration, settings: nil)
 
         // When: Change mode
         let initialRoutes = viewModel.routes.count
@@ -274,7 +274,7 @@ final class NetRomRoutesPagesModeTests: XCTestCase {
     func testViewModel_ModeAffectsAllTabs() {
         // Given: ViewModel in hybrid mode with mixed data
         let integration = makeIntegrationWithMixedData()
-        let viewModel = NetRomRoutesViewModel(integration: integration)
+        let viewModel = NetRomRoutesViewModel(integration: integration, settings: nil)
         viewModel.setMode(.hybrid)
 
         // Capture hybrid counts

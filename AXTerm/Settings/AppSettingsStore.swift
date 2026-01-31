@@ -41,6 +41,13 @@ final class AppSettingsStore: ObservableObject {
     static let analyticsHubMetricKey = "analyticsHubMetric"
     static let analyticsStationIdentityModeKey = "analyticsStationIdentityMode"
 
+    // NET/ROM route settings keys
+    static let hideExpiredRoutesKey = "hideExpiredRoutes"
+    static let routeRetentionDaysKey = "routeRetentionDays"
+    static let stalePolicyModeKey = "stalePolicyMode"
+    static let globalStaleTTLHoursKey = "globalStaleTTLHours"
+    static let adaptiveStaleMissedBroadcastsKey = "adaptiveStaleMissedBroadcasts"
+
     static let defaultHost = "localhost"
     static let defaultPort = 8001
     static let defaultRetention = 50_000
@@ -71,6 +78,19 @@ final class AppSettingsStore: ObservableObject {
     static let defaultAnalyticsMaxNodes = 150
     static let defaultAnalyticsHubMetric = "Degree"  // Matches HubMetric.degree.rawValue
     static let defaultAnalyticsStationIdentityMode = "station"  // Group SSIDs by default
+
+    // NET/ROM route defaults
+    static let defaultHideExpiredRoutes = true  // Hide expired routes by default for clean UI
+    static let defaultRouteRetentionDays = 60   // Keep routes for 60 days before pruning
+    static let minRouteRetentionDays = 1
+    static let maxRouteRetentionDays = 365
+    static let defaultStalePolicyMode = "adaptive"  // Use adaptive per-origin by default
+    static let defaultGlobalStaleTTLHours = 1   // 1 hour = 60 minutes (matches default freshness TTL of 30 min)
+    static let minGlobalStaleTTLHours = 1
+    static let maxGlobalStaleTTLHours = 168     // 1 week max
+    static let defaultAdaptiveStaleMissedBroadcasts = 3  // Consider stale after missing 3 expected broadcasts
+    static let minAdaptiveStaleMissedBroadcasts = 2
+    static let maxAdaptiveStaleMissedBroadcasts = 10
 
     @Published var host: String {
         didSet {
@@ -273,6 +293,57 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistAnalyticsStationIdentityMode() }
     }
 
+    // MARK: - NET/ROM Route Settings
+
+    @Published var hideExpiredRoutes: Bool {
+        didSet { persistHideExpiredRoutes() }
+    }
+
+    @Published var routeRetentionDays: Int {
+        didSet {
+            let clamped = max(Self.minRouteRetentionDays, min(Self.maxRouteRetentionDays, routeRetentionDays))
+            guard clamped == routeRetentionDays else {
+                deferUpdate { [weak self, clamped] in
+                    self?.routeRetentionDays = clamped
+                }
+                return
+            }
+            persistRouteRetentionDays()
+        }
+    }
+
+    /// Stale policy mode: "adaptive" (per-origin) or "global" (fixed TTL)
+    @Published var stalePolicyMode: String {
+        didSet { persistStalePolicyMode() }
+    }
+
+    @Published var globalStaleTTLHours: Int {
+        didSet {
+            let clamped = max(Self.minGlobalStaleTTLHours, min(Self.maxGlobalStaleTTLHours, globalStaleTTLHours))
+            guard clamped == globalStaleTTLHours else {
+                deferUpdate { [weak self, clamped] in
+                    self?.globalStaleTTLHours = clamped
+                }
+                return
+            }
+            persistGlobalStaleTTLHours()
+        }
+    }
+
+    /// Number of missed broadcasts before considering adaptive routes stale
+    @Published var adaptiveStaleMissedBroadcasts: Int {
+        didSet {
+            let clamped = max(Self.minAdaptiveStaleMissedBroadcasts, min(Self.maxAdaptiveStaleMissedBroadcasts, adaptiveStaleMissedBroadcasts))
+            guard clamped == adaptiveStaleMissedBroadcasts else {
+                deferUpdate { [weak self, clamped] in
+                    self?.adaptiveStaleMissedBroadcasts = clamped
+                }
+                return
+            }
+            persistAdaptiveStaleMissedBroadcasts()
+        }
+    }
+
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -309,6 +380,13 @@ final class AppSettingsStore: ObservableObject {
         let storedAnalyticsHubMetric = defaults.string(forKey: Self.analyticsHubMetricKey) ?? Self.defaultAnalyticsHubMetric
         let storedAnalyticsStationIdentityMode = defaults.string(forKey: Self.analyticsStationIdentityModeKey) ?? Self.defaultAnalyticsStationIdentityMode
 
+        // NET/ROM route settings
+        let storedHideExpiredRoutes = defaults.object(forKey: Self.hideExpiredRoutesKey) as? Bool ?? Self.defaultHideExpiredRoutes
+        let storedRouteRetentionDays = defaults.object(forKey: Self.routeRetentionDaysKey) as? Int ?? Self.defaultRouteRetentionDays
+        let storedStalePolicyMode = defaults.string(forKey: Self.stalePolicyModeKey) ?? Self.defaultStalePolicyMode
+        let storedGlobalStaleTTLHours = defaults.object(forKey: Self.globalStaleTTLHoursKey) as? Int ?? Self.defaultGlobalStaleTTLHours
+        let storedAdaptiveStaleMissedBroadcasts = defaults.object(forKey: Self.adaptiveStaleMissedBroadcastsKey) as? Int ?? Self.defaultAdaptiveStaleMissedBroadcasts
+
         self.host = Self.sanitizeHost(storedHost)
         self.port = Self.sanitizePort(storedPort)
         self.retentionLimit = Self.sanitizeRetention(storedRetention)
@@ -339,6 +417,13 @@ final class AppSettingsStore: ObservableObject {
         self.analyticsMaxNodes = max(10, min(500, storedAnalyticsMaxNodes))
         self.analyticsHubMetric = storedAnalyticsHubMetric
         self.analyticsStationIdentityMode = storedAnalyticsStationIdentityMode
+
+        // NET/ROM route settings
+        self.hideExpiredRoutes = storedHideExpiredRoutes
+        self.routeRetentionDays = max(Self.minRouteRetentionDays, min(Self.maxRouteRetentionDays, storedRouteRetentionDays))
+        self.stalePolicyMode = storedStalePolicyMode
+        self.globalStaleTTLHours = max(Self.minGlobalStaleTTLHours, min(Self.maxGlobalStaleTTLHours, storedGlobalStaleTTLHours))
+        self.adaptiveStaleMissedBroadcasts = max(Self.minAdaptiveStaleMissedBroadcasts, min(Self.maxAdaptiveStaleMissedBroadcasts, storedAdaptiveStaleMissedBroadcasts))
 
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             Self.testRetainedStores.append(self)
@@ -499,6 +584,28 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(analyticsStationIdentityMode, forKey: Self.analyticsStationIdentityModeKey)
     }
 
+    // MARK: - NET/ROM Route Settings Persistence
+
+    private func persistHideExpiredRoutes() {
+        defaults.set(hideExpiredRoutes, forKey: Self.hideExpiredRoutesKey)
+    }
+
+    private func persistRouteRetentionDays() {
+        defaults.set(routeRetentionDays, forKey: Self.routeRetentionDaysKey)
+    }
+
+    private func persistStalePolicyMode() {
+        defaults.set(stalePolicyMode, forKey: Self.stalePolicyModeKey)
+    }
+
+    private func persistGlobalStaleTTLHours() {
+        defaults.set(globalStaleTTLHours, forKey: Self.globalStaleTTLHoursKey)
+    }
+
+    private func persistAdaptiveStaleMissedBroadcasts() {
+        defaults.set(adaptiveStaleMissedBroadcasts, forKey: Self.adaptiveStaleMissedBroadcastsKey)
+    }
+
     private static func registerDefaultsIfNeeded(on defaults: UserDefaults) {
         defaults.register(defaults: [
             Self.hostKey: Self.defaultHost,
@@ -528,7 +635,12 @@ final class AppSettingsStore: ObservableObject {
             Self.analyticsMinEdgeCountKey: Self.defaultAnalyticsMinEdgeCount,
             Self.analyticsMaxNodesKey: Self.defaultAnalyticsMaxNodes,
             Self.analyticsHubMetricKey: Self.defaultAnalyticsHubMetric,
-            Self.analyticsStationIdentityModeKey: Self.defaultAnalyticsStationIdentityMode
+            Self.analyticsStationIdentityModeKey: Self.defaultAnalyticsStationIdentityMode,
+            Self.hideExpiredRoutesKey: Self.defaultHideExpiredRoutes,
+            Self.routeRetentionDaysKey: Self.defaultRouteRetentionDays,
+            Self.stalePolicyModeKey: Self.defaultStalePolicyMode,
+            Self.globalStaleTTLHoursKey: Self.defaultGlobalStaleTTLHours,
+            Self.adaptiveStaleMissedBroadcastsKey: Self.defaultAdaptiveStaleMissedBroadcasts
         ])
     }
 

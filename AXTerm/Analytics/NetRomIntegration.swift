@@ -34,6 +34,9 @@ final class NetRomIntegration {
     private let inferenceConfig: NetRomInferenceConfig
     private let linkConfig: LinkQualityConfig
 
+    /// Optional persistence for recording broadcast intervals (adaptive stale threshold).
+    private weak var persistence: NetRomPersistence?
+
     #if DEBUG
     private static var retainedForTests: [NetRomIntegration] = []
     #endif
@@ -43,13 +46,15 @@ final class NetRomIntegration {
         mode: NetRomRoutingMode,
         routerConfig: NetRomConfig = .default,
         inferenceConfig: NetRomInferenceConfig = .default,
-        linkConfig: LinkQualityConfig = .default
+        linkConfig: LinkQualityConfig = .default,
+        persistence: NetRomPersistence? = nil
     ) {
         self.localCallsign = CallsignValidator.normalize(localCallsign)
         self.mode = mode
         self.routerConfig = routerConfig
         self.inferenceConfig = inferenceConfig
         self.linkConfig = linkConfig
+        self.persistence = persistence
 
         self.router = NetRomRouter(localCallsign: localCallsign, config: routerConfig)
         self.linkEstimator = LinkQualityEstimator(config: linkConfig)
@@ -65,6 +70,11 @@ final class NetRomIntegration {
         #if DEBUG
         Self.retainedForTests.append(self)
         #endif
+    }
+
+    /// Set or update the persistence reference.
+    func setPersistence(_ persistence: NetRomPersistence?) {
+        self.persistence = persistence
     }
 
     // MARK: - Mode Management
@@ -134,6 +144,17 @@ final class NetRomIntegration {
         #if DEBUG
         print("[NETROM:INTEGRATION] Processing NET/ROM broadcast from \(normalizedOrigin) with \(result.entries.count) entries")
         #endif
+
+        // Record broadcast for adaptive stale threshold calculation
+        if let persistence = persistence {
+            do {
+                try persistence.recordBroadcast(from: normalizedOrigin, timestamp: result.timestamp)
+            } catch {
+                #if DEBUG
+                print("[NETROM:INTEGRATION] Failed to record broadcast: \(error)")
+                #endif
+            }
+        }
 
         // First, ensure the broadcast sender is registered as a neighbor
         // NET/ROM broadcasts are always direct (no digipeating), so the sender is a neighbor
@@ -321,6 +342,23 @@ final class NetRomIntegration {
 
     func exportRoutes() -> [RouteInfo] {
         router.currentRoutes()
+    }
+
+    // MARK: - Origin Interval Queries (Adaptive Stale Threshold)
+
+    /// Get the estimated broadcast interval for a specific origin.
+    ///
+    /// - Parameter origin: The callsign of the origin station.
+    /// - Returns: The interval info, or nil if no data exists.
+    func getOriginInterval(for origin: String) -> OriginIntervalInfo? {
+        guard let persistence = persistence else { return nil }
+        return try? persistence.getOriginInterval(for: origin)
+    }
+
+    /// Get all tracked origin intervals.
+    func getAllOriginIntervals() -> [OriginIntervalInfo] {
+        guard let persistence = persistence else { return [] }
+        return (try? persistence.getAllOriginIntervals()) ?? []
     }
 
     // MARK: - Reset (Debug)
