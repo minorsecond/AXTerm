@@ -14,8 +14,6 @@ final class SelectionMutationScheduler {
     func schedule(_ mutation: @MainActor @escaping () -> Void) {
         task?.cancel()
         task = Task { @MainActor in
-            await Task.yield()
-            await Task.yield()
             mutation()
         }
     }

@@ -351,7 +351,6 @@ final class AppSettingsStore: ObservableObject {
 
     private func deferUpdate(_ update: @MainActor @escaping () -> Void) {
         Task { @MainActor in
-            await Task.yield()
             update()
         }
     }

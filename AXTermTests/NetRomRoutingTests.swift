@@ -68,7 +68,7 @@ final class NetRomRoutingTests: XCTestCase {
         XCTAssertEqual(neighbors.map(\.call), [neighbor], "NET/ROM should build a neighbor entry when repeated direct packets arrive.")
         let quality = neighbors.first?.quality ?? 0
         XCTAssertGreaterThan(quality, 0, "Quality must be positive after multiple receptions.")
-        XCTAssertLessThanOrEqual(quality, NetRomRoutingConstants.maximumRouteQuality)
+        XCTAssertLessThanOrEqual(quality, NetRomConfig.maximumRouteQuality)
     }
 
     func testMutualDirectNeighborBoostsQuality() {
@@ -195,7 +195,7 @@ final class NetRomRoutingTests: XCTestCase {
         }
 
         var bestPaths = router.bestPaths(from: destination)
-        XCTAssertEqual(bestPaths.count, NetRomRoutingConstants.maximumRouteEntriesPerDestination)
+        XCTAssertEqual(bestPaths.count, NetRomConfig.default.maxRoutesPerDestination)
         let sortedQualities = bestPaths.map(\.quality)
         XCTAssertEqual(sortedQualities, sortedQualities.sorted(by: >), "Best paths must be ordered from highest to lowest quality.")
 
@@ -217,7 +217,7 @@ final class NetRomRoutingTests: XCTestCase {
         )
 
         bestPaths = router.bestPaths(from: destination)
-        XCTAssertFalse(bestPaths.contains { $0.nodes.last == destination && $0.quality < NetRomRoutingConstants.minimumRouteQuality }, "Routes below minimum quality must be rejected.")
+        XCTAssertFalse(bestPaths.contains { $0.nodes.last == destination && $0.quality < NetRomConfig.default.minimumRouteQuality }, "Routes below minimum quality must be rejected.")
     }
 
     func testRoutesExpireAfterObsolescenceInterval() {
@@ -239,7 +239,7 @@ final class NetRomRoutingTests: XCTestCase {
             timestamp: now.addingTimeInterval(1)
         )
 
-        let later = now.addingTimeInterval(NetRomRoutingConstants.routeObsolescenceInterval + 1)
+        let later = now.addingTimeInterval(NetRomConfig.default.routeObsolescenceInterval + 1)
         router.purgeStaleRoutes(currentDate: later)
         XCTAssertTrue(router.currentRoutes().isEmpty, "Routes must be removed after the obsolescence window.")
     }
@@ -268,73 +268,5 @@ final class NetRomRoutingTests: XCTestCase {
         let routes = router.currentRoutes()
         let deterministicallySorted = routes.sorted { $0.destination == $1.destination ? $0.quality > $1.quality : $0.destination < $1.destination }
         XCTAssertEqual(routes, deterministicallySorted, "Routing table must present entries in a deterministic order even when qualities tie.")
-    }
-}
-
-// MARK: - Placeholder API sketches until the production implementation exists
-
-private struct NeighborInfo: Equatable {
-    let call: String
-    let quality: Int
-    let lastSeen: Date
-}
-
-private struct RouteInfo: Equatable {
-    let destination: String
-    let origin: String
-    let quality: Int
-    let path: [String]
-}
-
-private struct Path: Equatable {
-    let nodes: [String]
-    let quality: Int
-}
-
-private enum NetRomRoutingConstants {
-    static let maximumRouteQuality = 255
-    static let minimumRouteQuality = 32
-    static let maximumRouteEntriesPerDestination = 2
-    static let routeObsolescenceInterval: TimeInterval = 120
-}
-
-private final class NetRomRouter {
-    enum PacketDirection {
-        case incoming, outgoing
-    }
-
-    init(localCallsign: String) {
-        XCTFail("NetRomRouter is not implemented")
-        fatalError()
-    }
-
-    func observePacket(_ packet: Packet, observedQuality: Int, direction: PacketDirection, timestamp: Date) {
-        XCTFail("NetRomRouter.observePacket(...) is not implemented")
-        fatalError()
-    }
-
-    func broadcastRoutes(from origin: String, quality: Int, destinations: [RouteInfo], timestamp: Date) {
-        XCTFail("NetRomRouter.broadcastRoutes(...) is not implemented")
-        fatalError()
-    }
-
-    func currentNeighbors() -> [NeighborInfo] {
-        XCTFail("NetRomRouter.currentNeighbors() is not implemented")
-        fatalError()
-    }
-
-    func currentRoutes() -> [RouteInfo] {
-        XCTFail("NetRomRouter.currentRoutes() is not implemented")
-        fatalError()
-    }
-
-    func bestPaths(from destination: String) -> [Path] {
-        XCTFail("NetRomRouter.bestPaths(from:) is not implemented")
-        fatalError()
-    }
-
-    func purgeStaleRoutes(currentDate: Date) {
-        XCTFail("NetRomRouter.purgeStaleRoutes(currentDate:) is not implemented")
-        fatalError()
     }
 }

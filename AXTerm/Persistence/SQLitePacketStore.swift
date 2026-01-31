@@ -48,7 +48,7 @@ final class SQLitePacketStore: PacketStore, @unchecked Sendable {
         try dbQueue.write { db in
             try db.execute(
                 sql: "UPDATE \(PacketRecord.databaseTableName) SET pinned = ? WHERE id = ?",
-                arguments: [pinned, packetId.uuidString]
+                arguments: [pinned, packetId]
             )
         }
     }
