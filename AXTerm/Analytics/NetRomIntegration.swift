@@ -149,11 +149,18 @@ final class NetRomIntegration {
         if let persistence = persistence {
             do {
                 try persistence.recordBroadcast(from: normalizedOrigin, timestamp: result.timestamp)
+                #if DEBUG
+                print("[NETROM:INTEGRATION] ✅ Recorded broadcast from \(normalizedOrigin)")
+                #endif
             } catch {
                 #if DEBUG
-                print("[NETROM:INTEGRATION] Failed to record broadcast: \(error)")
+                print("[NETROM:INTEGRATION] ❌ Failed to record broadcast: \(error)")
                 #endif
             }
+        } else {
+            #if DEBUG
+            print("[NETROM:INTEGRATION] ⚠️ Cannot record broadcast - persistence is nil")
+            #endif
         }
 
         // First, ensure the broadcast sender is registered as a neighbor
@@ -357,7 +364,12 @@ final class NetRomIntegration {
 
     /// Get all tracked origin intervals.
     func getAllOriginIntervals() -> [OriginIntervalInfo] {
-        guard let persistence = persistence else { return [] }
+        guard let persistence = persistence else {
+            #if DEBUG
+            print("[NETROM:INTEGRATION] ⚠️ getAllOriginIntervals() - persistence is nil!")
+            #endif
+            return []
+        }
         return (try? persistence.getAllOriginIntervals()) ?? []
     }
 

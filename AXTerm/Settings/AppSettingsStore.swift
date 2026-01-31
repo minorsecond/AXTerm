@@ -47,6 +47,8 @@ final class AppSettingsStore: ObservableObject {
     static let stalePolicyModeKey = "stalePolicyMode"
     static let globalStaleTTLHoursKey = "globalStaleTTLHours"
     static let adaptiveStaleMissedBroadcastsKey = "adaptiveStaleMissedBroadcasts"
+    static let neighborStaleTTLHoursKey = "neighborStaleTTLHours"
+    static let linkStatStaleTTLHoursKey = "linkStatStaleTTLHours"
 
     static let defaultHost = "localhost"
     static let defaultPort = 8001
@@ -91,6 +93,16 @@ final class AppSettingsStore: ObservableObject {
     static let defaultAdaptiveStaleMissedBroadcasts = 3  // Consider stale after missing 3 expected broadcasts
     static let minAdaptiveStaleMissedBroadcasts = 2
     static let maxAdaptiveStaleMissedBroadcasts = 10
+
+    // Neighbor activity decay TTL (separate from route adaptive)
+    static let defaultNeighborStaleTTLHours = 6  // Neighbors stale after 6 hours of no activity
+    static let minNeighborStaleTTLHours = 1
+    static let maxNeighborStaleTTLHours = 168    // 1 week max
+
+    // Link stat activity decay TTL (separate from route adaptive)
+    static let defaultLinkStatStaleTTLHours = 12  // Link stats stale after 12 hours of no activity
+    static let minLinkStatStaleTTLHours = 1
+    static let maxLinkStatStaleTTLHours = 168     // 1 week max
 
     @Published var host: String {
         didSet {
@@ -344,6 +356,34 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
+    /// Neighbor activity decay TTL in hours
+    @Published var neighborStaleTTLHours: Int {
+        didSet {
+            let clamped = max(Self.minNeighborStaleTTLHours, min(Self.maxNeighborStaleTTLHours, neighborStaleTTLHours))
+            guard clamped == neighborStaleTTLHours else {
+                deferUpdate { [weak self, clamped] in
+                    self?.neighborStaleTTLHours = clamped
+                }
+                return
+            }
+            persistNeighborStaleTTLHours()
+        }
+    }
+
+    /// Link stat activity decay TTL in hours
+    @Published var linkStatStaleTTLHours: Int {
+        didSet {
+            let clamped = max(Self.minLinkStatStaleTTLHours, min(Self.maxLinkStatStaleTTLHours, linkStatStaleTTLHours))
+            guard clamped == linkStatStaleTTLHours else {
+                deferUpdate { [weak self, clamped] in
+                    self?.linkStatStaleTTLHours = clamped
+                }
+                return
+            }
+            persistLinkStatStaleTTLHours()
+        }
+    }
+
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -386,6 +426,8 @@ final class AppSettingsStore: ObservableObject {
         let storedStalePolicyMode = defaults.string(forKey: Self.stalePolicyModeKey) ?? Self.defaultStalePolicyMode
         let storedGlobalStaleTTLHours = defaults.object(forKey: Self.globalStaleTTLHoursKey) as? Int ?? Self.defaultGlobalStaleTTLHours
         let storedAdaptiveStaleMissedBroadcasts = defaults.object(forKey: Self.adaptiveStaleMissedBroadcastsKey) as? Int ?? Self.defaultAdaptiveStaleMissedBroadcasts
+        let storedNeighborStaleTTLHours = defaults.object(forKey: Self.neighborStaleTTLHoursKey) as? Int ?? Self.defaultNeighborStaleTTLHours
+        let storedLinkStatStaleTTLHours = defaults.object(forKey: Self.linkStatStaleTTLHoursKey) as? Int ?? Self.defaultLinkStatStaleTTLHours
 
         self.host = Self.sanitizeHost(storedHost)
         self.port = Self.sanitizePort(storedPort)
@@ -424,6 +466,8 @@ final class AppSettingsStore: ObservableObject {
         self.stalePolicyMode = storedStalePolicyMode
         self.globalStaleTTLHours = max(Self.minGlobalStaleTTLHours, min(Self.maxGlobalStaleTTLHours, storedGlobalStaleTTLHours))
         self.adaptiveStaleMissedBroadcasts = max(Self.minAdaptiveStaleMissedBroadcasts, min(Self.maxAdaptiveStaleMissedBroadcasts, storedAdaptiveStaleMissedBroadcasts))
+        self.neighborStaleTTLHours = max(Self.minNeighborStaleTTLHours, min(Self.maxNeighborStaleTTLHours, storedNeighborStaleTTLHours))
+        self.linkStatStaleTTLHours = max(Self.minLinkStatStaleTTLHours, min(Self.maxLinkStatStaleTTLHours, storedLinkStatStaleTTLHours))
 
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             Self.testRetainedStores.append(self)
@@ -606,6 +650,14 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(adaptiveStaleMissedBroadcasts, forKey: Self.adaptiveStaleMissedBroadcastsKey)
     }
 
+    private func persistNeighborStaleTTLHours() {
+        defaults.set(neighborStaleTTLHours, forKey: Self.neighborStaleTTLHoursKey)
+    }
+
+    private func persistLinkStatStaleTTLHours() {
+        defaults.set(linkStatStaleTTLHours, forKey: Self.linkStatStaleTTLHoursKey)
+    }
+
     private static func registerDefaultsIfNeeded(on defaults: UserDefaults) {
         defaults.register(defaults: [
             Self.hostKey: Self.defaultHost,
@@ -640,7 +692,9 @@ final class AppSettingsStore: ObservableObject {
             Self.routeRetentionDaysKey: Self.defaultRouteRetentionDays,
             Self.stalePolicyModeKey: Self.defaultStalePolicyMode,
             Self.globalStaleTTLHoursKey: Self.defaultGlobalStaleTTLHours,
-            Self.adaptiveStaleMissedBroadcastsKey: Self.defaultAdaptiveStaleMissedBroadcasts
+            Self.adaptiveStaleMissedBroadcastsKey: Self.defaultAdaptiveStaleMissedBroadcasts,
+            Self.neighborStaleTTLHoursKey: Self.defaultNeighborStaleTTLHours,
+            Self.linkStatStaleTTLHoursKey: Self.defaultLinkStatStaleTTLHours
         ])
     }
 

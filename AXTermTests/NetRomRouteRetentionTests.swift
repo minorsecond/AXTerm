@@ -384,4 +384,40 @@ final class NetRomRouteRetentionTests: XCTestCase {
         XCTAssertNotNil(interval, "Should normalize callsign")
         XCTAssertEqual(interval?.origin, "W0ABC")
     }
+
+    // MARK: - Neighbor and Link Stat TTL Settings Tests
+
+    func testNeighborStaleTTLHours_DefaultsTo6() {
+        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        XCTAssertEqual(settings.neighborStaleTTLHours, 6, "neighborStaleTTLHours should default to 6 hours")
+    }
+
+    func testNeighborStaleTTLHours_ClampsToMinimum() {
+        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        settings.neighborStaleTTLHours = 0
+
+        let expectation = XCTestExpectation(description: "Wait for clamping")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            XCTAssertGreaterThanOrEqual(settings.neighborStaleTTLHours, AppSettingsStore.minNeighborStaleTTLHours)
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 1.0)
+    }
+
+    func testLinkStatStaleTTLHours_DefaultsTo12() {
+        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        XCTAssertEqual(settings.linkStatStaleTTLHours, 12, "linkStatStaleTTLHours should default to 12 hours")
+    }
+
+    func testLinkStatStaleTTLHours_ClampsToMinimum() {
+        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "test_\(UUID())")!)
+        settings.linkStatStaleTTLHours = 0
+
+        let expectation = XCTestExpectation(description: "Wait for clamping")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            XCTAssertGreaterThanOrEqual(settings.linkStatStaleTTLHours, AppSettingsStore.minLinkStatStaleTTLHours)
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 1.0)
+    }
 }

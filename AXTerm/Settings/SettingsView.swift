@@ -304,40 +304,105 @@ struct SettingsView: View {
                         Text("Number of missed broadcasts before a route is considered stale. Lower values detect staleness faster but may cause more false positives.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    } else {
-                        Text("All routes use a fixed time-based stale threshold.")
+                    }
+
+                    // Global TTL is always shown - it's the fallback for adaptive and the primary for global mode
+                    HStack {
+                        Text(settings.stalePolicyMode == "adaptive" ? "Fallback stale threshold" : "Stale threshold")
+                        Spacer()
+                        Text("\(settings.globalStaleTTLHours) hour\(settings.globalStaleTTLHours == 1 ? "" : "s")")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack(spacing: 8) {
+                        TextField(
+                            "",
+                            value: $settings.globalStaleTTLHours,
+                            format: .number
+                        )
+                        .frame(width: 60)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Stale threshold hours")
+
+                        Stepper(
+                            "",
+                            value: $settings.globalStaleTTLHours,
+                            in: AppSettingsStore.minGlobalStaleTTLHours...AppSettingsStore.maxGlobalStaleTTLHours
+                        )
+                        .labelsHidden()
+                    }
+
+                    if settings.stalePolicyMode == "adaptive" {
+                        Text("Used for origins with no broadcast interval data yet. Once an origin's pattern is learned, their adaptive threshold takes over.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-
-                        HStack {
-                            Text("Stale threshold")
-                            Spacer()
-                            Text("\(settings.globalStaleTTLHours) hour\(settings.globalStaleTTLHours == 1 ? "" : "s")")
-                                .foregroundStyle(.secondary)
-                        }
-
-                        HStack(spacing: 8) {
-                            TextField(
-                                "",
-                                value: $settings.globalStaleTTLHours,
-                                format: .number
-                            )
-                            .frame(width: 60)
-                            .textFieldStyle(.roundedBorder)
-                            .accessibilityLabel("Stale threshold hours")
-
-                            Stepper(
-                                "",
-                                value: $settings.globalStaleTTLHours,
-                                in: AppSettingsStore.minGlobalStaleTTLHours...AppSettingsStore.maxGlobalStaleTTLHours
-                            )
-                            .labelsHidden()
-                        }
-
+                    } else {
                         Text("Routes older than this are considered stale. Affects freshness display and filtering.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+
+                    Divider()
+
+                    // Neighbor activity decay TTL
+                    HStack {
+                        Text("Neighbor stale threshold")
+                        Spacer()
+                        Text("\(settings.neighborStaleTTLHours) hour\(settings.neighborStaleTTLHours == 1 ? "" : "s")")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack(spacing: 8) {
+                        TextField(
+                            "",
+                            value: $settings.neighborStaleTTLHours,
+                            format: .number
+                        )
+                        .frame(width: 60)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Neighbor stale threshold hours")
+
+                        Stepper(
+                            "",
+                            value: $settings.neighborStaleTTLHours,
+                            in: AppSettingsStore.minNeighborStaleTTLHours...AppSettingsStore.maxNeighborStaleTTLHours
+                        )
+                        .labelsHidden()
+                    }
+
+                    Text("Neighbors are considered stale after this long without any packet activity.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    // Link stat activity decay TTL
+                    HStack {
+                        Text("Link quality stale threshold")
+                        Spacer()
+                        Text("\(settings.linkStatStaleTTLHours) hour\(settings.linkStatStaleTTLHours == 1 ? "" : "s")")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack(spacing: 8) {
+                        TextField(
+                            "",
+                            value: $settings.linkStatStaleTTLHours,
+                            format: .number
+                        )
+                        .frame(width: 60)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Link quality stale threshold hours")
+
+                        Stepper(
+                            "",
+                            value: $settings.linkStatStaleTTLHours,
+                            in: AppSettingsStore.minLinkStatStaleTTLHours...AppSettingsStore.maxLinkStatStaleTTLHours
+                        )
+                        .labelsHidden()
+                    }
+
+                    Text("Link quality entries are considered stale after this long without any activity on that link.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {

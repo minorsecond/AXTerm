@@ -153,8 +153,11 @@ struct RouteDisplayInfo: Identifiable, Hashable {
     /// Freshness mapped to 0-255 scale.
     let freshness255: Int
 
-    /// Freshness status label (Fresh, Recent, Stale, Expired).
+    /// Freshness status label (Fresh, Recent, Stale, Expired, or Learning...).
     let freshnessStatus: String
+
+    /// Whether we're still learning this origin's broadcast interval.
+    let isLearningInterval: Bool
 
     /// Default TTL for route freshness (30 minutes).
     private static let defaultTTL: TimeInterval = FreshnessCalculator.defaultTTL
@@ -162,7 +165,7 @@ struct RouteDisplayInfo: Identifiable, Hashable {
     /// Default plateau duration (5 minutes).
     private static let defaultPlateau: TimeInterval = FreshnessCalculator.defaultPlateau
 
-    init(from info: RouteInfo, now: Date, ttl: TimeInterval = RouteDisplayInfo.defaultTTL, plateau: TimeInterval = RouteDisplayInfo.defaultPlateau) {
+    init(from info: RouteInfo, now: Date, ttl: TimeInterval = RouteDisplayInfo.defaultTTL, plateau: TimeInterval = RouteDisplayInfo.defaultPlateau, isLearning: Bool = false) {
         self.id = "\(info.destination)→\(info.origin)"
         self.destination = info.destination
         self.nextHop = info.path.first ?? info.origin
@@ -174,12 +177,20 @@ struct RouteDisplayInfo: Identifiable, Hashable {
         self.hopCount = max(1, info.path.count)
         self.lastUpdated = info.lastUpdated
         self.lastUpdatedRelative = Self.formatRelativeTime(info.lastUpdated, now: now)
+        self.isLearningInterval = isLearning
 
         // Compute time-based freshness using plateau + smoothstep curve
         self.freshness = info.freshness(now: now, ttl: ttl, plateau: plateau)
         self.freshnessDisplayString = info.freshnessDisplayString(now: now, ttl: ttl, plateau: plateau)
         self.freshness255 = info.freshness255(now: now, ttl: ttl, plateau: plateau)
-        self.freshnessStatus = info.freshnessStatus(now: now, ttl: ttl, plateau: plateau)
+
+        // Show "Learning..." status when we haven't learned the origin's broadcast interval yet
+        if isLearning {
+            let baseStatus = info.freshnessStatus(now: now, ttl: ttl, plateau: plateau)
+            self.freshnessStatus = "\(baseStatus) (Learning...)"
+        } else {
+            self.freshnessStatus = info.freshnessStatus(now: now, ttl: ttl, plateau: plateau)
+        }
     }
 
     private static func formatRelativeTime(_ date: Date, now: Date) -> String {
@@ -392,12 +403,22 @@ final class NetRomRoutesViewModel: ObservableObject {
     /// Cached origin intervals for adaptive TTL calculation
     private var originIntervals: [String: OriginIntervalInfo] = [:]
 
-    /// Computed global TTL based on settings (in seconds)
+    /// Computed global TTL for routes (fallback) in seconds
     private var globalStaleTTLSeconds: TimeInterval {
         TimeInterval((settings?.globalStaleTTLHours ?? AppSettingsStore.defaultGlobalStaleTTLHours) * 3600)
     }
 
-    /// Whether adaptive stale policy is enabled
+    /// Computed TTL for neighbors (activity decay) in seconds
+    private var neighborStaleTTLSeconds: TimeInterval {
+        TimeInterval((settings?.neighborStaleTTLHours ?? AppSettingsStore.defaultNeighborStaleTTLHours) * 3600)
+    }
+
+    /// Computed TTL for link stats (activity decay) in seconds
+    private var linkStatStaleTTLSeconds: TimeInterval {
+        TimeInterval((settings?.linkStatStaleTTLHours ?? AppSettingsStore.defaultLinkStatStaleTTLHours) * 3600)
+    }
+
+    /// Whether adaptive stale policy is enabled for routes
     private var isAdaptiveMode: Bool {
         (settings?.stalePolicyMode ?? AppSettingsStore.defaultStalePolicyMode) == "adaptive"
     }
@@ -412,10 +433,47 @@ final class NetRomRoutesViewModel: ObservableObject {
         settings?.hideExpiredRoutes ?? AppSettingsStore.defaultHideExpiredRoutes
     }
 
-    /// Get adaptive TTL for a specific origin, or fall back to global TTL.
+    /// Determine TTL and learning status for a route based on its source type.
+    ///
+    /// - Classic/Broadcast routes: Use adaptive interval tracking (or global TTL fallback)
+    /// - Inferred routes: Use activity decay with neighbor TTL (no broadcast interval to track)
+    ///
+    /// - Parameter route: The route info.
+    /// - Returns: Tuple of (TTL in seconds, whether we're still learning the interval).
+    private func routeTTL(for route: RouteInfo) -> (ttl: TimeInterval, isLearning: Bool) {
+        // Inferred routes use activity decay like neighbors - no broadcast interval to track
+        if route.sourceType == "inferred" {
+            return (neighborStaleTTLSeconds, false)
+        }
+
+        // Classic/broadcast routes use adaptive interval tracking
+        let ttl = adaptiveTTL(for: route.origin)
+        let isLearning = isAdaptiveMode && !hasLearnedInterval(for: route.origin)
+        return (ttl, isLearning)
+    }
+
+    /// Check if we've learned the broadcast interval for an origin (2+ broadcasts).
     ///
     /// - Parameter origin: The origin callsign.
-    /// - Returns: TTL in seconds based on the origin's broadcast interval, or global TTL if unavailable.
+    /// - Returns: True if we have a valid interval estimate.
+    private func hasLearnedInterval(for origin: String) -> Bool {
+        let normalizedOrigin = CallsignValidator.normalize(origin)
+        if let intervalInfo = originIntervals[normalizedOrigin],
+           intervalInfo.estimatedIntervalSeconds > 0 {
+            return true
+        }
+        return false
+    }
+
+    /// Get adaptive TTL for a specific origin, or fall back to global TTL.
+    ///
+    /// For origins with known broadcast intervals, computes: interval × missedBroadcasts threshold.
+    /// This respects each origin's chosen broadcast schedule - if they broadcast once per day
+    /// and stick to that schedule, their routes should stay fresh.
+    ///
+    /// - Parameter origin: The origin callsign.
+    /// - Returns: TTL in seconds based on the origin's broadcast interval,
+    ///            or global TTL if no interval data exists.
     private func adaptiveTTL(for origin: String) -> TimeInterval {
         guard isAdaptiveMode else {
             return globalStaleTTLSeconds
@@ -425,6 +483,7 @@ final class NetRomRoutesViewModel: ObservableObject {
         if let intervalInfo = originIntervals[normalizedOrigin],
            intervalInfo.estimatedIntervalSeconds > 0 {
             // TTL = interval * missed broadcasts threshold
+            // Respects the origin's actual broadcast pattern
             return intervalInfo.estimatedIntervalSeconds * Double(missedBroadcastsThreshold)
         }
 
@@ -531,6 +590,28 @@ final class NetRomRoutesViewModel: ObservableObject {
         let intervals = integration.getAllOriginIntervals()
         originIntervals = Dictionary(uniqueKeysWithValues: intervals.map { ($0.origin, $0) })
 
+        #if DEBUG
+        if !hasLoggedFirstRefresh && isAdaptiveMode {
+            print("[NETROM:VIEWMODEL] ========== Adaptive Mode Debug ==========")
+            print("[NETROM:VIEWMODEL] Origin intervals loaded: \(intervals.count)")
+            for interval in intervals.prefix(10) {
+                let intervalStr = interval.estimatedIntervalSeconds > 0
+                    ? String(format: "%.0fs (%.1f min)", interval.estimatedIntervalSeconds, interval.estimatedIntervalSeconds / 60)
+                    : "unknown (need 2+ broadcasts)"
+                print("[NETROM:VIEWMODEL]   \(interval.origin): interval=\(intervalStr), broadcasts=\(interval.broadcastCount)")
+            }
+            if intervals.count > 10 {
+                print("[NETROM:VIEWMODEL]   ... and \(intervals.count - 10) more")
+            }
+            if intervals.isEmpty {
+                print("[NETROM:VIEWMODEL] ⚠️ No origin intervals found - all routes will use fallback TTL")
+                print("[NETROM:VIEWMODEL]    This means no NET/ROM broadcasts have been recorded yet,")
+                print("[NETROM:VIEWMODEL]    or the persistence isn't connected to the integration.")
+            }
+            print("[NETROM:VIEWMODEL] ==========================================")
+        }
+        #endif
+
         // Fetch current data filtered by mode
         let rawNeighbors = integration.currentNeighbors(forMode: routingMode)
         let rawRoutes = integration.currentRoutes(forMode: routingMode)
@@ -614,19 +695,23 @@ final class NetRomRoutesViewModel: ObservableObject {
         }
         #endif
 
-        // Convert to display models using configured TTL
-        // For neighbors and link stats, use global TTL
-        // For routes, use adaptive TTL based on origin broadcast interval if enabled
-        let globalTTL = globalStaleTTLSeconds
-        neighbors = rawNeighbors.map { NeighborDisplayInfo(from: $0, now: now, ttl: globalTTL) }
+        // Convert to display models using appropriate TTLs:
+        // - Neighbors: activity decay with dedicated neighborStaleTTL
+        // - Routes (classic/broadcast): adaptive TTL based on origin broadcast interval (or fallback)
+        // - Routes (inferred): activity decay with neighborStaleTTL (no broadcast interval to track)
+        // - Link Stats: activity decay with dedicated linkStatStaleTTL
+        let neighborTTL = neighborStaleTTLSeconds
+        let linkStatTTL = linkStatStaleTTLSeconds
 
-        // Routes use adaptive TTL per-origin when adaptive mode is enabled
+        neighbors = rawNeighbors.map { NeighborDisplayInfo(from: $0, now: now, ttl: neighborTTL) }
+
+        // Routes use different TTL strategies based on source type
         routes = rawRoutes.map { route in
-            let ttl = adaptiveTTL(for: route.origin)
-            return RouteDisplayInfo(from: route, now: now, ttl: ttl)
+            let (ttl, isLearning) = routeTTL(for: route)
+            return RouteDisplayInfo(from: route, now: now, ttl: ttl, isLearning: isLearning)
         }
 
-        linkStats = rawLinkStats.map { LinkStatDisplayInfo(from: $0, now: now, ttl: globalTTL) }
+        linkStats = rawLinkStats.map { LinkStatDisplayInfo(from: $0, now: now, ttl: linkStatTTL) }
 
         lastRefresh = now
         isLoading = false

@@ -166,6 +166,13 @@ final class PacketEngine: ObservableObject {
         // Initialize NET/ROM persistence
         if let writer = databaseWriter {
             self.netRomPersistence = try? NetRomPersistence(database: writer)
+            #if DEBUG
+            if netRomPersistence != nil {
+                print("[NETROM:ENGINE] ✅ NetRomPersistence initialized successfully")
+            } else {
+                print("[NETROM:ENGINE] ❌ NetRomPersistence failed to initialize")
+            }
+            #endif
         }
 
         // Initialize NET/ROM integration for passive route inference
@@ -176,6 +183,9 @@ final class PacketEngine: ObservableObject {
                 mode: .hybrid,  // Use hybrid mode for best passive inference
                 persistence: netRomPersistence  // Pass persistence for adaptive stale threshold tracking
             )
+            #if DEBUG
+            print("[NETROM:ENGINE] ✅ NetRomIntegration initialized with persistence: \(netRomPersistence != nil ? "YES" : "NO")")
+            #endif
 
             // Load persisted NET/ROM state if available
             loadNetRomSnapshot()
