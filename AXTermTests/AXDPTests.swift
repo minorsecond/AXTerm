@@ -344,4 +344,172 @@ final class AXDPTests: XCTestCase {
         XCTAssertEqual(decoded?.payloadCRC32, original.payloadCRC32)
         XCTAssertEqual(decoded?.sackBitmap, original.sackBitmap)
     }
+
+    // MARK: - SACK Bitmap Tests
+
+    func testSACKBitmapSetAndGet() {
+        var sack = AXDPSACKBitmap(baseChunk: 5, windowSize: 16)
+
+        // Initially all bits are false
+        XCTAssertFalse(sack.isReceived(chunk: 5))
+        XCTAssertFalse(sack.isReceived(chunk: 10))
+
+        // Mark chunk 7 as received
+        sack.markReceived(chunk: 7)
+        XCTAssertTrue(sack.isReceived(chunk: 7))
+        XCTAssertFalse(sack.isReceived(chunk: 6))
+    }
+
+    func testSACKBitmapBaseAdvance() {
+        var sack = AXDPSACKBitmap(baseChunk: 0, windowSize: 8)
+
+        // Receive chunks 0, 1, 2 contiguously
+        sack.markReceived(chunk: 0)
+        sack.markReceived(chunk: 1)
+        sack.markReceived(chunk: 2)
+
+        // Also receive chunk 5 (gap at 3,4)
+        sack.markReceived(chunk: 5)
+
+        // Highest contiguous should be 2 (0,1,2 are contiguous)
+        XCTAssertEqual(sack.highestContiguous, 2)
+
+        // Missing chunks in window
+        let missing = sack.missingChunks(upTo: 7)
+        XCTAssertEqual(missing, [3, 4, 6, 7])
+    }
+
+    func testSACKBitmapEncodeDecode() {
+        var sack = AXDPSACKBitmap(baseChunk: 10, windowSize: 16)
+        sack.markReceived(chunk: 10)
+        sack.markReceived(chunk: 12)
+        sack.markReceived(chunk: 15)
+
+        let encoded = sack.encode()
+        let decoded = AXDPSACKBitmap.decode(from: encoded, baseChunk: 10, windowSize: 16)
+
+        XCTAssertNotNil(decoded)
+        XCTAssertTrue(decoded!.isReceived(chunk: 10))
+        XCTAssertFalse(decoded!.isReceived(chunk: 11))
+        XCTAssertTrue(decoded!.isReceived(chunk: 12))
+        XCTAssertTrue(decoded!.isReceived(chunk: 15))
+    }
+
+    // MARK: - Message ID Tracker Tests
+
+    func testMessageIdTrackerDeduplication() {
+        var tracker = AXDPMessageIdTracker(windowSize: 100)
+
+        // First time seeing message ID 1 - should not be duplicate
+        XCTAssertFalse(tracker.isDuplicate(sessionId: 1, messageId: 1))
+
+        // Second time - should be duplicate
+        XCTAssertTrue(tracker.isDuplicate(sessionId: 1, messageId: 1))
+
+        // Different session, same message ID - not duplicate
+        XCTAssertFalse(tracker.isDuplicate(sessionId: 2, messageId: 1))
+    }
+
+    func testMessageIdTrackerWindowEviction() {
+        var tracker = AXDPMessageIdTracker(windowSize: 3)
+
+        // Fill window
+        _ = tracker.isDuplicate(sessionId: 1, messageId: 1)
+        _ = tracker.isDuplicate(sessionId: 1, messageId: 2)
+        _ = tracker.isDuplicate(sessionId: 1, messageId: 3)
+
+        // All should be duplicates now
+        XCTAssertTrue(tracker.isDuplicate(sessionId: 1, messageId: 1))
+        XCTAssertTrue(tracker.isDuplicate(sessionId: 1, messageId: 2))
+        XCTAssertTrue(tracker.isDuplicate(sessionId: 1, messageId: 3))
+
+        // Add one more - should evict oldest
+        _ = tracker.isDuplicate(sessionId: 1, messageId: 4)
+
+        // Message 1 should be evicted
+        XCTAssertFalse(tracker.isDuplicate(sessionId: 1, messageId: 1))
+    }
+
+    // MARK: - Retry Policy Tests
+
+    func testRetryPolicyExponentialBackoff() {
+        let policy = AXDPRetryPolicy(
+            maxRetries: 5,
+            baseInterval: 2.0,
+            maxInterval: 30.0,
+            jitterFraction: 0.0  // Disable jitter for deterministic test
+        )
+
+        // First retry at base interval
+        XCTAssertEqual(policy.retryInterval(attempt: 0), 2.0, accuracy: 0.01)
+
+        // Second retry at 2 * base
+        XCTAssertEqual(policy.retryInterval(attempt: 1), 4.0, accuracy: 0.01)
+
+        // Third retry at 4 * base
+        XCTAssertEqual(policy.retryInterval(attempt: 2), 8.0, accuracy: 0.01)
+
+        // Should cap at maxInterval
+        XCTAssertEqual(policy.retryInterval(attempt: 10), 30.0, accuracy: 0.01)
+    }
+
+    func testRetryPolicyShouldRetry() {
+        let policy = AXDPRetryPolicy(maxRetries: 3, baseInterval: 1.0, maxInterval: 10.0)
+
+        XCTAssertTrue(policy.shouldRetry(attempt: 0))
+        XCTAssertTrue(policy.shouldRetry(attempt: 2))
+        XCTAssertFalse(policy.shouldRetry(attempt: 3))  // Exceeded
+    }
+
+    // MARK: - Transfer State Tests
+
+    func testTransferStateTracksSentChunks() {
+        var state = AXDPTransferState(sessionId: 1, totalChunks: 10)
+
+        XCTAssertEqual(state.pendingChunks.count, 10)
+        XCTAssertFalse(state.isComplete)
+
+        // Acknowledge chunk 0
+        state.acknowledgeChunk(0)
+        XCTAssertEqual(state.pendingChunks.count, 9)
+        XCTAssertFalse(state.pendingChunks.contains(0))
+
+        // Acknowledge all remaining
+        for i in 1..<10 {
+            state.acknowledgeChunk(UInt32(i))
+        }
+        XCTAssertTrue(state.isComplete)
+    }
+
+    func testTransferStateTracksRetries() {
+        var state = AXDPTransferState(sessionId: 1, totalChunks: 5)
+
+        XCTAssertEqual(state.retryCount(for: 0), 0)
+
+        state.recordRetry(for: 0)
+        XCTAssertEqual(state.retryCount(for: 0), 1)
+
+        state.recordRetry(for: 0)
+        state.recordRetry(for: 0)
+        XCTAssertEqual(state.retryCount(for: 0), 3)
+    }
+
+    func testTransferStateWithSACK() {
+        var state = AXDPTransferState(sessionId: 1, totalChunks: 8)
+
+        // Create SACK acknowledging chunks 0, 2, 5
+        var sack = AXDPSACKBitmap(baseChunk: 0, windowSize: 8)
+        sack.markReceived(chunk: 0)
+        sack.markReceived(chunk: 2)
+        sack.markReceived(chunk: 5)
+
+        state.applySelectiveAck(sack)
+
+        // Should have 5 pending: 1, 3, 4, 6, 7
+        XCTAssertEqual(state.pendingChunks.count, 5)
+        XCTAssertFalse(state.pendingChunks.contains(0))
+        XCTAssertTrue(state.pendingChunks.contains(1))
+        XCTAssertFalse(state.pendingChunks.contains(2))
+        XCTAssertTrue(state.pendingChunks.contains(3))
+    }
 }

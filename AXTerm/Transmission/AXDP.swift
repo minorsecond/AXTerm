@@ -332,3 +332,272 @@ enum AXDP {
         return crc ^ 0xFFFFFFFF
     }
 }
+
+// MARK: - SACK Bitmap
+
+/// Selective ACK bitmap for tracking received chunks
+struct AXDPSACKBitmap: Sendable {
+    /// Base chunk index (lowest chunk in window)
+    let baseChunk: UInt32
+
+    /// Window size in chunks
+    let windowSize: Int
+
+    /// Bitmap tracking received chunks (bit N = chunk baseChunk+N)
+    private var bitmap: [UInt8]
+
+    init(baseChunk: UInt32, windowSize: Int) {
+        self.baseChunk = baseChunk
+        self.windowSize = windowSize
+        // Each byte covers 8 chunks
+        let bytes = (windowSize + 7) / 8
+        self.bitmap = [UInt8](repeating: 0, count: bytes)
+    }
+
+    /// Mark a chunk as received
+    mutating func markReceived(chunk: UInt32) {
+        guard chunk >= baseChunk else { return }
+        let offset = Int(chunk - baseChunk)
+        guard offset < windowSize else { return }
+
+        let byteIndex = offset / 8
+        let bitIndex = offset % 8
+        bitmap[byteIndex] |= (1 << bitIndex)
+    }
+
+    /// Check if a chunk has been received
+    func isReceived(chunk: UInt32) -> Bool {
+        guard chunk >= baseChunk else { return false }
+        let offset = Int(chunk - baseChunk)
+        guard offset < windowSize else { return false }
+
+        let byteIndex = offset / 8
+        let bitIndex = offset % 8
+        return (bitmap[byteIndex] & (1 << bitIndex)) != 0
+    }
+
+    /// Get the highest contiguous chunk index received from base
+    var highestContiguous: UInt32 {
+        var highest = baseChunk
+        var foundGap = false
+
+        for i in 0..<windowSize {
+            let chunk = baseChunk + UInt32(i)
+            if isReceived(chunk: chunk) {
+                if !foundGap {
+                    highest = chunk
+                }
+            } else {
+                foundGap = true
+            }
+        }
+
+        return highest
+    }
+
+    /// Get list of missing chunks up to a given chunk index
+    func missingChunks(upTo maxChunk: UInt32) -> [UInt32] {
+        var missing: [UInt32] = []
+        let limit = min(Int(maxChunk - baseChunk) + 1, windowSize)
+
+        for i in 0..<limit {
+            let chunk = baseChunk + UInt32(i)
+            if !isReceived(chunk: chunk) {
+                missing.append(chunk)
+            }
+        }
+
+        return missing
+    }
+
+    /// Encode bitmap to bytes
+    func encode() -> Data {
+        return Data(bitmap)
+    }
+
+    /// Decode bitmap from bytes
+    static func decode(from data: Data, baseChunk: UInt32, windowSize: Int) -> AXDPSACKBitmap? {
+        let expectedBytes = (windowSize + 7) / 8
+        guard data.count >= expectedBytes else { return nil }
+
+        var sack = AXDPSACKBitmap(baseChunk: baseChunk, windowSize: windowSize)
+        for i in 0..<expectedBytes {
+            sack.bitmap[i] = data[i]
+        }
+        return sack
+    }
+}
+
+// MARK: - Message ID Tracker
+
+/// Tracks message IDs for deduplication
+struct AXDPMessageIdTracker: Sendable {
+    /// Key for session+messageId pair
+    private struct MessageKey: Hashable {
+        let sessionId: UInt32
+        let messageId: UInt32
+    }
+
+    /// Maximum number of message IDs to track
+    let windowSize: Int
+
+    /// Set of seen message keys
+    private var seen: Set<MessageKey> = []
+
+    /// Order of insertion for LRU eviction
+    private var order: [MessageKey] = []
+
+    init(windowSize: Int = 1000) {
+        self.windowSize = max(1, windowSize)
+    }
+
+    /// Check if this message is a duplicate. If not seen before, marks it as seen.
+    /// Returns true if duplicate, false if new.
+    mutating func isDuplicate(sessionId: UInt32, messageId: UInt32) -> Bool {
+        let key = MessageKey(sessionId: sessionId, messageId: messageId)
+
+        if seen.contains(key) {
+            return true
+        }
+
+        // Not seen - add it
+        seen.insert(key)
+        order.append(key)
+
+        // Evict if over window size
+        while order.count > windowSize {
+            let oldest = order.removeFirst()
+            seen.remove(oldest)
+        }
+
+        return false
+    }
+
+    /// Clear all tracked message IDs
+    mutating func clear() {
+        seen.removeAll()
+        order.removeAll()
+    }
+}
+
+// MARK: - Retry Policy
+
+/// Configures retry behavior for AXDP reliability
+struct AXDPRetryPolicy: Sendable {
+    /// Maximum number of retry attempts
+    let maxRetries: Int
+
+    /// Base retry interval in seconds
+    let baseInterval: Double
+
+    /// Maximum retry interval in seconds
+    let maxInterval: Double
+
+    /// Fraction of interval to add as jitter (0.0 to 1.0)
+    let jitterFraction: Double
+
+    init(
+        maxRetries: Int = 5,
+        baseInterval: Double = 2.0,
+        maxInterval: Double = 30.0,
+        jitterFraction: Double = 0.2
+    ) {
+        self.maxRetries = max(1, maxRetries)
+        self.baseInterval = max(0.1, baseInterval)
+        self.maxInterval = max(baseInterval, maxInterval)
+        self.jitterFraction = max(0, min(1.0, jitterFraction))
+    }
+
+    /// Check if another retry should be attempted
+    func shouldRetry(attempt: Int) -> Bool {
+        return attempt < maxRetries
+    }
+
+    /// Calculate retry interval for given attempt (0-indexed)
+    func retryInterval(attempt: Int) -> Double {
+        // Exponential backoff: base * 2^attempt
+        let exponential = baseInterval * pow(2.0, Double(attempt))
+        var interval = min(exponential, maxInterval)
+
+        // Add jitter if enabled
+        if jitterFraction > 0 {
+            let jitter = interval * jitterFraction * Double.random(in: -1.0...1.0)
+            interval = max(baseInterval, interval + jitter)
+        }
+
+        return interval
+    }
+}
+
+// MARK: - Transfer State
+
+/// Tracks state for an AXDP file transfer session
+struct AXDPTransferState: Sendable {
+    /// Session ID
+    let sessionId: UInt32
+
+    /// Total number of chunks in the transfer
+    let totalChunks: UInt32
+
+    /// Set of chunk indices still pending (not yet acknowledged)
+    private(set) var pendingChunks: Set<UInt32>
+
+    /// Retry counts per chunk
+    private var retries: [UInt32: Int] = [:]
+
+    /// Creation timestamp
+    let createdAt: Date
+
+    /// Last activity timestamp
+    var lastActivity: Date
+
+    /// Check if transfer is complete (all chunks acknowledged)
+    var isComplete: Bool {
+        pendingChunks.isEmpty
+    }
+
+    init(sessionId: UInt32, totalChunks: UInt32) {
+        self.sessionId = sessionId
+        self.totalChunks = totalChunks
+        self.pendingChunks = Set(0..<totalChunks)
+        self.createdAt = Date()
+        self.lastActivity = Date()
+    }
+
+    /// Acknowledge a chunk as received by peer
+    mutating func acknowledgeChunk(_ chunk: UInt32) {
+        pendingChunks.remove(chunk)
+        lastActivity = Date()
+    }
+
+    /// Record a retry attempt for a chunk
+    mutating func recordRetry(for chunk: UInt32) {
+        retries[chunk, default: 0] += 1
+        lastActivity = Date()
+    }
+
+    /// Get retry count for a chunk
+    func retryCount(for chunk: UInt32) -> Int {
+        retries[chunk] ?? 0
+    }
+
+    /// Apply a selective acknowledgment bitmap
+    mutating func applySelectiveAck(_ sack: AXDPSACKBitmap) {
+        for chunk in 0..<totalChunks {
+            if sack.isReceived(chunk: chunk) {
+                pendingChunks.remove(chunk)
+            }
+        }
+        lastActivity = Date()
+    }
+
+    /// Get the next chunk to send (lowest pending)
+    func nextChunkToSend() -> UInt32? {
+        pendingChunks.min()
+    }
+
+    /// Get chunks that need retransmission (sorted by chunk index)
+    func chunksNeedingRetransmit() -> [UInt32] {
+        pendingChunks.sorted()
+    }
+}
