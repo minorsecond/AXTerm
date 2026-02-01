@@ -52,16 +52,24 @@ final class NetRomLinkQualitySourceModeTests: XCTestCase {
         let kissConfig = LinkQualityConfig(
             source: .kiss,
             slidingWindowSeconds: 300,
-            ewmaAlpha: 0.1,
+            forwardHalfLifeSeconds: 30,
+            reverseHalfLifeSeconds: 30,
             initialDeliveryRatio: 0.5,
+            minDeliveryRatio: 0.05,
+            maxETX: 20.0,
+            ackProgressWeight: 0.6,
             maxObservationsPerLink: 100,
             excludeServiceDestinations: true
         )
         let agwpeConfig = LinkQualityConfig(
             source: .agwpe,
             slidingWindowSeconds: 300,
-            ewmaAlpha: 0.1,
+            forwardHalfLifeSeconds: 30,
+            reverseHalfLifeSeconds: 30,
             initialDeliveryRatio: 0.5,
+            minDeliveryRatio: 0.05,
+            maxETX: 20.0,
+            ackProgressWeight: 0.6,
             maxObservationsPerLink: 100,
             excludeServiceDestinations: true
         )
@@ -287,8 +295,8 @@ final class NetRomLinkQualitySourceModeTests: XCTestCase {
         let config = LinkQualityConfig.default
 
         XCTAssertGreaterThan(config.slidingWindowSeconds, 0)
-        XCTAssertGreaterThan(config.ewmaAlpha, 0)
-        XCTAssertLessThanOrEqual(config.ewmaAlpha, 1.0)
+        XCTAssertGreaterThan(config.forwardHalfLifeSeconds, 0)
+        XCTAssertGreaterThan(config.reverseHalfLifeSeconds, 0)
         XCTAssertGreaterThan(config.maxObservationsPerLink, 0)
 
         // TODO: Test source-specific configs when implemented:

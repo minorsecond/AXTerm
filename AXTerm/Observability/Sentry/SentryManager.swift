@@ -73,6 +73,13 @@ final class SentryManager {
     func startIfEnabled(settings: AppSettingsStore) {
         let config = SentryConfiguration.load(settings: settings)
         self.config = config
+        
+    #if DEBUG
+    logger.debug("Sentry startIfEnabled: enabledByUser=\(config.enabledByUser), dsnPresent=\(config.dsn != nil), shouldStart=\(config.shouldStart), env=\(config.environment)")
+    if let dsn = config.dsn {
+        logger.debug("Sentry DSN prefix: \(String(dsn.prefix(20)))…")
+    }
+    #endif
 
         guard config.shouldStart, let dsn = config.dsn else {
             if started {

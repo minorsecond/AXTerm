@@ -13,218 +13,109 @@ final class RoutingFreshnessClassificationTests: XCTestCase {
 
     // MARK: - Classification Routing Refresh Properties
 
-    /// dataProgress should refresh neighbor timestamps
-    func testDataProgressRefreshesNeighborTimestamp() {
+    func testDataProgressRefreshesNeighborAndRoute() {
         let classification = PacketClassification.dataProgress
         XCTAssertTrue(classification.refreshesNeighbor)
-    }
-
-    /// dataProgress should refresh route timestamps
-    func testDataProgressRefreshesRouteTimestamp() {
-        let classification = PacketClassification.dataProgress
         XCTAssertTrue(classification.refreshesRoute)
     }
 
-    /// routingBroadcast should refresh route timestamps
-    func testRoutingBroadcastRefreshesRouteTimestamp() {
+    func testRoutingBroadcastRefreshesRouteOnlyByDefault() {
         let classification = PacketClassification.routingBroadcast
+        XCTAssertFalse(classification.refreshesNeighbor)
         XCTAssertTrue(classification.refreshesRoute)
     }
 
-    /// routingBroadcast should NOT refresh neighbor timestamps (broadcasts don't indicate neighbor presence)
-    func testRoutingBroadcastDoesNotRefreshNeighborTimestamp() {
-        let classification = PacketClassification.routingBroadcast
-        // Routing broadcasts update routes, not direct neighbor relationships
-        // Neighbor presence is established by the underlying packet, not the broadcast content
-        XCTAssertFalse(classification.refreshesNeighbor)
-    }
-
-    /// uiBeacon should have weak refresh for routes (configurable)
-    func testUIBeaconWeaklyRefreshesRoutes() {
-        let classification = PacketClassification.uiBeacon
-        // UI frames provide weak evidence - one-way, no acknowledgement
-        XCTAssertTrue(classification.refreshesRoute)  // Weak refresh is still a refresh
-    }
-
-    /// uiBeacon should weakly refresh neighbor (it indicates RF presence)
-    func testUIBeaconWeaklyRefreshesNeighbor() {
+    func testUIBeaconWeaklyRefreshesNeighborButNotRouteByDefault() {
         let classification = PacketClassification.uiBeacon
         XCTAssertTrue(classification.refreshesNeighbor)
+        XCTAssertFalse(classification.refreshesRoute)
     }
 
-    /// ackOnly (RR/RNR) should NOT refresh neighbor timestamps
-    func testAckOnlyDoesNotRefreshNeighborTimestamp() {
+    func testAckOnlyDoesNotRefreshRouting() {
         let classification = PacketClassification.ackOnly
-        // ACKs don't carry new data - they're flow control
         XCTAssertFalse(classification.refreshesNeighbor)
-    }
-
-    /// ackOnly should NOT refresh route timestamps
-    func testAckOnlyDoesNotRefreshRouteTimestamp() {
-        let classification = PacketClassification.ackOnly
         XCTAssertFalse(classification.refreshesRoute)
     }
 
-    /// retryOrDuplicate should NOT refresh neighbor timestamps
-    func testRetryOrDuplicateDoesNotRefreshNeighborTimestamp() {
+    func testRetryOrDuplicateDoesNotRefreshRouting() {
         let classification = PacketClassification.retryOrDuplicate
-        // Retries indicate link problems, not freshness
         XCTAssertFalse(classification.refreshesNeighbor)
-    }
-
-    /// retryOrDuplicate should NOT refresh route timestamps
-    func testRetryOrDuplicateDoesNotRefreshRouteTimestamp() {
-        let classification = PacketClassification.retryOrDuplicate
         XCTAssertFalse(classification.refreshesRoute)
     }
 
-    /// sessionControl should NOT refresh neighbor timestamps (it's control, not data)
-    func testSessionControlDoesNotRefreshNeighborTimestamp() {
+    func testSessionControlDoesNotRefreshRouting() {
         let classification = PacketClassification.sessionControl
-        // Session control frames (SABM, UA, DISC, etc.) are control plane, not data
         XCTAssertFalse(classification.refreshesNeighbor)
-    }
-
-    /// sessionControl should NOT refresh route timestamps
-    func testSessionControlDoesNotRefreshRouteTimestamp() {
-        let classification = PacketClassification.sessionControl
         XCTAssertFalse(classification.refreshesRoute)
     }
 
-    /// unknown classification should NOT refresh anything
-    func testUnknownDoesNotRefreshAnything() {
+    func testUnknownDoesNotRefreshRouting() {
         let classification = PacketClassification.unknown
         XCTAssertFalse(classification.refreshesNeighbor)
         XCTAssertFalse(classification.refreshesRoute)
     }
 
-    // MARK: - Router Integration Tests
+    // MARK: - Mode Integration Tests
 
-    /// Router should only refresh neighbor timestamp for data-carrying classifications
-    func testRouterRefreshesNeighborOnlyForDataProgress() {
-        let router = NetRomRouter(localCallsign: "TEST0", config: .default)
-        let baseTime = Date(timeIntervalSince1970: 1000)
+    func testClassicMode_RefreshesClassicRoutesOnly() {
+        let integration = NetRomIntegration(localCallsign: "TEST0", mode: .classic)
+        let baseTime = Date(timeIntervalSince1970: 1_700_100_000)
 
-        // Initial observation to create neighbor
-        let initialPacket = makePacket(
-            frameType: .i,
-            control: 0x00,
-            controlByte1: 0x00,
-            pid: 0xF0,
-            info: Data([0x48, 0x65, 0x6C, 0x6C, 0x6F]),  // "Hello"
-            fromCall: "W1ABC",
-            toCall: "TEST0"
-        )
-        router.observePacketWithClassification(
-            initialPacket,
-            classification: .dataProgress,
-            observedQuality: 200,
-            direction: .incoming,
-            timestamp: baseTime
-        )
+        // Seed a classic/broadcast route and an inferred route.
+        let classicRoute = RouteInfo(destination: "W2XYZ", origin: "W1ABC", quality: 200, path: ["W1ABC", "W2XYZ"], lastUpdated: baseTime, sourceType: "broadcast")
+        let inferredRoute = RouteInfo(destination: "W3QRS", origin: "W1ABC", quality: 180, path: ["W1ABC", "W3QRS"], lastUpdated: baseTime, sourceType: "inferred")
+        integration.importRoutes([classicRoute, inferredRoute])
 
-        // Verify neighbor was created
-        let neighbors1 = router.currentNeighbors()
-        XCTAssertEqual(neighbors1.count, 1)
-        XCTAssertEqual(neighbors1.first?.lastSeen, baseTime)
+        let dataPacket = makePacket(frameType: .i, control: 0x00, controlByte1: 0x00, pid: 0xF0, info: Data([0x41]), fromCall: "W1ABC", toCall: "TEST0", timestamp: baseTime.addingTimeInterval(60))
+        integration.observePacket(dataPacket, timestamp: dataPacket.timestamp)
 
-        // ACK-only packet should NOT update timestamp
-        let ackPacket = makePacket(
-            frameType: .s,
-            control: 0xA1,  // RR
-            pid: nil,
-            info: Data(),
-            fromCall: "W1ABC",
-            toCall: "TEST0"
-        )
-        let laterTime = baseTime.addingTimeInterval(60)
-        router.observePacketWithClassification(
-            ackPacket,
-            classification: .ackOnly,
-            observedQuality: 200,
-            direction: .incoming,
-            timestamp: laterTime
-        )
+        let routes = integration.currentRoutes()
+        let updatedClassic = routes.first { $0.destination == "W2XYZ" }
+        let updatedInferred = routes.first { $0.destination == "W3QRS" }
 
-        // Timestamp should NOT have changed
-        let neighbors2 = router.currentNeighbors()
-        XCTAssertEqual(neighbors2.first?.lastSeen, baseTime)  // Still original time
-
-        // Data progress packet SHOULD update timestamp
-        let dataPacket = makePacket(
-            frameType: .i,
-            control: 0x02,
-            controlByte1: 0x40,
-            pid: 0xF0,
-            info: Data([0x57, 0x6F, 0x72, 0x6C, 0x64]),  // "World"
-            fromCall: "W1ABC",
-            toCall: "TEST0"
-        )
-        let evenLaterTime = baseTime.addingTimeInterval(120)
-        router.observePacketWithClassification(
-            dataPacket,
-            classification: .dataProgress,
-            observedQuality: 200,
-            direction: .incoming,
-            timestamp: evenLaterTime
-        )
-
-        // Timestamp SHOULD have updated
-        let neighbors3 = router.currentNeighbors()
-        XCTAssertEqual(neighbors3.first?.lastSeen, evenLaterTime)
+        XCTAssertEqual(updatedClassic?.lastUpdated, dataPacket.timestamp, "Classic/broadcast routes should refresh on dataProgress in classic mode.")
+        XCTAssertEqual(updatedInferred?.lastUpdated, baseTime, "Inferred routes must not be refreshed in classic mode.")
     }
 
-    /// Router should not create neighbor for ack-only packets
-    func testRouterDoesNotCreateNeighborForAckOnly() {
-        let router = NetRomRouter(localCallsign: "TEST0", config: .default)
-        let baseTime = Date(timeIntervalSince1970: 1000)
+    func testInferenceMode_UpdatesInferredRoutesButNotClassic() {
+        let integration = NetRomIntegration(localCallsign: "TEST0", mode: .inference)
+        let baseTime = Date(timeIntervalSince1970: 1_700_100_100)
 
-        // ACK-only packet from unknown station should NOT create neighbor
-        let ackPacket = makePacket(
-            frameType: .s,
-            control: 0xA1,  // RR
-            pid: nil,
-            info: Data(),
-            fromCall: "W9NEW",
-            toCall: "TEST0"
-        )
-        router.observePacketWithClassification(
-            ackPacket,
-            classification: .ackOnly,
-            observedQuality: 200,
-            direction: .incoming,
-            timestamp: baseTime
-        )
+        let classicRoute = RouteInfo(destination: "W2XYZ", origin: "W1ABC", quality: 200, path: ["W1ABC", "W2XYZ"], lastUpdated: baseTime, sourceType: "broadcast")
+        integration.importRoutes([classicRoute])
 
-        // Should NOT have created a neighbor
-        let neighbors = router.currentNeighbors()
-        XCTAssertTrue(neighbors.isEmpty)
+        // Digipeated packet should infer route to K9OUT via W1ABC.
+        let inferredPacket = makePacket(frameType: .i, control: 0x00, controlByte1: 0x00, pid: 0xF0, info: Data([0x42]), fromCall: "K9OUT", toCall: "K8DST", via: ["W1ABC"], timestamp: baseTime.addingTimeInterval(30))
+        integration.observePacket(inferredPacket, timestamp: inferredPacket.timestamp)
+
+        let routes = integration.currentRoutes()
+        let inferredRoute = routes.first { $0.destination == "K9OUT" }
+        let unchangedClassic = routes.first { $0.destination == "W2XYZ" }
+
+        XCTAssertEqual(inferredRoute?.lastUpdated, inferredPacket.timestamp, "Inferred routes should refresh on dataProgress evidence in inference mode.")
+        XCTAssertEqual(unchangedClassic?.lastUpdated, baseTime, "Classic routes must not be refreshed in inference mode.")
     }
 
-    /// Router should not create neighbor for retry/duplicate packets
-    func testRouterDoesNotCreateNeighborForRetry() {
-        let router = NetRomRouter(localCallsign: "TEST0", config: .default)
-        let baseTime = Date(timeIntervalSince1970: 1000)
+    func testHybridMode_RefreshesBothClassicAndInferredBySourceType() {
+        let integration = NetRomIntegration(localCallsign: "TEST0", mode: .hybrid)
+        let baseTime = Date(timeIntervalSince1970: 1_700_100_200)
 
-        // REJ packet from unknown station should NOT create neighbor
-        let rejPacket = makePacket(
-            frameType: .s,
-            control: 0x09,  // REJ
-            pid: nil,
-            info: Data(),
-            fromCall: "W9NEW",
-            toCall: "TEST0"
-        )
-        router.observePacketWithClassification(
-            rejPacket,
-            classification: .retryOrDuplicate,
-            observedQuality: 200,
-            direction: .incoming,
-            timestamp: baseTime
-        )
+        let classicRoute = RouteInfo(destination: "W2XYZ", origin: "W1ABC", quality: 200, path: ["W1ABC", "W2XYZ"], lastUpdated: baseTime, sourceType: "broadcast")
+        let inferredRoute = RouteInfo(destination: "K9OUT", origin: "W1ABC", quality: 160, path: ["W1ABC", "K9OUT"], lastUpdated: baseTime, sourceType: "inferred")
+        integration.importRoutes([classicRoute, inferredRoute])
 
-        let neighbors = router.currentNeighbors()
-        XCTAssertTrue(neighbors.isEmpty)
+        let dataPacket = makePacket(frameType: .i, control: 0x00, controlByte1: 0x00, pid: 0xF0, info: Data([0x43]), fromCall: "W1ABC", toCall: "TEST0", timestamp: baseTime.addingTimeInterval(20))
+        integration.observePacket(dataPacket, timestamp: dataPacket.timestamp)
+
+        let inferredPacket = makePacket(frameType: .i, control: 0x00, controlByte1: 0x00, pid: 0xF0, info: Data([0x44]), fromCall: "K9OUT", toCall: "K8DST", via: ["W1ABC"], timestamp: baseTime.addingTimeInterval(40))
+        integration.observePacket(inferredPacket, timestamp: inferredPacket.timestamp)
+
+        let routes = integration.currentRoutes()
+        let updatedClassic = routes.first { $0.destination == "W2XYZ" }
+        let updatedInferred = routes.first { $0.destination == "K9OUT" }
+
+        XCTAssertEqual(updatedClassic?.lastUpdated, dataPacket.timestamp, "Classic/broadcast routes should refresh on dataProgress in hybrid mode.")
+        XCTAssertEqual(updatedInferred?.lastUpdated, inferredPacket.timestamp, "Inferred routes should refresh via passive inference in hybrid mode.")
     }
 
     // MARK: - Test Helpers
@@ -235,14 +126,16 @@ final class RoutingFreshnessClassificationTests: XCTestCase {
         controlByte1: UInt8? = nil,
         pid: UInt8?,
         info: Data,
-        fromCall: String = "TEST1",
-        toCall: String = "TEST2"
+        fromCall: String,
+        toCall: String,
+        via: [String] = [],
+        timestamp: Date
     ) -> Packet {
         Packet(
-            timestamp: Date(),
+            timestamp: timestamp,
             from: AX25Address(call: fromCall),
             to: AX25Address(call: toCall),
-            via: [],
+            via: via.map { AX25Address(call: $0) },
             frameType: frameType,
             control: control,
             controlByte1: controlByte1,

@@ -294,11 +294,14 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
         self.dfEstimate = record.dfEstimate
         self.drEstimate = record.drEstimate
 
-        // Calculate ETX if both df and dr are available
+        // Calculate ETX with the same clamping rules used by the estimator
+        let config = LinkQualityConfig.default
         if let df = record.dfEstimate, let dr = record.drEstimate, df > 0, dr > 0 {
-            self.etx = 1.0 / (df * dr)
+            let product = max(config.minDeliveryRatio, df) * max(config.minDeliveryRatio, dr)
+            self.etx = min(config.maxETX, max(1.0, 1.0 / product))
         } else if let df = record.dfEstimate, df > 0 {
-            self.etx = 1.0 / df
+            let clamped = max(config.minDeliveryRatio, df)
+            self.etx = min(config.maxETX, max(1.0, 1.0 / clamped))
         } else {
             self.etx = nil
         }

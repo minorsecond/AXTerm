@@ -481,7 +481,8 @@ struct QualityBadge: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
-        .help("Quality: \(quality)/255 (\(String(format: "%.1f", percent))%) - Higher is better")
+        .help("Quality estimates how reliably packets travel in each direction. Lower values indicate retries or weak acknowledgement evidence.")
+        .accessibilityLabel("Quality \(quality) of 255, \(Int(percent)) percent.")
     }
 }
 

@@ -62,52 +62,72 @@ enum PacketClassification: String, Codable, Hashable, Sendable {
     var tooltip: String {
         switch self {
         case .dataProgress:
-            return "A data frame carrying information between stations."
+            return "DATA — A data frame carrying information between stations."
         case .ackOnly:
-            return "An acknowledgement frame confirming reception. Does not carry new data."
+            return "ACK — An acknowledgement frame confirming reception. Does not carry new data."
         case .retryOrDuplicate:
-            return "A retransmission or duplicate frame, indicating possible link issues."
+            return "RETRY — A retransmission or duplicate frame, indicating possible link issues."
         case .uiBeacon:
-            return "A beacon or broadcast frame, typically position reports or status."
+            return "BEACON — A beacon or broadcast frame, typically position reports or status."
         case .routingBroadcast:
-            return "A routing update sharing network topology information."
+            return "ROUTE — A routing update sharing network topology information."
         case .sessionControl:
-            return "A session management frame (connect, disconnect, or error)."
+            return "CTRL — A session management frame (connect, disconnect, or error)."
         case .unknown:
-            return "Frame type could not be determined."
+            return "— — Frame type could not be determined."
         }
     }
 
-    /// Whether this classification should refresh neighbor/route timestamps
-    var refreshesRouting: Bool {
+    /// Whether this classification should refresh neighbor timestamps by default.
+    /// Route-level refresh is handled separately to allow policy overrides.
+    var refreshesNeighbor: Bool {
         switch self {
-        case .dataProgress, .routingBroadcast:
+        case .dataProgress:
             return true
         case .uiBeacon:
             return true  // Weak refresh - configurable in routing layer
+        case .routingBroadcast:
+            return false // Policy may allow for direct evidence
         case .ackOnly, .retryOrDuplicate, .sessionControl, .unknown:
             return false
         }
     }
 
-    /// Weight for quality estimation (0.0 = ignore, 1.0 = full weight)
-    var qualityWeight: Double {
+    /// Whether this classification should refresh route timestamps by default.
+    var refreshesRoute: Bool {
+        switch self {
+        case .dataProgress, .routingBroadcast:
+            return true
+        case .uiBeacon:
+            return false // Weak refresh disabled by default (policy may enable)
+        case .ackOnly, .retryOrDuplicate, .sessionControl, .unknown:
+            return false
+        }
+    }
+
+    /// Weight for forward delivery evidence (0.0 = ignore, 1.0 = full weight)
+    var forwardEvidenceWeight: Double {
         switch self {
         case .dataProgress: return 1.0
-        case .routingBroadcast: return 1.0
-        case .uiBeacon: return 0.5
-        case .ackOnly: return 0.1  // ACKs are evidence of reverse path working
-        case .sessionControl: return 0.2
-        case .retryOrDuplicate: return 0.0  // Handled separately as penalty
+        case .routingBroadcast: return 0.8
+        case .uiBeacon: return 0.4
+        case .ackOnly: return 0.0
+        case .sessionControl: return 0.0
+        case .retryOrDuplicate: return 0.0
         case .unknown: return 0.0
         }
     }
 
-    /// Penalty factor for quality (1.0 = no penalty, 0.0 = maximum penalty)
-    var qualityPenalty: Double {
+    /// Weight for reverse delivery evidence (ACK-based).
+    var reverseEvidenceWeight: Double {
         switch self {
-        case .retryOrDuplicate: return 0.5  // 50% penalty for retries
-        default: return 1.0
+        case .ackOnly: return 0.3
+        case .dataProgress: return 0.0
+        case .routingBroadcast: return 0.0
+        case .uiBeacon: return 0.0
+        case .sessionControl: return 0.0
+        case .retryOrDuplicate: return 0.0
+        case .unknown: return 0.0
         }
     }
 }
@@ -154,7 +174,17 @@ enum PacketClassifier {
             return classifyUFrame(packet: packet, decoded: decoded)
 
         case .unknown:
-            return .unknown
+            // Fallback to declared frameType when control bytes are incomplete.
+            switch packet.frameType {
+            case .i:
+                return .dataProgress
+            case .s:
+                return classifySFrame(decoded: decoded)
+            case .u, .ui:
+                return .uiBeacon
+            case .unknown:
+                return .unknown
+            }
         }
     }
 

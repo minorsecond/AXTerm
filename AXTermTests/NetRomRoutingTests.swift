@@ -240,9 +240,9 @@ final class NetRomRoutingTests: XCTestCase {
             timestamp: now.addingTimeInterval(1)
         )
 
-        let later = now.addingTimeInterval(NetRomConfig.default.routeObsolescenceInterval + 1)
+        let later = now.addingTimeInterval(NetRomConfig.default.routeTTLSeconds + 1)
         router.purgeStaleRoutes(currentDate: later)
-        XCTAssertTrue(router.currentRoutes().isEmpty, "Routes must be removed after the obsolescence window.")
+        XCTAssertTrue(router.currentRoutes().isEmpty, "Routes must be removed after the TTL window.")
     }
 
     func testDeterministicRouteOrdering() {

@@ -113,8 +113,8 @@ struct PacketInspectorView: View {
                 }
 
                 HStack(spacing: 10) {
-                    FrameTypeBadge(text: packet.frameType.shortLabel)
-                        .help(packet.frameType.helpText)
+                    FrameTypeBadge(text: packet.classification.badge)
+                        .help(packet.classification.tooltip)
                     Text(packet.timestamp, style: .date)
                         .foregroundStyle(.secondary)
                     Text(packet.timestamp, style: .time)
@@ -289,12 +289,27 @@ struct PacketInspectorView: View {
 
     private var frameSection: some View {
         GroupBox("Frame") {
+            let decoded = packet.controlFieldDecoded
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
                 GridRow {
                     Text("Type:")
                         .foregroundStyle(.secondary)
                     Text(packet.frameType.displayName)
                         .font(.system(.body, design: .monospaced))
+                }
+
+                GridRow {
+                    Text("Classification:")
+                        .foregroundStyle(.secondary)
+                    Text(packet.classification.badge)
+                        .font(.system(.body, design: .monospaced))
+                }
+
+                GridRow {
+                    Text("Explanation:")
+                        .foregroundStyle(.secondary)
+                    Text(packet.classification.tooltip)
+                        .font(.system(.body))
                 }
 
                 if let pid = packet.pid {
@@ -314,6 +329,33 @@ struct PacketInspectorView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)
+
+            DisclosureGroup("Technical details") {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
+                    GridRow {
+                        Text("N(S):")
+                            .foregroundStyle(.secondary)
+                        Text(decoded.ns.map { "\($0)" } ?? "—")
+                            .font(.system(.body, design: .monospaced))
+                    }
+
+                    GridRow {
+                        Text("N(R):")
+                            .foregroundStyle(.secondary)
+                        Text(decoded.nr.map { "\($0)" } ?? "—")
+                            .font(.system(.body, design: .monospaced))
+                    }
+
+                    GridRow {
+                        Text("P/F:")
+                            .foregroundStyle(.secondary)
+                        Text(decoded.pf.map { $0 == 1 ? "Set" : "Clear" } ?? "—")
+                            .font(.system(.body, design: .monospaced))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 6)
+            }
         }
     }
 

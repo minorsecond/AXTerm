@@ -883,13 +883,9 @@ final class PacketEngine: ObservableObject {
             }
             #endif
 
-            // Check if snapshot is valid (within TTL)
-            let isValid = try persistence.isSnapshotValid(currentDate: Date(), expectedConfigHash: nil)
-            #if DEBUG
-            print("[NETROM:STARTUP] Snapshot valid check: \(isValid)")
-            #endif
-
-            guard isValid else {
+            // Load persisted state with per-entry TTL filtering.
+            // Policy: use persisted metrics when valid; only recompute via replay if snapshot is missing/invalid.
+            guard let state = try persistence.load(now: Date(), expectedConfigHash: nil) else {
                 #if DEBUG
                 print("[NETROM:STARTUP] ❌ Snapshot expired or invalid, starting fresh")
                 print("[NETROM:STARTUP] (maxSnapshotAgeSeconds = 3600 by default)")
@@ -897,10 +893,9 @@ final class PacketEngine: ObservableObject {
                 return
             }
 
-            // Load persisted state
-            let neighbors = try persistence.loadNeighbors()
-            let routes = try persistence.loadRoutes()
-            let linkStats = try persistence.loadLinkStats()
+            let neighbors = state.neighbors
+            let routes = state.routes
+            let linkStats = state.linkStats
 
             #if DEBUG
             print("[NETROM:STARTUP] Raw data loaded from SQLite:")

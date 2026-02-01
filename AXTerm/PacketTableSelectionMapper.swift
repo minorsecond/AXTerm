@@ -15,19 +15,22 @@ struct PacketRowViewModel: Identifiable, Hashable {
     let viaText: String
     let typeLabel: String
     let typeTooltip: String
+    let typeAccessibilityLabel: String
     let infoText: String
     let infoTooltip: String
     let isLowSignal: Bool
 
     static func fromPacket(_ packet: Packet) -> PacketRowViewModel {
+        let classification = packet.classification
         return PacketRowViewModel(
             id: packet.id,
             timeText: packet.timestamp.formatted(date: .omitted, time: .standard),
             fromText: packet.fromDisplay,
             toText: packet.toDisplay,
             viaText: packet.viaDisplay,
-            typeLabel: packet.frameType.shortLabel,
-            typeTooltip: packet.frameType.helpText,
+            typeLabel: classification.badge,
+            typeTooltip: classification.tooltip,
+            typeAccessibilityLabel: "Frame type: \(classification.badge). \(classification.tooltip)",
             infoText: packet.infoDisplay,
             infoTooltip: packet.infoTooltip,
             isLowSignal: packet.isLowSignal

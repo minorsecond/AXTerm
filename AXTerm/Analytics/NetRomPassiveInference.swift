@@ -34,7 +34,7 @@ final class NetRomPassiveInference {
     private static var inferenceCount = 0
     #endif
 
-    func observePacket(_ packet: Packet, timestamp: Date) {
+    func observePacket(_ packet: Packet, timestamp: Date, classification: PacketClassification, duplicateStatus: PacketDuplicateStatus) {
         guard let rawFrom = packet.from?.display,
               let normalizedFrom = normalize(rawFrom),
               let rawTo = packet.to?.display,
@@ -55,8 +55,11 @@ final class NetRomPassiveInference {
         }
         #endif
 
+        let isRetry = duplicateStatus == .retryDuplicate || classification == .retryOrDuplicate
+
         // Case 1: Direct packet addressed to us (no via path)
         if packet.via.isEmpty && normalizedTo == localCallsign {
+            guard classification.refreshesNeighbor else { return }
             router.observePacketInferred(
                 makeSyntheticPacket(call: normalizedFrom, timestamp: timestamp),
                 observedQuality: config.inferredBaseQuality,
@@ -90,11 +93,20 @@ final class NetRomPassiveInference {
         }
         #endif
 
+        let weight = config.weight(for: classification)
+        let canInfer = weight > 0 && classification != .ackOnly
+        if !canInfer {
+            if classification == .retryOrDuplicate {
+                recordEvidence(destination: normalizedFrom, origin: nextHop, path: [nextHop, normalizedFrom], timestamp: timestamp, classification: classification, isRetry: true)
+            }
+            return
+        }
+
         // Create inferred neighbor from the digipeater
         simulateNeighborObservationInferred(nextHop: nextHop, timestamp: timestamp)
 
         // Record route evidence: route to the packet source via the last digipeater
-        recordEvidence(destination: normalizedFrom, origin: nextHop, path: [nextHop, normalizedFrom], timestamp: timestamp)
+        recordEvidence(destination: normalizedFrom, origin: nextHop, path: [nextHop, normalizedFrom], timestamp: timestamp, classification: classification, isRetry: isRetry)
     }
 
     func purgeStaleEvidence(currentDate: Date) {
@@ -126,14 +138,18 @@ final class NetRomPassiveInference {
 
     // MARK: - Helpers
 
-    private func recordEvidence(destination: String, origin: String, path: [String], timestamp: Date) {
+    private func recordEvidence(destination: String, origin: String, path: [String], timestamp: Date, classification: PacketClassification, isRetry: Bool) {
         var bucket = evidenceByDestination[destination] ?? []
 
         if let index = bucket.firstIndex(where: { $0.origin == origin }) {
             bucket[index].path = path
-            bucket[index].refresh(timestamp: timestamp, config: config)
+            bucket[index].refresh(timestamp: timestamp, classification: classification, config: config, isRetry: isRetry)
         } else {
-            bucket.append(NetRomRouteEvidence(destination: destination, origin: origin, path: path, lastObserved: timestamp, reinforcementLevel: 1))
+            if isRetry {
+                return
+            }
+            let initialScore = config.weight(for: classification)
+            bucket.append(NetRomRouteEvidence(destination: destination, origin: origin, path: path, lastObserved: timestamp, reinforcementScore: initialScore))
         }
 
         bucket.sort { $0.advertisedQuality(using: config) > $1.advertisedQuality(using: config) }

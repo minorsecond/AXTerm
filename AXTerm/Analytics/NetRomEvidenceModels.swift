@@ -15,6 +15,11 @@ struct NetRomInferenceConfig {
     let reinforcementIncrement: Int
     let inferredMinimumQuality: Int
     let maxInferredRoutesPerDestination: Int
+    let dataProgressWeight: Double
+    let routingBroadcastWeight: Double
+    let uiBeaconWeight: Double
+    let ackOnlyWeight: Double
+    let retryPenaltyMultiplier: Double
 
     static let `default` = NetRomInferenceConfig(
         evidenceWindowSeconds: 5,
@@ -22,8 +27,25 @@ struct NetRomInferenceConfig {
         inferredBaseQuality: 60,
         reinforcementIncrement: 20,
         inferredMinimumQuality: 25,
-        maxInferredRoutesPerDestination: 2
+        maxInferredRoutesPerDestination: 2,
+        dataProgressWeight: 1.0,
+        routingBroadcastWeight: 0.8,
+        uiBeaconWeight: 0.4,
+        ackOnlyWeight: 0.1,
+        retryPenaltyMultiplier: 0.7
     )
+
+    func weight(for classification: PacketClassification) -> Double {
+        switch classification {
+        case .dataProgress: return dataProgressWeight
+        case .routingBroadcast: return routingBroadcastWeight
+        case .uiBeacon: return uiBeaconWeight
+        case .ackOnly: return ackOnlyWeight
+        case .retryOrDuplicate: return 0.0
+        case .sessionControl: return 0.0
+        case .unknown: return 0.0
+        }
+    }
 }
 
 /// Evidence record for an inferred route.
@@ -32,20 +54,24 @@ struct NetRomRouteEvidence: Equatable {
     let origin: String
     var path: [String]
     var lastObserved: Date
-    var reinforcementLevel: Int
+    var reinforcementScore: Double
 
     /// Advertised quality derived from reinforcement increments.
     func advertisedQuality(using config: NetRomInferenceConfig) -> Int {
-        let boost = max(0, reinforcementLevel - 1) * config.reinforcementIncrement
-        let total = config.inferredBaseQuality + boost
-        return min(NetRomConfig.maximumRouteQuality, total)
+        let boost = max(0.0, reinforcementScore) * Double(config.reinforcementIncrement)
+        let total = Double(config.inferredBaseQuality) + boost
+        return min(NetRomConfig.maximumRouteQuality, Int(round(total)))
     }
 
     /// Refresh the evidence timestamp and optionally reinforce it if enough time has elapsed.
-    mutating func refresh(timestamp: Date, config: NetRomInferenceConfig) {
+    mutating func refresh(timestamp: Date, classification: PacketClassification, config: NetRomInferenceConfig, isRetry: Bool) {
         let elapsed = timestamp.timeIntervalSince(lastObserved)
-        if elapsed >= config.evidenceWindowSeconds {
-            reinforcementLevel += 1
+        let weight = config.weight(for: classification)
+        if elapsed >= config.evidenceWindowSeconds && weight > 0 {
+            reinforcementScore += weight
+        }
+        if isRetry {
+            reinforcementScore *= config.retryPenaltyMultiplier
         }
         lastObserved = timestamp
     }

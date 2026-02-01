@@ -9,21 +9,41 @@ import Foundation
 
 /// NET/ROM routing configuration constants.
 /// Quality math follows section 10 of https://packet-radio.net/wp-content/uploads/2017/04/netrom1.pdf
+struct RoutingFreshnessPolicy: Equatable {
+    /// Whether UI beacons should refresh neighbor lastSeen (weak evidence).
+    let uiBeaconRefreshesNeighbor: Bool
+    /// Whether UI beacons should refresh routes (disabled by default).
+    let uiBeaconRefreshesRoute: Bool
+    /// Whether routing broadcasts refresh neighbor lastSeen when directly heard.
+    let routingBroadcastRefreshesNeighbor: Bool
+
+    static let `default` = RoutingFreshnessPolicy(
+        uiBeaconRefreshesNeighbor: true,
+        uiBeaconRefreshesRoute: false,
+        routingBroadcastRefreshesNeighbor: true
+    )
+}
+
 struct NetRomConfig {
     let neighborBaseQuality: Int
     let neighborIncrement: Int
     let minimumRouteQuality: Int
     let maxRoutesPerDestination: Int
-    let obsolescenceInit: Int
-    let routeObsolescenceInterval: TimeInterval
+    /// Neighbor TTL in seconds (timestamp-based).
+    let neighborTTLSeconds: TimeInterval
+    /// Route TTL in seconds (timestamp-based).
+    let routeTTLSeconds: TimeInterval
+    /// Routing freshness policy for classification-driven refresh.
+    let routingPolicy: RoutingFreshnessPolicy
 
     static let `default` = NetRomConfig(
         neighborBaseQuality: 80,
         neighborIncrement: 40,
         minimumRouteQuality: 32,
         maxRoutesPerDestination: 3,
-        obsolescenceInit: 1,
-        routeObsolescenceInterval: 60
+        neighborTTLSeconds: FreshnessCalculator.defaultTTL,
+        routeTTLSeconds: FreshnessCalculator.defaultTTL,
+        routingPolicy: .default
     )
 
     static let maximumRouteQuality = 255
@@ -266,6 +286,29 @@ final class NetRomRouter {
         return currentRoutes().first { $0.destination == normalized }
     }
 
+    /// Refresh lastUpdated for routes from a specific origin, constrained by source types.
+    func refreshRoutes(from origin: String, timestamp: Date, allowedSourceTypes: Set<String>) {
+        let normalizedOrigin = CallsignValidator.normalize(origin)
+        guard !normalizedOrigin.isEmpty else { return }
+
+        for (destination, routeList) in routesByDestination {
+            var updated = false
+            let refreshed = routeList.map { route -> RouteRecord in
+                guard route.origin == normalizedOrigin else { return route }
+                guard allowedSourceTypes.contains(route.sourceType) else { return route }
+                var copy = route
+                if copy.lastHeard != timestamp {
+                    updated = true
+                }
+                copy.lastHeard = timestamp
+                return copy
+            }
+            if updated {
+                routesByDestination[destination] = refreshed.sorted(by: routeSort)
+            }
+        }
+    }
+
     // MARK: - Import from Persistence
 
     func importNeighbors(_ infos: [NeighborInfo]) {
@@ -276,7 +319,7 @@ final class NetRomRouter {
                 call: normalized,
                 pathQuality: info.quality,
                 lastUpdate: info.lastSeen,
-                obsolescenceCount: info.obsolescenceCount,
+                obsolescenceCount: 1,
                 sourceType: info.sourceType
             )
         }
@@ -301,7 +344,7 @@ final class NetRomRouter {
                 quality: info.quality,
                 path: normalizedPath,
                 lastHeard: info.lastUpdated,
-                obsolescenceCount: config.obsolescenceInit,
+                obsolescenceCount: 1,
                 sourceType: info.sourceType
             )
             var bucket = routesByDestination[normalizedDest] ?? []
@@ -320,30 +363,17 @@ final class NetRomRouter {
     }
 
     func purgeStaleRoutes(currentDate: Date) {
-        var refreshedRoutes: [String: [RouteRecord]] = [:]
-        for (destination, routeList) in routesByDestination {
-            let updated = routeList.compactMap { route -> RouteRecord? in
-                let age = currentDate.timeIntervalSince(route.lastHeard)
-                let intervals = max(0, Int(age / config.routeObsolescenceInterval))
-                let remaining = route.obsolescenceCount - intervals
-                guard remaining > 0 else { return nil }
-                var refreshed = route
-                refreshed.obsolescenceCount = remaining
-                return refreshed
-            }
-            guard !updated.isEmpty else { continue }
-            refreshedRoutes[destination] = updated.sorted(by: routeSort)
+        let routeCutoff = currentDate.addingTimeInterval(-config.routeTTLSeconds)
+        let neighborCutoff = currentDate.addingTimeInterval(-config.neighborTTLSeconds)
+
+        routesByDestination = routesByDestination.compactMapValues { routeList in
+            let filtered = routeList.filter { $0.lastHeard >= routeCutoff }
+            return filtered.isEmpty ? nil : filtered.sorted(by: routeSort)
         }
-        routesByDestination = refreshedRoutes
 
         neighbors = neighbors.compactMapValues { neighbor in
-            let age = currentDate.timeIntervalSince(neighbor.lastUpdate)
-            let intervals = max(0, Int(age / config.routeObsolescenceInterval))
-            let remaining = neighbor.obsolescenceCount - intervals
-            guard remaining > 0 else { return nil }
-            var refreshed = neighbor
-            refreshed.obsolescenceCount = remaining
-            return refreshed
+            guard neighbor.lastUpdate >= neighborCutoff else { return nil }
+            return neighbor
         }
     }
 
@@ -355,14 +385,14 @@ final class NetRomRouter {
             call: call,
             pathQuality: config.neighborBaseQuality,
             lastUpdate: timestamp,
-            obsolescenceCount: config.obsolescenceInit,
+            obsolescenceCount: 1,
             sourceType: sourceType
         )
         let normalizedQuality = clampQuality(observedQuality)
         let boostedQuality = min(NetRomConfig.maximumRouteQuality, max(candidate.pathQuality, normalizedQuality) + config.neighborIncrement)
         candidate.pathQuality = boostedQuality
         candidate.lastUpdate = timestamp
-        candidate.obsolescenceCount = config.obsolescenceInit
+        candidate.obsolescenceCount = 1
         // Don't overwrite classic with inferred
         if candidate.sourceType != "classic" {
             candidate.sourceType = sourceType
@@ -384,7 +414,7 @@ final class NetRomRouter {
             existing.quality = max(existing.quality, quality)
             existing.path = path
             existing.lastHeard = timestamp
-            existing.obsolescenceCount = config.obsolescenceInit
+            existing.obsolescenceCount = 1
             // Don't overwrite classic/broadcast with inferred
             if existing.sourceType == "inferred" && sourceType != "inferred" {
                 existing.sourceType = sourceType
@@ -397,7 +427,7 @@ final class NetRomRouter {
                 quality: quality,
                 path: path,
                 lastHeard: timestamp,
-                obsolescenceCount: config.obsolescenceInit,
+                obsolescenceCount: 1,
                 sourceType: sourceType
             )
             bucket.append(newRoute)

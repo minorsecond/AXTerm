@@ -37,7 +37,19 @@ final class NetRomLinkQualityPersistenceRehydrationTests: XCTestCase {
     // MARK: - Test Helpers
 
     private func makeEstimator(config: LinkQualityConfig = .default) -> LinkQualityEstimator {
-        LinkQualityEstimator(config: config, clock: { [self] in self.testClock })
+        let testConfig = LinkQualityConfig(
+            source: config.source,
+            slidingWindowSeconds: config.slidingWindowSeconds,
+            forwardHalfLifeSeconds: 2,
+            reverseHalfLifeSeconds: 2,
+            initialDeliveryRatio: config.initialDeliveryRatio,
+            minDeliveryRatio: config.minDeliveryRatio,
+            maxETX: config.maxETX,
+            ackProgressWeight: config.ackProgressWeight,
+            maxObservationsPerLink: config.maxObservationsPerLink,
+            excludeServiceDestinations: config.excludeServiceDestinations
+        )
+        return LinkQualityEstimator(config: testConfig, clock: { [self] in self.testClock })
     }
 
     private func makePacket(

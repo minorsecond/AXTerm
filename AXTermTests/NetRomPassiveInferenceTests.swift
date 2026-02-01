@@ -33,7 +33,12 @@ final class NetRomPassiveInferenceTests: XCTestCase {
                 inferredBaseQuality: 60,
                 reinforcementIncrement: 30,
                 inferredMinimumQuality: 20,
-                maxInferredRoutesPerDestination: 2
+                maxInferredRoutesPerDestination: 2,
+                dataProgressWeight: 1.0,
+                routingBroadcastWeight: 0.8,
+                uiBeaconWeight: 0.4,
+                ackOnlyWeight: 0.1,
+                retryPenaltyMultiplier: 0.7
             )
         )
     }
@@ -43,7 +48,9 @@ final class NetRomPassiveInferenceTests: XCTestCase {
         to: String,
         via: [String] = [],
         infoText: String = "OBSERVE",
-        frameType: FrameType = .ui,
+        frameType: FrameType = .i,
+        control: UInt8 = 0x00,
+        controlByte1: UInt8? = 0x00,
         timestamp: Date
     ) -> Packet {
         let infoData = infoText.data(using: .ascii) ?? Data()
@@ -53,7 +60,8 @@ final class NetRomPassiveInferenceTests: XCTestCase {
             to: AX25Address(call: to),
             via: via.map { AX25Address(call: $0) },
             frameType: frameType,
-            control: 0,
+            control: control,
+            controlByte1: controlByte1,
             pid: nil,
             info: infoData,
             rawAx25: infoData,
@@ -69,7 +77,8 @@ final class NetRomPassiveInferenceTests: XCTestCase {
         let start = Date(timeIntervalSince1970: 1_700_000_800)
 
         for offset in 0..<4 {
-            inference.observePacket(makePacket(from: neighbor, to: localCallsign, timestamp: start.addingTimeInterval(Double(offset))), timestamp: start.addingTimeInterval(Double(offset)))
+            let packet = makePacket(from: neighbor, to: localCallsign, timestamp: start.addingTimeInterval(Double(offset)))
+            inference.observePacket(packet, timestamp: packet.timestamp, classification: PacketClassifier.classify(packet: packet), duplicateStatus: .unique)
         }
 
         let neighbors = router.currentNeighbors()
@@ -83,15 +92,16 @@ final class NetRomPassiveInferenceTests: XCTestCase {
         let inference = makeInference(router: router)
         let beacon = Date(timeIntervalSince1970: 1_700_000_900)
 
-        inference.observePacket(
-            makePacket(
-                from: "BEACON",
-                to: localCallsign,
-                infoText: "BEACON",
-                timestamp: beacon
-            ),
+        let packet = makePacket(
+            from: "BEACON",
+            to: localCallsign,
+            infoText: "BEACON",
+            frameType: .ui,
+            control: 0x03,
+            controlByte1: nil,
             timestamp: beacon
         )
+        inference.observePacket(packet, timestamp: beacon, classification: PacketClassifier.classify(packet: packet), duplicateStatus: .unique)
 
         XCTAssertTrue(router.currentNeighbors().isEmpty)
     }
@@ -104,16 +114,14 @@ final class NetRomPassiveInferenceTests: XCTestCase {
         let start = Date(timeIntervalSince1970: 1_700_001_000)
 
         for offset in 0..<5 {
-            inference.observePacket(
-                makePacket(
-                    from: source,
-                    to: localCallsign,
-                    via: [via],
-                    infoText: "DATA",
-                    timestamp: start.addingTimeInterval(Double(offset))
-                ),
+            let packet = makePacket(
+                from: source,
+                to: localCallsign,
+                via: [via],
+                infoText: "DATA",
                 timestamp: start.addingTimeInterval(Double(offset))
             )
+            inference.observePacket(packet, timestamp: packet.timestamp, classification: PacketClassifier.classify(packet: packet), duplicateStatus: .unique)
         }
 
         let inferredRoutes = router.currentRoutes().filter { $0.destination == source }
@@ -130,10 +138,8 @@ final class NetRomPassiveInferenceTests: XCTestCase {
         let via = "K2BBB"
         let start = Date(timeIntervalSince1970: 1_700_001_100)
 
-        inference.observePacket(
-            makePacket(from: source, to: localCallsign, via: [via], timestamp: start),
-            timestamp: start
-        )
+        let packet = makePacket(from: source, to: localCallsign, via: [via], timestamp: start)
+        inference.observePacket(packet, timestamp: start, classification: PacketClassifier.classify(packet: packet), duplicateStatus: .unique)
 
         XCTAssertFalse(router.currentRoutes().filter { $0.destination == source }.isEmpty)
 
@@ -149,10 +155,8 @@ final class NetRomPassiveInferenceTests: XCTestCase {
         let via = "K2BBB"
         let start = Date(timeIntervalSince1970: 1_700_001_200)
 
-        inference.observePacket(
-            makePacket(from: source, to: localCallsign, via: [via], timestamp: start),
-            timestamp: start
-        )
+        let packet = makePacket(from: source, to: localCallsign, via: [via], timestamp: start)
+        inference.observePacket(packet, timestamp: start, classification: PacketClassifier.classify(packet: packet), duplicateStatus: .unique)
 
         XCTAssertFalse(router.currentRoutes().contains { $0.destination == via })
     }
@@ -166,7 +170,9 @@ final class NetRomPassiveInferenceTests: XCTestCase {
             for offset in 0..<3 {
                 inference.observePacket(
                     makePacket(from: source, to: localCallsign, via: [via], timestamp: start.addingTimeInterval(Double(offset))),
-                    timestamp: start.addingTimeInterval(Double(offset))
+                    timestamp: start.addingTimeInterval(Double(offset)),
+                    classification: PacketClassification.dataProgress,
+                    duplicateStatus: .unique
                 )
             }
             return router.currentRoutes()

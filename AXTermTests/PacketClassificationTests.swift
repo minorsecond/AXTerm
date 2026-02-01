@@ -10,6 +10,7 @@ import XCTest
 @testable import AXTerm
 
 final class PacketClassificationTests: XCTestCase {
+    private let baseTimestamp = Date(timeIntervalSince1970: 1_700_000_000)
 
     // MARK: - I-Frame Classification
 
@@ -210,6 +211,24 @@ final class PacketClassificationTests: XCTestCase {
         XCTAssertEqual(classification, .sessionControl)
     }
 
+    // MARK: - Display Mapping Tests
+
+    func testBadgeMapping() {
+        XCTAssertEqual(PacketClassification.dataProgress.badge, "DATA")
+        XCTAssertEqual(PacketClassification.ackOnly.badge, "ACK")
+        XCTAssertEqual(PacketClassification.retryOrDuplicate.badge, "RETRY")
+        XCTAssertEqual(PacketClassification.uiBeacon.badge, "BEACON")
+        XCTAssertEqual(PacketClassification.routingBroadcast.badge, "ROUTE")
+        XCTAssertEqual(PacketClassification.sessionControl.badge, "CTRL")
+        XCTAssertEqual(PacketClassification.unknown.badge, "—")
+    }
+
+    func testTooltipMapping() {
+        XCTAssertEqual(PacketClassification.ackOnly.tooltip, "ACK — An acknowledgement frame confirming reception. Does not carry new data.")
+        XCTAssertTrue(PacketClassification.dataProgress.tooltip.hasPrefix("DATA —"))
+        XCTAssertTrue(PacketClassification.uiBeacon.tooltip.hasPrefix("BEACON —"))
+    }
+
     // MARK: - NET/ROM Broadcast Classification
 
     /// NET/ROM routing broadcasts should be classified as routingBroadcast
@@ -349,10 +368,12 @@ final class PacketClassificationTests: XCTestCase {
         pid: UInt8?,
         info: Data,
         fromCall: String = "TEST1",
-        toCall: String = "TEST2"
+        toCall: String = "TEST2",
+        timestamp: Date? = nil
     ) -> Packet {
+        let packetTimestamp = timestamp ?? baseTimestamp
         Packet(
-            timestamp: Date(),
+            timestamp: packetTimestamp,
             from: AX25Address(call: fromCall),
             to: AX25Address(call: toCall),
             via: [],

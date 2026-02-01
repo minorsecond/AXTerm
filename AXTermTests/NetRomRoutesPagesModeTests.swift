@@ -60,7 +60,12 @@ final class NetRomRoutesPagesModeTests: XCTestCase {
                 inferredBaseQuality: 120,
                 reinforcementIncrement: 20,
                 inferredMinimumQuality: 50,
-                maxInferredRoutesPerDestination: 5
+                maxInferredRoutesPerDestination: 5,
+                dataProgressWeight: 1.0,
+                routingBroadcastWeight: 0.8,
+                uiBeaconWeight: 0.4,
+                ackOnlyWeight: 0.1,
+                retryPenaltyMultiplier: 0.7
             ),
             linkConfig: LinkQualityConfig.default
         )

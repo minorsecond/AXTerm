@@ -90,11 +90,11 @@ struct PacketTableNSTableView: NSViewRepresentable {
         viaColumn.headerToolTip = "Digipeater path"
 
         let typeColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(PacketTableColumnIdentifier.type.rawValue))
-        typeColumn.title = "Type"
-        typeColumn.minWidth = 40
-        typeColumn.width = 50
+        typeColumn.title = "Frame Type"
+        typeColumn.minWidth = 60
+        typeColumn.width = 70
         typeColumn.resizingMask = [.autoresizingMask]
-        typeColumn.headerToolTip = "AX.25 frame type"
+        typeColumn.headerToolTip = "Classified frame type"
 
         let infoColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(PacketTableColumnIdentifier.info.rawValue))
         infoColumn.title = "Info"

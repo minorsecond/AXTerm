@@ -29,6 +29,7 @@ final class NetRomIntegration {
     private let router: NetRomRouter
     private var passiveInference: NetRomPassiveInference?
     private var linkEstimator: LinkQualityEstimator
+    private var duplicateTracker: PacketDuplicateTracker
 
     private let routerConfig: NetRomConfig
     private let inferenceConfig: NetRomInferenceConfig
@@ -58,6 +59,11 @@ final class NetRomIntegration {
 
         self.router = NetRomRouter(localCallsign: localCallsign, config: routerConfig)
         self.linkEstimator = LinkQualityEstimator(config: linkConfig)
+        self.duplicateTracker = PacketDuplicateTracker(
+            source: linkConfig.source,
+            ingestionDedupWindow: linkConfig.ingestionDedupWindow,
+            retryDuplicateWindow: linkConfig.retryDuplicateWindow
+        )
 
         if mode == .inference || mode == .hybrid {
             self.passiveInference = NetRomPassiveInference(
@@ -101,13 +107,33 @@ final class NetRomIntegration {
     // MARK: - Packet Observation
 
     func observePacket(_ packet: Packet, timestamp: Date, isDuplicate: Bool = false) {
+        var duplicateStatus = duplicateTracker.status(for: packet, at: timestamp)
+        if isDuplicate && duplicateStatus != .ingestionDedup {
+            duplicateStatus = .retryDuplicate
+        }
+
+        if duplicateStatus == .ingestionDedup {
+            return
+        }
+
+        let baseClassification = PacketClassifier.classify(packet: packet)
+        let classification: PacketClassification = duplicateStatus == .retryDuplicate ? .retryOrDuplicate : baseClassification
+
         // Always update link quality estimator
-        linkEstimator.observePacket(packet, timestamp: timestamp, isDuplicate: isDuplicate)
+        linkEstimator.observePacket(
+            packet,
+            timestamp: timestamp,
+            classification: classification,
+            duplicateStatus: duplicateStatus
+        )
 
         // Check for NET/ROM broadcast packets (PID 0xCF to NODES)
         // These are processed in all modes since they're explicit routing information
         if let broadcastResult = NetRomBroadcastParser.parse(packet: packet) {
-            processNetRomBroadcast(broadcastResult)
+            // Don't reinforce routing from retry/duplicate broadcasts.
+            if classification != .retryOrDuplicate {
+                processNetRomBroadcast(broadcastResult, classification: classification)
+            }
             return // Don't double-process as regular packet
         }
 
@@ -120,24 +146,36 @@ final class NetRomIntegration {
         case .classic:
             // Classic mode: only direct observations become neighbors
             if packet.via.isEmpty {
-                router.observePacket(packet, observedQuality: observedQuality, direction: .incoming, timestamp: timestamp)
+                applyRoutingFreshness(
+                    packet: packet,
+                    classification: classification,
+                    observedQuality: observedQuality,
+                    allowedRouteSources: Set(["classic", "broadcast"]),
+                    timestamp: timestamp
+                )
             }
 
         case .inference:
             // Inference mode: use passive inference for all observations
-            passiveInference?.observePacket(packet, timestamp: timestamp)
+            passiveInference?.observePacket(packet, timestamp: timestamp, classification: classification, duplicateStatus: duplicateStatus)
 
         case .hybrid:
             // Hybrid mode: use both classic and inference
             if packet.via.isEmpty {
-                router.observePacket(packet, observedQuality: observedQuality, direction: .incoming, timestamp: timestamp)
+                applyRoutingFreshness(
+                    packet: packet,
+                    classification: classification,
+                    observedQuality: observedQuality,
+                    allowedRouteSources: Set(["classic", "broadcast"]),
+                    timestamp: timestamp
+                )
             }
-            passiveInference?.observePacket(packet, timestamp: timestamp)
+            passiveInference?.observePacket(packet, timestamp: timestamp, classification: classification, duplicateStatus: duplicateStatus)
         }
     }
 
     /// Process a parsed NET/ROM broadcast, adding the sender as a neighbor and updating routes.
-    private func processNetRomBroadcast(_ result: NetRomBroadcastResult) {
+    private func processNetRomBroadcast(_ result: NetRomBroadcastResult, classification: PacketClassification) {
         let normalizedOrigin = CallsignValidator.normalize(result.originCallsign)
         guard !normalizedOrigin.isEmpty else { return }
 
@@ -180,8 +218,10 @@ final class NetRomIntegration {
         )
 
         // Register as neighbor with high quality (broadcast reception implies good link)
-        let observedQuality = linkQualityForNeighbor(normalizedOrigin)
-        router.observePacket(syntheticPacket, observedQuality: max(observedQuality, 200), direction: .incoming, timestamp: result.timestamp)
+        if shouldRefreshNeighbor(for: classification) {
+            let observedQuality = linkQualityForNeighbor(normalizedOrigin)
+            router.observePacket(syntheticPacket, observedQuality: max(observedQuality, 200), direction: .incoming, timestamp: result.timestamp)
+        }
 
         // Convert broadcast entries to RouteInfo and feed to router
         let routeInfos = result.entries.map { entry in
@@ -391,6 +431,11 @@ final class NetRomIntegration {
 
         // Create fresh link estimator
         linkEstimator = LinkQualityEstimator(config: linkConfig)
+        duplicateTracker = PacketDuplicateTracker(
+            source: linkConfig.source,
+            ingestionDedupWindow: linkConfig.ingestionDedupWindow,
+            retryDuplicateWindow: linkConfig.retryDuplicateWindow
+        )
 
         // Recreate passive inference if needed
         if mode == .inference || mode == .hybrid {
@@ -425,5 +470,44 @@ final class NetRomIntegration {
         }
 
         return routerConfig.neighborBaseQuality
+    }
+
+    private func applyRoutingFreshness(
+        packet: Packet,
+        classification: PacketClassification,
+        observedQuality: Int,
+        allowedRouteSources: Set<String>,
+        timestamp: Date
+    ) {
+        let refreshNeighbor = shouldRefreshNeighbor(for: classification)
+        let refreshRoutes = shouldRefreshRoute(for: classification)
+
+        if refreshNeighbor {
+            router.observePacket(packet, observedQuality: observedQuality, direction: .incoming, timestamp: timestamp)
+        }
+
+        if refreshRoutes, let origin = packet.from?.display {
+            router.refreshRoutes(from: origin, timestamp: timestamp, allowedSourceTypes: allowedRouteSources)
+        }
+    }
+
+    private func shouldRefreshNeighbor(for classification: PacketClassification) -> Bool {
+        switch classification {
+        case .uiBeacon:
+            return routerConfig.routingPolicy.uiBeaconRefreshesNeighbor
+        case .routingBroadcast:
+            return routerConfig.routingPolicy.routingBroadcastRefreshesNeighbor
+        default:
+            return classification.refreshesNeighbor
+        }
+    }
+
+    private func shouldRefreshRoute(for classification: PacketClassification) -> Bool {
+        switch classification {
+        case .uiBeacon:
+            return routerConfig.routingPolicy.uiBeaconRefreshesRoute
+        default:
+            return classification.refreshesRoute
+        }
     }
 }

@@ -104,6 +104,13 @@ struct AXTermApp: App {
                 settings: settings,
                 inspectionRouter: inspectionRouter
             )
+
+            #if DEBUG
+            Divider()
+            Button("Send Test Event to Sentry") {
+                SentryManager.shared.sendTestEvent()
+            }
+            #endif
         }
     }
 }
