@@ -29,24 +29,25 @@ final class StationInspectorViewModelTests: XCTestCase {
 
     func testTopPeersDeterministic() {
         let packets: [Packet] = []
+        // GraphEdge uses normalized (uppercase) station IDs to match AX25Address behavior
         let edges = [
-            GraphEdge(source: "alpha", target: "beta", count: 3, bytes: nil),
-            GraphEdge(source: "gamma", target: "alpha", count: 3, bytes: nil),
-            GraphEdge(source: "alpha", target: "delta", count: 1, bytes: nil),
-            GraphEdge(source: "epsilon", target: "alpha", count: 2, bytes: nil)
+            GraphEdge(source: "ALPHA", target: "BETA", count: 3, bytes: nil),
+            GraphEdge(source: "GAMMA", target: "ALPHA", count: 3, bytes: nil),
+            GraphEdge(source: "ALPHA", target: "DELTA", count: 1, bytes: nil),
+            GraphEdge(source: "EPSILON", target: "ALPHA", count: 2, bytes: nil)
         ]
 
         let viewModel = StationInspectorViewModel(stationID: "alpha", packets: packets, edges: edges)
 
         let topPeers = viewModel.stats.topPeers
         XCTAssertEqual(topPeers.count, 4)
-        XCTAssertEqual(topPeers[0].stationID, "beta")
+        XCTAssertEqual(topPeers[0].stationID, "BETA")
         XCTAssertEqual(topPeers[0].count, 3)
-        XCTAssertEqual(topPeers[1].stationID, "gamma")
+        XCTAssertEqual(topPeers[1].stationID, "GAMMA")
         XCTAssertEqual(topPeers[1].count, 3)
-        XCTAssertEqual(topPeers[2].stationID, "epsilon")
+        XCTAssertEqual(topPeers[2].stationID, "EPSILON")
         XCTAssertEqual(topPeers[2].count, 2)
-        XCTAssertEqual(topPeers[3].stationID, "delta")
+        XCTAssertEqual(topPeers[3].stationID, "DELTA")
         XCTAssertEqual(topPeers[3].count, 1)
     }
 }

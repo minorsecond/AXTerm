@@ -23,6 +23,7 @@ import XCTest
 /// Directionality: A→B stats MUST NOT affect B→A unless there is explicit reverse evidence.
 @testable import AXTerm
 
+@MainActor
 final class NetRomLinkQualityTests: XCTestCase {
 
     // Injectable time source for deterministic tests
@@ -32,8 +33,25 @@ final class NetRomLinkQualityTests: XCTestCase {
         let testConfig = LinkQualityConfig(
             source: config.source,
             slidingWindowSeconds: config.slidingWindowSeconds,
-            forwardHalfLifeSeconds: 2,
+            forwardHalfLifeSeconds: 2,  // Fast convergence for most tests
             reverseHalfLifeSeconds: 2,
+            initialDeliveryRatio: config.initialDeliveryRatio,
+            minDeliveryRatio: config.minDeliveryRatio,
+            maxETX: config.maxETX,
+            ackProgressWeight: config.ackProgressWeight,
+            maxObservationsPerLink: config.maxObservationsPerLink,
+            excludeServiceDestinations: config.excludeServiceDestinations
+        )
+        return LinkQualityEstimator(config: testConfig, clock: { [self] in self.testClock })
+    }
+
+    /// Estimator with longer half-life for EWMA smoothing tests.
+    private func makeSlowEstimator(config: LinkQualityConfig = .default) -> LinkQualityEstimator {
+        let testConfig = LinkQualityConfig(
+            source: config.source,
+            slidingWindowSeconds: config.slidingWindowSeconds,
+            forwardHalfLifeSeconds: 15,  // Slower convergence for smoothing tests
+            reverseHalfLifeSeconds: 15,
             initialDeliveryRatio: config.initialDeliveryRatio,
             minDeliveryRatio: config.minDeliveryRatio,
             maxETX: config.maxETX,
@@ -281,7 +299,8 @@ final class NetRomLinkQualityTests: XCTestCase {
     // MARK: - EWMA Smoothing (CRITICAL)
 
     func testEWMASmoothingPreventsSpikes() {
-        var estimator = makeEstimator()
+        // Use slow estimator for this smoothing test
+        var estimator = makeSlowEstimator()
         let now = Date(timeIntervalSince1970: 1_700_002_600)
         testClock = now
 

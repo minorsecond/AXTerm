@@ -372,7 +372,7 @@ final class PacketClassificationTests: XCTestCase {
         timestamp: Date? = nil
     ) -> Packet {
         let packetTimestamp = timestamp ?? baseTimestamp
-        Packet(
+        return Packet(
             timestamp: packetTimestamp,
             from: AX25Address(call: fromCall),
             to: AX25Address(call: toCall),

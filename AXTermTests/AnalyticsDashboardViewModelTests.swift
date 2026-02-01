@@ -122,7 +122,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.viewState.graphModel.edges.first?.sourceID, "A1PHA")
     }
 
-    func testSelectionUpdatesDoNotCrash() {
+    func testSelectionUpdatesDoNotCrash() async {
         let settings = makeSettings()
         settings.analyticsTimeframe = "custom"
         settings.analyticsBucket = "fiveMinutes"
@@ -137,6 +137,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
             graphDebounce: 0,
             packetScheduler: .main
         )
+        viewModel.setActive(true)
 
         viewModel.handleNodeClick("alpha", isShift: false)
         XCTAssertEqual(viewModel.viewState.selectedNodeID, "alpha")

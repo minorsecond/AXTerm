@@ -383,8 +383,9 @@ final class NetworkGraphRegressionTests: XCTestCase {
 
     // MARK: - Test G: Empty Edges Case Still Renders Nodes (CRITICAL)
 
-    /// When filters remove all edges, nodes should still be present.
-    /// AFTER FIX: Nodes are built from nodeStats, not from edges.
+    /// Nodes are built from nodeStats independently of edges.
+    /// HeardVia summary edges are ALWAYS created between endpoints (regardless of includeVia toggle).
+    /// The includeVia toggle only controls whether digipeaters become nodes and hop-by-hop edges.
     func testEmptyEdgesCaseStillRendersNodes() {
         let now = Date()
         var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
@@ -395,7 +396,7 @@ final class NetworkGraphRegressionTests: XCTestCase {
 
         let packets = builder.buildPackets()
 
-        // Build with includeVia OFF - should have no edges but nodes should still exist
+        // Build with includeVia OFF
         let options = NetworkGraphBuilder.Options(
             includeViaDigipeaters: false,
             minimumEdgeCount: 1,
@@ -405,17 +406,23 @@ final class NetworkGraphRegressionTests: XCTestCase {
 
         let classifiedGraph = NetworkGraphBuilder.buildClassified(packets: packets, options: options, now: now)
 
-        // With includeVia OFF, heardVia edges won't be created
-        // But nodes should still appear because they're tracked in nodeStats
+        // Nodes should be present because they're tracked in nodeStats
         XCTAssertGreaterThanOrEqual(
             classifiedGraph.nodes.count, 3,
-            "Nodes W1ABC, K2DEF, N3GHI should be present even without edges (includeVia OFF)"
+            "Nodes W1ABC, K2DEF, N3GHI should be present (includeVia OFF)"
         )
 
-        // The edges should be empty (no heardVia edges when includeVia OFF)
+        // HeardVia summary edges ARE created between endpoints (this is correct behavior)
+        // The toggle only affects whether digipeaters become nodes, not endpoint relationships
+        XCTAssertEqual(
+            classifiedGraph.edges.count, 2,
+            "HeardVia edges between endpoints should exist (W1ABC-K2DEF, K2DEF-N3GHI)"
+        )
+
+        // All edges should be HeardVia type
         XCTAssertTrue(
-            classifiedGraph.edges.isEmpty,
-            "No edges should exist when only via traffic and includeVia OFF"
+            classifiedGraph.edges.allSatisfy { $0.linkType == .heardVia },
+            "All edges should be HeardVia type"
         )
 
         // Verify specific nodes
@@ -424,7 +431,7 @@ final class NetworkGraphRegressionTests: XCTestCase {
             "W1ABC, K2DEF, N3GHI must all be present as nodes"
         )
 
-        // N0DIG should NOT be present (includeVia OFF)
+        // N0DIG should NOT be present (includeVia OFF means digipeaters don't become nodes)
         let hasDigi = classifiedGraph.nodes.contains { $0.id == "N0DIG" }
         XCTAssertFalse(hasDigi, "N0DIG should not be present when includeVia OFF")
     }

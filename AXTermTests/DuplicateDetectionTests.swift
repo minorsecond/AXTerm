@@ -8,6 +8,7 @@
 import XCTest
 @testable import AXTerm
 
+@MainActor
 final class DuplicateDetectionTests: XCTestCase {
     private func makeIFrame(from: String, to: String, ns: UInt8, payload: [UInt8], timestamp: Date) -> Packet {
         let control = (ns << 1) & 0x0E

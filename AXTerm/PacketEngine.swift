@@ -137,7 +137,7 @@ final class PacketEngine: ObservableObject {
     // MARK: - Initialization
 
     init(
-        maxPackets: Int = 5000,
+        maxPackets: Int = 5000,  // We only show this many packets in the UI, but more can be persisted in the DB
         maxConsoleLines: Int = 10_000,
         maxRawChunks: Int = 10_000,
         settings: AppSettingsStore,

@@ -13,7 +13,8 @@
 //  Since AX.25 often has UI-only frames (no ACK), dr is frequently unobservable.
 //  We support partial observability:
 //    1) Full ETX when both df and dr are estimable
-//    2) Unidirectional fallback: quality ≈ 255 / (1 / df) when dr is unknown
+//    2) Unidirectional fallback: uses conservative dr estimate (initialDeliveryRatio)
+//       when dr is unknown, ensuring quality is penalized for one-way evidence only
 //
 //  EWMA smoothing ensures stability - quality doesn't spike from transient conditions.
 //  Directionality is critical: A→B stats MUST NOT affect B→A unless explicit reverse evidence exists.
@@ -393,7 +394,8 @@ struct LinkQualityEstimator {
                 restoredForwardEstimate: restoredForward,
                 restoredReverseEstimate: record.drEstimate,
                 restoredObservationCount: record.observationCount,
-                restoredDuplicateCount: record.duplicateCount
+                restoredDuplicateCount: record.duplicateCount,
+                restoredQuality: record.quality
             )
         }
 
@@ -505,6 +507,7 @@ private struct DirectionalLinkStats {
     var restoredReverseEstimate: Double?
     var restoredObservationCount: Int
     var restoredDuplicateCount: Int
+    var restoredQuality: Int?
 
     init(
         lastUpdated: Date,
@@ -512,7 +515,8 @@ private struct DirectionalLinkStats {
         restoredForwardEstimate: Double? = nil,
         restoredReverseEstimate: Double? = nil,
         restoredObservationCount: Int = 0,
-        restoredDuplicateCount: Int = 0
+        restoredDuplicateCount: Int = 0,
+        restoredQuality: Int? = nil
     ) {
         self.forwardEstimate = nil
         self.reverseEstimate = nil
@@ -525,6 +529,7 @@ private struct DirectionalLinkStats {
         self.restoredReverseEstimate = restoredReverseEstimate
         self.restoredObservationCount = restoredObservationCount
         self.restoredDuplicateCount = restoredDuplicateCount
+        self.restoredQuality = restoredQuality
     }
 
     var hasEvidence: Bool {
@@ -547,6 +552,7 @@ private struct DirectionalLinkStats {
         restoredReverseEstimate = nil
         restoredObservationCount = 0
         restoredDuplicateCount = 0
+        restoredQuality = nil
 
         switch channel {
         case .forward:
@@ -631,6 +637,12 @@ private struct DirectionalLinkStats {
 
     /// Quality scaled to 0...255 using ETX mapping.
     func quality(using config: LinkQualityConfig) -> Int {
+        // If we have no live observations but have restored quality from persistence, use it directly.
+        // This preserves imported quality values until new evidence arrives.
+        if observations.count == 0, let restoredQuality {
+            return min(255, max(0, restoredQuality))
+        }
+
         guard let df = effectiveForwardEstimate(config: config) else { return 0 }
         let dr = effectiveReverseEstimate()
         let etx = Self.etx(df: df, dr: dr, config: config)
@@ -655,8 +667,13 @@ private struct DirectionalLinkStats {
             let product = max(config.minDeliveryRatio, df) * max(config.minDeliveryRatio, dr)
             return min(config.maxETX, max(1.0, 1.0 / product))
         }
+        // When dr is unknown, apply a small penalty to indicate unconfirmed reverse path.
+        // Use 0.99 as a conservative dr estimate - high enough to preserve reasonable quality
+        // for good links, but ensures quality is never exactly 255 without reverse evidence.
         let dfClamped = max(config.minDeliveryRatio, df)
-        return min(config.maxETX, max(1.0, 1.0 / dfClamped))
+        let drConservative = 0.99
+        let product = dfClamped * drConservative
+        return min(config.maxETX, max(1.0, 1.0 / product))
     }
 
     private func updateEWMA(

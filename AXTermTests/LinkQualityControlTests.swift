@@ -8,6 +8,7 @@
 import XCTest
 @testable import AXTerm
 
+@MainActor
 final class LinkQualityControlTests: XCTestCase {
     private var testClock: Date = Date(timeIntervalSince1970: 1_700_200_000)
 

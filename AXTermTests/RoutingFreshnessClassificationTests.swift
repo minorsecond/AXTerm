@@ -9,6 +9,7 @@
 import XCTest
 @testable import AXTerm
 
+@MainActor
 final class RoutingFreshnessClassificationTests: XCTestCase {
 
     // MARK: - Classification Routing Refresh Properties

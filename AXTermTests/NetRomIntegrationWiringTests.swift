@@ -108,10 +108,14 @@ final class NetRomIntegrationWiringTests: XCTestCase {
         let baseTime = Date(timeIntervalSince1970: 1_700_004_300)
 
         // When: Observe packets with duplicates
-        let packet = makePacket(from: "W0ABC", to: localCallsign, via: [], timestamp: baseTime)
-        integration.observePacket(packet, timestamp: baseTime, isDuplicate: false)
-        integration.observePacket(packet, timestamp: baseTime.addingTimeInterval(0.1), isDuplicate: true)
-        integration.observePacket(packet, timestamp: baseTime.addingTimeInterval(0.2), isDuplicate: true)
+        // Packets must be > 0.25s apart to avoid ingestion dedup window
+        let packet1 = makePacket(from: "W0ABC", to: localCallsign, via: [], timestamp: baseTime)
+        let packet2 = makePacket(from: "W0ABC", to: localCallsign, via: [], timestamp: baseTime.addingTimeInterval(1))
+        let packet3 = makePacket(from: "W0ABC", to: localCallsign, via: [], timestamp: baseTime.addingTimeInterval(2))
+
+        integration.observePacket(packet1, timestamp: baseTime, isDuplicate: false)
+        integration.observePacket(packet2, timestamp: baseTime.addingTimeInterval(1), isDuplicate: true)
+        integration.observePacket(packet3, timestamp: baseTime.addingTimeInterval(2), isDuplicate: true)
 
         // Then: Link stats should reflect duplicates
         let linkStats = integration.exportLinkStats()

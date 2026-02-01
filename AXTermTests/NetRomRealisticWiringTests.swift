@@ -583,13 +583,14 @@ final class NetRomRealisticWiringTests: XCTestCase {
         }
 
         // Then, send duplicate bursts
+        // Packets must be > 0.25s apart to avoid ingestion dedup window
         for i in 0..<20 {
             let packet = makePacket(
                 from: "W0BST",
                 to: localCallsign,
                 via: [],
-                infoText: "BURST",
-                timestamp: baseTime.addingTimeInterval(50 + Double(i) * 0.1)
+                infoText: "BURST\(i)",  // Different content to avoid dedup
+                timestamp: baseTime.addingTimeInterval(50 + Double(i))
             )
             integration.observePacket(packet, timestamp: packet.timestamp, isDuplicate: i > 0)
         }

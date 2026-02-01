@@ -14,6 +14,7 @@ import XCTest
 /// packet-radio.net/netrom1.pdf (Section 10 et seq.).
 @testable import AXTerm
 
+@MainActor
 final class NetRomRoutingTests: XCTestCase {
     private let localCallsign = "N0CALL"
     private func makeRouter() -> NetRomRouter {
@@ -240,7 +241,8 @@ final class NetRomRoutingTests: XCTestCase {
             timestamp: now.addingTimeInterval(1)
         )
 
-        let later = now.addingTimeInterval(NetRomConfig.default.routeTTLSeconds + 1)
+        // Use TTL + 2 to ensure route is past the cutoff (not exactly at boundary)
+        let later = now.addingTimeInterval(NetRomConfig.default.routeTTLSeconds + 2)
         router.purgeStaleRoutes(currentDate: later)
         XCTAssertTrue(router.currentRoutes().isEmpty, "Routes must be removed after the TTL window.")
     }
