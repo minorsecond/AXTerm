@@ -24,6 +24,9 @@ struct SettingsView: View {
     /// Uses @AppStorage directly to avoid feedback loops with MenuBarExtra scene updates.
     @AppStorage(AppSettingsStore.runInMenuBarKey) private var runInMenuBar = AppSettingsStore.defaultRunInMenuBar
 
+    /// Adaptive transmission settings
+    @State private var txAdaptiveSettings = TxAdaptiveSettings()
+
     private let retentionStep = 1_000
 
     var body: some View {
@@ -456,6 +459,10 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Section("Transmission") {
+                transmissionSettingsSection
+            }
         }
         .formStyle(.grouped)
         .padding(20)
@@ -660,6 +667,146 @@ struct SettingsView: View {
                 settings.watchKeywords[index] = newValue
             }
         )
+    }
+
+    // MARK: - Transmission Settings Section
+
+    @ViewBuilder
+    private var transmissionSettingsSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Traffic Shaping
+            GroupBox("Traffic Shaping") {
+                VStack(alignment: .leading, spacing: 12) {
+                    adaptiveSettingRow(
+                        title: "Packet Length",
+                        setting: txAdaptiveSettings.paclen,
+                        onToggle: {
+                            txAdaptiveSettings.paclen.mode = txAdaptiveSettings.paclen.mode == .auto ? .manual : .auto
+                        },
+                        onValueChange: { txAdaptiveSettings.paclen.manualValue = $0 }
+                    )
+
+                    adaptiveSettingRow(
+                        title: "Window Size (K)",
+                        setting: txAdaptiveSettings.windowSize,
+                        onToggle: {
+                            txAdaptiveSettings.windowSize.mode = txAdaptiveSettings.windowSize.mode == .auto ? .manual : .auto
+                        },
+                        onValueChange: { txAdaptiveSettings.windowSize.manualValue = $0 }
+                    )
+
+                    adaptiveSettingRow(
+                        title: "Max Retries (N2)",
+                        setting: txAdaptiveSettings.maxRetries,
+                        onToggle: {
+                            txAdaptiveSettings.maxRetries.mode = txAdaptiveSettings.maxRetries.mode == .auto ? .manual : .auto
+                        },
+                        onValueChange: { txAdaptiveSettings.maxRetries.manualValue = $0 }
+                    )
+                }
+                .padding(.top, 4)
+            }
+
+            // AXDP Protocol
+            GroupBox("AXDP Protocol") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Enable AXDP Extensions", isOn: $txAdaptiveSettings.axdpExtensionsEnabled)
+
+                    Toggle("Auto-negotiate Capabilities", isOn: $txAdaptiveSettings.autoNegotiateCapabilities)
+                        .disabled(!txAdaptiveSettings.axdpExtensionsEnabled)
+
+                    Toggle("Enable Compression", isOn: $txAdaptiveSettings.compressionEnabled)
+                        .disabled(!txAdaptiveSettings.axdpExtensionsEnabled)
+
+                    if txAdaptiveSettings.compressionEnabled && txAdaptiveSettings.axdpExtensionsEnabled {
+                        Picker("Compression Algorithm", selection: $txAdaptiveSettings.compressionAlgorithm) {
+                            Text("LZ4 (fast)").tag(AXDPCompression.Algorithm.lz4)
+                            Text("Deflate (better ratio)").tag(AXDPCompression.Algorithm.deflate)
+                        }
+                        .pickerStyle(.menu)
+                    }
+
+                    Text("AXDP extensions provide compression, capability negotiation, and reliable transfers. They are backward-compatible with stations that don't support them.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 4)
+            }
+
+            // Debug
+            GroupBox("Debug") {
+                Toggle("Show AXDP decode details in console", isOn: $txAdaptiveSettings.showAXDPDecodeDetails)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func adaptiveSettingRow(
+        title: String,
+        setting: AdaptiveSetting<Int>,
+        onToggle: @escaping () -> Void,
+        onValueChange: @escaping (Int) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+
+                Spacer()
+
+                Picker("", selection: Binding(
+                    get: { setting.mode },
+                    set: { _ in onToggle() }
+                )) {
+                    Text("Auto").tag(AdaptiveMode.auto)
+                    Text("Manual").tag(AdaptiveMode.manual)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 120)
+            }
+
+            if setting.mode == .auto {
+                HStack {
+                    Text("Current: \(setting.currentAdaptive)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if let reason = setting.adaptiveReason {
+                        Text("(\(reason))")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            } else {
+                if let range = setting.range {
+                    HStack {
+                        Text("Value:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        TextField("", value: Binding(
+                            get: { setting.manualValue },
+                            set: { onValueChange($0) }
+                        ), format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 60)
+
+                        Stepper("", value: Binding(
+                            get: { setting.manualValue },
+                            set: { onValueChange($0) }
+                        ), in: range)
+                        .labelsHidden()
+
+                        Spacer()
+
+                        Text("(\(range.lowerBound)-\(range.upperBound))")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -9,6 +9,7 @@ import SwiftUI
 
 enum NavigationItem: String, Hashable, CaseIterable {
     case packets = "Packets"
+    case terminal = "Terminal"
     case console = "Console"
     case raw = "Raw"
     case analytics = "Analytics"
@@ -83,6 +84,12 @@ struct ContentView: View {
             switch selectedNav {
             case .packets:
                 return
+            case .terminal:
+                // Terminal view loads console for session output
+                guard !didLoadConsoleHistory else { return }
+                didLoadConsoleHistory = true
+                await Task.yield()
+                client.loadPersistedConsole()
             case .console:
                 guard !didLoadConsoleHistory else { return }
                 didLoadConsoleHistory = true
@@ -167,6 +174,7 @@ struct ContentView: View {
     private func iconFor(_ item: NavigationItem) -> String {
         switch item {
         case .packets: return "list.bullet.rectangle"
+        case .terminal: return "keyboard"
         case .console: return "terminal"
         case .raw: return "doc.text"
         case .analytics: return "chart.bar"
@@ -195,6 +203,8 @@ struct ContentView: View {
             switch selectedNav {
             case .packets:
                 packetsView
+            case .terminal:
+                TerminalView(client: client, settings: settings)
             case .console:
                 ConsoleView(
                     lines: client.consoleLines,
