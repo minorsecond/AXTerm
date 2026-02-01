@@ -201,3 +201,144 @@ extension LinkRttTracker {
         return AdaptiveParameters(paclen: paclen, windowSize: windowSize, reason: reason)
     }
 }
+
+// MARK: - AIMD Congestion Window
+
+/// AIMD (Additive Increase Multiplicative Decrease) congestion window.
+///
+/// Implements TCP-like congestion control for AX.25 connected mode:
+/// - Slow start: exponential growth until loss or threshold
+/// - Congestion avoidance: linear growth after slow start
+/// - On loss: halve the window (multiplicative decrease)
+struct AIMDWindow: Sendable {
+    /// Current congestion window (fractional)
+    private(set) var cwnd: Double
+
+    /// Slow start threshold
+    private(set) var ssthresh: Double
+
+    /// Maximum window size
+    let maxWindow: Double
+
+    /// Minimum window size
+    let minWindow: Double = 1.0
+
+    /// Additive increase factor (increase per RTT)
+    let aiIncrement: Double = 1.0
+
+    /// Multiplicative decrease factor
+    let mdFactor: Double = 0.5
+
+    /// Whether currently in slow start phase
+    var isSlowStart: Bool {
+        cwnd < ssthresh
+    }
+
+    /// Effective window as integer (floored)
+    var effectiveWindow: Int {
+        max(1, Int(cwnd))
+    }
+
+    init(initialWindow: Double = 1.0, maxWindow: Double = 8.0, ssthresh: Double? = nil) {
+        self.cwnd = max(1.0, initialWindow)
+        self.maxWindow = max(1.0, maxWindow)
+        self.ssthresh = ssthresh ?? maxWindow / 2
+    }
+
+    /// Called when an ACK is received (successful delivery).
+    mutating func onAck() {
+        if isSlowStart {
+            // Slow start: increase by 1 per ACK (exponential growth)
+            cwnd = min(cwnd + 1.0, maxWindow)
+        } else {
+            // Congestion avoidance: increase by 1/cwnd per ACK (linear growth)
+            cwnd = min(cwnd + aiIncrement / cwnd, maxWindow)
+        }
+    }
+
+    /// Called when a loss is detected (timeout or NACK).
+    mutating func onLoss() {
+        // Set new ssthresh to half current window
+        ssthresh = max(minWindow, cwnd * mdFactor)
+
+        // Multiplicative decrease
+        cwnd = max(minWindow, cwnd * mdFactor)
+    }
+
+    /// Reset to initial state.
+    mutating func reset() {
+        cwnd = minWindow
+        ssthresh = maxWindow / 2
+    }
+}
+
+// MARK: - Paclen Adapter
+
+/// Adapts packet length based on link performance.
+///
+/// Per spec Section 4.2:
+/// - Start conservative (e.g., 128 bytes)
+/// - Decrease on failure/retry
+/// - Increase after N consecutive successes
+struct PaclenAdapter: Sendable {
+    /// Current recommended paclen
+    private(set) var currentPaclen: Int
+
+    /// User's base/preferred paclen
+    let basePaclen: Int
+
+    /// Minimum allowed paclen
+    let minPaclen: Int
+
+    /// Maximum allowed paclen
+    let maxPaclen: Int
+
+    /// Consecutive successes required to increase
+    let stabilityThreshold: Int = 10
+
+    /// Current success streak
+    private var successStreak: Int = 0
+
+    init(basePaclen: Int = 128, minPaclen: Int = 32, maxPaclen: Int = 256) {
+        self.basePaclen = basePaclen
+        self.currentPaclen = basePaclen
+        self.minPaclen = max(16, minPaclen)
+        self.maxPaclen = max(minPaclen, maxPaclen)
+    }
+
+    /// Record a successful delivery (no retransmit needed).
+    mutating func recordSuccess() {
+        successStreak += 1
+
+        // Increase paclen after stability threshold
+        if successStreak >= stabilityThreshold {
+            // Increase by 32 bytes, clamped
+            currentPaclen = min(currentPaclen + 32, maxPaclen)
+            // Reset streak but keep partial credit
+            successStreak = stabilityThreshold / 2
+        }
+    }
+
+    /// Record a failure (timeout/retransmit).
+    mutating func recordFailure() {
+        successStreak = 0
+
+        // Decrease paclen by half the distance to min
+        let decrease = (currentPaclen - minPaclen) / 2
+        currentPaclen = max(minPaclen, currentPaclen - max(16, decrease))
+    }
+
+    /// Record a retry (partial failure).
+    mutating func recordRetry() {
+        successStreak = 0
+
+        // Smaller decrease than full failure
+        currentPaclen = max(minPaclen, currentPaclen - 16)
+    }
+
+    /// Reset to base paclen.
+    mutating func reset() {
+        currentPaclen = basePaclen
+        successStreak = 0
+    }
+}
