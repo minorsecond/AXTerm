@@ -225,7 +225,7 @@ enum AX25SessionEvent: Sendable {
 // MARK: - Session Actions
 
 /// Actions to take in response to events
-enum AX25SessionAction: Sendable {
+enum AX25SessionAction: Sendable, Equatable {
     case sendSABM
     case sendUA
     case sendDM
@@ -242,4 +242,215 @@ enum AX25SessionAction: Sendable {
     case notifyConnected
     case notifyDisconnected
     case notifyError(String)
+}
+
+// MARK: - State Machine
+
+/// AX.25 connected-mode state machine
+/// Handles state transitions and generates actions in response to events
+struct AX25StateMachine: Sendable {
+    /// Current session state
+    private(set) var state: AX25SessionState = .disconnected
+
+    /// Session configuration
+    let config: AX25SessionConfig
+
+    /// Sequence number state
+    var sequenceState: AX25SequenceState
+
+    /// Retry counter for current operation
+    private(set) var retryCount: Int = 0
+
+    init(config: AX25SessionConfig) {
+        self.config = config
+        self.sequenceState = AX25SequenceState(modulo: config.modulo)
+    }
+
+    /// Handle an event and return the list of actions to execute
+    mutating func handle(event: AX25SessionEvent) -> [AX25SessionAction] {
+        switch (state, event) {
+
+        // MARK: - Disconnected State
+
+        case (.disconnected, .connectRequest):
+            state = .connecting
+            retryCount = 0
+            sequenceState.reset()
+            return [.sendSABM, .startT1]
+
+        case (.disconnected, .receivedSABM):
+            // Remote initiated connection
+            state = .connected
+            sequenceState.reset()
+            return [.sendUA, .startT3, .notifyConnected]
+
+        case (.disconnected, .receivedDISC):
+            // Respond with DM (not connected)
+            return [.sendDM]
+
+        case (.disconnected, _):
+            // Ignore other events in disconnected state
+            return []
+
+        // MARK: - Connecting State
+
+        case (.connecting, .receivedUA):
+            state = .connected
+            retryCount = 0
+            return [.stopT1, .startT3, .notifyConnected]
+
+        case (.connecting, .receivedDM):
+            state = .disconnected
+            return [.stopT1, .notifyError("Connection refused (DM received)")]
+
+        case (.connecting, .t1Timeout):
+            retryCount += 1
+            if retryCount > config.maxRetries {
+                state = .error
+                return [.stopT1, .notifyError("Connection timeout (retries exceeded)")]
+            }
+            return [.sendSABM, .startT1]
+
+        case (.connecting, .disconnectRequest):
+            state = .disconnected
+            return [.stopT1, .notifyDisconnected]
+
+        case (.connecting, _):
+            return []
+
+        // MARK: - Connected State
+
+        case (.connected, .disconnectRequest):
+            state = .disconnecting
+            retryCount = 0
+            return [.sendDISC, .stopT3, .startT1]
+
+        case (.connected, .receivedDISC):
+            state = .disconnected
+            return [.sendUA, .stopT3, .notifyDisconnected]
+
+        case (.connected, .receivedSABM):
+            // Remote is re-establishing - reset and ack
+            sequenceState.reset()
+            return [.sendUA, .startT3]
+
+        case (.connected, .receivedIFrame(let ns, let nr, let payload)):
+            return handleIFrame(ns: ns, nr: nr, payload: payload)
+
+        case (.connected, .receivedRR(let nr)):
+            return handleRR(nr: nr)
+
+        case (.connected, .receivedRNR(let nr)):
+            // Remote is busy - ack frames but don't send more
+            sequenceState.ackUpTo(nr: nr)
+            return [.stopT1]
+
+        case (.connected, .receivedREJ(let nr)):
+            // Remote requests retransmit from nr
+            sequenceState.ackUpTo(nr: nr)
+            // Note: actual retransmit logic would be handled by session manager
+            return [.startT1]
+
+        case (.connected, .receivedFRMR):
+            state = .error
+            return [.stopT3, .notifyError("Protocol error (FRMR received)")]
+
+        case (.connected, .receivedDM):
+            state = .disconnected
+            return [.stopT3, .notifyError("Remote disconnected (DM received)")]
+
+        case (.connected, .t1Timeout):
+            retryCount += 1
+            if retryCount > config.maxRetries {
+                state = .error
+                return [.stopT1, .stopT3, .notifyError("Link failure (retries exceeded)")]
+            }
+            // Retransmit would happen here
+            return [.startT1]
+
+        case (.connected, .t3Timeout):
+            // Send RR as poll to check link
+            return [.sendRR(nr: sequenceState.vr), .startT1]
+
+        case (.connected, _):
+            return []
+
+        // MARK: - Disconnecting State
+
+        case (.disconnecting, .receivedUA):
+            state = .disconnected
+            return [.stopT1, .notifyDisconnected]
+
+        case (.disconnecting, .receivedDM):
+            state = .disconnected
+            return [.stopT1, .notifyDisconnected]
+
+        case (.disconnecting, .t1Timeout):
+            retryCount += 1
+            if retryCount > config.maxRetries {
+                state = .disconnected
+                return [.stopT1, .notifyDisconnected]
+            }
+            return [.sendDISC, .startT1]
+
+        case (.disconnecting, _):
+            return []
+
+        // MARK: - Error State
+
+        case (.error, .connectRequest):
+            state = .connecting
+            retryCount = 0
+            sequenceState.reset()
+            return [.sendSABM, .startT1]
+
+        case (.error, _):
+            return []
+        }
+    }
+
+    // MARK: - I-Frame Handling
+
+    private mutating func handleIFrame(ns: Int, nr: Int, payload: Data) -> [AX25SessionAction] {
+        var actions: [AX25SessionAction] = []
+
+        // Process N(R) - acknowledge our sent frames
+        if sequenceState.outstandingCount > 0 {
+            sequenceState.ackUpTo(nr: nr)
+        }
+
+        // Check if this is the expected sequence number
+        if ns == sequenceState.vr {
+            // In sequence - accept and advance
+            sequenceState.incrementVR()
+            actions.append(.deliverData(payload))
+            actions.append(.sendRR(nr: sequenceState.vr))
+            actions.append(.startT3)
+
+            if sequenceState.outstandingCount == 0 {
+                actions.append(.stopT1)
+            }
+        } else {
+            // Out of sequence - request retransmit
+            actions.append(.sendREJ(nr: sequenceState.vr))
+        }
+
+        return actions
+    }
+
+    // MARK: - RR Handling
+
+    private mutating func handleRR(nr: Int) -> [AX25SessionAction] {
+        var actions: [AX25SessionAction] = []
+
+        sequenceState.ackUpTo(nr: nr)
+
+        if sequenceState.outstandingCount == 0 {
+            // All frames acked
+            actions.append(.stopT1)
+            actions.append(.startT3)
+        }
+
+        return actions
+    }
 }

@@ -209,4 +209,233 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(stats.bytesSent, 100)
         XCTAssertEqual(stats.bytesReceived, 50)
     }
+
+    // MARK: - State Machine Tests
+
+    func testStateMachineInitialState() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        XCTAssertEqual(sm.state, .disconnected)
+    }
+
+    func testStateMachineConnectRequestFromDisconnected() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+
+        let actions = sm.handle(event: .connectRequest)
+
+        XCTAssertEqual(sm.state, .connecting)
+        XCTAssertTrue(actions.contains(.sendSABM))
+        XCTAssertTrue(actions.contains(.startT1))
+    }
+
+    func testStateMachineUAWhileConnecting() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+
+        let actions = sm.handle(event: .receivedUA)
+
+        XCTAssertEqual(sm.state, .connected)
+        XCTAssertTrue(actions.contains(.stopT1))
+        XCTAssertTrue(actions.contains(.startT3))
+        XCTAssertTrue(actions.contains(.notifyConnected))
+    }
+
+    func testStateMachineDMWhileConnecting() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+
+        let actions = sm.handle(event: .receivedDM)
+
+        XCTAssertEqual(sm.state, .disconnected)
+        XCTAssertTrue(actions.contains(.stopT1))
+        XCTAssertTrue(actions.contains { action in
+            if case .notifyError = action { return true }
+            return false
+        })
+    }
+
+    func testStateMachineT1TimeoutRetry() {
+        var sm = AX25StateMachine(config: AX25SessionConfig(maxRetries: 3))
+        _ = sm.handle(event: .connectRequest)
+
+        // First timeout - should retry
+        let actions1 = sm.handle(event: .t1Timeout)
+        XCTAssertEqual(sm.state, .connecting)
+        XCTAssertTrue(actions1.contains(.sendSABM))
+        XCTAssertEqual(sm.retryCount, 1)
+    }
+
+    func testStateMachineT1TimeoutExceeded() {
+        var sm = AX25StateMachine(config: AX25SessionConfig(maxRetries: 2))
+        _ = sm.handle(event: .connectRequest)
+
+        _ = sm.handle(event: .t1Timeout)  // retry 1
+        _ = sm.handle(event: .t1Timeout)  // retry 2
+        let actions = sm.handle(event: .t1Timeout)  // exceed
+
+        XCTAssertEqual(sm.state, .error)
+        XCTAssertTrue(actions.contains(.stopT1))
+        XCTAssertTrue(actions.contains { action in
+            if case .notifyError = action { return true }
+            return false
+        })
+    }
+
+    func testStateMachineDisconnectRequestWhileConnected() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+
+        let actions = sm.handle(event: .disconnectRequest)
+
+        XCTAssertEqual(sm.state, .disconnecting)
+        XCTAssertTrue(actions.contains(.sendDISC))
+        XCTAssertTrue(actions.contains(.stopT3))
+        XCTAssertTrue(actions.contains(.startT1))
+    }
+
+    func testStateMachineUAWhileDisconnecting() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+        _ = sm.handle(event: .disconnectRequest)
+
+        let actions = sm.handle(event: .receivedUA)
+
+        XCTAssertEqual(sm.state, .disconnected)
+        XCTAssertTrue(actions.contains(.stopT1))
+        XCTAssertTrue(actions.contains(.notifyDisconnected))
+    }
+
+    func testStateMachineReceivedSABMWhileDisconnected() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+
+        let actions = sm.handle(event: .receivedSABM)
+
+        XCTAssertEqual(sm.state, .connected)
+        XCTAssertTrue(actions.contains(.sendUA))
+        XCTAssertTrue(actions.contains(.startT3))
+        XCTAssertTrue(actions.contains(.notifyConnected))
+    }
+
+    func testStateMachineReceivedDISCWhileConnected() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+
+        let actions = sm.handle(event: .receivedDISC)
+
+        XCTAssertEqual(sm.state, .disconnected)
+        XCTAssertTrue(actions.contains(.sendUA))
+        XCTAssertTrue(actions.contains(.stopT3))
+        XCTAssertTrue(actions.contains(.notifyDisconnected))
+    }
+
+    func testStateMachineReceivedIFrameInSequence() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+
+        let payload = Data([0x01, 0x02, 0x03])
+        let actions = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, payload: payload))
+
+        XCTAssertTrue(actions.contains { action in
+            if case .deliverData(let data) = action { return data == payload }
+            return false
+        })
+        XCTAssertTrue(actions.contains { action in
+            if case .sendRR(let nr) = action { return nr == 1 }
+            return false
+        })
+        XCTAssertEqual(sm.sequenceState.vr, 1)
+    }
+
+    func testStateMachineReceivedIFrameOutOfSequence() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+
+        // Receive frame with ns=1 when expecting ns=0
+        let payload = Data([0x01])
+        let actions = sm.handle(event: .receivedIFrame(ns: 1, nr: 0, payload: payload))
+
+        // Should send REJ requesting retransmit from expected sequence
+        XCTAssertTrue(actions.contains { action in
+            if case .sendREJ(let nr) = action { return nr == 0 }
+            return false
+        })
+        // Should NOT deliver data
+        XCTAssertFalse(actions.contains { action in
+            if case .deliverData = action { return true }
+            return false
+        })
+    }
+
+    func testStateMachineReceivedRRAcknowledgesFrames() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+
+        // Simulate sending I-frame (this would increment vs)
+        sm.sequenceState.incrementVS()
+        sm.sequenceState.incrementVS()
+        XCTAssertEqual(sm.sequenceState.outstandingCount, 2)
+
+        // Receive RR with nr=2 (acks frames 0,1)
+        let actions = sm.handle(event: .receivedRR(nr: 2))
+
+        XCTAssertEqual(sm.sequenceState.va, 2)
+        XCTAssertEqual(sm.sequenceState.outstandingCount, 0)
+        XCTAssertTrue(actions.contains(.stopT1))
+        XCTAssertTrue(actions.contains(.startT3))
+    }
+
+    func testStateMachineReceivedFRMR() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+
+        let actions = sm.handle(event: .receivedFRMR)
+
+        XCTAssertEqual(sm.state, .error)
+        XCTAssertTrue(actions.contains(.stopT3))
+        XCTAssertTrue(actions.contains { action in
+            if case .notifyError = action { return true }
+            return false
+        })
+    }
+
+    func testStateMachineT3TimeoutSendsRR() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+
+        let actions = sm.handle(event: .t3Timeout)
+
+        // T3 timeout should send RR as poll to keep link alive
+        XCTAssertTrue(actions.contains { action in
+            if case .sendRR = action { return true }
+            return false
+        })
+        XCTAssertTrue(actions.contains(.startT1))
+    }
+
+    func testStateMachineSequenceStateReset() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+
+        // Simulate some activity
+        sm.sequenceState.incrementVS()
+        sm.sequenceState.incrementVR()
+
+        // Disconnect and reconnect
+        _ = sm.handle(event: .disconnectRequest)
+        _ = sm.handle(event: .receivedUA)
+        _ = sm.handle(event: .connectRequest)
+
+        // Sequence state should be reset
+        XCTAssertEqual(sm.sequenceState.vs, 0)
+        XCTAssertEqual(sm.sequenceState.vr, 0)
+        XCTAssertEqual(sm.sequenceState.va, 0)
+    }
 }
