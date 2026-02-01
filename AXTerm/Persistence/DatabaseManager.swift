@@ -155,6 +155,28 @@ enum DatabaseManager {
             """)
     }
 
+    private static func addControlFieldColumns(_ db: Database) throws {
+        // Add AX.25 control field decoded columns to packets table
+        try db.alter(table: PacketRecord.databaseTableName) { table in
+            table.add(column: "ax25FrameClass", .text)      // "I", "S", "U", or "unknown"
+            table.add(column: "ax25SType", .text)           // "RR", "RNR", "REJ", "SREJ" (S-frames only)
+            table.add(column: "ax25UType", .text)           // "UI", "SABM", etc. (U-frames only)
+            table.add(column: "ax25Ns", .integer)           // N(S) for I-frames
+            table.add(column: "ax25Nr", .integer)           // N(R) for I/S frames
+            table.add(column: "ax25Pf", .integer)           // Poll/Final bit (0/1)
+            table.add(column: "ax25Ctl0", .integer)         // Raw first control byte
+            table.add(column: "ax25Ctl1", .integer)         // Raw second control byte (if present)
+            table.add(column: "ax25IsExtended", .integer).defaults(to: 0)  // Extended mode flag
+        }
+
+        // Create index for frame class queries
+        try db.create(
+            index: "idx_packets_ax25FrameClass",
+            on: PacketRecord.databaseTableName,
+            columns: ["ax25FrameClass"]
+        )
+    }
+
     private static func createConsoleRawEventsTables(_ db: Database) throws {
         try db.create(table: ConsoleEntryRecord.databaseTableName) { table in
             table.column("id", .text).primaryKey()
@@ -224,6 +246,20 @@ enum DatabaseManager {
             try createConsoleRawEventsTables(db)
             Task { @MainActor in
                 SentryManager.shared.breadcrumbDatabaseMigration(version: 2, success: true)
+            }
+        }
+        migrator.registerMigration("addControlFieldColumns") { db in
+            Task { @MainActor in
+                SentryManager.shared.addBreadcrumb(
+                    category: "db.migration",
+                    message: "Running migration v3 (addControlFieldColumns)",
+                    level: .info,
+                    data: nil
+                )
+            }
+            try addControlFieldColumns(db)
+            Task { @MainActor in
+                SentryManager.shared.breadcrumbDatabaseMigration(version: 3, success: true)
             }
         }
         return migrator

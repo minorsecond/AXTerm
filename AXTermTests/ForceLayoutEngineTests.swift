@@ -1,11 +1,11 @@
 import CoreGraphics
 import Foundation
-import Testing
+import XCTest
 @testable import AXTerm
 
-struct ForceLayoutEngineTests {
-    @Test
-    func deterministicPositionsWithFixedSeed() {
+final class ForceLayoutEngineTests: XCTestCase {
+
+    func testDeterministicPositionsWithFixedSeed() {
         let model = sampleModel()
         let stateA = ForceLayoutEngine.initialize(nodes: model.nodes, previous: [:], seed: 42)
         let stateB = ForceLayoutEngine.initialize(nodes: model.nodes, previous: [:], seed: 42)
@@ -32,11 +32,10 @@ struct ForceLayoutEngineTests {
             timeStep: 0.02
         )
 
-        #expect(tickA.positions == tickB.positions)
+        XCTAssertEqual(tickA.positions, tickB.positions)
     }
 
-    @Test
-    func positionsRemainFiniteAndBounded() {
+    func testPositionsRemainFiniteAndBounded() {
         let model = sampleModel()
         var state = ForceLayoutEngine.initialize(nodes: model.nodes, previous: [:], seed: 1)
 
@@ -54,15 +53,14 @@ struct ForceLayoutEngineTests {
         }
 
         for position in state.positions.values {
-            #expect(position.x.isFinite)
-            #expect(position.y.isFinite)
-            #expect(position.x >= 0 && position.x <= 1)
-            #expect(position.y >= 0 && position.y <= 1)
+            XCTAssertTrue(position.x.isFinite)
+            XCTAssertTrue(position.y.isFinite)
+            XCTAssertTrue(position.x >= 0 && position.x <= 1)
+            XCTAssertTrue(position.y >= 0 && position.y <= 1)
         }
     }
 
-    @Test
-    func energyDecreasesOverIterations() {
+    func testEnergyDecreasesOverIterations() {
         let model = sampleModel()
         var state = ForceLayoutEngine.initialize(nodes: model.nodes, previous: [:], seed: 2)
         var energies: [Double] = []
@@ -81,18 +79,21 @@ struct ForceLayoutEngineTests {
             energies.append(state.energy)
         }
 
-        #expect((energies.last ?? 0) <= (energies.first ?? 0))
+        // Energy should decrease or remain stable over iterations (damped system)
+        // Using >= comparison since last energy should be <= first energy
+        XCTAssertLessThanOrEqual(energies.last ?? 0, energies.first ?? 0,
+                                  "Energy should decrease or stay stable over iterations")
     }
 
     private func sampleModel() -> GraphModel {
         let nodes = [
-            NetworkGraphNode(id: "A", callsign: "A", weight: 4, inCount: 2, outCount: 2, inBytes: 20, outBytes: 20, degree: 2),
-            NetworkGraphNode(id: "B", callsign: "B", weight: 3, inCount: 1, outCount: 2, inBytes: 10, outBytes: 15, degree: 2),
-            NetworkGraphNode(id: "C", callsign: "C", weight: 2, inCount: 2, outCount: 0, inBytes: 12, outBytes: 0, degree: 1)
+            NetworkGraphNode(id: "W1AAA", callsign: "W1AAA", weight: 4, inCount: 2, outCount: 2, inBytes: 20, outBytes: 20, degree: 2),
+            NetworkGraphNode(id: "K2BBB", callsign: "K2BBB", weight: 3, inCount: 1, outCount: 2, inBytes: 10, outBytes: 15, degree: 2),
+            NetworkGraphNode(id: "N3CCC", callsign: "N3CCC", weight: 2, inCount: 2, outCount: 0, inBytes: 12, outBytes: 0, degree: 1)
         ]
         let edges = [
-            NetworkGraphEdge(sourceID: "A", targetID: "B", weight: 3, bytes: 30),
-            NetworkGraphEdge(sourceID: "B", targetID: "C", weight: 2, bytes: 20)
+            NetworkGraphEdge(sourceID: "W1AAA", targetID: "K2BBB", weight: 3, bytes: 30),
+            NetworkGraphEdge(sourceID: "K2BBB", targetID: "N3CCC", weight: 2, bytes: 20)
         ]
         return GraphModel(nodes: nodes, edges: edges, adjacency: [:], droppedNodesCount: 0)
     }

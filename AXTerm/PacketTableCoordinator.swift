@@ -197,6 +197,7 @@ extension PacketTableCoordinator: NSTableViewDelegate {
             field.textColor = row.isLowSignal ? .tertiaryLabelColor : .secondaryLabelColor
             field.alignment = .center
             field.toolTip = row.typeTooltip
+            field.setAccessibilityLabel(row.typeAccessibilityLabel)
         case PacketTableColumnIdentifier.info.rawValue:
             field.stringValue = row.infoText
             field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
@@ -213,7 +214,7 @@ extension PacketTableCoordinator: NSTableViewDelegate {
     private func makeTypePillCell(for identifier: NSUserInterfaceItemIdentifier, row: PacketRowViewModel) -> NSTableCellView {
         let cell = NSTableCellView()
         cell.identifier = identifier
-        let pillView = TypePillView(text: row.typeLabel, isLowSignal: row.isLowSignal)
+        let pillView = TypePillView(text: row.typeLabel, isLowSignal: row.isLowSignal, accessibilityLabel: row.typeAccessibilityLabel)
         pillView.toolTip = row.typeTooltip
         cell.addSubview(pillView)
         pillView.translatesAutoresizingMaskIntoConstraints = false
@@ -248,13 +249,14 @@ final class PacketTableNativeTableView: NSTableView {
 private final class TypePillView: NSView {
     private let textField = NSTextField(labelWithString: "")
 
-    init(text: String, isLowSignal: Bool) {
+    init(text: String, isLowSignal: Bool, accessibilityLabel: String) {
         super.init(frame: .zero)
         wantsLayer = true
         textField.stringValue = text
         textField.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
         textField.alignment = .center
         textField.textColor = isLowSignal ? .tertiaryLabelColor : .secondaryLabelColor
+        setAccessibilityLabel(accessibilityLabel)
         textField.setContentHuggingPriority(.required, for: .horizontal)
         textField.setContentCompressionResistancePriority(.required, for: .horizontal)
         addSubview(textField)

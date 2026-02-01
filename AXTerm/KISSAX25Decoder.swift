@@ -130,6 +130,8 @@ enum AX25 {
         let to: AX25Address?
         let via: [AX25Address]
         let control: UInt8
+        /// Second control byte (for I-frames in modulo-8 mode)
+        let controlByte1: UInt8?
         let pid: UInt8?
         let info: Data
         let frameType: FrameType
@@ -194,7 +196,7 @@ enum AX25 {
         guard offset < data.count else {
             return FrameDecodeResult(
                 from: from, to: to, via: via,
-                control: 0, pid: nil, info: Data(),
+                control: 0, controlByte1: nil, pid: nil, info: Data(),
                 frameType: .unknown
             )
         }
@@ -204,6 +206,13 @@ enum AX25 {
 
         // Determine frame type from control byte
         let frameType = classifyFrameType(control: control)
+
+        // For I-frames, extract the second control byte (modulo-8 mode)
+        var controlByte1: UInt8? = nil
+        if frameType == .i && offset < data.count {
+            controlByte1 = data[offset]
+            offset += 1
+        }
 
         // PID field (only present in I and UI frames)
         var pid: UInt8? = nil
@@ -224,7 +233,7 @@ enum AX25 {
 
         return FrameDecodeResult(
             from: from, to: to, via: via,
-            control: control, pid: pid, info: info,
+            control: control, controlByte1: controlByte1, pid: pid, info: info,
             frameType: frameType
         )
     }

@@ -76,12 +76,12 @@ final class AXTermTests: XCTestCase {
         XCTAssertEqual(FrameType.unknown.displayName, "?")
     }
 
-    func testFrameTypeIconMapping() {
-        XCTAssertEqual(FrameType.ui.icon, "📡")
-        XCTAssertEqual(FrameType.i.icon, "💬")
-        XCTAssertEqual(FrameType.s.icon, "🔁")
-        XCTAssertEqual(FrameType.u.icon, "⚙️")
-        XCTAssertEqual(FrameType.unknown.icon, "❓")
+    func testFrameTypeShortLabel() {
+        XCTAssertEqual(FrameType.ui.shortLabel, "UI")
+        XCTAssertEqual(FrameType.i.shortLabel, "I")
+        XCTAssertEqual(FrameType.s.shortLabel, "S")
+        XCTAssertEqual(FrameType.u.shortLabel, "U")
+        XCTAssertEqual(FrameType.unknown.shortLabel, "?")
     }
 
     // MARK: - ConsoleLine Tests

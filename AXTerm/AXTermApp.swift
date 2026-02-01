@@ -57,7 +57,8 @@ struct AXTermApp: App {
             rawStore: rawStore,
             eventLogger: eventLogger,
             watchRecorder: watchRecorder,
-            notificationScheduler: notificationScheduler
+            notificationScheduler: notificationScheduler,
+            databaseWriter: queue
         )
         SentryManager.shared.setConnectionTags(host: settingsStore.host, port: settingsStore.portValue)
         if settingsStore.autoConnectOnLaunch {
@@ -72,9 +73,6 @@ struct AXTermApp: App {
             ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter)
         }
         .commands {
-            CommandGroup(replacing: .appSettings) {
-                SettingsLink()
-            }
             CommandGroup(after: .windowArrangement) {
                 Button("Close") {
                     NSApp.keyWindow?.performClose(nil)
@@ -106,6 +104,13 @@ struct AXTermApp: App {
                 settings: settings,
                 inspectionRouter: inspectionRouter
             )
+
+            #if DEBUG
+            Divider()
+            Button("Send Test Event to Sentry") {
+                SentryManager.shared.sendTestEvent()
+            }
+            #endif
         }
     }
 }

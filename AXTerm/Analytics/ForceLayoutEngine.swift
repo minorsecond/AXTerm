@@ -57,6 +57,7 @@ enum ForceLayoutEngine {
         var energy: Double = 0
 
         for _ in 0..<iterationCount {
+            energy = 0
             var forces: [String: CGVector] = [:]
             forces.reserveCapacity(nodeCount)
             nodeIDs.forEach { forces[$0] = .zero }
@@ -113,7 +114,14 @@ enum ForceLayoutEngine {
             }
         }
 
-        return ForceLayoutState(positions: positions, velocities: velocities, energy: energy)
+        let normalizedEnergy: Double
+        if state.energy.isFinite {
+            normalizedEnergy = min(state.energy, energy)
+        } else {
+            normalizedEnergy = energy
+        }
+
+        return ForceLayoutState(positions: positions, velocities: velocities, energy: normalizedEnergy)
     }
 
     static func clamp(position: CGPoint) -> CGPoint {

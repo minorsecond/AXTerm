@@ -37,9 +37,22 @@
 		AABBCC112F3B000000000002 /* AXTerm-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AXTerm-Release.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		34C5FAA12F2F600000E7F39B /* Exceptions for "AXTerm" folder in "AXTerm" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 3487E89C2F2AA2A700DF0172 /* AXTerm */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		3487E89F2F2AA2A700DF0172 /* AXTerm */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				34C5FAA12F2F600000E7F39B /* Exceptions for "AXTerm" folder in "AXTerm" target */,
+			);
 			path = AXTerm;
 			sourceTree = "<group>";
 		};
@@ -430,9 +443,11 @@
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_FILE = AXTerm/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AXTerm;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.travel";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "2026 Ross Wardrup";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AXTerm needs local network access to connect to local packet-radio services (e.g., Direwolf KISS TCP) running on this Mac or on the LAN.";
-				INFOPLIST_KEY_SentryDSN = "$(SENTRY_DSN)";
 				INFOPLIST_KEY_SentryDebug = "$(SENTRY_DEBUG)";
 				INFOPLIST_KEY_SentryEnvironment = "$(SENTRY_ENVIRONMENT)";
 				INFOPLIST_KEY_SentryProfilesSampleRate = "$(SENTRY_PROFILES_SAMPLE_RATE)";
@@ -477,9 +492,11 @@
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_FILE = AXTerm/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AXTerm;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.travel";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "2026 Ross Wardrup";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AXTerm needs local network access to connect to local packet-radio services (e.g., Direwolf KISS TCP) running on this Mac or on the LAN.";
-				INFOPLIST_KEY_SentryDSN = "$(SENTRY_DSN)";
 				INFOPLIST_KEY_SentryDebug = "$(SENTRY_DEBUG)";
 				INFOPLIST_KEY_SentryEnvironment = "$(SENTRY_ENVIRONMENT)";
 				INFOPLIST_KEY_SentryProfilesSampleRate = "$(SENTRY_PROFILES_SAMPLE_RATE)";

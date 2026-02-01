@@ -48,7 +48,7 @@ final class SQLitePacketStore: PacketStore, @unchecked Sendable {
         try dbQueue.write { db in
             try db.execute(
                 sql: "UPDATE \(PacketRecord.databaseTableName) SET pinned = ? WHERE id = ?",
-                arguments: [pinned, packetId.uuidString]
+                arguments: [pinned, packetId]
             )
         }
     }
@@ -77,6 +77,16 @@ final class SQLitePacketStore: PacketStore, @unchecked Sendable {
     func count() throws -> Int {
         try dbQueue.read { db in
             try PacketRecord.fetchCount(db)
+        }
+    }
+
+    /// Load all packets in chronological order (oldest first) for replay.
+    /// Used by debug rebuild functionality.
+    func loadAllChronological() throws -> [PacketRecord] {
+        try dbQueue.read { db in
+            try PacketRecord
+                .order(Column("receivedAt").asc)
+                .fetchAll(db)
         }
     }
 }

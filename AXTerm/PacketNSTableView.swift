@@ -99,7 +99,7 @@ struct PacketNSTableView: NSViewRepresentable {
         let fromColumn = makeColumn(id: .from, title: "From", minWidth: 80, width: 100, toolTip: "Source callsign")
         let toColumn = makeColumn(id: .to, title: "To", minWidth: 80, width: 100, toolTip: "Destination callsign")
         let viaColumn = makeColumn(id: .via, title: "Via", minWidth: 60, width: 120, toolTip: "Digipeater path")
-        let typeColumn = makeColumn(id: .type, title: "Type", minWidth: 40, width: 50, toolTip: "AX.25 frame type")
+        let typeColumn = makeColumn(id: .type, title: "Frame Type", minWidth: 60, width: 70, toolTip: "Classified frame type")
         let infoColumn = makeColumn(id: .info, title: "Info", minWidth: 200, width: 400, toolTip: "Decoded payload preview")
         infoColumn.resizingMask = [.autoresizingMask, .userResizingMask]
 
@@ -468,6 +468,7 @@ extension PacketNSTableView {
                 field.textColor = row.isLowSignal ? .tertiaryLabelColor : .secondaryLabelColor
                 field.alignment = .center
                 field.toolTip = row.typeTooltip
+                field.setAccessibilityLabel(row.typeAccessibilityLabel)
             case ColumnIdentifier.info.rawValue:
                 field.stringValue = row.infoText
                 field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
@@ -485,7 +486,7 @@ extension PacketNSTableView {
         private func makeTypePillCell(for identifier: NSUserInterfaceItemIdentifier, row: PacketRowViewModel) -> NSTableCellView {
             let cell = NSTableCellView()
             cell.identifier = identifier
-            let pillView = TypePillView(text: row.typeLabel, isLowSignal: row.isLowSignal)
+            let pillView = TypePillView(text: row.typeLabel, isLowSignal: row.isLowSignal, accessibilityLabel: row.typeAccessibilityLabel)
             pillView.toolTip = row.typeTooltip
             cell.addSubview(pillView)
             pillView.translatesAutoresizingMaskIntoConstraints = false
@@ -628,13 +629,14 @@ extension PacketNSTableView {
 private final class TypePillView: NSView {
     private let textField = NSTextField(labelWithString: "")
 
-    init(text: String, isLowSignal: Bool) {
+    init(text: String, isLowSignal: Bool, accessibilityLabel: String) {
         super.init(frame: .zero)
         wantsLayer = true
         textField.stringValue = text
         textField.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
         textField.alignment = .center
         textField.textColor = isLowSignal ? .tertiaryLabelColor : .secondaryLabelColor
+        setAccessibilityLabel(accessibilityLabel)
         textField.setContentHuggingPriority(.required, for: .horizontal)
         textField.setContentCompressionResistancePriority(.required, for: .horizontal)
         addSubview(textField)
@@ -674,7 +676,7 @@ private struct PacketTableColumnSizer {
         case .from: title = "From"
         case .to: title = "To"
         case .via: title = "Via"
-        case .type: title = "Type"
+        case .type: title = "Frame Type"
         case .info: title = "Info"
         }
         return title.size(withAttributes: [.font: NSFont.systemFont(ofSize: NSFont.systemFontSize)]).width

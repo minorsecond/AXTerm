@@ -8,6 +8,7 @@
 import XCTest
 @testable import AXTerm
 
+@MainActor
 final class DiagnosticsExporterTests: XCTestCase {
     func testExportIncludesRequiredKeys() throws {
         let settings = makeSettings()

@@ -14,11 +14,11 @@ import Foundation
 struct SentryConfiguration: Equatable, Sendable {
     // MARK: - Info.plist Keys
 
-    static let infoPlistDSNKey = "SentryDSN"
-    static let infoPlistEnvironmentKey = "SentryEnvironment"
-    static let infoPlistDebugKey = "SentryDebug"
-    static let infoPlistTracesSampleRateKey = "SentryTracesSampleRate"
-    static let infoPlistProfilesSampleRateKey = "SentryProfilesSampleRate"
+    static let infoPlistDSNKey = "SENTRY_DSN"
+    static let infoPlistEnvironmentKey = "SENTRY_ENVIRONMENT"
+    static let infoPlistDebugKey = "SENTRY_DEBUG"
+    static let infoPlistTracesSampleRateKey = "SENTRY_TRACES_SAMPLE_RATE"
+    static let infoPlistProfilesSampleRateKey = "SENTRY_PROFILES_SAMPLE_RATE"
 
     /// Environment variable fallback for DSN (useful for CI or local overrides).
     static let environmentVariableDSNKey = "SENTRY_DSN"
@@ -126,13 +126,69 @@ struct SentryConfiguration: Equatable, Sendable {
 
     /// Resolve DSN from environment variable (priority) or Info.plist.
     static func resolveDSN(environmentValue: String?, infoPlistValue: String?) -> String? {
-        if let env = sanitizeValue(environmentValue), !env.isEmpty {
+        if let envRaw = environmentValue, let env = sanitizeDSNValue(envRaw) {
             return env
         }
-        return sanitizeValue(infoPlistValue)
+        if let plistRaw = infoPlistValue, let plist = sanitizeDSNValue(plistRaw) {
+            return plist
+        }
+        return nil
     }
 
     // MARK: - Private Helpers
+    
+    /// Sanitize and validate DSN-ish strings coming from xcconfig/Info.plist/env.
+    /// Returns nil if empty after sanitization.
+    private static func sanitizeDSNValue(_ raw: String) -> String? {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return nil }
+
+        // If Xcode injected quotes into the plist value, strip them.
+        if (s.hasPrefix("\"") && s.hasSuffix("\"")) || (s.hasPrefix("'") && s.hasSuffix("'")) {
+            s = String(s.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // xcconfig hack you used: https:$(/)$(/)... becomes https:////...
+        // Normalize any "http(s):" followed by 2+ slashes to exactly "://"
+        if s.hasPrefix("https:") {
+            s = "https:" + s.dropFirst("https:".count)
+        } else if s.hasPrefix("http:") {
+            s = "http:" + s.dropFirst("http:".count)
+        }
+
+        // Collapse backslash escapes like https:\/\/... into https://...
+        s = s.replacingOccurrences(of: #"\\/"#, with: "/", options: .regularExpression)
+
+        // Now fix the common missing-double-slash case: "https:8714..." -> "https://8714..."
+        if s.hasPrefix("https:") && !s.hasPrefix("https://") {
+            s = s.replacingOccurrences(of: "https:", with: "https://")
+        }
+        if s.hasPrefix("http:") && !s.hasPrefix("http://") {
+            s = s.replacingOccurrences(of: "http:", with: "http://")
+        }
+
+        // Fix the other common broken case you *actually have*:
+        // "...ingest.us.sentry.io451079..." -> "...ingest.us.sentry.io/451079..."
+        // Only do this if there's no slash after the host already.
+        if let atIdx = s.firstIndex(of: "@") {
+            let afterAt = s[s.index(after: atIdx)...]
+            if !afterAt.contains("/") {
+                // Insert a slash right after ".io" (works for sentry.io + ingest.us.sentry.io)
+                s = s.replacingOccurrences(of: ".io", with: ".io/")
+            } else {
+                // There IS a slash after @ somewhere; but your broken string can still be missing the slash
+                // specifically between ".io" and the project id. Only patch ".io<digits>" -> ".io/<digits>"
+                s = s.replacingOccurrences(
+                    of: #"\.io(?=\d)"#,
+                    with: ".io/",
+                    options: .regularExpression
+                )
+            }
+        }
+
+        s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return s.isEmpty ? nil : s
+    }
 
     private static func sanitizeValue(_ raw: String?) -> String? {
         guard let raw else { return nil }

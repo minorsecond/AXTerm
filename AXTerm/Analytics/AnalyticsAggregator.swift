@@ -27,7 +27,10 @@ struct AnalyticsAggregator {
         let heatmap = computeHeatmap(events: events, calendar: calendar)
         let histogram = computeHistogram(events: events, binCount: options.histogramBinCount)
 
-        let topTalkers = rankTop(stations: events.compactMap { $0.from }, limit: options.topLimit)
+        let topTalkers = rankTop(
+            stations: events.compactMap { $0.from } + events.compactMap { $0.to },
+            limit: options.topLimit
+        )
         let topDestinations = rankTop(stations: events.compactMap { $0.to }, limit: options.topLimit)
         let topDigipeaters = rankTop(stations: events.flatMap { $0.via }, limit: options.topLimit)
 
@@ -148,6 +151,8 @@ struct AnalyticsAggregator {
 
     private static func advance(date: Date, bucket: TimeBucket, calendar: Calendar) -> Date {
         switch bucket {
+        case .tenSeconds:
+            return calendar.date(byAdding: .second, value: 10, to: date) ?? date
         case .minute:
             return calendar.date(byAdding: .minute, value: 1, to: date) ?? date
         case .fiveMinutes:

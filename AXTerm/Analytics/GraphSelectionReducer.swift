@@ -21,6 +21,7 @@ struct GraphSelectionState: Equatable {
 
 enum GraphSelectionAction: Equatable {
     case clickNode(id: String, isShift: Bool)
+    case selectMany(ids: Set<String>, isShift: Bool)
     case clickBackground
     case doubleClickNode(id: String, isShift: Bool)
 }
@@ -36,6 +37,9 @@ enum GraphSelectionReducer {
         case let .clickNode(id, isShift):
             applyNodeClick(to: &state, id: id, isShift: isShift)
             return .none
+        case let .selectMany(ids, isShift):
+            applyMultiSelect(to: &state, ids: ids, isShift: isShift)
+            return .none
         case .clickBackground:
             state.selectedIDs.removeAll()
             state.primarySelectionID = nil
@@ -48,10 +52,25 @@ enum GraphSelectionReducer {
 
     private static func applyNodeClick(to state: inout GraphSelectionState, id: String, isShift: Bool) {
         if isShift {
-            state.selectedIDs.insert(id)
+            if state.selectedIDs.contains(id) {
+                state.selectedIDs.remove(id)
+            } else {
+                state.selectedIDs.insert(id)
+            }
         } else {
             state.selectedIDs = [id]
         }
         state.primarySelectionID = id
+    }
+
+    private static func applyMultiSelect(to state: inout GraphSelectionState, ids: Set<String>, isShift: Bool) {
+        if isShift {
+            state.selectedIDs.formUnion(ids)
+        } else {
+            state.selectedIDs = ids
+        }
+        if state.primarySelectionID == nil || !state.selectedIDs.contains(state.primarySelectionID ?? "") {
+            state.primarySelectionID = state.selectedIDs.sorted().first
+        }
     }
 }

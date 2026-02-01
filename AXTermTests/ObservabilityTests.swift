@@ -39,11 +39,11 @@ final class ObservabilityTests: XCTestCase {
 
     func testSentryConfiguration_loadFromMockInfoPlist_allValuesPresent() {
         let mockPlist = MockInfoPlistReader([
-            "SentryDSN": "https://test@sentry.io/123",
-            "SentryEnvironment": "testing",
-            "SentryDebug": "YES",
-            "SentryTracesSampleRate": "0.5",
-            "SentryProfilesSampleRate": "0.25",
+            "SENTRY_DSN": "https://test@sentry.io/123",
+            "SENTRY_ENVIRONMENT": "testing",
+            "SENTRY_DEBUG": "YES",
+            "SENTRY_TRACES_SAMPLE_RATE": "0.5",
+            "SENTRY_PROFILES_SAMPLE_RATE": "0.25",
             "CFBundleShortVersionString": "2.0",
             "CFBundleVersion": "42",
             "CFBundleName": "TestApp"
@@ -72,8 +72,8 @@ final class ObservabilityTests: XCTestCase {
 
     func testSentryConfiguration_loadFromMockInfoPlist_missingDSN_shouldNotStart() {
         let mockPlist = MockInfoPlistReader([
-            "SentryEnvironment": "testing",
-            "SentryDebug": "NO"
+            "SENTRY_ENVIRONMENT": "testing",
+            "SENTRY_DEBUG": "NO"
         ])
 
         let config = SentryConfiguration.load(
@@ -88,8 +88,8 @@ final class ObservabilityTests: XCTestCase {
 
     func testSentryConfiguration_loadFromMockInfoPlist_userDisabled_shouldNotStart() {
         let mockPlist = MockInfoPlistReader([
-            "SentryDSN": "https://test@sentry.io/123",
-            "SentryEnvironment": "production"
+            "SENTRY_DSN": "https://test@sentry.io/123",
+            "SENTRY_ENVIRONMENT": "production"
         ])
 
         let config = SentryConfiguration.load(
@@ -104,9 +104,9 @@ final class ObservabilityTests: XCTestCase {
 
     func testSentryConfiguration_sampleRatesClamped() {
         let mockPlist = MockInfoPlistReader([
-            "SentryDSN": "https://test@sentry.io/123",
-            "SentryTracesSampleRate": "2.5",  // Above 1.0
-            "SentryProfilesSampleRate": "-0.5"  // Below 0.0
+            "SENTRY_DSN": "https://test@sentry.io/123",
+            "SENTRY_TRACES_SAMPLE_RATE": "2.5",  // Above 1.0
+            "SENTRY_PROFILES_SAMPLE_RATE": "-0.5"  // Below 0.0
         ])
 
         let config = SentryConfiguration.load(
@@ -136,15 +136,15 @@ final class ObservabilityTests: XCTestCase {
         ]
 
         for (value, expected) in testCases {
-            let mockPlist = MockInfoPlistReader(["SentryDebug": value])
-            XCTAssertEqual(mockPlist.bool(forKey: "SentryDebug"), expected,
+            let mockPlist = MockInfoPlistReader(["SENTRY_DEBUG": value])
+            XCTAssertEqual(mockPlist.bool(forKey: "SENTRY_DEBUG"), expected,
                            "Failed for value: \(value)")
         }
     }
 
     func testSentryConfiguration_environmentVariableTakesPrecedenceOverInfoPlist() {
         let mockPlist = MockInfoPlistReader([
-            "SentryDSN": "https://plist@sentry.io/1"
+            "SENTRY_DSN": "https://plist@sentry.io/1"
         ])
 
         let config = SentryConfiguration.load(
@@ -229,8 +229,8 @@ final class ObservabilityTests: XCTestCase {
             "invalidString": "not a number"
         ])
 
-        XCTAssertEqual(mock.double(forKey: "doubleValue"), 0.75, accuracy: 0.001)
-        XCTAssertEqual(mock.double(forKey: "stringDouble"), 0.5, accuracy: 0.001)
+        XCTAssertEqual(mock.double(forKey: "doubleValue")!, 0.75, accuracy: 0.001)
+        XCTAssertEqual(mock.double(forKey: "stringDouble")!, 0.5, accuracy: 0.001)
         XCTAssertNil(mock.double(forKey: "invalidString"))
         XCTAssertNil(mock.double(forKey: "missing"))
     }
