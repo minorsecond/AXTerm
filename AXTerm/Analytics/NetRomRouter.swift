@@ -389,8 +389,17 @@ final class NetRomRouter {
             sourceType: sourceType
         )
         let normalizedQuality = clampQuality(observedQuality)
-        let boostedQuality = min(NetRomConfig.maximumRouteQuality, max(candidate.pathQuality, normalizedQuality) + config.neighborIncrement)
-        candidate.pathQuality = boostedQuality
+
+        // EWMA blend: 70% current + 30% observed
+        // This allows quality to both increase AND decrease based on observed link quality.
+        // The old formula (max + increment) could only increase, causing all neighbors to hit 255.
+        let blendedQuality = Int(0.7 * Double(candidate.pathQuality) + 0.3 * Double(normalizedQuality))
+
+        // Small bonus for being recently heard (capped at 255)
+        let heardBonus = 5
+        let finalQuality = min(NetRomConfig.maximumRouteQuality, blendedQuality + heardBonus)
+
+        candidate.pathQuality = finalQuality
         candidate.lastUpdate = timestamp
         candidate.obsolescenceCount = 1
         // Don't overwrite classic with inferred

@@ -272,4 +272,58 @@ final class NetRomRoutingTests: XCTestCase {
         let deterministicallySorted = routes.sorted { $0.destination == $1.destination ? $0.quality > $1.quality : $0.destination < $1.destination }
         XCTAssertEqual(routes, deterministicallySorted, "Routing table must present entries in a deterministic order even when qualities tie.")
     }
+
+    func testNeighborQualityCanDecreaseWithLowObservedQuality() {
+        let router = makeRouter()
+        let neighbor = "W0ABC"
+        let baseDate = Date(timeIntervalSince1970: 1_700_000_800)
+
+        // First, establish neighbor with high observed quality
+        for i in 0..<5 {
+            router.observePacket(
+                makePacket(from: neighbor, to: localCallsign, timestamp: baseDate.addingTimeInterval(Double(i))),
+                observedQuality: 250,
+                direction: .incoming,
+                timestamp: baseDate.addingTimeInterval(Double(i))
+            )
+        }
+
+        let highQuality = router.currentNeighbors().first?.quality ?? 0
+        XCTAssertGreaterThan(highQuality, 200, "Quality should be high after good observations")
+
+        // Now observe with low quality repeatedly
+        for i in 0..<10 {
+            router.observePacket(
+                makePacket(from: neighbor, to: localCallsign, timestamp: baseDate.addingTimeInterval(Double(10 + i))),
+                observedQuality: 50,
+                direction: .incoming,
+                timestamp: baseDate.addingTimeInterval(Double(10 + i))
+            )
+        }
+
+        let lowQuality = router.currentNeighbors().first?.quality ?? 0
+        XCTAssertLessThan(lowQuality, highQuality, "Quality must decrease when observed link quality is poor")
+        XCTAssertLessThan(lowQuality, 200, "Quality should converge toward observed value")
+    }
+
+    func testNeighborQualityDoesNotPegAt255() {
+        let router = makeRouter()
+        let neighbor = "W0ABC"
+        let baseDate = Date(timeIntervalSince1970: 1_700_000_900)
+
+        // Observe many packets with moderate quality
+        for i in 0..<20 {
+            router.observePacket(
+                makePacket(from: neighbor, to: localCallsign, timestamp: baseDate.addingTimeInterval(Double(i))),
+                observedQuality: 150,
+                direction: .incoming,
+                timestamp: baseDate.addingTimeInterval(Double(i))
+            )
+        }
+
+        let quality = router.currentNeighbors().first?.quality ?? 0
+        // With EWMA blending and moderate observed quality, should NOT hit 255
+        XCTAssertLessThan(quality, 255, "Quality should not peg at 255 with moderate observed quality")
+        XCTAssertGreaterThan(quality, 100, "Quality should be reasonable")
+    }
 }

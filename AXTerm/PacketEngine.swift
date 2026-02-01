@@ -883,19 +883,31 @@ final class PacketEngine: ObservableObject {
             }
             #endif
 
-            // Load persisted state with per-entry TTL filtering.
-            // Policy: use persisted metrics when valid; only recompute via replay if snapshot is missing/invalid.
-            guard let state = try persistence.load(now: Date(), expectedConfigHash: nil) else {
+            // Always load raw data without per-entry decay.
+            // The persistence layer's per-entry TTLs (30 min) are much shorter than
+            // the UI's freshness TTLs (6+ hours), causing data to be dropped during load.
+            // The UI already handles freshness filtering via the "Hide expired" toggle,
+            // so we should load ALL persisted data and let the UI decide what to show.
+            let now = Date()
+
+            let neighbors = try persistence.loadNeighbors()
+            let routes = try persistence.loadRoutes()
+            let linkStats = try persistence.loadLinkStats(now: now)
+
+            #if DEBUG
+            print("[NETROM:STARTUP] Loaded raw data (no decay filtering):")
+            print("[NETROM:STARTUP]   - Neighbors: \(neighbors.count)")
+            print("[NETROM:STARTUP]   - Routes: \(routes.count)")
+            print("[NETROM:STARTUP]   - Link stats: \(linkStats.count)")
+            #endif
+
+            // If all tables are empty, nothing to import
+            if neighbors.isEmpty && routes.isEmpty && linkStats.isEmpty {
                 #if DEBUG
-                print("[NETROM:STARTUP] ❌ Snapshot expired or invalid, starting fresh")
-                print("[NETROM:STARTUP] (maxSnapshotAgeSeconds = 3600 by default)")
+                print("[NETROM:STARTUP] No persisted data found, starting fresh")
                 #endif
                 return
             }
-
-            let neighbors = state.neighbors
-            let routes = state.routes
-            let linkStats = state.linkStats
 
             #if DEBUG
             print("[NETROM:STARTUP] Raw data loaded from SQLite:")
