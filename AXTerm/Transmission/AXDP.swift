@@ -115,6 +115,15 @@ enum AXDP {
         var sackBitmap: Data?
         var metadata: Data?
 
+        // Capability discovery (Section 6.x.3)
+        var capabilities: AXDPCapability?
+
+        // Compression (Section 6.x.4)
+        var compression: AXDPCompression.Algorithm = .none
+
+        // File metadata (Section 9.2)
+        var fileMeta: AXDPFileMeta?
+
         // Unknown TLVs preserved for forward compatibility
         var unknownTLVs: [TLV] = []
 
@@ -127,7 +136,10 @@ enum AXDP {
             payload: Data? = nil,
             payloadCRC32: UInt32? = nil,
             sackBitmap: Data? = nil,
-            metadata: Data? = nil
+            metadata: Data? = nil,
+            capabilities: AXDPCapability? = nil,
+            compression: AXDPCompression.Algorithm = .none,
+            fileMeta: AXDPFileMeta? = nil
         ) {
             self.type = type
             self.sessionId = sessionId
@@ -138,6 +150,9 @@ enum AXDP {
             self.payloadCRC32 = payloadCRC32
             self.sackBitmap = sackBitmap
             self.metadata = metadata
+            self.capabilities = capabilities
+            self.compression = compression
+            self.fileMeta = fileMeta
         }
 
         /// Encode message to bytes with magic header + TLVs
@@ -162,8 +177,18 @@ enum AXDP {
                 data.append(TLV(type: TLVType.totalChunks.rawValue, value: encodeUInt32(totalChunks)).encode())
             }
 
+            // Handle payload with optional compression
             if let payload = payload, !payload.isEmpty {
-                data.append(TLV(type: TLVType.payload.rawValue, value: payload).encode())
+                if compression != .none,
+                   let compressed = AXDPCompression.compress(payload, algorithm: compression) {
+                    // Compression successful - use compressed TLVs
+                    data.append(TLV(type: TLVType.compression.rawValue, value: Data([compression.rawValue])).encode())
+                    data.append(TLV(type: TLVType.originalLength.rawValue, value: encodeUInt32(UInt32(payload.count))).encode())
+                    data.append(TLV(type: TLVType.payloadCompressed.rawValue, value: compressed).encode())
+                } else {
+                    // No compression or compression failed - use raw payload
+                    data.append(TLV(type: TLVType.payload.rawValue, value: payload).encode())
+                }
             }
 
             if let crc = payloadCRC32 {
@@ -176,6 +201,16 @@ enum AXDP {
 
             if let meta = metadata, !meta.isEmpty {
                 data.append(TLV(type: TLVType.metadata.rawValue, value: meta).encode())
+            }
+
+            // Capabilities (for PING/PONG)
+            if let caps = capabilities {
+                data.append(TLV(type: TLVType.capabilities.rawValue, value: caps.encode()).encode())
+            }
+
+            // File metadata
+            if let fm = fileMeta {
+                data.append(TLV(type: TLVType.metadata.rawValue, value: fm.encode()).encode())
             }
 
             return data
@@ -197,6 +232,11 @@ enum AXDP {
             // Build message from TLVs
             var msg = Message(type: .chat, sessionId: 0, messageId: 0)
             var hasType = false
+
+            // Compression state for deferred decompression
+            var compressionAlgo: AXDPCompression.Algorithm = .none
+            var originalLength: UInt32 = 0
+            var compressedPayload: Data?
 
             for tlv in tlvs {
                 switch tlv.type {
@@ -238,11 +278,50 @@ enum AXDP {
                     msg.sackBitmap = tlv.value
 
                 case TLVType.metadata.rawValue:
-                    msg.metadata = tlv.value
+                    // Try to decode as file metadata first
+                    if let fm = AXDPFileMeta.decode(from: tlv.value) {
+                        msg.fileMeta = fm
+                    } else {
+                        msg.metadata = tlv.value
+                    }
+
+                case TLVType.capabilities.rawValue:
+                    msg.capabilities = AXDPCapability.decode(from: tlv.value)
+
+                case TLVType.compression.rawValue:
+                    if let rawAlgo = tlv.value.first,
+                       let algo = AXDPCompression.Algorithm(rawValue: rawAlgo) {
+                        compressionAlgo = algo
+                        msg.compression = algo
+                    }
+
+                case TLVType.originalLength.rawValue:
+                    if tlv.value.count >= 4 {
+                        originalLength = decodeUInt32(tlv.value)
+                    }
+
+                case TLVType.payloadCompressed.rawValue:
+                    compressedPayload = tlv.value
 
                 default:
                     // Unknown TLV - preserve for forward compatibility
                     msg.unknownTLVs.append(tlv)
+                }
+            }
+
+            // Handle compressed payload
+            if let compressed = compressedPayload,
+               compressionAlgo != .none,
+               originalLength > 0 {
+                // Decompress with default max length
+                let maxLen = AXDPCompression.absoluteMaxDecompressedLen
+                if let decompressed = AXDPCompression.decompress(
+                    compressed,
+                    algorithm: compressionAlgo,
+                    originalLength: originalLength,
+                    maxLength: maxLen
+                ) {
+                    msg.payload = decompressed
                 }
             }
 
