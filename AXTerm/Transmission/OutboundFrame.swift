@@ -183,6 +183,9 @@ struct TxQueueEntry: Identifiable {
     let frame: OutboundFrame
     var state: TxFrameState
 
+    /// Order in which this entry was enqueued (for FIFO within priority)
+    var enqueueOrder: UInt64 = 0
+
     var id: UUID { frame.id }
 
     init(frame: OutboundFrame) {
