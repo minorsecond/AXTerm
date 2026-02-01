@@ -266,6 +266,59 @@ final class PacketEngine: ObservableObject {
         SentryManager.shared.breadcrumbDisconnect()
     }
 
+    // MARK: - Transmission
+
+    /// Send an outbound frame via KISS
+    /// - Parameter frame: The frame to send
+    /// - Parameter completion: Callback with success or error
+    func send(frame: OutboundFrame, completion: ((Result<Void, Error>) -> Void)? = nil) {
+        guard status == .connected, let conn = connection else {
+            let error = NSError(domain: "PacketEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not connected"])
+            addErrorLine("Send failed: not connected", category: .transmission)
+            completion?(.failure(error))
+            return
+        }
+
+        // Encode the frame as AX.25
+        let ax25Data = frame.encodeAX25()
+
+        // Wrap in KISS frame (port 0, data frame)
+        let kissData = KISS.encodeFrame(payload: ax25Data, port: frame.channel)
+
+        // Log the transmission
+        addSystemLine("TX: \(frame.source.display) → \(frame.destination.display): \(frame.displayInfo ?? "")", category: .transmission)
+        eventLogger?.log(
+            level: .info,
+            category: .transmission,
+            message: "Sending frame",
+            metadata: [
+                "frameId": frame.id.uuidString,
+                "destination": frame.destination.display,
+                "source": frame.source.display,
+                "size": "\(ax25Data.count)"
+            ]
+        )
+
+        // Send via connection
+        conn.send(content: kissData, completion: .contentProcessed { [weak self] error in
+            Task { @MainActor in
+                if let error = error {
+                    self?.addErrorLine("Send failed: \(error.localizedDescription)", category: .transmission)
+                    self?.eventLogger?.log(
+                        level: .error,
+                        category: .transmission,
+                        message: "Send failed: \(error.localizedDescription)",
+                        metadata: ["frameId": frame.id.uuidString]
+                    )
+                    completion?(.failure(error))
+                } else {
+                    self?.addSystemLine("Frame sent successfully", category: .transmission)
+                    completion?(.success(()))
+                }
+            }
+        })
+    }
+
     private func handleConnectionState(_ state: NWConnection.State, host: String, port: UInt16) {
         switch state {
         case .ready:

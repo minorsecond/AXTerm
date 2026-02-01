@@ -25,6 +25,7 @@ struct ConsoleEntryRecord: Codable, FetchableRecord, PersistableRecord, Hashable
         case ui
         case packet
         case system
+        case transmission
     }
 
     var id: UUID

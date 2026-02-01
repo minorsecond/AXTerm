@@ -45,10 +45,15 @@ struct TerminalTxViewModel {
     // MARK: - Computed Properties
 
     /// Whether the current compose state is valid for sending
+    /// Note: Empty destination is allowed (uses "CQ" for broadcast)
     var canSend: Bool {
         !composeText.isEmpty &&
-        !destinationCall.isEmpty &&
-        isValidCallsign(destinationCall)
+        (destinationCall.isEmpty || isValidCallsign(destinationCall))
+    }
+
+    /// Effective destination (CQ if empty for broadcast)
+    var effectiveDestination: String {
+        destinationCall.isEmpty ? "CQ" : destinationCall
     }
 
     /// Current character count
@@ -81,7 +86,7 @@ struct TerminalTxViewModel {
         guard canSend else { return nil }
 
         let source = parseCallsign(sourceCall.isEmpty ? "NOCALL" : sourceCall)
-        let destination = parseCallsign(destinationCall)
+        let destination = parseCallsign(effectiveDestination)
         let path = parsePath(digiPath)
 
         // Build AXDP chat message payload
@@ -112,8 +117,8 @@ struct TerminalTxViewModel {
             queueEntries.append(entry)
         }
 
-        // Add to history
-        addToHistory(destinationCall)
+        // Add to history (use effective destination for broadcast)
+        addToHistory(effectiveDestination)
 
         // Clear compose text but keep destination
         composeText = ""

@@ -23,25 +23,37 @@ final class TerminalTxViewModelTests: XCTestCase {
         XCTAssertFalse(vm.canSend)
     }
 
-    func testCanSendRequiresDestinationAndText() {
+    func testCanSendRequiresTextOnly() {
         var vm = TerminalTxViewModel()
 
         // No destination or text
         XCTAssertFalse(vm.canSend)
 
-        // Only destination
+        // Only destination (no text)
         vm.destinationCall = "N0CALL"
         XCTAssertFalse(vm.canSend)
 
-        // Only text
+        // Only text (empty destination = broadcast to CQ)
         vm.destinationCall = ""
         vm.composeText = "Hello"
-        XCTAssertFalse(vm.canSend)
+        XCTAssertTrue(vm.canSend, "Should allow broadcast with empty destination")
 
         // Both
         vm.destinationCall = "N0CALL"
         vm.composeText = "Hello"
         XCTAssertTrue(vm.canSend)
+    }
+
+    func testEffectiveDestinationDefaultsToCQ() {
+        var vm = TerminalTxViewModel()
+        vm.composeText = "Test"
+
+        // Empty destination should default to CQ
+        XCTAssertEqual(vm.effectiveDestination, "CQ")
+
+        // Explicit destination should be used
+        vm.destinationCall = "N0CALL"
+        XCTAssertEqual(vm.effectiveDestination, "N0CALL")
     }
 
     func testCanSendValidatesCallsign() {
@@ -126,18 +138,27 @@ final class TerminalTxViewModelTests: XCTestCase {
         XCTAssertEqual(frame?.destination.ssid, 10)
     }
 
-    func testBuildFrameReturnsNilWhenInvalid() {
+    func testBuildFrameReturnsNilWhenNoText() {
         var vm = TerminalTxViewModel()
 
-        // No destination
+        // No text (even with destination)
         vm.sourceCall = "MYCALL"
-        vm.composeText = "Test"
-        XCTAssertNil(vm.buildOutboundFrame())
-
-        // No text
         vm.destinationCall = "N0CALL"
         vm.composeText = ""
         XCTAssertNil(vm.buildOutboundFrame())
+    }
+
+    func testBuildFrameWithBroadcast() {
+        var vm = TerminalTxViewModel()
+
+        // Empty destination should build frame with CQ destination
+        vm.sourceCall = "MYCALL"
+        vm.destinationCall = ""
+        vm.composeText = "Broadcast test"
+
+        let frame = vm.buildOutboundFrame()
+        XCTAssertNotNil(frame)
+        XCTAssertEqual(frame?.destination.call, "CQ")
     }
 
     // MARK: - Queue Management Tests

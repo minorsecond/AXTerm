@@ -116,6 +116,37 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
         self.axdpMessageId = axdpMessageId
         self.displayInfo = displayInfo
     }
+
+    /// Encode as raw AX.25 frame bytes (for KISS transport)
+    func encodeAX25() -> Data {
+        var data = Data()
+
+        // Destination address (7 bytes)
+        data.append(destination.encodeForAX25(isLast: path.isEmpty && true))
+
+        // Source address (7 bytes)
+        // Source has command/response bit set, last if no digipeaters
+        data.append(source.encodeForAX25(isLast: path.isEmpty))
+
+        // Digipeater addresses (7 bytes each)
+        for (index, digi) in path.digis.enumerated() {
+            let isLastDigi = index == path.digis.count - 1
+            data.append(digi.encodeForAX25(isLast: isLastDigi))
+        }
+
+        // Control field (UI frame = 0x03 for unnumbered)
+        data.append(0x03)
+
+        // PID (protocol identifier)
+        if let pid = pid {
+            data.append(pid)
+        }
+
+        // Info field (payload)
+        data.append(payload)
+
+        return data
+    }
 }
 
 /// Tracks the transmission state of an OutboundFrame

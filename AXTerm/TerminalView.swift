@@ -96,6 +96,10 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     func clearCompleted() {
         viewModel.clearCompleted()
     }
+
+    func updateFrameStatus(_ frameId: UUID, status: TxFrameStatus) {
+        viewModel.updateFrameState(frameId: frameId, status: status)
+    }
 }
 
 // MARK: - Terminal Tab Enum
@@ -119,6 +123,11 @@ struct TerminalView: View {
 
     // Bulk transfer state (simplified for now)
     @State private var transfers: [BulkTransfer] = []
+
+    // Clear state - hide lines before this timestamp (nil = show all)
+    @State private var clearedAt: Date?
+    @State private var showUndoClear = false
+    @State private var undoClearTask: Task<Void, Never>?
 
     init(client: PacketEngine, settings: AppSettingsStore) {
         self.client = client
@@ -203,7 +212,7 @@ struct TerminalView: View {
                 queueDepth: txViewModel.queueDepth,
                 isConnected: client.status == .connected,
                 onSend: {
-                    txViewModel.enqueueCurrentMessage()
+                    sendCurrentMessage()
                 },
                 onClear: {
                     txViewModel.clearCompose()
@@ -266,25 +275,125 @@ struct TerminalView: View {
 
     @ViewBuilder
     private var sessionOutputView: some View {
-        // Use ConsoleView with session filtering (for now, show all console lines)
-        ConsoleView(
-            lines: client.consoleLines,
-            showDaySeparators: settings.showConsoleDaySeparators,
-            onClear: {}
-        )
-        .overlay(alignment: .center) {
-            if client.consoleLines.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "text.bubble")
-                        .font(.system(size: 48))
-                        .foregroundStyle(.tertiary)
+        ZStack(alignment: .topTrailing) {
+            // Use ConsoleView with session filtering
+            ConsoleView(
+                lines: filteredConsoleLines,
+                showDaySeparators: settings.showConsoleDaySeparators,
+                onClear: {
+                    clearSession()
+                }
+            )
+            .overlay(alignment: .center) {
+                if filteredConsoleLines.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "text.bubble")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.tertiary)
 
-                    Text("No messages yet")
-                        .foregroundStyle(.secondary)
+                        Text("No messages yet")
+                            .foregroundStyle(.secondary)
 
-                    Text("Connect to a TNC to start receiving packets")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        if clearedAt != nil {
+                            Text("Session cleared")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        } else {
+                            Text("Connect to a TNC to start receiving packets")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+            }
+
+            // Undo clear banner
+            if showUndoClear {
+                undoClearBanner
+                    .padding(12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: showUndoClear)
+    }
+
+    /// Console lines filtered by clear timestamp
+    private var filteredConsoleLines: [ConsoleLine] {
+        guard let cutoff = clearedAt else {
+            return client.consoleLines
+        }
+        return client.consoleLines.filter { $0.timestamp > cutoff }
+    }
+
+    /// Clear session output (hide old lines, not delete)
+    private func clearSession() {
+        // Cancel any existing undo task
+        undoClearTask?.cancel()
+
+        // Store the clear timestamp
+        clearedAt = Date()
+        showUndoClear = true
+
+        // Hide undo banner after 10 seconds
+        undoClearTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
+            if !Task.isCancelled {
+                withAnimation {
+                    showUndoClear = false
+                }
+            }
+        }
+    }
+
+    /// Undo the clear action
+    private func undoClear() {
+        undoClearTask?.cancel()
+        clearedAt = nil
+        withAnimation {
+            showUndoClear = false
+        }
+    }
+
+    @ViewBuilder
+    private var undoClearBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "clock.arrow.circlepath")
+                .foregroundStyle(.secondary)
+
+            Text("Session cleared")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            Button("Undo") {
+                undoClear()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+    }
+
+    // MARK: - Transmission
+
+    /// Send the current composed message
+    private func sendCurrentMessage() {
+        // Add to queue (for UI display)
+        txViewModel.enqueueCurrentMessage()
+
+        // Get the last queued entry and actually send it
+        guard let entry = txViewModel.queueEntries.last else { return }
+
+        // Send via PacketEngine
+        client.send(frame: entry.frame) { [weak txViewModel] result in
+            Task { @MainActor in
+                switch result {
+                case .success:
+                    txViewModel?.updateFrameStatus(entry.frame.id, status: .sent)
+                case .failure:
+                    txViewModel?.updateFrameStatus(entry.frame.id, status: .failed)
                 }
             }
         }

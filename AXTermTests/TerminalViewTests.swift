@@ -55,18 +55,18 @@ final class TerminalViewTests: XCTestCase {
         }
     }
 
-    func testObservableViewModelCanSendRequiresTextAndDestination() async {
+    func testObservableViewModelCanSendRequiresText() async {
         await MainActor.run {
             let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
 
-            // Initially cannot send (no text, no destination)
+            // Initially cannot send (no text)
             XCTAssertFalse(viewModel.canSend)
 
-            // Add text only - still cannot send
+            // Add text only - CAN send (broadcast to CQ)
             viewModel.composeText.wrappedValue = "Test"
-            XCTAssertFalse(viewModel.canSend)
+            XCTAssertTrue(viewModel.canSend, "Should allow broadcast with empty destination")
 
-            // Add destination - now can send
+            // Add destination - still can send
             viewModel.destinationCall.wrappedValue = "K0ABC"
             XCTAssertTrue(viewModel.canSend)
         }

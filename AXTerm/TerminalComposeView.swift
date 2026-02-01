@@ -98,13 +98,12 @@ struct TerminalComposeView: View {
 
             // Message input
             HStack(spacing: 8) {
-                TextField("Message...", text: $composeText, axis: .vertical)
+                TextField("Message...", text: $composeText)
                     .textFieldStyle(.plain)
                     .font(.system(.body, design: .monospaced))
-                    .lineLimit(1...3)
                     .focused($isTextFieldFocused)
                     .onSubmit {
-                        if canSend {
+                        if canSend && isConnected {
                             onSend()
                         }
                     }
@@ -119,7 +118,7 @@ struct TerminalComposeView: View {
                     .controlSize(.small)
                     .disabled(!canSend || !isConnected)
                     .keyboardShortcut(.return, modifiers: .command)
-                    .help("Send message (Cmd+Return)")
+                    .help("Send message (Enter or Cmd+Return)")
 
                     Button(action: onClear) {
                         Image(systemName: "xmark.circle")
