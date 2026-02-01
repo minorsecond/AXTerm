@@ -46,6 +46,56 @@ enum KISS {
         }
         return result
     }
+
+    // MARK: - TX Encoding
+
+    /// Escape data for KISS transmission
+    /// Converts FEND -> FESC+TFEND and FESC -> FESC+TFESC
+    static func escape(_ data: Data) -> Data {
+        var result = Data()
+        // Worst case: every byte needs escaping (doubles size)
+        result.reserveCapacity(data.count * 2)
+
+        for byte in data {
+            if byte == FEND {
+                result.append(FESC)
+                result.append(TFEND)
+            } else if byte == FESC {
+                result.append(FESC)
+                result.append(TFESC)
+            } else {
+                result.append(byte)
+            }
+        }
+        return result
+    }
+
+    /// Build a complete KISS frame from an AX.25 payload
+    /// Format: FEND + command byte + escaped payload + FEND
+    /// - Parameters:
+    ///   - payload: The raw AX.25 frame bytes to transmit
+    ///   - port: The KISS port number (0-15, default 0)
+    /// - Returns: Complete KISS frame ready for TCP transmission
+    static func encodeFrame(payload: Data, port: UInt8 = 0) -> Data {
+        var frame = Data()
+        // Reserve capacity: FEND + cmd + escaped payload (worst case 2x) + FEND
+        frame.reserveCapacity(2 + payload.count * 2)
+
+        // Start delimiter
+        frame.append(FEND)
+
+        // Command byte: high nibble = port, low nibble = command (0 = data)
+        let command = (port << 4) | CMD_DATA
+        frame.append(command)
+
+        // Escaped AX.25 payload
+        frame.append(escape(payload))
+
+        // End delimiter
+        frame.append(FEND)
+
+        return frame
+    }
 }
 
 // MARK: - KISS Frame Parser
