@@ -180,6 +180,11 @@ struct AXDPCapability: Sendable, Equatable {
 
     /// Negotiate common capabilities between local and remote
     static func negotiate(local: AXDPCapability, remote: AXDPCapability) -> AXDPCapability {
+        TxLog.debug(.capability, "Negotiating capabilities", [
+            "localProto": "\(local.protoMin)-\(local.protoMax)",
+            "remoteProto": "\(remote.protoMin)-\(remote.protoMax)"
+        ])
+
         // Use lowest common version
         let commonProtoMax = min(local.protoMax, remote.protoMax)
         let commonProtoMin = max(local.protoMin, remote.protoMin)
@@ -195,7 +200,7 @@ struct AXDPCapability: Sendable, Equatable {
         let commonMaxDecompressed = min(local.maxDecompressedLen, remote.maxDecompressedLen)
         let commonMaxChunk = min(local.maxChunkLen, remote.maxChunkLen)
 
-        return AXDPCapability(
+        let result = AXDPCapability(
             protoMin: commonProtoMin,
             protoMax: commonProtoMax,
             features: commonFeatures,
@@ -203,6 +208,18 @@ struct AXDPCapability: Sendable, Equatable {
             maxDecompressedLen: commonMaxDecompressed,
             maxChunkLen: commonMaxChunk
         )
+
+        TxLog.axdpCapability(
+            peer: "negotiated",
+            caps: [
+                "proto:\(commonProtoMin)-\(commonProtoMax)",
+                "features:\(commonFeatures.rawValue)",
+                "algos:\(commonAlgos.map { String(describing: $0) }.joined(separator: ","))",
+                "maxChunk:\(commonMaxChunk)"
+            ]
+        )
+
+        return result
     }
 }
 
@@ -294,6 +311,8 @@ enum AXDPCompression {
         guard algorithm != .none else { return data }
         guard !data.isEmpty else { return data }
 
+        TxLog.debug(.compression, "Compressing", ["algorithm": String(describing: algorithm), "inputSize": data.count])
+
         let algo: compression_algorithm
         switch algorithm {
         case .none:
@@ -323,13 +342,25 @@ enum AXDPCompression {
             )
         }
 
-        guard compressedSize > 0 else { return nil }
+        guard compressedSize > 0 else {
+            TxLog.compressionError(operation: "compress", reason: "Compression returned 0 bytes")
+            return nil
+        }
 
         // Only use compression if it actually reduces size
         if compressedSize >= data.count {
+            TxLog.debug(.compression, "Compression skipped (no benefit)", [
+                "inputSize": data.count,
+                "wouldBe": compressedSize
+            ])
             return nil  // Compression didn't help
         }
 
+        TxLog.compressionEncode(
+            algorithm: String(describing: algorithm),
+            originalSize: data.count,
+            compressedSize: compressedSize
+        )
         return Data(bytes: destinationBuffer, count: compressedSize)
     }
 
@@ -343,9 +374,21 @@ enum AXDPCompression {
         guard algorithm != .none else { return data }
         guard !data.isEmpty else { return data }
 
+        TxLog.debug(.compression, "Decompressing", [
+            "algorithm": String(describing: algorithm),
+            "compressedSize": data.count,
+            "expectedSize": originalLength
+        ])
+
         // Enforce limits
-        guard originalLength <= maxLength else { return nil }
-        guard originalLength <= absoluteMaxDecompressedLen else { return nil }
+        guard originalLength <= maxLength else {
+            TxLog.compressionError(operation: "decompress", reason: "Original length \(originalLength) exceeds maxLength \(maxLength)")
+            return nil
+        }
+        guard originalLength <= absoluteMaxDecompressedLen else {
+            TxLog.compressionError(operation: "decompress", reason: "Original length \(originalLength) exceeds absolute max \(absoluteMaxDecompressedLen)")
+            return nil
+        }
 
         let algo: compression_algorithm
         switch algorithm {
@@ -376,8 +419,16 @@ enum AXDPCompression {
         }
 
         // Verify decompressed size matches claimed original
-        guard decompressedSize == Int(originalLength) else { return nil }
+        guard decompressedSize == Int(originalLength) else {
+            TxLog.compressionError(operation: "decompress", reason: "Size mismatch: got \(decompressedSize), expected \(originalLength)")
+            return nil
+        }
 
+        TxLog.compressionDecode(
+            algorithm: String(describing: algorithm),
+            compressedSize: data.count,
+            decompressedSize: decompressedSize
+        )
         return Data(bytes: destinationBuffer, count: decompressedSize)
     }
 }

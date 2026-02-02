@@ -159,6 +159,13 @@ enum AXDP {
         func encode() -> Data {
             var data = AXDP.magic
 
+            TxLog.axdpEncode(
+                type: String(describing: type),
+                sessionId: UInt16(sessionId & 0xFFFF),
+                messageId: messageId,
+                payloadSize: payload?.count ?? 0
+            )
+
             // MessageType (required)
             data.append(TLV(type: TLVType.messageType.rawValue, value: Data([type.rawValue])).encode())
 
@@ -221,7 +228,10 @@ enum AXDP {
         /// Unknown TLVs are safely skipped (forward compatibility).
         static func decode(from data: Data) -> Message? {
             // Check magic header
-            guard hasMagic(data) else { return nil }
+            guard hasMagic(data) else {
+                TxLog.debug(.axdp, "No AXDP magic header", ["size": data.count])
+                return nil
+            }
 
             // Parse TLVs after magic
             let tlvData = data.subdata(in: magic.count..<data.count)
@@ -326,7 +336,24 @@ enum AXDP {
             }
 
             // Must have at least message type
-            guard hasType else { return nil }
+            guard hasType else {
+                TxLog.axdpDecodeError(reason: "Missing message type", data: data)
+                return nil
+            }
+
+            TxLog.axdpDecode(
+                type: String(describing: msg.type),
+                sessionId: UInt16(msg.sessionId & 0xFFFF),
+                messageId: msg.messageId,
+                payloadSize: msg.payload?.count ?? 0
+            )
+
+            if !msg.unknownTLVs.isEmpty {
+                TxLog.debug(.axdp, "Unknown TLVs preserved", [
+                    "count": msg.unknownTLVs.count,
+                    "types": msg.unknownTLVs.map { String(format: "0x%02X", $0.type) }.joined(separator: ", ")
+                ])
+            }
 
             return msg
         }
