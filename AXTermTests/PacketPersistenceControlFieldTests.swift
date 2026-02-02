@@ -15,23 +15,25 @@ final class PacketPersistenceControlFieldTests: XCTestCase {
     // MARK: - I-Frame Persistence
 
     /// Test that I-frame control fields are persisted correctly
-    /// Note: For I-frames with 2 control bytes, we use controlByte1 parameter
+    /// Note: Modulo-8 I-frames use a single control byte with format NNNPSSS0
     func testControlFieldsPersistedForIFrame() throws {
         let store = try makeStore()
         let queue = try makeDBQueue()
         let endpoint = try makeEndpoint()
 
-        // Create an I-frame packet with both control bytes
+        // Create an I-frame packet with single control byte (modulo-8 mode)
         // I-frame with N(S)=2, P/F=1, N(R)=3
-        // ctl0: 0x04 (N(S)=2 in bits 1-3, bit 0=0)
-        // ctl1: 0x70 (N(R)=3 in bits 5-7, P/F=1 in bit 4)
+        // Control byte: 011 1 010 0 = 0x74
+        // - bits 5-7: N(R)=3 = 0b011
+        // - bit 4: P/F=1
+        // - bits 1-3: N(S)=2 = 0b010
+        // - bit 0: 0 (I-frame indicator)
         let packet = Packet(
             timestamp: Date(timeIntervalSince1970: 100),
             from: AX25Address(call: "TEST1"),
             to: AX25Address(call: "TEST2"),
             frameType: .i,
-            control: 0x04,
-            controlByte1: 0x70,
+            control: 0x74,
             pid: 0xF0,
             info: Data([0x41, 0x42]),
             rawAx25: Data([0x01, 0x02, 0x03]),
@@ -52,8 +54,8 @@ final class PacketPersistenceControlFieldTests: XCTestCase {
         XCTAssertEqual(record?.ax25Ns, 2)
         XCTAssertEqual(record?.ax25Nr, 3)
         XCTAssertEqual(record?.ax25Pf, 1)
-        XCTAssertEqual(record?.ax25Ctl0, 0x04)
-        XCTAssertEqual(record?.ax25Ctl1, 0x70)
+        XCTAssertEqual(record?.ax25Ctl0, 0x74)
+        XCTAssertNil(record?.ax25Ctl1)  // Modulo-8 I-frames use single byte
         XCTAssertEqual(record?.ax25IsExtended, 0)
     }
 

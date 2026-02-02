@@ -13,15 +13,17 @@ final class AX25ControlFieldDecoderTests: XCTestCase {
 
     // MARK: - I-Frame Tests (Modulo-8)
 
-    /// Test decoding a standard modulo-8 I-frame with 2 control bytes.
-    /// I-frame: bit 0 of ctl0 = 0
-    /// ctl0: N(S) in bits 1-3
-    /// ctl1: P/F in bit 4, N(R) in bits 5-7
+    /// Test decoding a standard modulo-8 I-frame with single control byte.
+    /// I-frame: bit 0 = 0
+    /// Format: NNNPSSS0 where NNN=N(R), P=P/F, SSS=N(S), 0=I-frame indicator
     func testDecodeIFrameModulo8() {
         // I-frame with N(S)=3, P/F=1, N(R)=5
-        // ctl0: 0b00000110 = 0x06 (N(S)=3 in bits 1-3, bit 0=0 for I-frame)
-        // ctl1: 0b10110000 = 0xB0 (N(R)=5 in bits 5-7, P/F=1 in bit 4)
-        let controlBytes: [UInt8] = [0x06, 0xB0]
+        // Control byte: 101 1 011 0 = 0xB6
+        // - bits 5-7: N(R)=5 = 0b101
+        // - bit 4: P/F=1
+        // - bits 1-3: N(S)=3 = 0b011
+        // - bit 0: 0 (I-frame indicator)
+        let controlBytes: [UInt8] = [0xB6]
 
         let decoded = AX25ControlFieldDecoder.decode(controlBytes: controlBytes)
 
@@ -29,8 +31,8 @@ final class AX25ControlFieldDecoderTests: XCTestCase {
         XCTAssertEqual(decoded.ns, 3)
         XCTAssertEqual(decoded.nr, 5)
         XCTAssertEqual(decoded.pf, 1)
-        XCTAssertEqual(decoded.ctl0, 0x06)
-        XCTAssertEqual(decoded.ctl1, 0xB0)
+        XCTAssertEqual(decoded.ctl0, 0xB6)
+        XCTAssertNil(decoded.ctl1)
         XCTAssertNil(decoded.sType)
         XCTAssertNil(decoded.uType)
         XCTAssertFalse(decoded.isExtended)
@@ -39,9 +41,12 @@ final class AX25ControlFieldDecoderTests: XCTestCase {
     /// Test I-frame with different sequence numbers and P/F=0
     func testDecodeIFrameModulo8_PFZero() {
         // I-frame with N(S)=0, P/F=0, N(R)=7
-        // ctl0: 0b00000000 = 0x00 (N(S)=0, bit 0=0)
-        // ctl1: 0b11100000 = 0xE0 (N(R)=7 in bits 5-7, P/F=0)
-        let controlBytes: [UInt8] = [0x00, 0xE0]
+        // Control byte: 111 0 000 0 = 0xE0
+        // - bits 5-7: N(R)=7 = 0b111
+        // - bit 4: P/F=0
+        // - bits 1-3: N(S)=0 = 0b000
+        // - bit 0: 0 (I-frame indicator)
+        let controlBytes: [UInt8] = [0xE0]
 
         let decoded = AX25ControlFieldDecoder.decode(controlBytes: controlBytes)
 
@@ -55,9 +60,12 @@ final class AX25ControlFieldDecoderTests: XCTestCase {
     /// Test I-frame with maximum sequence numbers
     func testDecodeIFrameModulo8_MaxSequences() {
         // I-frame with N(S)=7, P/F=1, N(R)=7
-        // ctl0: 0b00001110 = 0x0E (N(S)=7 in bits 1-3, bit 0=0)
-        // ctl1: 0b11110000 = 0xF0 (N(R)=7 in bits 5-7, P/F=1 in bit 4)
-        let controlBytes: [UInt8] = [0x0E, 0xF0]
+        // Control byte: 111 1 111 0 = 0xFE
+        // - bits 5-7: N(R)=7 = 0b111
+        // - bit 4: P/F=1
+        // - bits 1-3: N(S)=7 = 0b111
+        // - bit 0: 0 (I-frame indicator)
+        let controlBytes: [UInt8] = [0xFE]
 
         let decoded = AX25ControlFieldDecoder.decode(controlBytes: controlBytes)
 
@@ -67,17 +75,19 @@ final class AX25ControlFieldDecoderTests: XCTestCase {
         XCTAssertEqual(decoded.pf, 1)
     }
 
-    /// Test I-frame with missing second control byte returns unknown
-    func testDecodeIFrameMissing_Ctl1ReturnsUnknown() {
-        // Only one byte - should be treated as unknown for I-frame
+    /// Test I-frame with single control byte (standard modulo-8 mode)
+    /// Modulo-8 I-frames use a single byte, not two bytes
+    func testDecodeIFrameSingleByte() {
+        // Control byte: 0x00 = N(S)=0, P/F=0, N(R)=0
         let controlBytes: [UInt8] = [0x00]
 
         let decoded = AX25ControlFieldDecoder.decode(controlBytes: controlBytes)
 
-        // With only one byte, we can detect it's I-frame pattern but can't fully decode
-        // Implementation choice: return unknown or partial decode
-        // For safety, we expect unknown when we can't fully decode
-        XCTAssertEqual(decoded.frameClass, .unknown)
+        // Single byte is correct for modulo-8 I-frames
+        XCTAssertEqual(decoded.frameClass, .I)
+        XCTAssertEqual(decoded.ns, 0)
+        XCTAssertEqual(decoded.nr, 0)
+        XCTAssertEqual(decoded.pf, 0)
         XCTAssertEqual(decoded.ctl0, 0x00)
         XCTAssertNil(decoded.ctl1)
     }
@@ -335,8 +345,8 @@ final class AX25ControlFieldDecoderTests: XCTestCase {
 
     /// Test all frame class patterns are correctly identified
     func testFrameClassDetermination() {
-        // I-frame: bit 0 = 0
-        let iFrame = AX25ControlFieldDecoder.decode(controlBytes: [0x00, 0x00])
+        // I-frame: bit 0 = 0 (single byte in modulo-8 mode)
+        let iFrame = AX25ControlFieldDecoder.decode(controlBytes: [0x00])
         XCTAssertEqual(iFrame.frameClass, .I)
 
         // S-frame: bits 0-1 = 01

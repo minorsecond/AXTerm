@@ -277,12 +277,10 @@ enum AX25 {
         // Determine frame type from control byte
         let frameType = classifyFrameType(control: control)
 
-        // For I-frames, extract the second control byte (modulo-8 mode)
-        var controlByte1: UInt8? = nil
-        if frameType == .i && offset < data.count {
-            controlByte1 = data[offset]
-            offset += 1
-        }
+        // Note: Standard AX.25 (modulo-8) uses a single control byte for all frame types.
+        // Extended mode (modulo-128) uses two control bytes, but we don't support that yet.
+        // controlByte1 is reserved for future modulo-128 support.
+        let controlByte1: UInt8? = nil
 
         // PID field (only present in I and UI frames)
         var pid: UInt8? = nil
