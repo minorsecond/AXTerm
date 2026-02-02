@@ -32,8 +32,8 @@ final class AX25SessionTests: XCTestCase {
     func testSessionConfigDefaults() {
         let config = AX25SessionConfig()
 
-        // Default window size K=2
-        XCTAssertEqual(config.windowSize, 2)
+        // Default window size K=4
+        XCTAssertEqual(config.windowSize, 4)
 
         // Default max retries N2=10
         XCTAssertEqual(config.maxRetries, 10)
@@ -176,7 +176,7 @@ final class AX25SessionTests: XCTestCase {
             .receivedRR(nr: 0),
             .receivedRNR(nr: 0),
             .receivedREJ(nr: 0),
-            .receivedIFrame(ns: 0, nr: 0, payload: Data()),
+            .receivedIFrame(ns: 0, nr: 0, pf: false, payload: Data()),
             .t1Timeout,
             .t3Timeout
         ]
@@ -336,14 +336,14 @@ final class AX25SessionTests: XCTestCase {
         _ = sm.handle(event: .receivedUA)
 
         let payload = Data([0x01, 0x02, 0x03])
-        let actions = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, payload: payload))
+        let actions = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, pf: false, payload: payload))
 
         XCTAssertTrue(actions.contains { action in
             if case .deliverData(let data) = action { return data == payload }
             return false
         })
         XCTAssertTrue(actions.contains { action in
-            if case .sendRR(let nr) = action { return nr == 1 }
+            if case .sendRR(let nr, _) = action { return nr == 1 }
             return false
         })
         XCTAssertEqual(sm.sequenceState.vr, 1)
@@ -356,11 +356,11 @@ final class AX25SessionTests: XCTestCase {
 
         // Receive frame with ns=1 when expecting ns=0
         let payload = Data([0x01])
-        let actions = sm.handle(event: .receivedIFrame(ns: 1, nr: 0, payload: payload))
+        let actions = sm.handle(event: .receivedIFrame(ns: 1, nr: 0, pf: false, payload: payload))
 
         // Should send REJ requesting retransmit from expected sequence
         XCTAssertTrue(actions.contains { action in
-            if case .sendREJ(let nr) = action { return nr == 0 }
+            if case .sendREJ(let nr, _) = action { return nr == 0 }
             return false
         })
         // Should NOT deliver data
@@ -413,7 +413,7 @@ final class AX25SessionTests: XCTestCase {
 
         // T3 timeout should send RR as poll to keep link alive
         XCTAssertTrue(actions.contains { action in
-            if case .sendRR = action { return true }
+            if case .sendRR(_, _) = action { return true }
             return false
         })
         XCTAssertTrue(actions.contains(.startT1))

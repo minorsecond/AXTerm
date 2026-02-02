@@ -529,7 +529,7 @@ final class TransmissionEdgeCaseTests: XCTestCase {
         var sm = AX25StateMachine(config: AX25SessionConfig())
 
         // Receive I-frame while disconnected (should be ignored/rejected)
-        let actions = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, payload: Data([0x01])))
+        let actions = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, pf: false, payload: Data([0x01])))
 
         XCTAssertEqual(sm.state, .disconnected)  // Should stay disconnected
         // Should not deliver data

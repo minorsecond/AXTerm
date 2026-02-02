@@ -35,7 +35,7 @@ struct AX25SessionConfig: Sendable {
     /// Sequence number modulo (8 or 128)
     var modulo: Int { extended ? 128 : 8 }
 
-    init(windowSize: Int = 2, maxRetries: Int = 10, extended: Bool = false) {
+    init(windowSize: Int = 4, maxRetries: Int = 10, extended: Bool = false) {
         // Clamp window size to valid range
         let maxWindow = extended ? 127 : 7
         self.windowSize = max(1, min(windowSize, maxWindow))
@@ -215,7 +215,7 @@ enum AX25SessionEvent: Sendable {
     case receivedREJ(nr: Int)
 
     // Received I-frame
-    case receivedIFrame(ns: Int, nr: Int, payload: Data)
+    case receivedIFrame(ns: Int, nr: Int, pf: Bool, payload: Data)
 
     // Timeouts
     case t1Timeout
@@ -230,9 +230,9 @@ enum AX25SessionAction: Sendable, Equatable {
     case sendUA
     case sendDM
     case sendDISC
-    case sendRR(nr: Int)
-    case sendRNR(nr: Int)
-    case sendREJ(nr: Int)
+    case sendRR(nr: Int, pf: Bool = false)
+    case sendRNR(nr: Int, pf: Bool = false)
+    case sendREJ(nr: Int, pf: Bool = false)
     case sendIFrame(ns: Int, nr: Int, payload: Data)
     case startT1
     case stopT1
@@ -245,6 +245,13 @@ enum AX25SessionAction: Sendable, Equatable {
 }
 
 // MARK: - State Machine
+
+/// Buffered I-frame waiting for delivery
+struct BufferedIFrame: Sendable {
+    let ns: Int
+    let nr: Int
+    let payload: Data
+}
 
 /// AX.25 connected-mode state machine
 /// Handles state transitions and generates actions in response to events
@@ -261,13 +268,53 @@ struct AX25StateMachine: Sendable {
     /// Retry counter for current operation
     private(set) var retryCount: Int = 0
 
+    /// Receive buffer for out-of-sequence I-frames
+    /// Key is N(S) sequence number
+    var receiveBuffer: [Int: BufferedIFrame] = [:]
+
+    /// Flag indicating we've sent REJ and are waiting for retransmission
+    /// This prevents sending multiple REJs for the same gap
+    private(set) var rejSent: Bool = false
+
     init(config: AX25SessionConfig) {
         self.config = config
         self.sequenceState = AX25SequenceState(modulo: config.modulo)
     }
 
+    /// Reset all session state for a new connection
+    mutating func resetSessionState() {
+        sequenceState.reset()
+        receiveBuffer.removeAll()
+        rejSent = false
+    }
+
     /// Handle an event and return the list of actions to execute
     mutating func handle(event: AX25SessionEvent) -> [AX25SessionAction] {
+        let oldState = state
+        let actions = handleInternal(event: event)
+
+        // Log state transitions
+        if oldState != state {
+            TxLog.debug(.session, "State transition", [
+                "from": oldState.rawValue,
+                "to": state.rawValue,
+                "event": String(describing: event).prefix(50)
+            ])
+        }
+
+        // Log actions being taken
+        if !actions.isEmpty {
+            TxLog.debug(.ax25, "Actions generated", [
+                "count": actions.count,
+                "actions": actions.prefix(3).map { String(describing: $0).prefix(30) }.joined(separator: ", ")
+            ])
+        }
+
+        return actions
+    }
+
+    /// Internal handler for state machine logic
+    private mutating func handleInternal(event: AX25SessionEvent) -> [AX25SessionAction] {
         switch (state, event) {
 
         // MARK: - Disconnected State
@@ -275,13 +322,15 @@ struct AX25StateMachine: Sendable {
         case (.disconnected, .connectRequest):
             state = .connecting
             retryCount = 0
-            sequenceState.reset()
+            resetSessionState()
+            TxLog.outbound(.ax25, "Initiating connection (SABM)")
             return [.sendSABM, .startT1]
 
         case (.disconnected, .receivedSABM):
             // Remote initiated connection
             state = .connected
-            sequenceState.reset()
+            resetSessionState()
+            TxLog.inbound(.ax25, "Connection request received (SABM)")
             return [.sendUA, .startT3, .notifyConnected]
 
         case (.disconnected, .receivedDISC):
@@ -297,16 +346,20 @@ struct AX25StateMachine: Sendable {
         case (.connecting, .receivedUA):
             state = .connected
             retryCount = 0
+            TxLog.inbound(.ax25, "Connection established (UA received)")
             return [.stopT1, .startT3, .notifyConnected]
 
         case (.connecting, .receivedDM):
             state = .disconnected
+            TxLog.error(.ax25, "Connection refused", error: nil, ["reason": "DM received"])
             return [.stopT1, .notifyError("Connection refused (DM received)")]
 
         case (.connecting, .t1Timeout):
             retryCount += 1
+            TxLog.warning(.ax25, "T1 timeout during connect", ["retry": retryCount, "maxRetries": config.maxRetries])
             if retryCount > config.maxRetries {
                 state = .error
+                TxLog.error(.ax25, "Connection failed", error: nil, ["reason": "retries exceeded"])
                 return [.stopT1, .notifyError("Connection timeout (retries exceeded)")]
             }
             return [.sendSABM, .startT1]
@@ -331,11 +384,12 @@ struct AX25StateMachine: Sendable {
 
         case (.connected, .receivedSABM):
             // Remote is re-establishing - reset and ack
-            sequenceState.reset()
+            resetSessionState()
             return [.sendUA, .startT3]
 
-        case (.connected, .receivedIFrame(let ns, let nr, let payload)):
-            return handleIFrame(ns: ns, nr: nr, payload: payload)
+        case (.connected, .receivedIFrame(let ns, let nr, let pf, let payload)):
+            TxLog.inbound(.ax25, "I-frame received", ["ns": ns, "nr": nr, "pf": pf, "size": payload.count])
+            return handleIFrame(ns: ns, nr: nr, pf: pf, payload: payload)
 
         case (.connected, .receivedRR(let nr)):
             return handleRR(nr: nr)
@@ -353,16 +407,20 @@ struct AX25StateMachine: Sendable {
 
         case (.connected, .receivedFRMR):
             state = .error
+            TxLog.error(.ax25, "Protocol error", error: nil, ["reason": "FRMR received"])
             return [.stopT3, .notifyError("Protocol error (FRMR received)")]
 
         case (.connected, .receivedDM):
             state = .disconnected
+            TxLog.warning(.ax25, "Remote disconnected (DM received)")
             return [.stopT3, .notifyError("Remote disconnected (DM received)")]
 
         case (.connected, .t1Timeout):
             retryCount += 1
+            TxLog.warning(.ax25, "T1 timeout", ["retry": retryCount, "outstanding": sequenceState.outstandingCount])
             if retryCount > config.maxRetries {
                 state = .error
+                TxLog.error(.ax25, "Link failure", error: nil, ["reason": "retries exceeded", "retries": retryCount])
                 return [.stopT1, .stopT3, .notifyError("Link failure (retries exceeded)")]
             }
             // Retransmit would happen here
@@ -401,7 +459,7 @@ struct AX25StateMachine: Sendable {
         case (.error, .connectRequest):
             state = .connecting
             retryCount = 0
-            sequenceState.reset()
+            resetSessionState()
             return [.sendSABM, .startT1]
 
         case (.error, _):
@@ -411,7 +469,7 @@ struct AX25StateMachine: Sendable {
 
     // MARK: - I-Frame Handling
 
-    private mutating func handleIFrame(ns: Int, nr: Int, payload: Data) -> [AX25SessionAction] {
+    private mutating func handleIFrame(ns: Int, nr: Int, pf: Bool, payload: Data) -> [AX25SessionAction] {
         var actions: [AX25SessionAction] = []
 
         // Process N(R) - acknowledge our sent frames
@@ -421,21 +479,116 @@ struct AX25StateMachine: Sendable {
 
         // Check if this is the expected sequence number
         if ns == sequenceState.vr {
-            // In sequence - accept and advance
-            sequenceState.incrementVR()
-            actions.append(.deliverData(payload))
-            actions.append(.sendRR(nr: sequenceState.vr))
-            actions.append(.startT3)
+            // In sequence - deliver this frame and any consecutive buffered frames
+            // Pass the P/F bit so we can respond with F=1 if P=1
+            actions.append(contentsOf: deliverInSequenceFrame(ns: ns, nr: nr, pf: pf, payload: payload))
+        } else if isWithinReceiveWindow(ns: ns) {
+            // Out of sequence but within window - buffer for later delivery
+            bufferOutOfSequenceFrame(ns: ns, nr: nr, payload: payload)
 
-            if sequenceState.outstandingCount == 0 {
-                actions.append(.stopT1)
+            // Send REJ only once per gap (with F=1 if remote sent P=1)
+            if !rejSent {
+                print("[AX25Session] I-frame OUT OF SEQUENCE: received N(S)=\(ns), expected V(R)=\(sequenceState.vr), buffering")
+                actions.append(.sendREJ(nr: sequenceState.vr, pf: pf))
+                rejSent = true
+            } else {
+                print("[AX25Session] I-frame OUT OF SEQUENCE: received N(S)=\(ns), expected V(R)=\(sequenceState.vr), buffered (REJ already sent)")
+                // Still need to respond if P=1, even if REJ already sent
+                if pf {
+                    actions.append(.sendRR(nr: sequenceState.vr, pf: true))
+                }
             }
         } else {
-            // Out of sequence - request retransmit
-            actions.append(.sendREJ(nr: sequenceState.vr))
+            // Outside window - this is likely a duplicate of an already-received frame
+            print("[AX25Session] I-frame OUTSIDE WINDOW: received N(S)=\(ns), V(R)=\(sequenceState.vr), discarding")
+            // Still respond with RR if P=1 to indicate we're alive
+            if pf {
+                actions.append(.sendRR(nr: sequenceState.vr, pf: true))
+            }
         }
 
         return actions
+    }
+
+    /// Deliver an in-sequence frame and any consecutive buffered frames
+    /// - Parameters:
+    ///   - ns: N(S) sequence number
+    ///   - nr: N(R) sequence number
+    ///   - pf: P/F bit from incoming frame - if true, we must respond with F=1
+    ///   - payload: Frame payload
+    private mutating func deliverInSequenceFrame(ns: Int, nr: Int, pf: Bool, payload: Data) -> [AX25SessionAction] {
+        var actions: [AX25SessionAction] = []
+
+        // Clear REJ flag since we're receiving the expected frame
+        rejSent = false
+
+        // Deliver the current frame
+        let oldVR = sequenceState.vr
+        sequenceState.incrementVR()
+        print("[AX25Session] I-frame accepted: N(S)=\(ns), V(R) \(oldVR)->\(sequenceState.vr), payload=\(payload.count) bytes, P/F=\(pf)")
+        actions.append(.deliverData(payload))
+
+        // Check for consecutive buffered frames and deliver them
+        while let buffered = receiveBuffer.removeValue(forKey: sequenceState.vr) {
+            let bufferedOldVR = sequenceState.vr
+            sequenceState.incrementVR()
+            print("[AX25Session] Buffered I-frame delivered: N(S)=\(buffered.ns), V(R) \(bufferedOldVR)->\(sequenceState.vr), payload=\(buffered.payload.count) bytes")
+            actions.append(.deliverData(buffered.payload))
+        }
+
+        // Send RR acknowledging all delivered frames
+        // If incoming frame had P=1, respond with F=1
+        actions.append(.sendRR(nr: sequenceState.vr, pf: pf))
+        actions.append(.startT3)
+
+        if sequenceState.outstandingCount == 0 {
+            actions.append(.stopT1)
+        }
+
+        return actions
+    }
+
+    /// Buffer an out-of-sequence frame for later delivery
+    private mutating func bufferOutOfSequenceFrame(ns: Int, nr: Int, payload: Data) {
+        // Don't buffer duplicates
+        guard receiveBuffer[ns] == nil else {
+            print("[AX25Session] Duplicate buffered frame N(S)=\(ns), ignoring")
+            return
+        }
+
+        // Limit buffer size to window size to prevent memory exhaustion
+        if receiveBuffer.count >= config.windowSize {
+            print("[AX25Session] Receive buffer full, discarding oldest")
+            // Find and remove the frame with the smallest distance from V(R)
+            // This is a safety measure - shouldn't happen in normal operation
+            if let oldestKey = receiveBuffer.keys.min(by: { distanceFromVR($0) > distanceFromVR($1) }) {
+                receiveBuffer.removeValue(forKey: oldestKey)
+            }
+        }
+
+        receiveBuffer[ns] = BufferedIFrame(ns: ns, nr: nr, payload: payload)
+        print("[AX25Session] Buffered I-frame N(S)=\(ns), buffer size=\(receiveBuffer.count)")
+    }
+
+    /// Check if a sequence number is within the receive window
+    /// A frame is within the window if it's between V(R) and V(R) + window size (modulo)
+    private func isWithinReceiveWindow(ns: Int) -> Bool {
+        let modulo = config.modulo
+        let vr = sequenceState.vr
+
+        // Calculate distance from V(R) in forward direction
+        let distance = (ns - vr + modulo) % modulo
+
+        // Frame is within window if distance is less than window size
+        // Distance of 0 means it's the expected frame (handled separately)
+        // Distance > 0 but < windowSize means it's ahead but within window
+        return distance > 0 && distance <= config.windowSize
+    }
+
+    /// Calculate distance from V(R) for buffer management
+    private func distanceFromVR(_ ns: Int) -> Int {
+        let modulo = config.modulo
+        return (ns - sequenceState.vr + modulo) % modulo
     }
 
     // MARK: - RR Handling
