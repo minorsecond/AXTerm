@@ -8,6 +8,31 @@
 
 import Foundation
 
+// MARK: - Connection Mode
+
+/// Transport mode for transmission
+enum TxConnectionMode: String, CaseIterable, Codable {
+    case datagram = "Datagram"   // UI frames - no connection, best effort
+    case connected = "Connected" // SABM/UA session with I-frames
+
+    var description: String {
+        switch self {
+        case .datagram:
+            return "One-way datagram (UI frame)"
+        case .connected:
+            return "Two-way session (SABM → I-frames)"
+        }
+    }
+
+    /// Whether this mode provides delivery confirmation
+    var hasAcks: Bool {
+        switch self {
+        case .datagram: return false
+        case .connected: return true
+        }
+    }
+}
+
 /// ViewModel managing terminal TX state: compose input, queue, and history.
 /// Note: This is a struct for testability. Wrap in ObservableObject for SwiftUI use.
 struct TerminalTxViewModel {
@@ -25,6 +50,13 @@ struct TerminalTxViewModel {
 
     /// Source callsign (typically from settings)
     var sourceCall: String = ""
+
+    /// Connection mode (datagram vs connected)
+    var connectionMode: TxConnectionMode = .connected  // Default to connected for proper packet radio behavior
+
+    /// Whether to use AXDP encoding (vs plain text)
+    /// Set to false when communicating with non-AXDP stations
+    var useAXDP: Bool = false  // Default to plain text to avoid Direwolf confusion
 
     // MARK: - Queue State
 
@@ -82,6 +114,8 @@ struct TerminalTxViewModel {
 
     /// Build an OutboundFrame from current compose state.
     /// Returns nil if state is invalid.
+    /// Note: For connected mode, this builds a frame that the session manager
+    /// will convert to proper I-frames with sequence numbers.
     func buildOutboundFrame() -> OutboundFrame? {
         guard canSend else { return nil }
 
@@ -89,8 +123,33 @@ struct TerminalTxViewModel {
         let destination = parseCallsign(effectiveDestination)
         let path = parsePath(digiPath)
 
-        // Build AXDP chat message payload
-        let payload = buildChatPayload(text: composeText)
+        // Build payload based on AXDP setting
+        let payload: Data
+        if useAXDP {
+            // AXDP-encoded payload (for AXDP-aware peers)
+            payload = buildChatPayload(text: composeText)
+        } else {
+            // Plain text payload (for legacy/standard peers)
+            // This avoids Direwolf's APRS decoder confusion
+            payload = Data(composeText.utf8)
+        }
+
+        // Frame type depends on connection mode
+        // Note: For connected mode, the session manager will convert this
+        // to I-frames with proper sequence numbers
+        let frameType: String
+        let controlByte: UInt8?
+
+        switch connectionMode {
+        case .datagram:
+            frameType = "ui"
+            controlByte = 0x03  // UI frame
+        case .connected:
+            // Mark as needing connected-mode handling
+            // Session manager will convert to I-frame with N(S)/N(R)
+            frameType = "i"
+            controlByte = nil  // Will be set by session manager
+        }
 
         return OutboundFrame(
             destination: destination,
@@ -98,8 +157,9 @@ struct TerminalTxViewModel {
             path: path,
             payload: payload,
             priority: .interactive,
-            frameType: "ui",
+            frameType: frameType,
             pid: 0xF0,
+            controlByte: controlByte,
             displayInfo: String(composeText.prefix(50))
         )
     }

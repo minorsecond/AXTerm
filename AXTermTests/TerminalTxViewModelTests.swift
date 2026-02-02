@@ -80,6 +80,8 @@ final class TerminalTxViewModelTests: XCTestCase {
         vm.sourceCall = "MYCALL"
         vm.destinationCall = "N0CALL"
         vm.composeText = "Hello World"
+        vm.connectionMode = .datagram  // UI frame mode
+        vm.useAXDP = true              // AXDP encoding
 
         let frame = vm.buildOutboundFrame()
 
