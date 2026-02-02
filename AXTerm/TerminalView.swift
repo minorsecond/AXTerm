@@ -435,10 +435,10 @@ struct TerminalView: View {
     // Bulk transfer state (simplified for now)
     @State private var transfers: [BulkTransfer] = []
 
-    // Clear state - hide lines before this timestamp (nil = show all)
-    @State private var clearedAt: Date?
+    // Clear state - undo UI state (actual timestamp is persisted in settings)
     @State private var showUndoClear = false
     @State private var undoClearTask: Task<Void, Never>?
+    @State private var previousClearedAt: Date?  // For undo functionality
 
     // Session notification toast
     @State private var sessionNotification: SessionNotification?
@@ -721,7 +721,7 @@ struct TerminalView: View {
                         Text("No messages yet")
                             .foregroundStyle(.secondary)
 
-                        if clearedAt != nil {
+                        if settings.terminalClearedAt != nil {
                             Text("Session cleared")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
@@ -744,21 +744,24 @@ struct TerminalView: View {
         .animation(.easeInOut(duration: 0.2), value: showUndoClear)
     }
 
-    /// Console lines filtered by clear timestamp
+    /// Console lines filtered by clear timestamp (uses persisted setting)
     private var filteredConsoleLines: [ConsoleLine] {
-        guard let cutoff = clearedAt else {
+        guard let cutoff = settings.terminalClearedAt else {
             return client.consoleLines
         }
         return client.consoleLines.filter { $0.timestamp > cutoff }
     }
 
-    /// Clear session output (hide old lines, not delete)
+    /// Clear session output (hide old lines, not delete) - persists across app restarts
     private func clearSession() {
         // Cancel any existing undo task
         undoClearTask?.cancel()
 
-        // Store the clear timestamp
-        clearedAt = Date()
+        // Store previous value for undo
+        previousClearedAt = settings.terminalClearedAt
+
+        // Store the clear timestamp (persisted to UserDefaults)
+        settings.terminalClearedAt = Date()
         showUndoClear = true
 
         // Hide undo banner after 10 seconds
@@ -767,6 +770,7 @@ struct TerminalView: View {
             if !Task.isCancelled {
                 withAnimation {
                     showUndoClear = false
+                    previousClearedAt = nil  // Can no longer undo after banner dismissed
                 }
             }
         }
@@ -775,7 +779,8 @@ struct TerminalView: View {
     /// Undo the clear action
     private func undoClear() {
         undoClearTask?.cancel()
-        clearedAt = nil
+        settings.terminalClearedAt = previousClearedAt  // Restore previous value (nil if never cleared before)
+        previousClearedAt = nil
         withAnimation {
             showUndoClear = false
         }

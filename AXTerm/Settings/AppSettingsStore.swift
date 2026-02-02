@@ -104,6 +104,9 @@ final class AppSettingsStore: ObservableObject {
     static let minLinkStatStaleTTLHours = 1
     static let maxLinkStatStaleTTLHours = 168     // 1 week max
 
+    // Terminal clear timestamp key
+    static let terminalClearedAtKey = "terminalClearedAt"
+
     @Published var host: String {
         didSet {
             let sanitized = Self.sanitizeHost(host)
@@ -384,6 +387,11 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
+    /// Terminal session clear timestamp - messages before this are hidden
+    @Published var terminalClearedAt: Date? {
+        didSet { persistTerminalClearedAt() }
+    }
+
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -429,6 +437,14 @@ final class AppSettingsStore: ObservableObject {
         let storedNeighborStaleTTLHours = defaults.object(forKey: Self.neighborStaleTTLHoursKey) as? Int ?? Self.defaultNeighborStaleTTLHours
         let storedLinkStatStaleTTLHours = defaults.object(forKey: Self.linkStatStaleTTLHoursKey) as? Int ?? Self.defaultLinkStatStaleTTLHours
 
+        // Terminal clear timestamp (stored as TimeInterval)
+        let storedTerminalClearedAt: Date?
+        if let timeInterval = defaults.object(forKey: Self.terminalClearedAtKey) as? TimeInterval {
+            storedTerminalClearedAt = Date(timeIntervalSince1970: timeInterval)
+        } else {
+            storedTerminalClearedAt = nil
+        }
+
         self.host = Self.sanitizeHost(storedHost)
         self.port = Self.sanitizePort(storedPort)
         self.retentionLimit = Self.sanitizeRetention(storedRetention)
@@ -468,6 +484,9 @@ final class AppSettingsStore: ObservableObject {
         self.adaptiveStaleMissedBroadcasts = max(Self.minAdaptiveStaleMissedBroadcasts, min(Self.maxAdaptiveStaleMissedBroadcasts, storedAdaptiveStaleMissedBroadcasts))
         self.neighborStaleTTLHours = max(Self.minNeighborStaleTTLHours, min(Self.maxNeighborStaleTTLHours, storedNeighborStaleTTLHours))
         self.linkStatStaleTTLHours = max(Self.minLinkStatStaleTTLHours, min(Self.maxLinkStatStaleTTLHours, storedLinkStatStaleTTLHours))
+
+        // Terminal clear timestamp
+        self.terminalClearedAt = storedTerminalClearedAt
 
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             Self.testRetainedStores.append(self)
@@ -656,6 +675,14 @@ final class AppSettingsStore: ObservableObject {
 
     private func persistLinkStatStaleTTLHours() {
         defaults.set(linkStatStaleTTLHours, forKey: Self.linkStatStaleTTLHoursKey)
+    }
+
+    private func persistTerminalClearedAt() {
+        if let date = terminalClearedAt {
+            defaults.set(date.timeIntervalSince1970, forKey: Self.terminalClearedAtKey)
+        } else {
+            defaults.removeObject(forKey: Self.terminalClearedAtKey)
+        }
     }
 
     private static func registerDefaultsIfNeeded(on defaults: UserDefaults) {
