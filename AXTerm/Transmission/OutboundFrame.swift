@@ -87,6 +87,16 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
     /// Human-readable description for UI display
     let displayInfo: String?
 
+    /// Explicit control byte (for U-frames, S-frames, I-frames)
+    /// If nil, defaults to 0x03 (UI frame) for backwards compatibility
+    let controlByte: UInt8?
+
+    /// N(S) - Send sequence number for I-frames (0-7 for mod 8, 0-127 for mod 128)
+    let ns: Int?
+
+    /// N(R) - Receive sequence number for I-frames and S-frames
+    let nr: Int?
+
     init(
         id: UUID = UUID(),
         channel: UInt8 = 0,
@@ -100,6 +110,9 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
         pid: UInt8? = 0xF0,
         sessionId: UUID? = nil,
         axdpMessageId: UInt32? = nil,
+        controlByte: UInt8? = nil,
+        ns: Int? = nil,
+        nr: Int? = nil,
         displayInfo: String? = nil
     ) {
         self.id = id
@@ -114,6 +127,9 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
         self.pid = pid
         self.sessionId = sessionId
         self.axdpMessageId = axdpMessageId
+        self.controlByte = controlByte
+        self.ns = ns
+        self.nr = nr
         self.displayInfo = displayInfo
     }
 
@@ -134,16 +150,25 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
             data.append(digi.encodeForAX25(isLast: isLastDigi))
         }
 
-        // Control field (UI frame = 0x03 for unnumbered)
-        data.append(0x03)
+        // Control field
+        // Use explicit controlByte if provided, otherwise default to UI (0x03)
+        let control = controlByte ?? 0x03
+        data.append(control)
 
-        // PID (protocol identifier)
-        if let pid = pid {
-            data.append(pid)
+        // PID (protocol identifier) - only for UI and I frames
+        // U-frames (except UI) and S-frames don't have PID
+        let frameClass = frameType.lowercased()
+        if frameClass == "ui" || frameClass == "i" {
+            if let pid = pid {
+                data.append(pid)
+            }
         }
 
-        // Info field (payload)
-        data.append(payload)
+        // Info field (payload) - only for UI and I frames
+        // S-frames and most U-frames have no info field
+        if frameClass == "ui" || frameClass == "i" {
+            data.append(payload)
+        }
 
         return data
     }

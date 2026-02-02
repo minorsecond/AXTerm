@@ -8,6 +8,7 @@
 
 import Foundation
 import Network
+import OSLog
 
 // MARK: - Transport State
 
@@ -136,6 +137,7 @@ final class KISSTransport: @unchecked Sendable {
     func connect() {
         guard state != .connecting && state != .connected else { return }
 
+        TxLog.kissConnect(host: host, port: port)
         setState(.connecting)
 
         let nwHost = NWEndpoint.Host(host)
@@ -169,6 +171,7 @@ final class KISSTransport: @unchecked Sendable {
         lock.unlock()
 
         conn?.cancel()
+        TxLog.kissDisconnected(reason: "User initiated")
         setState(.disconnected)
     }
 
@@ -183,7 +186,16 @@ final class KISSTransport: @unchecked Sendable {
         lock.lock()
         _pendingFrames.append(frame)
         let currentState = _state
+        let queueDepth = _pendingFrames.count
         lock.unlock()
+
+        TxLog.kissSend(frameId: frameId, size: frame.kissData.count)
+        TxLog.debug(.queue, "Frame queued", [
+            "frameId": String(frameId.uuidString.prefix(8)),
+            "queueDepth": queueDepth,
+            "state": currentState.rawValue
+        ])
+        TxLog.hexDump(.kiss, "KISS frame", data: frame.kissData)
 
         // If connected, start sending
         if currentState == .connected {
@@ -216,11 +228,16 @@ final class KISSTransport: @unchecked Sendable {
     private func handleConnectionState(_ newState: NWConnection.State) {
         switch newState {
         case .ready:
+            TxLog.kissConnected(host: host, port: port)
             setState(.connected)
             // Flush any queued frames
             flushQueue()
 
         case .failed(let error):
+            TxLog.error(.kiss, "Connection failed", error: error, [
+                "host": host,
+                "port": port
+            ])
             setState(.failed)
             // Notify delegate of all pending failures
             lock.lock()
@@ -228,6 +245,7 @@ final class KISSTransport: @unchecked Sendable {
             _pendingFrames.removeAll()
             lock.unlock()
 
+            TxLog.warning(.queue, "Failing \(pending.count) queued frames due to connection failure")
             for frame in pending {
                 delegate?.transportDidSend(
                     frameId: frame.id,
@@ -236,16 +254,18 @@ final class KISSTransport: @unchecked Sendable {
             }
 
         case .cancelled:
+            TxLog.kissDisconnected(reason: "Connection cancelled")
             setState(.disconnected)
             lock.lock()
             isSending = false
             lock.unlock()
 
-        case .waiting:
-            // Keep trying
+        case .waiting(let error):
+            TxLog.debug(.kiss, "Connection waiting", ["error": error.localizedDescription])
             break
 
         default:
+            TxLog.debug(.kiss, "Connection state: \(newState)")
             break
         }
     }
@@ -261,11 +281,17 @@ final class KISSTransport: @unchecked Sendable {
         lock.unlock()
 
         guard let conn = conn, state == .connected else {
+            TxLog.warning(.transport, "Cannot flush: not connected", ["state": state.rawValue])
             lock.lock()
             isSending = false
             lock.unlock()
             return
         }
+
+        TxLog.outbound(.transport, "Transmitting frame", [
+            "frameId": String(frame.id.uuidString.prefix(8)),
+            "size": frame.kissData.count
+        ])
 
         conn.send(content: frame.kissData, completion: .contentProcessed { [weak self] error in
             self?.handleSendCompletion(frame: frame, error: error)
@@ -280,17 +306,22 @@ final class KISSTransport: @unchecked Sendable {
         }
         isSending = false
         let currentState = _state
+        let remainingCount = _pendingFrames.count
         lock.unlock()
 
         // Notify delegate
         if let error = error {
+            TxLog.kissSendComplete(frameId: frame.id, success: false, error: error)
             delegate?.transportDidSend(
                 frameId: frame.id,
                 result: .failure(KISSTransportError.sendFailed(error.localizedDescription))
             )
         } else {
+            TxLog.kissSendComplete(frameId: frame.id, success: true)
             delegate?.transportDidSend(frameId: frame.id, result: .success(()))
         }
+
+        TxLog.debug(.queue, "Queue updated", ["remaining": remainingCount])
 
         // Continue with next frame
         if currentState == .connected {

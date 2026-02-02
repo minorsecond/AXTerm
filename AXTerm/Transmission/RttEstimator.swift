@@ -45,6 +45,16 @@ struct RttEstimator {
             srtt = sample
             rttvar = sample / 2
         }
+
+        // Log RTT update
+        if let newSrtt = srtt {
+            TxLog.rttUpdate(
+                peer: "estimator",
+                srtt: newSrtt,
+                rttvar: rttvar,
+                rto: rto()
+            )
+        }
     }
 
     /// Calculate the recommended RTO (retransmission timeout).
@@ -247,12 +257,17 @@ struct AIMDWindow: Sendable {
 
     /// Called when an ACK is received (successful delivery).
     mutating func onAck() {
+        let oldCwnd = cwnd
         if isSlowStart {
             // Slow start: increase by 1 per ACK (exponential growth)
             cwnd = min(cwnd + 1.0, maxWindow)
+            TxLog.congestionWindowChange(peer: "aimd", cwnd: effectiveWindow, reason: "ACK (slow start)")
         } else {
             // Congestion avoidance: increase by 1/cwnd per ACK (linear growth)
             cwnd = min(cwnd + aiIncrement / cwnd, maxWindow)
+            if Int(oldCwnd) != effectiveWindow {
+                TxLog.congestionWindowChange(peer: "aimd", cwnd: effectiveWindow, reason: "ACK (congestion avoidance)")
+            }
         }
     }
 
@@ -263,6 +278,8 @@ struct AIMDWindow: Sendable {
 
         // Multiplicative decrease
         cwnd = max(minWindow, cwnd * mdFactor)
+
+        TxLog.congestionWindowChange(peer: "aimd", cwnd: effectiveWindow, reason: "LOSS (MD to \(String(format: "%.1f", cwnd)))")
     }
 
     /// Reset to initial state.

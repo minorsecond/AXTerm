@@ -75,6 +75,13 @@ struct TxScheduler {
 
         // Keep queue sorted by priority (descending) then enqueue order (ascending)
         sortQueue()
+
+        TxLog.queueEnqueue(
+            frameId: frame.id,
+            dest: frame.destination.display,
+            priority: String(describing: frame.priority),
+            queueDepth: queue.count
+        )
     }
 
     /// Dequeue the next frame if pacing allows.
@@ -100,6 +107,15 @@ struct TxScheduler {
 
                 // Update stored entry
                 entriesById[dequeuedEntry.frame.id] = dequeuedEntry
+
+                TxLog.queueDequeue(
+                    frameId: dequeuedEntry.frame.id,
+                    dest: destKey
+                )
+                TxLog.debug(.queue, "Frame dequeued for sending", [
+                    "remaining": queue.count,
+                    "priority": String(describing: dequeuedEntry.frame.priority)
+                ])
 
                 return dequeuedEntry
             }
@@ -141,6 +157,12 @@ struct TxScheduler {
         guard var entry = entriesById[frameId] else { return }
         entry.state.markFailed(reason: reason)
         entriesById[frameId] = entry
+
+        TxLog.error(.queue, "Frame failed", error: nil, [
+            "frameId": String(frameId.uuidString.prefix(8)),
+            "dest": entry.frame.destination.display,
+            "reason": reason
+        ])
     }
 
     /// Re-queue a frame for retry (e.g., after timeout).
@@ -166,6 +188,7 @@ struct TxScheduler {
         if var entry = entriesById[frameId] {
             entry.state.markCancelled()
             entriesById[frameId] = entry
+            TxLog.queueCancel(frameId: frameId, reason: "User cancelled")
         }
     }
 
