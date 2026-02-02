@@ -29,8 +29,12 @@ final class LinkQualityControlTests: XCTestCase {
     }
 
     private func makeIFrame(from: String, to: String, ns: UInt8, nr: UInt8, timestamp: Date) -> Packet {
-        let control = (ns << 1) & 0x0E
-        let controlByte1 = (nr << 5) & 0xE0
+        // Modulo-8 I-frame uses single control byte: NNNPSSS0
+        // - bits 5-7: N(R)
+        // - bit 4: P/F (0)
+        // - bits 1-3: N(S)
+        // - bit 0: 0 (I-frame indicator)
+        let control = ((nr & 0x07) << 5) | ((ns & 0x07) << 1)
         return Packet(
             timestamp: timestamp,
             from: AX25Address(call: from),
@@ -38,7 +42,6 @@ final class LinkQualityControlTests: XCTestCase {
             via: [],
             frameType: .i,
             control: control,
-            controlByte1: controlByte1,
             pid: 0xF0,
             info: Data([0x41, 0x42]),
             rawAx25: Data([0x00])
