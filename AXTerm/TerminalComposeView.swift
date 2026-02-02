@@ -171,158 +171,141 @@ struct TerminalComposeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Single unified compose bar
             Divider()
 
-            // Address bar
-            HStack(spacing: 12) {
-                // From (source) - display only
-                HStack(spacing: 4) {
-                    Text("From:")
-                        .foregroundStyle(.secondary)
-                        .font(.system(size: 11))
-                    Text(sourceCall.isEmpty ? "NOCALL" : sourceCall)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                }
-
-                Image(systemName: "arrow.right")
-                    .foregroundStyle(.tertiary)
-                    .font(.system(size: 10))
-
-                // Destination callsign
-                HStack(spacing: 4) {
-                    Text("To:")
-                        .foregroundStyle(.secondary)
-                        .font(.system(size: 11))
-                    TextField("Callsign", text: $destinationCall)
-                        .textFieldStyle(.plain)
+            VStack(spacing: 8) {
+                // Message input row - the main focus
+                HStack(spacing: 10) {
+                    // Compact address display
+                    Text(addressSummary)
                         .font(.system(size: 11, design: .monospaced))
-                        .frame(width: 70)
-                        .textCase(.uppercase)
-                }
-
-                // Digi path
-                HStack(spacing: 4) {
-                    Text("Via:")
                         .foregroundStyle(.secondary)
-                        .font(.system(size: 11))
-                    TextField("Path", text: $digiPath)
+                        .lineLimit(1)
+
+                    // Message field - simple, no border, just text
+                    TextField("Message...", text: $composeText)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 11, design: .monospaced))
-                        .frame(width: 100)
-                        .textCase(.uppercase)
-                }
-
-                Spacer()
-
-                // Connection mode toggle
-                ConnectionModeToggle(
-                    mode: $connectionMode,
-                    sessionState: sessionState,
-                    onDisconnect: onDisconnect
-                )
-
-                // Session status (for connected mode)
-                if connectionMode == .connected {
-                    SessionStatusBadge(
-                        state: sessionState,
-                        destinationCall: destinationCall,
-                        onDisconnect: onDisconnect
-                    )
-                }
-
-                // Queue depth indicator
-                if queueDepth > 0 {
-                    HStack(spacing: 4) {
-                        Image(systemName: "tray.full")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.orange)
-                        Text("\(queueDepth)")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                    .help("Frames queued for transmission")
-                }
-
-                // Character count
-                Text("\(characterCount)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .monospacedDigit()
-                    .help("Character count")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(nsColor: .windowBackgroundColor))
-
-            Divider()
-
-            // Message input area
-            HStack(spacing: 10) {
-                TextField("Message...", text: $composeText)
-                    .textFieldStyle(.plain)
-                    .font(.system(.body, design: .monospaced))
-                    .focused($isTextFieldFocused)
-                    .onSubmit {
-                        if canSendMessage && isConnected {
-                            onSend()
+                        .font(.system(.body, design: .monospaced))
+                        .focused($isTextFieldFocused)
+                        .onSubmit {
+                            if canSendMessage && isConnected {
+                                onSend()
+                            }
                         }
-                    }
-                    .disabled(!isConnected || !canTypeMessage)
+                        .disabled(!isConnected || !canTypeMessage)
 
-                // Action buttons
-                HStack(spacing: 6) {
-                    // Clear button
-                    Button {
-                        onClear()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 16))
-                            .foregroundStyle(.tertiary)
+                    // Character count (subtle)
+                    if !composeText.isEmpty {
+                        Text("\(characterCount)")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.quaternary)
+                            .monospacedDigit()
                     }
-                    .buttonStyle(.plain)
-                    .disabled(composeText.isEmpty)
-                    .help("Clear message")
-                    .opacity(composeText.isEmpty ? 0.3 : 1)
 
                     // Send or Connect button
                     if connectionMode == .connected && sessionState != .connected {
-                        // Need to connect first
                         Button {
                             onConnect()
                         } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "link")
-                                Text("Connect")
-                            }
-                            .font(.system(size: 12, weight: .medium))
+                            Image(systemName: "link.circle.fill")
+                                .font(.system(size: 20))
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.regular)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(isConnected && !destinationCall.isEmpty ? Color.accentColor : Color.secondary.opacity(0.3))
                         .disabled(!isConnected || destinationCall.isEmpty)
-                        .help("Establish session with \(destinationCall.isEmpty ? "destination" : destinationCall)")
+                        .help("Connect to \(destinationCall.isEmpty ? "destination" : destinationCall)")
                     } else {
-                        // Can send directly
                         Button {
                             onSend()
                         } label: {
-                            Image(systemName: "paperplane.fill")
-                                .font(.system(size: 14))
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.system(size: 20))
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.regular)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(canSendMessage && isConnected ? Color.accentColor : Color.secondary.opacity(0.3))
                         .disabled(!canSendMessage || !isConnected)
                         .keyboardShortcut(.return, modifiers: .command)
-                        .help("Send message (⌘ Return)")
+                        .help("Send (⌘ Return)")
+                    }
+                }
+
+                // Controls row - secondary, more compact
+                HStack(spacing: 16) {
+                    // Editable destination
+                    HStack(spacing: 4) {
+                        Text("To")
+                            .foregroundStyle(.tertiary)
+                            .font(.system(size: 10))
+                        TextField("CALL", text: $destinationCall)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .frame(width: 60)
+                            .textCase(.uppercase)
+                    }
+
+                    // Editable path
+                    HStack(spacing: 4) {
+                        Text("Via")
+                            .foregroundStyle(.tertiary)
+                            .font(.system(size: 10))
+                        TextField("path", text: $digiPath)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 11, design: .monospaced))
+                            .frame(width: 80)
+                            .textCase(.uppercase)
+                    }
+
+                    Spacer()
+
+                    // Mode toggle
+                    ConnectionModeToggle(
+                        mode: $connectionMode,
+                        sessionState: sessionState,
+                        onDisconnect: onDisconnect
+                    )
+
+                    // Session status (for connected mode)
+                    if connectionMode == .connected {
+                        SessionStatusBadge(
+                            state: sessionState,
+                            destinationCall: destinationCall,
+                            onDisconnect: onDisconnect
+                        )
+                    }
+
+                    // Queue depth indicator
+                    if queueDepth > 0 {
+                        HStack(spacing: 3) {
+                            Image(systemName: "tray.full")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.orange)
+                            Text("\(queueDepth)")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                        }
+                        .help("Frames queued")
                     }
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(Color(nsColor: .windowBackgroundColor))
         }
     }
 
     // MARK: - Computed Properties
+
+    /// Compact address summary for display
+    private var addressSummary: String {
+        let from = sourceCall.isEmpty ? "?" : sourceCall
+        let to = destinationCall.isEmpty ? "?" : destinationCall
+        if digiPath.isEmpty {
+            return "\(from)→\(to)"
+        } else {
+            return "\(from)→\(to) via \(digiPath)"
+        }
+    }
 
     /// Whether the user can type a message
     private var canTypeMessage: Bool {

@@ -144,11 +144,11 @@ final class TerminalViewTests: XCTestCase {
         XCTAssertEqual(NavigationItem.terminal.rawValue, "Terminal")
     }
 
-    func testNavigationItemTerminalIsSecondItem() {
+    func testNavigationItemTerminalIsFirstItem() {
         let allCases = NavigationItem.allCases
 
-        // Terminal should be second in the list (after Packets)
-        XCTAssertEqual(allCases[0], .packets)
-        XCTAssertEqual(allCases[1], .terminal)
+        // Terminal should be first in the list (the default view)
+        XCTAssertEqual(allCases[0], .terminal)
+        XCTAssertEqual(allCases[1], .packets)
     }
 }

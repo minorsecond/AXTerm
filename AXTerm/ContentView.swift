@@ -8,12 +8,11 @@
 import SwiftUI
 
 enum NavigationItem: String, Hashable, CaseIterable {
-    case packets = "Packets"
     case terminal = "Terminal"
-    case console = "Console"
-    case raw = "Raw"
-    case analytics = "Analytics"
+    case packets = "Packets"
     case routes = "Routes"
+    case analytics = "Analytics"
+    case raw = "Raw"
 }
 
 struct ContentView: View {
@@ -22,14 +21,14 @@ struct ContentView: View {
     @ObservedObject private var inspectionRouter: PacketInspectionRouter
     private let inspectionCoordinator = PacketInspectionCoordinator()
 
-    @State private var selectedNav: NavigationItem = .packets
+    @State private var selectedNav: NavigationItem = .terminal
     @State private var searchText: String = ""
     @State private var filters = PacketFilters()
 
     @State private var selection = Set<Packet.ID>()
     @State private var inspectorSelection: PacketInspectorSelection?
     @FocusState private var isSearchFocused: Bool
-    @State private var didLoadHistory = false
+    @State private var didLoadPacketsHistory = false
     @State private var didLoadConsoleHistory = false
     @State private var didLoadRawHistory = false
     @State private var selectionMutationScheduler = SelectionMutationScheduler()
@@ -74,27 +73,26 @@ struct ContentView: View {
             }
         }
         .task {
-            guard !didLoadHistory else { return }
-            didLoadHistory = true
+            guard !didLoadConsoleHistory else { return }
+            didLoadConsoleHistory = true
             SentryManager.shared.addBreadcrumb(category: "app.lifecycle", message: "Main UI ready", level: .info, data: nil)
-            // Keep startup responsive: load the main (Packets) view history first.
-            client.loadPersistedPackets()
+            // Load console history for the default Terminal view
+            client.loadPersistedConsole()
         }
         .task(id: selectedNav) {
             switch selectedNav {
-            case .packets:
-                return
             case .terminal:
                 // Terminal view loads console for session output
                 guard !didLoadConsoleHistory else { return }
                 didLoadConsoleHistory = true
                 await Task.yield()
                 client.loadPersistedConsole()
-            case .console:
-                guard !didLoadConsoleHistory else { return }
-                didLoadConsoleHistory = true
+            case .packets:
+                // Load packets when navigating to Packets view
+                guard !didLoadPacketsHistory else { return }
+                didLoadPacketsHistory = true
                 await Task.yield()
-                client.loadPersistedConsole()
+                client.loadPersistedPackets()
             case .raw:
                 guard !didLoadRawHistory else { return }
                 didLoadRawHistory = true
@@ -173,12 +171,11 @@ struct ContentView: View {
 
     private func iconFor(_ item: NavigationItem) -> String {
         switch item {
+        case .terminal: return "terminal"
         case .packets: return "list.bullet.rectangle"
-        case .terminal: return "keyboard"
-        case .console: return "terminal"
-        case .raw: return "doc.text"
-        case .analytics: return "chart.bar"
         case .routes: return "arrow.triangle.branch"
+        case .analytics: return "chart.bar"
+        case .raw: return "doc.text"
         }
     }
 
@@ -201,26 +198,20 @@ struct ContentView: View {
             }
 
             switch selectedNav {
-            case .packets:
-                packetsView
             case .terminal:
                 TerminalView(client: client, settings: settings)
-            case .console:
-                ConsoleView(
-                    lines: client.consoleLines,
-                    showDaySeparators: settings.showConsoleDaySeparators,
-                    clearedAt: $settings.consoleClearedAt
-                )
+            case .packets:
+                packetsView
+            case .routes:
+                NetRomRoutesView(integration: client.netRomIntegration, packetEngine: client, settings: settings)
+            case .analytics:
+                AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel)
             case .raw:
                 RawView(
                     chunks: client.rawChunks,
                     showDaySeparators: settings.showRawDaySeparators,
                     clearedAt: $settings.rawClearedAt
                 )
-            case .analytics:
-                AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel)
-            case .routes:
-                NetRomRoutesView(integration: client.netRomIntegration, packetEngine: client, settings: settings)
             }
         }
     }
@@ -351,44 +342,52 @@ struct ContentView: View {
     }
 
     private var statusPill: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(statusTitle)
-                .font(.caption)
+        HStack(spacing: 6) {
+            // Status indicator dot
+            Circle()
+                .fill(statusColor)
+                .frame(width: 8, height: 8)
+
+            // Status text - simple and clean
+            Text(statusText)
+                .font(.system(size: 11))
                 .foregroundStyle(.secondary)
 
-            Text(statusDetail)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            // Stats when connected
+            if client.status == .connected {
+                Text("•")
+                    .foregroundStyle(.quaternary)
+                Text(statusDetail)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .animation(.easeInOut(duration: 0.2), value: client.status)
     }
 
-    private var statusTitle: String {
+    private var statusText: String {
         switch client.status {
         case .connected:
-            return "\(statusEmoji) Connected @ \(connectionHostPort)"
+            return connectionHostPort
         case .connecting:
-            return "\(statusEmoji) Connecting..."
+            return "Connecting..."
         case .disconnected:
-            return "\(statusEmoji) Disconnected"
+            return "Disconnected"
         case .failed:
-            return "\(statusEmoji) Connection Failed"
+            return "Connection Failed"
         }
     }
 
     private var statusDetail: String {
-        "\(formatBytes(client.bytesReceived)) • \(client.packets.count) packets"
+        "\(formatBytes(client.bytesReceived)) • \(client.packets.count) pkts"
     }
 
-    private var statusEmoji: String {
+    private var statusColor: Color {
         switch client.status {
-        case .connected: return "🟢"
-        case .connecting: return "🟠"
-        case .disconnected: return "⚪️"
-        case .failed: return "🔴"
+        case .connected: return .green
+        case .connecting: return .orange
+        case .disconnected: return Color(nsColor: .tertiaryLabelColor)
+        case .failed: return .red
         }
     }
 

@@ -23,6 +23,9 @@ struct ConsoleView: View {
     @State private var showID = true
     @State private var showBeacon = true
     @State private var showMail = true
+    @State private var showData = true
+    @State private var showPrompt = true
+    @State private var showOther = true
     @State private var showSystem = true
 
     /// Lines filtered by clear timestamp
@@ -38,12 +41,14 @@ struct ConsoleView: View {
             case .system, .error:
                 return showSystem
             case .packet:
-                guard let messageType = line.messageType else { return true }
+                guard let messageType = line.messageType else { return showOther }
                 switch messageType {
                 case .id: return showID
                 case .beacon: return showBeacon
                 case .mail: return showMail
-                case .message: return true
+                case .data: return showData
+                case .prompt: return showPrompt
+                case .message: return showOther
                 }
             }
         }
@@ -193,10 +198,48 @@ struct ConsoleView: View {
     @ViewBuilder
     private var filterToggleGroup: some View {
         HStack(spacing: 4) {
-            FilterToggle(label: "ID", isOn: $showID, color: .blue)
-            FilterToggle(label: "BCN", isOn: $showBeacon, color: .green)
-            FilterToggle(label: "MAIL", isOn: $showMail, color: .orange)
-            FilterToggle(label: "SYS", isOn: $showSystem, color: .gray)
+            FilterToggle(
+                label: "ID",
+                isOn: $showID,
+                color: .blue,
+                tooltip: "Station identification broadcasts. Stations periodically announce their callsign and capabilities."
+            )
+            FilterToggle(
+                label: "BCN",
+                isOn: $showBeacon,
+                color: .green,
+                tooltip: "Beacon messages. Periodic broadcasts containing station info, location, or status updates."
+            )
+            FilterToggle(
+                label: "MAIL",
+                isOn: $showMail,
+                color: .orange,
+                tooltip: "Mail notifications. Alerts about new messages waiting at a BBS or mailbox."
+            )
+            FilterToggle(
+                label: "DATA",
+                isOn: $showData,
+                color: .purple,
+                tooltip: "Content messages. The actual data being exchanged — personal messages, bulletins, and transferred information."
+            )
+            FilterToggle(
+                label: "CMD",
+                isOn: $showPrompt,
+                color: .cyan,
+                tooltip: "Commands and prompts. Session control messages like connect/disconnect, BBS menus, and user commands."
+            )
+            FilterToggle(
+                label: "OTHER",
+                isOn: $showOther,
+                color: .brown,
+                tooltip: "Unclassified messages. Packets that don't fit other categories."
+            )
+            FilterToggle(
+                label: "SYS",
+                isOn: $showSystem,
+                color: .gray,
+                tooltip: "System messages. Connection status, errors, and internal application notifications."
+            )
         }
     }
 
@@ -375,11 +418,10 @@ struct ConsoleLineView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
             // Category indicator (left border) - matches filter button colors
-            if let borderColor = categoryBorderColor {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(borderColor)
-                    .frame(width: 3)
-            }
+            RoundedRectangle(cornerRadius: 1)
+                .fill(categoryBorderColor)
+                .frame(width: 3)
+                .help(categoryTooltip)
 
             // Timestamp
             Text(line.timestampString)
@@ -428,19 +470,49 @@ struct ConsoleLineView: View {
     }
 
     /// Left border color based on message category (matches filter buttons)
-    private var categoryBorderColor: Color? {
+    private var categoryBorderColor: Color {
         switch line.kind {
         case .error:
             return .red
         case .system:
             return .gray  // Matches SYS filter button
         case .packet:
-            guard let messageType = line.messageType else { return nil }
+            guard let messageType = line.messageType else { return .brown }
             switch messageType {
-            case .id: return .blue       // Matches ID filter button
-            case .beacon: return .green  // Matches BCN filter button
-            case .mail: return .orange   // Matches MAIL filter button
-            case .message: return nil    // Regular messages have no border
+            case .id: return .blue         // Matches ID filter button
+            case .beacon: return .green    // Matches BCN filter button
+            case .mail: return .orange     // Matches MAIL filter button
+            case .data: return .purple     // Actual content/data (the interesting stuff!)
+            case .prompt: return .cyan     // Commands, prompts, session messages
+            case .message: return .brown   // Unclassified/other
+            }
+        }
+    }
+
+    /// Tooltip describing the message category
+    private var categoryTooltip: String {
+        switch line.kind {
+        case .error:
+            return "Error: An error or warning message"
+        case .system:
+            return "System: Connection status or application notification"
+        case .packet:
+            guard let messageType = line.messageType else {
+                return "Other: Unclassified packet"
+            }
+            switch messageType {
+            case .id:
+                return "ID: Station identification broadcast"
+            case .beacon:
+                return "Beacon: Periodic status broadcast"
+            case .mail:
+                return "Mail: Message notification"
+            case .data:
+                return "Data: Content being transferred"
+            case .prompt:
+                return "Command: Session control or prompt"
+            case .message:
+                return "Other: Unclassified packet"
             }
         }
     }
@@ -517,20 +589,21 @@ struct FilterToggle: View {
     let label: String
     @Binding var isOn: Bool
     let color: Color
+    var tooltip: String = ""
 
     var body: some View {
-        Button {
-            isOn.toggle()
-        } label: {
-            Text(label)
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(isOn ? color.opacity(0.2) : Color.gray.opacity(0.1))
-                .foregroundStyle(isOn ? color : .secondary)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-        }
-        .buttonStyle(.plain)
+        Text(label)
+            .font(.system(size: 9, weight: .medium, design: .monospaced))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(isOn ? color.opacity(0.2) : Color.gray.opacity(0.1))
+            .foregroundStyle(isOn ? color : .secondary)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .contentShape(Rectangle())
+            .onTapGesture {
+                isOn.toggle()
+            }
+            .help(tooltip)
     }
 }
 

@@ -20,7 +20,9 @@ struct ConsoleLine: Identifiable, Hashable, Sendable {
         case id       // Station identification
         case beacon   // Beacon message
         case mail     // Mail notification
-        case message  // Regular message/data
+        case data     // Actual content/data being transferred (the interesting stuff)
+        case prompt   // BBS/node prompts and session protocol messages
+        case message  // Fallback for unclassified messages
     }
 
     let id: UUID
@@ -61,8 +63,9 @@ struct ConsoleLine: Identifiable, Hashable, Sendable {
         // Auto-detect message type for packets if not explicitly provided
         if let messageType = messageType {
             self.messageType = messageType
-        } else if kind == .packet, let to = to {
-            self.messageType = Self.detectMessageType(text: text, to: to)
+        } else if kind == .packet {
+            // Detect message type even if 'to' is nil (use empty string as fallback)
+            self.messageType = Self.detectMessageType(text: text, to: to ?? "")
         } else {
             self.messageType = nil
         }
@@ -152,7 +155,50 @@ struct ConsoleLine: Identifiable, Hashable, Sendable {
             return .mail
         }
 
+        // Detect BBS/node prompts and session messages (not the interesting data)
+        if isPromptOrSessionMessage(normalizedText) {
+            return .prompt
+        }
+
+        // If it has substantial content and isn't a prompt, it's likely actual data
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).count > 10 {
+            return .data
+        }
+
         return .message
+    }
+
+    /// Check if the text is a BBS/node prompt or session protocol message
+    private static func isPromptOrSessionMessage(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Lines ending with command prompts (the ">" at the end is the key indicator)
+        if trimmed.hasSuffix(">") {
+            return true
+        }
+
+        // Node session messages (typically start with ###)
+        if trimmed.hasPrefix("###") {
+            return true
+        }
+
+        // Very short messages that look like single commands (L, B, K, etc.)
+        if trimmed.count <= 3 && trimmed.allSatisfy({ $0.isLetter || $0.isNumber }) {
+            return true
+        }
+
+        // Lines that are primarily prompt text (starts with these patterns)
+        let promptStarts = [
+            "ENTER COMMAND",
+            "ENTER CMD",
+        ]
+        for pattern in promptStarts {
+            if trimmed.hasPrefix(pattern) {
+                return true
+            }
+        }
+
+        return false
     }
 
     /// Display string for the via path
