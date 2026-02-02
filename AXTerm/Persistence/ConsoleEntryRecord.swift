@@ -38,17 +38,23 @@ struct ConsoleEntryRecord: Codable, FetchableRecord, PersistableRecord, Hashable
     var byteCount: Int?
 
     func toConsoleLine() -> ConsoleLine {
-        let metadata = metadataJSON.flatMap(DeterministicJSON.decodeDictionary)
-        let from = metadata?["from"]
-        let to = metadata?["to"]
+        let metadata = metadataJSON.flatMap { DeterministicJSON.decode(ConsoleMetadata.self, from: $0) }
         return ConsoleLine(
             id: id,
             kind: ConsoleLine.Kind(from: level),
             timestamp: createdAt,
-            from: from,
-            to: to,
-            text: message
+            from: metadata?.from,
+            to: metadata?.to,
+            text: message,
+            via: metadata?.via ?? []
         )
+    }
+
+    /// Metadata structure for JSON serialization
+    private struct ConsoleMetadata: Codable {
+        let from: String?
+        let to: String?
+        let via: [String]?
     }
 }
 

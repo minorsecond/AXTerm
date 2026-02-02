@@ -139,6 +139,13 @@ final class PacketEngine: ObservableObject {
     private var parser = KISSFrameParser()
     private var stationTracker = StationTracker()
 
+    // MARK: - Console Line Duplicate Detection
+
+    /// Tracks recent console line signatures to detect duplicates received via different paths
+    private var recentConsoleSignatures: [String: (timestamp: Date, viaPath: [String])] = [:]
+    /// Time window for considering console lines as duplicates (5 seconds)
+    private let consoleDuplicateWindow: TimeInterval = 5.0
+
     // MARK: - Initialization
 
     init(
@@ -516,6 +523,44 @@ final class PacketEngine: ObservableObject {
         appendConsoleLine(ConsoleLine.error(text), category: category)
     }
 
+    // MARK: - Console Line Duplicate Detection
+
+    /// Check if a console line with this signature was recently seen (within duplicate window)
+    private func isDuplicateConsoleLine(signature: String, timestamp: Date, viaPath: [String]) -> Bool {
+        // First, prune old entries
+        pruneOldConsoleSignatures(before: timestamp)
+
+        // Check if we've seen this signature recently
+        if let existing = recentConsoleSignatures[signature] {
+            // Same content seen within the time window
+            // Only consider it a duplicate if it came via a different path
+            let sameViaPath = existing.viaPath == viaPath
+            if !sameViaPath {
+                return true  // Different path, same content = duplicate
+            }
+        }
+        return false
+    }
+
+    /// Record a console line signature for future duplicate detection
+    private func recordConsoleLineSignature(signature: String, timestamp: Date, viaPath: [String]) {
+        recentConsoleSignatures[signature] = (timestamp: timestamp, viaPath: viaPath)
+    }
+
+    /// Remove signatures older than the duplicate window
+    private func pruneOldConsoleSignatures(before timestamp: Date) {
+        let cutoff = timestamp.addingTimeInterval(-consoleDuplicateWindow)
+        recentConsoleSignatures = recentConsoleSignatures.filter { _, value in
+            value.timestamp > cutoff
+        }
+    }
+
+    /// Compute content signature for duplicate detection
+    private func computeContentSignature(from: String, to: String, text: String) -> String {
+        let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return "\(from.uppercased())|\(to.uppercased())|\(normalizedText)"
+    }
+
     // MARK: - Filtering
 
     func filteredPackets(search: String, filters: PacketFilters, stationCall: String?) -> [Packet] {
@@ -596,12 +641,29 @@ final class PacketEngine: ObservableObject {
         observePacketForNetRom(packet)
 
         if let text = packet.infoText {
+            // Extract via path as array of callsign strings
+            let viaPath = packet.via.map { addr in
+                addr.repeated ? "\(addr.display)*" : addr.display
+            }
+
+            // Check for duplicate (same content via different path)
+            var isDuplicate = false
+            let signature = computeContentSignature(from: packet.fromDisplay, to: packet.toDisplay, text: text)
+            if isDuplicateConsoleLine(signature: signature, timestamp: packet.timestamp, viaPath: viaPath) {
+                isDuplicate = true
+            }
+            // Track this signature for future duplicate detection
+            recordConsoleLineSignature(signature: signature, timestamp: packet.timestamp, viaPath: viaPath)
+
             let line = ConsoleLine.packet(
                 from: packet.fromDisplay,
                 to: packet.toDisplay,
                 text: text,
-                timestamp: packet.timestamp
+                timestamp: packet.timestamp,
+                via: viaPath,
+                isDuplicate: isDuplicate
             )
+
             appendConsoleLine(line, category: .packet, packetID: packet.id, byteCount: packet.info.count)
         }
 
@@ -775,7 +837,7 @@ final class PacketEngine: ObservableObject {
         byteCount: Int? = nil
     ) {
         guard settings.persistHistory, let persistenceWorker else { return }
-        let metadata = ConsoleEntryMetadata(from: line.from, to: line.to)
+        let metadata = ConsoleEntryMetadata(from: line.from, to: line.to, via: line.via.isEmpty ? nil : line.via)
         let metadataJSON = metadata.hasValues ? DeterministicJSON.encode(metadata) : nil
         let entry = ConsoleEntryRecord(
             id: line.id,
@@ -1383,9 +1445,10 @@ struct DebugRebuildResult {
 private struct ConsoleEntryMetadata: Codable {
     let from: String?
     let to: String?
+    let via: [String]?
 
     var hasValues: Bool {
-        from != nil || to != nil
+        from != nil || to != nil || (via != nil && !via!.isEmpty)
     }
 }
 

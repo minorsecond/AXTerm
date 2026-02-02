@@ -15,12 +15,28 @@ struct ConsoleLine: Identifiable, Hashable, Sendable {
         case packet
     }
 
+    /// Message type for packet-based console lines
+    enum MessageType: String, Hashable, Sendable {
+        case id       // Station identification
+        case beacon   // Beacon message
+        case mail     // Mail notification
+        case message  // Regular message/data
+    }
+
     let id: UUID
     let kind: Kind
     let timestamp: Date
     let from: String?
     let to: String?
     let text: String
+    /// Digipeater path (if any)
+    let via: [String]
+    /// Message type for packets (nil for system/error lines)
+    let messageType: MessageType?
+    /// Signature for duplicate detection (from+to+normalized_text)
+    let contentSignature: String?
+    /// Whether this is a duplicate of a recently seen packet (received via different path)
+    let isDuplicate: Bool
 
     init(
         id: UUID = UUID(),
@@ -28,7 +44,10 @@ struct ConsoleLine: Identifiable, Hashable, Sendable {
         timestamp: Date = Date(),
         from: String? = nil,
         to: String? = nil,
-        text: String
+        text: String,
+        via: [String] = [],
+        messageType: MessageType? = nil,
+        isDuplicate: Bool = false
     ) {
         self.id = id
         self.kind = kind
@@ -36,6 +55,25 @@ struct ConsoleLine: Identifiable, Hashable, Sendable {
         self.from = from
         self.to = to
         self.text = text
+        self.via = via
+        self.isDuplicate = isDuplicate
+
+        // Auto-detect message type for packets if not explicitly provided
+        if let messageType = messageType {
+            self.messageType = messageType
+        } else if kind == .packet, let to = to {
+            self.messageType = Self.detectMessageType(text: text, to: to)
+        } else {
+            self.messageType = nil
+        }
+
+        // Compute content signature for duplicate detection
+        if kind == .packet, let from = from, let to = to {
+            let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            self.contentSignature = "\(from.uppercased())|\(to.uppercased())|\(normalizedText)"
+        } else {
+            self.contentSignature = nil
+        }
     }
 
     // MARK: - Formatting Helpers
@@ -73,7 +111,53 @@ struct ConsoleLine: Identifiable, Hashable, Sendable {
         ConsoleLine(kind: .error, text: text)
     }
 
-    static func packet(from: String, to: String, text: String, timestamp: Date = Date()) -> ConsoleLine {
-        ConsoleLine(kind: .packet, timestamp: timestamp, from: from, to: to, text: text)
+    static func packet(
+        from: String,
+        to: String,
+        text: String,
+        timestamp: Date = Date(),
+        via: [String] = [],
+        isDuplicate: Bool = false
+    ) -> ConsoleLine {
+        let messageType = detectMessageType(text: text, to: to)
+        return ConsoleLine(
+            kind: .packet,
+            timestamp: timestamp,
+            from: from,
+            to: to,
+            text: text,
+            via: via,
+            messageType: messageType,
+            isDuplicate: isDuplicate
+        )
+    }
+
+    /// Detect message type from packet text content and destination
+    private static func detectMessageType(text: String, to: String) -> MessageType {
+        let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let normalizedTo = to.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+
+        // ID messages: destination is "ID", or text starts with "ID", "ID ...", "ID:..."
+        if normalizedTo == "ID" || normalizedText == "ID" || normalizedText.hasPrefix("ID ") || normalizedText.hasPrefix("ID:") {
+            return .id
+        }
+
+        // Beacon messages: destination is "BEACON" or text starts with "BEACON"
+        if normalizedTo == "BEACON" || normalizedText.hasPrefix("BEACON") {
+            return .beacon
+        }
+
+        // Mail messages: "Mail for:", "MAIL:", etc.
+        if normalizedText.hasPrefix("MAIL FOR:") || normalizedText.hasPrefix("MAIL:") || normalizedText.hasPrefix("MAIL ") {
+            return .mail
+        }
+
+        return .message
+    }
+
+    /// Display string for the via path
+    var viaDisplay: String {
+        guard !via.isEmpty else { return "" }
+        return via.joined(separator: ",")
     }
 }

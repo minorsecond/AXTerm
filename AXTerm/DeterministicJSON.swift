@@ -28,4 +28,9 @@ enum DeterministicJSON {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return nil }
         return object
     }
+
+    nonisolated static func decode<T: Decodable>(_ type: T.Type, from value: String) -> T? {
+        guard let data = value.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
 }

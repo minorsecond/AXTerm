@@ -104,8 +104,10 @@ final class AppSettingsStore: ObservableObject {
     static let minLinkStatStaleTTLHours = 1
     static let maxLinkStatStaleTTLHours = 168     // 1 week max
 
-    // Terminal clear timestamp key
+    // Clear timestamp keys for views
     static let terminalClearedAtKey = "terminalClearedAt"
+    static let consoleClearedAtKey = "consoleClearedAt"
+    static let rawClearedAtKey = "rawClearedAt"
 
     @Published var host: String {
         didSet {
@@ -392,6 +394,16 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistTerminalClearedAt() }
     }
 
+    /// Console view clear timestamp - messages before this are hidden
+    @Published var consoleClearedAt: Date? {
+        didSet { persistConsoleClearedAt() }
+    }
+
+    /// Raw view clear timestamp - chunks before this are hidden
+    @Published var rawClearedAt: Date? {
+        didSet { persistRawClearedAt() }
+    }
+
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -437,12 +449,26 @@ final class AppSettingsStore: ObservableObject {
         let storedNeighborStaleTTLHours = defaults.object(forKey: Self.neighborStaleTTLHoursKey) as? Int ?? Self.defaultNeighborStaleTTLHours
         let storedLinkStatStaleTTLHours = defaults.object(forKey: Self.linkStatStaleTTLHoursKey) as? Int ?? Self.defaultLinkStatStaleTTLHours
 
-        // Terminal clear timestamp (stored as TimeInterval)
+        // Clear timestamps (stored as TimeInterval)
         let storedTerminalClearedAt: Date?
         if let timeInterval = defaults.object(forKey: Self.terminalClearedAtKey) as? TimeInterval {
             storedTerminalClearedAt = Date(timeIntervalSince1970: timeInterval)
         } else {
             storedTerminalClearedAt = nil
+        }
+
+        let storedConsoleClearedAt: Date?
+        if let timeInterval = defaults.object(forKey: Self.consoleClearedAtKey) as? TimeInterval {
+            storedConsoleClearedAt = Date(timeIntervalSince1970: timeInterval)
+        } else {
+            storedConsoleClearedAt = nil
+        }
+
+        let storedRawClearedAt: Date?
+        if let timeInterval = defaults.object(forKey: Self.rawClearedAtKey) as? TimeInterval {
+            storedRawClearedAt = Date(timeIntervalSince1970: timeInterval)
+        } else {
+            storedRawClearedAt = nil
         }
 
         self.host = Self.sanitizeHost(storedHost)
@@ -485,8 +511,10 @@ final class AppSettingsStore: ObservableObject {
         self.neighborStaleTTLHours = max(Self.minNeighborStaleTTLHours, min(Self.maxNeighborStaleTTLHours, storedNeighborStaleTTLHours))
         self.linkStatStaleTTLHours = max(Self.minLinkStatStaleTTLHours, min(Self.maxLinkStatStaleTTLHours, storedLinkStatStaleTTLHours))
 
-        // Terminal clear timestamp
+        // Clear timestamps
         self.terminalClearedAt = storedTerminalClearedAt
+        self.consoleClearedAt = storedConsoleClearedAt
+        self.rawClearedAt = storedRawClearedAt
 
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             Self.testRetainedStores.append(self)
@@ -682,6 +710,22 @@ final class AppSettingsStore: ObservableObject {
             defaults.set(date.timeIntervalSince1970, forKey: Self.terminalClearedAtKey)
         } else {
             defaults.removeObject(forKey: Self.terminalClearedAtKey)
+        }
+    }
+
+    private func persistConsoleClearedAt() {
+        if let date = consoleClearedAt {
+            defaults.set(date.timeIntervalSince1970, forKey: Self.consoleClearedAtKey)
+        } else {
+            defaults.removeObject(forKey: Self.consoleClearedAtKey)
+        }
+    }
+
+    private func persistRawClearedAt() {
+        if let date = rawClearedAt {
+            defaults.set(date.timeIntervalSince1970, forKey: Self.rawClearedAtKey)
+        } else {
+            defaults.removeObject(forKey: Self.rawClearedAtKey)
         }
     }
 

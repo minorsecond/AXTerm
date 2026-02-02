@@ -209,13 +209,13 @@ struct ContentView: View {
                 ConsoleView(
                     lines: client.consoleLines,
                     showDaySeparators: settings.showConsoleDaySeparators,
-                    onClear: { client.clearConsole() }
+                    clearedAt: $settings.consoleClearedAt
                 )
             case .raw:
                 RawView(
                     chunks: client.rawChunks,
                     showDaySeparators: settings.showRawDaySeparators,
-                    onClear: { client.clearRaw() }
+                    clearedAt: $settings.rawClearedAt
                 )
             case .analytics:
                 AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel)
