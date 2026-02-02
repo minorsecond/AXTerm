@@ -117,3 +117,9 @@ fastlane/test_output/
 .swiftlint_cache/
 .swiftformat
 
+# ---------------------------------------
+# Docker
+# ---------------------------------------
+Docker/.env
+*.log
+

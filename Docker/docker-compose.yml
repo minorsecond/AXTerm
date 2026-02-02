@@ -1,0 +1,21 @@
+version: "3.8"
+
+# AXTerm KISS Relay Simulation
+# A simple relay that bridges two KISS TCP ports for testing.
+# Works on any platform including Apple Silicon.
+
+services:
+  kiss-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile.relay
+    container_name: axterm-kiss-relay
+    ports:
+      - "8001:8001"   # Station A
+      - "8002:8002"   # Station B
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8001"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
