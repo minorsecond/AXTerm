@@ -128,6 +128,11 @@ final class PacketEngine: ObservableObject {
     @Published var selectedStationCall: String?
     @Published private(set) var pinnedPacketIDs: Set<Packet.ID> = []
 
+    /// Publisher for incoming packets - subscribe to receive all decoded packets
+    var packetPublisher: AnyPublisher<Packet, Never> {
+        packetInsertSubject.eraseToAnyPublisher()
+    }
+
     // MARK: - Private State
 
     private var connection: NWConnection?
@@ -274,6 +279,7 @@ final class PacketEngine: ObservableObject {
     func send(frame: OutboundFrame, completion: ((Result<Void, Error>) -> Void)? = nil) {
         guard status == .connected, let conn = connection else {
             let error = NSError(domain: "PacketEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not connected"])
+            TxLog.error(.transport, "Send failed: not connected", error: error, ["frameId": String(frame.id.uuidString.prefix(8))])
             addErrorLine("Send failed: not connected", category: .transmission)
             completion?(.failure(error))
             return
@@ -281,9 +287,18 @@ final class PacketEngine: ObservableObject {
 
         // Encode the frame as AX.25
         let ax25Data = frame.encodeAX25()
+        TxLog.ax25Encode(
+            dest: frame.destination.display,
+            src: frame.source.display,
+            type: frame.frameType,
+            size: ax25Data.count
+        )
+        TxLog.hexDump(.ax25, "AX.25 frame", data: ax25Data)
 
         // Wrap in KISS frame (port 0, data frame)
         let kissData = KISS.encodeFrame(payload: ax25Data, port: frame.channel)
+        TxLog.kissSend(frameId: frame.id, size: kissData.count)
+        TxLog.hexDump(.kiss, "KISS frame", data: kissData)
 
         // Log the transmission
         addSystemLine("TX: \(frame.source.display) → \(frame.destination.display): \(frame.displayInfo ?? "")", category: .transmission)
@@ -303,6 +318,7 @@ final class PacketEngine: ObservableObject {
         conn.send(content: kissData, completion: .contentProcessed { [weak self] error in
             Task { @MainActor in
                 if let error = error {
+                    TxLog.kissSendComplete(frameId: frame.id, success: false, error: error)
                     self?.addErrorLine("Send failed: \(error.localizedDescription)", category: .transmission)
                     self?.eventLogger?.log(
                         level: .error,
@@ -312,6 +328,12 @@ final class PacketEngine: ObservableObject {
                     )
                     completion?(.failure(error))
                 } else {
+                    TxLog.kissSendComplete(frameId: frame.id, success: true)
+                    TxLog.outbound(.frame, "Frame transmitted", [
+                        "frameId": String(frame.id.uuidString.prefix(8)),
+                        "dest": frame.destination.display,
+                        "size": kissData.count
+                    ])
                     self?.addSystemLine("Frame sent successfully", category: .transmission)
                     completion?(.success(()))
                 }
@@ -382,11 +404,17 @@ final class PacketEngine: ObservableObject {
     func handleIncomingData(_ data: Data) {
         bytesReceived += data.count
 
+        TxLog.kissReceive(size: data.count)
+
         // Always log raw chunk
         appendRawChunk(RawChunk(data: data))
 
         // Parse KISS frames from the chunk
         let ax25Frames = parser.feed(data)
+
+        if !ax25Frames.isEmpty {
+            TxLog.debug(.kiss, "Parsed KISS frames", ["count": ax25Frames.count])
+        }
 
         for ax25Data in ax25Frames {
             processAX25Frame(ax25Data)
@@ -394,7 +422,10 @@ final class PacketEngine: ObservableObject {
     }
 
     private func processAX25Frame(_ ax25Data: Data) {
+        TxLog.hexDump(.ax25, "Received AX.25 frame", data: ax25Data)
+
         guard let decoded = AX25.decodeFrame(ax25: ax25Data) else {
+            TxLog.ax25DecodeError(reason: "Invalid frame structure", size: ax25Data.count)
             eventLogger?.log(
                 level: .warning,
                 category: .parser,
@@ -404,6 +435,13 @@ final class PacketEngine: ObservableObject {
             SentryManager.shared.captureDecodeFailure(byteCount: ax25Data.count)
             return
         }
+
+        TxLog.ax25Decode(
+            dest: decoded.to?.display ?? "?",
+            src: decoded.from?.display ?? "?",
+            type: decoded.frameType.rawValue,
+            size: ax25Data.count
+        )
 
         let host = connectedHost ?? settings.host
         let port = connectedPort ?? settings.portValue
