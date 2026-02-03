@@ -500,8 +500,7 @@ final class PacketEngine: ObservableObject {
     private func insertPacketSorted(_ packet: Packet) {
         // NOTE: Persisted packets load newest-first; appending new packets at the end
         // caused "All Packets" to appear stale because fresh rows landed off-screen.
-        let insertionIndex = PacketEngine.insertionIndex(for: packet, in: packets)
-        packets.insert(packet, at: insertionIndex)
+        PacketOrdering.insert(packet, into: &packets)
         if packets.count > maxPackets {
             packets.removeLast(packets.count - maxPackets)
         }
@@ -792,7 +791,7 @@ final class PacketEngine: ObservableObject {
     }
 
     private func applyLoadedPackets(_ loaded: [Packet], pinnedIDs: Set<Packet.ID>) {
-        packets = loaded.sorted(by: PacketEngine.shouldPrecede)
+        packets = loaded.sorted(by: PacketOrdering.shouldPrecede)
         pinnedPacketIDs = pinnedIDs
         rebuildStations(from: loaded)
     }
@@ -844,27 +843,6 @@ final class PacketEngine: ObservableObject {
                 SentryManager.shared.capturePersistenceFailure("save/prune packet", errorDescription: error.localizedDescription)
             }
         }
-    }
-
-    private static func shouldPrecede(_ lhs: Packet, _ rhs: Packet) -> Bool {
-        if lhs.timestamp != rhs.timestamp {
-            return lhs.timestamp > rhs.timestamp
-        }
-        return lhs.id.uuidString > rhs.id.uuidString
-    }
-
-    private static func insertionIndex(for packet: Packet, in packets: [Packet]) -> Int {
-        var lowerBound = 0
-        var upperBound = packets.count
-        while lowerBound < upperBound {
-            let mid = (lowerBound + upperBound) / 2
-            if shouldPrecede(packet, packets[mid]) {
-                upperBound = mid
-            } else {
-                lowerBound = mid + 1
-            }
-        }
-        return lowerBound
     }
 
     private func persistConsoleLine(

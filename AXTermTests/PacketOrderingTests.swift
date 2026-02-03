@@ -11,54 +11,44 @@ import XCTest
 @MainActor
 final class PacketOrderingTests: XCTestCase {
     func testIncomingPacketsStaySortedNewestFirst() {
-        let settings = makeSettings(persistHistory: false)
-        let client = PacketEngine(maxPackets: 10, settings: settings)
+        var packets: [Packet] = []
         let base = Date()
         let packetA = Packet(id: UUID(), timestamp: base.addingTimeInterval(-10), from: AX25Address(call: "A"))
         let packetB = Packet(id: UUID(), timestamp: base.addingTimeInterval(-5), from: AX25Address(call: "B"))
         let packetC = Packet(id: UUID(), timestamp: base.addingTimeInterval(-7), from: AX25Address(call: "C"))
 
-        client.handleIncomingPacket(packetA)
-        client.handleIncomingPacket(packetB)
-        client.handleIncomingPacket(packetC)
+        PacketOrdering.insert(packetA, into: &packets)
+        PacketOrdering.insert(packetB, into: &packets)
+        PacketOrdering.insert(packetC, into: &packets)
 
-        XCTAssertEqual(client.packets.map(\.id), [packetB.id, packetC.id, packetA.id])
+        XCTAssertEqual(packets.map(\.id), [packetB.id, packetC.id, packetA.id])
     }
 
     func testIncomingPacketsUseIdTiebreaker() {
-        let settings = makeSettings(persistHistory: false)
-        let client = PacketEngine(maxPackets: 10, settings: settings)
+        var packets: [Packet] = []
         let timestamp = Date()
         let lowerID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
         let higherID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
         let packetA = Packet(id: lowerID, timestamp: timestamp, from: AX25Address(call: "A"))
         let packetB = Packet(id: higherID, timestamp: timestamp, from: AX25Address(call: "B"))
 
-        client.handleIncomingPacket(packetA)
-        client.handleIncomingPacket(packetB)
+        PacketOrdering.insert(packetA, into: &packets)
+        PacketOrdering.insert(packetB, into: &packets)
 
-        XCTAssertEqual(client.packets.map(\.id), [higherID, lowerID])
+        XCTAssertEqual(packets.map(\.id), [higherID, lowerID])
     }
 
     func testSelectionRemainsAfterInsert() {
-        let settings = makeSettings(persistHistory: false)
-        let client = PacketEngine(maxPackets: 10, settings: settings)
+        var packets: [Packet] = []
         let selectedID = UUID()
         let selectedPacket = Packet(id: selectedID, timestamp: Date(), from: AX25Address(call: "A"))
 
-        client.handleIncomingPacket(selectedPacket)
+        PacketOrdering.insert(selectedPacket, into: &packets)
         let selection: Set<Packet.ID> = [selectedID]
 
-        client.handleIncomingPacket(Packet(id: UUID(), timestamp: Date().addingTimeInterval(1), from: AX25Address(call: "B")))
+        PacketOrdering.insert(Packet(id: UUID(), timestamp: Date().addingTimeInterval(1), from: AX25Address(call: "B")), into: &packets)
 
-        let updatedSelection = PacketSelectionResolver.filteredSelection(selection, for: client.packets)
+        let updatedSelection = PacketSelectionResolver.filteredSelection(selection, for: packets)
         XCTAssertEqual(updatedSelection, selection)
-    }
-
-    private func makeSettings(persistHistory: Bool) -> AppSettingsStore {
-        let suiteName = "AXTermTests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName) ?? .standard
-        defaults.set(persistHistory, forKey: AppSettingsStore.persistKey)
-        return AppSettingsStore(defaults: defaults)
     }
 }
