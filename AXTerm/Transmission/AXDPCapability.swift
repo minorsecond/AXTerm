@@ -416,8 +416,13 @@ enum AXDPCompression {
         case deflate = 3
     }
 
-    /// Absolute maximum decompressed length (hard limit per spec)
+    /// Absolute maximum decompressed length for individual message payloads (per spec)
+    /// Note: This is for per-message compression, NOT whole-file transfers
     static let absoluteMaxDecompressedLen: UInt32 = 8192
+
+    /// Maximum decompressed length for whole-file transfers (100 MB)
+    /// File transfers use whole-file compression which can produce much larger outputs
+    static let absoluteMaxFileTransferLen: UInt32 = 104_857_600
 
     /// Compress data using specified algorithm
     static func compress(_ data: Data, algorithm: Algorithm) -> Data? {
@@ -493,13 +498,11 @@ enum AXDPCompression {
             "expectedSize": originalLength
         ])
 
-        // Enforce limits
+        // Enforce the limit passed by the caller
+        // For per-message decompression, pass absoluteMaxDecompressedLen (8KB)
+        // For whole-file transfers, pass absoluteMaxFileTransferLen (100MB)
         guard originalLength <= maxLength else {
             TxLog.compressionError(operation: "decompress", reason: "Original length \(originalLength) exceeds maxLength \(maxLength)")
-            return nil
-        }
-        guard originalLength <= absoluteMaxDecompressedLen else {
-            TxLog.compressionError(operation: "decompress", reason: "Original length \(originalLength) exceeds absolute max \(absoluteMaxDecompressedLen)")
             return nil
         }
 

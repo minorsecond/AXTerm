@@ -50,6 +50,9 @@ final class SessionCoordinator: ObservableObject {
     /// Map from AXDP session ID to BulkTransfer ID for UI updates
     private var axdpToTransferId: [UInt32: UUID] = [:]
 
+    /// Track compression algorithm used for each transfer (for FILE_META and metrics)
+    private var transferCompressionAlgorithms: [UUID: AXDPCompression.Algorithm] = [:]
+
     /// Pending capability discovery requests (callsign -> timestamp)
     /// Used to track which stations we've sent PING to but haven't received PONG from
     private var pendingCapabilityDiscovery: [String: Date] = [:]
@@ -443,15 +446,19 @@ final class SessionCoordinator: ObservableObject {
             return
         }
 
+        // Check if whole-file compression was used
+        let compressionAlgorithm = message.compression
+
         TxLog.inbound(.axdp, "Received FILE_META", [
             "from": from.display,
             "file": fileMeta.filename,
             "size": fileMeta.fileSize,
             "chunks": message.totalChunks,
-            "session": axdpSessionId
+            "session": axdpSessionId,
+            "compression": compressionAlgorithm == .none ? "none" : compressionAlgorithm.displayName
         ])
 
-        // Create inbound transfer state
+        // Create inbound transfer state with compression info
         let expectedChunks = Int(message.totalChunks ?? 1)
         let state = InboundTransferState(
             axdpSessionId: axdpSessionId,
@@ -460,7 +467,8 @@ final class SessionCoordinator: ObservableObject {
             fileSize: Int(fileMeta.fileSize),
             expectedChunks: expectedChunks,
             chunkSize: Int(fileMeta.chunkSize),
-            sha256: fileMeta.sha256
+            sha256: fileMeta.sha256,
+            compressionAlgorithm: compressionAlgorithm  // Store for decompression after reassembly
         )
         inboundTransferStates[axdpSessionId] = state
 
@@ -598,12 +606,24 @@ final class SessionCoordinator: ObservableObject {
 
         var transferSuccess = false
 
-        // Reassemble file
-        if let fileData = state.reassembleFile() {
-            // Verify SHA256 hash
+        // Reassemble and decompress file (if compression was used)
+        if let fileData = state.reassembleAndDecompressFile() {
+            // Update compression metrics for UI display
+            if state.compressionAlgorithm != .none {
+                transfer.setCompressionMetrics(
+                    algorithm: state.compressionAlgorithm,
+                    originalSize: fileData.count,
+                    compressedSize: state.totalBytesReceived
+                )
+            }
+
+            // Verify SHA256 hash of DECOMPRESSED data
             let computedHash = computeSHA256(fileData)
             if computedHash == state.sha256 {
-                TxLog.debug(.axdp, "File hash verified", ["file": state.fileName])
+                TxLog.debug(.axdp, "File hash verified", [
+                    "file": state.fileName,
+                    "compression": state.compressionAlgorithm == .none ? "none" : state.compressionAlgorithm.displayName
+                ])
 
                 // Save file to Downloads folder
                 if let savedPath = saveReceivedFile(fileName: state.fileName, data: fileData) {
@@ -612,11 +632,16 @@ final class SessionCoordinator: ObservableObject {
                     transfer.savedFilePath = savedPath
                     transferSuccess = true
 
-                    TxLog.inbound(.axdp, "File transfer completed and saved", [
+                    var logData: [String: Any] = [
                         "file": state.fileName,
                         "path": savedPath,
                         "size": fileData.count
-                    ])
+                    ]
+                    if state.compressionAlgorithm != .none {
+                        logData["compression"] = state.compressionAlgorithm.displayName
+                        logData["compressedSize"] = state.totalBytesReceived
+                    }
+                    TxLog.inbound(.axdp, "File transfer completed and saved", logData)
                 } else {
                     // File save failed
                     transfer.status = .failed(reason: "Failed to save file to Downloads folder")
@@ -630,13 +655,17 @@ final class SessionCoordinator: ObservableObject {
                 TxLog.error(.axdp, "File hash mismatch - file corrupted", error: nil, [
                     "file": state.fileName,
                     "expected": String(state.sha256.hexEncodedString().prefix(16)),
-                    "computed": String(computedHash.hexEncodedString().prefix(16))
+                    "computed": String(computedHash.hexEncodedString().prefix(16)),
+                    "compression": state.compressionAlgorithm == .none ? "none" : state.compressionAlgorithm.displayName
                 ])
                 transfer.status = .failed(reason: "Hash verification failed - file corrupted during transfer")
             }
         } else {
-            // Failed to reassemble file
-            transfer.status = .failed(reason: "Failed to reassemble file from chunks")
+            // Failed to reassemble/decompress file
+            let reason = state.compressionAlgorithm != .none
+                ? "Failed to decompress file (algorithm: \(state.compressionAlgorithm.displayName))"
+                : "Failed to reassemble file from chunks"
+            transfer.status = .failed(reason: reason)
         }
 
         // Send completion ACK or NACK to sender
@@ -1136,6 +1165,93 @@ final class SessionCoordinator: ObservableObject {
         )
     }
 
+    // MARK: - Whole-File Compression
+
+    /// Apply whole-file compression before chunking.
+    /// This is much more effective than per-chunk compression because larger data compresses better.
+    /// - Parameters:
+    ///   - originalData: The original uncompressed file data
+    ///   - transfer: The transfer to update with compression metrics (inout)
+    ///   - compressionSettings: Per-transfer compression settings
+    /// - Returns: Tuple of (data to send, compression algorithm used)
+    private func applyWholeFileCompression(
+        originalData: Data,
+        transfer: inout BulkTransfer,
+        compressionSettings: TransferCompressionSettings
+    ) -> (Data, AXDPCompression.Algorithm) {
+
+        // Determine if compression should be attempted
+        let shouldCompress: Bool
+        let algorithmToUse: AXDPCompression.Algorithm
+
+        // Check per-transfer override first
+        if let enabledOverride = compressionSettings.enabledOverride {
+            shouldCompress = enabledOverride
+            algorithmToUse = compressionSettings.algorithmOverride ?? globalAdaptiveSettings.compressionAlgorithm
+        } else {
+            // Use global settings
+            shouldCompress = globalAdaptiveSettings.compressionEnabled
+            algorithmToUse = globalAdaptiveSettings.compressionAlgorithm
+        }
+
+        // Skip compression if disabled or algorithm is none
+        guard shouldCompress && algorithmToUse != .none else {
+            TxLog.debug(.compression, "Compression disabled", [
+                "file": transfer.fileName,
+                "size": originalData.count
+            ])
+            transfer.setCompressionMetrics(algorithm: nil, originalSize: originalData.count, compressedSize: originalData.count)
+            return (originalData, .none)
+        }
+
+        // Check compressibility analysis - skip if file is already compressed
+        if let analysis = transfer.compressibilityAnalysis, !analysis.isCompressible {
+            TxLog.debug(.compression, "Skipping compression (not compressible)", [
+                "file": transfer.fileName,
+                "reason": analysis.reason,
+                "category": analysis.fileCategory.rawValue
+            ])
+            transfer.setCompressionMetrics(algorithm: nil, originalSize: originalData.count, compressedSize: originalData.count)
+            return (originalData, .none)
+        }
+
+        // Attempt whole-file compression
+        TxLog.debug(.compression, "Compressing whole file", [
+            "file": transfer.fileName,
+            "algorithm": String(describing: algorithmToUse),
+            "originalSize": originalData.count
+        ])
+
+        guard let compressedData = AXDPCompression.compress(originalData, algorithm: algorithmToUse) else {
+            // Compression didn't help (returned nil means no benefit)
+            TxLog.debug(.compression, "Whole-file compression skipped (no benefit)", [
+                "file": transfer.fileName,
+                "algorithm": String(describing: algorithmToUse),
+                "size": originalData.count
+            ])
+            transfer.setCompressionMetrics(algorithm: algorithmToUse, originalSize: originalData.count, compressedSize: originalData.count)
+            return (originalData, .none)
+        }
+
+        // Compression was beneficial
+        let savingsPercent = Double(originalData.count - compressedData.count) / Double(originalData.count) * 100
+        TxLog.outbound(.compression, "Whole-file compression successful", [
+            "file": transfer.fileName,
+            "algorithm": String(describing: algorithmToUse),
+            "original": originalData.count,
+            "compressed": compressedData.count,
+            "savings": String(format: "%.1f%%", savingsPercent)
+        ])
+
+        transfer.setCompressionMetrics(
+            algorithm: algorithmToUse,
+            originalSize: originalData.count,
+            compressedSize: compressedData.count
+        )
+
+        return (compressedData, algorithmToUse)
+    }
+
     // MARK: - Transfer Management
 
     /// Start a file transfer to a connected session
@@ -1159,7 +1275,7 @@ final class SessionCoordinator: ObservableObject {
             return error
         }
 
-        guard let fileData = try? Data(contentsOf: fileURL, options: .mappedIfSafe) else {
+        guard let originalFileData = try? Data(contentsOf: fileURL, options: .mappedIfSafe) else {
             TxLog.error(.session, "Failed to read file for transfer", error: nil, [
                 "file": fileURL.lastPathComponent
             ])
@@ -1169,7 +1285,7 @@ final class SessionCoordinator: ObservableObject {
         var transfer = BulkTransfer(
             id: UUID(),
             fileName: fileURL.lastPathComponent,
-            fileSize: fileData.count,
+            fileSize: originalFileData.count,
             destination: destination,
             direction: .outbound,
             transferProtocol: transferProtocol,
@@ -1177,7 +1293,7 @@ final class SessionCoordinator: ObservableObject {
         )
 
         // Analyze compressibility
-        transfer.analyzeCompressibility(fileData)
+        transfer.analyzeCompressibility(originalFileData)
 
         // Log compressibility result
         if let analysis = transfer.compressibilityAnalysis {
@@ -1189,14 +1305,27 @@ final class SessionCoordinator: ObservableObject {
             ])
         }
 
+        // WHOLE-FILE COMPRESSION: Compress the entire file before chunking
+        // This is much more effective than per-chunk compression because:
+        // 1. Larger data compresses better (more context for compression dictionaries)
+        // 2. Small chunks (128 bytes) often expand when compressed
+        let (dataToSend, compressionAlgorithmUsed) = applyWholeFileCompression(
+            originalData: originalFileData,
+            transfer: &transfer,
+            compressionSettings: compressionSettings
+        )
+
         // Set status to awaiting acceptance - we'll only send chunks after receiver accepts
         transfer.status = .awaitingAcceptance
         transfer.markStarted()
         transfers.append(transfer)
 
-        // Store file data for chunking
+        // Store the (possibly compressed) data for chunking
         let transferId = transfer.id
-        transferFileData[transferId] = fileData
+        transferFileData[transferId] = dataToSend
+
+        // Store compression algorithm used for this transfer (needed for FILE_META)
+        transferCompressionAlgorithms[transferId] = compressionAlgorithmUsed
 
         // Generate AXDP session ID for this transfer
         let axdpSessionId = UInt32.random(in: 0...UInt32.max)
@@ -1211,22 +1340,29 @@ final class SessionCoordinator: ObservableObject {
         let destSSID = destParts.count > 1 ? Int(destParts[1]) ?? 0 : 0
         let destAddress = AX25Address(call: destCall, ssid: destSSID)
 
-        // Compute SHA256 hash
-        let fileHash = computeSHA256(fileData)
+        // Compute SHA256 hash of ORIGINAL data (receiver will decompress and verify)
+        let fileHash = computeSHA256(originalFileData)
+
+        // Calculate total chunks based on the data we'll actually send (compressed or original)
+        let actualDataSize = dataToSend.count
+        let actualTotalChunks = (actualDataSize + transfer.chunkSize - 1) / transfer.chunkSize
 
         // Send FILE_META message first
+        // FILE_META contains ORIGINAL file size (for receiver's progress display and decompression)
         let fileMeta = AXDPFileMeta(
             filename: transfer.fileName,
-            fileSize: UInt64(transfer.fileSize),
+            fileSize: UInt64(originalFileData.count),  // Original size - receiver needs this for decompression
             sha256: fileHash,
             chunkSize: UInt16(transfer.chunkSize)
         )
 
+        // Build FILE_META message, include compression algorithm if used
         let metaMessage = AXDP.Message(
             type: .fileMeta,
             sessionId: axdpSessionId,
             messageId: 0,
-            totalChunks: UInt32(transfer.totalChunks),
+            totalChunks: UInt32(actualTotalChunks),  // Chunks of (possibly compressed) data
+            compression: compressionAlgorithmUsed,  // Tell receiver which algorithm to use for decompression
             fileMeta: fileMeta
         )
 
@@ -1236,17 +1372,24 @@ final class SessionCoordinator: ObservableObject {
             path: path,
             payload: metaMessage.encode(),
             frameType: "i",
-            displayInfo: "AXDP FILE_META: \(transfer.fileName)"
+            displayInfo: "AXDP FILE_META: \(transfer.fileName)" + (compressionAlgorithmUsed != .none ? " (\(compressionAlgorithmUsed.displayName))" : "")
         )
 
         sendFrame(metaFrame)
 
-        TxLog.outbound(.session, "Sent FILE_META, waiting for acceptance", [
+        // Log with compression details
+        var logData: [String: Any] = [
             "file": transfer.fileName,
-            "size": transfer.fileSize,
-            "chunks": transfer.totalChunks,
+            "originalSize": originalFileData.count,
+            "chunks": actualTotalChunks,
             "axdpSession": axdpSessionId
-        ])
+        ]
+        if compressionAlgorithmUsed != .none {
+            logData["compression"] = compressionAlgorithmUsed.displayName
+            logData["compressedSize"] = actualDataSize
+            logData["savings"] = String(format: "%.1f%%", transfer.compressionMetrics?.savingsPercent ?? 0)
+        }
+        TxLog.outbound(.session, "Sent FILE_META, waiting for acceptance", logData)
 
         // Do NOT send chunks yet - wait for ACK from receiver
         // Chunks will be sent in handleAckMessage when acceptance is received
@@ -1293,36 +1436,27 @@ final class SessionCoordinator: ObservableObject {
             return
         }
 
-        // Get chunk data
+        // Get chunk data from the (possibly pre-compressed) file data
         guard let chunkData = transfers[transferIndex].chunkData(from: fileData, chunk: nextChunk) else { return }
 
-        // Resolve compression algorithm from transfer settings + global settings
-        let compressionAlgo: AXDPCompression.Algorithm = {
-            let currentTransfer = transfers[transferIndex]
-            // Check per-transfer override first
-            if let enabledOverride = currentTransfer.compressionSettings.enabledOverride {
-                if !enabledOverride {
-                    return .none  // Explicitly disabled for this transfer
-                }
-                // Enabled override - use algorithm override or global algorithm
-                return currentTransfer.compressionSettings.algorithmOverride ?? globalAdaptiveSettings.compressionAlgorithm
-            }
-            // No override - use global settings
-            if globalAdaptiveSettings.compressionEnabled {
-                return globalAdaptiveSettings.compressionAlgorithm
-            }
-            return .none
-        }()
+        // Calculate actual total chunks based on stored data size (may differ from transfer.totalChunks
+        // if the transfer was created with original size but we're sending compressed data)
+        let actualTotalChunks = (fileData.count + transfers[transferIndex].chunkSize - 1) / transfers[transferIndex].chunkSize
 
-        // Build FILE_CHUNK message with compression
+        // IMPORTANT: Do NOT apply per-chunk compression here.
+        // If compression is enabled, the ENTIRE file was already compressed in startTransfer().
+        // Sending chunks with compression: .none because:
+        // 1. Data is already compressed at file level (much more effective)
+        // 2. Small chunks don't compress well and often expand
+        // 3. FILE_META already told receiver which algorithm to use for whole-file decompression
         let chunkMessage = AXDP.Message(
             type: .fileChunk,
             sessionId: axdpSessionId,
             messageId: UInt32(nextChunk + 1),  // 1-indexed message IDs
             chunkIndex: UInt32(nextChunk),
-            totalChunks: UInt32(transfers[transferIndex].totalChunks),
+            totalChunks: UInt32(actualTotalChunks),
             payload: chunkData,
-            compression: compressionAlgo
+            compression: .none  // No per-chunk compression - file is pre-compressed
         )
 
         let chunkFrame = OutboundFrame(
@@ -1525,16 +1659,40 @@ struct InboundTransferState {
     let axdpSessionId: UInt32
     let sourceCallsign: String
     let fileName: String
-    let fileSize: Int
+    let fileSize: Int  // Original (decompressed) file size from FILE_META
     let expectedChunks: Int
     let chunkSize: Int
     let sha256: Data
+
+    /// Compression algorithm used for whole-file compression (from FILE_META)
+    /// If not .none, we need to decompress after reassembly
+    let compressionAlgorithm: AXDPCompression.Algorithm
 
     var receivedChunks: Set<Int> = []
     var chunkData: [Int: Data] = [:]
     var totalBytesReceived: Int = 0
     var startTime: Date?
     var endTime: Date?
+
+    init(
+        axdpSessionId: UInt32,
+        sourceCallsign: String,
+        fileName: String,
+        fileSize: Int,
+        expectedChunks: Int,
+        chunkSize: Int,
+        sha256: Data,
+        compressionAlgorithm: AXDPCompression.Algorithm = .none
+    ) {
+        self.axdpSessionId = axdpSessionId
+        self.sourceCallsign = sourceCallsign
+        self.fileName = fileName
+        self.fileSize = fileSize
+        self.expectedChunks = expectedChunks
+        self.chunkSize = chunkSize
+        self.sha256 = sha256
+        self.compressionAlgorithm = compressionAlgorithm
+    }
 
     var isComplete: Bool {
         receivedChunks.count >= expectedChunks
@@ -1562,6 +1720,8 @@ struct InboundTransferState {
         }
     }
 
+    /// Reassemble file from chunks.
+    /// If compression was used, this returns the compressed data - caller must decompress.
     func reassembleFile() -> Data? {
         guard isComplete else { return nil }
 
@@ -1571,6 +1731,52 @@ struct InboundTransferState {
             assembled.append(chunk)
         }
         return assembled
+    }
+
+    /// Reassemble and decompress file if necessary.
+    /// Returns the original uncompressed file data, or nil if reassembly/decompression fails.
+    func reassembleAndDecompressFile() -> Data? {
+        guard let assembled = reassembleFile() else { return nil }
+
+        // If no compression was used, return as-is
+        guard compressionAlgorithm != .none else {
+            return assembled
+        }
+
+        // Decompress the whole file
+        // Use absoluteMaxFileTransferLen for whole-file decompression (not per-message limit)
+        TxLog.debug(.compression, "Decompressing whole file", [
+            "file": fileName,
+            "algorithm": compressionAlgorithm.displayName,
+            "compressedSize": assembled.count,
+            "expectedSize": fileSize
+        ])
+
+        guard let decompressed = AXDPCompression.decompress(
+            assembled,
+            algorithm: compressionAlgorithm,
+            originalLength: UInt32(fileSize),
+            maxLength: AXDPCompression.absoluteMaxFileTransferLen
+        ) else {
+            TxLog.error(.compression, "Failed to decompress file", error: nil, [
+                "file": fileName,
+                "algorithm": compressionAlgorithm.displayName,
+                "compressedSize": assembled.count,
+                "expectedSize": fileSize
+            ])
+            return nil
+        }
+
+        let savingsPercent = Double(assembled.count) / Double(decompressed.count) * 100
+        TxLog.inbound(.compression, "Whole-file decompression successful", [
+            "file": fileName,
+            "algorithm": compressionAlgorithm.displayName,
+            "compressed": assembled.count,
+            "decompressed": decompressed.count,
+            "ratio": String(format: "%.1f%%", savingsPercent)
+        ])
+
+        return decompressed
     }
 
     func calculateMetrics() -> TransferMetrics? {

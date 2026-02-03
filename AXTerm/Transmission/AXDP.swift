@@ -184,9 +184,17 @@ enum AXDP {
                 data.append(TLV(type: TLVType.totalChunks.rawValue, value: encodeUInt32(totalChunks)).encode())
             }
 
-            // Handle payload with optional compression
+            // For FILE_META messages with whole-file compression, encode the compression algorithm
+            // separately from payload compression. This tells the receiver to decompress the entire
+            // file after reassembly, not individual message payloads.
+            if type == .fileMeta && compression != .none {
+                data.append(TLV(type: TLVType.compression.rawValue, value: Data([compression.rawValue])).encode())
+            }
+
+            // Handle payload with optional per-message compression
             if let payload = payload, !payload.isEmpty {
-                if compression != .none,
+                // For non-FILE_META messages, compression means compress THIS payload
+                if type != .fileMeta && compression != .none,
                    let compressed = AXDPCompression.compress(payload, algorithm: compression) {
                     // Compression successful - use compressed TLVs
                     data.append(TLV(type: TLVType.compression.rawValue, value: Data([compression.rawValue])).encode())
