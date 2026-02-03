@@ -82,6 +82,7 @@ final class YAPPProtocol: FileTransferProtocol {
 
     // Sender state
     private var senderState: YAPPSenderState = .idle
+    private var pausedState: TransferProtocolState?
     private var fileName: String = ""
     private var fileData: Data = Data()
     private var currentBlockIndex: Int = 0
@@ -218,18 +219,27 @@ final class YAPPProtocol: FileTransferProtocol {
     }
 
     func pause() {
-        if state == .transferring {
-            ackTimer?.invalidate()
-            state = .paused
-            delegate?.transferProtocol(self, stateChanged: state)
-        }
+        guard state.isActive, state != .paused else { return }
+        pausedState = state
+        ackTimer?.invalidate()
+        state = .paused
+        delegate?.transferProtocol(self, stateChanged: state)
     }
 
     func resume() {
-        if state == .paused {
-            state = .transferring
-            delegate?.transferProtocol(self, stateChanged: state)
+        guard state == .paused else { return }
+        let restored = pausedState ?? .transferring
+        pausedState = nil
+        state = restored
+        delegate?.transferProtocol(self, stateChanged: state)
+
+        switch restored {
+        case .transferring:
             retransmitCurrentBlock()
+        case .waitingForAccept, .waitingForAck:
+            startAckTimer()
+        default:
+            break
         }
     }
 

@@ -62,7 +62,8 @@ final class TransferProtocolRegistryTests: XCTestCase {
 
         let detected = registry.detectProtocol(from: sevenPlusData)
 
-        XCTAssertEqual(detected, .sevenPlus)
+        // 7plus detection is disabled while protocol stabilization is pending.
+        XCTAssertNil(detected)
     }
 
     func testDetectRawBinaryProtocol() {
@@ -71,7 +72,8 @@ final class TransferProtocolRegistryTests: XCTestCase {
 
         let detected = registry.detectProtocol(from: rawData)
 
-        XCTAssertEqual(detected, .rawBinary)
+        // Raw Binary detection is disabled while protocol is not user-facing.
+        XCTAssertNil(detected)
     }
 
     func testDetectUnknownProtocol() {
@@ -126,7 +128,6 @@ final class TransferProtocolRegistryTests: XCTestCase {
 
         XCTAssertTrue(available.contains(.axdp))
         XCTAssertTrue(available.contains(.yapp))
-        XCTAssertTrue(available.contains(.sevenPlus))
         // Note: rawBinary is intentionally excluded from sending options
         XCTAssertFalse(available.contains(.rawBinary))
         XCTAssertEqual(available.first, .axdp)  // AXDP should be first (preferred)
@@ -158,7 +159,6 @@ final class TransferProtocolRegistryTests: XCTestCase {
 
         XCTAssertFalse(available.contains(.axdp))
         XCTAssertTrue(available.contains(.yapp))
-        XCTAssertTrue(available.contains(.sevenPlus))
         // Note: rawBinary is intentionally excluded from sending options
         XCTAssertFalse(available.contains(.rawBinary))
         XCTAssertEqual(available.first, .yapp)  // YAPP should be first fallback

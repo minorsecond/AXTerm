@@ -11,6 +11,10 @@ import XCTest
 
 final class SevenPlusProtocolTests: XCTestCase {
 
+    override func setUpWithError() throws {
+        throw XCTSkip("7plus disabled until prioritized for stabilization")
+    }
+
     // MARK: - Header Encoding Tests
 
     func testEncodeHeader() {

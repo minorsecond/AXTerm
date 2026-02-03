@@ -15,13 +15,28 @@ final class TransferProtocolRegistry: @unchecked Sendable {
     /// Shared instance
     static let shared = TransferProtocolRegistry()
 
+    /// 7plus is temporarily disabled until prioritized for stabilization.
+    /// TODO(7plus): Re-enable when protocol implementation is reviewed and scheduled.
+    private let sevenPlusEnabled = false
+
+    /// Raw Binary is kept for reference but not exposed to users.
+    /// TODO(raw-binary): Re-enable when user-facing UX and reliability story are defined.
+    private let rawBinaryEnabled = false
+
     /// Registered protocol types in detection priority order
-    private let registeredProtocols: [TransferProtocolType] = [
-        .axdp,      // Check AXDP first (modern protocol)
-        .yapp,      // Then YAPP (common legacy)
-        .sevenPlus, // Then 7plus (ASCII encoding)
-        .rawBinary  // Raw binary last (minimal detection)
-    ]
+    private var registeredProtocols: [TransferProtocolType] {
+        var protocols: [TransferProtocolType] = [
+            .axdp,     // Check AXDP first (modern protocol)
+            .yapp      // Then YAPP (common legacy)
+        ]
+        if sevenPlusEnabled {
+            protocols.insert(.sevenPlus, at: 2)
+        }
+        if rawBinaryEnabled {
+            protocols.append(.rawBinary)
+        }
+        return protocols
+    }
 
     private init() {}
 
@@ -61,14 +76,14 @@ final class TransferProtocolRegistry: @unchecked Sendable {
                     return .yapp
                 }
             case .sevenPlus:
-                if SevenPlusProtocol.canHandle(data: data) {
+                if sevenPlusEnabled, SevenPlusProtocol.canHandle(data: data) {
                     return .sevenPlus
                 }
             case .rawBinary:
-                if RawBinaryProtocol.canHandle(data: data) {
+                if rawBinaryEnabled, RawBinaryProtocol.canHandle(data: data) {
                     return .rawBinary
                 }
-            }
+        }
         }
         return nil
     }
@@ -106,7 +121,9 @@ final class TransferProtocolRegistry: @unchecked Sendable {
         // Connected-mode protocols require an established session
         if isConnected {
             available.append(.yapp)
-            available.append(.sevenPlus)
+            if sevenPlusEnabled {
+                available.append(.sevenPlus)
+            }
             // Note: Raw Binary is intentionally excluded from sending options
             // because it has no application-level ACKs - it's effectively pointless
             // for sending. It's kept in the codebase for receive-only support.

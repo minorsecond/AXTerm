@@ -77,19 +77,20 @@ final class SevenPlusProtocol: FileTransferProtocol {
 
     static func canHandle(data: Data) -> Bool {
         guard let str = String(data: data, encoding: .ascii) else { return false }
+        let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 7plus files start with header line
-        if str.hasPrefix("7PLUS ") || str.hasPrefix(" go_7+.") {
+        if trimmed.hasPrefix("7PLUS ") || trimmed.hasPrefix("go_7+.") || trimmed.hasPrefix(" go_7+.") {
             return true
         }
 
         // Or the standard uuencode-style begin line we support
-        if str.hasPrefix("begin ") {
+        if trimmed.hasPrefix("begin ") {
             return true
         }
 
         // Check for our specific header format
-        if str.contains("7PLUS v") && str.contains("size=") {
+        if trimmed.contains("7PLUS v") && trimmed.contains("size=") {
             return true
         }
 
@@ -220,6 +221,7 @@ final class SevenPlusProtocol: FileTransferProtocol {
     func encodeLine(_ data: Data) -> String {
         var result = ""
         var index = 0
+        var checksumSum = 0
 
         while index < data.count {
             // Get up to 3 bytes
@@ -235,19 +237,23 @@ final class SevenPlusProtocol: FileTransferProtocol {
 
             result.append(sevenPlusCharset[Int(c1)])
             result.append(sevenPlusCharset[Int(c2)])
+            checksumSum += Int(c1)
+            checksumSum += Int(c2)
 
             if index + 1 < data.count {
                 result.append(sevenPlusCharset[Int(c3)])
+                checksumSum += Int(c3)
             }
             if index + 2 < data.count {
                 result.append(sevenPlusCharset[Int(c4)])
+                checksumSum += Int(c4)
             }
 
             index += 3
         }
 
-        // Add line checksum (sum of all character values mod 64)
-        let lineSum = result.unicodeScalars.reduce(0) { $0 + Int($1.value) } % 64
+        // Add line checksum (sum of all encoded values mod 64)
+        let lineSum = checksumSum % 64
         result.append(sevenPlusCharset[lineSum])
 
         return result + "\r\n"
@@ -261,7 +267,17 @@ final class SevenPlusProtocol: FileTransferProtocol {
         // Verify line checksum
         let dataChars = Array(chars.dropLast())
         let checksumChar = chars.last!
-        let expectedSum = dataChars.reduce(0) { $0 + Int($1.asciiValue ?? 0) } % 64
+        var dataIndices: [Int] = []
+        dataIndices.reserveCapacity(dataChars.count)
+
+        for char in dataChars {
+            guard let index = sevenPlusCharset.firstIndex(of: char) else {
+                return nil
+            }
+            dataIndices.append(index)
+        }
+
+        let expectedSum = dataIndices.reduce(0, +) % 64
 
         guard let checksumIndex = sevenPlusCharset.firstIndex(of: checksumChar),
               checksumIndex == expectedSum else {
@@ -272,14 +288,11 @@ final class SevenPlusProtocol: FileTransferProtocol {
         var result = Data()
         var index = 0
 
-        while index + 3 < dataChars.count {
-            guard let i1 = sevenPlusCharset.firstIndex(of: dataChars[index]),
-                  let i2 = sevenPlusCharset.firstIndex(of: dataChars[index + 1]),
-                  let i3 = sevenPlusCharset.firstIndex(of: dataChars[index + 2]),
-                  let i4 = sevenPlusCharset.firstIndex(of: dataChars[index + 3]) else {
-                return nil  // Invalid character
-            }
-
+        while index + 3 < dataIndices.count {
+            let i1 = dataIndices[index]
+            let i2 = dataIndices[index + 1]
+            let i3 = dataIndices[index + 2]
+            let i4 = dataIndices[index + 3]
             let byte1 = UInt8((i1 << 2) | (i2 >> 4))
             let byte2 = UInt8(((i2 & 0x0F) << 4) | (i3 >> 2))
             let byte3 = UInt8(((i3 & 0x03) << 6) | i4)
@@ -292,19 +305,15 @@ final class SevenPlusProtocol: FileTransferProtocol {
         }
 
         // Handle remaining characters (partial group)
-        let remaining = dataChars.count - index
+        let remaining = dataIndices.count - index
         if remaining >= 2 {
-            guard let i1 = sevenPlusCharset.firstIndex(of: dataChars[index]),
-                  let i2 = sevenPlusCharset.firstIndex(of: dataChars[index + 1]) else {
-                return nil
-            }
+            let i1 = dataIndices[index]
+            let i2 = dataIndices[index + 1]
             let byte1 = UInt8((i1 << 2) | (i2 >> 4))
             result.append(byte1)
 
             if remaining >= 3 {
-                guard let i3 = sevenPlusCharset.firstIndex(of: dataChars[index + 2]) else {
-                    return nil
-                }
+                let i3 = dataIndices[index + 2]
                 let byte2 = UInt8(((i2 & 0x0F) << 4) | (i3 >> 2))
                 result.append(byte2)
             }
@@ -392,17 +401,17 @@ final class SevenPlusProtocol: FileTransferProtocol {
 
     private func processLine(_ line: String) -> Bool {
         // Check for header
-        if line.hasPrefix(" go_7+.") {
+        if line.hasPrefix("go_7+.") || line.hasPrefix(" go_7+.") {
             return parseHeader(line)
         }
 
         // Check for footer
-        if line.hasPrefix(" stop_7+.") {
+        if line.hasPrefix("stop_7+.") || line.hasPrefix(" stop_7+.") {
             return handleEndOfFile()
         }
 
         // Check for block checksum
-        if line.hasPrefix(" chk") {
+        if line.hasPrefix("chk") || line.hasPrefix(" chk") {
             // Verify block checksum (optional - we trust the data)
             return true
         }

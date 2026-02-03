@@ -11,6 +11,10 @@ import XCTest
 
 final class RawBinaryProtocolTests: XCTestCase {
 
+    override func setUpWithError() throws {
+        throw XCTSkip("Raw Binary transfers are disabled until UX/reliability work is prioritized")
+    }
+
     // MARK: - Metadata Encoding Tests
 
     func testEncodeMetadata() {

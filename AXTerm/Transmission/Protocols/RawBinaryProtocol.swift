@@ -72,10 +72,10 @@ final class RawBinaryProtocol: FileTransferProtocol {
 
     static func canHandle(data: Data) -> Bool {
         // Raw binary is detected by JSON metadata start or EOT marker
-        guard let firstByte = data.first else { return false }
+        guard let firstNonWhitespace = firstNonWhitespaceByte(in: data) else { return false }
 
         // Check for JSON metadata start
-        if firstByte == RawBinaryMarker.metadata.rawValue {
+        if firstNonWhitespace == RawBinaryMarker.metadata.rawValue {
             // Verify it looks like our JSON format
             if let str = String(data: data, encoding: .utf8),
                str.contains("\"filename\"") && str.contains("\"size\"") {
@@ -84,7 +84,7 @@ final class RawBinaryProtocol: FileTransferProtocol {
         }
 
         // Check for EOT
-        if firstByte == RawBinaryMarker.eot.rawValue && data.count == 1 {
+        if firstNonWhitespace == RawBinaryMarker.eot.rawValue && data.count == 1 {
             return true
         }
 
@@ -158,12 +158,12 @@ final class RawBinaryProtocol: FileTransferProtocol {
     // MARK: - Receiver Side
 
     func handleIncomingData(_ data: Data) -> Bool {
-        guard let firstByte = data.first else { return false }
+        guard let firstNonWhitespace = Self.firstNonWhitespaceByte(in: data) else { return false }
 
         switch rawState {
         case .idle, .receivingMetadata:
             // Look for metadata
-            if firstByte == RawBinaryMarker.metadata.rawValue {
+            if firstNonWhitespace == RawBinaryMarker.metadata.rawValue {
                 if parseMetadata(data) {
                     rawState = .receivingData
                     receivedData = Data()
@@ -186,7 +186,7 @@ final class RawBinaryProtocol: FileTransferProtocol {
 
         case .receivingData:
             // Check for EOT
-            if firstByte == RawBinaryMarker.eot.rawValue && data.count == 1 {
+            if firstNonWhitespace == RawBinaryMarker.eot.rawValue && data.count == 1 {
                 return handleEndOfTransmission()
             }
 
@@ -217,9 +217,7 @@ final class RawBinaryProtocol: FileTransferProtocol {
     /// Encode metadata frame as JSON
     func encodeMetadata(fileName: String, fileSize: Int, sha256: Data) -> Data {
         let sha256Hex = sha256.map { String(format: "%02x", $0) }.joined()
-        let json = """
-        {"filename":"\(escapeJSON(fileName))","size":\(fileSize),"sha256":"\(sha256Hex)"}
-        """
+        let json = "{\"filename\":\"\(escapeJSON(fileName))\",\"size\":\(fileSize),\"sha256\":\"\(sha256Hex)\"}"
         return json.data(using: .utf8) ?? Data()
     }
 
@@ -320,6 +318,18 @@ final class RawBinaryProtocol: FileTransferProtocol {
             .replacingOccurrences(of: "\n", with: "\\n")
             .replacingOccurrences(of: "\r", with: "\\r")
             .replacingOccurrences(of: "\t", with: "\\t")
+    }
+
+    private static func firstNonWhitespaceByte(in data: Data) -> UInt8? {
+        for byte in data {
+            switch byte {
+            case 0x09, 0x0A, 0x0D, 0x20:
+                continue
+            default:
+                return byte
+            }
+        }
+        return nil
     }
 
     /// Extract string value from JSON
