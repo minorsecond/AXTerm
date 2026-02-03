@@ -956,9 +956,6 @@ final class SessionCoordinator: ObservableObject {
             transfersAwaitingAcceptance.removeValue(forKey: axdpSessionId)
 
             // Start sending chunks now that transfer is accepted
-            // Reset the start time to now - this gives accurate throughput by measuring
-            // only the actual data transfer, not the acceptance handshake
-            transfers[transferIndex].startedAt = Date()
             transfers[transferIndex].status = .sending
 
             // Get destination and path from transfer
