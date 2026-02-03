@@ -64,6 +64,9 @@ final class SessionCoordinator: ObservableObject {
     /// Used to map ACK/NACK responses to the correct transfer
     private var transfersAwaitingAcceptance: [UInt32: UUID] = [:]
 
+    /// Global adaptive settings (for compression, etc.)
+    var globalAdaptiveSettings: TxAdaptiveSettings = TxAdaptiveSettings()
+
     init() {
         setupCallbacks()
     }
@@ -1293,14 +1296,33 @@ final class SessionCoordinator: ObservableObject {
         // Get chunk data
         guard let chunkData = transfers[transferIndex].chunkData(from: fileData, chunk: nextChunk) else { return }
 
-        // Build FILE_CHUNK message
+        // Resolve compression algorithm from transfer settings + global settings
+        let compressionAlgo: AXDPCompression.Algorithm = {
+            let currentTransfer = transfers[transferIndex]
+            // Check per-transfer override first
+            if let enabledOverride = currentTransfer.compressionSettings.enabledOverride {
+                if !enabledOverride {
+                    return .none  // Explicitly disabled for this transfer
+                }
+                // Enabled override - use algorithm override or global algorithm
+                return currentTransfer.compressionSettings.algorithmOverride ?? globalAdaptiveSettings.compressionAlgorithm
+            }
+            // No override - use global settings
+            if globalAdaptiveSettings.compressionEnabled {
+                return globalAdaptiveSettings.compressionAlgorithm
+            }
+            return .none
+        }()
+
+        // Build FILE_CHUNK message with compression
         let chunkMessage = AXDP.Message(
             type: .fileChunk,
             sessionId: axdpSessionId,
             messageId: UInt32(nextChunk + 1),  // 1-indexed message IDs
             chunkIndex: UInt32(nextChunk),
             totalChunks: UInt32(transfers[transferIndex].totalChunks),
-            payload: chunkData
+            payload: chunkData,
+            compression: compressionAlgo
         )
 
         let chunkFrame = OutboundFrame(
