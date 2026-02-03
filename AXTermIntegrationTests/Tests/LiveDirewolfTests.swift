@@ -39,7 +39,7 @@ final class LiveDirewolfTests: XCTestCase {
 
     // MARK: - Test State
 
-    var transport: KISSTransport?
+    var transport: SimulatorClient?
     var receivedFrames: [Data] = []
     var frameExpectation: XCTestExpectation?
 
@@ -59,10 +59,24 @@ final class LiveDirewolfTests: XCTestCase {
         try await Task.sleep(nanoseconds: 500_000_000)
     }
 
+    /// Check if Direwolf is actually reachable
+    private func skipIfDirewolfUnavailable() async throws {
+        let client = SimulatorClient(host: direwolfHost, port: direwolfPort, stationName: "DirewolfCheck")
+        do {
+            try await client.connect()
+            client.disconnect()
+        } catch {
+            throw XCTSkip("Direwolf not available at \(direwolfHost):\(direwolfPort)")
+        }
+    }
+
     // MARK: - Connection Tests
 
     /// Test basic TCP connection to Direwolf
+    /// NOTE: This test requires a real Direwolf TNC at 192.168.3.218:8001
     func testDirewolfConnection() async throws {
+        try await skipIfDirewolfUnavailable()
+
         let transport = try await connectToDirewolf()
         defer { transport.disconnect() }
 
@@ -73,6 +87,7 @@ final class LiveDirewolfTests: XCTestCase {
     /// Test connection and listen for welcome + any prompts
     /// This helps diagnose what the node sends without us issuing commands
     func testConnectAndListenOnly() async throws {
+        try await skipIfDirewolfUnavailable()
         let transport = try await connectToDirewolf()
         defer { transport.disconnect() }
 
@@ -141,7 +156,7 @@ final class LiveDirewolfTests: XCTestCase {
                     let uType = decoded.uType ?? .UNKNOWN
                     print("LISTEN TEST: U-frame \(uType)")
 
-                case .UNKNOWN:
+                case .unknown:
                     print("LISTEN TEST: Unknown frame")
                 }
             }
@@ -163,6 +178,7 @@ final class LiveDirewolfTests: XCTestCase {
 
     /// Test sending SABM and receiving UA from KB5YZB-7
     func testSABMUAHandshake() async throws {
+        try await skipIfDirewolfUnavailable()
         let transport = try await connectToDirewolf()
         defer { transport.disconnect() }
 
@@ -199,6 +215,7 @@ final class LiveDirewolfTests: XCTestCase {
     /// Test simple P command which should return ports list
     /// SAFETY: "P" is read-only, just lists available ports
     func testConnectedModePCommand() async throws {
+        try await skipIfDirewolfUnavailable()
         let transport = try await connectToDirewolf()
         defer { transport.disconnect() }
 
@@ -354,7 +371,7 @@ final class LiveDirewolfTests: XCTestCase {
             let uType = decoded.uType ?? .UNKNOWN
             return ("U-frame \(uType)", nil)
 
-        case .UNKNOWN:
+        case .unknown:
             return ("unknown frame class", nil)
         }
     }
@@ -362,6 +379,7 @@ final class LiveDirewolfTests: XCTestCase {
     /// Test full connection and command exchange
     /// SAFETY: Only sends "NODES" command which is read-only
     func testConnectedModeNODESCommand() async throws {
+        try await skipIfDirewolfUnavailable()
         let transport = try await connectToDirewolf()
         defer { transport.disconnect() }
 
@@ -509,57 +527,53 @@ final class LiveDirewolfTests: XCTestCase {
 
     // MARK: - KISS Transport Helpers
 
-    private func connectToDirewolf() async throws -> KISSTransport {
-        let endpoint = KISSEndpoint(host: direwolfHost, port: direwolfPort)!
-        let transport = KISSTransport(endpoint: endpoint)
-
-        return try await withCheckedThrowingContinuation { continuation in
-            transport.connect { result in
-                switch result {
-                case .success:
-                    continuation.resume(returning: transport)
-                case .failure(let error):
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
+    /// Live Direwolf tests use SimulatorClient for now since KISSTransport
+    /// API is primarily designed for outbound frame queueing, not bidirectional communication.
+    /// For true live Direwolf testing, use SimulatorClient configured with the Direwolf host.
+    private func connectToDirewolf() async throws -> SimulatorClient {
+        let client = SimulatorClient(host: direwolfHost, port: direwolfPort, stationName: "Direwolf")
+        try await client.connect()
+        return client
     }
 
-    private func sendFrame(transport: KISSTransport, frame: Data) async throws {
-        return try await withCheckedThrowingContinuation { continuation in
-            transport.send(frame: frame, channel: 0) { result in
-                switch result {
-                case .success:
-                    continuation.resume()
-                case .failure(let error):
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
+    private func sendFrame(transport: SimulatorClient, frame: Data) async throws {
+        try await transport.sendAX25Frame(frame)
     }
 
-    private func waitForFrame(transport: KISSTransport, timeout: TimeInterval) async throws -> Data {
+    private func waitForFrame(transport: SimulatorClient, timeout: TimeInterval) async throws -> Data {
+        return try await transport.waitForFrame(timeout: timeout)
+    }
+
+    // Keep KISSTransport helper for backward compatibility
+    private func connectToKISSTransport() async throws -> KISSTransport {
+        let transport = KISSTransport(host: direwolfHost, port: direwolfPort)
+
         return try await withCheckedThrowingContinuation { continuation in
-            var received = false
-            var handler: ((Data) -> Void)?
+            class Delegate: KISSTransportDelegate {
+                var continuation: CheckedContinuation<KISSTransport, Error>?
+                var transport: KISSTransport?
 
-            handler = { data in
-                if !received {
-                    received = true
-                    continuation.resume(returning: data)
+                func transportDidSend(frameId: UUID, result: Result<Void, Error>) {}
+
+                func transportDidChangeState(_ state: KISSTransportState) {
+                    guard let cont = continuation, let trans = transport else { return }
+                    continuation = nil
+                    switch state {
+                    case .connected:
+                        cont.resume(returning: trans)
+                    case .failed:
+                        cont.resume(throwing: TestError.connectionFailed)
+                    default:
+                        break
+                    }
                 }
             }
 
-            transport.onFrameReceived = handler
-
-            // Timeout
-            Task {
-                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                if !received {
-                    received = true
-                    continuation.resume(throwing: TestError.timeout)
-                }
-            }
+            let delegate = Delegate()
+            delegate.continuation = continuation
+            delegate.transport = transport
+            transport.delegate = delegate
+            transport.connect()
         }
     }
 

@@ -138,7 +138,8 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
         var data = Data()
 
         // Destination address (7 bytes)
-        data.append(destination.encodeForAX25(isLast: path.isEmpty && true))
+        // Destination is never last - source always follows
+        data.append(destination.encodeForAX25(isLast: false))
 
         // Source address (7 bytes)
         // Source has command/response bit set, last if no digipeaters

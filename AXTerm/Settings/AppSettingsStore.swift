@@ -32,6 +32,10 @@ final class AppSettingsStore: ObservableObject {
     static let sentrySendPacketContentsKey = "sentrySendPacketContents"
     static let sentrySendConnectionDetailsKey = "sentrySendConnectionDetails"
 
+    // File transfer settings keys
+    static let allowedFileTransferCallsignsKey = "allowedFileTransferCallsigns"
+    static let deniedFileTransferCallsignsKey = "deniedFileTransferCallsigns"
+
     // Analytics settings keys
     static let analyticsTimeframeKey = "analyticsTimeframe"
     static let analyticsBucketKey = "analyticsBucket"
@@ -262,6 +266,62 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistSentrySendConnectionDetails() }
     }
 
+    // MARK: - File Transfer Settings
+
+    /// Callsigns that are always allowed to send files without prompting
+    @Published var allowedFileTransferCallsigns: [String] {
+        didSet {
+            persistAllowedFileTransferCallsigns()
+        }
+    }
+
+    /// Check if a callsign is in the allowed list
+    func isCallsignAllowedForFileTransfer(_ callsign: String) -> Bool {
+        let normalized = CallsignValidator.normalize(callsign)
+        return allowedFileTransferCallsigns.contains { CallsignValidator.normalize($0) == normalized }
+    }
+
+    /// Add a callsign to the allowed list
+    func allowCallsignForFileTransfer(_ callsign: String) {
+        let normalized = CallsignValidator.normalize(callsign)
+        guard !normalized.isEmpty, !isCallsignAllowedForFileTransfer(normalized) else { return }
+        allowedFileTransferCallsigns.append(normalized)
+    }
+
+    /// Remove a callsign from the allowed list
+    func removeCallsignFromFileTransferAllowlist(_ callsign: String) {
+        let normalized = CallsignValidator.normalize(callsign)
+        allowedFileTransferCallsigns.removeAll { CallsignValidator.normalize($0) == normalized }
+    }
+
+    /// Callsigns that are always denied from sending files
+    @Published var deniedFileTransferCallsigns: [String] {
+        didSet {
+            persistDeniedFileTransferCallsigns()
+        }
+    }
+
+    /// Check if a callsign is in the denied list
+    func isCallsignDeniedForFileTransfer(_ callsign: String) -> Bool {
+        let normalized = CallsignValidator.normalize(callsign)
+        return deniedFileTransferCallsigns.contains { CallsignValidator.normalize($0) == normalized }
+    }
+
+    /// Add a callsign to the denied list
+    func denyCallsignForFileTransfer(_ callsign: String) {
+        let normalized = CallsignValidator.normalize(callsign)
+        guard !normalized.isEmpty, !isCallsignDeniedForFileTransfer(normalized) else { return }
+        deniedFileTransferCallsigns.append(normalized)
+        // Also remove from allow list if present
+        removeCallsignFromFileTransferAllowlist(callsign)
+    }
+
+    /// Remove a callsign from the denied list
+    func removeCallsignFromFileTransferDenylist(_ callsign: String) {
+        let normalized = CallsignValidator.normalize(callsign)
+        deniedFileTransferCallsigns.removeAll { CallsignValidator.normalize($0) == normalized }
+    }
+
     // MARK: - Analytics Settings
 
     @Published var analyticsTimeframe: String {
@@ -430,6 +490,8 @@ final class AppSettingsStore: ObservableObject {
         let storedSentryEnabled = defaults.object(forKey: Self.sentryEnabledKey) as? Bool ?? Self.defaultSentryEnabled
         let storedSentrySendPacketContents = defaults.object(forKey: Self.sentrySendPacketContentsKey) as? Bool ?? Self.defaultSentrySendPacketContents
         let storedSentrySendConnectionDetails = defaults.object(forKey: Self.sentrySendConnectionDetailsKey) as? Bool ?? Self.defaultSentrySendConnectionDetails
+        let storedAllowedFileTransferCallsigns = defaults.stringArray(forKey: Self.allowedFileTransferCallsignsKey) ?? []
+        let storedDeniedFileTransferCallsigns = defaults.stringArray(forKey: Self.deniedFileTransferCallsignsKey) ?? []
 
         // Analytics settings
         let storedAnalyticsTimeframe = defaults.string(forKey: Self.analyticsTimeframeKey) ?? Self.defaultAnalyticsTimeframe
@@ -492,6 +554,8 @@ final class AppSettingsStore: ObservableObject {
         self.sentryEnabled = storedSentryEnabled
         self.sentrySendPacketContents = storedSentrySendPacketContents
         self.sentrySendConnectionDetails = storedSentrySendConnectionDetails
+        self.allowedFileTransferCallsigns = storedAllowedFileTransferCallsigns
+        self.deniedFileTransferCallsigns = storedDeniedFileTransferCallsigns
 
         // Analytics settings
         self.analyticsTimeframe = storedAnalyticsTimeframe
@@ -645,6 +709,14 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(sentrySendConnectionDetails, forKey: Self.sentrySendConnectionDetailsKey)
     }
 
+    private func persistAllowedFileTransferCallsigns() {
+        defaults.set(allowedFileTransferCallsigns, forKey: Self.allowedFileTransferCallsignsKey)
+    }
+
+    private func persistDeniedFileTransferCallsigns() {
+        defaults.set(deniedFileTransferCallsigns, forKey: Self.deniedFileTransferCallsignsKey)
+    }
+
     // MARK: - Analytics Settings Persistence
 
     private func persistAnalyticsTimeframe() {
@@ -752,6 +824,8 @@ final class AppSettingsStore: ObservableObject {
             Self.sentryEnabledKey: Self.defaultSentryEnabled,
             Self.sentrySendPacketContentsKey: Self.defaultSentrySendPacketContents,
             Self.sentrySendConnectionDetailsKey: Self.defaultSentrySendConnectionDetails,
+            Self.allowedFileTransferCallsignsKey: [String](),
+            Self.deniedFileTransferCallsignsKey: [String](),
             Self.analyticsTimeframeKey: Self.defaultAnalyticsTimeframe,
             Self.analyticsBucketKey: Self.defaultAnalyticsBucket,
             Self.analyticsIncludeViaKey: Self.defaultAnalyticsIncludeVia,

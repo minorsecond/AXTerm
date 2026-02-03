@@ -438,4 +438,8 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(sm.sequenceState.vr, 0)
         XCTAssertEqual(sm.sequenceState.va, 0)
     }
+
+    // Note: Pending data queue property is tested implicitly through
+    // integration tests in the session manager tests, where sessions
+    // are created and managed properly with MainActor context.
 }

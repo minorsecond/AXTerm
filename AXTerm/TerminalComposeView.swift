@@ -69,6 +69,8 @@ struct SessionStatusBadge: View {
     let state: AX25SessionState?
     let destinationCall: String
     let onDisconnect: () -> Void
+    /// Optional AXDP capability for the remote station
+    var peerCapability: AXDPCapability?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -81,6 +83,11 @@ struct SessionStatusBadge: View {
             Text(stateText)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(stateColor == .green ? .primary : .secondary)
+
+            // AXDP capability badge when connected and peer supports AXDP
+            if state == .connected, peerCapability != nil {
+                AXDPCapabilityBadge(capability: peerCapability, compact: true)
+            }
 
             // Disconnect button when connected
             if state == .connected {
@@ -161,6 +168,8 @@ struct TerminalComposeView: View {
     let isConnected: Bool
     /// Session state for connected mode (nil if not in connected mode)
     let sessionState: AX25SessionState?
+    /// AXDP capability for the destination station (if known)
+    var destinationCapability: AXDPCapability?
 
     let onSend: () -> Void
     let onClear: () -> Void
@@ -270,7 +279,8 @@ struct TerminalComposeView: View {
                         SessionStatusBadge(
                             state: sessionState,
                             destinationCall: destinationCall,
-                            onDisconnect: onDisconnect
+                            onDisconnect: onDisconnect,
+                            peerCapability: destinationCapability
                         )
                     }
 

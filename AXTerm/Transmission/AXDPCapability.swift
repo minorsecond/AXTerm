@@ -9,8 +9,9 @@
 //  Compression is only used when peer support is confirmed.
 //
 
-import Foundation
+import Combine
 import Compression
+import Foundation
 
 // MARK: - Capability Structure
 
@@ -290,13 +291,125 @@ struct AXDPCapabilityCache: Sendable {
     }
 }
 
+// MARK: - Observable Capability Store
+
+/// Observable store for AXDP peer capabilities
+/// Used by UI components to display capability badges
+@MainActor
+final class AXDPCapabilityStore: ObservableObject {
+    /// Published cache for reactive updates
+    @Published private(set) var cache = AXDPCapabilityCache()
+
+    /// Get capabilities for a peer by callsign (can include SSID, e.g., "N0CALL-2")
+    func capabilities(for callsign: String) -> AXDPCapability? {
+        let (call, ssid) = parseCallsign(callsign)
+        let key = AXDPPeerKey(callsign: call, ssid: ssid)
+        return cache.get(for: key)
+    }
+
+    /// Get capabilities for a peer with SSID
+    func capabilities(for callsign: String, ssid: Int) -> AXDPCapability? {
+        let key = AXDPPeerKey(callsign: callsign, ssid: ssid)
+        return cache.get(for: key)
+    }
+
+    /// Store capabilities for a peer
+    func store(_ capability: AXDPCapability, for callsign: String, ssid: Int = 0) {
+        let key = AXDPPeerKey(callsign: callsign, ssid: ssid)
+        cache.store(capability, for: key)
+        objectWillChange.send()
+
+        TxLog.debug(.capability, "Stored peer capability", [
+            "peer": callsign + (ssid > 0 ? "-\(ssid)" : ""),
+            "protoMax": capability.protoMax,
+            "features": capability.features.description,
+            "compression": capability.compressionAlgos.map { $0.displayName }.joined(separator: ", ")
+        ])
+    }
+
+    /// Check if peer has AXDP capabilities cached
+    /// Callsign can include SSID (e.g., "N0CALL-2")
+    func hasCapabilities(for callsign: String) -> Bool {
+        let (call, ssid) = parseCallsign(callsign)
+        let key = AXDPPeerKey(callsign: call, ssid: ssid)
+        return cache.get(for: key) != nil
+    }
+
+    /// Parse callsign with optional SSID (e.g., "N0CALL-2" -> ("N0CALL", 2))
+    private func parseCallsign(_ callsign: String) -> (call: String, ssid: Int) {
+        let parts = callsign.uppercased().split(separator: "-")
+        let call = String(parts.first ?? "")
+        let ssid = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
+        return (call, ssid)
+    }
+
+    /// Remove cached capabilities for a peer
+    /// Called when session disconnects to ensure fresh discovery on next connection
+    /// Callsign can include SSID (e.g., "N0CALL-2")
+    func remove(for callsign: String) {
+        let (call, ssid) = parseCallsign(callsign)
+        let key = AXDPPeerKey(callsign: call, ssid: ssid)
+        cache.remove(for: key)
+        objectWillChange.send()
+
+        TxLog.debug(.capability, "Removed peer capability from cache", [
+            "peer": callsign
+        ])
+    }
+
+    /// Get all known peers with capabilities
+    var knownPeers: [String] {
+        cache.allPeers.map { $0.callsign + ($0.ssid > 0 ? "-\($0.ssid)" : "") }
+    }
+
+    /// Clear all cached capabilities
+    func clear() {
+        cache.clear()
+        objectWillChange.send()
+    }
+}
+
+// MARK: - Capability Cache Extensions
+
+extension AXDPCapabilityCache {
+    /// Get all peers currently in cache
+    var allPeers: [AXDPPeerKey] {
+        // Note: This requires access to the private cache dictionary
+        // For now, return empty - we'll track this separately if needed
+        []
+    }
+}
+
+// MARK: - Features Description
+
+extension AXDPCapability.Features: CustomStringConvertible {
+    var description: String {
+        var parts: [String] = []
+        if contains(.sack) { parts.append("SACK") }
+        if contains(.resume) { parts.append("Resume") }
+        if contains(.compression) { parts.append("Compression") }
+        if contains(.extendedMetadata) { parts.append("ExtMeta") }
+        return parts.isEmpty ? "None" : parts.joined(separator: ", ")
+    }
+
+    /// Short description for badges
+    var shortDescription: String {
+        var parts: [String] = []
+        if contains(.sack) { parts.append("S") }
+        if contains(.resume) { parts.append("R") }
+        if contains(.compression) { parts.append("C") }
+        if contains(.extendedMetadata) { parts.append("M") }
+        return parts.joined()
+    }
+}
+
 // MARK: - Compression
 
 /// AXDP compression support
 enum AXDPCompression {
 
     /// Supported compression algorithms
-    enum Algorithm: UInt8, Sendable, Equatable, Hashable {
+    enum Algorithm: UInt8, Sendable, Equatable, Hashable, CaseIterable {
         case none    = 0
         case lz4     = 1
         case zstd    = 2

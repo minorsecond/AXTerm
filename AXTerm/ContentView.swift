@@ -21,6 +21,9 @@ struct ContentView: View {
     @ObservedObject private var inspectionRouter: PacketInspectionRouter
     private let inspectionCoordinator = PacketInspectionCoordinator()
 
+    /// Session coordinator for connected-mode sessions - survives tab switches
+    @StateObject private var sessionCoordinator: SessionCoordinator
+
     @State private var selectedNav: NavigationItem = .terminal
     @State private var searchText: String = ""
     @State private var filters = PacketFilters()
@@ -40,6 +43,11 @@ struct ContentView: View {
         _inspectionRouter = ObservedObject(wrappedValue: inspectionRouter)
         // Initialize analytics view model with settings store for persistence
         _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(settingsStore: settings))
+        // Initialize session coordinator for connected-mode sessions
+        let coordinator = SessionCoordinator()
+        coordinator.localCallsign = settings.myCallsign
+        coordinator.subscribeToPackets(from: client)
+        _sessionCoordinator = StateObject(wrappedValue: coordinator)
     }
 
     var body: some View {
@@ -115,6 +123,9 @@ struct ContentView: View {
         .focusedValue(\.selectNavigation, SelectNavigationAction { item in
             selectedNav = item
         })
+        .onChange(of: settings.myCallsign) { _, newValue in
+            sessionCoordinator.localCallsign = newValue
+        }
     }
 
     // MARK: - Sidebar
@@ -151,7 +162,8 @@ struct ContentView: View {
                     ForEach(client.stations) { station in
                         StationRowView(
                             station: station,
-                            isSelected: client.selectedStationCall == station.call
+                            isSelected: client.selectedStationCall == station.call,
+                            capability: client.capabilityStore.capabilities(for: station.call)
                         )
                         .contentShape(Rectangle())
                         .onTapGesture {
@@ -199,7 +211,7 @@ struct ContentView: View {
 
             switch selectedNav {
             case .terminal:
-                TerminalView(client: client, settings: settings)
+                TerminalView(client: client, settings: settings, sessionCoordinator: sessionCoordinator)
             case .packets:
                 packetsView
             case .routes:
@@ -479,9 +491,10 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView(
-        client: PacketEngine(settings: AppSettingsStore()),
-        settings: AppSettingsStore(),
+    let settings = AppSettingsStore()
+    return ContentView(
+        client: PacketEngine(settings: settings),
+        settings: settings,
         inspectionRouter: PacketInspectionRouter()
     )
 }

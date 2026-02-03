@@ -112,6 +112,12 @@ final class PacketEngine: ObservableObject {
     private var netRomObserveCount: Int = 0
     #endif
 
+    // MARK: - AXDP Capability Tracking
+
+    /// AXDP capability store for tracking peer capabilities
+    /// Used by UI to display capability badges for stations
+    let capabilityStore = AXDPCapabilityStore()
+
     // MARK: - Published State
 
     @Published private(set) var status: ConnectionStatus = .disconnected
@@ -211,6 +217,7 @@ final class PacketEngine: ObservableObject {
 
         configureStationSubscription()
         observeSettings()
+        observeCapabilityStore()
         loadPersistedPackets(reason: "startup")
     }
 
@@ -640,6 +647,9 @@ final class PacketEngine: ObservableObject {
         // Feed packet to NET/ROM integration for route inference
         observePacketForNetRom(packet)
 
+        // Check for AXDP capabilities in UI frames
+        detectAXDPCapabilities(from: packet)
+
         if let text = packet.infoText {
             // Extract via path as array of callsign strings
             let viaPath = packet.via.map { addr in
@@ -691,6 +701,33 @@ final class PacketEngine: ObservableObject {
             print("[NETROM] observe #\(netRomObserveCount): \(fromDisplay) → \(toDisplay) via=[\(viaPath)]")
         }
         #endif
+    }
+
+    /// Detect and store AXDP capabilities from packet payload (UI frames).
+    /// Capability discovery happens via PING/PONG message exchange.
+    private func detectAXDPCapabilities(from packet: Packet) {
+        guard let fromAddress = packet.from else { return }
+
+        // Only check UI frames for AXDP - I-frames are handled by SessionCoordinator
+        guard packet.frameType == .ui || packet.frameType == .i else { return }
+
+        // Check for AXDP magic header
+        guard AXDP.hasMagic(packet.info) else { return }
+
+        // Decode AXDP message
+        guard let message = AXDP.Message.decode(from: packet.info) else { return }
+
+        // PING and PONG messages carry capability information
+        if (message.type == .ping || message.type == .pong), let caps = message.capabilities {
+            capabilityStore.store(caps, for: fromAddress.call, ssid: fromAddress.ssid)
+
+            TxLog.debug(.capability, "Detected AXDP capabilities from UI frame", [
+                "peer": fromAddress.display,
+                "type": message.type == .ping ? "PING" : "PONG",
+                "protoMax": caps.protoMax,
+                "features": caps.features.description
+            ])
+        }
     }
 
     private func handleWatchMatch(for packet: Packet) {
@@ -920,6 +957,15 @@ final class PacketEngine: ObservableObject {
             .sink { [weak self] enabled in
                 guard enabled else { return }
                 self?.loadPersistedHistory()
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Forward capability store changes to trigger view updates
+    private func observeCapabilityStore() {
+        capabilityStore.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
             }
             .store(in: &cancellables)
     }

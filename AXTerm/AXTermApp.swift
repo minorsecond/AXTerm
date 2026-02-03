@@ -5,6 +5,7 @@
 //  Created by Ross Wardrup on 1/28/26.
 //
 
+import GRDB
 import SwiftUI
 
 @main
@@ -25,15 +26,29 @@ struct AXTermApp: App {
     private let client: PacketEngine
 
     init() {
+        let testConfig = TestModeConfiguration.shared
         let settingsStore = AppSettingsStore()
         _settings = StateObject(wrappedValue: settingsStore)
         let router = PacketInspectionRouter()
         _inspectionRouter = StateObject(wrappedValue: router)
 
+        // Apply test mode overrides
+        if testConfig.isTestMode {
+            if let callsign = testConfig.callsign {
+                settingsStore.myCallsign = callsign
+            }
+        }
+
         SentryManager.shared.startIfEnabled(settings: settingsStore)
         SentryManager.shared.addBreadcrumb(category: "app.lifecycle", message: "App init", level: .info, data: nil)
 
-        let queue = try? DatabaseManager.makeDatabaseQueue()
+        // Use ephemeral database in test mode to avoid polluting the real database
+        let queue: DatabaseQueue?
+        if testConfig.isTestMode {
+            queue = try? DatabaseManager.makeEphemeralDatabaseQueue(instanceID: testConfig.instanceID)
+        } else {
+            queue = try? DatabaseManager.makeDatabaseQueue()
+        }
         let packetStore = queue.map { SQLitePacketStore(dbQueue: $0) }
         let consoleStore = queue.map { SQLiteConsoleStore(dbQueue: $0) }
         let rawStore = queue.map { SQLiteRawStore(dbQueue: $0) }
@@ -60,16 +75,24 @@ struct AXTermApp: App {
             notificationScheduler: notificationScheduler,
             databaseWriter: queue
         )
-        SentryManager.shared.setConnectionTags(host: settingsStore.host, port: settingsStore.portValue)
-        if settingsStore.autoConnectOnLaunch {
-            self.client.connect(host: settingsStore.host, port: settingsStore.portValue)
+
+        // Determine connection settings (test mode overrides take precedence)
+        let effectiveHost = testConfig.effectiveHost(default: settingsStore.host)
+        let effectivePort = testConfig.effectivePort(default: settingsStore.portValue)
+
+        SentryManager.shared.setConnectionTags(host: effectiveHost, port: effectivePort)
+
+        // Auto-connect if settings say so OR if test mode requests it
+        if settingsStore.autoConnectOnLaunch || testConfig.autoConnect {
+            self.client.connect(host: effectiveHost, port: effectivePort)
         }
         appDelegate.settings = settingsStore
         appDelegate.notificationDelegate = notificationHandler
     }
 
     var body: some Scene {
-        WindowGroup("AXTerm", id: "main") {
+        let windowTitle = "AXTerm" + TestModeConfiguration.shared.windowTitleSuffix
+        WindowGroup(windowTitle, id: "main") {
             ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter)
         }
         .commands {

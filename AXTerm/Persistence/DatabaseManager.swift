@@ -24,6 +24,43 @@ enum DatabaseManager {
         return folderURL.appendingPathComponent(databaseName)
     }
 
+    /// Creates a temporary database URL for test mode.
+    /// Each instance gets a unique database based on the instance identifier.
+    static func ephemeralDatabaseURL(instanceID: String) throws -> URL {
+        let tempDir = FileManager.default.temporaryDirectory
+        let testFolder = tempDir.appendingPathComponent("AXTerm-Test", isDirectory: true)
+        try FileManager.default.createDirectory(at: testFolder, withIntermediateDirectories: true)
+
+        // Sanitize instance ID for use in filename
+        let sanitizedID = instanceID
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "/", with: "_")
+        let dbName = "axterm-test-\(sanitizedID).sqlite"
+        return testFolder.appendingPathComponent(dbName)
+    }
+
+    /// Creates a database queue for test mode with an ephemeral database.
+    /// The database is created fresh each time (previous test data is deleted).
+    @MainActor
+    static func makeEphemeralDatabaseQueue(instanceID: String) throws -> DatabaseQueue {
+        let url = try ephemeralDatabaseURL(instanceID: instanceID)
+        let urlPath = url.path
+
+        // Delete any existing test database to start fresh
+        try? FileManager.default.removeItem(at: url)
+
+        print("AXTerm Test Mode: Using ephemeral database at \(urlPath)")
+
+        do {
+            let queue = try DatabaseQueue(path: urlPath)
+            try migrator.migrate(queue)
+            return queue
+        } catch {
+            print("AXTerm Test Mode: Failed to create ephemeral database: \(error)")
+            throw error
+        }
+    }
+
     @MainActor
     static func makeDatabaseQueue() throws -> DatabaseQueue {
         let url = try databaseURL()

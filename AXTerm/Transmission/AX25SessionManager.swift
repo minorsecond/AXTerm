@@ -53,6 +53,16 @@ final class AX25Session: @unchecked Sendable {
     /// Key is N(S) sequence number
     var sendBuffer: [Int: OutboundFrame] = [:]
 
+    /// Pending data queue: data waiting to be sent once connected
+    /// Each entry is (data, pid, displayInfo)
+    var pendingDataQueue: [(data: Data, pid: UInt8, displayInfo: String?)] = []
+
+    /// T1 retransmit timer task
+    var t1TimerTask: Task<Void, Never>?
+
+    /// T3 idle timer task
+    var t3TimerTask: Task<Void, Never>?
+
     /// Timestamp when SABM was sent (for RTT calculation)
     var sabmSentAt: Date?
 
@@ -180,6 +190,9 @@ final class AX25SessionManager: ObservableObject {
     /// Callback when session state changes
     var onSessionStateChanged: ((AX25Session, AX25SessionState, AX25SessionState) -> Void)?
 
+    /// Callback when frames need to be sent from timer retransmission
+    var onRetransmitFrame: ((OutboundFrame) -> Void)?
+
     // MARK: - Session Lifecycle
 
     /// Get or create a session for the given destination
@@ -221,6 +234,21 @@ final class AX25SessionManager: ObservableObject {
     ) -> AX25Session? {
         let key = SessionKey(destination: destination, path: path, channel: channel)
         return sessions[key]
+    }
+
+    /// Find any connected session (useful for responder UIs that don't have destination set)
+    /// Returns the most recently active connected session, or nil if none
+    func anyConnectedSession() -> AX25Session? {
+        return sessions.values
+            .filter { $0.state == .connected }
+            .max { $0.lastActivityAt < $1.lastActivityAt }
+    }
+
+    /// Find a connected session with a specific peer, regardless of who initiated
+    func connectedSession(withPeer peer: AX25Address) -> AX25Session? {
+        return sessions.values.first {
+            $0.remoteAddress == peer && $0.state == .connected
+        }
     }
 
     /// Remove a session
@@ -337,18 +365,20 @@ final class AX25SessionManager: ObservableObject {
                 frames.append(sabm)
             }
             // Queue the data for when connection is established
-            // For now, we'll buffer it in the session
-            // TODO: Implement pending data queue
+            session.pendingDataQueue.append((data: data, pid: pid, displayInfo: displayInfo))
             TxLog.debug(.session, "Queued data pending connection", [
                 "peer": destination.display,
-                "size": data.count
+                "size": data.count,
+                "queueDepth": session.pendingDataQueue.count
             ])
 
         case .connecting:
             // Already connecting, queue the data
+            session.pendingDataQueue.append((data: data, pid: pid, displayInfo: displayInfo))
             TxLog.debug(.session, "Queued data, connection in progress", [
                 "peer": destination.display,
-                "size": data.count
+                "size": data.count,
+                "queueDepth": session.pendingDataQueue.count
             ])
 
         case .connected:
@@ -384,13 +414,17 @@ final class AX25SessionManager: ObservableObject {
         path: DigiPath,
         channel: UInt8
     ) -> OutboundFrame? {
+        print("[AX25SessionManager] handleInboundSABM called: from=\(source.display), to=\(destination.display), localCallsign=\(localCallsign.display)")
+
         // Create session if it doesn't exist (we're the responder)
         let key = SessionKey(destination: source, path: path, channel: channel)
 
         let session: AX25Session
         if let existing = sessions[key] {
+            print("[AX25SessionManager] Found existing session for \(source.display), state=\(existing.state.rawValue)")
             session = existing
         } else {
+            print("[AX25SessionManager] Creating new session for \(source.display)")
             session = AX25Session(
                 localAddress: destination,  // We're the destination of the SABM
                 remoteAddress: source,
@@ -403,7 +437,9 @@ final class AX25SessionManager: ObservableObject {
         }
 
         let oldState = session.state
+        print("[AX25SessionManager] Before handle event: state=\(oldState.rawValue)")
         let actions = session.stateMachine.handle(event: .receivedSABM)
+        print("[AX25SessionManager] After handle event: state=\(session.state.rawValue), actions=\(actions)")
 
         if oldState != session.state {
             onSessionStateChanged?(session, oldState, session.state)
@@ -414,7 +450,12 @@ final class AX25SessionManager: ObservableObject {
         }
 
         session.touch()
-        return processActions(actions, for: session).first
+        let frames = processActions(actions, for: session)
+        print("[AX25SessionManager] processActions returned \(frames.count) frames")
+        if let frame = frames.first {
+            print("[AX25SessionManager] Returning UA frame to \(frame.destination.display)")
+        }
+        return frames.first
     }
 
     /// Handle an inbound UA (unnumbered acknowledge)
@@ -472,6 +513,9 @@ final class AX25SessionManager: ObservableObject {
                 peer: source.display,
                 mode: "connected"
             )
+
+            // Drain pending data queue now that we're connected
+            drainPendingDataQueue(for: session)
         } else if session.state == .disconnected {
             TxLog.sessionClose(
                 sessionId: session.id,
@@ -721,7 +765,153 @@ final class AX25SessionManager: ObservableObject {
         return processActions(actions, for: session)
     }
 
+    // MARK: - Timer Management
+
+    /// Start T1 (retransmit) timer for a session
+    private func startT1Timer(for session: AX25Session) {
+        // Cancel any existing T1 timer
+        session.t1TimerTask?.cancel()
+
+        let rto = session.timers.rto
+        let sessionId = session.id
+
+        TxLog.debug(.session, "Starting T1 timer", [
+            "session": String(sessionId.uuidString.prefix(8)),
+            "rto": String(format: "%.1fs", rto),
+            "state": session.state.rawValue
+        ])
+
+        session.t1TimerTask = Task { [weak self] in
+            do {
+                // Convert RTO from seconds to nanoseconds
+                try await Task.sleep(nanoseconds: UInt64(rto * 1_000_000_000))
+
+                guard !Task.isCancelled else { return }
+
+                await MainActor.run { [weak self] in
+                    guard let self = self else { return }
+                    // Find the session (it may have been removed)
+                    guard let session = self.sessions.values.first(where: { $0.id == sessionId }) else {
+                        TxLog.debug(.session, "T1 timeout but session gone", ["session": String(sessionId.uuidString.prefix(8))])
+                        return
+                    }
+
+                    TxLog.warning(.session, "T1 timeout fired", [
+                        "session": String(sessionId.uuidString.prefix(8)),
+                        "state": session.state.rawValue,
+                        "retryCount": session.stateMachine.retryCount
+                    ])
+
+                    // Handle the timeout
+                    let frames = self.handleT1Timeout(session: session)
+
+                    // Send any resulting frames via the retransmit callback
+                    for frame in frames {
+                        self.onRetransmitFrame?(frame)
+                    }
+                }
+            } catch {
+                // Task was cancelled, nothing to do
+            }
+        }
+    }
+
+    /// Stop T1 timer for a session
+    private func stopT1Timer(for session: AX25Session) {
+        if session.t1TimerTask != nil {
+            TxLog.debug(.session, "Stopping T1 timer", [
+                "session": String(session.id.uuidString.prefix(8))
+            ])
+            session.t1TimerTask?.cancel()
+            session.t1TimerTask = nil
+        }
+    }
+
+    /// Start T3 (idle) timer for a session
+    private func startT3Timer(for session: AX25Session) {
+        // Cancel any existing T3 timer
+        session.t3TimerTask?.cancel()
+
+        let timeout = session.timers.t3Timeout
+        let sessionId = session.id
+
+        session.t3TimerTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+
+                guard !Task.isCancelled else { return }
+
+                await MainActor.run { [weak self] in
+                    guard let self = self else { return }
+                    guard let session = self.sessions.values.first(where: { $0.id == sessionId }) else {
+                        return
+                    }
+
+                    TxLog.debug(.session, "T3 timeout fired", [
+                        "session": String(sessionId.uuidString.prefix(8)),
+                        "state": session.state.rawValue
+                    ])
+
+                    let frames = self.handleT3Timeout(session: session)
+                    for frame in frames {
+                        self.onRetransmitFrame?(frame)
+                    }
+                }
+            } catch {
+                // Task was cancelled
+            }
+        }
+    }
+
+    /// Stop T3 timer for a session
+    private func stopT3Timer(for session: AX25Session) {
+        session.t3TimerTask?.cancel()
+        session.t3TimerTask = nil
+    }
+
     // MARK: - Private Helpers
+
+    /// Drain the pending data queue for a session that just connected
+    private func drainPendingDataQueue(for session: AX25Session) {
+        guard !session.pendingDataQueue.isEmpty else { return }
+
+        TxLog.debug(.session, "Draining pending data queue", [
+            "peer": session.remoteAddress.display,
+            "queueDepth": session.pendingDataQueue.count
+        ])
+
+        // Copy and clear the queue
+        let pendingData = session.pendingDataQueue
+        session.pendingDataQueue.removeAll()
+
+        // Send each queued item
+        for item in pendingData {
+            guard session.canSendIFrame else {
+                // Window full, re-queue remaining items
+                session.pendingDataQueue.append(item)
+                TxLog.warning(.session, "Window full during queue drain, re-queued", [
+                    "remaining": session.pendingDataQueue.count
+                ])
+                continue
+            }
+
+            let iFrame = buildIFrame(for: session, payload: item.data, pid: item.pid, displayInfo: item.displayInfo)
+
+            // Buffer for potential retransmission
+            session.bufferFrame(iFrame, ns: session.vs - 1)
+            session.statistics.recordSent(bytes: item.data.count)
+
+            // Send via callback
+            onSendFrame?(iFrame)
+
+            TxLog.debug(.session, "Sent queued data", [
+                "peer": session.remoteAddress.display,
+                "size": item.data.count
+            ])
+        }
+
+        session.touch()
+    }
 
     /// Build an I-frame for the session with current sequence numbers
     private func buildIFrame(
@@ -861,10 +1051,17 @@ final class AX25SessionManager: ObservableObject {
                     "peer": session.remoteAddress.display
                 ])
 
-            case .startT1, .stopT1, .startT3, .stopT3:
-                // Timer management would be handled by a timer service
-                // For now, just log
-                TxLog.debug(.session, "Timer action: \(action)")
+            case .startT1:
+                startT1Timer(for: session)
+
+            case .stopT1:
+                stopT1Timer(for: session)
+
+            case .startT3:
+                startT3Timer(for: session)
+
+            case .stopT3:
+                stopT3Timer(for: session)
             }
         }
 

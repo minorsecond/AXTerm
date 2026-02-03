@@ -17,8 +17,8 @@ import UniformTypeIdentifiers
 final class ObservableTerminalTxViewModel: ObservableObject {
     @Published private(set) var viewModel: TerminalTxViewModel
 
-    /// Session manager for connected-mode operations
-    let sessionManager = AX25SessionManager()
+    /// Session manager for connected-mode operations (shared from SessionCoordinator)
+    let sessionManager: AX25SessionManager
 
     /// Current session (if any) for the active destination
     @Published private(set) var currentSession: AX25Session?
@@ -29,23 +29,41 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Callback for sending response frames (RR, REJ, etc.)
     var onSendResponseFrame: ((OutboundFrame) -> Void)?
 
-    init(sourceCall: String = "") {
+    init(sourceCall: String = "", sessionManager: AX25SessionManager? = nil) {
         var vm = TerminalTxViewModel()
         vm.sourceCall = sourceCall
         self.viewModel = vm
 
-        // Set up session manager callbacks
-        sessionManager.localCallsign = AX25Address(call: sourceCall.isEmpty ? "NOCALL" : sourceCall, ssid: 0)
+        // Use shared session manager if provided, otherwise create one
+        self.sessionManager = sessionManager ?? AX25SessionManager()
 
-        sessionManager.onSessionStateChanged = { [weak self] session, _, newState in
+        // Set up session manager callbacks - parse callsign-SSID format
+        let input = sourceCall.isEmpty ? "NOCALL" : sourceCall
+        let parts = input.uppercased().split(separator: "-")
+        let baseCall = String(parts.first ?? "NOCALL")
+        let ssid = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
+        self.sessionManager.localCallsign = AX25Address(call: baseCall, ssid: ssid)
+        print("[ObservableTerminalTxViewModel.init] Set localCallsign: call='\(baseCall)', ssid=\(ssid)")
+
+        // Chain session state callback - preserve any existing callback (e.g., from SessionCoordinator)
+        let previousStateCallback = self.sessionManager.onSessionStateChanged
+        self.sessionManager.onSessionStateChanged = { [weak self] session, oldState, newState in
+            // Call previous callback first (important for AXDP capability discovery)
+            previousStateCallback?(session, oldState, newState)
+
+            // Then handle our own state updates
             Task { @MainActor in
-                if session.id == self?.currentSession?.id {
-                    self?.objectWillChange.send()
+                // When a session connects, refresh currentSession to pick up responder sessions
+                // This handles the case where Station B receives an inbound SABM
+                // but currentSession is nil because we didn't initiate the connection
+                if newState == .connected {
+                    self?.updateCurrentSession()
                 }
+                self?.objectWillChange.send()
             }
         }
 
-        sessionManager.onDataReceived = { [weak self] session, data in
+        self.sessionManager.onDataReceived = { [weak self] session, data in
             // Handle received data from connected session
             TxLog.inbound(.axdp, "Data received from session", [
                 "peer": session.remoteAddress.display,
@@ -67,11 +85,28 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Process an incoming packet and route it to the session manager if relevant
     private func handleIncomingPacket(_ packet: Packet) {
         // Only process packets addressed to us
-        guard let from = packet.from, let to = packet.to else { return }
-        guard to.call.uppercased() == sessionManager.localCallsign.call.uppercased() else { return }
+        guard let from = packet.from, let to = packet.to else {
+            return
+        }
 
-        // Decode control field to determine frame type
+        // Debug: show all packets and check if they're addressed to us
         let decoded = AX25ControlFieldDecoder.decode(control: packet.control, controlByte1: packet.controlByte1)
+        let localCall = sessionManager.localCallsign.call.uppercased()
+        let toCall = to.call.uppercased()
+
+        // Log if it's a U-frame (which includes SABM)
+        if decoded.frameClass == .U {
+            print("[TerminalView.handleIncomingPacket] U-frame: from=\(from.display), to.call='\(toCall)' ssid=\(to.ssid), localCallsign.call='\(localCall)' ssid=\(sessionManager.localCallsign.ssid), uType=\(decoded.uType?.rawValue ?? "nil")")
+        }
+
+        guard toCall == localCall else {
+            if decoded.frameClass == .U && (decoded.uType == .SABM || decoded.uType == .SABME) {
+                print("[TerminalView.handleIncomingPacket] SABM filtered: to.call='\(toCall)' (len=\(toCall.count)) != localCallsign.call='\(localCall)' (len=\(localCall.count))")
+            }
+            return
+        }
+
+        print("[TerminalView.handleIncomingPacket] Packet addressed to us: from=\(from.display), frameClass=\(decoded.frameClass.rawValue), uType=\(decoded.uType?.rawValue ?? "nil")")
 
         // Use channel 0 for default KISS port
         let channel: UInt8 = 0
@@ -99,18 +134,27 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             sessionManager.handleInboundUA(from: from, path: path, channel: channel)
             updateCurrentSession()
         case .DM:
-            let _ = sessionManager.handleInboundDM(from: from, path: path, channel: channel)
+            sessionManager.handleInboundDM(from: from, path: path, channel: channel)
             updateCurrentSession()
         case .DISC:
-            let _ = sessionManager.handleInboundDISC(from: from, path: path, channel: channel)
+            if let responseFrame = sessionManager.handleInboundDISC(from: from, path: path, channel: channel) {
+                sendResponseFrame(responseFrame)
+            }
             updateCurrentSession()
         case .SABM, .SABME:
-            let _ = sessionManager.handleInboundSABM(
+            // Respond with UA to accept the incoming connection
+            print("[TerminalView] Received SABM from \(from.display), calling handleInboundSABM")
+            if let uaFrame = sessionManager.handleInboundSABM(
                 from: from,
                 to: sessionManager.localCallsign,
                 path: path,
                 channel: channel
-            )
+            ) {
+                print("[TerminalView] Got UA frame back, calling sendResponseFrame")
+                sendResponseFrame(uaFrame)
+            } else {
+                print("[TerminalView] WARNING: handleInboundSABM returned nil!")
+            }
             updateCurrentSession()
         default:
             break
@@ -135,7 +179,13 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
     /// Send a response frame (RR, REJ, etc.) via the callback
     private func sendResponseFrame(_ frame: OutboundFrame) {
-        onSendResponseFrame?(frame)
+        print("[TerminalView.sendResponseFrame] Sending frame type=\(frame.frameType) to \(frame.destination.display)")
+        if onSendResponseFrame != nil {
+            print("[TerminalView.sendResponseFrame] Callback is set, calling it")
+            onSendResponseFrame?(frame)
+        } else {
+            print("[TerminalView.sendResponseFrame] WARNING: onSendResponseFrame callback is nil!")
+        }
     }
 
     private func handleSFrame(packet: Packet, from: AX25Address, sType: AX25SType?, nr: Int, pf: Int, channel: UInt8) {
@@ -246,7 +296,13 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
     func updateSourceCall(_ call: String) {
         viewModel.sourceCall = call
-        sessionManager.localCallsign = AX25Address(call: call.isEmpty ? "NOCALL" : call, ssid: 0)
+        // Parse callsign-SSID format (e.g., "TEST-2" -> call="TEST", ssid=2)
+        let input = call.isEmpty ? "NOCALL" : call
+        let parts = input.uppercased().split(separator: "-")
+        let baseCall = String(parts.first ?? "NOCALL")
+        let ssid = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
+        sessionManager.localCallsign = AX25Address(call: baseCall, ssid: ssid)
+        print("[updateSourceCall] Set localCallsign: call='\(baseCall)', ssid=\(ssid)")
     }
 
     func enqueueCurrentMessage() {
@@ -270,6 +326,12 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     }
 
     // MARK: - Session Management
+
+    /// Public method to refresh the current session
+    /// Called when session state changes (especially for responder sessions)
+    func refreshCurrentSession() {
+        updateCurrentSession()
+    }
 
     /// Connect to the current destination (for connected mode)
     func connect() -> OutboundFrame? {
@@ -305,16 +367,39 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     }
 
     /// Update the current session based on destination/path
+    /// Also handles responder sessions where we might not have set a destination
     private func updateCurrentSession() {
-        guard !viewModel.destinationCall.isEmpty else {
-            currentSession = nil
+        // If we have a destination specified, look for that specific session
+        if !viewModel.destinationCall.isEmpty {
+            let dest = parseCallsign(viewModel.destinationCall)
+            let path = parsePath(viewModel.digiPath)
+
+            if let session = sessionManager.existingSession(for: dest, path: path) {
+                currentSession = session
+                return
+            }
+
+            // Also check if there's a connected session with this peer (for responder case)
+            if let session = sessionManager.connectedSession(withPeer: dest) {
+                currentSession = session
+                return
+            }
+        }
+
+        // If no destination set or not found, check for any connected session
+        // This handles the responder case where Station B receives an inbound connection
+        // but hasn't typed the destination callsign yet
+        if let session = sessionManager.anyConnectedSession() {
+            currentSession = session
+            // Auto-populate the destination field with the connected peer's callsign
+            // so the user can see who they're connected to
+            if viewModel.destinationCall.isEmpty {
+                viewModel.destinationCall = session.remoteAddress.display
+            }
             return
         }
 
-        let dest = parseCallsign(viewModel.destinationCall)
-        let path = parsePath(viewModel.digiPath)
-
-        currentSession = sessionManager.existingSession(for: dest, path: path)
+        currentSession = nil
     }
 
     // MARK: - Parsing Helpers
@@ -426,23 +511,33 @@ struct SessionNotificationToast: View {
 struct TerminalView: View {
     @ObservedObject var client: PacketEngine
     @ObservedObject var settings: AppSettingsStore
+    @ObservedObject var sessionCoordinator: SessionCoordinator
     @StateObject private var txViewModel: ObservableTerminalTxViewModel
 
     @State private var selectedTab: TerminalTab = .session
     @State private var showingTransferSheet = false
     @State private var selectedFileURL: URL?
 
-    // Bulk transfer state (simplified for now)
-    @State private var transfers: [BulkTransfer] = []
+    // Transfer error alert
+    @State private var transferError: String?
+    @State private var showingTransferError = false
+
+    // Incoming transfer sheet
+    @State private var showingIncomingTransferSheet = false
+    @State private var currentIncomingRequest: IncomingTransferRequest?
 
     // Session notification toast
     @State private var sessionNotification: SessionNotification?
     @State private var notificationTask: Task<Void, Never>?
 
-    init(client: PacketEngine, settings: AppSettingsStore) {
+    init(client: PacketEngine, settings: AppSettingsStore, sessionCoordinator: SessionCoordinator) {
         self.client = client
         _settings = ObservedObject(wrappedValue: settings)
-        _txViewModel = StateObject(wrappedValue: ObservableTerminalTxViewModel(sourceCall: settings.myCallsign))
+        _sessionCoordinator = ObservedObject(wrappedValue: sessionCoordinator)
+        _txViewModel = StateObject(wrappedValue: ObservableTerminalTxViewModel(
+            sourceCall: settings.myCallsign,
+            sessionManager: sessionCoordinator.sessionManager
+        ))
     }
 
     var body: some View {
@@ -475,38 +570,101 @@ struct TerminalView: View {
             SendFileSheet(
                 isPresented: $showingTransferSheet,
                 selectedFileURL: selectedFileURL,
-                onSend: { destination, path in
-                    startTransfer(destination: destination, path: path)
+                connectedSessions: sessionCoordinator.connectedSessions,
+                onSend: { destination, path, transferProtocol, compressionSettings in
+                    startTransfer(destination: destination, path: path, transferProtocol: transferProtocol, compressionSettings: compressionSettings)
+                },
+                checkCapability: { callsign in
+                    sessionCoordinator.capabilityStatus(for: callsign)
+                },
+                availableProtocols: { callsign in
+                    sessionCoordinator.availableProtocols(for: callsign)
                 }
             )
+        }
+        .alert("Transfer Error", isPresented: $showingTransferError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(transferError ?? "Unknown error")
+        }
+        .sheet(isPresented: $showingIncomingTransferSheet) {
+            if let request = currentIncomingRequest {
+                IncomingTransferSheet(
+                    isPresented: $showingIncomingTransferSheet,
+                    request: request,
+                    onAccept: {
+                        sessionCoordinator.acceptIncomingTransfer(request.id)
+                    },
+                    onDecline: {
+                        sessionCoordinator.declineIncomingTransfer(request.id)
+                    },
+                    onAlwaysAccept: {
+                        settings.allowCallsignForFileTransfer(request.sourceCallsign)
+                        sessionCoordinator.acceptIncomingTransfer(request.id)
+                    },
+                    onAlwaysDeny: {
+                        settings.denyCallsignForFileTransfer(request.sourceCallsign)
+                        sessionCoordinator.declineIncomingTransfer(request.id)
+                    }
+                )
+            }
+        }
+        .onChange(of: sessionCoordinator.pendingIncomingTransfers) { _, newRequests in
+            // Auto-show modal for first pending request if not already showing
+            if !showingIncomingTransferSheet, let first = newRequests.first {
+                // Check if auto-accept or auto-deny is enabled for this callsign
+                if settings.isCallsignAllowedForFileTransfer(first.sourceCallsign) {
+                    // Auto-accept
+                    sessionCoordinator.acceptIncomingTransfer(first.id)
+                } else if settings.isCallsignDeniedForFileTransfer(first.sourceCallsign) {
+                    // Auto-deny
+                    sessionCoordinator.declineIncomingTransfer(first.id)
+                } else {
+                    // Show modal for user decision
+                    currentIncomingRequest = first
+                    showingIncomingTransferSheet = true
+                }
+            }
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleFileDrop(providers)
         }
         .onAppear {
-            // Subscribe to incoming packets for session management
-            txViewModel.subscribeToPackets(from: client)
-
             // Wire up response frame sending (for RR, REJ, etc.)
             txViewModel.onSendResponseFrame = { [weak client] frame in
+                print("[TerminalView.onAppear] onSendResponseFrame callback invoked for \(frame.destination.display)")
                 client?.send(frame: frame) { result in
                     Task { @MainActor in
                         switch result {
                         case .success:
+                            print("[TerminalView] Response frame sent successfully")
                             TxLog.outbound(.ax25, "Response frame sent", [
                                 "type": frame.frameType,
                                 "dest": frame.destination.display
                             ])
                         case .failure(let error):
+                            print("[TerminalView] Response frame send FAILED: \(error)")
                             TxLog.error(.ax25, "Response frame send failed", error: error)
                         }
                     }
                 }
             }
 
-            // Wire up session state change notifications
+            // Wire up session state change notifications for this view's toast display
+            let previousCallback = txViewModel.sessionManager.onSessionStateChanged
             txViewModel.sessionManager.onSessionStateChanged = { [weak txViewModel] session, oldState, newState in
+                // Call any previous callback first
+                previousCallback?(session, oldState, newState)
+
                 Task { @MainActor in
+                    // CRITICAL: When a session connects (especially responder sessions),
+                    // we need to update currentSession so the UI reflects the connected state.
+                    // This handles the case where Station B receives an inbound connection
+                    // but hasn't set a destination yet - the session exists but currentSession is nil.
+                    if newState == .connected {
+                        txViewModel?.refreshCurrentSession()
+                    }
+
                     txViewModel?.objectWillChange.send()
 
                     // Show notification for significant state changes
@@ -614,6 +772,7 @@ struct TerminalView: View {
                 queueDepth: txViewModel.queueDepth,
                 isConnected: client.status == .connected,
                 sessionState: txViewModel.sessionState,
+                destinationCapability: client.capabilityStore.capabilities(for: txViewModel.viewModel.destinationCall),
                 onSend: {
                     sendCurrentMessage()
                 },
@@ -866,21 +1025,28 @@ struct TerminalView: View {
     @ViewBuilder
     private var transfersView: some View {
         BulkTransferListView(
-            transfers: transfers,
+            transfers: sessionCoordinator.transfers,
+            pendingIncomingTransfers: sessionCoordinator.pendingIncomingTransfers,
             onPause: { id in
-                pauseTransfer(id)
+                sessionCoordinator.pauseTransfer(id)
             },
             onResume: { id in
-                resumeTransfer(id)
+                sessionCoordinator.resumeTransfer(id)
             },
             onCancel: { id in
-                cancelTransfer(id)
+                sessionCoordinator.cancelTransfer(id)
             },
             onClearCompleted: {
-                clearCompletedTransfers()
+                sessionCoordinator.clearCompletedTransfers()
             },
             onAddFile: {
                 selectFileForTransfer()
+            },
+            onAcceptIncoming: { id in
+                sessionCoordinator.acceptIncomingTransfer(id)
+            },
+            onDeclineIncoming: { id in
+                sessionCoordinator.declineIncomingTransfer(id)
             }
         )
     }
@@ -913,62 +1079,27 @@ struct TerminalView: View {
         }
     }
 
-    private func startTransfer(destination: String, path: String) {
+    private func startTransfer(destination: String, path: String, transferProtocol: TransferProtocolType = .axdp, compressionSettings: TransferCompressionSettings = .useGlobal) {
         guard let url = selectedFileURL else { return }
+        let digiPath = path.isEmpty ? DigiPath() : DigiPath.from(path.split(separator: ",").map { String($0.trimmingCharacters(in: .whitespaces)) })
 
-        let transfer = BulkTransfer(
-            id: UUID(),
-            fileName: url.lastPathComponent,
-            fileSize: fileSize(url) ?? 0,
-            destination: destination
-        )
-
-        transfers.append(transfer)
+        if let error = sessionCoordinator.startTransfer(to: destination, fileURL: url, path: digiPath, transferProtocol: transferProtocol, compressionSettings: compressionSettings) {
+            transferError = error
+            showingTransferError = true
+        }
         selectedFileURL = nil
-
-        // TODO: Actually start transfer via TxScheduler
-    }
-
-    private func fileSize(_ url: URL) -> Int? {
-        try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int
-    }
-
-    private func pauseTransfer(_ id: UUID) {
-        if let index = transfers.firstIndex(where: { $0.id == id }) {
-            transfers[index].status = .paused
-        }
-    }
-
-    private func resumeTransfer(_ id: UUID) {
-        if let index = transfers.firstIndex(where: { $0.id == id }) {
-            transfers[index].status = .sending
-        }
-    }
-
-    private func cancelTransfer(_ id: UUID) {
-        if let index = transfers.firstIndex(where: { $0.id == id }) {
-            transfers[index].status = .cancelled
-        }
-    }
-
-    private func clearCompletedTransfers() {
-        transfers.removeAll { transfer in
-            switch transfer.status {
-            case .completed, .cancelled, .failed:
-                return true
-            default:
-                return false
-            }
-        }
     }
 }
 
 // MARK: - Preview
 
 #Preview("Terminal View") {
-    TerminalView(
-        client: PacketEngine(settings: AppSettingsStore()),
-        settings: AppSettingsStore()
+    let settings = AppSettingsStore()
+    let coordinator = SessionCoordinator()
+    return TerminalView(
+        client: PacketEngine(settings: settings),
+        settings: settings,
+        sessionCoordinator: coordinator
     )
     .frame(width: 800, height: 600)
 }
