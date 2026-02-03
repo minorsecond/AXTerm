@@ -7,7 +7,7 @@
 # real-time diagnostics and frame traffic.
 #
 # Usage:
-#   ./run-ui-tests.sh [mode]
+#   ./run-ui-tests.sh [--clean-rebuild|clean_rebuild] [mode]
 #
 # Modes:
 #   manual      - Launch apps for manual testing (default)
@@ -30,7 +30,19 @@ CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m'
 
-MODE="${1:-manual}"
+CLEAN_REBUILD=0
+MODE="manual"
+
+for arg in "$@"; do
+    case "$arg" in
+        --clean-rebuild|clean_rebuild)
+            CLEAN_REBUILD=1
+            ;;
+        manual|automated|monitor|build|stop|help|-h|--help)
+            MODE="$arg"
+            ;;
+    esac
+done
 
 print_banner() {
     echo -e "${CYAN}"
@@ -74,6 +86,11 @@ check_dependencies() {
 
 build_app() {
     echo -e "${YELLOW}Building AXTerm...${NC}"
+
+    if [ "$CLEAN_REBUILD" -eq 1 ]; then
+        echo -e "${YELLOW}Cleaning build artifacts...${NC}"
+        rm -rf "$BUILD_DIR"
+    fi
 
     # Check if we need to build
     APP_PATH="$BUILD_DIR/Build/Products/Debug/AXTerm.app"
@@ -232,7 +249,10 @@ cleanup() {
 }
 
 show_usage() {
-    echo "Usage: $0 [mode]"
+    echo "Usage: $0 [--clean-rebuild|clean_rebuild] [mode]"
+    echo ""
+    echo "Options:"
+    echo "  --clean-rebuild, clean_rebuild  - Remove build artifacts before building"
     echo ""
     echo "Modes:"
     echo "  manual      - Launch apps for manual testing (default)"

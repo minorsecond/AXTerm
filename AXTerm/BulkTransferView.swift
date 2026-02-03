@@ -241,14 +241,14 @@ struct BulkTransferRow: View {
             Divider()
 
             // File info
-            detailRow("Original Size", formatBytes(transfer.fileSize))
+            detailRow("Original Size", formatBytes(transfer.fileSize), help: "Uncompressed file size on disk.")
             if transfer.compressionUsed && transfer.transmissionSize != transfer.fileSize {
-                detailRow("Transfer Size", formatBytes(transfer.transmissionSize))
+                detailRow("Transfer Size", formatBytes(transfer.transmissionSize), help: "Bytes sent over the air for this transfer. When compression is used, this reflects the compressed size.")
             }
-            detailRow(transfer.direction == .inbound ? "From" : "To", transfer.destination)
-            detailRow("Protocol", transfer.transferProtocol.displayName)
-            detailRow("Chunk Size", "\(transfer.chunkSize) bytes")
-            detailRow("Chunks", "\(transfer.completedChunks)/\(transfer.totalChunks)")
+            detailRow(transfer.direction == .inbound ? "From" : "To", transfer.destination, help: "Remote station for this transfer.")
+            detailRow("Protocol", transfer.transferProtocol.displayName, help: "Transfer protocol used for this session.")
+            detailRow("Chunk Size", "\(transfer.chunkSize) bytes", help: "Payload bytes per chunk before AXDP framing. Smaller chunks trade efficiency for reliability.")
+            detailRow("Chunks", "\(transfer.completedChunks)/\(transfer.totalChunks)", help: "Progress in chunks received/sent out of total.")
 
             // Compression info - show during transfer or after completion
             if transfer.compressionSettings != .disabled || transfer.compressionMetrics != nil {
@@ -260,36 +260,36 @@ struct BulkTransferRow: View {
 
                 if let metrics = transfer.compressionMetrics {
                     // Completed transfer - show full metrics
-                    detailRow("Algorithm", metrics.algorithm?.displayName ?? "None")
-                    detailRow("Original Size", formatBytes(metrics.originalSize))
-                    detailRow("Compressed Size", formatBytes(metrics.compressedSize))
+                    detailRow("Algorithm", metrics.algorithm?.displayName ?? "None", help: "Compression algorithm used for the file payload.")
+                    detailRow("Original Size", formatBytes(metrics.originalSize), help: "Size of the file before compression.")
+                    detailRow("Compressed Size", formatBytes(metrics.compressedSize), help: "Total compressed payload bytes sent.")
                     if metrics.wasEffective {
-                        detailRow("Savings", String(format: "%.1f%% smaller", metrics.savingsPercent))
+                        detailRow("Savings", String(format: "%.1f%% smaller", metrics.savingsPercent), help: "Percent reduction vs original size.")
                     } else {
-                        detailRow("Savings", "No benefit (stored uncompressed)")
+                        detailRow("Savings", "No benefit (stored uncompressed)", help: "Compression did not reduce size, so the transfer stored data uncompressed.")
                     }
-                    detailRow("Bytes Saved", formatBytes(metrics.bytesSaved))
+                    detailRow("Bytes Saved", formatBytes(metrics.bytesSaved), help: "Original size minus compressed size.")
                 } else if isActive {
                     // Active transfer - show settings
                     let settings = transfer.compressionSettings
                     if settings.useGlobalSettings {
-                        detailRow("Mode", "Using global settings")
+                        detailRow("Mode", "Using global settings", help: "This transfer uses the global compression configuration.")
                     } else if let override = settings.enabledOverride {
-                        detailRow("Enabled", override ? "Yes" : "No")
+                        detailRow("Enabled", override ? "Yes" : "No", help: "Per-transfer override to force compression on or off.")
                     }
                     if let algo = settings.algorithmOverride {
-                        detailRow("Algorithm", algo.displayName)
+                        detailRow("Algorithm", algo.displayName, help: "Per-transfer compression algorithm override.")
                     }
 
                     // Show live compression ratio if available
                     if transfer.bytesTransmitted > 0 && transfer.bytesSent > 0 && transfer.bytesTransmitted != transfer.bytesSent {
                         let liveRatio = Double(transfer.bytesTransmitted) / Double(transfer.bytesSent)
                         if liveRatio < 1.0 {
-                            detailRow("Live Ratio", String(format: "%.1f%% of original", liveRatio * 100))
+                            detailRow("Live Ratio", String(format: "%.1f%% of original", liveRatio * 100), help: "Running ratio of bytes sent over the air vs original bytes so far.")
                         }
                     }
                 } else {
-                    detailRow("Status", "No compression used")
+                    detailRow("Status", "No compression used", help: "Compression was disabled for this transfer.")
                 }
             }
 
@@ -301,19 +301,19 @@ struct BulkTransferRow: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
 
-                detailRow("Data Started", formatTime(dataStart))
+                detailRow("Data Started", formatTime(dataStart), help: "Timestamp when the first data chunk was sent/received.")
                 if let dataDuration = transfer.dataPhaseDurationSeconds {
                     let label = transfer.dataPhaseCompletedAt == nil ? "Data Elapsed" : "Data Duration"
-                    detailRow(label, formatDuration(dataDuration))
+                    detailRow(label, formatDuration(dataDuration), help: "Elapsed time from first data chunk to the latest (or last) data chunk.")
                 }
 
                 if let completed = transfer.completedAt {
-                    detailRow("Completed", formatTime(completed))
+                    detailRow("Completed", formatTime(completed), help: "Timestamp when the transfer finished.")
                     if let total = transfer.totalDurationSeconds {
-                        detailRow("Total Duration", formatDuration(total))
+                        detailRow("Total Duration", formatDuration(total), help: "Total elapsed time from transfer start to completion, including setup and processing.")
                     }
                     if let processing = transfer.processingDurationSeconds {
-                        detailRow("Processing", formatDuration(processing))
+                        detailRow("Processing", formatDuration(processing), help: "Local post-transfer work such as reassembly, decompression, hashing, and file save. Small files can be near-zero.")
                     }
                 }
             }
@@ -326,17 +326,17 @@ struct BulkTransferRow: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
 
-                detailRow("Data Rate", transfer.throughputDisplay)
+                detailRow("Data Rate", transfer.throughputDisplay, help: "Payload bytes divided by data duration.")
                 if transfer.compressionUsed {
-                    detailRow("Air Rate", transfer.airThroughputDisplay)
-                    detailRow("Efficiency", String(format: "%.0f%%", transfer.bandwidthEfficiency * 100))
+                    detailRow("Air Rate", transfer.airThroughputDisplay, help: "Over-the-air bytes (including framing/compression) divided by data duration.")
+                    detailRow("Efficiency", String(format: "%.0f%%", transfer.bandwidthEfficiency * 100), help: "Data Rate divided by Air Rate.")
                 }
 
                 if transfer.direction == .outbound, let remote = transfer.remoteTransferMetrics {
-                    detailRow("Rx Data Rate", formatBitRate(remote.dataBytesPerSecond * 8))
-                    detailRow("Rx Data Duration", formatDuration(remote.dataDurationSeconds))
+                    detailRow("Rx Data Rate", formatBitRate(remote.dataBytesPerSecond * 8), help: "Receiver-reported payload bytes divided by receiver data duration.")
+                    detailRow("Rx Data Duration", formatDuration(remote.dataDurationSeconds), help: "Receiver-reported time from first to last valid chunk.")
                     if remote.processingDurationSeconds > 0 {
-                        detailRow("Rx Processing", formatDuration(remote.processingDurationSeconds))
+                        detailRow("Rx Processing", formatDuration(remote.processingDurationSeconds), help: "Receiver-reported post-transfer processing time (reassembly/decompress/verify/save). Can be near-zero on small files.")
                     }
                 }
             }
@@ -346,8 +346,8 @@ struct BulkTransferRow: View {
     }
 
     @ViewBuilder
-    private func detailRow(_ label: String, _ value: String) -> some View {
-        HStack {
+    private func detailRow(_ label: String, _ value: String, help: String? = nil) -> some View {
+        let row = HStack {
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -355,6 +355,12 @@ struct BulkTransferRow: View {
             Text(value)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+
+        if let help {
+            row.help(help)
+        } else {
+            row
         }
     }
 
@@ -471,11 +477,17 @@ struct BulkTransferRow: View {
     private var statusBadge: some View {
         switch transfer.status {
         case .pending:
-            Label("Queued", systemImage: "clock")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if transfer.direction == .inbound {
+                Label("Pending permission", systemImage: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else {
+                Label("Queued", systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         case .awaitingAcceptance:
-            Label("Awaiting", systemImage: "hourglass")
+            Label("Pending permission", systemImage: "lock.fill")
                 .font(.caption)
                 .foregroundStyle(.orange)
         case .sending:
@@ -547,6 +559,7 @@ struct BulkTransferRow: View {
 struct BulkTransferListView: View {
     let transfers: [BulkTransfer]
     var pendingIncomingTransfers: [IncomingTransferRequest] = []
+    var suppressIncomingRequests: Bool = false
     let onPause: (UUID) -> Void
     let onResume: (UUID) -> Void
     let onCancel: (UUID) -> Void
@@ -555,24 +568,22 @@ struct BulkTransferListView: View {
     var onAcceptIncoming: ((UUID) -> Void)?
     var onDeclineIncoming: ((UUID) -> Void)?
 
+    private var visibleIncomingRequests: [IncomingTransferRequest] {
+        []
+    }
+
+    private var visibleTransfers: [BulkTransfer] {
+        suppressIncomingRequests
+            ? transfers.filter { $0.status != .awaitingAcceptance }
+            : transfers
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
             HStack {
                 Text("File Transfers")
                     .font(.headline)
-
-                // Incoming badge
-                if !pendingIncomingTransfers.isEmpty {
-                    Text("\(pendingIncomingTransfers.count)")
-                        .font(.caption2)
-                        .fontWeight(.semibold)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.blue)
-                        .foregroundStyle(.white)
-                        .clipShape(Capsule())
-                }
 
                 Spacer()
 
@@ -598,7 +609,7 @@ struct BulkTransferListView: View {
             Divider()
 
             // Transfer list
-            if transfers.isEmpty && pendingIncomingTransfers.isEmpty {
+            if visibleTransfers.isEmpty && visibleIncomingRequests.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "doc.badge.arrow.up")
                         .font(.system(size: 48))
@@ -616,19 +627,6 @@ struct BulkTransferListView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 8) {
-                        // Pending incoming transfers (show first for attention)
-                        if !pendingIncomingTransfers.isEmpty {
-                            Section {
-                                IncomingTransferListView(
-                                    requests: pendingIncomingTransfers,
-                                    onAccept: { id in onAcceptIncoming?(id) },
-                                    onDecline: { id in onDeclineIncoming?(id) }
-                                )
-                            } header: {
-                                SectionHeader(title: "Incoming Requests", count: pendingIncomingTransfers.count)
-                            }
-                        }
-
                         // Active transfers
                         if !activeTransfers.isEmpty {
                             Section {
@@ -673,9 +671,9 @@ struct BulkTransferListView: View {
     }
 
     private var activeTransfers: [BulkTransfer] {
-        transfers.filter { transfer in
+        visibleTransfers.filter { transfer in
             switch transfer.status {
-            case .pending, .awaitingAcceptance, .sending, .paused, .awaitingCompletion:
+            case .pending, .sending, .paused, .awaitingCompletion:
                 return true
             default:
                 return false
@@ -684,7 +682,7 @@ struct BulkTransferListView: View {
     }
 
     private var completedTransfers: [BulkTransfer] {
-        transfers.filter { transfer in
+        visibleTransfers.filter { transfer in
             switch transfer.status {
             case .completed, .cancelled, .failed:
                 return true
