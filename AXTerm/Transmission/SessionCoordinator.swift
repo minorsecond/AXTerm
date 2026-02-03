@@ -1315,6 +1315,10 @@ final class SessionCoordinator: ObservableObject {
             compressionSettings: compressionSettings
         )
 
+        // Update transmission size to reflect actual data being sent (compressed or original)
+        // This ensures progress tracking is accurate for compressed transfers
+        transfer.setTransmissionSize(dataToSend.count)
+
         // Set status to awaiting acceptance - we'll only send chunks after receiver accepts
         transfer.status = .awaitingAcceptance
         transfer.markStarted()

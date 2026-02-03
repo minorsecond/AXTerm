@@ -346,7 +346,7 @@ extension AXDPCompression.Algorithm {
 struct BulkTransfer: Identifiable, Sendable {
     let id: UUID
     let fileName: String
-    let fileSize: Int
+    let fileSize: Int  // Original uncompressed file size (for display)
     let destination: String
     let chunkSize: Int
 
@@ -355,6 +355,11 @@ struct BulkTransfer: Identifiable, Sendable {
 
     /// Transfer protocol being used
     let transferProtocol: TransferProtocolType
+
+    /// Actual size of data being transmitted (may differ from fileSize if compressed)
+    /// For outbound: compressed size if compression used, otherwise fileSize
+    /// For inbound: received bytes
+    var transmissionSize: Int
 
     /// Current status
     var status: BulkTransferStatus = .pending
@@ -414,6 +419,7 @@ struct BulkTransfer: Identifiable, Sendable {
         self.direction = direction
         self.transferProtocol = transferProtocol
         self.compressionSettings = compressionSettings
+        self.transmissionSize = fileSize  // Default to file size, updated when compression applied
     }
 
     /// Analyze compressibility of file data
@@ -433,9 +439,16 @@ struct BulkTransfer: Identifiable, Sendable {
     // MARK: - Progress
 
     /// Transfer progress (0.0 to 1.0)
+    /// For outbound transfers with compression, progress is based on transmitted bytes vs transmission size
     var progress: Double {
-        guard fileSize > 0 else { return 1.0 }
-        return min(1.0, Double(bytesSent) / Double(fileSize))
+        let targetSize = transmissionSize > 0 ? transmissionSize : fileSize
+        guard targetSize > 0 else { return 1.0 }
+        return min(1.0, Double(bytesSent) / Double(targetSize))
+    }
+
+    /// Update transmission size when compression is applied
+    mutating func setTransmissionSize(_ size: Int) {
+        transmissionSize = size
     }
 
     // MARK: - State Checks
@@ -536,10 +549,11 @@ struct BulkTransfer: Identifiable, Sendable {
 
     // MARK: - Chunk Management
 
-    /// Total number of chunks
+    /// Total number of chunks (based on transmission size, which may be compressed)
     var totalChunks: Int {
-        guard fileSize > 0 else { return 0 }
-        return (fileSize + chunkSize - 1) / chunkSize
+        let targetSize = transmissionSize > 0 ? transmissionSize : fileSize
+        guard targetSize > 0 else { return 0 }
+        return (targetSize + chunkSize - 1) / chunkSize
     }
 
     /// Number of completed chunks
@@ -559,10 +573,11 @@ struct BulkTransfer: Identifiable, Sendable {
         sentChunks.remove(chunk)
         retryChunks.remove(chunk)
 
-        // Update bytesSent
+        // Update bytesSent based on transmission size (compressed or original)
+        let targetSize = transmissionSize > 0 ? transmissionSize : fileSize
         bytesSent = completedChunks_.reduce(0) { total, c in
             let start = c * chunkSize
-            let end = min(start + chunkSize, fileSize)
+            let end = min(start + chunkSize, targetSize)
             return total + (end - start)
         }
     }
