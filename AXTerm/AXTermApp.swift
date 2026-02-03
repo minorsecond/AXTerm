@@ -26,8 +26,18 @@ struct AXTermApp: App {
     private let client: PacketEngine
 
     init() {
+        let isUnitTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
         let testConfig = TestModeConfiguration.shared
-        let settingsStore = AppSettingsStore()
+        let isTestModeRun = isUnitTests || testConfig.isTestMode
+        let defaults: UserDefaults
+        if isTestModeRun {
+            let suiteName = "com.rosswardrup.AXTerm.test.\(testConfig.instanceID)"
+            defaults = UserDefaults(suiteName: suiteName) ?? .standard
+            defaults.removePersistentDomain(forName: suiteName)
+        } else {
+            defaults = .standard
+        }
+        let settingsStore = AppSettingsStore(defaults: defaults)
         _settings = StateObject(wrappedValue: settingsStore)
         let router = PacketInspectionRouter()
         _inspectionRouter = StateObject(wrappedValue: router)
@@ -37,6 +47,7 @@ struct AXTermApp: App {
             if let callsign = testConfig.callsign {
                 settingsStore.myCallsign = callsign
             }
+            settingsStore.runInMenuBar = false
         }
 
         SentryManager.shared.startIfEnabled(settings: settingsStore)
@@ -44,8 +55,12 @@ struct AXTermApp: App {
 
         // Use ephemeral database in test mode to avoid polluting the real database
         let queue: DatabaseQueue?
-        if testConfig.isTestMode {
-            queue = try? DatabaseManager.makeEphemeralDatabaseQueue(instanceID: testConfig.instanceID)
+        let useEphemeralDatabase = (testConfig.isTestMode && testConfig.ephemeralDatabase) || isUnitTests || testConfig.isTestMode
+        if useEphemeralDatabase {
+            let instanceID = isUnitTests
+                ? "unit-\(ProcessInfo.processInfo.processIdentifier)"
+                : testConfig.instanceID
+            queue = try? DatabaseManager.makeEphemeralDatabaseQueue(instanceID: instanceID)
         } else {
             queue = try? DatabaseManager.makeDatabaseQueue()
         }
@@ -83,7 +98,7 @@ struct AXTermApp: App {
         SentryManager.shared.setConnectionTags(host: effectiveHost, port: effectivePort)
 
         // Auto-connect if settings say so OR if test mode requests it
-        if settingsStore.autoConnectOnLaunch || testConfig.autoConnect {
+        if !isUnitTests && (settingsStore.autoConnectOnLaunch || testConfig.autoConnect) {
             self.client.connect(host: effectiveHost, port: effectivePort)
         }
         appDelegate.settings = settingsStore
