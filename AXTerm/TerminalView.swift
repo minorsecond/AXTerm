@@ -615,20 +615,7 @@ struct TerminalView: View {
             )
         }
         .onChange(of: sessionCoordinator.pendingIncomingTransfers) { _, newRequests in
-            // Auto-show modal for first pending request if not already showing
-            if currentIncomingRequest == nil, let first = newRequests.first {
-                // Check if auto-accept or auto-deny is enabled for this callsign
-                if settings.isCallsignAllowedForFileTransfer(first.sourceCallsign) {
-                    // Auto-accept
-                    sessionCoordinator.acceptIncomingTransfer(first.id)
-                } else if settings.isCallsignDeniedForFileTransfer(first.sourceCallsign) {
-                    // Auto-deny
-                    sessionCoordinator.declineIncomingTransfer(first.id)
-                } else {
-                    // Show modal for user decision - setting the item shows the sheet
-                    currentIncomingRequest = first
-                }
-            }
+            handlePendingIncomingTransfers(newRequests)
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleFileDrop(providers)
@@ -1056,6 +1043,34 @@ struct TerminalView: View {
     }
 
     // MARK: - Transfer Management
+
+    /// Handle pending incoming transfer requests with auto-accept/deny logic
+    private func handlePendingIncomingTransfers(_ newRequests: [IncomingTransferRequest]) {
+        // Auto-show modal for first pending request if not already showing
+        guard currentIncomingRequest == nil, let first = newRequests.first else { return }
+
+        // Check if auto-accept or auto-deny is enabled for this callsign
+        if settings.isCallsignAllowedForFileTransfer(first.sourceCallsign) {
+            // Auto-accept - log so user knows what happened
+            TxLog.inbound(.session, "Auto-accepted file transfer (callsign in allow list)", [
+                "from": first.sourceCallsign,
+                "file": first.fileName,
+                "size": first.fileSize
+            ])
+            sessionCoordinator.acceptIncomingTransfer(first.id)
+        } else if settings.isCallsignDeniedForFileTransfer(first.sourceCallsign) {
+            // Auto-deny - log so user knows what happened
+            TxLog.inbound(.session, "Auto-declined file transfer (callsign in deny list)", [
+                "from": first.sourceCallsign,
+                "file": first.fileName,
+                "size": first.fileSize
+            ])
+            sessionCoordinator.declineIncomingTransfer(first.id)
+        } else {
+            // Show modal for user decision - setting the item shows the sheet
+            currentIncomingRequest = first
+        }
+    }
 
     private func handleFileDrop(_ providers: [NSItemProvider]) -> Bool {
         guard let provider = providers.first else { return false }

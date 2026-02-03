@@ -41,22 +41,23 @@ struct BulkTransferRow: View {
                 // Protocol badge
                 transferProtocolBadge(transfer.transferProtocol)
 
-                // Compression badge
+                // Compression badge - show when compression was used
                 if let metrics = transfer.compressionMetrics, metrics.wasEffective {
                     compressionBadge(metrics)
-                } else if isActive && transfer.compressionSettings != .disabled && !transfer.compressionSettings.useGlobalSettings {
-                    // Show "compressing" indicator during active transfer
+                } else if let metrics = transfer.compressionMetrics, metrics.algorithm != nil && !metrics.wasEffective {
+                    // Compression was attempted but not effective
                     HStack(spacing: 2) {
                         Image(systemName: "arrow.down.right.and.arrow.up.left")
                             .font(.caption2)
-                        Text("Compressing")
+                        Text("No savings")
                     }
                     .font(.caption2)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Color.blue.opacity(0.2))
-                    .foregroundStyle(.blue)
+                    .background(Color.gray.opacity(0.2))
+                    .foregroundStyle(.secondary)
                     .clipShape(Capsule())
+                    .help("Compression was attempted but provided no benefit")
                 }
 
                 Spacer()
@@ -128,16 +129,18 @@ struct BulkTransferRow: View {
                         .help("Data throughput")
                     }
 
-                    // Air throughput (if compression active)
-                    if transfer.compressionUsed && transfer.airThroughputBytesPerSecond > 0 {
+                    // Air throughput - shows actual bytes over the air
+                    if transfer.airThroughputBytesPerSecond > 0 {
                         HStack(spacing: 2) {
                             Image(systemName: "antenna.radiowaves.left.and.right")
                                 .font(.caption2)
                             Text(transfer.airThroughputDisplay)
                         }
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .help("Air interface throughput (compressed)")
+                        .foregroundStyle(transfer.compressionUsed ? .tertiary : .secondary)
+                        .help(transfer.compressionUsed
+                              ? "Air interface throughput (compressed data)"
+                              : "Air interface throughput")
                     }
 
                     // ETA
@@ -238,8 +241,11 @@ struct BulkTransferRow: View {
             Divider()
 
             // File info
-            detailRow("File Size", formatBytes(transfer.fileSize))
-            detailRow("Destination", transfer.destination)
+            detailRow("Original Size", formatBytes(transfer.fileSize))
+            if transfer.compressionUsed && transfer.transmissionSize != transfer.fileSize {
+                detailRow("Transfer Size", formatBytes(transfer.transmissionSize))
+            }
+            detailRow(transfer.direction == .inbound ? "From" : "To", transfer.destination)
             detailRow("Protocol", transfer.transferProtocol.displayName)
             detailRow("Chunk Size", "\(transfer.chunkSize) bytes")
             detailRow("Chunks", "\(transfer.completedChunks)/\(transfer.totalChunks)")
@@ -392,14 +398,25 @@ struct BulkTransferRow: View {
     }
 
     private var progressText: String {
+        // Show progress against transmission size (compressed if applicable)
+        let targetSize = transfer.transmissionSize > 0 ? transfer.transmissionSize : transfer.fileSize
         let sent = ByteCountFormatter.string(
             fromByteCount: Int64(transfer.bytesSent),
             countStyle: .file
         )
         let total = ByteCountFormatter.string(
-            fromByteCount: Int64(transfer.fileSize),
+            fromByteCount: Int64(targetSize),
             countStyle: .file
         )
+
+        // If compressed and different from original, show both
+        if transfer.compressionUsed && targetSize != transfer.fileSize {
+            let originalFormatted = ByteCountFormatter.string(
+                fromByteCount: Int64(transfer.fileSize),
+                countStyle: .file
+            )
+            return "\(sent) / \(total) (\(originalFormatted) uncompressed)"
+        }
         return "\(sent) / \(total)"
     }
 
@@ -453,9 +470,26 @@ struct BulkTransferRow: View {
                 .font(.caption)
                 .foregroundStyle(.orange)
         case .awaitingCompletion:
-            Label("Finalizing", systemImage: "checkmark.circle.badge.questionmark")
+            if transfer.direction == .inbound && transfer.compressionUsed {
+                // Receiver with compression - show decompressing status
+                HStack(spacing: 4) {
+                    ProgressView()
+                        .scaleEffect(0.5)
+                        .frame(width: 10, height: 10)
+                    Text("Decompressing")
+                }
                 .font(.caption)
                 .foregroundStyle(.blue)
+            } else if transfer.direction == .outbound {
+                // Sender awaiting completion confirmation
+                Label("Awaiting confirmation", systemImage: "checkmark.circle.badge.questionmark")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+            } else {
+                Label("Finalizing", systemImage: "checkmark.circle.badge.questionmark")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+            }
         case .completed:
             Label("Completed", systemImage: "checkmark.circle.fill")
                 .font(.caption)

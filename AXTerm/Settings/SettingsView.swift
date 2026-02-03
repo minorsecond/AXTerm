@@ -463,6 +463,10 @@ struct SettingsView: View {
             Section("Transmission") {
                 transmissionSettingsSection
             }
+
+            Section("File Transfers") {
+                fileTransferPermissionsSection
+            }
         }
         .formStyle(.grouped)
         .padding(20)
@@ -738,6 +742,145 @@ struct SettingsView: View {
                 Toggle("Show AXDP decode details in console", isOn: $txAdaptiveSettings.showAXDPDecodeDetails)
             }
         }
+    }
+
+    // MARK: - File Transfer Permissions Section
+
+    @ViewBuilder
+    private var fileTransferPermissionsSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Control which stations can send you files without prompting.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            // Auto-Accept List
+            GroupBox("Auto-Accept") {
+                VStack(alignment: .leading, spacing: 10) {
+                    if settings.allowedFileTransferCallsigns.isEmpty {
+                        Text("No callsigns configured")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .padding(.vertical, 4)
+                    } else {
+                        ForEach(settings.allowedFileTransferCallsigns, id: \.self) { callsign in
+                            HStack {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .font(.caption)
+
+                                Text(callsign)
+                                    .font(.system(.body, design: .monospaced))
+
+                                Spacer()
+
+                                Button {
+                                    settings.removeCallsignFromFileTransferAllowlist(callsign)
+                                } label: {
+                                    Image(systemName: "minus.circle")
+                                        .foregroundStyle(.red)
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Remove from auto-accept list")
+                            }
+                        }
+                    }
+
+                    HStack {
+                        TextField("Add callsign", text: $newAllowCallsign)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit {
+                                addToAllowList()
+                            }
+
+                        Button("Add") {
+                            addToAllowList()
+                        }
+                        .disabled(newAllowCallsign.isEmpty || !CallsignValidator.isValid(newAllowCallsign))
+                    }
+
+                    Text("Files from these callsigns are accepted automatically.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 4)
+            }
+
+            // Auto-Deny List
+            GroupBox("Auto-Deny") {
+                VStack(alignment: .leading, spacing: 10) {
+                    if settings.deniedFileTransferCallsigns.isEmpty {
+                        Text("No callsigns configured")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .padding(.vertical, 4)
+                    } else {
+                        ForEach(settings.deniedFileTransferCallsigns, id: \.self) { callsign in
+                            HStack {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.red)
+                                    .font(.caption)
+
+                                Text(callsign)
+                                    .font(.system(.body, design: .monospaced))
+
+                                Spacer()
+
+                                Button {
+                                    settings.removeCallsignFromFileTransferDenylist(callsign)
+                                } label: {
+                                    Image(systemName: "minus.circle")
+                                        .foregroundStyle(.red)
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Remove from auto-deny list")
+                            }
+                        }
+                    }
+
+                    HStack {
+                        TextField("Add callsign", text: $newDenyCallsign)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit {
+                                addToDenyList()
+                            }
+
+                        Button("Add") {
+                            addToDenyList()
+                        }
+                        .disabled(newDenyCallsign.isEmpty || !CallsignValidator.isValid(newDenyCallsign))
+                    }
+
+                    Text("Files from these callsigns are declined automatically.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 4)
+            }
+
+            // Clear All Button
+            if !settings.allowedFileTransferCallsigns.isEmpty || !settings.deniedFileTransferCallsigns.isEmpty {
+                Button("Clear All Permissions") {
+                    settings.allowedFileTransferCallsigns.removeAll()
+                    settings.deniedFileTransferCallsigns.removeAll()
+                }
+                .foregroundStyle(.red)
+            }
+        }
+    }
+
+    @State private var newAllowCallsign = ""
+    @State private var newDenyCallsign = ""
+
+    private func addToAllowList() {
+        guard !newAllowCallsign.isEmpty, CallsignValidator.isValid(newAllowCallsign) else { return }
+        settings.allowCallsignForFileTransfer(newAllowCallsign)
+        newAllowCallsign = ""
+    }
+
+    private func addToDenyList() {
+        guard !newDenyCallsign.isEmpty, CallsignValidator.isValid(newDenyCallsign) else { return }
+        settings.denyCallsignForFileTransfer(newDenyCallsign)
+        newDenyCallsign = ""
     }
 
     @ViewBuilder

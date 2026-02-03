@@ -484,6 +484,20 @@ final class SessionCoordinator: ObservableObject {
             chunkSize: Int(fileMeta.chunkSize),
             direction: .inbound
         )
+        // For inbound transfers with compression, set transmission size based on expected chunks
+        // This is the compressed data size we'll actually receive
+        let estimatedTransmissionSize = expectedChunks * Int(fileMeta.chunkSize)
+        transfer.setTransmissionSize(estimatedTransmissionSize)
+
+        // Store compression metrics if compression was used
+        if compressionAlgorithm != .none {
+            transfer.setCompressionMetrics(
+                algorithm: compressionAlgorithm,
+                originalSize: Int(fileMeta.fileSize),
+                compressedSize: estimatedTransmissionSize
+            )
+        }
+
         transfer.status = .pending
         transfer.markStarted()
         transfers.append(transfer)
@@ -538,6 +552,11 @@ final class SessionCoordinator: ObservableObject {
            let transferIndex = transfers.firstIndex(where: { $0.id == transferId }) {
             var transfer = transfers[transferIndex]
             transfer.markChunkCompleted(chunkIndex)
+
+            // Track actual bytes received for accurate progress and throughput
+            // Use state's totalBytesReceived for precise tracking
+            transfer.bytesSent = state.totalBytesReceived
+            transfer.bytesTransmitted = state.totalBytesReceived
 
             // If transfer is in pending state, move to receiving
             if transfer.status == .pending {
@@ -871,6 +890,9 @@ final class SessionCoordinator: ObservableObject {
             transfersAwaitingAcceptance.removeValue(forKey: axdpSessionId)
 
             // Start sending chunks now that transfer is accepted
+            // Reset the start time to now - this gives accurate throughput by measuring
+            // only the actual data transfer, not the acceptance handshake
+            transfers[transferIndex].startedAt = Date()
             transfers[transferIndex].status = .sending
 
             // Get destination and path from transfer
@@ -1478,6 +1500,8 @@ final class SessionCoordinator: ObservableObject {
         var transfer = transfers[transferIndex]
         transfer.markChunkSent(nextChunk)
         transfer.markChunkCompleted(nextChunk)
+        // Update bytesTransmitted for air rate calculation (actual bytes sent over air)
+        transfer.bytesTransmitted += chunkData.count
         transfers[transferIndex] = transfer
 
         // Adaptive UI update frequency - more frequent for small transfers
