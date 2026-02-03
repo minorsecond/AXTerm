@@ -44,6 +44,9 @@ enum AXDP {
         case compression        = 0x30
         case originalLength     = 0x31
         case payloadCompressed  = 0x32
+
+        // Extensions (0x40-0x4F)
+        case transferMetrics    = 0x40
     }
 
     // MARK: - Message Types
@@ -124,6 +127,9 @@ enum AXDP {
         // File metadata (Section 9.2)
         var fileMeta: AXDPFileMeta?
 
+        // Transfer metrics (extension)
+        var transferMetrics: AXDPTransferMetrics?
+
         // Unknown TLVs preserved for forward compatibility
         var unknownTLVs: [TLV] = []
 
@@ -139,7 +145,8 @@ enum AXDP {
             metadata: Data? = nil,
             capabilities: AXDPCapability? = nil,
             compression: AXDPCompression.Algorithm = .none,
-            fileMeta: AXDPFileMeta? = nil
+            fileMeta: AXDPFileMeta? = nil,
+            transferMetrics: AXDPTransferMetrics? = nil
         ) {
             self.type = type
             self.sessionId = sessionId
@@ -153,6 +160,7 @@ enum AXDP {
             self.capabilities = capabilities
             self.compression = compression
             self.fileMeta = fileMeta
+            self.transferMetrics = transferMetrics
         }
 
         /// Encode message to bytes with magic header + TLVs
@@ -226,6 +234,11 @@ enum AXDP {
             // File metadata
             if let fm = fileMeta {
                 data.append(TLV(type: TLVType.metadata.rawValue, value: fm.encode()).encode())
+            }
+
+            // Transfer metrics (extension)
+            if let metrics = transferMetrics {
+                data.append(TLV(type: TLVType.transferMetrics.rawValue, value: metrics.encode()).encode())
             }
 
             return data
@@ -321,6 +334,13 @@ enum AXDP {
                 case TLVType.payloadCompressed.rawValue:
                     compressedPayload = tlv.value
 
+                case TLVType.transferMetrics.rawValue:
+                    if let metrics = AXDPTransferMetrics.decode(from: tlv.value) {
+                        msg.transferMetrics = metrics
+                    } else {
+                        msg.unknownTLVs.append(tlv)
+                    }
+
                 default:
                     // Unknown TLV - preserve for forward compatibility
                     msg.unknownTLVs.append(tlv)
@@ -368,6 +388,64 @@ enum AXDP {
     }
 
     // MARK: - Helper Functions
+
+    /// Transfer metrics extension (durations in milliseconds, sizes in bytes)
+    struct AXDPTransferMetrics: Sendable, Equatable {
+        static let version: UInt8 = 1
+
+        let dataDurationMs: UInt32
+        let processingDurationMs: UInt32
+        let bytesReceived: UInt32
+        let decompressedBytes: UInt32?
+
+        var dataDurationSeconds: Double {
+            Double(dataDurationMs) / 1000.0
+        }
+
+        var processingDurationSeconds: Double {
+            Double(processingDurationMs) / 1000.0
+        }
+
+        var dataBytesPerSecond: Double {
+            let seconds = dataDurationSeconds
+            guard seconds > 0 else { return 0 }
+            return Double(bytesReceived) / seconds
+        }
+
+        func encode() -> Data {
+            var data = Data()
+            data.append(Self.version)
+            data.append(encodeUInt32(dataDurationMs))
+            data.append(encodeUInt32(processingDurationMs))
+            data.append(encodeUInt32(bytesReceived))
+            if let decompressedBytes = decompressedBytes {
+                data.append(encodeUInt32(decompressedBytes))
+            }
+            return data
+        }
+
+        static func decode(from data: Data) -> AXDPTransferMetrics? {
+            guard data.count >= 1 + 12 else { return nil }
+            let version = data[0]
+            guard version == Self.version else { return nil }
+
+            let dataDurationMs = decodeUInt32(data.subdata(in: 1..<5))
+            let processingDurationMs = decodeUInt32(data.subdata(in: 5..<9))
+            let bytesReceived = decodeUInt32(data.subdata(in: 9..<13))
+
+            var decompressedBytes: UInt32?
+            if data.count >= 17 {
+                decompressedBytes = decodeUInt32(data.subdata(in: 13..<17))
+            }
+
+            return AXDPTransferMetrics(
+                dataDurationMs: dataDurationMs,
+                processingDurationMs: processingDurationMs,
+                bytesReceived: bytesReceived,
+                decompressedBytes: decompressedBytes
+            )
+        }
+    }
 
     /// Check if data starts with AXDP magic header
     static func hasMagic(_ data: Data) -> Bool {

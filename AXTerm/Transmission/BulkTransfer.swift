@@ -373,6 +373,11 @@ struct BulkTransfer: Identifiable, Sendable {
     /// Timing
     var startedAt: Date?
     var completedAt: Date?
+    var dataPhaseStartedAt: Date?
+    var dataPhaseCompletedAt: Date?
+
+    /// Receiver-reported transfer metrics (extension, outbound only)
+    var remoteTransferMetrics: AXDP.AXDPTransferMetrics?
 
     /// Compression settings for this transfer (can override global)
     var compressionSettings: TransferCompressionSettings = .useGlobal
@@ -488,26 +493,34 @@ struct BulkTransfer: Identifiable, Sendable {
     /// Mark transfer as started
     mutating func markStarted() {
         startedAt = Date()
+        if dataPhaseStartedAt == nil {
+            dataPhaseStartedAt = startedAt
+        }
     }
 
     /// Mark transfer as completed
     mutating func markCompleted() {
         completedAt = Date()
+        if dataPhaseCompletedAt == nil, dataPhaseStartedAt != nil {
+            dataPhaseCompletedAt = completedAt
+        }
         status = .completed
     }
 
     /// Throughput in bytes per second (data throughput, not air throughput)
     var throughputBytesPerSecond: Double {
-        guard let start = startedAt else { return 0 }
-        let elapsed = Date().timeIntervalSince(start)
+        guard let start = dataPhaseStart else { return 0 }
+        let end = dataPhaseEnd ?? Date()
+        let elapsed = end.timeIntervalSince(start)
         guard elapsed > 0 else { return 0 }
         return Double(bytesSent) / elapsed
     }
 
     /// Air throughput in bytes per second (actual transmitted bytes)
     var airThroughputBytesPerSecond: Double {
-        guard let start = startedAt else { return 0 }
-        let elapsed = Date().timeIntervalSince(start)
+        guard let start = dataPhaseStart else { return 0 }
+        let end = dataPhaseEnd ?? Date()
+        let elapsed = end.timeIntervalSince(start)
         guard elapsed > 0 else { return 0 }
         return Double(bytesTransmitted) / elapsed
     }
@@ -518,6 +531,36 @@ struct BulkTransfer: Identifiable, Sendable {
         guard throughput > 0 else { return nil }
         let remaining = fileSize - bytesSent
         return Double(remaining) / throughput
+    }
+
+    /// Data phase start time (first successfully transferred chunk)
+    var dataPhaseStart: Date? {
+        dataPhaseStartedAt ?? startedAt
+    }
+
+    /// Data phase end time (last successfully transferred chunk)
+    var dataPhaseEnd: Date? {
+        dataPhaseCompletedAt
+    }
+
+    /// Data phase duration (seconds)
+    var dataPhaseDurationSeconds: TimeInterval? {
+        guard let start = dataPhaseStart else { return nil }
+        let end = dataPhaseEnd ?? (status == .completed ? completedAt : nil) ?? Date()
+        return end.timeIntervalSince(start)
+    }
+
+    /// Total duration from data start to completion (includes processing/ack)
+    var totalDurationSeconds: TimeInterval? {
+        guard let start = dataPhaseStart, let completedAt = completedAt else { return nil }
+        return completedAt.timeIntervalSince(start)
+    }
+
+    /// Processing duration after data phase (e.g. reassembly/decompression/save)
+    var processingDurationSeconds: TimeInterval? {
+        guard let dataPhaseEnd = dataPhaseEnd, let completedAt = completedAt else { return nil }
+        let duration = completedAt.timeIntervalSince(dataPhaseEnd)
+        return duration >= 0 ? duration : nil
     }
 
     /// Format throughput for display (bits per second)

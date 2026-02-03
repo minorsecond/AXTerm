@@ -58,7 +58,7 @@ final class SessionCoordinator: ObservableObject {
     private var pendingCapabilityDiscovery: [String: Date] = [:]
 
     /// Timeout for capability discovery (seconds)
-    private let capabilityDiscoveryTimeout: TimeInterval = 30.0
+    private let capabilityDiscoveryTimeout: TimeInterval = 900.0
 
     /// Callback for capability discovery events (for debug display)
     var onCapabilityEvent: ((CapabilityDebugEvent) -> Void)?
@@ -499,7 +499,6 @@ final class SessionCoordinator: ObservableObject {
         }
 
         transfer.status = .pending
-        transfer.markStarted()
         transfers.append(transfer)
 
         // Create pending incoming transfer request for UI accept/decline
@@ -551,6 +550,20 @@ final class SessionCoordinator: ObservableObject {
         if let transferId = axdpToTransferId[axdpSessionId],
            let transferIndex = transfers.firstIndex(where: { $0.id == transferId }) {
             var transfer = transfers[transferIndex]
+
+            // Guard against processing chunks for already-completed/failed transfers
+            switch transfer.status {
+            case .completed, .failed, .cancelled:
+                TxLog.debug(.axdp, "Ignoring chunk for terminated transfer", [
+                    "session": axdpSessionId,
+                    "chunk": chunkIndex,
+                    "status": String(describing: transfer.status)
+                ])
+                return
+            default:
+                break
+            }
+
             transfer.markChunkCompleted(chunkIndex)
 
             // Track actual bytes received for accurate progress and throughput
@@ -558,9 +571,20 @@ final class SessionCoordinator: ObservableObject {
             transfer.bytesSent = state.totalBytesReceived
             transfer.bytesTransmitted = state.totalBytesReceived
 
-            // If transfer is in pending state, move to receiving
+            // If transfer is in pending state, move to receiving AND reset timing
+            // This ensures throughput calculation starts when data actually arrives,
+            // not when FILE_META was received (which could be much earlier if user took time to accept)
             if transfer.status == .pending {
                 transfer.status = .sending  // Use .sending for "receiving" state
+            }
+
+            if transfer.dataPhaseStartedAt == nil, let start = state.startTime {
+                transfer.dataPhaseStartedAt = start
+                transfer.startedAt = start
+            }
+
+            if state.isComplete, transfer.dataPhaseCompletedAt == nil {
+                transfer.dataPhaseCompletedAt = state.endTime ?? Date()
             }
 
             // Force SwiftUI to see the entire array as new on last chunk (fixes diffing issue)
@@ -600,8 +624,24 @@ final class SessionCoordinator: ObservableObject {
             return
         }
 
+        // CRITICAL: Guard against duplicate completion - prevent processing if already completed or failed
+        // This can happen if multiple chunks arrive rapidly and trigger completion checks
+        switch transfers[transferIndex].status {
+        case .completed, .failed, .cancelled:
+            TxLog.debug(.axdp, "Ignoring duplicate/late transfer completion", [
+                "session": axdpSessionId,
+                "file": state.fileName,
+                "currentStatus": String(describing: transfers[transferIndex].status)
+            ])
+            return
+        default:
+            break
+        }
+
         // Calculate metrics
         let metrics = state.calculateMetrics()
+        let processingStart = Date()
+        var decompressedSize: Int?
 
         TxLog.inbound(.axdp, "Transfer complete", [
             "file": state.fileName,
@@ -627,6 +667,7 @@ final class SessionCoordinator: ObservableObject {
 
         // Reassemble and decompress file (if compression was used)
         if let fileData = state.reassembleAndDecompressFile() {
+            decompressedSize = fileData.count
             // Update compression metrics for UI display
             if state.compressionAlgorithm != .none {
                 transfer.setCompressionMetrics(
@@ -687,13 +728,33 @@ final class SessionCoordinator: ObservableObject {
             transfer.status = .failed(reason: reason)
         }
 
+        let processingEnd = Date()
+
         // Send completion ACK or NACK to sender
         if transferSuccess {
             // Send completion ACK to tell sender the transfer is fully complete
+            let dataDurationMs: UInt32
+            if let start = state.startTime {
+                let end = state.endTime ?? processingStart
+                let duration = max(0, end.timeIntervalSince(start))
+                dataDurationMs = UInt32(duration * 1000.0)
+            } else {
+                dataDurationMs = 0
+            }
+
+            let processingDurationMs = UInt32(max(0, processingEnd.timeIntervalSince(processingStart)) * 1000.0)
+            let metricsExtension = AXDP.AXDPTransferMetrics(
+                dataDurationMs: dataDurationMs,
+                processingDurationMs: processingDurationMs,
+                bytesReceived: UInt32(state.totalBytesReceived),
+                decompressedBytes: decompressedSize.map { UInt32($0) }
+            )
+
             let completionAck = AXDP.Message(
                 type: .ack,
                 sessionId: axdpSessionId,
-                messageId: SessionCoordinator.transferCompleteMessageId
+                messageId: SessionCoordinator.transferCompleteMessageId,
+                transferMetrics: globalAdaptiveSettings.axdpExtensionsEnabled ? metricsExtension : nil
             )
 
             let ackFrame = OutboundFrame(
@@ -710,7 +771,9 @@ final class SessionCoordinator: ObservableObject {
             TxLog.outbound(.axdp, "Sent transfer completion ACK to sender", [
                 "dest": state.sourceCallsign,
                 "file": state.fileName,
-                "axdpSession": axdpSessionId
+                "axdpSession": axdpSessionId,
+                "dataDurationMs": dataDurationMs,
+                "processingDurationMs": processingDurationMs
             ])
         } else {
             // Send completion NACK to tell sender the transfer failed on receiver side
@@ -859,6 +922,9 @@ final class SessionCoordinator: ObservableObject {
                 // Mark transfer as truly completed
                 var transfer = transfers[transferIndex]
                 transfer.markCompleted()
+                if let metrics = message.transferMetrics {
+                    transfer.remoteTransferMetrics = metrics
+                }
 
                 // Force SwiftUI to see the entire array as new (fixes diffing issue)
                 var updatedTransfers = transfers
@@ -1132,7 +1198,7 @@ final class SessionCoordinator: ObservableObject {
                     "dest": destination,
                     "protocol": transferProtocol.rawValue
                 ])
-                return "Cannot send file: \(destination) does not support AXDP. Try a legacy protocol (YAPP, 7plus, or Raw)."
+                return "Cannot send file: \(destination) does not support AXDP. Try a legacy protocol (YAPP)."
 
             case .confirmed:
                 // AXDP confirmed, good to go
@@ -1343,7 +1409,6 @@ final class SessionCoordinator: ObservableObject {
 
         // Set status to awaiting acceptance - we'll only send chunks after receiver accepts
         transfer.status = .awaitingAcceptance
-        transfer.markStarted()
         transfers.append(transfer)
 
         // Store the (possibly compressed) data for chunking
@@ -1494,6 +1559,13 @@ final class SessionCoordinator: ObservableObject {
             displayInfo: "AXDP CHUNK \(nextChunk + 1)/\(transfers[transferIndex].totalChunks)"
         )
 
+        // Start data-phase timing on first chunk sent
+        if transfers[transferIndex].dataPhaseStartedAt == nil {
+            let now = Date()
+            transfers[transferIndex].dataPhaseStartedAt = now
+            transfers[transferIndex].startedAt = now
+        }
+
         sendFrame(chunkFrame)
 
         // Mark chunk as sent and update progress - use explicit reassignment for SwiftUI
@@ -1502,6 +1574,9 @@ final class SessionCoordinator: ObservableObject {
         transfer.markChunkCompleted(nextChunk)
         // Update bytesTransmitted for air rate calculation (actual bytes sent over air)
         transfer.bytesTransmitted += chunkData.count
+        if nextChunk == actualTotalChunks - 1, transfer.dataPhaseCompletedAt == nil {
+            transfer.dataPhaseCompletedAt = Date()
+        }
         transfers[transferIndex] = transfer
 
         // Adaptive UI update frequency - more frequent for small transfers

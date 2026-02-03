@@ -294,21 +294,27 @@ struct BulkTransferRow: View {
             }
 
             // Timing info
-            if let started = transfer.startedAt {
+            if let dataStart = transfer.dataPhaseStart {
                 Divider()
                 Text("Timing")
                     .font(.caption)
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
 
-                detailRow("Started", formatTime(started))
+                detailRow("Data Started", formatTime(dataStart))
+                if let dataDuration = transfer.dataPhaseDurationSeconds {
+                    let label = transfer.dataPhaseCompletedAt == nil ? "Data Elapsed" : "Data Duration"
+                    detailRow(label, formatDuration(dataDuration))
+                }
+
                 if let completed = transfer.completedAt {
                     detailRow("Completed", formatTime(completed))
-                    let duration = completed.timeIntervalSince(started)
-                    detailRow("Duration", formatDuration(duration))
-                } else {
-                    let elapsed = Date().timeIntervalSince(started)
-                    detailRow("Elapsed", formatDuration(elapsed))
+                    if let total = transfer.totalDurationSeconds {
+                        detailRow("Total Duration", formatDuration(total))
+                    }
+                    if let processing = transfer.processingDurationSeconds {
+                        detailRow("Processing", formatDuration(processing))
+                    }
                 }
             }
 
@@ -324,6 +330,14 @@ struct BulkTransferRow: View {
                 if transfer.compressionUsed {
                     detailRow("Air Rate", transfer.airThroughputDisplay)
                     detailRow("Efficiency", String(format: "%.0f%%", transfer.bandwidthEfficiency * 100))
+                }
+
+                if transfer.direction == .outbound, let remote = transfer.remoteTransferMetrics {
+                    detailRow("Rx Data Rate", formatBitRate(remote.dataBytesPerSecond * 8))
+                    detailRow("Rx Data Duration", formatDuration(remote.dataDurationSeconds))
+                    if remote.processingDurationSeconds > 0 {
+                        detailRow("Rx Processing", formatDuration(remote.processingDurationSeconds))
+                    }
                 }
             }
         }
@@ -366,6 +380,16 @@ struct BulkTransferRow: View {
             let hours = Int(seconds / 3600)
             let mins = Int((seconds.truncatingRemainder(dividingBy: 3600)) / 60)
             return "\(hours)h \(mins)m"
+        }
+    }
+
+    private func formatBitRate(_ bitsPerSecond: Double) -> String {
+        if bitsPerSecond < 1000 {
+            return String(format: "%.0f bps", bitsPerSecond)
+        } else if bitsPerSecond < 1_000_000 {
+            return String(format: "%.1f kbps", bitsPerSecond / 1000)
+        } else {
+            return String(format: "%.2f Mbps", bitsPerSecond / 1_000_000)
         }
     }
 

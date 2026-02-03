@@ -1,4 +1,5 @@
 # transmitting.md — AXTerm Transmission Logic (state-of-the-art, compatible)
+Status: 2/2 items complete
 
 > **Scope:** This document guides AI coders implementing **packet transmission** features in **AXTerm** (macOS, Swift/SwiftUI) **above Direwolf** via **KISS**. AXTerm already decodes/sniffs RX frames; this adds a modern TX pipeline, unnumbered (UI) app protocols, and **AX.25 connected-mode** session support (implemented in-app, transmitted via Direwolf).  
 > **Compatibility rule:** Everything must remain usable on existing packet networks. Unknown frames should be ignorable by legacy stations. No “requires everyone to upgrade” assumptions.
@@ -553,7 +554,33 @@ Connected vs UI differences
 
 ⸻
 
-6.x.5 UX requirements for AXDP negotiation + compression
+6.x.5 Transfer metrics extension (completion ACK)
+
+Purpose
+	•	Provide receiver-measured data-phase and processing metrics to the sender
+	•	Avoid wall-clock timestamp dependencies (durations only)
+	•	Keep wire format additive and safely ignorable by older peers
+
+New TLV
+	•	0x40 TransferMetrics (bytes; versioned)
+	•	Currently attached only to the transfer completion ACK (MessageType=ACK, MessageId=0xFFFFFFFF)
+
+TransferMetrics v1 payload (little payload, fixed order)
+	•	version: UInt8 (must be 1)
+	•	dataDurationMs: UInt32 (receiver-measured duration from first valid chunk to last valid chunk)
+	•	processingDurationMs: UInt32 (receiver-side reassembly/decompress/hash/save time)
+	•	bytesReceived: UInt32 (total bytes received over the air, i.e., compressed bytes if used)
+	•	decompressedBytes: UInt32? (optional; present if decompressed size is known)
+
+Checklist
+- [x] Encode TransferMetrics TLV on completion ACK (AXDP extensions only).
+  - Implementation notes: `AXTerm/Transmission/SessionCoordinator.swift` builds AXDP.AXDPTransferMetrics and includes it in completion ACK when `axdpExtensionsEnabled` is true.
+- [x] Decode TransferMetrics TLV and display receiver-measured stats on sender side.
+  - Implementation notes: `AXTerm/Transmission/AXDP.swift` decodes TLV 0x40; `AXTerm/Transmission/SessionCoordinator.swift` stores it on the transfer; `AXTerm/BulkTransferView.swift` displays receiver data rate/duration/processing.
+
+⸻
+
+6.x.6 UX requirements for AXDP negotiation + compression
 
 In the transcript/terminal:
 	•	Show a small “badge” for AXDP:
@@ -577,7 +604,7 @@ In settings:
 
 ⸻
 
-6.x.6 Implementation notes (important correctness points)
+6.x.7 Implementation notes (important correctness points)
 	•	AXDP parser must be strict about lengths (no overruns, no negative lengths).
 	•	Unknown TLVs must be safely skipped.
 	•	Nested TLVs (Capabilities sub-TLVs) must also be length-checked.
@@ -912,6 +939,7 @@ Reserved TLV ranges:
 	•	Core TLVs: 0x01–0x1F
 	•	Capabilities: 0x20–0x2F
 	•	Compression: 0x30–0x3F
+	•	Extensions: 0x40–0x4F
 	•	Future: 0x80–0xFF experimental/private
 
 LinkKey / PeerKey Definition:

@@ -191,6 +191,27 @@ final class AXDPTests: XCTestCase {
         XCTAssertEqual(decoded?.messageId, 42)
     }
 
+    func testEncodeAckMessageWithTransferMetrics() {
+        let metrics = AXDP.AXDPTransferMetrics(
+            dataDurationMs: 1234,
+            processingDurationMs: 250,
+            bytesReceived: 4096,
+            decompressedBytes: 8192
+        )
+        let msg = AXDP.Message(
+            type: .ack,
+            sessionId: 99,
+            messageId: 0xFFFF_FFFF,
+            transferMetrics: metrics
+        )
+
+        let encoded = msg.encode()
+        let decoded = AXDP.Message.decode(from: encoded)
+
+        XCTAssertNotNil(decoded)
+        XCTAssertEqual(decoded?.transferMetrics, metrics)
+    }
+
     func testEncodeSackBitmap() {
         let sackBitmap = Data([0xFF, 0x00, 0xAA])  // Bits for chunks received
         let msg = AXDP.Message(
