@@ -533,7 +533,15 @@ final class SessionCoordinator: ObservableObject {
                 transfer.status = .sending  // Use .sending for "receiving" state
             }
 
-            transfers[transferIndex] = transfer  // Explicit reassignment for SwiftUI update
+            // Force SwiftUI to see the entire array as new on last chunk (fixes diffing issue)
+            // This ensures the 109/109 count is visible before completion
+            if chunkIndex == state.expectedChunks - 1 {
+                var updatedTransfers = transfers
+                updatedTransfers[transferIndex] = transfer
+                transfers = updatedTransfers
+            } else {
+                transfers[transferIndex] = transfer
+            }
 
             // Adaptive UI update frequency - more frequent for small transfers, less for large
             // Aim for ~20-30 updates during the transfer for smooth progress
@@ -555,7 +563,7 @@ final class SessionCoordinator: ObservableObject {
         }
     }
 
-    /// Handle transfer completion - verify hash and save file
+    /// Handle transfer completion - verify hash, save file, and send completion ACK/NACK to sender
     private func handleTransferComplete(axdpSessionId: UInt32, state: InboundTransferState) {
         guard let transferId = axdpToTransferId[axdpSessionId],
               let transferIndex = transfers.firstIndex(where: { $0.id == transferId }) else {
@@ -575,6 +583,18 @@ final class SessionCoordinator: ObservableObject {
         // Use explicit copy for SwiftUI update
         var transfer = transfers[transferIndex]
 
+        // Prepare sender address for ACK/NACK
+        let sourceParts = state.sourceCallsign.uppercased().split(separator: "-")
+        let sourceCall = String(sourceParts.first ?? "")
+        let sourceSSID = sourceParts.count > 1 ? Int(sourceParts[1]) ?? 0 : 0
+        let sourceAddress = AX25Address(call: sourceCall, ssid: sourceSSID)
+
+        // Find the session for path info
+        let session = sessionManager.sessions.values.first { $0.remoteAddress == sourceAddress && $0.state == .connected }
+        let path = session?.path ?? DigiPath()
+
+        var transferSuccess = false
+
         // Reassemble file
         if let fileData = state.reassembleFile() {
             // Verify SHA256 hash
@@ -587,6 +607,7 @@ final class SessionCoordinator: ObservableObject {
                     // Success - mark as completed and store path
                     transfer.markCompleted()
                     transfer.savedFilePath = savedPath
+                    transferSuccess = true
 
                     TxLog.inbound(.axdp, "File transfer completed and saved", [
                         "file": state.fileName,
@@ -615,8 +636,62 @@ final class SessionCoordinator: ObservableObject {
             transfer.status = .failed(reason: "Failed to reassemble file from chunks")
         }
 
-        // Reassign to trigger SwiftUI update
-        transfers[transferIndex] = transfer
+        // Send completion ACK or NACK to sender
+        if transferSuccess {
+            // Send completion ACK to tell sender the transfer is fully complete
+            let completionAck = AXDP.Message(
+                type: .ack,
+                sessionId: axdpSessionId,
+                messageId: SessionCoordinator.transferCompleteMessageId
+            )
+
+            let ackFrame = OutboundFrame(
+                destination: sourceAddress,
+                source: sessionManager.localCallsign,
+                path: path,
+                payload: completionAck.encode(),
+                frameType: session != nil ? "i" : "ui",
+                displayInfo: "AXDP ACK (transfer complete)"
+            )
+
+            sendFrame(ackFrame)
+
+            TxLog.outbound(.axdp, "Sent transfer completion ACK to sender", [
+                "dest": state.sourceCallsign,
+                "file": state.fileName,
+                "axdpSession": axdpSessionId
+            ])
+        } else {
+            // Send completion NACK to tell sender the transfer failed on receiver side
+            let completionNack = AXDP.Message(
+                type: .nack,
+                sessionId: axdpSessionId,
+                messageId: SessionCoordinator.transferCompleteMessageId
+            )
+
+            let nackFrame = OutboundFrame(
+                destination: sourceAddress,
+                source: sessionManager.localCallsign,
+                path: path,
+                payload: completionNack.encode(),
+                frameType: session != nil ? "i" : "ui",
+                displayInfo: "AXDP NACK (transfer failed)"
+            )
+
+            sendFrame(nackFrame)
+
+            TxLog.outbound(.axdp, "Sent transfer completion NACK to sender", [
+                "dest": state.sourceCallsign,
+                "file": state.fileName,
+                "reason": transfer.failureExplanation,
+                "axdpSession": axdpSessionId
+            ])
+        }
+
+        // Force SwiftUI to see the entire array as new (fixes diffing issue)
+        var updatedTransfers = transfers
+        updatedTransfers[transferIndex] = transfer
+        transfers = updatedTransfers
 
         // Clean up state
         inboundTransferStates.removeValue(forKey: axdpSessionId)
@@ -634,12 +709,43 @@ final class SessionCoordinator: ObservableObject {
         }
     }
 
-    /// Save received file to Downloads folder
+    /// Save received file to Downloads folder (or Documents as fallback)
     /// - Returns: The path where the file was saved, or nil if save failed
     private func saveReceivedFile(fileName: String, data: Data) -> String? {
         let fileManager = FileManager.default
-        guard let downloadsURL = fileManager.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
-            TxLog.error(.axdp, "Cannot access Downloads folder - check sandbox entitlements", error: nil)
+
+        // Try Downloads folder first, then Documents as fallback
+        var baseURL: URL?
+
+        // Try Downloads folder
+        if let downloadsURL = fileManager.urls(for: .downloadsDirectory, in: .userDomainMask).first {
+            // For sandboxed apps, create an AXTerm subfolder
+            let axTermDownloads = downloadsURL.appendingPathComponent("AXTerm Transfers")
+            do {
+                try fileManager.createDirectory(at: axTermDownloads, withIntermediateDirectories: true)
+                baseURL = axTermDownloads
+                TxLog.debug(.axdp, "Using Downloads folder", ["path": axTermDownloads.path])
+            } catch {
+                TxLog.warning(.axdp, "Cannot create Downloads subfolder, trying Documents", ["error": error.localizedDescription])
+            }
+        }
+
+        // Fall back to Documents folder if Downloads failed
+        if baseURL == nil {
+            if let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first {
+                let axTermDocs = documentsURL.appendingPathComponent("AXTerm Transfers")
+                do {
+                    try fileManager.createDirectory(at: axTermDocs, withIntermediateDirectories: true)
+                    baseURL = axTermDocs
+                    TxLog.debug(.axdp, "Using Documents folder", ["path": axTermDocs.path])
+                } catch {
+                    TxLog.error(.axdp, "Cannot create Documents subfolder", error: error)
+                }
+            }
+        }
+
+        guard let downloadsURL = baseURL else {
+            TxLog.error(.axdp, "Cannot access any writable folder - check sandbox entitlements", error: nil)
             return nil
         }
 
@@ -674,7 +780,7 @@ final class SessionCoordinator: ObservableObject {
         }
     }
 
-    /// Handle ACK message (transfer accepted or chunk acknowledged)
+    /// Handle ACK message (transfer accepted, chunk acknowledged, or transfer complete)
     func handleAckMessage(_ message: AXDP.Message, from: AX25Address) {
         TxLog.debug(.axdp, "Received ACK", [
             "from": from.display,
@@ -682,8 +788,51 @@ final class SessionCoordinator: ObservableObject {
             "messageId": message.messageId
         ])
 
-        // Check if this ACK is for a transfer awaiting acceptance
         let axdpSessionId = message.sessionId
+
+        // Check if this is a transfer completion ACK from receiver
+        if message.messageId == SessionCoordinator.transferCompleteMessageId {
+            // Find the transfer awaiting completion
+            if let transferId = transferSessionIds.first(where: { $0.value == axdpSessionId })?.key,
+               let transferIndex = transfers.firstIndex(where: { $0.id == transferId }) {
+
+                // Verify the transfer is in awaitingCompletion state
+                guard transfers[transferIndex].status == .awaitingCompletion else {
+                    TxLog.warning(.axdp, "Received completion ACK but transfer not awaiting completion", [
+                        "transfer": String(transferId.uuidString.prefix(8)),
+                        "status": String(describing: transfers[transferIndex].status)
+                    ])
+                    return
+                }
+
+                // Mark transfer as truly completed
+                var transfer = transfers[transferIndex]
+                transfer.markCompleted()
+
+                // Force SwiftUI to see the entire array as new (fixes diffing issue)
+                var updatedTransfers = transfers
+                updatedTransfers[transferIndex] = transfer
+                transfers = updatedTransfers
+
+                // Clean up resources now that transfer is fully complete
+                transferFileData.removeValue(forKey: transferId)
+                transferSessionIds.removeValue(forKey: transferId)
+
+                // Force UI update
+                objectWillChange.send()
+                Task { @MainActor in
+                    self.objectWillChange.send()
+                }
+
+                TxLog.outbound(.axdp, "Transfer completed - receiver confirmed file saved", [
+                    "file": transfer.fileName,
+                    "chunks": transfer.totalChunks
+                ])
+            }
+            return
+        }
+
+        // Check if this ACK is for a transfer awaiting acceptance
         if let transferId = transfersAwaitingAcceptance[axdpSessionId],
            let transferIndex = transfers.firstIndex(where: { $0.id == transferId }) {
             // Remove from awaiting acceptance
@@ -712,15 +861,49 @@ final class SessionCoordinator: ObservableObject {
         }
     }
 
-    /// Handle NACK message (transfer declined or error)
+    /// Handle NACK message (transfer declined, error, or transfer failed on receiver)
     func handleNackMessage(_ message: AXDP.Message, from: AX25Address) {
         TxLog.debug(.axdp, "Received NACK", [
             "from": from.display,
-            "session": message.sessionId
+            "session": message.sessionId,
+            "messageId": message.messageId
         ])
 
-        // Check if this NACK is for a transfer awaiting acceptance
         let axdpSessionId = message.sessionId
+
+        // Check if this is a transfer completion NACK (receiver failed to save file)
+        if message.messageId == SessionCoordinator.transferCompleteMessageId {
+            if let transferId = transferSessionIds.first(where: { $0.value == axdpSessionId })?.key,
+               let transferIndex = transfers.firstIndex(where: { $0.id == transferId }) {
+
+                // Transfer failed on receiver side (hash mismatch, save failed, etc.)
+                var transfer = transfers[transferIndex]
+                transfer.status = .failed(reason: "Receiver failed to save file - transfer unsuccessful")
+
+                // Force SwiftUI to see the entire array as new (fixes diffing issue)
+                var updatedTransfers = transfers
+                updatedTransfers[transferIndex] = transfer
+                transfers = updatedTransfers
+
+                // Clean up resources
+                transferFileData.removeValue(forKey: transferId)
+                transferSessionIds.removeValue(forKey: transferId)
+
+                // Force UI update
+                objectWillChange.send()
+                Task { @MainActor in
+                    self.objectWillChange.send()
+                }
+
+                TxLog.error(.axdp, "Transfer failed - receiver could not save file", error: nil, [
+                    "file": transfer.fileName,
+                    "from": from.display
+                ])
+            }
+            return
+        }
+
+        // Check if this NACK is for a transfer awaiting acceptance
         if let transferId = transfersAwaitingAcceptance[axdpSessionId],
            let transferIndex = transfers.firstIndex(where: { $0.id == transferId }) {
             // Remove from awaiting acceptance
@@ -1068,30 +1251,41 @@ final class SessionCoordinator: ObservableObject {
         return nil  // Success
     }
 
+    /// Sentinel message ID used for transfer completion ACK/NACK
+    /// Using 0xFFFFFFFF as it's unlikely to be a legitimate chunk message ID
+    static let transferCompleteMessageId: UInt32 = 0xFFFFFFFF
+
     /// Send the next chunk for a transfer
     private func sendNextChunk(for transferId: UUID, to destination: AX25Address, path: DigiPath, axdpSessionId: UInt32) {
         guard let transferIndex = transfers.firstIndex(where: { $0.id == transferId }) else { return }
         guard transfers[transferIndex].status == .sending else { return }
         guard let fileData = transferFileData[transferId] else { return }
         guard let nextChunk = transfers[transferIndex].nextChunkToSend else {
-            // All chunks sent - mark as completed
+            // All chunks sent - transition to awaitingCompletion (NOT completed yet!)
+            // Sender waits for completion ACK from receiver before marking as completed
             var transfer = transfers[transferIndex]
-            transfer.markCompleted()
-            transfers[transferIndex] = transfer  // Explicit reassignment ensures SwiftUI update
-            transferFileData.removeValue(forKey: transferId)
-            transferSessionIds.removeValue(forKey: transferId)
+            transfer.status = .awaitingCompletion
+
+            // Keep the transfer data and session ID - we still need them until completion ACK
+            // Don't clean up yet: transferFileData, transferSessionIds
+
+            // Force SwiftUI to see the entire array as new (fixes diffing issue)
+            var updatedTransfers = transfers
+            updatedTransfers[transferIndex] = transfer
+            transfers = updatedTransfers
 
             // Force objectWillChange to ensure UI updates immediately
             objectWillChange.send()
 
-            // Double-send on next run loop to ensure SwiftUI catches the completion state
+            // Double-send on next run loop to ensure SwiftUI catches the state change
             Task { @MainActor in
                 self.objectWillChange.send()
             }
 
-            TxLog.outbound(.session, "Transfer completed", [
+            TxLog.outbound(.axdp, "All chunks sent, awaiting completion confirmation from receiver", [
                 "file": transfer.fileName,
-                "chunks": transfer.totalChunks
+                "chunks": transfer.totalChunks,
+                "axdpSession": axdpSessionId
             ])
             return
         }

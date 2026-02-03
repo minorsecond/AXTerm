@@ -367,7 +367,7 @@ struct BulkTransferRow: View {
 
     private var isActive: Bool {
         switch transfer.status {
-        case .pending, .awaitingAcceptance, .sending, .paused:
+        case .pending, .awaitingAcceptance, .sending, .paused, .awaitingCompletion:
             return true
         default:
             return false
@@ -438,13 +438,24 @@ struct BulkTransferRow: View {
                 .font(.caption)
                 .foregroundStyle(.orange)
         case .sending:
-            Label("Sending", systemImage: "arrow.up.circle")
-                .font(.caption)
-                .foregroundStyle(.blue)
+            // Show "Receiving" for inbound transfers, "Sending" for outbound
+            if transfer.direction == .inbound {
+                Label("Receiving", systemImage: "arrow.down.circle")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            } else {
+                Label("Sending", systemImage: "arrow.up.circle")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+            }
         case .paused:
             Label("Paused", systemImage: "pause.circle")
                 .font(.caption)
                 .foregroundStyle(.orange)
+        case .awaitingCompletion:
+            Label("Finalizing", systemImage: "checkmark.circle.badge.questionmark")
+                .font(.caption)
+                .foregroundStyle(.blue)
         case .completed:
             Label("Completed", systemImage: "checkmark.circle.fill")
                 .font(.caption)
@@ -570,6 +581,8 @@ struct BulkTransferListView: View {
                                         onResume: { onResume(transfer.id) },
                                         onCancel: { onCancel(transfer.id) }
                                     )
+                                    // Force re-render when status or progress changes
+                                    .id("\(transfer.id)-\(transfer.status)-\(transfer.completedChunks)")
                                 }
                             } header: {
                                 SectionHeader(title: "Active", count: activeTransfers.count)
@@ -586,6 +599,8 @@ struct BulkTransferListView: View {
                                         onResume: { },
                                         onCancel: { }
                                     )
+                                    // Force re-render when status changes
+                                    .id("\(transfer.id)-\(transfer.status)")
                                 }
                             } header: {
                                 SectionHeader(title: "Completed", count: completedTransfers.count)
@@ -602,7 +617,7 @@ struct BulkTransferListView: View {
     private var activeTransfers: [BulkTransfer] {
         transfers.filter { transfer in
             switch transfer.status {
-            case .pending, .awaitingAcceptance, .sending, .paused:
+            case .pending, .awaitingAcceptance, .sending, .paused, .awaitingCompletion:
                 return true
             default:
                 return false

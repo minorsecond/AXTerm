@@ -16,6 +16,7 @@ enum BulkTransferStatus: Equatable, Sendable {
     case awaitingAcceptance  // Waiting for receiver to accept (ACK) or decline (NACK)
     case sending
     case paused
+    case awaitingCompletion  // Sender: all chunks sent, waiting for receiver's completion ACK
     case completed
     case cancelled
     case failed(reason: String)
@@ -452,7 +453,7 @@ struct BulkTransfer: Identifiable, Sendable {
     /// Whether transfer can be cancelled
     var canCancel: Bool {
         switch status {
-        case .pending, .awaitingAcceptance, .sending, .paused:
+        case .pending, .awaitingAcceptance, .sending, .paused, .awaitingCompletion:
             return true
         case .completed, .cancelled, .failed:
             return false
@@ -697,7 +698,7 @@ struct BulkTransferManager: Sendable {
     var activeTransfers: [BulkTransfer] {
         transfers.filter { transfer in
             switch transfer.status {
-            case .pending, .awaitingAcceptance, .sending, .paused:
+            case .pending, .awaitingAcceptance, .sending, .paused, .awaitingCompletion:
                 return true
             default:
                 return false

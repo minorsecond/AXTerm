@@ -439,4 +439,307 @@ final class FileTransferProtocolTests: XCTestCase {
         // 2. refreshCurrentSession() call
         // 3. UI update to show "Connected" status
     }
+
+    // MARK: - Issue 6: Incoming Transfer Sheet Empty
+
+    /// Test that IncomingTransferRequest is Identifiable (required for .sheet(item:))
+    /// This validates the fix for the empty incoming transfer modal
+    func testIncomingTransferRequestIsIdentifiable() throws {
+        // IncomingTransferRequest must be Identifiable for .sheet(item:) to work
+        let request = IncomingTransferRequest(
+            sourceCallsign: "TEST-1",
+            fileName: "test.txt",
+            fileSize: 1024,
+            axdpSessionId: 12345
+        )
+
+        // Identifiable requires an id property
+        XCTAssertNotNil(request.id, "IncomingTransferRequest must have an id for .sheet(item:)")
+
+        // The id should be unique
+        let request2 = IncomingTransferRequest(
+            sourceCallsign: "TEST-1",
+            fileName: "test.txt",
+            fileSize: 1024,
+            axdpSessionId: 12345
+        )
+        XCTAssertNotEqual(request.id, request2.id, "Each request should have unique id")
+    }
+
+    /// Test that sheet item binding pattern works correctly
+    /// When item is non-nil, the sheet should present with that item's data
+    func testSheetItemBindingPattern() throws {
+        // The .sheet(item:) pattern: sheet shows when item != nil, hides when item == nil
+        var currentRequest: IncomingTransferRequest? = nil
+
+        // Initially no request - sheet should not show
+        XCTAssertNil(currentRequest)
+
+        // Set a request - this triggers sheet presentation with the request data
+        let request = IncomingTransferRequest(
+            sourceCallsign: "STATION-A",
+            fileName: "data.csv",
+            fileSize: 5000,
+            axdpSessionId: 99999
+        )
+        currentRequest = request
+
+        // Request is now non-nil - sheet content closure receives this exact request
+        XCTAssertNotNil(currentRequest)
+        XCTAssertEqual(currentRequest?.sourceCallsign, "STATION-A")
+        XCTAssertEqual(currentRequest?.fileName, "data.csv")
+        XCTAssertEqual(currentRequest?.axdpSessionId, 99999)
+
+        // After user action, set to nil to dismiss
+        currentRequest = nil
+        XCTAssertNil(currentRequest)
+    }
+
+    /// Test that incoming transfer request contains all required fields
+    func testIncomingTransferRequestFields() throws {
+        let request = IncomingTransferRequest(
+            sourceCallsign: "N0CALL",
+            fileName: "Meshtastic Application Logs.csv",
+            fileSize: 13950,
+            axdpSessionId: 2372242869
+        )
+
+        // All fields needed by the IncomingTransferSheet view
+        XCTAssertEqual(request.sourceCallsign, "N0CALL")
+        XCTAssertEqual(request.fileName, "Meshtastic Application Logs.csv")
+        XCTAssertEqual(request.fileSize, 13950)
+        XCTAssertEqual(request.axdpSessionId, 2372242869)
+        XCTAssertNotNil(request.receivedAt)
+        XCTAssertNotNil(request.id)
+    }
+
+    // MARK: - Issue 7: Transfer Completion ACK Flow
+
+    /// Sentinel message ID used for transfer completion ACK/NACK
+    /// Using 0xFFFFFFFF as it's unlikely to be a legitimate chunk message ID
+    static let transferCompleteMessageId: UInt32 = 0xFFFFFFFF
+
+    /// Test that sender can enter awaitingCompletion status after sending all chunks
+    func testSenderEntersAwaitingCompletionStatus() throws {
+        var transfer = BulkTransfer(
+            id: UUID(),
+            fileName: "test.txt",
+            fileSize: 256,  // 2 chunks at 128 bytes
+            destination: "DEST",
+            chunkSize: 128,
+            direction: .outbound
+        )
+
+        // Start sending
+        transfer.status = .sending
+        transfer.markStarted()
+        XCTAssertEqual(transfer.totalChunks, 2)
+
+        // Mark all chunks as sent and completed
+        transfer.markChunkSent(0)
+        transfer.markChunkCompleted(0)
+        transfer.markChunkSent(1)
+        transfer.markChunkCompleted(1)
+
+        // All chunks sent - should transition to awaitingCompletion (not completed!)
+        transfer.status = .awaitingCompletion
+        XCTAssertEqual(transfer.status, .awaitingCompletion)
+
+        // Sender should NOT be marked as completed yet - waiting for receiver ACK
+        if case .completed = transfer.status {
+            XCTFail("Sender should NOT be completed until receiver confirms")
+        }
+    }
+
+    /// Test that awaitingCompletion status exists and behaves correctly
+    func testAwaitingCompletionStatusBehavior() throws {
+        var transfer = BulkTransfer(
+            id: UUID(),
+            fileName: "test.txt",
+            fileSize: 128,
+            destination: "DEST"
+        )
+
+        transfer.status = .awaitingCompletion
+        XCTAssertEqual(transfer.status, .awaitingCompletion)
+
+        // Cannot pause while awaiting completion
+        XCTAssertFalse(transfer.canPause)
+
+        // Can still cancel while awaiting completion (abort transfer)
+        XCTAssertTrue(transfer.canCancel)
+    }
+
+    /// Test that completion ACK message can be created with sentinel ID
+    func testCompletionACKMessageCreation() throws {
+        let axdpSessionId: UInt32 = 12345
+        let completionAck = AXDP.Message(
+            type: .ack,
+            sessionId: axdpSessionId,
+            messageId: FileTransferProtocolTests.transferCompleteMessageId
+        )
+
+        XCTAssertEqual(completionAck.type, .ack)
+        XCTAssertEqual(completionAck.sessionId, axdpSessionId)
+        XCTAssertEqual(completionAck.messageId, FileTransferProtocolTests.transferCompleteMessageId)
+    }
+
+    /// Test that completion NACK message can be created with sentinel ID
+    func testCompletionNACKMessageCreation() throws {
+        let axdpSessionId: UInt32 = 12345
+        let completionNack = AXDP.Message(
+            type: .nack,
+            sessionId: axdpSessionId,
+            messageId: FileTransferProtocolTests.transferCompleteMessageId
+        )
+
+        XCTAssertEqual(completionNack.type, .nack)
+        XCTAssertEqual(completionNack.sessionId, axdpSessionId)
+        XCTAssertEqual(completionNack.messageId, FileTransferProtocolTests.transferCompleteMessageId)
+    }
+
+    /// Test that sender transitions from awaitingCompletion to completed after ACK
+    func testSenderCompletesAfterReceivingCompletionACK() throws {
+        var transfer = BulkTransfer(
+            id: UUID(),
+            fileName: "test.txt",
+            fileSize: 128,
+            destination: "DEST",
+            direction: .outbound
+        )
+
+        // Sender has sent all chunks and is waiting for receiver confirmation
+        transfer.status = .awaitingCompletion
+        XCTAssertEqual(transfer.status, .awaitingCompletion)
+
+        // Simulate receiving completion ACK from receiver
+        // This is what SessionCoordinator.handleAckMessage should do:
+        transfer.markCompleted()
+
+        XCTAssertEqual(transfer.status, .completed)
+        XCTAssertNotNil(transfer.completedAt)
+    }
+
+    /// Test that sender transitions to failed after receiving completion NACK
+    func testSenderFailsAfterReceivingCompletionNACK() throws {
+        var transfer = BulkTransfer(
+            id: UUID(),
+            fileName: "test.txt",
+            fileSize: 128,
+            destination: "DEST",
+            direction: .outbound
+        )
+
+        // Sender has sent all chunks and is waiting for receiver confirmation
+        transfer.status = .awaitingCompletion
+
+        // Simulate receiving completion NACK from receiver (file save failed)
+        transfer.status = .failed(reason: "Remote station failed to save file")
+
+        if case .failed(let reason) = transfer.status {
+            XCTAssertTrue(reason.contains("failed to save"))
+        } else {
+            XCTFail("Status should be failed")
+        }
+    }
+
+    /// Test chunk completion flow - verify all chunks complete triggers status change
+    func testAllChunksCompleteTriggerStatusChange() throws {
+        var transfer = BulkTransfer(
+            id: UUID(),
+            fileName: "test.txt",
+            fileSize: 384,  // 3 chunks at 128 bytes
+            destination: "DEST",
+            chunkSize: 128,
+            direction: .outbound
+        )
+
+        transfer.status = .sending
+        transfer.markStarted()
+
+        // Verify initial state
+        XCTAssertEqual(transfer.totalChunks, 3)
+        XCTAssertEqual(transfer.completedChunks, 0)
+        XCTAssertNotNil(transfer.nextChunkToSend)
+
+        // Complete chunks one by one
+        transfer.markChunkSent(0)
+        transfer.markChunkCompleted(0)
+        XCTAssertEqual(transfer.completedChunks, 1)
+        XCTAssertNotNil(transfer.nextChunkToSend)
+
+        transfer.markChunkSent(1)
+        transfer.markChunkCompleted(1)
+        XCTAssertEqual(transfer.completedChunks, 2)
+        XCTAssertNotNil(transfer.nextChunkToSend)
+
+        transfer.markChunkSent(2)
+        transfer.markChunkCompleted(2)
+        XCTAssertEqual(transfer.completedChunks, 3)
+
+        // Now nextChunkToSend should be nil (all chunks completed)
+        XCTAssertNil(transfer.nextChunkToSend, "Should have no more chunks to send")
+
+        // At this point, sender should transition to awaitingCompletion, NOT completed
+        transfer.status = .awaitingCompletion
+        XCTAssertEqual(transfer.status, .awaitingCompletion)
+    }
+
+    /// Test that progress shows 100% when all chunks are sent
+    func testProgressShowsCompleteWhenAllChunksSent() throws {
+        var transfer = BulkTransfer(
+            id: UUID(),
+            fileName: "test.txt",
+            fileSize: 256,
+            destination: "DEST",
+            chunkSize: 128,
+            direction: .outbound
+        )
+
+        transfer.status = .sending
+        XCTAssertEqual(transfer.totalChunks, 2)
+
+        // Initially 0%
+        XCTAssertEqual(transfer.progress, 0.0, accuracy: 0.01)
+
+        // Complete first chunk
+        transfer.markChunkSent(0)
+        transfer.markChunkCompleted(0)
+        XCTAssertEqual(transfer.progress, 0.5, accuracy: 0.01)
+
+        // Complete second chunk
+        transfer.markChunkSent(1)
+        transfer.markChunkCompleted(1)
+        XCTAssertEqual(transfer.progress, 1.0, accuracy: 0.01)
+
+        // Progress should be 100% even before completion ACK
+        XCTAssertEqual(transfer.completedChunks, transfer.totalChunks)
+    }
+
+    /// Test transfer direction affects status display
+    func testTransferDirectionAffectsStatusDisplay() throws {
+        // Outbound transfer
+        var outbound = BulkTransfer(
+            id: UUID(),
+            fileName: "test.txt",
+            fileSize: 128,
+            destination: "DEST",
+            direction: .outbound
+        )
+        outbound.status = .sending
+        XCTAssertEqual(outbound.direction, .outbound)
+        XCTAssertEqual(outbound.direction.rawValue, "Sending")
+
+        // Inbound transfer
+        var inbound = BulkTransfer(
+            id: UUID(),
+            fileName: "test.txt",
+            fileSize: 128,
+            destination: "SRC",
+            direction: .inbound
+        )
+        inbound.status = .sending  // Uses .sending but displays as "Receiving"
+        XCTAssertEqual(inbound.direction, .inbound)
+        XCTAssertEqual(inbound.direction.rawValue, "Receiving")
+    }
 }

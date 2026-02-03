@@ -522,8 +522,7 @@ struct TerminalView: View {
     @State private var transferError: String?
     @State private var showingTransferError = false
 
-    // Incoming transfer sheet
-    @State private var showingIncomingTransferSheet = false
+    // Incoming transfer sheet - using item binding for .sheet(item:)
     @State private var currentIncomingRequest: IncomingTransferRequest?
 
     // Session notification toast
@@ -587,31 +586,37 @@ struct TerminalView: View {
         } message: {
             Text(transferError ?? "Unknown error")
         }
-        .sheet(isPresented: $showingIncomingTransferSheet) {
-            if let request = currentIncomingRequest {
-                IncomingTransferSheet(
-                    isPresented: $showingIncomingTransferSheet,
-                    request: request,
-                    onAccept: {
-                        sessionCoordinator.acceptIncomingTransfer(request.id)
-                    },
-                    onDecline: {
-                        sessionCoordinator.declineIncomingTransfer(request.id)
-                    },
-                    onAlwaysAccept: {
-                        settings.allowCallsignForFileTransfer(request.sourceCallsign)
-                        sessionCoordinator.acceptIncomingTransfer(request.id)
-                    },
-                    onAlwaysDeny: {
-                        settings.denyCallsignForFileTransfer(request.sourceCallsign)
-                        sessionCoordinator.declineIncomingTransfer(request.id)
-                    }
-                )
-            }
+        .sheet(item: $currentIncomingRequest) { request in
+            // Using .sheet(item:) guarantees request is non-nil when this closure executes
+            IncomingTransferSheet(
+                isPresented: Binding(
+                    get: { currentIncomingRequest != nil },
+                    set: { if !$0 { currentIncomingRequest = nil } }
+                ),
+                request: request,
+                onAccept: {
+                    sessionCoordinator.acceptIncomingTransfer(request.id)
+                    currentIncomingRequest = nil
+                },
+                onDecline: {
+                    sessionCoordinator.declineIncomingTransfer(request.id)
+                    currentIncomingRequest = nil
+                },
+                onAlwaysAccept: {
+                    settings.allowCallsignForFileTransfer(request.sourceCallsign)
+                    sessionCoordinator.acceptIncomingTransfer(request.id)
+                    currentIncomingRequest = nil
+                },
+                onAlwaysDeny: {
+                    settings.denyCallsignForFileTransfer(request.sourceCallsign)
+                    sessionCoordinator.declineIncomingTransfer(request.id)
+                    currentIncomingRequest = nil
+                }
+            )
         }
         .onChange(of: sessionCoordinator.pendingIncomingTransfers) { _, newRequests in
             // Auto-show modal for first pending request if not already showing
-            if !showingIncomingTransferSheet, let first = newRequests.first {
+            if currentIncomingRequest == nil, let first = newRequests.first {
                 // Check if auto-accept or auto-deny is enabled for this callsign
                 if settings.isCallsignAllowedForFileTransfer(first.sourceCallsign) {
                     // Auto-accept
@@ -620,9 +625,8 @@ struct TerminalView: View {
                     // Auto-deny
                     sessionCoordinator.declineIncomingTransfer(first.id)
                 } else {
-                    // Show modal for user decision
+                    // Show modal for user decision - setting the item shows the sheet
                     currentIncomingRequest = first
-                    showingIncomingTransferSheet = true
                 }
             }
         }
