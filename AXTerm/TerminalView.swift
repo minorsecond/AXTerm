@@ -1070,7 +1070,7 @@ struct TerminalView: View {
     private var transfersView: some View {
         BulkTransferListView(
             transfers: sessionCoordinator.transfers,
-            pendingIncomingTransfers: sessionCoordinator.pendingIncomingTransfers,
+            pendingIncomingTransfers: currentIncomingRequest == nil ? sessionCoordinator.pendingIncomingTransfers : [],
             onPause: { id in
                 sessionCoordinator.pauseTransfer(id)
             },
