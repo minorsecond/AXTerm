@@ -528,6 +528,8 @@ struct TerminalView: View {
     // Session notification toast
     @State private var sessionNotification: SessionNotification?
     @State private var notificationTask: Task<Void, Never>?
+    @State private var showConnectionBanner = false
+    @State private var connectionBannerTask: Task<Void, Never>?
 
     init(client: PacketEngine, settings: AppSettingsStore, sessionCoordinator: SessionCoordinator) {
         self.client = client
@@ -564,6 +566,20 @@ struct TerminalView: View {
         }
         .onChange(of: settings.myCallsign) { _, newValue in
             txViewModel.updateSourceCall(newValue)
+        }
+        .onChange(of: client.status) { oldValue, newValue in
+            if shouldShowConnectionBanner(oldValue: oldValue, newValue: newValue) {
+                showConnectionBannerTemporarily()
+            }
+        }
+        .onAppear {
+            if !showConnectionBanner {
+                if TestModeConfiguration.shared.isTestMode {
+                    showConnectionBannerTemporarily()
+                } else if client.status == .connected {
+                    showConnectionBannerTemporarily()
+                }
+            }
         }
         .sheet(isPresented: $showingTransferSheet) {
             SendFileSheet(
@@ -723,15 +739,51 @@ struct TerminalView: View {
         }
     }
 
+    private func shouldShowConnectionBanner(oldValue: ConnectionStatus, newValue: ConnectionStatus) -> Bool {
+        guard oldValue != newValue else { return false }
+        switch newValue {
+        case .connected, .disconnected, .failed:
+            return true
+        case .connecting:
+            return false
+        }
+    }
+
+    private func showConnectionBannerTemporarily() {
+        connectionBannerTask?.cancel()
+        withAnimation(.easeOut(duration: 0.2)) {
+            showConnectionBanner = true
+        }
+        connectionBannerTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if !Task.isCancelled {
+                withAnimation(.easeIn(duration: 0.2)) {
+                    showConnectionBanner = false
+                }
+            }
+        }
+    }
+
     // MARK: - Session View
 
     @ViewBuilder
     private var sessionView: some View {
         ZStack(alignment: .top) {
             VStack(spacing: 0) {
+                if TestModeConfiguration.shared.isTestMode {
+                    Text(connectionMessage)
+                        .font(.caption)
+                        .opacity(0.01)
+                        .accessibilityIdentifier("connectionStatus")
+                        .accessibilityLabel(connectionMessage)
+                        .accessibilityHidden(false)
+                        .frame(width: 1, height: 1)
+                }
+
                 // Connection status banner
-                if client.status != .connected {
+                if showConnectionBanner {
                     connectionBanner
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
                 // Session output (reuse console view for now, filtered by session)
@@ -802,6 +854,7 @@ struct TerminalView: View {
             Text(connectionMessage)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .accessibilityIdentifier("connectionStatus")
 
             Spacer()
 

@@ -197,7 +197,7 @@ run_automated_tests() {
 
     cd "$PROJECT_DIR"
 
-    xcodebuild \
+    AXTERM_DUAL_INSTANCE_TESTS=1 xcodebuild \
         -project AXTerm.xcodeproj \
         -scheme AXTermUITests \
         -destination 'platform=macOS' \

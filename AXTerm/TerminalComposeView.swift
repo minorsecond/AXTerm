@@ -196,6 +196,7 @@ struct TerminalComposeView: View {
                     TextField("Message...", text: $composeText)
                         .textFieldStyle(.plain)
                         .font(.system(.body, design: .monospaced))
+                        .accessibilityIdentifier("terminalComposeField")
                         .focused($isTextFieldFocused)
                         .onSubmit {
                             if canSendMessage && isConnected {

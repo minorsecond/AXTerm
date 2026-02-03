@@ -468,6 +468,7 @@ struct SettingsView: View {
                 fileTransferPermissionsSection
             }
         }
+        .accessibilityIdentifier("settingsView")
         .formStyle(.grouped)
         .padding(20)
         .confirmationDialog(

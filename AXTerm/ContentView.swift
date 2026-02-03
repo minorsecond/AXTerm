@@ -56,10 +56,22 @@ struct ContentView: View {
         } detail: {
             detailView
         }
+        .accessibilityIdentifier("mainWindowRoot")
         .searchable(text: $searchText, prompt: "Search packets...")
         .searchFocused($isSearchFocused)
         .toolbar {
             toolbarContent
+        }
+        .overlay(alignment: .topLeading) {
+            if TestModeConfiguration.shared.isTestMode {
+                Text(connectionMessage)
+                    .font(.caption)
+                    .opacity(0.01)
+                    .accessibilityIdentifier("connectionStatus")
+                    .accessibilityLabel(connectionMessage)
+                    .accessibilityHidden(false)
+                    .frame(width: 1, height: 1)
+            }
         }
         .sheet(item: $inspectorSelection) { selection in
             if let packet = client.packet(with: selection.id) {
@@ -128,6 +140,15 @@ struct ContentView: View {
         }
     }
 
+    private var connectionMessage: String {
+        switch client.status {
+        case .connected: return "Connected"
+        case .connecting: return "Connecting..."
+        case .disconnected: return "Not connected"
+        case .failed: return "Connection failed"
+        }
+    }
+
     // MARK: - Sidebar
 
     private var sidebar: some View {
@@ -136,6 +157,7 @@ struct ContentView: View {
                 ForEach(NavigationItem.allCases, id: \.self) { item in
                     Label(item.rawValue, systemImage: iconFor(item))
                         .tag(item)
+                        .accessibilityIdentifier("nav-\(item.rawValue.lowercased())")
                 }
             }
 
