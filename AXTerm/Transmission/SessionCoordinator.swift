@@ -95,6 +95,13 @@ final class SessionCoordinator: ObservableObject {
     /// Used to deliver chat to the terminal transcript regardless of AXDP badge state.
     var onAXDPChatReceived: ((AX25Address, String) -> Void)?
 
+    /// Callback when peer sends peerAxdpEnabled (they turned on AXDP). Parameter: peer address.
+    /// Used to show a toast prompting the local user to enable AXDP.
+    var onPeerAxdpEnabled: ((AX25Address) -> Void)?
+
+    /// Callback when peer sends peerAxdpDisabled (they turned off AXDP). Parameter: peer address.
+    var onPeerAxdpDisabled: ((AX25Address) -> Void)?
+
     /// Transfers awaiting acceptance (AXDP session ID -> transfer ID)
     /// Used to map ACK/NACK responses to the correct transfer
     private var transfersAwaitingAcceptance: [UInt32: UUID] = [:]
@@ -534,6 +541,33 @@ final class SessionCoordinator: ObservableObject {
         ))
     }
 
+    /// Send peerAxdpEnabled notification to a peer when the local user enables the AXDP toggle.
+    /// Only call when peer has confirmed AXDP capability and a session is connected.
+    func sendPeerAxdpEnabled(to address: AX25Address, path: DigiPath) {
+        let sessionId = UInt32(arc4random() & 0x7FFFFFFF)
+        let messageId = UInt32(arc4random() & 0x7FFFFFFF)
+        let msg = AXDP.Message(
+            type: .peerAxdpEnabled,
+            sessionId: sessionId,
+            messageId: messageId
+        )
+        _ = sendAXDPPayload(msg.encode(), to: address, path: path, displayInfo: "AXDP peer enabled")
+        TxLog.debug(.axdp, "Sent peerAxdpEnabled notification", ["dest": address.display])
+    }
+
+    /// Send peerAxdpDisabled notification when the local user disables the AXDP toggle.
+    func sendPeerAxdpDisabled(to address: AX25Address, path: DigiPath) {
+        let sessionId = UInt32(arc4random() & 0x7FFFFFFF)
+        let messageId = UInt32(arc4random() & 0x7FFFFFFF)
+        let msg = AXDP.Message(
+            type: .peerAxdpDisabled,
+            sessionId: sessionId,
+            messageId: messageId
+        )
+        _ = sendAXDPPayload(msg.encode(), to: address, path: path, displayInfo: "AXDP peer disabled")
+        TxLog.debug(.axdp, "Sent peerAxdpDisabled notification", ["dest": address.display])
+    }
+
     private func updateSessionManagerCallsign() {
         let input = localCallsign.isEmpty ? "NOCALL" : localCallsign
         let parts = input.uppercased().split(separator: "-")
@@ -701,12 +735,30 @@ final class SessionCoordinator: ObservableObject {
         case .chat:
             handleChatMessage(message, from: from)
 
+        case .peerAxdpEnabled:
+            handlePeerAxdpEnabled(from: from)
+
+        case .peerAxdpDisabled:
+            handlePeerAxdpDisabled(from: from)
+
         default:
             TxLog.debug(.axdp, "Unhandled AXDP message type", [
                 "type": String(describing: message.type),
                 "from": from.display
             ])
         }
+    }
+
+    /// Handle peerAxdpEnabled: peer turned on their AXDP toggle; notify UI to show toast.
+    private func handlePeerAxdpEnabled(from: AX25Address) {
+        TxLog.debug(.axdp, "Peer enabled AXDP", ["from": from.display])
+        onPeerAxdpEnabled?(from)
+    }
+
+    /// Handle peerAxdpDisabled: peer turned off their AXDP toggle; notify UI.
+    private func handlePeerAxdpDisabled(from: AX25Address) {
+        TxLog.debug(.axdp, "Peer disabled AXDP", ["from": from.display])
+        onPeerAxdpDisabled?(from)
     }
 
     /// Handle AXDP chat message: decode payload and deliver to terminal transcript.

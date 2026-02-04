@@ -31,6 +31,12 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Current session (if any) for the active destination
     @Published private(set) var currentSession: AX25Session?
 
+    /// When a peer sends peerAxdpEnabled, set this to trigger a toast. View clears after showing.
+    @Published var pendingPeerAxdpNotification: String?
+
+    /// When a peer sends peerAxdpDisabled, set this to trigger a toast.
+    @Published var pendingPeerAxdpDisabledNotification: String?
+
     /// Cancellables for Combine subscriptions
     private var cancellables = Set<AnyCancellable>()
 
@@ -282,6 +288,10 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         )
     }
 
+    func setUseAXDP(_ value: Bool) {
+        viewModel.useAXDP = value
+    }
+
     // MARK: - Read-only Properties
 
     var sourceCall: String {
@@ -481,81 +491,6 @@ enum TerminalTab: String, CaseIterable {
     case transfers = "Transfers"
 }
 
-// MARK: - Session Notification
-
-/// Notification for session state changes
-struct SessionNotification: Identifiable, Equatable {
-    let id = UUID()
-    let type: NotificationType
-    let peer: String
-    let message: String
-
-    enum NotificationType {
-        case connected
-        case disconnected
-        case error
-    }
-
-    var icon: String {
-        switch type {
-        case .connected: return "link.circle.fill"
-        case .disconnected: return "link.badge.xmark"
-        case .error: return "exclamationmark.triangle.fill"
-        }
-    }
-
-    var color: Color {
-        switch type {
-        case .connected: return .green
-        case .disconnected: return .orange
-        case .error: return .red
-        }
-    }
-}
-
-/// Toast view for session notifications
-struct SessionNotificationToast: View {
-    let notification: SessionNotification
-    let onDismiss: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: notification.icon)
-                .font(.system(size: 20))
-                .foregroundStyle(notification.color)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(notification.peer)
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                Text(notification.message)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            Button {
-                onDismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(notification.color.opacity(0.1))
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(notification.color.opacity(0.3), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.1), radius: 8, y: 4)
-    }
-}
-
 // MARK: - Terminal View
 
 /// Main terminal view with session output and transmission controls
@@ -731,6 +666,17 @@ struct TerminalView: View {
                 client?.appendSessionChatLine(from: from.display, text: text)
             }
 
+            sessionCoordinator.onPeerAxdpEnabled = { [weak txViewModel] from in
+                Task { @MainActor in
+                    txViewModel?.pendingPeerAxdpNotification = from.display
+                }
+            }
+            sessionCoordinator.onPeerAxdpDisabled = { [weak txViewModel] from in
+                Task { @MainActor in
+                    txViewModel?.pendingPeerAxdpDisabledNotification = from.display
+                }
+            }
+
             // Wire up response frame sending (for RR, REJ, etc.)
             txViewModel.onSendResponseFrame = { [weak client] frame in
                 print("[TerminalView.onAppear] onSendResponseFrame callback invoked for \(frame.destination.display)")
@@ -833,6 +779,38 @@ struct TerminalView: View {
         }
     }
 
+    /// Notify all connected peers with confirmed AXDP capability that we enabled AXDP.
+    /// Called when user enables via the toggle or via the toast's Enable button.
+    private func sendPeerAxdpEnabledToConnectedSessions() {
+        for session in sessionCoordinator.connectedSessions {
+            if sessionCoordinator.hasConfirmedAXDPCapability(for: session.remoteAddress.display) {
+                sessionCoordinator.sendPeerAxdpEnabled(to: session.remoteAddress, path: session.path)
+            }
+        }
+    }
+
+
+    /// Binding for AXDP toggle that also sends peerAxdpEnabled/Disabled to peers when toggled.
+    /// Sends to ALL connected sessions with confirmed capability.
+    private var useAXDPBinding: Binding<Bool> {
+        Binding(
+            get: { txViewModel.viewModel.useAXDP },
+            set: { newValue in
+                let wasOn = txViewModel.viewModel.useAXDP
+                txViewModel.setUseAXDP(newValue)
+                if newValue, !wasOn {
+                    sendPeerAxdpEnabledToConnectedSessions()
+                } else if !newValue, wasOn {
+                    for session in sessionCoordinator.connectedSessions {
+                        if sessionCoordinator.hasConfirmedAXDPCapability(for: session.remoteAddress.display) {
+                            sessionCoordinator.sendPeerAxdpDisabled(to: session.remoteAddress, path: session.path)
+                        }
+                    }
+                }
+            }
+        )
+    }
+
     private func shouldShowConnectionBanner(oldValue: ConnectionStatus, newValue: ConnectionStatus) -> Bool {
         guard oldValue != newValue else { return false }
         switch newValue {
@@ -902,7 +880,7 @@ struct TerminalView: View {
                 digiPath: txViewModel.digiPath,
                 composeText: txViewModel.composeText,
                 connectionMode: txViewModel.connectionMode,
-                useAXDP: txViewModel.useAXDP,
+                useAXDP: useAXDPBinding,
                 sourceCall: txViewModel.sourceCall,
                 canSend: txViewModel.canSend,
                 characterCount: txViewModel.characterCount,
@@ -930,12 +908,37 @@ struct TerminalView: View {
             if let notification = sessionNotification {
                 SessionNotificationToast(
                     notification: notification,
-                    onDismiss: dismissSessionNotification
+                    onDismiss: dismissSessionNotification,
+                    primaryActionLabel: notification.supportsPrimaryAction ? notification.defaultPrimaryActionLabel : nil,
+                    onPrimaryAction: (notification.type == .peerAxdpEnabled) ? {
+                        txViewModel.setUseAXDP(true)
+                        sendPeerAxdpEnabledToConnectedSessions()
+                        dismissSessionNotification()
+                    } : nil
                 )
                 .padding(.horizontal, 20)
                 .padding(.top, 60)
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
+        }
+        .onReceive(txViewModel.$pendingPeerAxdpNotification.compactMap { $0 }.removeDuplicates()) { peer in
+            txViewModel.pendingPeerAxdpNotification = nil
+            let alreadyUsing = txViewModel.viewModel.useAXDP
+            showSessionNotification(SessionNotification(
+                type: alreadyUsing ? .peerAxdpEnabledAlreadyUsing : .peerAxdpEnabled,
+                peer: peer,
+                message: alreadyUsing
+                    ? "has enabled AXDP – you're both using it"
+                    : "has enabled AXDP – turn it on for enhanced features?"
+            ))
+        }
+        .onReceive(txViewModel.$pendingPeerAxdpDisabledNotification.compactMap { $0 }.removeDuplicates()) { peer in
+            showSessionNotification(SessionNotification(
+                type: .peerAxdpDisabled,
+                peer: peer,
+                message: "has disabled AXDP"
+            ))
+            txViewModel.pendingPeerAxdpDisabledNotification = nil
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: sessionNotification)
     }

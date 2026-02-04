@@ -53,13 +53,15 @@ enum AXDP {
 
     /// AXDP message types
     enum MessageType: UInt8, Codable {
-        case chat       = 1
-        case fileMeta   = 2
-        case fileChunk  = 3
-        case ack        = 4
-        case nack       = 5
-        case ping       = 6
-        case pong       = 7
+        case chat             = 1
+        case fileMeta         = 2
+        case fileChunk        = 3
+        case ack              = 4
+        case nack             = 5
+        case ping             = 6
+        case pong             = 7
+        case peerAxdpEnabled  = 8  // Sent when user enables AXDP toggle; prompts peer to enable
+        case peerAxdpDisabled = 9  // Sent when user disables AXDP toggle; informs peer
     }
 
     // MARK: - TLV Structure

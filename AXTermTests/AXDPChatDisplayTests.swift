@@ -131,4 +131,170 @@ final class AXDPChatDisplayTests: XCTestCase {
 
         XCTAssertEqual(capturedText, messageText)
     }
+
+    // MARK: - peerAxdpEnabled notification (TDD: receive path)
+
+    /// When SessionCoordinator receives an I-frame with AXDP peerAxdpEnabled payload,
+    /// it MUST invoke onPeerAxdpEnabled with the peer address.
+    func testSessionCoordinatorInvokesOnPeerAxdpEnabledWhenReceivingPeerAxdpEnabledIFrame() async throws {
+        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        defaults.set(false, forKey: AppSettingsStore.persistKey)
+        let settings = AppSettingsStore(defaults: defaults)
+        settings.myCallsign = "TEST-2"
+
+        let client = PacketEngine(
+            maxPackets: 100,
+            maxConsoleLines: 100,
+            maxRawChunks: 100,
+            settings: settings
+        )
+
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+        coordinator.packetEngine = client
+        coordinator.localCallsign = "TEST-2"
+        coordinator.subscribeToPackets(from: client)
+
+        var capturedFrom: AX25Address?
+        coordinator.onPeerAxdpEnabled = { from in
+            capturedFrom = from
+        }
+
+        let axdpPayload = AXDP.Message(
+            type: .peerAxdpEnabled,
+            sessionId: 0,
+            messageId: UInt32.random(in: 1...UInt32.max)
+        ).encode()
+
+        let packet = Packet(
+            timestamp: Date(),
+            from: AX25Address(call: "TEST", ssid: 1),
+            to: AX25Address(call: "TEST", ssid: 2),
+            via: [],
+            frameType: .i,
+            control: 0x00,
+            controlByte1: nil,
+            pid: 0xF0,
+            info: axdpPayload,
+            rawAx25: Data(),
+            kissEndpoint: nil,
+            infoText: nil
+        )
+
+        client.handleIncomingPacket(packet)
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertNotNil(capturedFrom, "onPeerAxdpEnabled should be called")
+        XCTAssertEqual(capturedFrom?.display, "TEST-1")
+    }
+
+    /// peerAxdpEnabled over UI frame also triggers callback.
+    func testSessionCoordinatorInvokesOnPeerAxdpEnabledWhenReceivingPeerAxdpEnabledUIFrame() async throws {
+        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        defaults.set(false, forKey: AppSettingsStore.persistKey)
+        let settings = AppSettingsStore(defaults: defaults)
+        settings.myCallsign = "TEST-2"
+
+        let client = PacketEngine(
+            maxPackets: 100,
+            maxConsoleLines: 100,
+            maxRawChunks: 100,
+            settings: settings
+        )
+
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+        coordinator.packetEngine = client
+        coordinator.localCallsign = "TEST-2"
+        coordinator.subscribeToPackets(from: client)
+
+        var capturedFrom: AX25Address?
+        coordinator.onPeerAxdpEnabled = { from in
+            capturedFrom = from
+        }
+
+        let axdpPayload = AXDP.Message(
+            type: .peerAxdpEnabled,
+            sessionId: 0,
+            messageId: 123
+        ).encode()
+
+        let packet = Packet(
+            timestamp: Date(),
+            from: AX25Address(call: "TEST", ssid: 1),
+            to: AX25Address(call: "TEST", ssid: 2),
+            via: [],
+            frameType: .ui,
+            control: 0x03,
+            controlByte1: nil,
+            pid: 0xF0,
+            info: axdpPayload,
+            rawAx25: Data(),
+            kissEndpoint: nil,
+            infoText: nil
+        )
+
+        client.handleIncomingPacket(packet)
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertNotNil(capturedFrom, "onPeerAxdpEnabled should be called for UI frame")
+        XCTAssertEqual(capturedFrom?.display, "TEST-1")
+    }
+
+    // MARK: - peerAxdpDisabled notification
+
+    func testSessionCoordinatorInvokesOnPeerAxdpDisabledWhenReceivingPeerAxdpDisabledIFrame() async throws {
+        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        defaults.set(false, forKey: AppSettingsStore.persistKey)
+        let settings = AppSettingsStore(defaults: defaults)
+        settings.myCallsign = "TEST-2"
+
+        let client = PacketEngine(
+            maxPackets: 100,
+            maxConsoleLines: 100,
+            maxRawChunks: 100,
+            settings: settings
+        )
+
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+        coordinator.packetEngine = client
+        coordinator.localCallsign = "TEST-2"
+        coordinator.subscribeToPackets(from: client)
+
+        var capturedFrom: AX25Address?
+        coordinator.onPeerAxdpDisabled = { from in
+            capturedFrom = from
+        }
+
+        let axdpPayload = AXDP.Message(
+            type: .peerAxdpDisabled,
+            sessionId: 0,
+            messageId: 999
+        ).encode()
+
+        let packet = Packet(
+            timestamp: Date(),
+            from: AX25Address(call: "TEST", ssid: 1),
+            to: AX25Address(call: "TEST", ssid: 2),
+            via: [],
+            frameType: .i,
+            control: 0x00,
+            controlByte1: nil,
+            pid: 0xF0,
+            info: axdpPayload,
+            rawAx25: Data(),
+            kissEndpoint: nil,
+            infoText: nil
+        )
+
+        client.handleIncomingPacket(packet)
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertNotNil(capturedFrom, "onPeerAxdpDisabled should be called")
+        XCTAssertEqual(capturedFrom?.display, "TEST-1")
+    }
 }
