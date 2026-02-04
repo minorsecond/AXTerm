@@ -241,6 +241,11 @@ enum AXDP {
                 data.append(TLV(type: TLVType.transferMetrics.rawValue, value: metrics.encode()).encode())
             }
 
+            #if DEBUG
+            let hex = AXDP.hexPrefix(data)
+            print("[AXDP WIRE][ENC] type=\(type) sessionId=\(sessionId) messageId=\(messageId) bytes=\(data.count) hex=\(hex)")
+            #endif
+
             return data
         }
 
@@ -383,6 +388,11 @@ enum AXDP {
                 ])
             }
 
+            #if DEBUG
+            let hex = AXDP.hexPrefix(data)
+            print("[AXDP WIRE][DEC] type=\(msg.type) sessionId=\(msg.sessionId) messageId=\(msg.messageId) bytes=\(data.count) hex=\(hex)")
+            #endif
+
             return msg
         }
     }
@@ -451,6 +461,12 @@ enum AXDP {
     static func hasMagic(_ data: Data) -> Bool {
         guard data.count >= magic.count else { return false }
         return data.prefix(magic.count) == magic
+    }
+
+    /// Debug helper to render a compact hex prefix for wire logging.
+    static func hexPrefix(_ data: Data, limit: Int = 64) -> String {
+        guard !data.isEmpty else { return "" }
+        return data.prefix(limit).map { String(format: "%02X", $0) }.joined()
     }
 
     /// Decode all TLVs from data, skipping malformed ones

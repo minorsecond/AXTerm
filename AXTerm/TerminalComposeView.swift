@@ -285,6 +285,11 @@ struct TerminalComposeView: View {
                         )
                     }
 
+                    // AXDP payload toggle (only when we know the peer speaks AXDP)
+                    if let capability = destinationCapability {
+                        AXDPPayloadToggle(isOn: $useAXDP, capability: capability)
+                    }
+
                     // Queue depth indicator
                     if queueDepth > 0 {
                         HStack(spacing: 3) {
@@ -339,6 +344,40 @@ struct TerminalComposeView: View {
         case .connected:
             // Must be connected to send in connected mode
             return sessionState == .connected
+        }
+    }
+
+    // MARK: - AXDP Toggle
+
+    /// Compact inline toggle for enabling AXDP payload encoding.
+    /// Shown only when we have a discovered AXDP capability for the destination.
+    private struct AXDPPayloadToggle: View {
+        @Binding var isOn: Bool
+        let capability: AXDPCapability
+
+        var body: some View {
+            Toggle(isOn: $isOn) {
+                HStack(spacing: 4) {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("AXDP")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+            }
+            .toggleStyle(.button)
+            .controlSize(.mini)
+            .help(tooltip)
+        }
+
+        private var tooltip: String {
+            var parts: [String] = []
+            parts.append("AXDP payloads enabled for this destination.")
+            parts.append("Peer supports AXDP v\(capability.protoMin)-\(capability.protoMax).")
+            if capability.features.contains(.compression) {
+                parts.append("Compression may be used for file transfers.")
+            }
+            parts.append("Disable if the remote behaves unexpectedly.")
+            return parts.joined(separator: " ")
         }
     }
 

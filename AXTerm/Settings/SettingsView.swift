@@ -471,6 +471,21 @@ struct SettingsView: View {
         .accessibilityIdentifier("settingsView")
         .formStyle(.grouped)
         .padding(20)
+        .onAppear {
+            // Seed adaptive settings from persisted app settings so that AXDP
+            // toggles reflect the configured transmission behavior across launches.
+            txAdaptiveSettings.axdpExtensionsEnabled = settings.axdpExtensionsEnabled
+            txAdaptiveSettings.autoNegotiateCapabilities = settings.axdpAutoNegotiateCapabilities
+            txAdaptiveSettings.compressionEnabled = settings.axdpCompressionEnabled
+            if let algo = AXDPCompression.Algorithm(rawValue: settings.axdpCompressionAlgorithmRaw) {
+                txAdaptiveSettings.compressionAlgorithm = algo
+            }
+            txAdaptiveSettings.maxDecompressedPayload = UInt32(settings.axdpMaxDecompressedPayload)
+            txAdaptiveSettings.showAXDPDecodeDetails = settings.axdpShowDecodeDetails
+
+            // Also push into the live session coordinator on first open.
+            syncAdaptiveSettingsToSessionCoordinator()
+        }
         .confirmationDialog(
             "Clear all stored packet history?",
             isPresented: $showingClearConfirmation,
@@ -716,12 +731,21 @@ struct SettingsView: View {
             GroupBox("AXDP Protocol") {
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle("Enable AXDP Extensions", isOn: $txAdaptiveSettings.axdpExtensionsEnabled)
+                        .onChange(of: txAdaptiveSettings.axdpExtensionsEnabled) { _, _ in
+                            syncAdaptiveSettingsToSessionCoordinator()
+                        }
 
                     Toggle("Auto-negotiate Capabilities", isOn: $txAdaptiveSettings.autoNegotiateCapabilities)
                         .disabled(!txAdaptiveSettings.axdpExtensionsEnabled)
+                        .onChange(of: txAdaptiveSettings.autoNegotiateCapabilities) { _, _ in
+                            syncAdaptiveSettingsToSessionCoordinator()
+                        }
 
                     Toggle("Enable Compression", isOn: $txAdaptiveSettings.compressionEnabled)
                         .disabled(!txAdaptiveSettings.axdpExtensionsEnabled)
+                        .onChange(of: txAdaptiveSettings.compressionEnabled) { _, _ in
+                            syncAdaptiveSettingsToSessionCoordinator()
+                        }
 
                     if txAdaptiveSettings.compressionEnabled && txAdaptiveSettings.axdpExtensionsEnabled {
                         Picker("Compression Algorithm", selection: $txAdaptiveSettings.compressionAlgorithm) {
@@ -729,6 +753,9 @@ struct SettingsView: View {
                             Text("Deflate (better ratio)").tag(AXDPCompression.Algorithm.deflate)
                         }
                         .pickerStyle(.menu)
+                        .onChange(of: txAdaptiveSettings.compressionAlgorithm) { _, _ in
+                            syncAdaptiveSettingsToSessionCoordinator()
+                        }
                     }
 
                     Text("AXDP extensions provide compression, capability negotiation, and reliable transfers. They are backward-compatible with stations that don't support them.")
@@ -741,8 +768,32 @@ struct SettingsView: View {
             // Debug
             GroupBox("Debug") {
                 Toggle("Show AXDP decode details in console", isOn: $txAdaptiveSettings.showAXDPDecodeDetails)
+                    .onChange(of: txAdaptiveSettings.showAXDPDecodeDetails) { _, _ in
+                        syncAdaptiveSettingsToSessionCoordinator()
+                    }
             }
         }
+    }
+
+    /// Propagate AXDP-related adaptive settings into the live session coordinator so
+    /// that negotiation and compression behavior follow the user's configuration.
+    private func syncAdaptiveSettingsToSessionCoordinator() {
+        guard let coordinator = SessionCoordinator.shared else { return }
+        // Persist into app settings for durability
+        settings.axdpExtensionsEnabled = txAdaptiveSettings.axdpExtensionsEnabled
+        settings.axdpAutoNegotiateCapabilities = txAdaptiveSettings.autoNegotiateCapabilities
+        settings.axdpCompressionEnabled = txAdaptiveSettings.compressionEnabled
+        settings.axdpCompressionAlgorithmRaw = txAdaptiveSettings.compressionAlgorithm.rawValue
+        settings.axdpMaxDecompressedPayload = Int(txAdaptiveSettings.maxDecompressedPayload)
+        settings.axdpShowDecodeDetails = txAdaptiveSettings.showAXDPDecodeDetails
+
+        // Push into live session coordinator so new sessions use updated behavior
+        coordinator.globalAdaptiveSettings.axdpExtensionsEnabled = txAdaptiveSettings.axdpExtensionsEnabled
+        coordinator.globalAdaptiveSettings.autoNegotiateCapabilities = txAdaptiveSettings.autoNegotiateCapabilities
+        coordinator.globalAdaptiveSettings.compressionEnabled = txAdaptiveSettings.compressionEnabled
+        coordinator.globalAdaptiveSettings.compressionAlgorithm = txAdaptiveSettings.compressionAlgorithm
+        coordinator.globalAdaptiveSettings.maxDecompressedPayload = txAdaptiveSettings.maxDecompressedPayload
+        coordinator.globalAdaptiveSettings.showAXDPDecodeDetails = txAdaptiveSettings.showAXDPDecodeDetails
     }
 
     // MARK: - File Transfer Permissions Section

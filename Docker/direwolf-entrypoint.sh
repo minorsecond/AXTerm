@@ -28,7 +28,8 @@ ACHANNELS 1
 
 # Channel 0 settings
 CHANNEL 0
-MODEM 1200
+# MODEM baud rate is configurable via MODEM_SPEED env (300/1200/9600, etc.)
+MODEM ${MODEM_SPEED:-1200}
 PTT NONE
 
 # KISS TCP interface for AXTerm

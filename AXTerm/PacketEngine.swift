@@ -98,6 +98,21 @@ final class PacketEngine: ObservableObject {
         #endif
     }
 
+    /// AXDP-specific debug logging for capability detection and routing.
+    private func debugAXDP(_ message: String, _ data: [String: Any] = [:]) {
+        #if DEBUG
+        if data.isEmpty {
+            print("[AXDP TRACE][Packets] \(message)")
+        } else {
+            let details = data
+                .map { "\($0.key)=\($0.value)" }
+                .sorted()
+                .joined(separator: " ")
+            print("[AXDP TRACE][Packets] \(message) | \(details)")
+        }
+        #endif
+    }
+
     private func hexPrefix(_ data: Data, limit: Int = 32) -> String {
         guard !data.isEmpty else { return "" }
         return data.prefix(limit).map { String(format: "%02X", $0) }.joined()
@@ -768,11 +783,18 @@ final class PacketEngine: ObservableObject {
         if (message.type == .ping || message.type == .pong), let caps = message.capabilities {
             capabilityStore.store(caps, for: fromAddress.call, ssid: fromAddress.ssid)
 
+            let kind = message.type == .ping ? "PING" : "PONG"
             TxLog.debug(.capability, "Detected AXDP capabilities from UI frame", [
                 "peer": fromAddress.display,
-                "type": message.type == .ping ? "PING" : "PONG",
+                "type": kind,
                 "protoMax": caps.protoMax,
                 "features": caps.features.description
+            ])
+            debugAXDP("Capability \(kind) via UI/I frame", [
+                "peer": fromAddress.display,
+                "protoRange": "\(caps.protoMin)-\(caps.protoMax)",
+                "features": caps.features.description,
+                "infoLen": packet.info.count
             ])
         }
     }

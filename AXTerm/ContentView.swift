@@ -46,6 +46,17 @@ struct ContentView: View {
         // Initialize session coordinator for connected-mode sessions
         let coordinator = SessionCoordinator()
         coordinator.localCallsign = settings.myCallsign
+        // Seed AXDP / transmission adaptive settings from persisted settings
+        var adaptive = TxAdaptiveSettings()
+        adaptive.axdpExtensionsEnabled = settings.axdpExtensionsEnabled
+        adaptive.autoNegotiateCapabilities = settings.axdpAutoNegotiateCapabilities
+        adaptive.compressionEnabled = settings.axdpCompressionEnabled
+        if let algo = AXDPCompression.Algorithm(rawValue: settings.axdpCompressionAlgorithmRaw) {
+            adaptive.compressionAlgorithm = algo
+        }
+        adaptive.maxDecompressedPayload = UInt32(settings.axdpMaxDecompressedPayload)
+        adaptive.showAXDPDecodeDetails = settings.axdpShowDecodeDetails
+        coordinator.globalAdaptiveSettings = adaptive
         coordinator.subscribeToPackets(from: client)
         _sessionCoordinator = StateObject(wrappedValue: coordinator)
     }

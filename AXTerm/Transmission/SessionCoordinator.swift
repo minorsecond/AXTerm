@@ -16,6 +16,9 @@ import CommonCrypto
 /// This class is owned by ContentView and passed down to child views.
 @MainActor
 final class SessionCoordinator: ObservableObject {
+    /// Shared instance for settings integration (single coordinator for app lifecycle).
+    /// This is assigned in `init` for the main `ContentView`-owned coordinator.
+    static weak var shared: SessionCoordinator?
     /// The session manager for connected-mode operations
     let sessionManager = AX25SessionManager()
 
@@ -75,7 +78,24 @@ final class SessionCoordinator: ObservableObject {
     var globalAdaptiveSettings: TxAdaptiveSettings = TxAdaptiveSettings()
 
     init() {
+        SessionCoordinator.shared = self
         setupCallbacks()
+    }
+
+    // MARK: - Debug Logging (AXDP)
+
+    private func debugAXDP(_ message: String, _ fields: [String: Any] = [:]) {
+        #if DEBUG
+        if fields.isEmpty {
+            print("[AXDP TRACE][Session] \(message)")
+        } else {
+            let details = fields
+                .map { "\($0.key)=\($0.value)" }
+                .sorted()
+                .joined(separator: " ")
+            print("[AXDP TRACE][Session] \(message) | \(details)")
+        }
+        #endif
     }
 
     // MARK: - Setup
@@ -96,12 +116,25 @@ final class SessionCoordinator: ObservableObject {
             // When a session becomes connected AND we are the initiator, send AXDP PING
             // The responder will receive PING and reply with PONG
             if oldState != .connected && newState == .connected {
-                if session.isInitiator && self.globalAdaptiveSettings.autoNegotiateCapabilities {
+                if session.isInitiator &&
+                    self.globalAdaptiveSettings.axdpExtensionsEnabled &&
+                    self.globalAdaptiveSettings.autoNegotiateCapabilities {
                     self.sendCapabilityPing(to: session)
+                    self.debugAXDP("Session connected, sending PING", [
+                        "peer": session.remoteAddress.display,
+                        "path": session.path.display,
+                        "sessionId": session.id.uuidString
+                    ])
                     TxLog.debug(.capability, "Session connected (initiator), sending AXDP PING", [
                         "peer": session.remoteAddress.display
                     ])
                 } else {
+                    self.debugAXDP("Session connected, no PING (either responder or AXDP disabled)", [
+                        "peer": session.remoteAddress.display,
+                        "initiator": session.isInitiator,
+                        "axdpEnabled": globalAdaptiveSettings.axdpExtensionsEnabled,
+                        "autoNegotiate": globalAdaptiveSettings.autoNegotiateCapabilities
+                    ])
                     TxLog.debug(.capability, "Session connected (responder), waiting for PING from initiator", [
                         "peer": session.remoteAddress.display
                     ])
@@ -353,6 +386,15 @@ final class SessionCoordinator: ObservableObject {
     private func handleAXDPMessage(from: AX25Address, path: DigiPath, payload: Data) {
         guard AXDP.hasMagic(payload) else { return }
         guard let message = AXDP.Message.decode(from: payload) else { return }
+
+        debugAXDP("RX", [
+            "type": String(describing: message.type),
+            "from": from.display,
+            "path": path.display,
+            "sessionId": message.sessionId,
+            "messageId": message.messageId,
+            "len": payload.count
+        ])
 
         switch message.type {
         case .ping, .pong:

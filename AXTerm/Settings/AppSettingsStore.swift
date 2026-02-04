@@ -45,6 +45,14 @@ final class AppSettingsStore: ObservableObject {
     static let analyticsHubMetricKey = "analyticsHubMetric"
     static let analyticsStationIdentityModeKey = "analyticsStationIdentityMode"
 
+    // AXDP / transmission extension settings keys
+    static let axdpExtensionsEnabledKey = "axdpExtensionsEnabled"
+    static let axdpAutoNegotiateKey = "axdpAutoNegotiateCapabilities"
+    static let axdpCompressionEnabledKey = "axdpCompressionEnabled"
+    static let axdpCompressionAlgorithmKey = "axdpCompressionAlgorithm"
+    static let axdpMaxDecompressedPayloadKey = "axdpMaxDecompressedPayload"
+    static let axdpShowDecodeDetailsKey = "axdpShowAXDPDecodeDetails"
+
     // NET/ROM route settings keys
     static let hideExpiredRoutesKey = "hideExpiredRoutes"
     static let routeRetentionDaysKey = "routeRetentionDays"
@@ -84,6 +92,14 @@ final class AppSettingsStore: ObservableObject {
     static let defaultAnalyticsMaxNodes = 150
     static let defaultAnalyticsHubMetric = "Degree"  // Matches HubMetric.degree.rawValue
     static let defaultAnalyticsStationIdentityMode = "station"  // Group SSIDs by default
+
+    // AXDP defaults (match TxAdaptiveSettings defaults)
+    static let defaultAXDPExtensionsEnabled = true
+    static let defaultAXDPAutoNegotiate = false
+    static let defaultAXDPCompressionEnabled = true
+    static let defaultAXDPCompressionAlgorithm: UInt8 = 1  // AXDPCompression.Algorithm.lz4
+    static let defaultAXDPMaxDecompressedPayload = 4096
+    static let defaultAXDPShowDecodeDetails = false
 
     // NET/ROM route defaults
     static let defaultHideExpiredRoutes = true  // Hide expired routes by default for clean UI
@@ -264,6 +280,38 @@ final class AppSettingsStore: ObservableObject {
 
     @Published var sentrySendConnectionDetails: Bool {
         didSet { persistSentrySendConnectionDetails() }
+    }
+
+    // MARK: - AXDP / Transmission Extension Settings
+
+    /// Whether AXDP extensions are enabled globally.
+    @Published var axdpExtensionsEnabled: Bool {
+        didSet { persistAXDPExtensionsEnabled() }
+    }
+
+    /// Whether to automatically negotiate AXDP capabilities on connect.
+    @Published var axdpAutoNegotiateCapabilities: Bool {
+        didSet { persistAXDPAutoNegotiateCapabilities() }
+    }
+
+    /// Whether AXDP compression is enabled for AXTerm peers.
+    @Published var axdpCompressionEnabled: Bool {
+        didSet { persistAXDPCompressionEnabled() }
+    }
+
+    /// Preferred AXDP compression algorithm (raw value, mapped to enum elsewhere).
+    @Published var axdpCompressionAlgorithmRaw: UInt8 {
+        didSet { persistAXDPCompressionAlgorithm() }
+    }
+
+    /// Maximum allowed decompressed AXDP payload size (bytes).
+    @Published var axdpMaxDecompressedPayload: Int {
+        didSet { persistAXDPMaxDecompressedPayload() }
+    }
+
+    /// Whether to show detailed AXDP decode information in the transcript.
+    @Published var axdpShowDecodeDetails: Bool {
+        didSet { persistAXDPShowDecodeDetails() }
     }
 
     // MARK: - File Transfer Settings
@@ -511,6 +559,14 @@ final class AppSettingsStore: ObservableObject {
         let storedNeighborStaleTTLHours = defaults.object(forKey: Self.neighborStaleTTLHoursKey) as? Int ?? Self.defaultNeighborStaleTTLHours
         let storedLinkStatStaleTTLHours = defaults.object(forKey: Self.linkStatStaleTTLHoursKey) as? Int ?? Self.defaultLinkStatStaleTTLHours
 
+        // AXDP / transmission extension settings
+        let storedAXDPExtensionsEnabled = defaults.object(forKey: Self.axdpExtensionsEnabledKey) as? Bool ?? Self.defaultAXDPExtensionsEnabled
+        let storedAXDPAutoNegotiate = defaults.object(forKey: Self.axdpAutoNegotiateKey) as? Bool ?? Self.defaultAXDPAutoNegotiate
+        let storedAXDPCompressionEnabled = defaults.object(forKey: Self.axdpCompressionEnabledKey) as? Bool ?? Self.defaultAXDPCompressionEnabled
+        let storedAXDPCompressionAlgorithm = (defaults.object(forKey: Self.axdpCompressionAlgorithmKey) as? Int).map { UInt8($0) } ?? Self.defaultAXDPCompressionAlgorithm
+        let storedAXDPMaxDecompressedPayload = defaults.object(forKey: Self.axdpMaxDecompressedPayloadKey) as? Int ?? Self.defaultAXDPMaxDecompressedPayload
+        let storedAXDPShowDecodeDetails = defaults.object(forKey: Self.axdpShowDecodeDetailsKey) as? Bool ?? Self.defaultAXDPShowDecodeDetails
+
         // Clear timestamps (stored as TimeInterval)
         let storedTerminalClearedAt: Date?
         if let timeInterval = defaults.object(forKey: Self.terminalClearedAtKey) as? TimeInterval {
@@ -574,6 +630,14 @@ final class AppSettingsStore: ObservableObject {
         self.adaptiveStaleMissedBroadcasts = max(Self.minAdaptiveStaleMissedBroadcasts, min(Self.maxAdaptiveStaleMissedBroadcasts, storedAdaptiveStaleMissedBroadcasts))
         self.neighborStaleTTLHours = max(Self.minNeighborStaleTTLHours, min(Self.maxNeighborStaleTTLHours, storedNeighborStaleTTLHours))
         self.linkStatStaleTTLHours = max(Self.minLinkStatStaleTTLHours, min(Self.maxLinkStatStaleTTLHours, storedLinkStatStaleTTLHours))
+
+        // AXDP / transmission extension settings
+        self.axdpExtensionsEnabled = storedAXDPExtensionsEnabled
+        self.axdpAutoNegotiateCapabilities = storedAXDPAutoNegotiate
+        self.axdpCompressionEnabled = storedAXDPCompressionEnabled
+        self.axdpCompressionAlgorithmRaw = storedAXDPCompressionAlgorithm
+        self.axdpMaxDecompressedPayload = storedAXDPMaxDecompressedPayload
+        self.axdpShowDecodeDetails = storedAXDPShowDecodeDetails
 
         // Clear timestamps
         self.terminalClearedAt = storedTerminalClearedAt
@@ -709,6 +773,32 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(sentrySendConnectionDetails, forKey: Self.sentrySendConnectionDetailsKey)
     }
 
+    // MARK: - AXDP / Transmission Extension Persistence
+
+    private func persistAXDPExtensionsEnabled() {
+        defaults.set(axdpExtensionsEnabled, forKey: Self.axdpExtensionsEnabledKey)
+    }
+
+    private func persistAXDPAutoNegotiateCapabilities() {
+        defaults.set(axdpAutoNegotiateCapabilities, forKey: Self.axdpAutoNegotiateKey)
+    }
+
+    private func persistAXDPCompressionEnabled() {
+        defaults.set(axdpCompressionEnabled, forKey: Self.axdpCompressionEnabledKey)
+    }
+
+    private func persistAXDPCompressionAlgorithm() {
+        defaults.set(Int(axdpCompressionAlgorithmRaw), forKey: Self.axdpCompressionAlgorithmKey)
+    }
+
+    private func persistAXDPMaxDecompressedPayload() {
+        defaults.set(axdpMaxDecompressedPayload, forKey: Self.axdpMaxDecompressedPayloadKey)
+    }
+
+    private func persistAXDPShowDecodeDetails() {
+        defaults.set(axdpShowDecodeDetails, forKey: Self.axdpShowDecodeDetailsKey)
+    }
+
     private func persistAllowedFileTransferCallsigns() {
         defaults.set(allowedFileTransferCallsigns, forKey: Self.allowedFileTransferCallsignsKey)
     }
@@ -839,7 +929,13 @@ final class AppSettingsStore: ObservableObject {
             Self.globalStaleTTLHoursKey: Self.defaultGlobalStaleTTLHours,
             Self.adaptiveStaleMissedBroadcastsKey: Self.defaultAdaptiveStaleMissedBroadcasts,
             Self.neighborStaleTTLHoursKey: Self.defaultNeighborStaleTTLHours,
-            Self.linkStatStaleTTLHoursKey: Self.defaultLinkStatStaleTTLHours
+            Self.linkStatStaleTTLHoursKey: Self.defaultLinkStatStaleTTLHours,
+            Self.axdpExtensionsEnabledKey: Self.defaultAXDPExtensionsEnabled,
+            Self.axdpAutoNegotiateKey: Self.defaultAXDPAutoNegotiate,
+            Self.axdpCompressionEnabledKey: Self.defaultAXDPCompressionEnabled,
+            Self.axdpCompressionAlgorithmKey: Self.defaultAXDPCompressionAlgorithm,
+            Self.axdpMaxDecompressedPayloadKey: Self.defaultAXDPMaxDecompressedPayload,
+            Self.axdpShowDecodeDetailsKey: Self.defaultAXDPShowDecodeDetails
         ])
     }
 
