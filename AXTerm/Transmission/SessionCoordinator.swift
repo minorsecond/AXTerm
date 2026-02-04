@@ -12,6 +12,27 @@ import Combine
 import SwiftUI
 import CommonCrypto
 
+// MARK: - Per-route adaptive cache
+
+/// Key for per-route adaptive cache (destination + path so direct vs via digi are separate).
+struct RouteAdaptiveKey: Hashable, Sendable {
+    let destination: String
+    let pathSignature: String
+}
+
+/// Normalizes destination so "PEER" and "PEER-0" match (SSID 0 display form).
+private func canonicalDestination(_ destination: String) -> String {
+    let u = destination.uppercased().trimmingCharacters(in: .whitespaces)
+    if u.hasSuffix("-0") { return String(u.dropLast(2)) }
+    return u
+}
+
+/// Cached learned params for one route with TTL for invalidation.
+struct CachedAdaptiveEntry: Sendable {
+    var settings: TxAdaptiveSettings
+    var lastUpdated: Date
+}
+
 /// Coordinates session management and file transfers across the app.
 /// This class is owned by ContentView and passed down to child views.
 @MainActor
@@ -90,9 +111,171 @@ final class SessionCoordinator: ObservableObject {
     /// Global adaptive settings (for compression, etc.)
     var globalAdaptiveSettings: TxAdaptiveSettings = TxAdaptiveSettings()
 
+    /// When true, learn from session and network and use learned params; when false, use fixed defaults.
+    @Published var adaptiveTransmissionEnabled: Bool = true
+
+    /// Destinations that should use default config (no learned params). "Reset for this station" adds here.
+    @Published var useDefaultConfigForDestinations: Set<String> = []
+
+    /// Per-route learned adaptive params so multiple connections (e.g. same peer direct vs via digi) don't overwrite each other.
+    /// Key: (destination, pathSignature); value: learned settings + last update time for TTL invalidation.
+    private var adaptiveCache: [RouteAdaptiveKey: CachedAdaptiveEntry] = [:]
+
+    /// TTL for per-route cache: after this many seconds without a sample for that route, we fall back to global.
+    private static let adaptiveCacheTTLSeconds: TimeInterval = 30 * 60  // 30 minutes
+
     init() {
         SessionCoordinator.shared = self
         setupCallbacks()
+    }
+
+    /// Sync AX.25 session config from global adaptive settings so both messaging and file transfer use the same window size, RTO bounds, and retries.
+    /// Call after setting globalAdaptiveSettings (e.g. on launch or when user changes TX adaptive settings).
+    func syncSessionManagerConfigFromAdaptive() {
+        guard adaptiveTransmissionEnabled else {
+            sessionManager.defaultConfig = AX25SessionConfig()
+            TxLog.adaptiveConfigSynced(window: 4, rtoMin: 1, rtoMax: 30, maxRetries: 10)
+            return
+        }
+        let a = globalAdaptiveSettings
+        sessionManager.defaultConfig = AX25SessionConfig(
+            windowSize: a.windowSize.effectiveValue,
+            maxReceiveBufferSize: nil,
+            maxRetries: a.maxRetries.effectiveValue,
+            extended: false,
+            rtoMin: a.rtoMin.effectiveValue,
+            rtoMax: a.rtoMax.effectiveValue,
+            initialRto: max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, 4.0))
+        )
+        TxLog.adaptiveConfigSynced(
+            window: a.windowSize.effectiveValue,
+            rtoMin: a.rtoMin.effectiveValue,
+            rtoMax: a.rtoMax.effectiveValue,
+            maxRetries: a.maxRetries.effectiveValue
+        )
+    }
+
+    /// Apply a link quality sample to adaptive settings (per-route when session, global when network).
+    /// Session samples update the per-route cache so multiple connections (e.g. same peer direct vs via digi) don't overwrite each other.
+    func applyLinkQualitySample(lossRate: Double, etx: Double, srtt: Double?, source: String = "session", routeKey: RouteAdaptiveKey? = nil) {
+        guard adaptiveTransmissionEnabled else {
+            TxLog.adaptiveSampleIgnored(reason: "adaptive disabled", lossRate: lossRate, etx: etx)
+            return
+        }
+        if let key = routeKey {
+            // Normalize destination for consistent cache lookups (PEER-0 and PEER map to same key)
+            let normalizedKey = RouteAdaptiveKey(destination: canonicalDestination(key.destination), pathSignature: key.pathSignature)
+            var entry = adaptiveCache[normalizedKey]?.settings ?? TxAdaptiveSettings()
+            entry.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt)
+            adaptiveCache[normalizedKey] = CachedAdaptiveEntry(settings: entry, lastUpdated: Date())
+            let a = entry
+            let reason = a.windowSize.adaptiveReason ?? a.paclen.adaptiveReason ?? "updated"
+            TxLog.adaptiveLearning(
+                source: source,
+                lossRate: lossRate,
+                etx: etx,
+                srtt: srtt,
+                window: a.windowSize.effectiveValue,
+                paclen: a.paclen.effectiveValue,
+                reason: reason + " [route \(normalizedKey.destination) \(normalizedKey.pathSignature.isEmpty ? "direct" : normalizedKey.pathSignature)]"
+            )
+        } else {
+            globalAdaptiveSettings.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt)
+            let a = globalAdaptiveSettings
+            let reason = a.windowSize.adaptiveReason ?? a.paclen.adaptiveReason ?? "updated"
+            TxLog.adaptiveLearning(
+                source: source,
+                lossRate: lossRate,
+                etx: etx,
+                srtt: srtt,
+                window: a.windowSize.effectiveValue,
+                paclen: a.paclen.effectiveValue,
+                reason: reason
+            )
+            syncSessionManagerConfigFromAdaptive()
+        }
+        objectWillChange.send()
+    }
+
+    /// True if cached entry is older than TTL (route-level cache invalidation).
+    private func isAdaptiveCacheEntryExpired(_ entry: CachedAdaptiveEntry) -> Bool {
+        Date().timeIntervalSince(entry.lastUpdated) > Self.adaptiveCacheTTLSeconds
+    }
+
+    /// Build session config from adaptive settings (shared by per-route and merged paths).
+    private func configFromAdaptive(_ a: TxAdaptiveSettings) -> AX25SessionConfig {
+        AX25SessionConfig(
+            windowSize: a.windowSize.effectiveValue,
+            maxReceiveBufferSize: nil,
+            maxRetries: a.maxRetries.effectiveValue,
+            extended: false,
+            rtoMin: a.rtoMin.effectiveValue,
+            rtoMax: a.rtoMax.effectiveValue,
+            initialRto: max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, 4.0))
+        )
+    }
+
+    /// Number of active sessions (any state) to the given destination. Used to stabilize config when multiple connections exist.
+    private func activeSessionCount(forDestination destination: String) -> Int {
+        let canon = canonicalDestination(destination)
+        return sessionManager.sessions.values.filter { canonicalDestination($0.remoteAddress.display) == canon }.count
+    }
+
+    /// Conservative merge of configs for a destination: min window, max RTO, max retries. Used when 2+ sessions exist to same peer so we don't flip parameters between connections or corrupt transmissions.
+    private func mergedConfigForDestination(_ destination: String) -> AX25SessionConfig {
+        var configs: [AX25SessionConfig] = [configFromAdaptive(globalAdaptiveSettings)]
+        let canon = canonicalDestination(destination)
+        for (key, entry) in adaptiveCache where key.destination == canon && !isAdaptiveCacheEntryExpired(entry) {
+            configs.append(configFromAdaptive(entry.settings))
+        }
+        guard let first = configs.first else { return AX25SessionConfig() }
+        let windowSize = configs.map(\.windowSize).min() ?? first.windowSize
+        let rtoMin = configs.compactMap(\.rtoMin).max() ?? first.rtoMin ?? 1.0
+        let rtoMax = configs.compactMap(\.rtoMax).max() ?? first.rtoMax ?? 30.0
+        let maxRetries = configs.map(\.maxRetries).max() ?? first.maxRetries
+        return AX25SessionConfig(
+            windowSize: windowSize,
+            maxReceiveBufferSize: nil,
+            maxRetries: maxRetries,
+            extended: false,
+            rtoMin: rtoMin,
+            rtoMax: rtoMax,
+            initialRto: max(rtoMin, min(rtoMax, 4.0))
+        )
+    }
+
+    /// Remove expired entries from per-route cache (call periodically or when looking up).
+    private func pruneExpiredAdaptiveCache() {
+        let now = Date()
+        adaptiveCache = adaptiveCache.filter { _, entry in
+            now.timeIntervalSince(entry.lastUpdated) <= Self.adaptiveCacheTTLSeconds
+        }
+    }
+
+    /// Clear all learned adaptive settings, per-route cache, and per-station overrides; reset to defaults.
+    func clearAllLearned() {
+        globalAdaptiveSettings = TxAdaptiveSettings()
+        useDefaultConfigForDestinations.removeAll()
+        adaptiveCache.removeAll()
+        syncSessionManagerConfigFromAdaptive()
+        TxLog.adaptiveCleared(reason: "clear all – reset to defaults (routes + global)")
+        objectWillChange.send()
+    }
+
+    /// Use default config for this station (reset learned params for this callsign only).
+    func resetStationToDefault(callsign: String) {
+        let normalized = canonicalDestination(callsign)
+        guard !normalized.isEmpty else { return }
+        useDefaultConfigForDestinations.insert(normalized)
+        TxLog.adaptiveStationReset(callsign: normalized)
+        objectWillChange.send()
+    }
+
+    /// Use global adaptive config for this station again (undo per-station reset).
+    func useGlobalAdaptiveForStation(callsign: String) {
+        let normalized = canonicalDestination(callsign)
+        useDefaultConfigForDestinations.remove(normalized)
+        objectWillChange.send()
     }
 
     /// Explicit deinit to ensure any background tasks are cancelled cleanly.
@@ -124,6 +307,29 @@ final class SessionCoordinator: ObservableObject {
         // Wire up response frame sending
         sessionManager.onRetransmitFrame = { [weak self] frame in
             self?.sendFrame(frame)
+        }
+
+        sessionManager.onLinkQualitySample = { [weak self] session, lossRate, etx, srtt in
+            let routeKey = RouteAdaptiveKey(
+                destination: session.remoteAddress.display.uppercased(),
+                pathSignature: session.path.display
+            )
+            self?.applyLinkQualitySample(lossRate: lossRate, etx: etx, srtt: srtt, source: "session", routeKey: routeKey)
+        }
+
+        sessionManager.getConfigForDestination = { [weak self] destination, pathSignature in
+            guard let self = self else { return AX25SessionConfig() }
+            if !self.adaptiveTransmissionEnabled { return AX25SessionConfig() }
+            if self.useDefaultConfigForDestinations.contains(where: { canonicalDestination($0) == canonicalDestination(destination) }) { return AX25SessionConfig() }
+            // When multiple connections exist to the same destination, use a conservative merged config so we don't flip parameters between connections or change settings mid-transmission.
+            if self.activeSessionCount(forDestination: destination) >= 1 {
+                return self.mergedConfigForDestination(destination)
+            }
+            let key = RouteAdaptiveKey(destination: canonicalDestination(destination), pathSignature: pathSignature)
+            if let cached = self.adaptiveCache[key], !self.isAdaptiveCacheEntryExpired(cached) {
+                return self.configFromAdaptive(cached.settings)
+            }
+            return self.configFromAdaptive(self.globalAdaptiveSettings)
         }
 
         // Wire up session state changes for automatic capability discovery

@@ -27,6 +27,9 @@ struct SettingsView: View {
     /// Adaptive transmission settings
     @State private var txAdaptiveSettings = TxAdaptiveSettings()
 
+    /// Callsign to add to "use default config" (per-station reset)
+    @State private var adaptiveResetCallsign = ""
+
     private let retentionStep = 1_000
 
     var body: some View {
@@ -485,6 +488,10 @@ struct SettingsView: View {
 
             // Also push into the live session coordinator on first open.
             syncAdaptiveSettingsToSessionCoordinator()
+            if let coordinator = SessionCoordinator.shared {
+                coordinator.adaptiveTransmissionEnabled = settings.adaptiveTransmissionEnabled
+                coordinator.syncSessionManagerConfigFromAdaptive()
+            }
         }
         .confirmationDialog(
             "Clear all stored packet history?",
@@ -694,7 +701,81 @@ struct SettingsView: View {
     @ViewBuilder
     private var transmissionSettingsSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // Traffic Shaping
+            // Adaptive transmission: enable/disable and clear
+            GroupBox("Adaptive Transmission") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Enable adaptive transmission", isOn: Binding(
+                        get: { settings.adaptiveTransmissionEnabled },
+                        set: { newValue in
+                            settings.adaptiveTransmissionEnabled = newValue
+                            if let coordinator = SessionCoordinator.shared {
+                                coordinator.adaptiveTransmissionEnabled = newValue
+                                coordinator.syncSessionManagerConfigFromAdaptive()
+                                if newValue { TxLog.adaptiveEnabled() } else { TxLog.adaptiveDisabled() }
+                            }
+                        }
+                    ))
+
+                    if settings.adaptiveTransmissionEnabled {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chart.line.uptrend.xyaxis")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                            Text("Learning from session and network – params update automatically.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Button("Clear all learned settings") {
+                        if let coordinator = SessionCoordinator.shared {
+                            coordinator.clearAllLearned()
+                            txAdaptiveSettings = TxAdaptiveSettings()
+                            syncAdaptiveSettingsToSessionCoordinator()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!settings.adaptiveTransmissionEnabled)
+
+                    HStack(spacing: 8) {
+                        TextField("Callsign (e.g. N0CALL-2)", text: $adaptiveResetCallsign)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 120)
+                        Button("Reset adaptive for this station") {
+                            let call = adaptiveResetCallsign.trimmingCharacters(in: .whitespaces)
+                            guard !call.isEmpty else { return }
+                            SessionCoordinator.shared?.resetStationToDefault(callsign: call)
+                            adaptiveResetCallsign = ""
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(adaptiveResetCallsign.trimmingCharacters(in: .whitespaces).isEmpty || !settings.adaptiveTransmissionEnabled)
+                    }
+                    .help("Use default transmission params for this station only.")
+
+                    if let coordinator = SessionCoordinator.shared, !coordinator.useDefaultConfigForDestinations.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Stations using default config:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ForEach(Array(coordinator.useDefaultConfigForDestinations).sorted(), id: \.self) { callsign in
+                                HStack {
+                                    Text(callsign)
+                                        .font(.system(.caption, design: .monospaced))
+                                    Spacer()
+                                    Button("Use global again") {
+                                        coordinator.useGlobalAdaptiveForStation(callsign: callsign)
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .font(.caption)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.top, 4)
+            }
+
+            // Traffic Shaping (window size, RTO, retries apply to both messaging and file transfer)
             GroupBox("Traffic Shaping") {
                 VStack(alignment: .leading, spacing: 12) {
                     adaptiveSettingRow(
@@ -711,8 +792,12 @@ struct SettingsView: View {
                         setting: txAdaptiveSettings.windowSize,
                         onToggle: {
                             txAdaptiveSettings.windowSize.mode = txAdaptiveSettings.windowSize.mode == .auto ? .manual : .auto
+                            syncAdaptiveSettingsToSessionCoordinator()
                         },
-                        onValueChange: { txAdaptiveSettings.windowSize.manualValue = $0 }
+                        onValueChange: {
+                            txAdaptiveSettings.windowSize.manualValue = $0
+                            syncAdaptiveSettingsToSessionCoordinator()
+                        }
                     )
 
                     adaptiveSettingRow(
@@ -720,8 +805,12 @@ struct SettingsView: View {
                         setting: txAdaptiveSettings.maxRetries,
                         onToggle: {
                             txAdaptiveSettings.maxRetries.mode = txAdaptiveSettings.maxRetries.mode == .auto ? .manual : .auto
+                            syncAdaptiveSettingsToSessionCoordinator()
                         },
-                        onValueChange: { txAdaptiveSettings.maxRetries.manualValue = $0 }
+                        onValueChange: {
+                            txAdaptiveSettings.maxRetries.manualValue = $0
+                            syncAdaptiveSettingsToSessionCoordinator()
+                        }
                     )
                 }
                 .padding(.top, 4)
@@ -806,7 +895,12 @@ struct SettingsView: View {
         updatedSettings.compressionAlgorithm = txAdaptiveSettings.compressionAlgorithm
         updatedSettings.maxDecompressedPayload = txAdaptiveSettings.maxDecompressedPayload
         updatedSettings.showAXDPDecodeDetails = txAdaptiveSettings.showAXDPDecodeDetails
+        updatedSettings.windowSize = txAdaptiveSettings.windowSize
+        updatedSettings.maxRetries = txAdaptiveSettings.maxRetries
+        updatedSettings.rtoMin = txAdaptiveSettings.rtoMin
+        updatedSettings.rtoMax = txAdaptiveSettings.rtoMax
         coordinator.globalAdaptiveSettings = updatedSettings
+        coordinator.syncSessionManagerConfigFromAdaptive()
 
         print("[SettingsView] Updated coordinator settings:")
         print("[SettingsView]   coordinator.globalAdaptiveSettings.axdpExtensionsEnabled = \(coordinator.globalAdaptiveSettings.axdpExtensionsEnabled)")

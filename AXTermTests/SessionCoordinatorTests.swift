@@ -576,4 +576,206 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.transfers.count, 1)
         XCTAssertEqual(coordinator.transfers[0].status, .awaitingCompletion, "NACK with SACK must not mark transfer failed when no session mapping")
     }
+
+    // MARK: - Adaptive transmission: enable/disable, clear, per-station reset
+
+    func testClearAllLearnedResetsSettingsAndOverrides() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 1
+        coordinator.globalAdaptiveSettings.paclen.currentAdaptive = 64
+        coordinator.useDefaultConfigForDestinations.insert("N0CALL-1")
+
+        coordinator.clearAllLearned()
+
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.windowSize.currentAdaptive, 2)
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.paclen.currentAdaptive, 128)
+        XCTAssertTrue(coordinator.useDefaultConfigForDestinations.isEmpty)
+    }
+
+    func testResetStationToDefaultAddsToOverrideSet() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.resetStationToDefault(callsign: " N0CALL-2 ")
+
+        XCTAssertTrue(coordinator.useDefaultConfigForDestinations.contains("N0CALL-2"))
+    }
+
+    func testUseGlobalAdaptiveForStationRemovesOverride() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.useDefaultConfigForDestinations.insert("N0CALL-3")
+        coordinator.useGlobalAdaptiveForStation(callsign: "n0call-3")
+
+        XCTAssertFalse(coordinator.useDefaultConfigForDestinations.contains("N0CALL-3"))
+    }
+
+    func testApplyLinkQualitySampleWhenDisabledDoesNotUpdateSettings() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = false
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 2
+        coordinator.globalAdaptiveSettings.paclen.currentAdaptive = 128
+
+        coordinator.applyLinkQualitySample(lossRate: 0.5, etx: 3.0, srtt: 2.0, source: "session")
+
+        // Should remain at defaults (no learning when disabled)
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.windowSize.currentAdaptive, 2)
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.paclen.currentAdaptive, 128)
+    }
+
+    func testApplyLinkQualitySampleWhenEnabledUpdatesSettings() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.applyLinkQualitySample(lossRate: 0.25, etx: 2.5, srtt: 1.0, source: "session")
+
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.windowSize.currentAdaptive, 1)
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.paclen.currentAdaptive, 64)
+    }
+
+    func testGetConfigForDestinationUsesDefaultWhenStationInOverrideSet() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 1
+        coordinator.globalAdaptiveSettings.windowSize.mode = .auto
+        coordinator.syncSessionManagerConfigFromAdaptive()
+        coordinator.useDefaultConfigForDestinations.insert("PEER-1")
+
+        let configForPeer = coordinator.sessionManager.getConfigForDestination?("PEER-1", "") ?? AX25SessionConfig()
+        let configForOther = coordinator.sessionManager.getConfigForDestination?("OTHER-0", "") ?? AX25SessionConfig()
+
+        XCTAssertEqual(configForPeer.windowSize, 4, "Overridden station should get default config (window 4)")
+        XCTAssertEqual(configForOther.windowSize, 1, "Other should get learned config")
+    }
+
+    // MARK: - Per-route adaptive cache and multi-connection stabilization
+
+    func testApplyLinkQualitySampleWithRouteKeyUpdatesPerRouteCache() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        let routeKey = RouteAdaptiveKey(destination: "PEER-0", pathSignature: "VIA,WIDE1-1")
+        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.0, srtt: nil, source: "session", routeKey: routeKey)
+
+        let config = coordinator.sessionManager.getConfigForDestination?("PEER-0", "VIA,WIDE1-1") ?? AX25SessionConfig()
+        XCTAssertEqual(config.windowSize, 1, "Per-route high loss should yield window 1")
+        XCTAssertEqual(config.maxRetries, 10)
+    }
+
+    func testApplyLinkQualitySampleWithoutRouteKeyUpdatesGlobalOnly() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.applyLinkQualitySample(lossRate: 0.25, etx: 2.5, srtt: 1.0, source: "network")
+
+        let config = coordinator.sessionManager.getConfigForDestination?("ANY-0", "") ?? AX25SessionConfig()
+        XCTAssertEqual(config.windowSize, 1, "Global sample should drive global adaptive (high loss -> window 1)")
+    }
+
+    func testGetConfigForDestinationWithMultipleSessionsUsesMergedConfig() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.localCallsign = "LOCAL-0"
+        let peer = AX25Address(call: "PEER", ssid: 0)
+
+        coordinator.applyLinkQualitySample(lossRate: 0.4, etx: 4.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""))
+        coordinator.applyLinkQualitySample(lossRate: 0.05, etx: 1.1, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: "DIGI-1"))
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 2
+
+        _ = coordinator.sessionManager.session(for: peer, path: DigiPath())
+        _ = coordinator.sessionManager.session(for: peer, path: DigiPath.from(["DIGI-1"]))
+
+        let mergedConfig = coordinator.sessionManager.getConfigForDestination?("PEER-0", "other") ?? AX25SessionConfig()
+        XCTAssertEqual(mergedConfig.windowSize, 1, "Merged config should use min(window) when multiple sessions to same destination")
+        XCTAssertGreaterThanOrEqual(mergedConfig.rtoMin ?? 0, 1.0)
+        XCTAssertGreaterThanOrEqual(mergedConfig.maxRetries, 10)
+    }
+
+    func testClearAllLearnedClearsPerRouteCache() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.applyLinkQualitySample(lossRate: 0.3, etx: 2.5, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: "VIA"))
+
+        coordinator.clearAllLearned()
+
+        let config = coordinator.sessionManager.getConfigForDestination?("PEER-0", "VIA") ?? AX25SessionConfig()
+        XCTAssertEqual(config.windowSize, 2, "After clear, should fall back to global defaults (window 2)")
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.windowSize.currentAdaptive, 2)
+    }
+
+    func testAdaptiveDisabledReturnsDefaultConfig() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = false
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 1
+
+        let config = coordinator.sessionManager.getConfigForDestination?("PEER-0", "") ?? AX25SessionConfig()
+        XCTAssertEqual(config.windowSize, 4, "When adaptive disabled, should get default session config")
+    }
+
+    func testConfigFixedAtSessionCreation() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 2
+        coordinator.syncSessionManagerConfigFromAdaptive()
+        coordinator.localCallsign = "LOCAL-0"
+        let peer = AX25Address(call: "PEER", ssid: 0)
+
+        let session = coordinator.sessionManager.session(for: peer, path: DigiPath())
+        let configAtCreation = session.stateMachine.config
+        XCTAssertEqual(configAtCreation.windowSize, 2)
+
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 1
+        coordinator.applyLinkQualitySample(lossRate: 0.4, etx: 3.0, srtt: nil, source: "session")
+
+        let sameSession = coordinator.sessionManager.existingSession(for: peer, path: DigiPath())
+        XCTAssertNotNil(sameSession)
+        XCTAssertEqual(sameSession!.stateMachine.config.windowSize, configAtCreation.windowSize, "Session config must not change mid-session")
+    }
+
+    func testPerRouteVsDirectUseSeparateCacheEntries() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.applyLinkQualitySample(lossRate: 0.05, etx: 1.1, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""))
+        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.5, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: "DIGI-1"))
+
+        let configDirect = coordinator.sessionManager.getConfigForDestination?("PEER-0", "") ?? AX25SessionConfig()
+        let configVia = coordinator.sessionManager.getConfigForDestination?("PEER-0", "DIGI-1") ?? AX25SessionConfig()
+
+        XCTAssertEqual(configDirect.windowSize, 3, "Direct route good link -> larger window")
+        XCTAssertEqual(configVia.windowSize, 1, "Via route high loss -> window 1")
+    }
+
+    func testRouteAdaptiveKeyNormalizesDestinationInLookup() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.applyLinkQualitySample(lossRate: 0.3, etx: 2.5, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""))
+
+        let configLower = coordinator.sessionManager.getConfigForDestination?("peer-0", "") ?? AX25SessionConfig()
+        let configUpper = coordinator.sessionManager.getConfigForDestination?("PEER-0", "") ?? AX25SessionConfig()
+        XCTAssertEqual(configLower.windowSize, configUpper.windowSize, "Lookup should normalize destination for cache hit")
+    }
 }

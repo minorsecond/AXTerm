@@ -52,6 +52,7 @@ final class AppSettingsStore: ObservableObject {
     static let axdpCompressionAlgorithmKey = "axdpCompressionAlgorithm"
     static let axdpMaxDecompressedPayloadKey = "axdpMaxDecompressedPayload"
     static let axdpShowDecodeDetailsKey = "axdpShowAXDPDecodeDetails"
+    static let adaptiveTransmissionEnabledKey = "adaptiveTransmissionEnabled"
 
     // NET/ROM route settings keys
     static let hideExpiredRoutesKey = "hideExpiredRoutes"
@@ -100,6 +101,7 @@ final class AppSettingsStore: ObservableObject {
     static let defaultAXDPCompressionAlgorithm: UInt8 = 1  // AXDPCompression.Algorithm.lz4
     static let defaultAXDPMaxDecompressedPayload = 4096
     static let defaultAXDPShowDecodeDetails = false
+    static let defaultAdaptiveTransmissionEnabled = true
 
     // NET/ROM route defaults
     static let defaultHideExpiredRoutes = true  // Hide expired routes by default for clean UI
@@ -312,6 +314,11 @@ final class AppSettingsStore: ObservableObject {
     /// Whether to show detailed AXDP decode information in the transcript.
     @Published var axdpShowDecodeDetails: Bool {
         didSet { persistAXDPShowDecodeDetails() }
+    }
+
+    /// Whether adaptive transmission (learning from session and network) is enabled.
+    @Published var adaptiveTransmissionEnabled: Bool {
+        didSet { persistAdaptiveTransmissionEnabled() }
     }
 
     // MARK: - File Transfer Settings
@@ -566,6 +573,7 @@ final class AppSettingsStore: ObservableObject {
         let storedAXDPCompressionAlgorithm = (defaults.object(forKey: Self.axdpCompressionAlgorithmKey) as? Int).map { UInt8($0) } ?? Self.defaultAXDPCompressionAlgorithm
         let storedAXDPMaxDecompressedPayload = defaults.object(forKey: Self.axdpMaxDecompressedPayloadKey) as? Int ?? Self.defaultAXDPMaxDecompressedPayload
         let storedAXDPShowDecodeDetails = defaults.object(forKey: Self.axdpShowDecodeDetailsKey) as? Bool ?? Self.defaultAXDPShowDecodeDetails
+        let storedAdaptiveTransmissionEnabled = defaults.object(forKey: Self.adaptiveTransmissionEnabledKey) as? Bool ?? Self.defaultAdaptiveTransmissionEnabled
 
         // Clear timestamps (stored as TimeInterval)
         let storedTerminalClearedAt: Date?
@@ -638,6 +646,7 @@ final class AppSettingsStore: ObservableObject {
         self.axdpCompressionAlgorithmRaw = storedAXDPCompressionAlgorithm
         self.axdpMaxDecompressedPayload = storedAXDPMaxDecompressedPayload
         self.axdpShowDecodeDetails = storedAXDPShowDecodeDetails
+        self.adaptiveTransmissionEnabled = storedAdaptiveTransmissionEnabled
 
         // Clear timestamps
         self.terminalClearedAt = storedTerminalClearedAt
@@ -799,6 +808,10 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(axdpShowDecodeDetails, forKey: Self.axdpShowDecodeDetailsKey)
     }
 
+    private func persistAdaptiveTransmissionEnabled() {
+        defaults.set(adaptiveTransmissionEnabled, forKey: Self.adaptiveTransmissionEnabledKey)
+    }
+
     private func persistAllowedFileTransferCallsigns() {
         defaults.set(allowedFileTransferCallsigns, forKey: Self.allowedFileTransferCallsignsKey)
     }
@@ -935,7 +948,8 @@ final class AppSettingsStore: ObservableObject {
             Self.axdpCompressionEnabledKey: Self.defaultAXDPCompressionEnabled,
             Self.axdpCompressionAlgorithmKey: Self.defaultAXDPCompressionAlgorithm,
             Self.axdpMaxDecompressedPayloadKey: Self.defaultAXDPMaxDecompressedPayload,
-            Self.axdpShowDecodeDetailsKey: Self.defaultAXDPShowDecodeDetails
+            Self.axdpShowDecodeDetailsKey: Self.defaultAXDPShowDecodeDetails,
+            Self.adaptiveTransmissionEnabledKey: Self.defaultAdaptiveTransmissionEnabled
         ])
     }
 

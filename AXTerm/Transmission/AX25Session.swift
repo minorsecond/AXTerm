@@ -36,10 +36,27 @@ struct AX25SessionConfig: Sendable {
     /// Use extended mode (modulo 128 vs modulo 8)
     let extended: Bool
 
+    /// Minimum RTO (seconds). When nil, session timers use default 1.0.
+    let rtoMin: Double?
+
+    /// Maximum RTO (seconds). When nil, session timers use default 30.0.
+    let rtoMax: Double?
+
+    /// Initial RTO (seconds) before any RTT sample. When nil, session timers use default 4.0.
+    let initialRto: Double?
+
     /// Sequence number modulo (8 or 128)
     var modulo: Int { extended ? 128 : 8 }
 
-    init(windowSize: Int = 4, maxReceiveBufferSize: Int? = nil, maxRetries: Int = 10, extended: Bool = false) {
+    init(
+        windowSize: Int = 4,
+        maxReceiveBufferSize: Int? = nil,
+        maxRetries: Int = 10,
+        extended: Bool = false,
+        rtoMin: Double? = nil,
+        rtoMax: Double? = nil,
+        initialRto: Double? = nil
+    ) {
         // Clamp window size to valid range
         let maxWindow = extended ? 127 : 7
         let ws = max(1, min(windowSize, maxWindow))
@@ -47,6 +64,9 @@ struct AX25SessionConfig: Sendable {
         self.maxReceiveBufferSize = maxReceiveBufferSize.map { max(1, min($0, ws)) }
         self.maxRetries = max(1, maxRetries)
         self.extended = extended
+        self.rtoMin = rtoMin
+        self.rtoMax = rtoMax
+        self.initialRto = initialRto
     }
 }
 
@@ -119,7 +139,7 @@ struct AX25SessionTimers: Sendable {
     var rttvar: Double = 0.0
 
     /// Current RTO (retransmission timeout)
-    private(set) var rto: Double = 3.0
+    private(set) var rto: Double
 
     /// T3 idle timeout (seconds)
     let t3Timeout: Double = 180.0
@@ -131,10 +151,19 @@ struct AX25SessionTimers: Sendable {
     private let beta: Double = 1.0 / 4.0
 
     /// Minimum RTO (seconds)
-    private let rtoMin: Double = 1.0
+    private let rtoMin: Double
 
     /// Maximum RTO (seconds)
-    private let rtoMax: Double = 30.0
+    private let rtoMax: Double
+
+    /// Default initial RTO (seconds)
+    private static let defaultInitialRto: Double = 4.0
+
+    init(rtoMin: Double = 1.0, rtoMax: Double = 30.0, initialRto: Double = 4.0) {
+        self.rtoMin = max(0.5, rtoMin)
+        self.rtoMax = max(self.rtoMin, min(60.0, rtoMax))
+        self.rto = max(self.rtoMin, min(self.rtoMax, initialRto))
+    }
 
     /// Update RTT estimates with a new sample
     mutating func updateRTT(sample: Double) {
@@ -158,11 +187,11 @@ struct AX25SessionTimers: Sendable {
         rto = min(rto * 2, rtoMax)
     }
 
-    /// Reset timers
+    /// Reset timers to initial RTO (same bounds)
     mutating func reset() {
         srtt = nil
         rttvar = 0.0
-        rto = 3.0
+        rto = max(rtoMin, min(rtoMax, Self.defaultInitialRto))
     }
 }
 
@@ -265,7 +294,7 @@ struct AX25StateMachine: Sendable {
     /// Current session state
     private(set) var state: AX25SessionState = .disconnected
 
-    /// Session configuration
+    /// Session configuration (fixed at connection start; never changed mid-session to avoid corrupting in-flight data).
     let config: AX25SessionConfig
 
     /// Sequence number state

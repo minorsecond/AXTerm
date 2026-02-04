@@ -230,4 +230,69 @@ final class AdaptiveSettingsTests: XCTestCase {
         settings.autoNegotiateCapabilities = true
         XCTAssertTrue(settings.autoNegotiateCapabilities)
     }
+
+    // MARK: - updateFromLinkQuality (adaptive learning)
+
+    func testUpdateFromLinkQualityHighLoss() {
+        var settings = TxAdaptiveSettings()
+        settings.updateFromLinkQuality(lossRate: 0.3, etx: 2.5, srtt: nil)
+        XCTAssertEqual(settings.paclen.currentAdaptive, 64)
+        XCTAssertEqual(settings.windowSize.currentAdaptive, 1)
+        XCTAssertTrue(settings.paclen.adaptiveReason?.contains("Loss") ?? false)
+        XCTAssertEqual(settings.windowSize.adaptiveReason, "High loss - stop-and-wait")
+    }
+
+    func testUpdateFromLinkQualityGoodLink() {
+        var settings = TxAdaptiveSettings()
+        settings.updateFromLinkQuality(lossRate: 0.05, etx: 1.2, srtt: nil)
+        XCTAssertEqual(settings.paclen.currentAdaptive, 128)
+        XCTAssertEqual(settings.windowSize.currentAdaptive, 3) // min(4, defaultValue+1) with default 2
+        XCTAssertEqual(settings.windowSize.adaptiveReason, "Good link quality")
+    }
+
+    func testUpdateFromLinkQualityWithSrttSetsRtoReasons() {
+        var settings = TxAdaptiveSettings()
+        settings.updateFromLinkQuality(lossRate: 0.1, etx: 1.5, srtt: 2.0)
+        XCTAssertNotNil(settings.rtoMin.adaptiveReason)
+        XCTAssertTrue(settings.rtoMin.adaptiveReason?.contains("RTT") ?? false)
+        XCTAssertNotNil(settings.rtoMax.adaptiveReason)
+    }
+
+    func testUpdateFromLinkQualityModerateLoss() {
+        var settings = TxAdaptiveSettings()
+        settings.paclen.currentAdaptive = 256
+        settings.updateFromLinkQuality(lossRate: 0.15, etx: 1.8, srtt: nil)
+        XCTAssertLessThanOrEqual(settings.paclen.currentAdaptive, 128)
+        XCTAssertEqual(settings.windowSize.currentAdaptive, 2) // default
+    }
+
+    func testUpdateFromLinkQualityZeroLossStaysReasonable() {
+        var settings = TxAdaptiveSettings()
+        settings.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: 0.5)
+        XCTAssertGreaterThanOrEqual(settings.windowSize.currentAdaptive, 1)
+        XCTAssertLessThanOrEqual(settings.windowSize.currentAdaptive, 7)
+        XCTAssertGreaterThanOrEqual(settings.paclen.currentAdaptive, 32)
+        XCTAssertLessThanOrEqual(settings.paclen.currentAdaptive, 256)
+    }
+
+    func testUpdateFromLinkQualityNilSrttDoesNotCrash() {
+        var settings = TxAdaptiveSettings()
+        settings.updateFromLinkQuality(lossRate: 0.2, etx: 2.0, srtt: nil)
+        XCTAssertEqual(settings.windowSize.currentAdaptive, 1)
+        XCTAssertEqual(settings.paclen.currentAdaptive, 64)
+    }
+
+    func testUpdateFromLinkQualityExtremeLossClampsWindowToOne() {
+        var settings = TxAdaptiveSettings()
+        settings.updateFromLinkQuality(lossRate: 0.9, etx: 20.0, srtt: nil)
+        XCTAssertEqual(settings.windowSize.currentAdaptive, 1)
+        XCTAssertLessThanOrEqual(settings.paclen.currentAdaptive, 64)
+    }
+
+    func testUpdateFromLinkQualityGoodLinkIncreasesWindow() {
+        var settings = TxAdaptiveSettings()
+        settings.windowSize.currentAdaptive = 1
+        settings.updateFromLinkQuality(lossRate: 0.02, etx: 1.05, srtt: 1.0)
+        XCTAssertGreaterThanOrEqual(settings.windowSize.currentAdaptive, 2)
+    }
 }

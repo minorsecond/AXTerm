@@ -53,12 +53,18 @@ final class AX25Session: @unchecked Sendable {
     /// Key is N(S) sequence number
     var sendBuffer: [Int: OutboundFrame] = [:]
 
+    /// Send timestamp per N(S) for RTT estimation when RR acks frames
+    private var sendTimeByNs: [Int: Date] = [:]
+
     /// Pending data queue: data waiting to be sent once connected
     /// Each entry is (data, pid, displayInfo)
     var pendingDataQueue: [(data: Data, pid: UInt8, displayInfo: String?)] = []
 
     /// T1 retransmit timer task
     var t1TimerTask: Task<Void, Never>?
+
+    /// Pending retransmit task (grace period after T1 fires); cancelled if RR arrives
+    var t1PendingRetransmitTask: Task<Void, Never>?
 
     /// T3 idle timer task
     var t3TimerTask: Task<Void, Never>?
@@ -90,7 +96,11 @@ final class AX25Session: @unchecked Sendable {
         self.path = path
         self.channel = channel
         self.stateMachine = AX25StateMachine(config: config)
-        self.timers = AX25SessionTimers()
+        self.timers = AX25SessionTimers(
+            rtoMin: config.rtoMin ?? 1.0,
+            rtoMax: config.rtoMax ?? 30.0,
+            initialRto: config.initialRto ?? 4.0
+        )
         self.statistics = AX25SessionStatistics()
         self.lastActivityAt = Date()
         self.isInitiator = isInitiator
@@ -99,6 +109,7 @@ final class AX25Session: @unchecked Sendable {
     deinit {
         // Ensure timers are cancelled to avoid background tasks outliving the session.
         t1TimerTask?.cancel()
+        t1PendingRetransmitTask?.cancel()
         t3TimerTask?.cancel()
     }
 
@@ -135,6 +146,27 @@ final class AX25Session: @unchecked Sendable {
     /// Add frame to send buffer for retransmission
     func bufferFrame(_ frame: OutboundFrame, ns: Int) {
         sendBuffer[ns] = frame
+    }
+
+    /// Record send time for N(S) so we can measure RTT when RR acks it
+    func recordSendTime(ns: Int, time: Date) {
+        sendTimeByNs[ns] = time
+    }
+
+    /// Clear send times for sequence numbers acked by RR(nr) (nr = next expected)
+    func clearSendTimesAcked(by nr: Int) {
+        let modulo = stateMachine.config.modulo
+        sendTimeByNs = sendTimeByNs.filter { (ns, _) in
+            let diff = (nr - ns + modulo) % modulo
+            return diff > modulo / 2 || diff == 0
+        }
+    }
+
+    /// Get send time for the last frame acked by RR(nr), if any, for RTT sample
+    func sendTimeForAckedBy(nr: Int) -> Date? {
+        let modulo = stateMachine.config.modulo
+        let ackedNs = (nr - 1 + modulo) % modulo
+        return sendTimeByNs[ackedNs]
     }
 
     /// Remove acknowledged frames from buffer
@@ -236,6 +268,12 @@ final class AX25SessionManager: ObservableObject {
     /// Callback when frames need to be sent from timer retransmission
     var onRetransmitFrame: ((OutboundFrame) -> Void)?
 
+    /// Callback when we have a link quality sample (e.g. after RR with RTT) for adaptive tuning. Parameters: session, lossRate, etx, srtt.
+    var onLinkQualitySample: ((AX25Session, Double, Double, Double?) -> Void)?
+
+    /// When set, used to get session config per route (destination + path) so direct vs via-digi use separate learned params. If nil, use defaultConfig.
+    var getConfigForDestination: ((String, String) -> AX25SessionConfig)?
+
     // MARK: - Deep Session Debug (Debug Builds Only)
 
     /// Emit a detailed snapshot of session state for debugging retries, timers, and window usage.
@@ -308,12 +346,14 @@ final class AX25SessionManager: ObservableObject {
             return existing
         }
 
+        let pathSignature = path.display
+        let config = getConfigForDestination?(destination.display, pathSignature) ?? defaultConfig
         let session = AX25Session(
             localAddress: localCallsign,
             remoteAddress: destination,
             path: path,
             channel: channel,
-            config: defaultConfig,
+            config: config,
             isInitiator: true
         )
         sessions[key] = session
@@ -595,7 +635,9 @@ final class AX25SessionManager: ObservableObject {
                 frames.append(iFrame)
 
                 // Buffer for potential retransmission
-                session.bufferFrame(iFrame, ns: session.vs - 1)  // vs was incremented
+                let ns = session.vs - 1
+                session.bufferFrame(iFrame, ns: ns)
+                session.recordSendTime(ns: ns, time: Date())
                 session.statistics.recordSent(bytes: data.count)
                 session.touch()
 
@@ -683,12 +725,14 @@ final class AX25SessionManager: ObservableObject {
             debugTrace("SABM creating session", [
                 "peer": source.display
             ])
+            let pathSignature = path.display
+            let config = getConfigForDestination?(source.display, pathSignature) ?? defaultConfig
             session = AX25Session(
                 localAddress: destination,  // We're the destination of the SABM
                 remoteAddress: source,
                 path: path,
                 channel: channel,
-                config: defaultConfig,
+                config: config,
                 isInitiator: false
             )
             sessions[key] = session
@@ -1110,6 +1154,19 @@ final class AX25SessionManager: ObservableObject {
             return nil
         }
 
+        // Measure RTT from last acked frame so T1 (RTO) adapts during transfer
+        if let sentAt = session.sendTimeForAckedBy(nr: nr) {
+            let rtt = Date().timeIntervalSince(sentAt)
+            session.timers.updateRTT(sample: rtt)
+            TxLog.rttUpdate(
+                peer: source.display,
+                srtt: session.timers.srtt ?? rtt,
+                rttvar: session.timers.rttvar,
+                rto: session.timers.rto
+            )
+        }
+        session.clearSendTimesAcked(by: nr)
+
         let oldState = session.state
         let actions = session.stateMachine.handle(event: .receivedRR(nr: nr))
 
@@ -1130,6 +1187,13 @@ final class AX25SessionManager: ObservableObject {
         debugDumpSessionState(session, context: isPoll ? "inbound-RR-poll" : "inbound-RR")
 
         _ = processActions(actions, for: session)
+
+        // Feed link quality sample into adaptive settings (session-based learning)
+        let framesSent = max(1, session.statistics.framesSent)
+        let lossRate = Double(session.statistics.retransmissions) / Double(framesSent)
+        let delivery = max(0.05, 1.0 - lossRate)
+        let etx = 1.0 / (delivery * delivery)
+        onLinkQualitySample?(session, lossRate, etx, session.timers.srtt)
 
         // If this was a poll (P=1), respond with RR F=1
         if isPoll && session.state == .connected {
@@ -1303,12 +1367,25 @@ final class AX25SessionManager: ObservableObject {
                         "retryCount": session.stateMachine.retryCount
                     ])
 
-                    // Handle the timeout
-                    let frames = self.handleT1Timeout(session: session)
-
-                    // Send any resulting frames via the retransmit callback
-                    for frame in frames {
-                        self.onRetransmitFrame?(frame)
+                    // Grace period: delay retransmit so if RR is in flight we can cancel and avoid duplicate frames
+                    let graceNanoseconds: UInt64 = 200_000_000  // 200ms
+                    session.t1PendingRetransmitTask?.cancel()
+                    session.t1PendingRetransmitTask = Task { [weak self] in
+                        do {
+                            try await Task.sleep(nanoseconds: graceNanoseconds)
+                            guard !Task.isCancelled else { return }
+                            await MainActor.run { [weak self] in
+                                guard let self = self else { return }
+                                guard let session = self.sessions.values.first(where: { $0.id == sessionId }) else { return }
+                                session.t1PendingRetransmitTask = nil
+                                let frames = self.handleT1Timeout(session: session)
+                                for frame in frames {
+                                    self.onRetransmitFrame?(frame)
+                                }
+                            }
+                        } catch {
+                            // Cancelled (RR arrived during grace) – nothing to do
+                        }
                     }
                 }
             } catch {
@@ -1326,6 +1403,8 @@ final class AX25SessionManager: ObservableObject {
             session.t1TimerTask?.cancel()
             session.t1TimerTask = nil
         }
+        session.t1PendingRetransmitTask?.cancel()
+        session.t1PendingRetransmitTask = nil
     }
 
     /// Start T3 (idle) timer for a session

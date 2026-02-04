@@ -170,14 +170,16 @@ struct TxAdaptiveSettings: Sendable {
         [paclen, windowSize, maxRetries, rtoMin, rtoMax]
     }
 
-    /// Update adaptive values from link quality
+    /// Update adaptive values from link quality (session-based and network-wide learning).
+    /// Starts from sane defaults; learns from observed loss/ETX/RTT to avoid overwhelming the network or being overly conservative.
+    /// Only updates currentAdaptive (suggested value); manual-mode parameters keep user choice via effectiveValue.
     mutating func updateFromLinkQuality(
         lossRate: Double,
         etx: Double,
         srtt: Double?
     ) {
         // Paclen adaptation (per spec Section 4.2)
-        if lossRate > 0.2 || etx > 2.0 {
+        if lossRate >= 0.2 || etx > 2.0 {
             paclen.currentAdaptive = 64
             paclen.adaptiveReason = "Loss \(Int(lossRate * 100))%, ETX \(String(format: "%.1f", etx))"
         } else if lossRate > 0.1 {
@@ -189,10 +191,10 @@ struct TxAdaptiveSettings: Sendable {
         }
 
         // Window size adaptation (per spec Section 4.4)
-        if lossRate > 0.2 {
+        if lossRate >= 0.2 {
             windowSize.currentAdaptive = 1
             windowSize.adaptiveReason = "High loss - stop-and-wait"
-        } else if etx < 1.5 {
+        } else if etx <= 1.5 {
             windowSize.currentAdaptive = min(4, windowSize.defaultValue + 1)
             windowSize.adaptiveReason = "Good link quality"
         } else {

@@ -151,8 +151,8 @@ final class AX25SessionTests: XCTestCase {
     func testSessionTimerConfiguration() {
         var timers = AX25SessionTimers()
 
-        // Initial RTO should be default
-        XCTAssertEqual(timers.rto, 3.0, accuracy: 0.1)
+        // Initial RTO should be default (4.0 per AX25SessionTimers)
+        XCTAssertEqual(timers.rto, 4.0, accuracy: 0.1)
 
         // Update with RTT sample
         timers.updateRTT(sample: 1.5)
@@ -168,7 +168,7 @@ final class AX25SessionTests: XCTestCase {
     func testSessionTimerBackoff() {
         var timers = AX25SessionTimers()
 
-        let initialRTO = timers.rto  // 3.0
+        let initialRTO = timers.rto  // 4.0 default
         timers.backoff()
 
         // Backoff should double the RTO (clamped to max 30)

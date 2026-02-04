@@ -63,6 +63,13 @@ struct ContentView: View {
         adaptive.maxDecompressedPayload = UInt32(settings.axdpMaxDecompressedPayload)
         adaptive.showAXDPDecodeDetails = settings.axdpShowDecodeDetails
         coordinator.globalAdaptiveSettings = adaptive
+        coordinator.adaptiveTransmissionEnabled = settings.adaptiveTransmissionEnabled
+        coordinator.syncSessionManagerConfigFromAdaptive()
+        if settings.adaptiveTransmissionEnabled {
+            TxLog.adaptiveEnabled()
+        } else {
+            TxLog.adaptiveDisabled()
+        }
         coordinator.subscribeToPackets(from: client)
         _sessionCoordinator = StateObject(wrappedValue: coordinator)
     }
@@ -115,6 +122,19 @@ struct ContentView: View {
             SentryManager.shared.addBreadcrumb(category: "app.lifecycle", message: "Main UI ready", level: .info, data: nil)
             // Load console history for the default Terminal view
             client.loadPersistedConsole()
+        }
+        .task {
+            // Feed network-wide link quality into adaptive settings periodically (don't overwhelm, don't be too conservative)
+            let intervalSeconds: UInt64 = 30
+            while true {
+                try? await Task.sleep(nanoseconds: intervalSeconds * 1_000_000_000)
+                guard let coordinator = SessionCoordinator.shared,
+                      coordinator.adaptiveTransmissionEnabled,
+                      let integration = client.netRomIntegration else { continue }
+                let stats = integration.exportLinkStats()
+                guard let (lossRate, etx) = Self.aggregateLinkQualityForAdaptive(stats) else { continue }
+                coordinator.applyLinkQualitySample(lossRate: lossRate, etx: etx, srtt: nil, source: "network")
+            }
         }
         .task(id: selectedNav) {
             switch selectedNav {
@@ -526,6 +546,22 @@ struct ContentView: View {
         selectionMutationScheduler.schedule {
             mutation()
         }
+    }
+
+    /// Aggregate link stats into (lossRate, etx) for adaptive settings. Uses only links with enough observations.
+    private static func aggregateLinkQualityForAdaptive(_ records: [LinkStatRecord]) -> (lossRate: Double, etx: Double)? {
+        let minObs = 5
+        let valid = records.filter { r in
+            r.observationCount >= minObs
+                && (r.dfEstimate ?? 0) > 0.05
+                && (r.drEstimate ?? 0) > 0.05
+        }
+        guard !valid.isEmpty else { return nil }
+        let etxValues = valid.map { 1.0 / ($0.dfEstimate! * $0.drEstimate!) }
+        let medianEtx = etxValues.sorted()[etxValues.count / 2]
+        let meanDf = valid.reduce(0.0) { $0 + ($1.dfEstimate ?? 0) } / Double(valid.count)
+        let lossRate = 1.0 - meanDf
+        return (lossRate: max(0, min(1, lossRate)), etx: medianEtx)
     }
 }
 

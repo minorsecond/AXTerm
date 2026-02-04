@@ -53,6 +53,13 @@
 			);
 			target = 3487E89C2F2AA2A700DF0172 /* AXTerm */;
 		};
+		INTG00012F3C00000000000D /* Exceptions for "AXTermIntegrationTests" folder in "AXTermIntegrationTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = INTG00012F3C000000000005 /* AXTermIntegrationTests */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -76,6 +83,9 @@
 		};
 		INTG00012F3C000000000003 /* AXTermIntegrationTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				INTG00012F3C00000000000D /* Exceptions for "AXTermIntegrationTests" folder in "AXTermIntegrationTests" target */,
+			);
 			path = AXTermIntegrationTests;
 			sourceTree = "<group>";
 		};

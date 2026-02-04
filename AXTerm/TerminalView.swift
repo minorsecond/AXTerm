@@ -596,6 +596,41 @@ struct TerminalView: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
 
+            // Adaptive transmission status (updates when coordinator learns)
+            if sessionCoordinator.adaptiveTransmissionEnabled {
+                HStack(spacing: 8) {
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                        .font(.caption2)
+                        .foregroundStyle(.green)
+                    Text("Adaptive")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("On")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.green)
+                    Text("K:\(sessionCoordinator.globalAdaptiveSettings.windowSize.effectiveValue)")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Text("P:\(sessionCoordinator.globalAdaptiveSettings.paclen.effectiveValue)")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: "gearshape")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text("Adaptive Off")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+            }
+
             Divider()
                 .padding(.top, 8)
 

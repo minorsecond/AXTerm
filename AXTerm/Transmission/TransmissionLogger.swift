@@ -32,6 +32,7 @@ enum TxLogCategory: String {
     case congestion = "CONGESTION"
     case path = "PATH"
     case settings = "SETTINGS"
+    case adaptive = "ADAPTIVE"
 
     var emoji: String {
         switch self {
@@ -49,6 +50,7 @@ enum TxLogCategory: String {
         case .congestion: return "🚦"
         case .path: return "🛤️"
         case .settings: return "⚙️"
+        case .adaptive: return "📊"
         }
     }
 }
@@ -387,6 +389,75 @@ final class TxLog {
             "score": String(format: "%.2f", score),
             "reason": reason
         ])
+    }
+
+    // MARK: - Adaptive transmission logging (always to console in DEBUG so user can verify it's working)
+
+    static func adaptiveLearning(source: String, lossRate: Double, etx: Double, srtt: Double?, window: Int, paclen: Int, reason: String) {
+        var data: [String: Any] = [
+            "source": source,
+            "loss": String(format: "%.2f", lossRate),
+            "etx": String(format: "%.2f", etx),
+            "window": window,
+            "paclen": paclen,
+            "reason": reason
+        ]
+        if let s = srtt { data["srtt"] = String(format: "%.2fs", s) }
+        #if DEBUG
+        print("[ADAPTIVE] 📊 Learning | \(source) | loss=\(String(format: "%.2f", lossRate)) etx=\(String(format: "%.2f", etx))\(srtt.map { " srtt=\(String(format: "%.2fs", $0))" } ?? "") → K=\(window) P=\(paclen) | \(reason)")
+        #endif
+        debug(.adaptive, "Learning", data)
+    }
+
+    static func adaptiveConfigSynced(window: Int, rtoMin: Double, rtoMax: Double, maxRetries: Int) {
+        let data: [String: Any] = [
+            "window": window,
+            "rtoMin": String(format: "%.1f", rtoMin),
+            "rtoMax": String(format: "%.1f", rtoMax),
+            "maxRetries": maxRetries
+        ]
+        #if DEBUG
+        print("[ADAPTIVE] 📊 Config synced | K=\(window) RTO=\(String(format: "%.1f", rtoMin))–\(String(format: "%.1f", rtoMax))s N2=\(maxRetries)")
+        #endif
+        debug(.adaptive, "Config synced", data)
+    }
+
+    static func adaptiveCleared(reason: String) {
+        #if DEBUG
+        print("[ADAPTIVE] 📊 Cleared | \(reason)")
+        #endif
+        debug(.adaptive, "Cleared", ["reason": reason])
+    }
+
+    static func adaptiveDisabled() {
+        #if DEBUG
+        print("[ADAPTIVE] 📊 Disabled – using fixed defaults")
+        #endif
+        debug(.adaptive, "Disabled", nil)
+    }
+
+    static func adaptiveEnabled() {
+        #if DEBUG
+        print("[ADAPTIVE] 📊 Enabled – learning from session and network")
+        #endif
+        debug(.adaptive, "Enabled", nil)
+    }
+
+    static func adaptiveStationReset(callsign: String) {
+        #if DEBUG
+        print("[ADAPTIVE] 📊 Station reset to default | \(callsign)")
+        #endif
+        debug(.adaptive, "Station reset", ["callsign": callsign])
+    }
+
+    static func adaptiveSampleIgnored(reason: String, lossRate: Double? = nil, etx: Double? = nil) {
+        var data: [String: Any] = ["reason": reason]
+        if let l = lossRate { data["loss"] = String(format: "%.2f", l) }
+        if let e = etx { data["etx"] = String(format: "%.2f", e) }
+        #if DEBUG
+        print("[ADAPTIVE] 📊 Sample ignored | \(reason)")
+        #endif
+        debug(.adaptive, "Sample ignored", data)
     }
 
     // MARK: - Internal Implementation

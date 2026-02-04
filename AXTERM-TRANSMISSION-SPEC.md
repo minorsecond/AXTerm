@@ -695,6 +695,10 @@ Maintain send buffer for unacked frames:
   - window, paclen, RTO, retries, RTT, ETX/ETT estimates
 - In the terminal transcript, visually group retransmissions and mark them subtly (don’t spam the user).
 
+### 7.8 Session config fixed at connection start; multi-connection stabilization
+- **No mid-transmission changes:** Session parameters (window K, RTO min/max, N2, etc.) are chosen once when the session is created and MUST NOT be changed for the lifetime of that session. Changing parameters during an active transfer would risk corrupting in-flight data and sequence state.
+- **Multiple simultaneous connections to the same destination:** When more than one session exists to the same peer (e.g. direct and via digi), do not flip between per-route learned params. Use a **conservative merged config**: min(window), max(RTO min), max(RTO max), max(N2) across all relevant learned/config sources for that destination. This gives a stable middle ground and avoids chaotic parameter switching or corrupting any of the connections.
+
 ---
 
 ## 8) “Modern networking ideas” that *do* fit amateur packet constraints
