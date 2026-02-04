@@ -203,7 +203,35 @@ struct ConsoleLine: Identifiable, Hashable, Sendable {
 
     /// Display string for the via path
     var viaDisplay: String {
-        guard !via.isEmpty else { return "" }
-        return via.joined(separator: ",")
+        Self.normalizedViaItems(from: via).joined(separator: ",")
+    }
+
+    private static func normalizedViaItems(from via: [String]) -> [String] {
+        guard !via.isEmpty else { return [] }
+
+        var order: [String] = []
+        var displayByKey: [String: String] = [:]
+        var repeatedByKey: [String: Bool] = [:]
+
+        for item in via {
+            let trimmed = item.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let isRepeated = trimmed.hasSuffix("*")
+            let base = isRepeated ? String(trimmed.dropLast()) : trimmed
+            let key = base.uppercased()
+
+            if displayByKey[key] == nil {
+                displayByKey[key] = base
+                order.append(key)
+            }
+            if isRepeated {
+                repeatedByKey[key] = true
+            }
+        }
+
+        return order.compactMap { key in
+            guard let display = displayByKey[key] else { return nil }
+            return (repeatedByKey[key] ?? false) ? "\(display)*" : display
+        }
     }
 }

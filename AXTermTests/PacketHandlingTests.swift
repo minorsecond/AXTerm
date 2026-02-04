@@ -117,6 +117,52 @@ final class PacketHandlingTests: XCTestCase {
         XCTAssertEqual(client.status, .disconnected)
     }
 
+    func testPacketViaDisplayDedupesRepeatedDigis() {
+        let via = [
+            AX25Address(call: "W0ARP", ssid: 7),
+            AX25Address(call: "W0ARP", ssid: 7, repeated: true),
+        ]
+
+        let packet = Packet(
+            timestamp: Date(),
+            from: AX25Address(call: "K0EPI", ssid: 7),
+            to: AX25Address(call: "N0HI", ssid: 7),
+            via: via,
+            frameType: .ui,
+            control: 0x03,
+            info: Data("INFO".utf8),
+            rawAx25: Data("INFO".utf8)
+        )
+
+        XCTAssertEqual(packet.viaDisplay, "W0ARP-7*")
+    }
+
+    func testConsoleLineViaDedupesRepeatedDigis() {
+        let settings = makeSettings(persistHistory: false)
+        let client = PacketEngine(settings: settings)
+
+        let via = [
+            AX25Address(call: "W0ARP", ssid: 7),
+            AX25Address(call: "W0ARP", ssid: 7, repeated: true),
+        ]
+
+        let packet = Packet(
+            timestamp: Date(),
+            from: AX25Address(call: "K0EPI", ssid: 7),
+            to: AX25Address(call: "N0HI", ssid: 7),
+            via: via,
+            frameType: .ui,
+            control: 0x03,
+            info: Data("INFO".utf8),
+            rawAx25: Data("INFO".utf8)
+        )
+
+        client.handleIncomingPacket(packet)
+
+        XCTAssertEqual(client.consoleLines.count, 1)
+        XCTAssertEqual(client.consoleLines[0].via, ["W0ARP-7*"])
+    }
+
     private func makeSettings(persistHistory: Bool) -> AppSettingsStore {
         let suiteName = "AXTermTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard

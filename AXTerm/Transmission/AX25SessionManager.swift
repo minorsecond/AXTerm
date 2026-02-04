@@ -251,6 +251,15 @@ final class AX25SessionManager: ObservableObject {
         }
     }
 
+    /// Find a connected session with a specific peer and channel
+    func connectedSession(withPeer peer: AX25Address, channel: UInt8) -> AX25Session? {
+        return sessions.values.first {
+            $0.remoteAddress == peer &&
+            $0.channel == channel &&
+            $0.state == .connected
+        }
+    }
+
     /// Remove a session
     func removeSession(_ session: AX25Session) {
         sessions.removeValue(forKey: session.key)
@@ -273,6 +282,15 @@ final class AX25SessionManager: ObservableObject {
             session.remoteAddress.display.uppercased() == sourceDisplay &&
             session.channel == channel &&
             (session.state == .connecting || session.state == .disconnecting)
+        }
+    }
+
+    private func connectingSession(withPeer peer: AX25Address, channel: UInt8) -> AX25Session? {
+        let peerDisplay = peer.display.uppercased()
+        return sessions.values.first { session in
+            session.remoteAddress.display.uppercased() == peerDisplay &&
+            session.channel == channel &&
+            session.state == .connecting
         }
     }
 
@@ -299,6 +317,22 @@ final class AX25SessionManager: ObservableObject {
         path: DigiPath = DigiPath(),
         channel: UInt8 = 0
     ) -> OutboundFrame? {
+        if let existing = connectedSession(withPeer: destination, channel: channel) {
+            logPathOverrideIfNeeded(session: existing, requestedPath: path, reason: "connect")
+            TxLog.warning(.session, "Cannot connect: session already connected", [
+                "peer": destination.display
+            ])
+            return nil
+        }
+
+        if let existing = connectingSession(withPeer: destination, channel: channel) {
+            logPathOverrideIfNeeded(session: existing, requestedPath: path, reason: "connect")
+            TxLog.warning(.session, "Cannot connect: session already connecting", [
+                "peer": destination.display
+            ])
+            return nil
+        }
+
         let session = session(for: destination, path: path, channel: channel)
 
         guard session.state == .disconnected || session.state == .error else {
@@ -355,7 +389,7 @@ final class AX25SessionManager: ObservableObject {
         pid: UInt8 = 0xF0,
         displayInfo: String? = nil
     ) -> [OutboundFrame] {
-        let session = session(for: destination, path: path, channel: channel)
+        let session = selectSession(for: destination, path: path, channel: channel)
         var frames: [OutboundFrame] = []
 
         switch session.state {
@@ -403,6 +437,42 @@ final class AX25SessionManager: ObservableObject {
         }
 
         return frames
+    }
+
+    private func selectSession(
+        for destination: AX25Address,
+        path: DigiPath,
+        channel: UInt8
+    ) -> AX25Session {
+        if let connected = connectedSession(withPeer: destination, channel: channel) {
+            logPathOverrideIfNeeded(session: connected, requestedPath: path, reason: "sendData")
+            return connected
+        }
+
+        if let connecting = connectingSession(withPeer: destination, channel: channel) {
+            logPathOverrideIfNeeded(session: connecting, requestedPath: path, reason: "sendData")
+            return connecting
+        }
+
+        return session(for: destination, path: path, channel: channel)
+    }
+
+    private func logPathOverrideIfNeeded(
+        session: AX25Session,
+        requestedPath: DigiPath,
+        reason: String
+    ) {
+        guard session.path != requestedPath else { return }
+
+        let currentPath = session.path.display.isEmpty ? "(direct)" : session.path.display
+        let requested = requestedPath.display.isEmpty ? "(direct)" : requestedPath.display
+
+        TxLog.debug(.path, "Using existing session path", [
+            "peer": session.remoteAddress.display,
+            "current": currentPath,
+            "requested": requested,
+            "reason": reason
+        ])
     }
 
     // MARK: - Inbound Frame Handling

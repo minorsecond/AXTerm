@@ -161,6 +161,27 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(timers.rto, min(initialRTO * 2, 30.0), accuracy: 0.1)
     }
 
+    func testSendDataUsesConnectedSessionWhenPathDiffers() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let destination = AX25Address(call: "N0HI", ssid: 7)
+        let originalPath = DigiPath.from(["W0ARP-7"])
+        let requestedPath = DigiPath.from(["WIDE1-1"])
+
+        let session = manager.session(for: destination, path: originalPath, channel: 0)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
+
+        XCTAssertEqual(session.state, .connected)
+
+        let frames = manager.sendData(Data([0x41]), to: destination, path: requestedPath, channel: 0)
+
+        XCTAssertEqual(manager.sessions.count, 1)
+        XCTAssertEqual(frames.count, 1)
+        XCTAssertEqual(frames.first?.path, originalPath)
+    }
+
     // MARK: - Session Event Tests
 
     func testSessionEventTypes() {

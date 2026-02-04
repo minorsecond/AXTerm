@@ -651,9 +651,7 @@ final class PacketEngine: ObservableObject {
 
         if let text = packet.infoText {
             // Extract via path as array of callsign strings
-            let viaPath = packet.via.map { addr in
-                addr.repeated ? "\(addr.display)*" : addr.display
-            }
+            let viaPath = Packet.normalizedViaItems(from: packet.via)
 
             // Check for duplicate (same content via different path)
             var isDuplicate = false
@@ -696,7 +694,7 @@ final class PacketEngine: ObservableObject {
         if netRomObserveCount <= 5 || netRomObserveCount % 100 == 0 {
             let fromDisplay = packet.from?.display ?? "?"
             let toDisplay = packet.to?.display ?? "?"
-            let viaPath = packet.via.map { $0.display }.joined(separator: ",")
+            let viaPath = Packet.normalizedViaItems(from: packet.via).joined(separator: ",")
             print("[NETROM] observe #\(netRomObserveCount): \(fromDisplay) → \(toDisplay) via=[\(viaPath)]")
         }
         #endif
