@@ -46,11 +46,8 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         self.sessionManager = sessionManager ?? AX25SessionManager()
 
         // Set up session manager callbacks - parse callsign-SSID format
-        let input = sourceCall.isEmpty ? "NOCALL" : sourceCall
-        let parts = input.uppercased().split(separator: "-")
-        let baseCall = String(parts.first ?? "NOCALL")
-        let ssid = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
-        self.sessionManager.localCallsign = AX25Address(call: baseCall, ssid: ssid)
+        let (baseCall, ssid) = CallsignNormalizer.parse(sourceCall.isEmpty ? "NOCALL" : sourceCall)
+        self.sessionManager.localCallsign = AX25Address(call: baseCall.isEmpty ? "NOCALL" : baseCall, ssid: ssid)
         print("[ObservableTerminalTxViewModel.init] Set localCallsign: call='\(baseCall)', ssid=\(ssid)")
 
         // Chain session state callback - preserve any existing callback (e.g., from SessionCoordinator)
@@ -82,6 +79,21 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             ])
             self.appendToSessionTranscript(from: session, data: data)
         }
+    }
+
+    /// Append decoded AXDP chat text to the session transcript.
+    /// Called when AXDP chat is received regardless of local AXDP badge state.
+    func appendAXDPChatToTranscript(from: AX25Address, text: String) {
+        guard let session = sessionManager.connectedSession(withPeer: from) else {
+            TxLog.debug(.axdp, "AXDP chat: no connected session for peer", [
+                "from": from.display,
+                "textLen": text.count
+            ])
+            return
+        }
+        // Append with newline so appendToSessionTranscript flushes the line
+        let data = Data((text.trimmingCharacters(in: .whitespacesAndNewlines) + "\r\n").utf8)
+        appendToSessionTranscript(from: session, data: data)
     }
 
     /// Subscribe to incoming packets from PacketEngine
@@ -308,6 +320,9 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// session transcript, respecting CR/LF line boundaries and keeping
     /// messages grouped in arrival order.
     private func appendToSessionTranscript(from session: AX25Session, data: Data) {
+        // Suppress raw AXDP envelope bytes—AXDP chat is delivered via appendAXDPChatToTranscript.
+        if AXDP.hasMagic(data) { return }
+
         // Only show text for the active session, if one is selected; otherwise
         // use the most recently active connected session as the source of truth.
         if let active = currentSession, active.id != session.id {
@@ -339,12 +354,8 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
     func updateSourceCall(_ call: String) {
         viewModel.sourceCall = call
-        // Parse callsign-SSID format (e.g., "TEST-2" -> call="TEST", ssid=2)
-        let input = call.isEmpty ? "NOCALL" : call
-        let parts = input.uppercased().split(separator: "-")
-        let baseCall = String(parts.first ?? "NOCALL")
-        let ssid = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
-        sessionManager.localCallsign = AX25Address(call: baseCall, ssid: ssid)
+        let (baseCall, ssid) = CallsignNormalizer.parse(call.isEmpty ? "NOCALL" : call)
+        sessionManager.localCallsign = AX25Address(call: baseCall.isEmpty ? "NOCALL" : baseCall, ssid: ssid)
         print("[updateSourceCall] Set localCallsign: call='\(baseCall)', ssid=\(ssid)")
     }
 
@@ -448,10 +459,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     // MARK: - Parsing Helpers
 
     private func parseCallsign(_ input: String) -> AX25Address {
-        let parts = input.uppercased().split(separator: "-")
-        let call = String(parts.first ?? "NOCALL")
-        let ssid = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
-        return AX25Address(call: call, ssid: ssid)
+        return CallsignNormalizer.toAddress(input)
     }
 
     private func parsePath(_ input: String) -> DigiPath {
@@ -715,6 +723,14 @@ struct TerminalView: View {
             handleFileDrop(providers)
         }
         .onAppear {
+            // Wire AXDP chat received to terminal transcript (regardless of AXDP badge state).
+            // Must add to client.consoleLines—that's what the UI displays. sessionTranscriptLines
+            // is legacy and not shown in ConsoleView.
+            sessionCoordinator.onAXDPChatReceived = { [weak txViewModel, weak client] from, text in
+                txViewModel?.appendAXDPChatToTranscript(from: from, text: text)
+                client?.appendSessionChatLine(from: from.display, text: text)
+            }
+
             // Wire up response frame sending (for RR, REJ, etc.)
             txViewModel.onSendResponseFrame = { [weak client] frame in
                 print("[TerminalView.onAppear] onSendResponseFrame callback invoked for \(frame.destination.display)")

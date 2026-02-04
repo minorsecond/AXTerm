@@ -7,6 +7,49 @@
 
 import Foundation
 
+// MARK: - Callsign Normalization (Single Source of Truth)
+
+/// Centralized callsign parsing and matching. Use this everywhere to avoid
+/// SSID/callsign inconsistencies (e.g. "TEST-1" vs "TEST1", "TEST" vs "TEST-0").
+enum CallsignNormalizer {
+    /// Parse "CALL-SSID" or "CALL" into (baseCall, ssid). SSID 0 if omitted.
+    /// - "TEST-1" -> ("TEST", 1)
+    /// - "TEST" -> ("TEST", 0)
+    /// - "TEST2" (no hyphen) -> ("TEST2", 0) — ambiguous; caller may need to try "TEST-2"
+    static func parse(_ input: String) -> (call: String, ssid: Int) {
+        let upper = input.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let parts = upper.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        let call = String(parts.first ?? "").trimmingCharacters(in: .whitespaces)
+        let ssid = parts.count > 1 ? (Int(parts[1]) ?? 0) : 0
+        return (call, max(0, min(15, ssid)))
+    }
+
+    /// Canonical display form: "CALL" for SSID 0, "CALL-N" for SSID > 0.
+    static func display(call: String, ssid: Int) -> String {
+        ssid > 0 ? "\(call)-\(ssid)" : call
+    }
+
+    /// Whether two addresses refer to the same station (call + SSID match).
+    static func addressesMatch(_ a: AX25Address, _ b: AX25Address) -> Bool {
+        a.call.uppercased() == b.call.uppercased() && a.ssid == b.ssid
+    }
+
+    /// Whether an address matches a display string (e.g. "TEST-1" or "TEST").
+    static func addressMatchesDisplay(_ address: AX25Address, _ display: String) -> Bool {
+        let (call, ssid) = parse(display)
+        guard !call.isEmpty else { return false }
+        return address.call.uppercased() == call.uppercased() && address.ssid == ssid
+    }
+
+    /// Create AX25Address from "CALL-SSID" or "CALL" string.
+    static func toAddress(_ input: String) -> AX25Address {
+        let (call, ssid) = parse(input)
+        return AX25Address(call: call.isEmpty ? "NOCALL" : call, ssid: ssid)
+    }
+}
+
+// MARK: - AX25Address
+
 /// Represents an AX.25 address (callsign + SSID)
 struct AX25Address: Hashable, Codable, Identifiable, Sendable {
     let call: String

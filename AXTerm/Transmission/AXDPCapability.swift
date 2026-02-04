@@ -337,10 +337,7 @@ final class AXDPCapabilityStore: ObservableObject {
 
     /// Parse callsign with optional SSID (e.g., "N0CALL-2" -> ("N0CALL", 2))
     private func parseCallsign(_ callsign: String) -> (call: String, ssid: Int) {
-        let parts = callsign.uppercased().split(separator: "-")
-        let call = String(parts.first ?? "")
-        let ssid = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
-        return (call, ssid)
+        return CallsignNormalizer.parse(callsign)
     }
 
     /// Remove cached capabilities for a peer

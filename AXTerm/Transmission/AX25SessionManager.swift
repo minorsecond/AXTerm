@@ -385,10 +385,19 @@ final class AX25SessionManager: ObservableObject {
             .max { $0.lastActivityAt < $1.lastActivityAt }
     }
 
-    /// Find a connected session with a specific peer, regardless of who initiated
+    /// Find a connected session with a specific peer, regardless of who initiated.
+    /// Uses exact address match first; falls back to CallsignNormalizer-based match.
     func connectedSession(withPeer peer: AX25Address) -> AX25Session? {
-        return sessions.values.first {
-            $0.remoteAddress == peer && $0.state == .connected
+        if let exact = sessions.values.first(where: { $0.remoteAddress == peer && $0.state == .connected }) {
+            return exact
+        }
+        // Fallback: match by call+SSID using canonical comparison (handles representation variances)
+        let peerCall = CallsignNormalizer.parse(peer.display).call
+        let peerSsid = peer.ssid
+        return sessions.values.first { session in
+            guard session.state == .connected else { return false }
+            let (sessCall, sessSsid) = CallsignNormalizer.parse(session.remoteAddress.display)
+            return sessCall.uppercased() == peerCall.uppercased() && sessSsid == peerSsid
         }
     }
 

@@ -594,6 +594,15 @@ final class PacketEngine: ObservableObject {
         appendConsoleLine(ConsoleLine.error(text), category: category)
     }
 
+    /// Append decoded AXDP/session chat to the console so it appears in the terminal.
+    /// Called when AXDP chat is received—the raw I-frame payload is binary so it never
+    /// reaches the console via the normal packet path.
+    func appendSessionChatLine(from fromDisplay: String, text: String) {
+        let toDisplay = settings.myCallsign
+        let line = ConsoleLine.packet(from: fromDisplay, to: toDisplay, text: text)
+        appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
+    }
+
     // MARK: - Console Line Duplicate Detection
 
     /// Check if a console line with this signature was recently seen (within duplicate window)

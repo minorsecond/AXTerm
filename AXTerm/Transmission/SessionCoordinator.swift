@@ -91,6 +91,10 @@ final class SessionCoordinator: ObservableObject {
     /// Callback for capability discovery events (for debug display)
     var onCapabilityEvent: ((CapabilityDebugEvent) -> Void)?
 
+    /// Callback when AXDP chat message is received. Parameters: (from address, decoded text).
+    /// Used to deliver chat to the terminal transcript regardless of AXDP badge state.
+    var onAXDPChatReceived: ((AX25Address, String) -> Void)?
+
     /// Transfers awaiting acceptance (AXDP session ID -> transfer ID)
     /// Used to map ACK/NACK responses to the correct transfer
     private var transfersAwaitingAcceptance: [UInt32: UUID] = [:]
@@ -694,12 +698,23 @@ final class SessionCoordinator: ObservableObject {
         case .nack:
             handleNackMessage(message, from: from, path: path)
 
+        case .chat:
+            handleChatMessage(message, from: from)
+
         default:
             TxLog.debug(.axdp, "Unhandled AXDP message type", [
                 "type": String(describing: message.type),
                 "from": from.display
             ])
         }
+    }
+
+    /// Handle AXDP chat message: decode payload and deliver to terminal transcript.
+    /// Per spec: receivers MUST display AXDP chat regardless of local AXDP badge state.
+    private func handleChatMessage(_ message: AXDP.Message, from: AX25Address) {
+        guard let payload = message.payload, !payload.isEmpty else { return }
+        guard let text = String(data: payload, encoding: .utf8), !text.isEmpty else { return }
+        onAXDPChatReceived?(from, text)
     }
 
     /// Handle PING/PONG capability messages
