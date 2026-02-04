@@ -8,10 +8,70 @@
 import XCTest
 @testable import AXTerm
 
+@MainActor
 final class SessionCoordinatorTests: XCTestCase {
 
     // Note: AXDPCapabilityStore is tested in AXDPCapabilityTests.swift
     // using the AXDPCapabilityCache which has the same core functionality.
+
+    // MARK: - AXDP Capability Negotiation (PING/PONG)
+
+    func testAutoNegotiateSendsPingWhenInitiatorAndExtensionsEnabled() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        // Enable AXDP extensions + auto-negotiation
+        coordinator.globalAdaptiveSettings.axdpExtensionsEnabled = true
+        coordinator.globalAdaptiveSettings.autoNegotiateCapabilities = true
+
+        // Simulate a connected session where we are the initiator
+        let session = AX25Session(
+            localAddress: AX25Address(call: "LOCAL"),
+            remoteAddress: AX25Address(call: "PEER"),
+            path: DigiPath(),
+            channel: 0,
+            config: AX25SessionConfig(),
+            isInitiator: true
+        )
+
+        // Manually trigger the onSessionStateChanged callback
+        coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
+
+        // We don't have a full packet engine here, but we can at least assert
+        // that discovery has started by checking that capability is no longer
+        // "unknown" once discovery has started.
+        let status = coordinator.capabilityStatus(for: "PEER")
+        XCTAssertEqual(status, .pending, "Expected AXDP discovery to be pending after initiator connect with auto-negotiation enabled.")
+    }
+
+    func testEnablingAutoNegotiateWhileConnectedTriggersDiscovery() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        // Disable auto-negotiate initially
+        coordinator.globalAdaptiveSettings.axdpExtensionsEnabled = true
+        coordinator.globalAdaptiveSettings.autoNegotiateCapabilities = false
+
+        // Simulate we already have a connected initiator session
+        coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
+        let peer = AX25Address(call: "PEER", ssid: 1)
+        let session = coordinator.sessionManager.session(for: peer)
+        // Force session to connected state
+        session.stateMachine.handle(event: .connectRequest)
+        session.stateMachine.handle(event: .receivedUA)
+
+        XCTAssertEqual(session.state, .connected)
+
+        // At this point capability should be unknown
+        XCTAssertEqual(coordinator.capabilityStatus(for: "PEER"), .unknown)
+
+        // Turn on auto-negotiation and trigger discovery for connected sessions
+        coordinator.globalAdaptiveSettings.autoNegotiateCapabilities = true
+        coordinator.triggerCapabilityDiscoveryForConnectedInitiators()
+
+        // Now discovery should be pending
+        XCTAssertEqual(coordinator.capabilityStatus(for: "PEER"), .pending)
+    }
 
     // MARK: - AXDP Message Building Tests
 

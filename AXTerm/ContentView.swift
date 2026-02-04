@@ -22,6 +22,7 @@ struct ContentView: View {
     private let inspectionCoordinator = PacketInspectionCoordinator()
 
     /// Session coordinator for connected-mode sessions - survives tab switches
+    /// Uses SessionCoordinator.shared so Settings can update the same instance
     @StateObject private var sessionCoordinator: SessionCoordinator
 
     @State private var selectedNav: NavigationItem = .terminal
@@ -43,8 +44,13 @@ struct ContentView: View {
         _inspectionRouter = ObservedObject(wrappedValue: inspectionRouter)
         // Initialize analytics view model with settings store for persistence
         _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(settingsStore: settings))
-        // Initialize session coordinator for connected-mode sessions
-        let coordinator = SessionCoordinator()
+        // Get or create the shared session coordinator so Settings can update the same instance
+        let coordinator: SessionCoordinator
+        if let existing = SessionCoordinator.shared {
+            coordinator = existing
+        } else {
+            coordinator = SessionCoordinator()
+        }
         coordinator.localCallsign = settings.myCallsign
         // Seed AXDP / transmission adaptive settings from persisted settings
         var adaptive = TxAdaptiveSettings()

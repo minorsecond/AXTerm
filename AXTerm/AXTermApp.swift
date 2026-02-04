@@ -50,6 +50,17 @@ struct AXTermApp: App {
                 settingsStore.myCallsign = callsign
             }
             settingsStore.runInMenuBar = false
+
+            // In UI test mode we want AXDP capability negotiation and related
+            // features to be completely frictionless so the harness "just
+            // works" without touching Settings in each instance.
+            //
+            // This ONLY affects the ephemeral per-test UserDefaults suite
+            // created above, so it does not change behaviour for normal
+            // installs.
+            settingsStore.axdpExtensionsEnabled = true
+            settingsStore.axdpAutoNegotiateCapabilities = true
+            settingsStore.axdpCompressionEnabled = true
         }
 
         SentryManager.shared.startIfEnabled(settings: settingsStore)

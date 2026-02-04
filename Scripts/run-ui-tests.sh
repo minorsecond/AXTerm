@@ -39,7 +39,7 @@ MODE="manual"
 
 for arg in "$@"; do
     case "$arg" in
-        --clean-rebuild|clean_rebuild)
+        --clean-rebuild|clean_rebuild|clean_build)
             CLEAN_REBUILD=1
             ;;
         manual|automated|monitor|build|stop|help|-h|--help)
@@ -265,7 +265,7 @@ cleanup() {
 }
 
 show_usage() {
-    echo "Usage: $0 [--clean-rebuild|clean_rebuild] [mode]"
+    echo "Usage: $0 [--clean-rebuild|clean_rebuild|clean_build] [mode]"
     echo ""
     echo "Options:"
     echo "  --clean-rebuild, clean_rebuild  - Remove build artifacts before building"

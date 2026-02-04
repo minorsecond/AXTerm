@@ -778,7 +778,16 @@ struct SettingsView: View {
     /// Propagate AXDP-related adaptive settings into the live session coordinator so
     /// that negotiation and compression behavior follow the user's configuration.
     private func syncAdaptiveSettingsToSessionCoordinator() {
-        guard let coordinator = SessionCoordinator.shared else { return }
+        print("[SettingsView] syncAdaptiveSettingsToSessionCoordinator called")
+        print("[SettingsView] SessionCoordinator.shared = \(SessionCoordinator.shared != nil ? "exists" : "nil")")
+        print("[SettingsView] txAdaptiveSettings.axdpExtensionsEnabled = \(txAdaptiveSettings.axdpExtensionsEnabled)")
+        print("[SettingsView] txAdaptiveSettings.autoNegotiateCapabilities = \(txAdaptiveSettings.autoNegotiateCapabilities)")
+        
+        guard let coordinator = SessionCoordinator.shared else {
+            print("[SettingsView] ERROR: SessionCoordinator.shared is nil!")
+            return
+        }
+        
         // Persist into app settings for durability
         settings.axdpExtensionsEnabled = txAdaptiveSettings.axdpExtensionsEnabled
         settings.axdpAutoNegotiateCapabilities = txAdaptiveSettings.autoNegotiateCapabilities
@@ -788,12 +797,32 @@ struct SettingsView: View {
         settings.axdpShowDecodeDetails = txAdaptiveSettings.showAXDPDecodeDetails
 
         // Push into live session coordinator so new sessions use updated behavior
-        coordinator.globalAdaptiveSettings.axdpExtensionsEnabled = txAdaptiveSettings.axdpExtensionsEnabled
-        coordinator.globalAdaptiveSettings.autoNegotiateCapabilities = txAdaptiveSettings.autoNegotiateCapabilities
-        coordinator.globalAdaptiveSettings.compressionEnabled = txAdaptiveSettings.compressionEnabled
-        coordinator.globalAdaptiveSettings.compressionAlgorithm = txAdaptiveSettings.compressionAlgorithm
-        coordinator.globalAdaptiveSettings.maxDecompressedPayload = txAdaptiveSettings.maxDecompressedPayload
-        coordinator.globalAdaptiveSettings.showAXDPDecodeDetails = txAdaptiveSettings.showAXDPDecodeDetails
+        // CRITICAL: TxAdaptiveSettings is a struct (value type), so we must assign the entire struct,
+        // not mutate individual properties (which would mutate a copy, not the original)
+        var updatedSettings = coordinator.globalAdaptiveSettings
+        updatedSettings.axdpExtensionsEnabled = txAdaptiveSettings.axdpExtensionsEnabled
+        updatedSettings.autoNegotiateCapabilities = txAdaptiveSettings.autoNegotiateCapabilities
+        updatedSettings.compressionEnabled = txAdaptiveSettings.compressionEnabled
+        updatedSettings.compressionAlgorithm = txAdaptiveSettings.compressionAlgorithm
+        updatedSettings.maxDecompressedPayload = txAdaptiveSettings.maxDecompressedPayload
+        updatedSettings.showAXDPDecodeDetails = txAdaptiveSettings.showAXDPDecodeDetails
+        coordinator.globalAdaptiveSettings = updatedSettings
+
+        print("[SettingsView] Updated coordinator settings:")
+        print("[SettingsView]   coordinator.globalAdaptiveSettings.axdpExtensionsEnabled = \(coordinator.globalAdaptiveSettings.axdpExtensionsEnabled)")
+        print("[SettingsView]   coordinator.globalAdaptiveSettings.autoNegotiateCapabilities = \(coordinator.globalAdaptiveSettings.autoNegotiateCapabilities)")
+        print("[SettingsView]   coordinator.connectedSessions.count = \(coordinator.connectedSessions.count)")
+
+        // If auto-negotiation is now enabled while sessions are already
+        // connected, proactively trigger capability discovery for those
+        // initiator sessions so the user doesn't have to reconnect manually.
+        if txAdaptiveSettings.axdpExtensionsEnabled &&
+            txAdaptiveSettings.autoNegotiateCapabilities {
+            print("[SettingsView] Calling triggerCapabilityDiscoveryForConnectedInitiators()")
+            coordinator.triggerCapabilityDiscoveryForConnectedInitiators()
+        } else {
+            print("[SettingsView] NOT calling triggerCapabilityDiscoveryForConnectedInitiators() - conditions not met")
+        }
     }
 
     // MARK: - File Transfer Permissions Section

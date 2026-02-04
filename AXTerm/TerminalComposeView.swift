@@ -64,13 +64,15 @@ struct ConnectionModeToggle: View {
 
 // MARK: - Session Status Badge
 
-/// Shows current session state with visual indicator
+/// Shows current session state with visual indicator and optional AXDP status
 struct SessionStatusBadge: View {
     let state: AX25SessionState?
     let destinationCall: String
     let onDisconnect: () -> Void
     /// Optional AXDP capability for the remote station
     var peerCapability: AXDPCapability?
+    /// AXDP capability negotiation status for this peer
+    var capabilityStatus: SessionCoordinator.CapabilityStatus = .unknown
 
     var body: some View {
         HStack(spacing: 6) {
@@ -84,9 +86,37 @@ struct SessionStatusBadge: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(stateColor == .green ? .primary : .secondary)
 
-            // AXDP capability badge when connected and peer supports AXDP
-            if state == .connected, peerCapability != nil {
-                AXDPCapabilityBadge(capability: peerCapability, compact: true)
+            // AXDP negotiation / capability indicators (connected sessions only)
+            if state == .connected {
+                switch capabilityStatus {
+                case .pending:
+                    // Subtle spinner-style indicator while negotiating
+                    ProgressView()
+                        .scaleEffect(0.5)
+                        .controlSize(.mini)
+                        .help(axdpStatusHelp)
+                case .confirmed:
+                    if let peerCapability {
+                        AXDPCapabilityBadge(capability: peerCapability, compact: true)
+                            .help(axdpStatusHelp)
+                    } else {
+                        // Fallback text when we know it's supported but lack details
+                        Text("AXDP")
+                            .font(.system(size: 9, weight: .semibold))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.accentColor.opacity(0.15))
+                            .clipShape(Capsule())
+                            .help(axdpStatusHelp)
+                    }
+                case .notSupported:
+                    Image(systemName: "bolt.slash")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .help(axdpStatusHelp)
+                case .unknown:
+                    EmptyView()
+                }
             }
 
             // Disconnect button when connected
@@ -151,6 +181,26 @@ struct SessionStatusBadge: View {
             return "Session error - try reconnecting"
         }
     }
+
+    private var axdpStatusHelp: String {
+        switch capabilityStatus {
+        case .unknown:
+            return "AXDP negotiation has not started for this peer."
+        case .pending:
+            return "Negotiating AXDP capabilities… waiting for PONG reply."
+        case .confirmed:
+            if let caps = peerCapability {
+                return """
+                AXDP enabled: v\(caps.protoMin)-\(caps.protoMax).
+                Features: \(caps.features.description).
+                """
+            } else {
+                return "AXDP enabled for this peer."
+            }
+        case .notSupported:
+            return "AXDP not supported or no response from this peer. Standard AX.25 will be used."
+        }
+    }
 }
 
 /// Compose box for terminal TX functionality
@@ -170,6 +220,8 @@ struct TerminalComposeView: View {
     let sessionState: AX25SessionState?
     /// AXDP capability for the destination station (if known)
     var destinationCapability: AXDPCapability?
+    /// AXDP capability negotiation status for the destination (if known)
+    var capabilityStatus: SessionCoordinator.CapabilityStatus = .unknown
 
     let onSend: () -> Void
     let onClear: () -> Void
@@ -281,7 +333,8 @@ struct TerminalComposeView: View {
                             state: sessionState,
                             destinationCall: destinationCall,
                             onDisconnect: onDisconnect,
-                            peerCapability: destinationCapability
+                            peerCapability: destinationCapability,
+                            capabilityStatus: capabilityStatus
                         )
                     }
 
@@ -606,8 +659,8 @@ struct TxQueueView: View {
     VStack(spacing: 12) {
         SessionStatusBadge(state: nil, destinationCall: "N0CALL", onDisconnect: {})
         SessionStatusBadge(state: .connecting, destinationCall: "N0CALL", onDisconnect: {})
-        SessionStatusBadge(state: .connected, destinationCall: "N0CALL", onDisconnect: {})
-        SessionStatusBadge(state: .disconnecting, destinationCall: "N0CALL", onDisconnect: {})
+        SessionStatusBadge(state: .connected, destinationCall: "N0CALL", onDisconnect: {}, capabilityStatus: .pending)
+        SessionStatusBadge(state: .connected, destinationCall: "N0CALL", onDisconnect: {}, capabilityStatus: .notSupported)
         SessionStatusBadge(state: .error, destinationCall: "N0CALL", onDisconnect: {})
     }
     .padding()

@@ -116,9 +116,21 @@ final class SessionCoordinator: ObservableObject {
             // When a session becomes connected AND we are the initiator, send AXDP PING
             // The responder will receive PING and reply with PONG
             if oldState != .connected && newState == .connected {
-                if session.isInitiator &&
-                    self.globalAdaptiveSettings.axdpExtensionsEnabled &&
-                    self.globalAdaptiveSettings.autoNegotiateCapabilities {
+                let axdpEnabled = self.globalAdaptiveSettings.axdpExtensionsEnabled
+                let autoNegotiate = self.globalAdaptiveSettings.autoNegotiateCapabilities
+                let isInitiator = session.isInitiator
+                
+                self.debugAXDP("Session connected - checking PING conditions", [
+                    "peer": session.remoteAddress.display,
+                    "isInitiator": isInitiator,
+                    "axdpEnabled": axdpEnabled,
+                    "autoNegotiate": autoNegotiate,
+                    "willSendPING": (isInitiator && axdpEnabled && autoNegotiate)
+                ])
+                
+                if isInitiator &&
+                    axdpEnabled &&
+                    autoNegotiate {
                     self.sendCapabilityPing(to: session)
                     self.debugAXDP("Session connected, sending PING", [
                         "peer": session.remoteAddress.display,
@@ -131,9 +143,9 @@ final class SessionCoordinator: ObservableObject {
                 } else {
                     self.debugAXDP("Session connected, no PING (either responder or AXDP disabled)", [
                         "peer": session.remoteAddress.display,
-                        "initiator": session.isInitiator,
-                        "axdpEnabled": globalAdaptiveSettings.axdpExtensionsEnabled,
-                        "autoNegotiate": globalAdaptiveSettings.autoNegotiateCapabilities
+                        "initiator": isInitiator,
+                        "axdpEnabled": axdpEnabled,
+                        "autoNegotiate": autoNegotiate
                     ])
                     TxLog.debug(.capability, "Session connected (responder), waiting for PING from initiator", [
                         "peer": session.remoteAddress.display
@@ -166,7 +178,7 @@ final class SessionCoordinator: ObservableObject {
     }
 
     /// Send an AXDP PING to a connected session to discover capabilities
-    private func sendCapabilityPing(to session: AX25Session) {
+    func sendCapabilityPing(to session: AX25Session) {
         let peerCallsign = session.remoteAddress.display.uppercased()
 
         if isAXDPNotSupported(for: peerCallsign) {
@@ -222,6 +234,43 @@ final class SessionCoordinator: ObservableObject {
             peer: session.remoteAddress.display,
             capabilities: localCaps
         ))
+    }
+
+    /// Trigger AXDP capability discovery for all currently connected sessions
+    /// where we are the initiator. This is used when auto-negotiation is turned
+    /// on while a session is already connected.
+    func triggerCapabilityDiscoveryForConnectedInitiators() {
+        debugAXDP("triggerCapabilityDiscoveryForConnectedInitiators called", [
+            "axdpEnabled": globalAdaptiveSettings.axdpExtensionsEnabled,
+            "autoNegotiate": globalAdaptiveSettings.autoNegotiateCapabilities,
+            "connectedCount": connectedSessions.count
+        ])
+        
+        guard globalAdaptiveSettings.axdpExtensionsEnabled,
+              globalAdaptiveSettings.autoNegotiateCapabilities else {
+            debugAXDP("triggerCapabilityDiscoveryForConnectedInitiators: guards failed", [
+                "axdpEnabled": globalAdaptiveSettings.axdpExtensionsEnabled,
+                "autoNegotiate": globalAdaptiveSettings.autoNegotiateCapabilities
+            ])
+            return
+        }
+
+        let initiatorSessions = connectedSessions.filter { $0.isInitiator }
+        debugAXDP("triggerCapabilityDiscoveryForConnectedInitiators: found initiator sessions", [
+            "totalConnected": connectedSessions.count,
+            "initiatorCount": initiatorSessions.count,
+            "sessions": initiatorSessions.map { ["peer": $0.remoteAddress.display, "isInitiator": $0.isInitiator] }
+        ])
+
+        for session in initiatorSessions {
+            debugAXDP("triggerCapabilityDiscoveryForConnectedInitiators: sending PING", [
+                "peer": session.remoteAddress.display,
+                "sessionId": session.id.uuidString
+            ])
+            // sendCapabilityPing() is internally idempotent with respect to
+            // pending/confirmed/not-supported state.
+            sendCapabilityPing(to: session)
+        }
     }
 
     /// Send an AXDP PONG response to a received PING

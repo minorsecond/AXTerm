@@ -859,6 +859,7 @@ struct TerminalView: View {
                 isConnected: client.status == .connected,
                 sessionState: txViewModel.sessionState,
                 destinationCapability: client.capabilityStore.capabilities(for: txViewModel.viewModel.destinationCall),
+                capabilityStatus: sessionCoordinator.capabilityStatus(for: txViewModel.viewModel.destinationCall),
                 onSend: {
                     sendCurrentMessage()
                 },
