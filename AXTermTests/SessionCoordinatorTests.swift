@@ -77,14 +77,14 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(session.state, .connected)
 
         // At this point capability should be unknown
-        XCTAssertEqual(coordinator.capabilityStatus(for: "PEER"), .unknown)
+        XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .unknown)
 
         // Turn on auto-negotiation and trigger discovery for connected sessions
         coordinator.globalAdaptiveSettings.autoNegotiateCapabilities = true
         coordinator.triggerCapabilityDiscoveryForConnectedInitiators()
 
         // Now discovery should be pending
-        XCTAssertEqual(coordinator.capabilityStatus(for: "PEER"), .pending)
+        XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .pending)
     }
 
     // MARK: - AXDP Message Building Tests
