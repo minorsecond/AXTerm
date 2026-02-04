@@ -1,7 +1,17 @@
 #!/bin/bash
 # AXTerm Network Test Runner
-# Runs all networking-related tests: AX.25, packet handling, AXDP, and
-# connected-mode networking (unit tests, plus optional integration tests).
+# Runs all networking-related tests: AX.25, packet handling, AXDP, file transfers,
+# bulk transfers, protocol implementations (YAPP, 7+, Raw Binary), KISS transport,
+# connected-mode networking, and link quality (unit tests, plus optional integration tests).
+#
+# Includes:
+#   - AX.25 frame handling, session management, I-frame reordering
+#   - AXDP protocol, capabilities, compatibility
+#   - File transfer protocols (YAPP, 7+, Raw Binary, AXDP)
+#   - Bulk transfer coordination and metrics
+#   - KISS encoding/decoding and transport
+#   - NET/ROM link quality and routing
+#   - Transmission scheduling and edge cases
 #
 # Usage:
 #   Scripts/run-network-tests.sh
@@ -49,7 +59,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-echo -e "${GREEN}=== AXTerm Network Tests (AX.25 / Packet / AXDP) ===${NC}"
+echo -e "${GREEN}=== AXTerm Network Tests (AX.25 / Packet / AXDP / File Transfer / KISS) ===${NC}"
 echo ""
 
 cd "$PROJECT_ROOT"
@@ -61,6 +71,9 @@ UNIT_TEST_ARGS+=("-destination" "platform=macOS")
 # Core AX.25 / packet / AXDP / link-quality classes
 UNIT_TEST_ARGS+=("-only-testing:AXTermTests/AX25Tests")
 UNIT_TEST_ARGS+=("-only-testing:AXTermTests/AX25SessionTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/AX25FrameBuildingTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/AX25ControlFieldDecoderTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/IFrameReorderingTests")
 UNIT_TEST_ARGS+=("-only-testing:AXTermTests/ConnectedModeTests")
 UNIT_TEST_ARGS+=("-only-testing:AXTermTests/PacketHandlingTests")
 UNIT_TEST_ARGS+=("-only-testing:AXTermTests/PacketOrderingTests")
@@ -69,10 +82,33 @@ UNIT_TEST_ARGS+=("-only-testing:AXTermTests/PacketEncodingTests")
 UNIT_TEST_ARGS+=("-only-testing:AXTermTests/AXDPTests")
 UNIT_TEST_ARGS+=("-only-testing:AXTermTests/AXDPCompatibilityTests")
 UNIT_TEST_ARGS+=("-only-testing:AXTermTests/AXDPCapabilityTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/SessionCoordinatorTests")
 UNIT_TEST_ARGS+=("-only-testing:AXTermTests/LinkQualityControlTests")
 UNIT_TEST_ARGS+=("-only-testing:AXTermTests/NetRomLinkQualityTests")
 UNIT_TEST_ARGS+=("-only-testing:AXTermTests/NetRomLinkQualitySourceModeTests")
 UNIT_TEST_ARGS+=("-only-testing:AXTermTests/NetRomLinkQualityPersistenceRehydrationTests")
+
+# File transfer / bulk transfer / protocol tests
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/FileTransferProtocolTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/FileTransferReceiverTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/BulkTransferTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/TransferMetricsTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/TransferProtocolRegistryTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/RawBinaryProtocolTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/SevenPlusProtocolTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/YAPPProtocolTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/WholeFileCompressionTests")
+
+# KISS / transport / frame transmission tests
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/KISSTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/KISSEncodingTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/KISSTransportTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/KISSRelayIntegrationTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/OutboundFrameTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/TerminalTxViewModelTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/TxSchedulerTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/TxSchedulerIntegrationTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/TransmissionEdgeCaseTests")
 
 echo "Running unit networking tests..."
 echo "  xcodebuild test ${UNIT_TEST_ARGS[*]}"

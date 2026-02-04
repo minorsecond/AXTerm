@@ -248,6 +248,42 @@ final class IFrameReorderingTests: XCTestCase {
 
     // MARK: - Buffer Limit Tests
 
+    /// Regression: when receive buffer fills, we must discard the frame FARTHEST from V(R),
+    /// not the next one we need. Otherwise we consistently lose the 5th frame (N(S)=4), i.e. chunk index 4 in file transfers.
+    /// Scenario: V(R)=0, window 7 so 1..7 are in window; buffer limit 4 so we can fill with 4,5,6,7. Then frame 1
+    /// arrives—buffer full so we drop one. We must drop 7 (farthest), keeping 1,4,5,6. Then 0,2,3 arrive → deliver 0,1,2,3,4,5,6.
+    func testBufferFullDiscardsFarthestNotNextNeededChunk4Preserved() {
+        var sm = AX25StateMachine(config: AX25SessionConfig(windowSize: 7, maxReceiveBufferSize: 4))
+
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+        XCTAssertEqual(sm.sequenceState.vr, 0)
+
+        var allDelivered: [Data] = []
+
+        // Receive 4, 5, 6, 7 out of order (buffer fills with 4 frames; V(R) still 0)
+        for ns in [4, 5, 6, 7] {
+            _ = sm.handle(event: .receivedIFrame(ns: ns, nr: 0, pf: false, payload: Data("\(ns)".utf8)))
+        }
+        XCTAssertEqual(allDelivered.count, 0, "Nothing delivered yet; all buffered")
+        XCTAssertEqual(sm.sequenceState.vr, 0)
+
+        // Frame 1 arrives out of order; buffer is full so we must discard one to make room. We must discard 7 (farthest), then buffer 1.
+        _ = sm.handle(event: .receivedIFrame(ns: 1, nr: 0, pf: false, payload: Data("1".utf8)))
+        XCTAssertEqual(allDelivered.count, 0)
+        XCTAssertEqual(sm.sequenceState.vr, 0)
+
+        // Now 0, 2, 3 arrive — deliver 0, then 1 from buffer, then 2, then 3 and drain buffer 4,5,6
+        for ns in [0, 2, 3] {
+            let actions = sm.handle(event: .receivedIFrame(ns: ns, nr: 0, pf: false, payload: Data("\(ns)".utf8)))
+            allDelivered.append(contentsOf: extractDeliveredData(from: actions))
+        }
+
+        XCTAssertEqual(allDelivered.count, 7, "Delivered 0,1,2,3,4,5,6 (frame 7 was discarded when buffer filled)")
+        XCTAssertEqual(String(data: allDelivered[4], encoding: .utf8), "4", "Chunk 4 must be delivered; was lost when buffer discarded next-needed instead of farthest")
+        XCTAssertEqual(sm.sequenceState.vr, 7)
+    }
+
     /// Test that buffer has reasonable limits - verified by behavior
     /// Frames beyond the window size should be discarded
     func testBufferSizeLimit() {

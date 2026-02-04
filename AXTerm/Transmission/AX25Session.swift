@@ -26,6 +26,10 @@ struct AX25SessionConfig: Sendable {
     /// Window size K (max outstanding I-frames)
     let windowSize: Int
 
+    /// Maximum receive buffer size for out-of-sequence frames. When nil, equals windowSize.
+    /// Can be set smaller than windowSize to force discard-oldest behavior under load (e.g. testing).
+    let maxReceiveBufferSize: Int?
+
     /// Maximum retries N2
     let maxRetries: Int
 
@@ -35,10 +39,12 @@ struct AX25SessionConfig: Sendable {
     /// Sequence number modulo (8 or 128)
     var modulo: Int { extended ? 128 : 8 }
 
-    init(windowSize: Int = 4, maxRetries: Int = 10, extended: Bool = false) {
+    init(windowSize: Int = 4, maxReceiveBufferSize: Int? = nil, maxRetries: Int = 10, extended: Bool = false) {
         // Clamp window size to valid range
         let maxWindow = extended ? 127 : 7
-        self.windowSize = max(1, min(windowSize, maxWindow))
+        let ws = max(1, min(windowSize, maxWindow))
+        self.windowSize = ws
+        self.maxReceiveBufferSize = maxReceiveBufferSize.map { max(1, min($0, ws)) }
         self.maxRetries = max(1, maxRetries)
         self.extended = extended
     }
@@ -587,13 +593,14 @@ struct AX25StateMachine: Sendable {
             return
         }
 
-        // Limit buffer size to window size to prevent memory exhaustion
-        if receiveBuffer.count >= config.windowSize {
-            print("[AX25Session] Receive buffer full, discarding oldest")
-            // Find and remove the frame with the smallest distance from V(R)
-            // This is a safety measure - shouldn't happen in normal operation
-            if let oldestKey = receiveBuffer.keys.min(by: { distanceFromVR($0) > distanceFromVR($1) }) {
-                receiveBuffer.removeValue(forKey: oldestKey)
+        let bufferLimit = config.maxReceiveBufferSize ?? config.windowSize
+        if receiveBuffer.count >= bufferLimit {
+            print("[AX25Session] Receive buffer full, discarding farthest")
+            // Remove the frame with the LARGEST distance from V(R), i.e. the one we will need last.
+            // (Removing the smallest distance would drop the next frame we need—e.g. N(S)=4 when V(R)=0—
+            // causing consistent loss of the same chunk index in file transfers.)
+            if let farthestKey = receiveBuffer.keys.max(by: { distanceFromVR($0) < distanceFromVR($1) }) {
+                receiveBuffer.removeValue(forKey: farthestKey)
             }
         }
 

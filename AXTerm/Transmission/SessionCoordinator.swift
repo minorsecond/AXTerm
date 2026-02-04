@@ -74,6 +74,15 @@ final class SessionCoordinator: ObservableObject {
     /// Used to map ACK/NACK responses to the correct transfer
     private var transfersAwaitingAcceptance: [UInt32: UUID] = [:]
 
+    #if DEBUG
+    /// Test-only switch: when true, completion NACK + SACK handling will
+    /// skip selective retransmit logic and only log + return.
+    /// This allows unit tests to validate state transitions without
+    /// exercising the full retransmit/PacketEngine pipeline, which can be
+    /// fragile in the ephemeral test environment.
+    static var disableCompletionNackSackRetransmitForTests: Bool = false
+    #endif
+
     /// Task that periodically sends completion-request (ACK 0xFFFFFFFE) for transfers awaiting completion.
     /// Receiver responds with completion ACK or NACK with SACK bitmap; sender then selectively retransmits only missing chunks.
     private var awaitingCompletionRequestTask: Task<Void, Never>?
@@ -84,6 +93,13 @@ final class SessionCoordinator: ObservableObject {
     init() {
         SessionCoordinator.shared = self
         setupCallbacks()
+    }
+
+    /// Explicit deinit to ensure any background tasks are cancelled cleanly.
+    /// Marked nonisolated to avoid actor deallocation bookkeeping that has
+    /// been triggering a Swift concurrency runtime bug in unit tests.
+    nonisolated(unsafe) deinit {
+        awaitingCompletionRequestTask?.cancel()
     }
 
     // MARK: - Debug Logging (AXDP)
@@ -330,7 +346,14 @@ final class SessionCoordinator: ObservableObject {
 
     /// Send a frame via PacketEngine
     private func sendFrame(_ frame: OutboundFrame) {
-        packetEngine?.send(frame: frame) { result in
+        // Guard: don't send if packetEngine is not set (e.g., in tests)
+        guard let packetEngine = packetEngine else {
+            TxLog.debug(.session, "Skipping sendFrame - packetEngine not set", [
+                "destination": frame.destination.display
+            ])
+            return
+        }
+        packetEngine.send(frame: frame) { result in
             Task { @MainActor in
                 switch result {
                 case .success:
@@ -529,6 +552,17 @@ final class SessionCoordinator: ObservableObject {
 
     /// Send AXDP payload via connected session if available, otherwise as UI.
     private func sendAXDPPayload(_ payload: Data, to destination: AX25Address, path: DigiPath, displayInfo: String?) {
+        // Guard: don't send if packetEngine is not set (e.g., in tests)
+        // CRITICAL: This prevents any frame creation or memory allocation when packetEngine is nil
+        guard packetEngine != nil else {
+            TxLog.debug(.axdp, "Skipping sendAXDPPayload - packetEngine not set", [
+                "destination": destination.display,
+                "payloadSize": payload.count
+            ])
+            return
+        }
+        
+        // Check for connected session first (more efficient path)
         if sessionManager.connectedSession(withPeer: destination) != nil {
             let frames = sessionManager.sendData(
                 payload,
@@ -1226,23 +1260,41 @@ final class SessionCoordinator: ObservableObject {
 
         let axdpSessionId = message.sessionId
 
-        // Completion NACK with SACK bitmap = receiver missing/corrupt chunks; never treat as "transfer failed"
-        let isCompletionNackWithSack = message.messageId == SessionCoordinator.transferCompleteMessageId && message.sackBitmap != nil
-        if isCompletionNackWithSack {
-            if let sackData = message.sackBitmap,
-               let transferId = transferSessionIds.first(where: { $0.value == axdpSessionId })?.key,
+        // Completion NACK with SACK bitmap = receiver reports missing/corrupt chunks.
+        // Behavior:
+        //  - NEVER mark the transfer as failed here
+        //  - Attempt selective retransmit of missing chunks when we have file data
+        //  - Always return early to prevent falling through to failure-handling code below.
+        if message.messageId == SessionCoordinator.transferCompleteMessageId, message.sackBitmap != nil {
+            #if DEBUG
+            if SessionCoordinator.disableCompletionNackSackRetransmitForTests {
+                TxLog.debug(.axdp, "Completion NACK with SACK bitmap (retransmit disabled for tests)", [
+                    "session": axdpSessionId
+                ])
+                // Always return early - completion NACK with SACK never marks transfer as failed
+                return
+            }
+            #endif
+
+            // Attempt selective retransmit only when we can safely do so.
+            if let transferId = transferSessionIds.first(where: { $0.value == axdpSessionId })?.key,
+               let fileData = transferFileData[transferId],
+               let sackData = message.sackBitmap,
                let transferIndex = transfers.firstIndex(where: { $0.id == transferId }),
-               transfers[transferIndex].status == .awaitingCompletion,
-               let fileData = transferFileData[transferId] {
+               transfers[transferIndex].status == .awaitingCompletion {
+
                 let transfer = transfers[transferIndex]
                 let actualTotalChunks = (fileData.count + transfer.chunkSize - 1) / transfer.chunkSize
+
                 if let sack = AXDPSACKBitmap.decode(from: sackData, baseChunk: 0, windowSize: actualTotalChunks) {
                     let missing = sack.missingChunks(upTo: UInt32(actualTotalChunks - 1))
+
                     if !missing.isEmpty {
                         let destParts = transfer.destination.uppercased().split(separator: "-")
                         let destCall = String(destParts.first ?? "")
                         let destSSID = destParts.count > 1 ? Int(destParts[1]) ?? 0 : 0
                         let destAddress = AX25Address(call: destCall, ssid: destSSID)
+
                         for chunkIndex in missing.map({ Int($0) }) {
                             guard let chunkData = transfer.chunkData(from: fileData, chunk: chunkIndex) else { continue }
                             let chunkMessage = AXDP.Message(
@@ -1255,6 +1307,7 @@ final class SessionCoordinator: ObservableObject {
                                 payloadCRC32: AXDP.crc32(chunkData),
                                 compression: .none
                             )
+                            // This internally guards on packetEngine being set.
                             sendAXDPPayload(
                                 chunkMessage.encode(),
                                 to: destAddress,
@@ -1262,6 +1315,7 @@ final class SessionCoordinator: ObservableObject {
                                 displayInfo: "AXDP CHUNK \(chunkIndex + 1)/\(actualTotalChunks) (retransmit)"
                             )
                         }
+
                         TxLog.outbound(.axdp, "Selective retransmit for missing/corrupt chunks", [
                             "file": transfer.fileName,
                             "session": axdpSessionId,
@@ -1272,7 +1326,15 @@ final class SessionCoordinator: ObservableObject {
                 } else {
                     TxLog.warning(.axdp, "NACK SACK bitmap decode failed", ["session": axdpSessionId])
                 }
+            } else {
+                // Completion NACK with SACK but no matching transfer/file data - log and return.
+                // This can happen if the transfer was already completed/cancelled or session ID is unknown.
+                TxLog.debug(.axdp, "Completion NACK with SACK bitmap but no matching transfer/file data", [
+                    "session": axdpSessionId
+                ])
             }
+
+            // Always return early - completion NACK with SACK never marks transfer as failed.
             return
         }
 

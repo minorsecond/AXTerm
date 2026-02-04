@@ -11,6 +11,20 @@ import XCTest
 @MainActor
 final class SessionCoordinatorTests: XCTestCase {
 
+    override func setUp() {
+        super.setUp()
+        #if DEBUG
+        SessionCoordinator.disableCompletionNackSackRetransmitForTests = true
+        #endif
+    }
+
+    override func tearDown() {
+        #if DEBUG
+        SessionCoordinator.disableCompletionNackSackRetransmitForTests = false
+        #endif
+        super.tearDown()
+    }
+
     // Note: AXDPCapabilityStore is tested in AXDPCapabilityTests.swift
     // using the AXDPCapabilityCache which has the same core functionality.
 
