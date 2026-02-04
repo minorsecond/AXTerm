@@ -137,6 +137,7 @@ final class PacketHandlingTests: XCTestCase {
         XCTAssertEqual(packet.viaDisplay, "W0ARP-7*")
     }
 
+    @MainActor
     func testConsoleLineViaDedupesRepeatedDigis() {
         let settings = makeSettings(persistHistory: false)
         let client = PacketEngine(settings: settings)
@@ -160,7 +161,8 @@ final class PacketHandlingTests: XCTestCase {
         client.handleIncomingPacket(packet)
 
         XCTAssertEqual(client.consoleLines.count, 1)
-        XCTAssertEqual(client.consoleLines[0].via, ["W0ARP-7*"])
+        guard let line = client.consoleLines.first else { return }
+        XCTAssertEqual(line.via, ["W0ARP-7*"])
     }
 
     private func makeSettings(persistHistory: Bool) -> AppSettingsStore {

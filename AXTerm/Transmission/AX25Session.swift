@@ -293,22 +293,25 @@ struct AX25StateMachine: Sendable {
         let oldState = state
         let actions = handleInternal(event: event)
 
-        // Log state transitions
+        // Log state transitions and key actions in DEBUG builds; this is intentionally
+        // verbose trace data to help diagnose retry / timeout behavior.
+#if DEBUG
         if oldState != state {
-            TxLog.debug(.session, "State transition", [
+            TxLog.debug(.session, "AX25 state transition", [
                 "from": oldState.rawValue,
                 "to": state.rawValue,
-                "event": String(describing: event).prefix(50)
+                "event": String(describing: event).prefix(80)
             ])
         }
 
-        // Log actions being taken
         if !actions.isEmpty {
-            TxLog.debug(.ax25, "Actions generated", [
-                "count": actions.count,
-                "actions": actions.prefix(3).map { String(describing: $0).prefix(30) }.joined(separator: ", ")
+            TxLog.debug(.ax25, "AX25 actions", [
+                "state": state.rawValue,
+                "event": String(describing: event).prefix(80),
+                "actions": actions.map { String(describing: $0) }.joined(separator: ", ")
             ])
         }
+#endif
 
         return actions
     }
@@ -333,6 +336,13 @@ struct AX25StateMachine: Sendable {
             TxLog.inbound(.ax25, "Connection request received (SABM)")
             return [.sendUA, .startT3, .notifyConnected]
 
+        case (.disconnected, .receivedUA):
+            // Late UA for a session we initiated (timing/path mismatch)
+            state = .connected
+            retryCount = 0
+            TxLog.inbound(.ax25, "Connection established (late UA)")
+            return [.startT3, .notifyConnected]
+
         case (.disconnected, .receivedDISC):
             // Respond with DM (not connected)
             return [.sendDM]
@@ -353,6 +363,13 @@ struct AX25StateMachine: Sendable {
             state = .disconnected
             TxLog.error(.ax25, "Connection refused", error: nil, ["reason": "DM received"])
             return [.stopT1, .notifyError("Connection refused (DM received)")]
+
+        case (.error, .receivedUA):
+            // Late UA after error state, recover to connected
+            state = .connected
+            retryCount = 0
+            TxLog.inbound(.ax25, "Connection established (late UA from error)")
+            return [.startT3, .notifyConnected]
 
         case (.connecting, .t1Timeout):
             retryCount += 1
@@ -417,10 +434,24 @@ struct AX25StateMachine: Sendable {
 
         case (.connected, .t1Timeout):
             retryCount += 1
-            TxLog.warning(.ax25, "T1 timeout", ["retry": retryCount, "outstanding": sequenceState.outstandingCount])
+            TxLog.warning(.ax25, "T1 timeout", [
+                "retry": retryCount,
+                "outstanding": sequenceState.outstandingCount,
+                "windowSize": config.windowSize,
+                "vs": sequenceState.vs,
+                "va": sequenceState.va,
+                "vr": sequenceState.vr
+            ])
             if retryCount > config.maxRetries {
                 state = .error
-                TxLog.error(.ax25, "Link failure", error: nil, ["reason": "retries exceeded", "retries": retryCount])
+                TxLog.error(.ax25, "Link failure", error: nil, [
+                    "reason": "retries exceeded",
+                    "retries": retryCount,
+                    "windowSize": config.windowSize,
+                    "vs": sequenceState.vs,
+                    "va": sequenceState.va,
+                    "vr": sequenceState.vr
+                ])
                 return [.stopT1, .stopT3, .notifyError("Link failure (retries exceeded)")]
             }
             // Retransmit would happen here

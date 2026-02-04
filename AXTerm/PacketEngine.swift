@@ -86,6 +86,23 @@ final class PacketEngine: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
     private let packetInsertSubject = PassthroughSubject<Packet, Never>()
 
+    // MARK: - Debug Logging (Debug Builds Only)
+    private func debugTrace(_ message: String, _ data: [String: Any] = [:]) {
+        #if DEBUG
+        if data.isEmpty {
+            print("[KISS TRACE] \(message)")
+        } else {
+            let details = data.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+            print("[KISS TRACE] \(message) | \(details)")
+        }
+        #endif
+    }
+
+    private func hexPrefix(_ data: Data, limit: Int = 32) -> String {
+        guard !data.isEmpty else { return "" }
+        return data.prefix(limit).map { String(format: "%02X", $0) }.joined()
+    }
+
     // MARK: - NET/ROM Integration
 
     /// NET/ROM routing integration for passive route inference and link quality estimation.
@@ -301,6 +318,15 @@ final class PacketEngine: ObservableObject {
 
         // Encode the frame as AX.25
         let ax25Data = frame.encodeAX25()
+        debugTrace("TX AX.25", [
+            "src": frame.source.display,
+            "dest": frame.destination.display,
+            "type": frame.frameType,
+            "ctl": frame.controlByte.map { String(format: "0x%02X", $0) } ?? "nil",
+            "pid": frame.pid.map { String(format: "0x%02X", $0) } ?? "nil",
+            "len": ax25Data.count,
+            "infoHex": hexPrefix(frame.payload)
+        ])
         TxLog.ax25Encode(
             dest: frame.destination.display,
             src: frame.source.display,
@@ -311,6 +337,11 @@ final class PacketEngine: ObservableObject {
 
         // Wrap in KISS frame (port 0, data frame)
         let kissData = KISS.encodeFrame(payload: ax25Data, port: frame.channel)
+        debugTrace("TX KISS", [
+            "port": frame.channel,
+            "len": kissData.count,
+            "hex": hexPrefix(kissData)
+        ])
         TxLog.kissSend(frameId: frame.id, size: kissData.count)
         TxLog.hexDump(.kiss, "KISS frame", data: kissData)
 
@@ -419,6 +450,10 @@ final class PacketEngine: ObservableObject {
         bytesReceived += data.count
 
         TxLog.kissReceive(size: data.count)
+        debugTrace("RX KISS chunk", [
+            "len": data.count,
+            "hex": hexPrefix(data)
+        ])
 
         // Always log raw chunk
         appendRawChunk(RawChunk(data: data))
@@ -437,6 +472,10 @@ final class PacketEngine: ObservableObject {
 
     private func processAX25Frame(_ ax25Data: Data) {
         TxLog.hexDump(.ax25, "Received AX.25 frame", data: ax25Data)
+        debugTrace("RX AX.25 raw", [
+            "len": ax25Data.count,
+            "hex": hexPrefix(ax25Data)
+        ])
 
         guard let decoded = AX25.decodeFrame(ax25: ax25Data) else {
             TxLog.ax25DecodeError(reason: "Invalid frame structure", size: ax25Data.count)
@@ -456,6 +495,17 @@ final class PacketEngine: ObservableObject {
             type: decoded.frameType.rawValue,
             size: ax25Data.count
         )
+        debugTrace("RX AX.25 decoded", [
+            "src": decoded.from?.display ?? "?",
+            "dest": decoded.to?.display ?? "?",
+            "via": decoded.via.map { $0.display }.joined(separator: ",").isEmpty ? "(direct)" : decoded.via.map { $0.display }.joined(separator: ","),
+            "type": decoded.frameType.rawValue,
+            "ctl": String(format: "0x%02X", decoded.control),
+            "ctl1": decoded.controlByte1.map { String(format: "0x%02X", $0) } ?? "nil",
+            "pid": decoded.pid.map { String(format: "0x%02X", $0) } ?? "nil",
+            "infoLen": decoded.info.count,
+            "infoHex": hexPrefix(decoded.info)
+        ])
 
         let host = connectedHost ?? settings.host
         let port = connectedPort ?? settings.portValue

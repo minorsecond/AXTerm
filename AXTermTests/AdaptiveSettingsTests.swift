@@ -226,9 +226,8 @@ final class AdaptiveSettingsTests: XCTestCase {
     func testAutoNegotiateCapabilities() {
         var settings = TxAdaptiveSettings()
 
-        XCTAssertTrue(settings.autoNegotiateCapabilities)
-
-        settings.autoNegotiateCapabilities = false
         XCTAssertFalse(settings.autoNegotiateCapabilities)
+        settings.autoNegotiateCapabilities = true
+        XCTAssertTrue(settings.autoNegotiateCapabilities)
     }
 }

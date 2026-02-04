@@ -137,7 +137,8 @@ struct TxAdaptiveSettings: Sendable {
     var axdpExtensionsEnabled: Bool = true
 
     /// Auto-negotiate capabilities with peers
-    var autoNegotiateCapabilities: Bool = true
+    // Default off to avoid sending binary AXDP PINGs to legacy nodes/BBS.
+    var autoNegotiateCapabilities: Bool = false
 
     /// Enable compression for AXDP transfers
     var compressionEnabled: Bool = true

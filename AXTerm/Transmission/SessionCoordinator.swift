@@ -59,6 +59,10 @@ final class SessionCoordinator: ObservableObject {
 
     /// Timeout for capability discovery (seconds)
     private let capabilityDiscoveryTimeout: TimeInterval = 900.0
+    /// Cache for peers that did not respond to AXDP discovery
+    private var axdpNotSupported: [String: Date] = [:]
+    /// How long to remember "not supported" before allowing auto-discovery again
+    private let axdpNotSupportedTTL: TimeInterval = 86400.0
 
     /// Callback for capability discovery events (for debug display)
     var onCapabilityEvent: ((CapabilityDebugEvent) -> Void)?
@@ -92,7 +96,7 @@ final class SessionCoordinator: ObservableObject {
             // When a session becomes connected AND we are the initiator, send AXDP PING
             // The responder will receive PING and reply with PONG
             if oldState != .connected && newState == .connected {
-                if session.isInitiator {
+                if session.isInitiator && self.globalAdaptiveSettings.autoNegotiateCapabilities {
                     self.sendCapabilityPing(to: session)
                     TxLog.debug(.capability, "Session connected (initiator), sending AXDP PING", [
                         "peer": session.remoteAddress.display
@@ -132,6 +136,13 @@ final class SessionCoordinator: ObservableObject {
     private func sendCapabilityPing(to session: AX25Session) {
         let peerCallsign = session.remoteAddress.display.uppercased()
 
+        if isAXDPNotSupported(for: peerCallsign) {
+            TxLog.debug(.capability, "Skipping PING - peer previously marked not supported", [
+                "peer": peerCallsign
+            ])
+            return
+        }
+
         // Don't send if we already know their capability or discovery is pending
         if hasConfirmedAXDPCapability(for: peerCallsign) {
             TxLog.debug(.capability, "Skipping PING - capability already confirmed", [
@@ -155,20 +166,17 @@ final class SessionCoordinator: ObservableObject {
             capabilities: localCaps
         )
 
-        // For connected sessions, use I-frames
-        let frame = OutboundFrame(
-            destination: session.remoteAddress,
-            source: sessionManager.localCallsign,
-            path: session.path,
-            payload: pingMessage.encode(),
-            frameType: "i",
-            displayInfo: "AXDP PING"
-        )
-
         // Track that we're waiting for a response
         pendingCapabilityDiscovery[peerCallsign] = Date()
+        scheduleCapabilityTimeout(for: peerCallsign)
 
-        sendFrame(frame)
+        // For connected sessions, route through session manager (I-frames)
+        sendAXDPPayload(
+            pingMessage.encode(),
+            to: session.remoteAddress,
+            path: session.path,
+            displayInfo: "AXDP PING"
+        )
 
         TxLog.outbound(.capability, "Sent AXDP PING via session", [
             "dest": session.remoteAddress.display,
@@ -193,20 +201,13 @@ final class SessionCoordinator: ObservableObject {
             capabilities: localCaps
         )
 
-        // Respond via UI frame if not in a session, or I-frame if connected
-        let session = sessionManager.sessions.values.first { $0.remoteAddress == address && $0.state == .connected }
-        let frameType = session != nil ? "i" : "ui"
-
-        let frame = OutboundFrame(
-            destination: address,
-            source: sessionManager.localCallsign,
+        // Respond via I-frames if connected, UI otherwise
+        sendAXDPPayload(
+            pongMessage.encode(),
+            to: address,
             path: path,
-            payload: pongMessage.encode(),
-            frameType: frameType,
             displayInfo: "AXDP PONG"
         )
-
-        sendFrame(frame)
 
         TxLog.outbound(.capability, "Sent AXDP PONG", [
             "dest": address.display,
@@ -383,6 +384,7 @@ final class SessionCoordinator: ObservableObject {
         guard let caps = message.capabilities else { return }
 
         let peerCallsign = from.display.uppercased()
+        clearAXDPNotSupported(for: peerCallsign)
 
         // Store capabilities in the capability store
         packetEngine?.capabilityStore.store(caps, for: from.call, ssid: from.ssid)
@@ -425,6 +427,68 @@ final class SessionCoordinator: ObservableObject {
                 sessionId: message.sessionId,
                 messageId: message.messageId
             )
+        }
+    }
+
+    // MARK: - AXDP Send Helper
+
+    /// Send AXDP payload via connected session if available, otherwise as UI.
+    private func sendAXDPPayload(_ payload: Data, to destination: AX25Address, path: DigiPath, displayInfo: String?) {
+        if sessionManager.connectedSession(withPeer: destination) != nil {
+            let frames = sessionManager.sendData(
+                payload,
+                to: destination,
+                path: path,
+                pid: 0xF0,
+                displayInfo: displayInfo
+            )
+            for frame in frames {
+                sendFrame(frame)
+            }
+            return
+        }
+
+        let frame = OutboundFrame(
+            destination: destination,
+            source: sessionManager.localCallsign,
+            path: path,
+            payload: payload,
+            frameType: "ui",
+            displayInfo: displayInfo
+        )
+        sendFrame(frame)
+    }
+
+    // MARK: - AXDP Not Supported Cache
+
+    private func isAXDPNotSupported(for callsign: String) -> Bool {
+        guard let markedAt = axdpNotSupported[callsign.uppercased()] else { return false }
+        if Date().timeIntervalSince(markedAt) > axdpNotSupportedTTL {
+            axdpNotSupported.removeValue(forKey: callsign.uppercased())
+            return false
+        }
+        return true
+    }
+
+    private func markAXDPNotSupported(for callsign: String) {
+        axdpNotSupported[callsign.uppercased()] = Date()
+        TxLog.debug(.capability, "Marked AXDP not supported", ["peer": callsign])
+    }
+
+    private func clearAXDPNotSupported(for callsign: String) {
+        axdpNotSupported.removeValue(forKey: callsign.uppercased())
+    }
+
+    private func scheduleCapabilityTimeout(for callsign: String) {
+        let call = callsign.uppercased()
+        Task { @MainActor in
+            let nanos = UInt64(capabilityDiscoveryTimeout * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanos)
+            guard let sentAt = pendingCapabilityDiscovery[call] else { return }
+            if Date().timeIntervalSince(sentAt) >= capabilityDiscoveryTimeout {
+                pendingCapabilityDiscovery.removeValue(forKey: call)
+                markAXDPNotSupported(for: call)
+            }
         }
     }
 
@@ -757,16 +821,12 @@ final class SessionCoordinator: ObservableObject {
                 transferMetrics: globalAdaptiveSettings.axdpExtensionsEnabled ? metricsExtension : nil
             )
 
-            let ackFrame = OutboundFrame(
-                destination: sourceAddress,
-                source: sessionManager.localCallsign,
+            sendAXDPPayload(
+                completionAck.encode(),
+                to: sourceAddress,
                 path: path,
-                payload: completionAck.encode(),
-                frameType: session != nil ? "i" : "ui",
                 displayInfo: "AXDP ACK (transfer complete)"
             )
-
-            sendFrame(ackFrame)
 
             TxLog.outbound(.axdp, "Sent transfer completion ACK to sender", [
                 "dest": state.sourceCallsign,
@@ -783,16 +843,12 @@ final class SessionCoordinator: ObservableObject {
                 messageId: SessionCoordinator.transferCompleteMessageId
             )
 
-            let nackFrame = OutboundFrame(
-                destination: sourceAddress,
-                source: sessionManager.localCallsign,
+            sendAXDPPayload(
+                completionNack.encode(),
+                to: sourceAddress,
                 path: path,
-                payload: completionNack.encode(),
-                frameType: session != nil ? "i" : "ui",
                 displayInfo: "AXDP NACK (transfer failed)"
             )
-
-            sendFrame(nackFrame)
 
             TxLog.outbound(.axdp, "Sent transfer completion NACK to sender", [
                 "dest": state.sourceCallsign,
@@ -1094,6 +1150,9 @@ final class SessionCoordinator: ObservableObject {
         let ssid = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
         let destAddress = AX25Address(call: baseCall, ssid: ssid)
 
+        // Manual discovery overrides "not supported" cache
+        clearAXDPNotSupported(for: destAddress.display)
+
         // Build AXDP PING message with our capabilities
         let localCaps = AXDPCapability.defaultLocal()
         let pingMessage = AXDP.Message(
@@ -1103,17 +1162,17 @@ final class SessionCoordinator: ObservableObject {
             capabilities: localCaps
         )
 
-        // Create UI frame with AXDP payload
-        let frame = OutboundFrame(
-            destination: destAddress,
-            source: sessionManager.localCallsign,
+        // Track that we're waiting for a response
+        pendingCapabilityDiscovery[destAddress.display.uppercased()] = Date()
+        scheduleCapabilityTimeout(for: destAddress.display)
+
+        // Manual discovery: prefer connected session, but do not force connection
+        sendAXDPPayload(
+            pingMessage.encode(),
+            to: destAddress,
             path: path,
-            payload: pingMessage.encode(),
-            frameType: "ui",
             displayInfo: "AXDP PING"
         )
-
-        sendFrame(frame)
 
         TxLog.outbound(.capability, "Sent AXDP PING", [
             "dest": destination,
@@ -1148,6 +1207,10 @@ final class SessionCoordinator: ObservableObject {
     func capabilityStatus(for callsign: String) -> CapabilityStatus {
         let call = callsign.uppercased()
 
+        if isAXDPNotSupported(for: call) {
+            return .notSupported
+        }
+
         if hasConfirmedAXDPCapability(for: call) {
             return .confirmed
         }
@@ -1157,6 +1220,8 @@ final class SessionCoordinator: ObservableObject {
             if elapsed < capabilityDiscoveryTimeout {
                 return .pending
             } else {
+                pendingCapabilityDiscovery.removeValue(forKey: call)
+                markAXDPNotSupported(for: call)
                 return .notSupported
             }
         }
@@ -1454,16 +1519,12 @@ final class SessionCoordinator: ObservableObject {
             fileMeta: fileMeta
         )
 
-        let metaFrame = OutboundFrame(
-            destination: destAddress,
-            source: sessionManager.localCallsign,
+        sendAXDPPayload(
+            metaMessage.encode(),
+            to: destAddress,
             path: path,
-            payload: metaMessage.encode(),
-            frameType: "i",
             displayInfo: "AXDP FILE_META: \(transfer.fileName)" + (compressionAlgorithmUsed != .none ? " (\(compressionAlgorithmUsed.displayName))" : "")
         )
-
-        sendFrame(metaFrame)
 
         // Log with compression details
         var logData: [String: Any] = [
@@ -1547,14 +1608,7 @@ final class SessionCoordinator: ObservableObject {
             compression: .none  // No per-chunk compression - file is pre-compressed
         )
 
-        let chunkFrame = OutboundFrame(
-            destination: destination,
-            source: sessionManager.localCallsign,
-            path: path,
-            payload: chunkMessage.encode(),
-            frameType: "i",
-            displayInfo: "AXDP CHUNK \(nextChunk + 1)/\(transfers[transferIndex].totalChunks)"
-        )
+        let chunkPayload = chunkMessage.encode()
 
         // Start data-phase timing on first chunk sent
         if transfers[transferIndex].dataPhaseStartedAt == nil {
@@ -1563,7 +1617,12 @@ final class SessionCoordinator: ObservableObject {
             transfers[transferIndex].startedAt = now
         }
 
-        sendFrame(chunkFrame)
+        sendAXDPPayload(
+            chunkPayload,
+            to: destination,
+            path: path,
+            displayInfo: "AXDP CHUNK \(nextChunk + 1)/\(transfers[transferIndex].totalChunks)"
+        )
 
         // Mark chunk as sent and update progress - use explicit reassignment for SwiftUI
         var transfer = transfers[transferIndex]
@@ -1651,16 +1710,12 @@ final class SessionCoordinator: ObservableObject {
                 messageId: 1
             )
 
-            let ackFrame = OutboundFrame(
-                destination: sourceAddress,
-                source: sessionManager.localCallsign,
+            sendAXDPPayload(
+                ackMessage.encode(),
+                to: sourceAddress,
                 path: path,
-                payload: ackMessage.encode(),
-                frameType: session != nil ? "i" : "ui",
                 displayInfo: "AXDP ACK (accept transfer)"
             )
-
-            sendFrame(ackFrame)
 
             TxLog.outbound(.session, "Accepted incoming transfer", [
                 "from": request.sourceCallsign,
@@ -1696,16 +1751,12 @@ final class SessionCoordinator: ObservableObject {
                 messageId: 1
             )
 
-            let nackFrame = OutboundFrame(
-                destination: sourceAddress,
-                source: sessionManager.localCallsign,
+            sendAXDPPayload(
+                nackMessage.encode(),
+                to: sourceAddress,
                 path: path,
-                payload: nackMessage.encode(),
-                frameType: session != nil ? "i" : "ui",
                 displayInfo: "AXDP NACK (decline transfer)"
             )
-
-            sendFrame(nackFrame)
 
             // Mark the inbound transfer as failed/declined
             if let transferId = axdpToTransferId[request.axdpSessionId],

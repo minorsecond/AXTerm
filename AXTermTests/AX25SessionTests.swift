@@ -8,7 +8,21 @@
 import XCTest
 @testable import AXTerm
 
+@MainActor
 final class AX25SessionTests: XCTestCase {
+
+    private func connectSession(
+        manager: AX25SessionManager,
+        destination: AX25Address,
+        path: DigiPath,
+        uaSource: AX25Address? = nil
+    ) -> AX25Session {
+        _ = manager.connect(to: destination, path: path, channel: 0)
+        let session = manager.session(for: destination, path: path, channel: 0)
+        manager.handleInboundUA(from: uaSource ?? destination, path: path, channel: 0)
+        XCTAssertEqual(session.state, .connected)
+        return session
+    }
 
     // MARK: - Session State Tests
 
@@ -180,6 +194,178 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(manager.sessions.count, 1)
         XCTAssertEqual(frames.count, 1)
         XCTAssertEqual(frames.first?.path, originalPath)
+    }
+
+    func testT1TimeoutRetransmitsOutstandingFrames() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let destination = AX25Address(call: "N0HI", ssid: 7)
+        let path = DigiPath.from(["W0ARP-7"])
+
+        let session = manager.session(for: destination, path: path, channel: 0)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
+
+        XCTAssertEqual(session.state, .connected)
+
+        let frames = manager.sendData(Data([0x41]), to: destination, path: path, channel: 0)
+        XCTAssertEqual(frames.count, 1)
+
+        let retransmitFrames = manager.handleT1Timeout(session: session)
+        XCTAssertEqual(retransmitFrames.count, 1)
+        XCTAssertEqual(retransmitFrames.first?.sessionId, session.id)
+    }
+
+    func testRejRetransmitsWithConnectedSessionPathMismatch() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let destination = AX25Address(call: "N0HI", ssid: 7)
+        let originalPath = DigiPath.from(["W0ARP-7"])
+        let incomingPath = DigiPath.from(["WIDE1-1"])
+
+        let session = manager.session(for: destination, path: originalPath, channel: 0)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
+
+        XCTAssertEqual(session.state, .connected)
+
+        let frames = manager.sendData(Data([0x41]), to: destination, path: originalPath, channel: 0)
+        XCTAssertEqual(frames.count, 1)
+
+        let retransmitFrames = manager.handleInboundREJ(from: destination, path: incomingPath, channel: 0, nr: 0)
+        XCTAssertEqual(retransmitFrames.count, 1)
+        XCTAssertEqual(retransmitFrames.first?.sessionId, session.id)
+    }
+
+    func testHandleInboundUAWithSSIDMismatchCompletesConnect() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let destination = AX25Address(call: "N0HI", ssid: 7)
+        let uaSource = AX25Address(call: "N0HI", ssid: 9)
+        let path = DigiPath.from(["W0ARP-7"])
+
+        _ = manager.connect(to: destination, path: path, channel: 0)
+        let session = manager.session(for: destination, path: path, channel: 0)
+
+        manager.handleInboundUA(from: uaSource, path: path, channel: 0)
+
+        XCTAssertEqual(session.state, .connected)
+        XCTAssertEqual(session.remoteAddress.display, destination.display)
+    }
+
+    func testHandleInboundIFrameWithSSIDMismatchReturnsRR() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let destination = AX25Address(call: "N0HI", ssid: 7)
+        let mismatchSource = AX25Address(call: "N0HI", ssid: 9)
+        let path = DigiPath.from(["W0ARP-7"])
+
+        _ = connectSession(manager: manager, destination: destination, path: path)
+
+        let rrFrame = manager.handleInboundIFrame(
+            from: mismatchSource,
+            path: path,
+            channel: 0,
+            ns: 0,
+            nr: 0,
+            pf: false,
+            payload: Data("INFO".utf8)
+        )
+
+        XCTAssertNotNil(rrFrame)
+        XCTAssertEqual(rrFrame?.frameType, "s")
+        XCTAssertEqual(rrFrame?.displayInfo?.prefix(2), "RR")
+    }
+
+    func testHandleInboundRRWithSSIDMismatchAcksOutstanding() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let destination = AX25Address(call: "N0HI", ssid: 7)
+        let mismatchSource = AX25Address(call: "N0HI", ssid: 9)
+        let path = DigiPath.from(["W0ARP-7"])
+
+        let session = connectSession(manager: manager, destination: destination, path: path)
+        _ = manager.sendData(Data([0x41]), to: destination, path: path, channel: 0)
+        XCTAssertEqual(session.outstandingCount, 1)
+
+        _ = manager.handleInboundRR(from: mismatchSource, path: path, channel: 0, nr: 1, isPoll: false)
+
+        XCTAssertEqual(session.outstandingCount, 0)
+    }
+
+    func testHandleInboundREJWithSSIDMismatchRetransmits() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let destination = AX25Address(call: "N0HI", ssid: 7)
+        let mismatchSource = AX25Address(call: "N0HI", ssid: 9)
+        let path = DigiPath.from(["W0ARP-7"])
+
+        let session = connectSession(manager: manager, destination: destination, path: path)
+        _ = manager.sendData(Data([0x41]), to: destination, path: path, channel: 0)
+
+        let retransmitFrames = manager.handleInboundREJ(from: mismatchSource, path: path, channel: 0, nr: 0)
+
+        XCTAssertEqual(retransmitFrames.count, 1)
+        XCTAssertEqual(retransmitFrames.first?.sessionId, session.id)
+    }
+
+    func testHandleInboundDMWithSSIDMismatchDisconnectsSession() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let destination = AX25Address(call: "N0HI", ssid: 7)
+        let mismatchSource = AX25Address(call: "N0HI", ssid: 9)
+        let path = DigiPath.from(["W0ARP-7"])
+
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        manager.handleInboundDM(from: mismatchSource, path: path, channel: 0)
+
+        XCTAssertEqual(session.state, .disconnected)
+    }
+
+    func testDigiPathFromStripsRepeatedMarkerAndParsesSSID() {
+        let path = DigiPath.from(["W0ARP-7*", "WIDE1-1*", "DRL"])
+
+        XCTAssertEqual(path.digis.count, 3)
+        XCTAssertEqual(path.digis[0].call, "W0ARP")
+        XCTAssertEqual(path.digis[0].ssid, 7)
+        XCTAssertTrue(path.digis[0].repeated)
+        XCTAssertEqual(path.digis[1].call, "WIDE1")
+        XCTAssertEqual(path.digis[1].ssid, 1)
+        XCTAssertTrue(path.digis[1].repeated)
+        XCTAssertEqual(path.digis[2].call, "DRL")
+        XCTAssertEqual(path.digis[2].ssid, 0)
+        XCTAssertFalse(path.digis[2].repeated)
+        XCTAssertEqual(path.display, "W0ARP-7,WIDE1-1,DRL")
+    }
+
+    func testHandleInboundIFrameWhileConnectingDoesNotSendDM() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let destination = AX25Address(call: "N0HI", ssid: 7)
+        let path = DigiPath.from(["W0ARP-7*"])
+
+        _ = manager.connect(to: destination, path: path, channel: 0)
+
+        let response = manager.handleInboundIFrame(
+            from: destination,
+            path: path,
+            channel: 0,
+            ns: 0,
+            nr: 0,
+            pf: false,
+            payload: Data("INFO".utf8)
+        )
+
+        XCTAssertNil(response)
     }
 
     // MARK: - Session Event Tests

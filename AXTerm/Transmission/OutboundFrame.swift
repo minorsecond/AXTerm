@@ -32,10 +32,17 @@ struct DigiPath: Codable, Hashable, Sendable {
     /// Create a path from callsign strings (e.g., "WIDE1-1", "WIDE2-1")
     static func from(_ calls: [String]) -> DigiPath {
         let addresses = calls.compactMap { call -> AX25Address? in
-            let parts = call.split(separator: "-")
+            let trimmed = call.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+
+            let repeated = trimmed.hasSuffix("*")
+            let clean = repeated ? String(trimmed.dropLast()) : trimmed
+            guard !clean.isEmpty else { return nil }
+
+            let parts = clean.split(separator: "-")
             let callsign = String(parts[0])
             let ssid = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
-            return AX25Address(call: callsign, ssid: ssid)
+            return AX25Address(call: callsign, ssid: ssid, repeated: repeated)
         }
         return DigiPath(addresses)
     }

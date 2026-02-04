@@ -96,6 +96,12 @@ final class AX25Session: @unchecked Sendable {
         self.isInitiator = isInitiator
     }
 
+    deinit {
+        // Ensure timers are cancelled to avoid background tasks outliving the session.
+        t1TimerTask?.cancel()
+        t3TimerTask?.cancel()
+    }
+
     /// Current session state
     var state: AX25SessionState {
         stateMachine.state
@@ -178,6 +184,43 @@ final class AX25SessionManager: ObservableObject {
     /// Default session configuration
     var defaultConfig: AX25SessionConfig = AX25SessionConfig()
 
+    // MARK: - Debug Logging (Debug Builds Only)
+    private func debugTrace(_ message: String, _ data: [String: Any] = [:]) {
+#if DEBUG
+        #if DEBUG
+        if data.isEmpty {
+            print("[AX25 TRACE] \(message)")
+        } else {
+            let details = data.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+            print("[AX25 TRACE] \(message) | \(details)")
+        }
+        #endif
+#endif
+    }
+
+    private func describeFrame(_ frame: OutboundFrame) -> String {
+        var parts: [String] = []
+        parts.append("type=\(frame.frameType)")
+        parts.append("to=\(frame.destination.display)")
+        parts.append("via=\(frame.path.display.isEmpty ? "(direct)" : frame.path.display)")
+        if let ctl = frame.controlByte {
+            parts.append(String(format: "ctl=0x%02X", ctl))
+        } else {
+            parts.append("ctl=nil")
+        }
+        if let pid = frame.pid {
+            parts.append(String(format: "pid=0x%02X", pid))
+        }
+        if let ns = frame.ns {
+            parts.append("ns=\(ns)")
+        }
+        if let nr = frame.nr {
+            parts.append("nr=\(nr)")
+        }
+        parts.append("len=\(frame.payload.count)")
+        return parts.joined(separator: " ")
+    }
+
     /// Local callsign (from settings)
     var localCallsign: AX25Address = AX25Address(call: "NOCALL", ssid: 0)
 
@@ -193,7 +236,65 @@ final class AX25SessionManager: ObservableObject {
     /// Callback when frames need to be sent from timer retransmission
     var onRetransmitFrame: ((OutboundFrame) -> Void)?
 
+    // MARK: - Deep Session Debug (Debug Builds Only)
+
+    /// Emit a detailed snapshot of session state for debugging retries, timers, and window usage.
+    /// This is intentionally verbose and only compiled into DEBUG builds.
+    private func debugDumpSessionState(_ session: AX25Session, context: String) {
+#if DEBUG
+        let sm = session.stateMachine
+        let timers = session.timers
+
+        let vs = sm.sequenceState.vs
+        let vr = sm.sequenceState.vr
+        let va = sm.sequenceState.va
+        let outstanding = sm.sequenceState.outstandingCount
+
+        var fields: [String: Any] = [
+            "peer": session.remoteAddress.display,
+            "session": String(session.id.uuidString.prefix(8)),
+            "context": context,
+            "state": sm.state.rawValue,
+            "vs": vs,
+            "va": va,
+            "vr": vr,
+            "outstanding": outstanding,
+            "windowSize": sm.config.windowSize,
+            "retryCount": sm.retryCount,
+            "maxRetries": sm.config.maxRetries,
+            "rto": String(format: "%.2f", timers.rto),
+            "t3Timeout": String(format: "%.1f", timers.t3Timeout),
+            "srtt": timers.srtt != nil ? String(format: "%.2f", timers.srtt!) : "nil",
+            "rttvar": String(format: "%.2f", timers.rttvar)
+        ]
+
+        // Summarize send buffer contents for retransmit analysis
+        if !session.sendBuffer.isEmpty {
+            let nsValues = session.sendBuffer.keys.sorted()
+            fields["sendBufferSeq"] = nsValues.map { String($0) }.joined(separator: ",")
+            fields["sendBufferCount"] = nsValues.count
+        } else {
+            fields["sendBufferSeq"] = "(empty)"
+            fields["sendBufferCount"] = 0
+        }
+
+        debugTrace("session-state", fields)
+#endif
+    }
+
     // MARK: - Session Lifecycle
+
+    deinit {
+        // Cancel any outstanding timers to avoid tasks running after teardown.
+        // AX25SessionManager is @MainActor, so deinit should run on the main actor.
+        MainActor.assumeIsolated {
+            for session in sessions.values {
+                session.t1TimerTask?.cancel()
+                session.t3TimerTask?.cancel()
+            }
+            sessions.removeAll()
+        }
+    }
 
     /// Get or create a session for the given destination
     func session(
@@ -285,6 +386,50 @@ final class AX25SessionManager: ObservableObject {
         }
     }
 
+    /// Find any session for a remote address, regardless of state/path
+    private func findAnySession(
+        from source: AX25Address,
+        channel: UInt8
+    ) -> AX25Session? {
+        let sourceDisplay = source.display.uppercased()
+        return sessions.values.first { session in
+            session.remoteAddress.display.uppercased() == sourceDisplay &&
+            session.channel == channel
+        }
+    }
+
+    /// Find any session for a remote callsign, ignoring SSID.
+    /// Useful when remote responds on a different SSID than expected.
+    private func findAnySessionByCallsign(
+        from source: AX25Address,
+        channel: UInt8
+    ) -> AX25Session? {
+        let sourceCall = normalizeCallsign(source.call)
+        return sessions.values.first { session in
+            normalizeCallsign(session.remoteAddress.call) == sourceCall &&
+            session.channel == channel
+        }
+    }
+
+    /// Find any session for a remote callsign, ignoring SSID and channel.
+    /// Last-resort fallback when channel information is unreliable.
+    private func findAnySessionByCallsignIgnoringChannel(
+        from source: AX25Address
+    ) -> AX25Session? {
+        let sourceCall = normalizeCallsign(source.call)
+        return sessions.values.first { session in
+            normalizeCallsign(session.remoteAddress.call) == sourceCall
+        }
+    }
+
+    private func normalizeCallsign(_ call: String) -> String {
+        let upper = call.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        if let dashIndex = upper.firstIndex(of: "-") {
+            return String(upper[..<dashIndex])
+        }
+        return upper
+    }
+
     private func connectingSession(withPeer peer: AX25Address, channel: UInt8) -> AX25Session? {
         let peerDisplay = peer.display.uppercased()
         return sessions.values.first { session in
@@ -308,6 +453,19 @@ final class AX25SessionManager: ObservableObject {
         }
     }
 
+    /// Find a connected session for a remote callsign, ignoring SSID.
+    private func findConnectedSessionByCallsign(
+        from source: AX25Address,
+        channel: UInt8
+    ) -> AX25Session? {
+        let sourceCall = normalizeCallsign(source.call)
+        return sessions.values.first { session in
+            normalizeCallsign(session.remoteAddress.call) == sourceCall &&
+            session.channel == channel &&
+            session.state == .connected
+        }
+    }
+
     // MARK: - Connection Management
 
     /// Initiate a connection to a remote station
@@ -317,6 +475,11 @@ final class AX25SessionManager: ObservableObject {
         path: DigiPath = DigiPath(),
         channel: UInt8 = 0
     ) -> OutboundFrame? {
+        debugTrace("connect request", [
+            "dest": destination.display,
+            "path": path.display.isEmpty ? "(direct)" : path.display,
+            "channel": channel
+        ])
         if let existing = connectedSession(withPeer: destination, channel: channel) {
             logPathOverrideIfNeeded(session: existing, requestedPath: path, reason: "connect")
             TxLog.warning(.session, "Cannot connect: session already connected", [
@@ -346,12 +509,21 @@ final class AX25SessionManager: ObservableObject {
         let actions = session.stateMachine.handle(event: .connectRequest)
 
         if oldState != session.state {
+            debugTrace("state change (connect)", [
+                "peer": destination.display,
+                "from": oldState.rawValue,
+                "to": session.state.rawValue
+            ])
             onSessionStateChanged?(session, oldState, session.state)
         }
 
         session.sabmSentAt = Date()
         session.touch()
 
+        debugTrace("sending SABM", [
+            "peer": destination.display,
+            "session": String(session.id.uuidString.prefix(8))
+        ])
         return processActions(actions, for: session).first
     }
 
@@ -418,6 +590,7 @@ final class AX25SessionManager: ObservableObject {
         case .connected:
             // Can send immediately if window allows
             if session.canSendIFrame {
+                let wasIdle = session.outstandingCount == 0
                 let iFrame = buildIFrame(for: session, payload: data, pid: pid, displayInfo: displayInfo)
                 frames.append(iFrame)
 
@@ -425,6 +598,10 @@ final class AX25SessionManager: ObservableObject {
                 session.bufferFrame(iFrame, ns: session.vs - 1)  // vs was incremented
                 session.statistics.recordSent(bytes: data.count)
                 session.touch()
+
+                if wasIdle {
+                    startT1Timer(for: session)
+                }
             } else {
                 TxLog.warning(.session, "Window full, cannot send", [
                     "outstanding": session.outstandingCount,
@@ -484,17 +661,28 @@ final class AX25SessionManager: ObservableObject {
         path: DigiPath,
         channel: UInt8
     ) -> OutboundFrame? {
-        print("[AX25SessionManager] handleInboundSABM called: from=\(source.display), to=\(destination.display), localCallsign=\(localCallsign.display)")
+        debugTrace("SABM received", [
+            "from": source.display,
+            "to": destination.display,
+            "local": localCallsign.display,
+            "path": path.display.isEmpty ? "(empty)" : path.display,
+            "channel": channel
+        ])
 
         // Create session if it doesn't exist (we're the responder)
         let key = SessionKey(destination: source, path: path, channel: channel)
 
         let session: AX25Session
         if let existing = sessions[key] {
-            print("[AX25SessionManager] Found existing session for \(source.display), state=\(existing.state.rawValue)")
+            debugTrace("SABM existing session", [
+                "peer": source.display,
+                "state": existing.state.rawValue
+            ])
             session = existing
         } else {
-            print("[AX25SessionManager] Creating new session for \(source.display)")
+            debugTrace("SABM creating session", [
+                "peer": source.display
+            ])
             session = AX25Session(
                 localAddress: destination,  // We're the destination of the SABM
                 remoteAddress: source,
@@ -507,9 +695,13 @@ final class AX25SessionManager: ObservableObject {
         }
 
         let oldState = session.state
-        print("[AX25SessionManager] Before handle event: state=\(oldState.rawValue)")
         let actions = session.stateMachine.handle(event: .receivedSABM)
-        print("[AX25SessionManager] After handle event: state=\(session.state.rawValue), actions=\(actions)")
+        debugTrace("SABM state transition", [
+            "peer": source.display,
+            "from": oldState.rawValue,
+            "to": session.state.rawValue,
+            "actions": actions.map { String(describing: $0) }.joined(separator: ",")
+        ])
 
         if oldState != session.state {
             onSessionStateChanged?(session, oldState, session.state)
@@ -534,6 +726,11 @@ final class AX25SessionManager: ObservableObject {
         path: DigiPath,
         channel: UInt8
     ) {
+        debugTrace("UA received", [
+            "from": source.display,
+            "path": path.display.isEmpty ? "(empty)" : path.display,
+            "channel": channel
+        ])
         // Try to find session with exact path match first
         var session = existingSession(for: source, path: path, channel: channel)
 
@@ -551,9 +748,76 @@ final class AX25SessionManager: ObservableObject {
             }
         }
 
+        // If still not found, fall back to any session for this peer (late UA or path mismatch)
+        if session == nil {
+            session = findAnySession(from: source, channel: channel)
+            if session != nil {
+                TxLog.debug(.session, "Found session by peer only (late UA)", [
+                    "from": source.display,
+                    "state": session?.state.rawValue ?? "unknown",
+                    "expectedPath": session?.path.display ?? "(none)",
+                    "receivedPath": path.display.isEmpty ? "(empty)" : path.display
+                ])
+            }
+        }
+
+        // Last resort: match by callsign only (SSID mismatch)
+        if session == nil {
+            session = findAnySessionByCallsign(from: source, channel: channel)
+            if session != nil {
+                TxLog.debug(.session, "Found session by callsign only (SSID mismatch)", [
+                    "from": source.display,
+                    "state": session?.state.rawValue ?? "unknown",
+                    "expectedPeer": session?.remoteAddress.display ?? "(none)"
+                ])
+            }
+        }
+
+        // Final fallback: match by callsign even if channel differs
+        if session == nil {
+            session = findAnySessionByCallsignIgnoringChannel(from: source)
+            if session != nil {
+                TxLog.debug(.session, "Found session by callsign (ignoring channel)", [
+                    "from": source.display,
+                    "state": session?.state.rawValue ?? "unknown",
+                    "expectedPeer": session?.remoteAddress.display ?? "(none)",
+                    "expectedChannel": session?.channel ?? -1
+                ])
+            }
+        }
+
         guard let session = session else {
+            debugTrace("UA for unknown session", [
+                "from": source.display
+            ])
             TxLog.warning(.session, "UA received for unknown session", ["from": source.display])
             return
+        }
+
+        // If we timed out and fell back to disconnected, allow a late UA to complete the connect.
+        if session.state == .disconnected || session.state == .error {
+            var allowLateUA = false
+            if let sabmSent = session.sabmSentAt {
+                let elapsed = Date().timeIntervalSince(sabmSent)
+                if elapsed <= max(session.timers.rto * 2.0, 5.0) {
+                    allowLateUA = true
+                    TxLog.debug(.session, "Treating late UA as connect completion", [
+                        "peer": source.display,
+                        "elapsed": String(format: "%.2fs", elapsed)
+                    ])
+                    debugTrace("late UA accepted", [
+                        "peer": source.display,
+                        "elapsed": String(format: "%.2fs", elapsed)
+                    ])
+                }
+            }
+            if !allowLateUA {
+                debugTrace("UA ignored (session not connecting)", [
+                    "peer": source.display,
+                    "state": session.state.rawValue
+                ])
+                return
+            }
         }
 
         let oldState = session.state
@@ -573,6 +837,11 @@ final class AX25SessionManager: ObservableObject {
         let actions = session.stateMachine.handle(event: .receivedUA)
 
         if oldState != session.state {
+            debugTrace("state change (UA)", [
+                "peer": source.display,
+                "from": oldState.rawValue,
+                "to": session.state.rawValue
+            ])
             onSessionStateChanged?(session, oldState, session.state)
         }
 
@@ -604,6 +873,11 @@ final class AX25SessionManager: ObservableObject {
         path: DigiPath,
         channel: UInt8
     ) {
+        debugTrace("DM received", [
+            "from": source.display,
+            "path": path.display.isEmpty ? "(empty)" : path.display,
+            "channel": channel
+        ])
         // Try to find session with exact path match first
         var session = existingSession(for: source, path: path, channel: channel)
 
@@ -611,8 +885,17 @@ final class AX25SessionManager: ObservableObject {
         if session == nil {
             session = findSessionExpectingUA(from: source, channel: channel)
         }
+        if session == nil {
+            session = findAnySession(from: source, channel: channel)
+        }
+        if session == nil {
+            session = findAnySessionByCallsign(from: source, channel: channel)
+        }
 
         guard let session = session else {
+            debugTrace("DM for unknown session", [
+                "from": source.display
+            ])
             TxLog.debug(.session, "DM received for unknown session", ["from": source.display])
             return
         }
@@ -621,6 +904,11 @@ final class AX25SessionManager: ObservableObject {
         let actions = session.stateMachine.handle(event: .receivedDM)
 
         if oldState != session.state {
+            debugTrace("state change (DM)", [
+                "peer": source.display,
+                "from": oldState.rawValue,
+                "to": session.state.rawValue
+            ])
             onSessionStateChanged?(session, oldState, session.state)
         }
 
@@ -634,7 +922,15 @@ final class AX25SessionManager: ObservableObject {
         path: DigiPath,
         channel: UInt8
     ) -> OutboundFrame? {
+        debugTrace("DISC received", [
+            "from": source.display,
+            "path": path.display.isEmpty ? "(empty)" : path.display,
+            "channel": channel
+        ])
         guard let session = existingSession(for: source, path: path, channel: channel) else {
+            debugTrace("DISC with no session -> DM", [
+                "from": source.display
+            ])
             // No session - respond with DM
             return AX25FrameBuilder.buildDM(
                 from: localCallsign,
@@ -647,6 +943,11 @@ final class AX25SessionManager: ObservableObject {
         let actions = session.stateMachine.handle(event: .receivedDISC)
 
         if oldState != session.state {
+            debugTrace("state change (DISC)", [
+                "peer": source.display,
+                "from": oldState.rawValue,
+                "to": session.state.rawValue
+            ])
             onSessionStateChanged?(session, oldState, session.state)
         }
 
@@ -679,24 +980,72 @@ final class AX25SessionManager: ObservableObject {
         pf: Bool = false,
         payload: Data
     ) -> OutboundFrame? {
+        debugTrace("I-frame received", [
+            "from": source.display,
+            "path": path.display.isEmpty ? "(empty)" : path.display,
+            "ns": ns,
+            "nr": nr,
+            "pf": pf ? 1 : 0,
+            "len": payload.count
+        ])
         // Try exact path match first, then fall back to address-only lookup
         var session = existingSession(for: source, path: path, channel: channel)
         if session == nil {
             session = findConnectedSession(from: source, channel: channel)
         }
-
-        guard let session = session else {
-            // No session - respond with DM
-            return AX25FrameBuilder.buildDM(
-                from: localCallsign,
-                to: source,
-                via: path
-            )
+        if session == nil {
+            session = findConnectedSessionByCallsign(from: source, channel: channel)
         }
 
-        guard session.state == .connected else {
+        if session == nil {
+            // Fall back to any session for this peer, regardless of state.
+            // This avoids tearing down valid links when path/state lookup fails.
+            if let anySession = findAnySession(from: source, channel: channel) {
+                TxLog.warning(.session, "I-frame received for non-connected session", [
+                    "peer": source.display,
+                    "state": anySession.state.rawValue
+                ])
+                return nil
+            }
+            if let anySession = findAnySessionByCallsign(from: source, channel: channel) {
+                TxLog.warning(.session, "I-frame received for non-connected session (SSID mismatch)", [
+                    "peer": source.display,
+                    "state": anySession.state.rawValue,
+                    "expectedPeer": anySession.remoteAddress.display
+                ])
+                return nil
+            }
+            if let anySession = findAnySessionByCallsignIgnoringChannel(from: source) {
+                TxLog.warning(.session, "I-frame received for non-connected session (channel mismatch)", [
+                    "peer": source.display,
+                    "state": anySession.state.rawValue,
+                    "expectedPeer": anySession.remoteAddress.display,
+                    "expectedChannel": anySession.channel
+                ])
+                return nil
+            }
+
+            // Robust behavior per AX.25 guidance: if we receive an I-frame that we
+            // can't associate with any session, we **ignore** it rather than sending
+            // DM. Sending DM here can erroneously tear down a valid remote session,
+            // especially when duplicate decodes or path mismatches occur via digipeaters.
+            TxLog.warning(.session, "I-frame received with no matching session; ignoring", [
+                "from": source.display,
+                "path": path.display.isEmpty ? "(empty)" : path.display,
+                "ns": ns,
+                "nr": nr,
+                "pf": pf ? 1 : 0
+            ])
+            debugTrace("I-frame with no session (ignored, no DM)", [
+                "from": source.display,
+                "path": path.display.isEmpty ? "(empty)" : path.display
+            ])
+            return nil
+        }
+
+        guard let session = session, session.state == .connected else {
             TxLog.warning(.session, "I-frame received but not connected", [
-                "state": session.state.rawValue
+                "state": session?.state.rawValue ?? "unknown"
             ])
             return nil
         }
@@ -705,6 +1054,11 @@ final class AX25SessionManager: ObservableObject {
         let actions = session.stateMachine.handle(event: .receivedIFrame(ns: ns, nr: nr, pf: pf, payload: payload))
 
         if oldState != session.state {
+            debugTrace("state change (I-frame)", [
+                "peer": source.display,
+                "from": oldState.rawValue,
+                "to": session.state.rawValue
+            ])
             onSessionStateChanged?(session, oldState, session.state)
         }
 
@@ -712,6 +1066,9 @@ final class AX25SessionManager: ObservableObject {
         session.acknowledgeUpTo(nr: nr)
         session.statistics.recordReceived(bytes: payload.count)
         session.touch()
+
+        // Deep debug snapshot whenever we successfully process an inbound I-frame.
+        debugDumpSessionState(session, context: "inbound-I")
 
         return processActions(actions, for: session).first
     }
@@ -731,13 +1088,25 @@ final class AX25SessionManager: ObservableObject {
         nr: Int,
         isPoll: Bool = false
     ) -> OutboundFrame? {
+        debugTrace("RR received", [
+            "from": source.display,
+            "path": path.display.isEmpty ? "(empty)" : path.display,
+            "nr": nr,
+            "pf": isPoll ? 1 : 0
+        ])
         // Try exact path match first, then fall back to address-only lookup
         var session = existingSession(for: source, path: path, channel: channel)
         if session == nil {
             session = findConnectedSession(from: source, channel: channel)
         }
+        if session == nil {
+            session = findConnectedSessionByCallsign(from: source, channel: channel)
+        }
 
         guard let session = session else {
+            debugTrace("RR for unknown session", [
+                "from": source.display
+            ])
             return nil
         }
 
@@ -745,6 +1114,11 @@ final class AX25SessionManager: ObservableObject {
         let actions = session.stateMachine.handle(event: .receivedRR(nr: nr))
 
         if oldState != session.state {
+            debugTrace("state change (RR)", [
+                "peer": source.display,
+                "from": oldState.rawValue,
+                "to": session.state.rawValue
+            ])
             onSessionStateChanged?(session, oldState, session.state)
         }
 
@@ -752,12 +1126,18 @@ final class AX25SessionManager: ObservableObject {
         session.acknowledgeUpTo(nr: nr)
         session.touch()
 
+        // Deep debug snapshot whenever we advance ACK state from RR.
+        debugDumpSessionState(session, context: isPoll ? "inbound-RR-poll" : "inbound-RR")
+
         _ = processActions(actions, for: session)
 
         // If this was a poll (P=1), respond with RR F=1
         if isPoll && session.state == .connected {
             let currentVR = session.vr
-            print("[AX25SessionManager] Responding to RR poll from \(source.display) with N(R)=\(currentVR)")
+            debugTrace("RR poll -> response", [
+                "peer": source.display,
+                "nr": currentVR
+            ])
             TxLog.debug(.session, "Responding to RR poll", [
                 "from": source.display,
                 "nr": currentVR
@@ -781,7 +1161,30 @@ final class AX25SessionManager: ObservableObject {
         channel: UInt8,
         nr: Int
     ) -> [OutboundFrame] {
-        guard let session = existingSession(for: source, path: path, channel: channel) else {
+        debugTrace("REJ received", [
+            "from": source.display,
+            "path": path.display.isEmpty ? "(empty)" : path.display,
+            "nr": nr,
+            "channel": channel
+        ])
+        var session = existingSession(for: source, path: path, channel: channel)
+        if session == nil {
+            session = findConnectedSession(from: source, channel: channel)
+            if let connected = session {
+                logPathOverrideIfNeeded(session: connected, requestedPath: path, reason: "rej")
+            }
+        }
+        if session == nil {
+            session = findConnectedSessionByCallsign(from: source, channel: channel)
+            if let connected = session {
+                logPathOverrideIfNeeded(session: connected, requestedPath: path, reason: "rej-ssid")
+            }
+        }
+
+        guard let session = session else {
+            debugTrace("REJ for unknown session", [
+                "from": source.display
+            ])
             return []
         }
 
@@ -789,6 +1192,11 @@ final class AX25SessionManager: ObservableObject {
         let actions = session.stateMachine.handle(event: .receivedREJ(nr: nr))
 
         if oldState != session.state {
+            debugTrace("state change (REJ)", [
+                "peer": source.display,
+                "from": oldState.rawValue,
+                "to": session.state.rawValue
+            ])
             onSessionStateChanged?(session, oldState, session.state)
         }
 
@@ -799,6 +1207,9 @@ final class AX25SessionManager: ObservableObject {
         }
 
         session.touch()
+
+        // Deep debug snapshot when peer explicitly requests retransmit.
+        debugDumpSessionState(session, context: "inbound-REJ")
 
         // Process actions first, then return retransmit frames
         var frames = processActions(actions, for: session)
@@ -814,13 +1225,33 @@ final class AX25SessionManager: ObservableObject {
         let actions = session.stateMachine.handle(event: .t1Timeout)
 
         if oldState != session.state {
+            debugTrace("state change (T1 timeout)", [
+                "peer": session.remoteAddress.display,
+                "from": oldState.rawValue,
+                "to": session.state.rawValue
+            ])
             onSessionStateChanged?(session, oldState, session.state)
         }
 
         session.timers.backoff()  // Exponential backoff
         session.touch()
 
-        return processActions(actions, for: session)
+        // Deep debug snapshot after every T1 timeout, to understand why we're retransmitting
+        // or giving up. This is the primary place to diagnose "AXTerm is giving up too early".
+        debugDumpSessionState(session, context: "T1-timeout")
+
+        var frames = processActions(actions, for: session)
+
+        if session.state == .connected, session.outstandingCount > 0 {
+            let retransmitFrames = session.framesToRetransmit(from: session.va)
+            for frame in retransmitFrames {
+                debugTrace("TX I (retransmit)", ["frame": describeFrame(frame)])
+                session.statistics.recordRetransmit()
+                frames.append(frame)
+            }
+        }
+
+        return frames
     }
 
     /// Handle T3 (idle) timeout for a session
@@ -966,6 +1397,7 @@ final class AX25SessionManager: ObservableObject {
             }
 
             let iFrame = buildIFrame(for: session, payload: item.data, pid: item.pid, displayInfo: item.displayInfo)
+            debugTrace("TX I (drain queue)", ["frame": describeFrame(iFrame)])
 
             // Buffer for potential retransmission
             session.bufferFrame(iFrame, ns: session.vs - 1)
@@ -1022,6 +1454,7 @@ final class AX25SessionManager: ObservableObject {
                     via: session.path,
                     extended: session.stateMachine.config.extended
                 )
+                debugTrace("TX SABM", ["frame": describeFrame(frame)])
                 frames.append(frame)
                 onSendFrame?(frame)
 
@@ -1031,6 +1464,7 @@ final class AX25SessionManager: ObservableObject {
                     to: session.remoteAddress,
                     via: session.path
                 )
+                debugTrace("TX UA", ["frame": describeFrame(frame)])
                 frames.append(frame)
                 onSendFrame?(frame)
 
@@ -1040,6 +1474,7 @@ final class AX25SessionManager: ObservableObject {
                     to: session.remoteAddress,
                     via: session.path
                 )
+                debugTrace("TX DM", ["frame": describeFrame(frame)])
                 frames.append(frame)
                 onSendFrame?(frame)
 
@@ -1049,6 +1484,7 @@ final class AX25SessionManager: ObservableObject {
                     to: session.remoteAddress,
                     via: session.path
                 )
+                debugTrace("TX DISC", ["frame": describeFrame(frame)])
                 frames.append(frame)
                 onSendFrame?(frame)
 
@@ -1060,6 +1496,7 @@ final class AX25SessionManager: ObservableObject {
                     nr: nr,
                     pf: pf
                 )
+                debugTrace("TX RR", ["frame": describeFrame(frame)])
                 frames.append(frame)
                 onSendFrame?(frame)
 
@@ -1071,6 +1508,7 @@ final class AX25SessionManager: ObservableObject {
                     nr: nr,
                     pf: pf
                 )
+                debugTrace("TX RNR", ["frame": describeFrame(frame)])
                 frames.append(frame)
                 onSendFrame?(frame)
 
@@ -1082,6 +1520,7 @@ final class AX25SessionManager: ObservableObject {
                     nr: nr,
                     pf: pf
                 )
+                debugTrace("TX REJ", ["frame": describeFrame(frame)])
                 frames.append(frame)
                 onSendFrame?(frame)
 
@@ -1095,6 +1534,7 @@ final class AX25SessionManager: ObservableObject {
                     payload: payload,
                     sessionId: session.id
                 )
+                debugTrace("TX I", ["frame": describeFrame(frame)])
                 frames.append(frame)
                 onSendFrame?(frame)
 
