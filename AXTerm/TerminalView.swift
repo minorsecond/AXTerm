@@ -1093,7 +1093,7 @@ struct TerminalView: View {
                 data.append(0x0D)  // CR
                 let frames = txViewModel.sendConnected(
                     payload: data,
-                    displayInfo: String(text.prefix(50))
+                    displayInfo: text
                 )
                 for frame in frames {
                     client.send(frame: frame) { result in
@@ -1137,7 +1137,7 @@ struct TerminalView: View {
         // Get frames from session manager (may include SABM if not connected)
         let frames = txViewModel.sendConnected(
             payload: payload,
-            displayInfo: String(text.prefix(50))
+            displayInfo: text
         )
 
         // Send all frames

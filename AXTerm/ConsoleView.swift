@@ -456,11 +456,12 @@ struct ConsoleLineView: View {
                 DuplicateCountBadge(count: duplicateCount)
             }
 
-            // Message text
+            // Message text (wraps to container width; no chopping)
             Text(line.text)
                 .foregroundStyle(messageColor)
                 .textSelection(.enabled)
                 .lineLimit(nil)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.system(size: 12, design: .monospaced))
         .padding(.vertical, 2)

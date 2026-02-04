@@ -94,6 +94,9 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
     /// Human-readable description for UI display
     let displayInfo: String?
 
+    /// True when payload is user terminal data (chat); console shows as DATA (purple) not SYS
+    let isUserPayload: Bool
+
     /// Explicit control byte (for U-frames, S-frames, I-frames)
     /// If nil, defaults to 0x03 (UI frame) for backwards compatibility
     let controlByte: UInt8?
@@ -120,7 +123,8 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
         controlByte: UInt8? = nil,
         ns: Int? = nil,
         nr: Int? = nil,
-        displayInfo: String? = nil
+        displayInfo: String? = nil,
+        isUserPayload: Bool = false
     ) {
         self.id = id
         self.channel = channel
@@ -138,6 +142,55 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
         self.ns = ns
         self.nr = nr
         self.displayInfo = displayInfo
+        self.isUserPayload = isUserPayload
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, channel, destination, source, path, createdAt, payload, priority
+        case frameType, pid, sessionId, axdpMessageId, displayInfo, isUserPayload
+        case controlByte, ns, nr
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        channel = try c.decode(UInt8.self, forKey: .channel)
+        destination = try c.decode(AX25Address.self, forKey: .destination)
+        source = try c.decode(AX25Address.self, forKey: .source)
+        path = try c.decode(DigiPath.self, forKey: .path)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        payload = try c.decode(Data.self, forKey: .payload)
+        priority = try c.decode(TxPriority.self, forKey: .priority)
+        frameType = try c.decode(String.self, forKey: .frameType)
+        pid = try c.decodeIfPresent(UInt8.self, forKey: .pid)
+        sessionId = try c.decodeIfPresent(UUID.self, forKey: .sessionId)
+        axdpMessageId = try c.decodeIfPresent(UInt32.self, forKey: .axdpMessageId)
+        displayInfo = try c.decodeIfPresent(String.self, forKey: .displayInfo)
+        isUserPayload = try c.decodeIfPresent(Bool.self, forKey: .isUserPayload) ?? false
+        controlByte = try c.decodeIfPresent(UInt8.self, forKey: .controlByte)
+        ns = try c.decodeIfPresent(Int.self, forKey: .ns)
+        nr = try c.decodeIfPresent(Int.self, forKey: .nr)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(channel, forKey: .channel)
+        try c.encode(destination, forKey: .destination)
+        try c.encode(source, forKey: .source)
+        try c.encode(path, forKey: .path)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(payload, forKey: .payload)
+        try c.encode(priority, forKey: .priority)
+        try c.encode(frameType, forKey: .frameType)
+        try c.encodeIfPresent(pid, forKey: .pid)
+        try c.encodeIfPresent(sessionId, forKey: .sessionId)
+        try c.encodeIfPresent(axdpMessageId, forKey: .axdpMessageId)
+        try c.encodeIfPresent(displayInfo, forKey: .displayInfo)
+        try c.encode(isUserPayload, forKey: .isUserPayload)
+        try c.encodeIfPresent(controlByte, forKey: .controlByte)
+        try c.encodeIfPresent(ns, forKey: .ns)
+        try c.encodeIfPresent(nr, forKey: .nr)
     }
 
     /// Encode as raw AX.25 frame bytes (for KISS transport)

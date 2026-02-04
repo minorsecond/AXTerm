@@ -360,8 +360,19 @@ final class PacketEngine: ObservableObject {
         TxLog.kissSend(frameId: frame.id, size: kissData.count)
         TxLog.hexDump(.kiss, "KISS frame", data: kissData)
 
-        // Log the transmission
-        addSystemLine("TX: \(frame.source.display) → \(frame.destination.display): \(frame.displayInfo ?? "")", category: .transmission)
+        // Log the transmission: user payload as DATA (purple), protocol as SYS
+        let showAsData: Bool
+        if let text = frame.displayInfo, !text.isEmpty {
+            showAsData = frame.isUserPayload || (frame.frameType.lowercased() == "i" && !isProtocolDisplayInfo(text))
+            if showAsData {
+                let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: text)
+                appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
+            } else {
+                addSystemLine("TX: \(frame.source.display) → \(frame.destination.display): \(text)", category: .transmission)
+            }
+        } else {
+            addSystemLine("TX: \(frame.source.display) → \(frame.destination.display): \(frame.displayInfo ?? "")", category: .transmission)
+        }
         eventLogger?.log(
             level: .info,
             category: .transmission,
@@ -633,6 +644,17 @@ final class PacketEngine: ObservableObject {
         recentConsoleSignatures = recentConsoleSignatures.filter { _, value in
             value.timestamp > cutoff
         }
+    }
+
+    /// True if displayInfo is a protocol label (AXDP PING, SABM, etc.), not user chat
+    private func isProtocolDisplayInfo(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { return true }
+        if t.hasPrefix("AXDP ") { return true }
+        if t == "SABM" || t == "SABME" || t == "UA" || t == "DM" || t == "DISC" { return true }
+        if t.hasPrefix("RR(") || t.hasPrefix("RNR(") || t.hasPrefix("REJ(") { return true }
+        if t.hasPrefix("I(") { return true }
+        return false
     }
 
     /// Compute content signature for duplicate detection

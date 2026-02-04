@@ -160,7 +160,8 @@ struct TerminalTxViewModel {
             frameType: frameType,
             pid: 0xF0,
             controlByte: controlByte,
-            displayInfo: String(composeText.prefix(50))
+            displayInfo: composeText,
+            isUserPayload: true
         )
     }
 
