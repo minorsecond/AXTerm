@@ -326,10 +326,23 @@ struct BulkTransferRow: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
 
-                detailRow("Data Rate", transfer.throughputDisplay, help: "Payload bytes divided by data duration.")
+                let useReceiverDuration = transfer.preferredRatesUseReceiverTiming
+                let dataRateBps = transfer.preferredDataRateBytesPerSecond
+                let dataRateDisplay = formatBitRate(dataRateBps * 8)
+                let dataRateHelp = useReceiverDuration
+                    ? "Payload bytes divided by receiver-reported data duration."
+                    : "Payload bytes divided by data duration."
+                detailRow("Data Rate", dataRateDisplay, help: dataRateHelp)
                 if transfer.compressionUsed {
-                    detailRow("Air Rate", transfer.airThroughputDisplay, help: "Over-the-air bytes (including framing/compression) divided by data duration.")
-                    detailRow("Efficiency", String(format: "%.0f%%", transfer.bandwidthEfficiency * 100), help: "Data Rate divided by Air Rate.")
+                    let airRateBps = transfer.preferredAirRateBytesPerSecond
+                    let airRateDisplay = formatBitRate(airRateBps * 8)
+                    let airRateHelp = useReceiverDuration
+                        ? "Over-the-air bytes (including framing/compression) divided by receiver-reported data duration."
+                        : "Over-the-air bytes (including framing/compression) divided by data duration."
+                    detailRow("Air Rate", airRateDisplay, help: airRateHelp)
+
+                    let efficiency = transfer.preferredBandwidthEfficiency
+                    detailRow("Efficiency", String(format: "%.0f%%", efficiency * 100), help: "Data Rate divided by Air Rate.")
                 }
 
                 if transfer.direction == .outbound, let remote = transfer.remoteTransferMetrics {

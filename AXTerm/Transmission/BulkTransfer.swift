@@ -573,6 +573,40 @@ struct BulkTransfer: Identifiable, Sendable {
         formatBitRate(airThroughputBytesPerSecond * 8)
     }
 
+    /// Preferred data rate for display (uses receiver-reported duration when available)
+    var preferredDataRateBytesPerSecond: Double {
+        guard let receiverDuration = receiverReportedDataDurationSeconds, receiverDuration > 0 else {
+            return throughputBytesPerSecond
+        }
+        return Double(bytesSent) / receiverDuration
+    }
+
+    /// Preferred air rate for display (uses receiver-reported duration when available)
+    var preferredAirRateBytesPerSecond: Double {
+        guard let receiverDuration = receiverReportedDataDurationSeconds, receiverDuration > 0 else {
+            return airThroughputBytesPerSecond
+        }
+        return Double(bytesTransmitted) / receiverDuration
+    }
+
+    /// Preferred efficiency for display (data rate divided by air rate)
+    var preferredBandwidthEfficiency: Double {
+        let airRate = preferredAirRateBytesPerSecond
+        guard airRate > 0 else { return bandwidthEfficiency }
+        return preferredDataRateBytesPerSecond / airRate
+    }
+
+    /// Whether the preferred rates use receiver-reported timing
+    var preferredRatesUseReceiverTiming: Bool {
+        guard receiverReportedDataDurationSeconds != nil else { return false }
+        return direction == .outbound
+    }
+
+    private var receiverReportedDataDurationSeconds: TimeInterval? {
+        guard direction == .outbound else { return nil }
+        return remoteTransferMetrics?.dataDurationSeconds
+    }
+
     /// Format bit rate for human readable display
     private func formatBitRate(_ bitsPerSecond: Double) -> String {
         if bitsPerSecond < 1000 {
