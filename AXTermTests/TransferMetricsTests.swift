@@ -98,6 +98,76 @@ final class TransferMetricsTests: XCTestCase {
         XCTAssertEqual(airThroughput, 1552, accuracy: 50, "Air throughput should be ~1552 B/s")
     }
 
+    func testPreferredRatesUseReceiverTimingForOutboundTransfers() {
+        // Given: An outbound transfer with receiver-reported timing
+        var transfer = BulkTransfer(
+            id: UUID(),
+            fileName: "test.csv",
+            fileSize: 13950,
+            destination: "TEST-2",
+            chunkSize: 128,
+            direction: .outbound
+        )
+        transfer.setTransmissionSize(2639)
+        transfer.bytesSent = 2639
+        transfer.bytesTransmitted = 2639
+        let localStart = Date(timeIntervalSinceReferenceDate: 1000)
+        let localEnd = localStart.addingTimeInterval(2.0) // Local timing says 2.0s
+        transfer.startedAt = localStart
+        transfer.dataPhaseStartedAt = localStart
+        transfer.dataPhaseCompletedAt = localEnd
+        transfer.remoteTransferMetrics = AXDP.AXDPTransferMetrics(
+            dataDurationMs: 1250,
+            processingDurationMs: 3,
+            bytesReceived: 2639,
+            decompressedBytes: 13950
+        )
+
+        // When: We compute preferred rates
+        let preferredDataRate = transfer.preferredDataRateBytesPerSecond
+        let preferredAirRate = transfer.preferredAirRateBytesPerSecond
+
+        // Then: Preferred rates should use receiver timing (2639 / 1.25s ~= 2111 B/s)
+        XCTAssertEqual(preferredDataRate, 2111, accuracy: 50, "Preferred data rate should use receiver timing")
+        XCTAssertEqual(preferredAirRate, 2111, accuracy: 50, "Preferred air rate should use receiver timing")
+        XCTAssertTrue(transfer.preferredRatesUseReceiverTiming, "Outbound preferred rates should use receiver timing")
+    }
+
+    func testPreferredRatesIgnoreReceiverTimingForInboundTransfers() {
+        // Given: An inbound transfer with receiver timing present (should be ignored)
+        var transfer = BulkTransfer(
+            id: UUID(),
+            fileName: "test.csv",
+            fileSize: 13950,
+            destination: "TEST-1",
+            chunkSize: 128,
+            direction: .inbound
+        )
+        transfer.setTransmissionSize(2639)
+        transfer.bytesSent = 2639
+        transfer.bytesTransmitted = 2639
+        let localStart = Date(timeIntervalSinceReferenceDate: 2000)
+        let localEnd = localStart.addingTimeInterval(1.7)
+        transfer.startedAt = localStart
+        transfer.dataPhaseStartedAt = localStart
+        transfer.dataPhaseCompletedAt = localEnd
+        transfer.remoteTransferMetrics = AXDP.AXDPTransferMetrics(
+            dataDurationMs: 1250,
+            processingDurationMs: 3,
+            bytesReceived: 2639,
+            decompressedBytes: 13950
+        )
+
+        // When: We compute preferred rates
+        let preferredDataRate = transfer.preferredDataRateBytesPerSecond
+        let preferredAirRate = transfer.preferredAirRateBytesPerSecond
+
+        // Then: Preferred rates should fall back to local timing (~1552 B/s)
+        XCTAssertEqual(preferredDataRate, 1552, accuracy: 50, "Inbound preferred data rate should use local timing")
+        XCTAssertEqual(preferredAirRate, 1552, accuracy: 50, "Inbound preferred air rate should use local timing")
+        XCTAssertFalse(transfer.preferredRatesUseReceiverTiming, "Inbound preferred rates should not use receiver timing")
+    }
+
     // MARK: - InboundTransferState Tests
 
     func testInboundStateDoesNotCountDuplicateChunks() {
