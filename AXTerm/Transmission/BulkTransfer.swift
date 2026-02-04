@@ -642,6 +642,16 @@ struct BulkTransfer: Identifiable, Sendable {
     mutating func markChunkSent(_ chunk: Int) {
         sentChunks.insert(chunk)
         retryChunks.remove(chunk)
+        
+        // Update bytesSent for progress display - include both sent and completed chunks
+        // This ensures the sender's progress bar moves as chunks are sent, not just when ACKed
+        let targetSize = transmissionSize > 0 ? transmissionSize : fileSize
+        let allProcessedChunks = sentChunks.union(completedChunks_)
+        bytesSent = allProcessedChunks.reduce(0) { total, c in
+            let start = c * chunkSize
+            let end = min(start + chunkSize, targetSize)
+            return total + (end - start)
+        }
     }
 
     /// Mark a chunk as completed (acked)
@@ -650,9 +660,11 @@ struct BulkTransfer: Identifiable, Sendable {
         sentChunks.remove(chunk)
         retryChunks.remove(chunk)
 
-        // Update bytesSent based on transmission size (compressed or original)
+        // Update bytesSent - include both sent and completed chunks for progress display
+        // This ensures progress remains accurate as chunks transition from sent to completed
         let targetSize = transmissionSize > 0 ? transmissionSize : fileSize
-        bytesSent = completedChunks_.reduce(0) { total, c in
+        let allProcessedChunks = sentChunks.union(completedChunks_)
+        bytesSent = allProcessedChunks.reduce(0) { total, c in
             let start = c * chunkSize
             let end = min(start + chunkSize, targetSize)
             return total + (end - start)
@@ -664,6 +676,16 @@ struct BulkTransfer: Identifiable, Sendable {
         sentChunks.remove(chunk)
         if !completedChunks_.contains(chunk) {
             retryChunks.insert(chunk)
+        }
+        
+        // Recalculate bytesSent since this chunk is no longer "sent"
+        // This ensures progress reflects only chunks that are actually sent (not in retry)
+        let targetSize = transmissionSize > 0 ? transmissionSize : fileSize
+        let allProcessedChunks = sentChunks.union(completedChunks_)
+        bytesSent = allProcessedChunks.reduce(0) { total, c in
+            let start = c * chunkSize
+            let end = min(start + chunkSize, targetSize)
+            return total + (end - start)
         }
     }
 

@@ -1025,6 +1025,43 @@ struct TerminalView: View {
         // Build payload
         let text = txViewModel.viewModel.composeText
         let useAXDP = txViewModel.viewModel.useAXDP
+        
+        // If AXDP is requested, verify capability is confirmed
+        if useAXDP {
+            let capabilityStatus = sessionCoordinator.capabilityStatus(for: txViewModel.viewModel.destinationCall)
+            if capabilityStatus != .confirmed {
+                TxLog.warning(.axdp, "Cannot send AXDP message - capability not confirmed", [
+                    "destination": txViewModel.viewModel.destinationCall,
+                    "status": String(describing: capabilityStatus)
+                ])
+                // Fall back to plain text
+                var data = Data(text.utf8)
+                data.append(0x0D)  // CR
+                let frames = txViewModel.sendConnected(
+                    payload: data,
+                    displayInfo: String(text.prefix(50))
+                )
+                for frame in frames {
+                    client.send(frame: frame) { result in
+                        Task { @MainActor in
+                            switch result {
+                            case .success:
+                                TxLog.outbound(.ax25, "Frame sent (fallback to plain text)", [
+                                    "type": frame.frameType,
+                                    "dest": frame.destination.display
+                                ])
+                            case .failure(let error):
+                                TxLog.error(.ax25, "Frame send failed", error: error)
+                            }
+                        }
+                    }
+                }
+                if !frames.isEmpty {
+                    txViewModel.clearCompose()
+                }
+                return
+            }
+        }
 
         let payload: Data
         if useAXDP {

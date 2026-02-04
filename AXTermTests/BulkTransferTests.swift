@@ -59,6 +59,89 @@ final class BulkTransferTests: XCTestCase {
         XCTAssertEqual(transfer.progress, 1.0, accuracy: 0.01)
     }
 
+    /// Regression test: Progress bar should update when chunks are sent, not just when ACKed
+    /// This ensures the sender's progress bar moves smoothly as chunks are transmitted
+    func testTransferProgressUpdatesOnChunkSent() {
+        var transfer = BulkTransfer(
+            id: UUID(),
+            fileName: "test.txt",
+            fileSize: 256,
+            destination: "DEST",
+            chunkSize: 128,
+            direction: .outbound
+        )
+
+        transfer.status = .sending
+        XCTAssertEqual(transfer.totalChunks, 2)
+
+        // Initially 0%
+        XCTAssertEqual(transfer.progress, 0.0, accuracy: 0.01)
+        XCTAssertEqual(transfer.bytesSent, 0)
+
+        // Send first chunk - progress should update immediately
+        transfer.markChunkSent(0)
+        XCTAssertEqual(transfer.progress, 0.5, accuracy: 0.01, "Progress should update when chunk is sent")
+        XCTAssertEqual(transfer.bytesSent, 128, "bytesSent should reflect sent chunks")
+
+        // Send second chunk - progress should be 100%
+        transfer.markChunkSent(1)
+        XCTAssertEqual(transfer.progress, 1.0, accuracy: 0.01, "Progress should be 100% when all chunks sent")
+        XCTAssertEqual(transfer.bytesSent, 256, "bytesSent should reflect all sent chunks")
+
+        // Complete first chunk (ACK received) - progress should remain 100%
+        transfer.markChunkCompleted(0)
+        XCTAssertEqual(transfer.progress, 1.0, accuracy: 0.01, "Progress should remain 100% after ACK")
+        XCTAssertEqual(transfer.bytesSent, 256, "bytesSent should still reflect all chunks")
+
+        // Complete second chunk - progress should still be 100%
+        transfer.markChunkCompleted(1)
+        XCTAssertEqual(transfer.progress, 1.0, accuracy: 0.01, "Progress should remain 100% after all ACKs")
+        XCTAssertEqual(transfer.bytesSent, 256, "bytesSent should reflect all completed chunks")
+    }
+
+    /// Regression test: Chunks should not be skipped when AX.25 window is full
+    /// This test verifies that chunks marked as "needs retry" are properly retried
+    func testChunksNotSkippedWhenWindowFull() {
+        var transfer = BulkTransfer(
+            id: UUID(),
+            fileName: "test.txt",
+            fileSize: 512,
+            destination: "DEST",
+            chunkSize: 128,
+            direction: .outbound
+        )
+
+        transfer.status = .sending
+        XCTAssertEqual(transfer.totalChunks, 4)
+
+        // Send chunks 0, 1, 2, 3
+        transfer.markChunkSent(0)
+        transfer.markChunkSent(1)
+        transfer.markChunkSent(2)
+        transfer.markChunkSent(3)
+
+        // Verify all chunks are sent (progress should be 100%)
+        XCTAssertEqual(transfer.progress, 1.0, accuracy: 0.01, "All chunks sent, progress should be 100%")
+        XCTAssertEqual(transfer.bytesSent, 512, "All bytes should be accounted for")
+
+        // Simulate window full scenario: chunk 2 needs retry (was sent but window was full)
+        // This simulates the bug where sendAXDPPayload returned false due to full window
+        transfer.markChunkNeedsRetry(2)
+
+        // nextChunkToSend should return 2 (the retry), not skip to nil
+        XCTAssertEqual(transfer.nextChunkToSend, 2, "Should retry chunk 2, not skip it")
+
+        // Progress should decrease slightly since chunk 2 is no longer "sent"
+        // (it's now in retry state, so bytesSent should reflect only chunks 0, 1, 3)
+        XCTAssertEqual(transfer.bytesSent, 384, "bytesSent should reflect only non-retry chunks")
+
+        // After retry is sent, should be back to 100%
+        transfer.markChunkSent(2)
+        XCTAssertNil(transfer.nextChunkToSend, "All chunks should be sent now")
+        XCTAssertEqual(transfer.progress, 1.0, accuracy: 0.01, "Progress should be 100% after retry sent")
+        XCTAssertEqual(transfer.bytesSent, 512, "All bytes should be accounted for after retry")
+    }
+
     func testTransferZeroSizeFile() {
         let transfer = BulkTransfer(
             id: UUID(),

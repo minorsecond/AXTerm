@@ -551,7 +551,8 @@ final class SessionCoordinator: ObservableObject {
     // MARK: - AXDP Send Helper
 
     /// Send AXDP payload via connected session if available, otherwise as UI.
-    private func sendAXDPPayload(_ payload: Data, to destination: AX25Address, path: DigiPath, displayInfo: String?) {
+    /// Returns true if frames were actually sent, false if window was full or packetEngine not set.
+    private func sendAXDPPayload(_ payload: Data, to destination: AX25Address, path: DigiPath, displayInfo: String?) -> Bool {
         // Guard: don't send if packetEngine is not set (e.g., in tests)
         // CRITICAL: This prevents any frame creation or memory allocation when packetEngine is nil
         guard packetEngine != nil else {
@@ -559,7 +560,7 @@ final class SessionCoordinator: ObservableObject {
                 "destination": destination.display,
                 "payloadSize": payload.count
             ])
-            return
+            return false
         }
         
         // Check for connected session first (more efficient path)
@@ -571,10 +572,18 @@ final class SessionCoordinator: ObservableObject {
                 pid: 0xF0,
                 displayInfo: displayInfo
             )
+            // If window is full, sendData returns empty array - don't send anything
+            guard !frames.isEmpty else {
+                TxLog.debug(.axdp, "Window full, cannot send AXDP payload", [
+                    "destination": destination.display,
+                    "payloadSize": payload.count
+                ])
+                return false
+            }
             for frame in frames {
                 sendFrame(frame)
             }
-            return
+            return true
         }
 
         let frame = OutboundFrame(
@@ -586,6 +595,7 @@ final class SessionCoordinator: ObservableObject {
             displayInfo: displayInfo
         )
         sendFrame(frame)
+        return true
     }
 
     // MARK: - AXDP Not Supported Cache
@@ -1923,17 +1933,33 @@ final class SessionCoordinator: ObservableObject {
             transfers[transferIndex].startedAt = now
         }
 
-        sendAXDPPayload(
+        let frameSent = sendAXDPPayload(
             chunkPayload,
             to: destination,
             path: path,
             displayInfo: "AXDP CHUNK \(nextChunk + 1)/\(transfers[transferIndex].totalChunks)"
         )
 
+        // Only mark chunk as sent if frames were actually sent (window wasn't full)
+        guard frameSent else {
+            // Window is full - mark chunk as needing retry and wait a bit longer before retrying
+            var transfer = transfers[transferIndex]
+            transfer.markChunkNeedsRetry(nextChunk)
+            transfers[transferIndex] = transfer
+            
+            // Wait longer before retrying (200ms) to give window time to open
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 200_000_000)  // 200ms delay
+                sendNextChunk(for: transferId, to: destination, path: path, axdpSessionId: axdpSessionId)
+            }
+            return
+        }
+
         // Mark chunk as sent and update progress - use explicit reassignment for SwiftUI
         var transfer = transfers[transferIndex]
         transfer.markChunkSent(nextChunk)
-        transfer.markChunkCompleted(nextChunk)
+        // NOTE: Don't mark as completed here - wait for ACK from receiver
+        // transfer.markChunkCompleted(nextChunk)  // REMOVED - only mark completed on ACK
         // Update bytesTransmitted for air rate calculation (actual bytes sent over air)
         transfer.bytesTransmitted += chunkData.count
         if nextChunk == actualTotalChunks - 1, transfer.dataPhaseCompletedAt == nil {
