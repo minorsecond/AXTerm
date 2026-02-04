@@ -42,6 +42,8 @@ struct AXTermApp: App {
         let router = PacketInspectionRouter()
         _inspectionRouter = StateObject(wrappedValue: router)
 
+        TxLog.configure(wireDebugEnabled: WireDebugSettings.isEnabled)
+
         // Apply test mode overrides
         if testConfig.isTestMode {
             if let callsign = testConfig.callsign {

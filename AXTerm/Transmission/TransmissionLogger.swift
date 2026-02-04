@@ -106,9 +106,19 @@ final class TxLog {
     }()
 
     /// Enable/disable verbose console output (DEBUG builds only)
-    var verboseConsole = true
+    var verboseConsole = false
+    /// Capture wire events for advanced diagnostics UI (DEBUG builds only)
+    var captureWireEvents = false
 
     private init() {}
+
+    static func configure(wireDebugEnabled: Bool) {
+        Task { @MainActor in
+            shared.verboseConsole = wireDebugEnabled
+            shared.captureWireEvents = wireDebugEnabled
+            WireLogStore.shared.isEnabled = wireDebugEnabled
+        }
+    }
 
     // MARK: - Public API
 
@@ -381,7 +391,7 @@ final class TxLog {
 
     // MARK: - Internal Implementation
 
-    private enum LogLevel {
+    enum LogLevel {
         case debug, info, warning, error
     }
 
@@ -400,6 +410,15 @@ final class TxLog {
         if verboseConsole {
             let line = "\(timestamp) \(direction.color) \(direction.rawValue) \(category.emoji) [\(category.rawValue)] \(message)\(dataStr)"
             print(line)
+        }
+        if captureWireEvents {
+            WireLogStore.shared.append(
+                direction: direction,
+                category: category,
+                level: level,
+                message: message,
+                data: data
+            )
         }
         #endif
 
