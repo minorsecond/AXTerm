@@ -368,6 +368,129 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertNil(response)
     }
 
+    func testHandleInboundIFrameWithNoSessionDoesNotRespondWithDM() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let source = AX25Address(call: "N0HI", ssid: 7)
+        let path = DigiPath.from(["W0ARP-7"])
+
+        // No sessions created at all. An unexpected I-frame should be safely ignored
+        // and MUST NOT trigger a DM, to avoid tearing down a valid remote link.
+        let response = manager.handleInboundIFrame(
+            from: source,
+            path: path,
+            channel: 0,
+            ns: 0,
+            nr: 0,
+            pf: false,
+            payload: Data("INFO".utf8)
+        )
+
+        XCTAssertNil(response, "Unexpected inbound I-frame with no session should be ignored, not answered with DM")
+    }
+
+    func testHandleInboundIFrameDuplicateForExistingSessionIsAcknowledgedNotDM() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let destination = AX25Address(call: "N0HI", ssid: 7)
+        let path = DigiPath.from(["W0ARP-7"])
+
+        // Establish a connected session.
+        let session = connectSession(manager: manager, destination: destination, path: path)
+        XCTAssertEqual(session.state, .connected)
+
+        // First delivery of an in-sequence I-frame should yield an RR.
+        let firstResponse = manager.handleInboundIFrame(
+            from: destination,
+            path: path,
+            channel: 0,
+            ns: 0,
+            nr: 0,
+            pf: false,
+            payload: Data("WELCOME".utf8)
+        )
+        XCTAssertNotNil(firstResponse)
+        XCTAssertEqual(firstResponse?.frameType, "s")  // RR
+
+        // A duplicate decode of the same frame with a slightly different path
+        // (e.g. without the repeated marker) must NOT cause a DM; at worst it
+        // is ignored or results in another RR.
+        let altPath = DigiPath.from(["W0ARP-7*"])
+        let duplicateResponse = manager.handleInboundIFrame(
+            from: destination,
+            path: altPath,
+            channel: 0,
+            ns: 0,
+            nr: 0,
+            pf: false,
+            payload: Data("WELCOME".utf8)
+        )
+
+        // We only care that we did not generate a DM here; in our current
+        // implementation this will be nil (ignored) due to matching the
+        // existing connected session earlier.
+        if let frame = duplicateResponse {
+            XCTAssertNotEqual(frame.frameType, "u", "Duplicate I-frame must not generate a DM U-frame")
+        }
+    }
+
+    // MARK: - Robustness & Safety Invariants
+
+    func testHandleInboundRRWithNoSessionDoesNotCreateSessionOrRespond() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let source = AX25Address(call: "N0HI", ssid: 7)
+        let path = DigiPath.from(["W0ARP-7"])
+
+        let response = manager.handleInboundRR(
+            from: source,
+            path: path,
+            channel: 0,
+            nr: 1,
+            isPoll: false
+        )
+
+        XCTAssertNil(response, "RR with no existing session should be ignored")
+        XCTAssertTrue(manager.sessions.isEmpty, "RR with no session must not implicitly create a session")
+    }
+
+    func testHandleInboundREJWithNoSessionDoesNotCreateSessionOrRespond() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let source = AX25Address(call: "N0HI", ssid: 7)
+        let path = DigiPath.from(["W0ARP-7"])
+
+        let retransmitFrames = manager.handleInboundREJ(
+            from: source,
+            path: path,
+            channel: 0,
+            nr: 0
+        )
+
+        XCTAssertTrue(retransmitFrames.isEmpty, "REJ with no session should not produce retransmits")
+        XCTAssertTrue(manager.sessions.isEmpty, "REJ with no session must not implicitly create a session")
+    }
+
+    func testT1TimeoutDoesNotRetransmitWhenNoOutstandingFrames() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let destination = AX25Address(call: "N0HI", ssid: 7)
+        let path = DigiPath.from(["W0ARP-7"])
+
+        let session = connectSession(manager: manager, destination: destination, path: path)
+        XCTAssertEqual(session.state, .connected)
+        XCTAssertEqual(session.outstandingCount, 0)
+
+        // No outstanding frames: T1 timeout should not produce retransmits.
+        let frames = manager.handleT1Timeout(session: session)
+        XCTAssertTrue(frames.isEmpty)
+    }
+
     // MARK: - Session Event Tests
 
     func testSessionEventTypes() {
@@ -572,6 +695,39 @@ final class AX25SessionTests: XCTestCase {
         })
         // Should NOT deliver data
         XCTAssertFalse(actions.contains { action in
+            if case .deliverData = action { return true }
+            return false
+        })
+    }
+
+    func testStateMachineInSequenceAndDuplicateIFramesMaintainOrder() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+
+        let payload1 = Data("LINE1".utf8)
+        let payload2 = Data("LINE2".utf8)
+
+        // Receive in-sequence ns=0
+        let actions1 = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, pf: false, payload: payload1))
+        XCTAssertEqual(sm.sequenceState.vr, 1)
+        XCTAssertTrue(actions1.contains { action in
+            if case .deliverData(let data) = action { return data == payload1 }
+            return false
+        })
+
+        // Receive in-sequence ns=1
+        let actions2 = sm.handle(event: .receivedIFrame(ns: 1, nr: 0, pf: false, payload: payload2))
+        XCTAssertEqual(sm.sequenceState.vr, 2)
+        XCTAssertTrue(actions2.contains { action in
+            if case .deliverData(let data) = action { return data == payload2 }
+            return false
+        })
+
+        // Duplicate of ns=1 should NOT advance VR or deliver again
+        let actionsDup = sm.handle(event: .receivedIFrame(ns: 1, nr: 0, pf: false, payload: payload2))
+        XCTAssertEqual(sm.sequenceState.vr, 2, "Duplicate I-frame must not advance V(R)")
+        XCTAssertFalse(actionsDup.contains { action in
             if case .deliverData = action { return true }
             return false
         })

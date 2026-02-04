@@ -123,13 +123,17 @@ struct ConsoleLine: Identifiable, Hashable, Sendable {
         isDuplicate: Bool = false
     ) -> ConsoleLine {
         let messageType = detectMessageType(text: text, to: to)
+        // Normalize via path for console display so repeated digis like
+        // "W0ARP-7,W0ARP-7*" collapse to a single "W0ARP-7*" entry. This keeps
+        // the console, tests, and packet model consistent.
+        let normalizedVia = normalizedViaItems(from: via)
         return ConsoleLine(
             kind: .packet,
             timestamp: timestamp,
             from: from,
             to: to,
             text: text,
-            via: via,
+            via: normalizedVia,
             messageType: messageType,
             isDuplicate: isDuplicate
         )

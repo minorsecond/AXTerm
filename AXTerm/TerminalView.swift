@@ -20,6 +20,14 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Session manager for connected-mode operations (shared from SessionCoordinator)
     let sessionManager: AX25SessionManager
 
+    /// Human-readable transcript lines for the active connected session.
+    /// Built from in-order AX.25 I-frame payloads so that out-of-order or
+    /// retransmitted packets don't scramble the on-screen text.
+    @Published private(set) var sessionTranscriptLines: [String] = []
+
+    /// Buffer for assembling the current line between CR/LF terminators.
+    private var currentLineBuffer = Data()
+
     /// Current session (if any) for the active destination
     @Published private(set) var currentSession: AX25Session?
 
@@ -64,11 +72,15 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         }
 
         self.sessionManager.onDataReceived = { [weak self] session, data in
-            // Handle received data from connected session
-            TxLog.inbound(.axdp, "Data received from session", [
+            guard let self = self else { return }
+            // Handle received data from connected session. The AX.25 state machine
+            // only delivers in-order, de-duplicated payloads here, so we can safely
+            // build a linear text transcript for the UI.
+            TxLog.inbound(.session, "Data received from session", [
                 "peer": session.remoteAddress.display,
                 "size": data.count
             ])
+            self.appendToSessionTranscript(from: session, data: data)
         }
     }
 
@@ -290,6 +302,37 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Current session state for display
     var sessionState: AX25SessionState? {
         currentSession?.state
+    }
+
+    /// Append payload bytes from an AX.25 I-frame into the human-readable
+    /// session transcript, respecting CR/LF line boundaries and keeping
+    /// messages grouped in arrival order.
+    private func appendToSessionTranscript(from session: AX25Session, data: Data) {
+        // Only show text for the active session, if one is selected; otherwise
+        // use the most recently active connected session as the source of truth.
+        if let active = currentSession, active.id != session.id {
+            // Ignore data for other sessions in this view.
+            return
+        }
+
+        for byte in data {
+            if byte == 0x0D || byte == 0x0A {
+                // End-of-line: flush current buffer if it has any content.
+                if !currentLineBuffer.isEmpty {
+                    let line = String(data: currentLineBuffer, encoding: .utf8) ??
+                               String(data: currentLineBuffer, encoding: .ascii) ??
+                               currentLineBuffer.map { String(format: "%02X", $0) }.joined()
+                    sessionTranscriptLines.append(line)
+                    // Keep transcript bounded for performance.
+                    if sessionTranscriptLines.count > 1000 {
+                        sessionTranscriptLines.removeFirst(sessionTranscriptLines.count - 1000)
+                    }
+                    currentLineBuffer.removeAll(keepingCapacity: true)
+                }
+            } else {
+                currentLineBuffer.append(byte)
+            }
+        }
     }
 
     // MARK: - Actions
@@ -900,7 +943,9 @@ struct TerminalView: View {
 
     @ViewBuilder
     private var sessionOutputView: some View {
-        // Use ConsoleView with session filtering via settings.terminalClearedAt
+        // Restore original ConsoleView-based UI so we keep timestamps,
+        // message-type pills, colors, etc. Improvements to grouping are
+        // handled at the data level rather than replacing this view.
         ConsoleView(
             lines: client.consoleLines,
             showDaySeparators: settings.showConsoleDaySeparators,
