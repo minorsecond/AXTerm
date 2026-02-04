@@ -74,6 +74,10 @@ final class SessionCoordinator: ObservableObject {
     /// Used to map ACK/NACK responses to the correct transfer
     private var transfersAwaitingAcceptance: [UInt32: UUID] = [:]
 
+    /// Task that periodically sends completion-request (ACK 0xFFFFFFFE) for transfers awaiting completion.
+    /// Receiver responds with completion ACK or NACK with SACK bitmap; sender then selectively retransmits only missing chunks.
+    private var awaitingCompletionRequestTask: Task<Void, Never>?
+
     /// Global adaptive settings (for compression, etc.)
     var globalAdaptiveSettings: TxAdaptiveSettings = TxAdaptiveSettings()
 
@@ -456,10 +460,10 @@ final class SessionCoordinator: ObservableObject {
             handleFileChunkMessage(message, from: from)
 
         case .ack:
-            handleAckMessage(message, from: from)
+            handleAckMessage(message, from: from, path: path)
 
         case .nack:
-            handleNackMessage(message, from: from)
+            handleNackMessage(message, from: from, path: path)
 
         default:
             TxLog.debug(.axdp, "Unhandled AXDP message type", [
@@ -697,9 +701,28 @@ final class SessionCoordinator: ObservableObject {
 
         let chunkIndex = Int(message.chunkIndex ?? 0)
 
+        // Per-chunk CRC32 verification (spec 6.x.4): reject corrupt chunks so they stay in "missing" set for NACK
+        if let expectedCRC = message.payloadCRC32 {
+            let computedCRC = AXDP.crc32(payload)
+            guard computedCRC == expectedCRC else {
+                TxLog.warning(.axdp, "FILE_CHUNK payload CRC mismatch, requesting retransmit", [
+                    "session": axdpSessionId,
+                    "chunk": chunkIndex,
+                    "expectedCRC": String(format: "%08X", expectedCRC),
+                    "computedCRC": String(format: "%08X", computedCRC)
+                ])
+                return  // Do not count as received; sender will retransmit on NACK
+            }
+        }
+
         // Receive the chunk
         state.receiveChunk(index: chunkIndex, data: payload)
         inboundTransferStates[axdpSessionId] = state
+
+        // CRITICAL: Check completion BEFORE UI updates to ensure we detect it even if
+        // the transfer lookup fails or the transfer is in an unexpected state.
+        // The completion ACK must be sent as soon as all chunks are received.
+        let isNowComplete = state.isComplete
 
         // Update BulkTransfer progress for UI - use explicit reassignment for SwiftUI
         if let transferId = axdpToTransferId[axdpSessionId],
@@ -707,6 +730,8 @@ final class SessionCoordinator: ObservableObject {
             var transfer = transfers[transferIndex]
 
             // Guard against processing chunks for already-completed/failed transfers
+            // BUT: if this is the completion chunk, we still need to send the ACK
+            // even if the transfer was already marked complete (race condition)
             switch transfer.status {
             case .completed, .failed, .cancelled:
                 TxLog.debug(.axdp, "Ignoring chunk for terminated transfer", [
@@ -714,6 +739,10 @@ final class SessionCoordinator: ObservableObject {
                     "chunk": chunkIndex,
                     "status": String(describing: transfer.status)
                 ])
+                // Still check completion - might be a late chunk that completes the transfer
+                if isNowComplete {
+                    handleTransferComplete(axdpSessionId: axdpSessionId, state: state)
+                }
                 return
             default:
                 break
@@ -738,7 +767,7 @@ final class SessionCoordinator: ObservableObject {
                 transfer.startedAt = start
             }
 
-            if state.isComplete, transfer.dataPhaseCompletedAt == nil {
+            if isNowComplete, transfer.dataPhaseCompletedAt == nil {
                 transfer.dataPhaseCompletedAt = state.endTime ?? Date()
             }
 
@@ -762,12 +791,35 @@ final class SessionCoordinator: ObservableObject {
             TxLog.debug(.axdp, "Received chunk", [
                 "session": axdpSessionId,
                 "chunk": "\(chunkIndex + 1)/\(state.expectedChunks)",
-                "progress": String(format: "%.0f%%", state.progress * 100)
+                "progress": String(format: "%.0f%%", state.progress * 100),
+                "receivedCount": state.receivedChunks.count,
+                "expectedChunks": state.expectedChunks,
+                "isComplete": isNowComplete
+            ])
+        } else {
+            // Transfer ID not found - log warning but still check completion
+            TxLog.warning(.axdp, "Received chunk but transfer ID not found", [
+                "session": axdpSessionId,
+                "chunk": chunkIndex
             ])
         }
 
-        // Check if transfer is complete
-        if state.isComplete {
+        // Check if transfer is complete - MUST happen even if transfer lookup failed
+        // The completion ACK is critical for the sender to know the transfer succeeded
+        // Re-read state from dictionary to ensure we have the latest version (defense against race conditions)
+        if let latestState = inboundTransferStates[axdpSessionId], latestState.isComplete {
+            TxLog.debug(.axdp, "Transfer completion detected, calling handleTransferComplete", [
+                "session": axdpSessionId,
+                "receivedChunks": latestState.receivedChunks.count,
+                "expectedChunks": latestState.expectedChunks,
+                "file": latestState.fileName
+            ])
+            handleTransferComplete(axdpSessionId: axdpSessionId, state: latestState)
+        } else if isNowComplete {
+            // Fallback: use local state if dictionary lookup fails (shouldn't happen, but be defensive)
+            TxLog.warning(.axdp, "Completion detected but state not in dictionary, using local state", [
+                "session": axdpSessionId
+            ])
             handleTransferComplete(axdpSessionId: axdpSessionId, state: state)
         }
     }
@@ -1041,8 +1093,8 @@ final class SessionCoordinator: ObservableObject {
         }
     }
 
-    /// Handle ACK message (transfer accepted, chunk acknowledged, or transfer complete)
-    func handleAckMessage(_ message: AXDP.Message, from: AX25Address) {
+    /// Handle ACK message (transfer accepted, chunk acknowledged, completion request, or transfer complete)
+    func handleAckMessage(_ message: AXDP.Message, from: AX25Address, path: DigiPath = DigiPath()) {
         TxLog.debug(.axdp, "Received ACK", [
             "from": from.display,
             "session": message.sessionId,
@@ -1051,19 +1103,57 @@ final class SessionCoordinator: ObservableObject {
 
         let axdpSessionId = message.sessionId
 
+        // Receiver: completion request from sender ("do you have all chunks?")
+        if message.messageId == SessionCoordinator.completionRequestMessageId,
+           let state = inboundTransferStates[axdpSessionId] {
+            if state.isComplete {
+                TxLog.debug(.axdp, "Completion request: transfer complete, sending completion ACK", [
+                    "session": axdpSessionId,
+                    "file": state.fileName
+                ])
+                handleTransferComplete(axdpSessionId: axdpSessionId, state: state)
+            } else {
+                // Send NACK with SACK bitmap (what we have) so sender can selectively retransmit missing chunks
+                var sack = AXDPSACKBitmap(baseChunk: 0, windowSize: state.expectedChunks)
+                for chunk in state.receivedChunks {
+                    sack.markReceived(chunk: UInt32(chunk))
+                }
+                let nackMessage = AXDP.Message(
+                    type: .nack,
+                    sessionId: axdpSessionId,
+                    messageId: SessionCoordinator.transferCompleteMessageId,
+                    sackBitmap: sack.encode()
+                )
+                sendAXDPPayload(
+                    nackMessage.encode(),
+                    to: from,
+                    path: path,
+                    displayInfo: "AXDP NACK (missing chunks)"
+                )
+                TxLog.outbound(.axdp, "Sent NACK with SACK bitmap (missing chunks)", [
+                    "dest": from.display,
+                    "session": axdpSessionId,
+                    "receivedCount": state.receivedChunks.count,
+                    "expectedChunks": state.expectedChunks,
+                    "file": state.fileName
+                ])
+            }
+            return
+        }
+
         // Check if this is a transfer completion ACK from receiver
         if message.messageId == SessionCoordinator.transferCompleteMessageId {
             // Find the transfer awaiting completion
             if let transferId = transferSessionIds.first(where: { $0.value == axdpSessionId })?.key,
                let transferIndex = transfers.firstIndex(where: { $0.id == transferId }) {
 
-                // Verify the transfer is in awaitingCompletion state
-                guard transfers[transferIndex].status == .awaitingCompletion else {
-                    TxLog.warning(.axdp, "Received completion ACK but transfer not awaiting completion", [
+                // Log if the transfer was not already in awaitingCompletion (race/mismatch),
+                // but still honor the ACK as authoritative.
+                if transfers[transferIndex].status != .awaitingCompletion {
+                    TxLog.warning(.axdp, "Completion ACK received while transfer not in awaitingCompletion state", [
                         "transfer": String(transferId.uuidString.prefix(8)),
                         "status": String(describing: transfers[transferIndex].status)
                     ])
-                    return
                 }
 
                 // Mark transfer as truly completed
@@ -1125,18 +1215,69 @@ final class SessionCoordinator: ObservableObject {
         }
     }
 
-    /// Handle NACK message (transfer declined, error, or transfer failed on receiver)
-    func handleNackMessage(_ message: AXDP.Message, from: AX25Address) {
+    /// Handle NACK message (transfer declined, missing chunks, or transfer failed on receiver)
+    func handleNackMessage(_ message: AXDP.Message, from: AX25Address, path: DigiPath = DigiPath()) {
         TxLog.debug(.axdp, "Received NACK", [
             "from": from.display,
             "session": message.sessionId,
-            "messageId": message.messageId
+            "messageId": message.messageId,
+            "hasSackBitmap": message.sackBitmap != nil
         ])
 
         let axdpSessionId = message.sessionId
 
-        // Check if this is a transfer completion NACK (receiver failed to save file)
-        if message.messageId == SessionCoordinator.transferCompleteMessageId {
+        // Completion NACK with SACK bitmap = receiver missing/corrupt chunks; never treat as "transfer failed"
+        let isCompletionNackWithSack = message.messageId == SessionCoordinator.transferCompleteMessageId && message.sackBitmap != nil
+        if isCompletionNackWithSack {
+            if let sackData = message.sackBitmap,
+               let transferId = transferSessionIds.first(where: { $0.value == axdpSessionId })?.key,
+               let transferIndex = transfers.firstIndex(where: { $0.id == transferId }),
+               transfers[transferIndex].status == .awaitingCompletion,
+               let fileData = transferFileData[transferId] {
+                let transfer = transfers[transferIndex]
+                let actualTotalChunks = (fileData.count + transfer.chunkSize - 1) / transfer.chunkSize
+                if let sack = AXDPSACKBitmap.decode(from: sackData, baseChunk: 0, windowSize: actualTotalChunks) {
+                    let missing = sack.missingChunks(upTo: UInt32(actualTotalChunks - 1))
+                    if !missing.isEmpty {
+                        let destParts = transfer.destination.uppercased().split(separator: "-")
+                        let destCall = String(destParts.first ?? "")
+                        let destSSID = destParts.count > 1 ? Int(destParts[1]) ?? 0 : 0
+                        let destAddress = AX25Address(call: destCall, ssid: destSSID)
+                        for chunkIndex in missing.map({ Int($0) }) {
+                            guard let chunkData = transfer.chunkData(from: fileData, chunk: chunkIndex) else { continue }
+                            let chunkMessage = AXDP.Message(
+                                type: .fileChunk,
+                                sessionId: axdpSessionId,
+                                messageId: UInt32(chunkIndex + 1),
+                                chunkIndex: UInt32(chunkIndex),
+                                totalChunks: UInt32(actualTotalChunks),
+                                payload: chunkData,
+                                payloadCRC32: AXDP.crc32(chunkData),
+                                compression: .none
+                            )
+                            sendAXDPPayload(
+                                chunkMessage.encode(),
+                                to: destAddress,
+                                path: path,
+                                displayInfo: "AXDP CHUNK \(chunkIndex + 1)/\(actualTotalChunks) (retransmit)"
+                            )
+                        }
+                        TxLog.outbound(.axdp, "Selective retransmit for missing/corrupt chunks", [
+                            "file": transfer.fileName,
+                            "session": axdpSessionId,
+                            "missingCount": missing.count,
+                            "chunks": missing.map { Int($0) }.sorted()
+                        ])
+                    }
+                } else {
+                    TxLog.warning(.axdp, "NACK SACK bitmap decode failed", ["session": axdpSessionId])
+                }
+            }
+            return
+        }
+
+        // Check if this is a transfer completion NACK (receiver failed to save file - no SACK bitmap)
+        if message.messageId == SessionCoordinator.transferCompleteMessageId, message.sackBitmap == nil {
             if let transferId = transferSessionIds.first(where: { $0.value == axdpSessionId })?.key,
                let transferIndex = transfers.firstIndex(where: { $0.id == transferId }) {
 
@@ -1186,7 +1327,9 @@ final class SessionCoordinator: ObservableObject {
         }
 
         // Legacy: check by session ID in transferSessionIds (for already-sending transfers)
-        if let transferId = transferSessionIds.first(where: { $0.value == message.sessionId })?.key,
+        // Never treat completion NACK (messageId == transferCompleteMessageId) as generic "declined"
+        if message.messageId != SessionCoordinator.transferCompleteMessageId,
+           let transferId = transferSessionIds.first(where: { $0.value == message.sessionId })?.key,
            let transferIndex = transfers.firstIndex(where: { $0.id == transferId }) {
             transfers[transferIndex].status = .failed(reason: "Transfer declined by remote")
             transferFileData.removeValue(forKey: transferId)
@@ -1641,6 +1784,13 @@ final class SessionCoordinator: ObservableObject {
     /// Using 0xFFFFFFFF as it's unlikely to be a legitimate chunk message ID
     static let transferCompleteMessageId: UInt32 = 0xFFFFFFFF
 
+    /// Message ID for completion request: sender asks receiver "do you have all chunks?"
+    /// Receiver responds with completion ACK (all good) or NACK with SACK bitmap (missing/corrupt chunks)
+    static let completionRequestMessageId: UInt32 = 0xFFFFFFFE
+
+    /// Interval between completion-request sends while awaiting completion (seconds)
+    private static let completionRequestIntervalSeconds: UInt64 = 2
+
     /// Send the next chunk for a transfer
     private func sendNextChunk(for transferId: UUID, to destination: AX25Address, path: DigiPath, axdpSessionId: UInt32) {
         guard let transferIndex = transfers.firstIndex(where: { $0.id == transferId }) else { return }
@@ -1673,6 +1823,7 @@ final class SessionCoordinator: ObservableObject {
                 "chunks": transfer.totalChunks,
                 "axdpSession": axdpSessionId
             ])
+            startAwaitingCompletionRequestTaskIfNeeded()
             return
         }
 
@@ -1689,6 +1840,7 @@ final class SessionCoordinator: ObservableObject {
         // 1. Data is already compressed at file level (much more effective)
         // 2. Small chunks don't compress well and often expand
         // 3. FILE_META already told receiver which algorithm to use for whole-file decompression
+        // Per-chunk CRC32 (PayloadCRC32) per spec 6.x.4: receiver can verify and request retransmit on corruption
         let chunkMessage = AXDP.Message(
             type: .fileChunk,
             sessionId: axdpSessionId,
@@ -1696,6 +1848,7 @@ final class SessionCoordinator: ObservableObject {
             chunkIndex: UInt32(nextChunk),
             totalChunks: UInt32(actualTotalChunks),
             payload: chunkData,
+            payloadCRC32: AXDP.crc32(chunkData),
             compression: .none  // No per-chunk compression - file is pre-compressed
         )
 
@@ -1736,6 +1889,48 @@ final class SessionCoordinator: ObservableObject {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms delay between chunks
             sendNextChunk(for: transferId, to: destination, path: path, axdpSessionId: axdpSessionId)
+        }
+    }
+
+    /// Start the background task that periodically sends completion-request (ACK 0xFFFFFFFE) for transfers awaiting completion.
+    /// Receiver responds with completion ACK or NACK with SACK bitmap; sender then selectively retransmits only missing chunks.
+    private func startAwaitingCompletionRequestTaskIfNeeded() {
+        guard awaitingCompletionRequestTask == nil || awaitingCompletionRequestTask?.isCancelled == true else { return }
+        awaitingCompletionRequestTask = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.completionRequestIntervalSeconds * 1_000_000_000)
+                guard !Task.isCancelled else { break }
+                sendCompletionRequestForAwaitingCompletionTransfers()
+            }
+        }
+    }
+
+    /// For each transfer in .awaitingCompletion, send completion request (ACK 0xFFFFFFFE) so receiver responds with ACK or NACK+SACK.
+    private func sendCompletionRequestForAwaitingCompletionTransfers() {
+        for transfer in transfers where transfer.status == .awaitingCompletion {
+            guard let axdpSessionId = transferSessionIds[transfer.id] else { continue }
+            let destParts = transfer.destination.uppercased().split(separator: "-")
+            let destCall = String(destParts.first ?? "")
+            let destSSID = destParts.count > 1 ? Int(destParts[1]) ?? 0 : 0
+            let destAddress = AX25Address(call: destCall, ssid: destSSID)
+            let path = sessionManager.sessions.values
+                .first { $0.remoteAddress == destAddress && $0.state == .connected }?.path ?? DigiPath()
+            let completionRequest = AXDP.Message(
+                type: .ack,
+                sessionId: axdpSessionId,
+                messageId: SessionCoordinator.completionRequestMessageId
+            )
+            sendAXDPPayload(
+                completionRequest.encode(),
+                to: destAddress,
+                path: path,
+                displayInfo: "AXDP completion request"
+            )
+            TxLog.debug(.axdp, "Sent completion request", [
+                "file": transfer.fileName,
+                "axdpSession": axdpSessionId,
+                "dest": destAddress.display
+            ])
         }
     }
 
@@ -1947,7 +2142,12 @@ struct InboundTransferState {
 
     mutating func receiveChunk(index: Int, data: Data) {
         // Don't count duplicates
-        guard !receivedChunks.contains(index) else { return }
+        guard !receivedChunks.contains(index) else {
+            #if DEBUG
+            print("[AXDP TRACE][InboundState] Duplicate chunk ignored | index=\(index) receivedCount=\(receivedChunks.count) expected=\(expectedChunks)")
+            #endif
+            return
+        }
 
         if startTime == nil {
             startTime = Date()
@@ -1957,8 +2157,12 @@ struct InboundTransferState {
         chunkData[index] = data
         totalBytesReceived += data.count
 
+        // Set endTime when complete - this is used for metrics
         if isComplete {
             endTime = Date()
+            #if DEBUG
+            print("[AXDP TRACE][InboundState] Transfer complete detected | receivedCount=\(receivedChunks.count) expectedChunks=\(expectedChunks) file=\(fileName)")
+            #endif
         }
     }
 

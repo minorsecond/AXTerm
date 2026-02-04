@@ -176,6 +176,31 @@ final class AXDPTests: XCTestCase {
         XCTAssertEqual(decoded?.payloadCRC32, AXDP.crc32(payload))
     }
 
+    /// Wrong PayloadCRC32 is detectable (receiver would reject chunk and request retransmit via NACK)
+    func testFileChunkWrongPayloadCRC32Detectable() {
+        let chunkData = Data(repeating: 0x42, count: 128)
+        let wrongCRC: UInt32 = 0xDEAD_BEEF
+
+        let msg = AXDP.Message(
+            type: .fileChunk,
+            sessionId: 12345,
+            messageId: 1,
+            chunkIndex: 0,
+            totalChunks: 8,
+            payload: chunkData,
+            payloadCRC32: wrongCRC
+        )
+
+        let encoded = msg.encode()
+        let decoded = AXDP.Message.decode(from: encoded)
+
+        XCTAssertNotNil(decoded)
+        XCTAssertEqual(decoded?.payload, chunkData)
+        XCTAssertEqual(decoded?.payloadCRC32, wrongCRC)
+        let computedCRC = AXDP.crc32(decoded!.payload!)
+        XCTAssertNotEqual(computedCRC, decoded!.payloadCRC32!, "Receiver must detect mismatch and not count chunk")
+    }
+
     func testEncodeAckMessage() {
         let msg = AXDP.Message(
             type: .ack,

@@ -194,6 +194,88 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertNotNil(decoded?.capabilities)
     }
 
+    // MARK: - Transfer Completion ACK Handling
+
+    /// Sender should mark transfer as completed when a completion ACK is received
+    /// and the transfer is currently awaitingCompletion.
+    func testHandleCompletionACKWhenAwaitingCompletion() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        // Set up an outbound transfer that has finished sending all chunks
+        let transferId = UUID()
+        let transfer = BulkTransfer(
+            id: transferId,
+            fileName: "test.txt",
+            fileSize: 1024,
+            destination: "TEST-2",
+            direction: .outbound
+        )
+
+        coordinator.transfers = [transfer]
+        coordinator.transfers[0].status = .awaitingCompletion
+
+        // Map AXDP session ID to this transfer
+        let axdpSessionId: UInt32 = 0x1234_5678
+        coordinator.storeAXDPSessionId(axdpSessionId, for: transferId)
+
+        // Build completion ACK from receiver
+        let completionAck = AXDP.Message(
+            type: .ack,
+            sessionId: axdpSessionId,
+            messageId: SessionCoordinator.transferCompleteMessageId
+        )
+
+        // Handle ACK
+        let from = AX25Address(call: "TEST-2")
+        coordinator.handleAckMessage(completionAck, from: from)
+
+        // Transfer should now be marked completed
+        XCTAssertEqual(coordinator.transfers[0].status, .completed)
+        XCTAssertNotNil(coordinator.transfers[0].completedAt)
+    }
+
+    /// Even if the UI never transitioned to .awaitingCompletion (e.g. due to a race
+    /// or chunk-count mismatch), a completion ACK from the receiver MUST still cause
+    /// the sender to mark the transfer as completed.
+    func testHandleCompletionACKCompletesTransferEvenIfNotAwaitingCompletion() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        // Simulate an outbound transfer that is still in .sending state
+        let transferId = UUID()
+        var transfer = BulkTransfer(
+            id: transferId,
+            fileName: "test.txt",
+            fileSize: 1024,
+            destination: "TEST-2",
+            direction: .outbound
+        )
+        transfer.status = .sending
+
+        coordinator.transfers = [transfer]
+
+        // Map AXDP session ID to this transfer
+        let axdpSessionId: UInt32 = 0xCAFEBABE
+        coordinator.storeAXDPSessionId(axdpSessionId, for: transferId)
+
+        // Build completion ACK from receiver
+        let completionAck = AXDP.Message(
+            type: .ack,
+            sessionId: axdpSessionId,
+            messageId: SessionCoordinator.transferCompleteMessageId
+        )
+
+        // Handle ACK
+        let from = AX25Address(call: "TEST-2")
+        coordinator.handleAckMessage(completionAck, from: from)
+
+        // Transfer should still be marked completed even though it wasn't in
+        // .awaitingCompletion at the time the ACK arrived.
+        XCTAssertEqual(coordinator.transfers[0].status, .completed)
+        XCTAssertNotNil(coordinator.transfers[0].completedAt)
+    }
+
     // MARK: - IncomingTransferRequest Tests
 
     func testIncomingTransferRequestCreation() {
@@ -334,5 +416,150 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(metrics.compressedSize, 1000)
         XCTAssertEqual(metrics.ratio, 1.0)
         XCTAssertFalse(metrics.wasEffective)
+    }
+
+    // MARK: - Receiver Completion Detection Tests
+
+    /// Test that InboundTransferState correctly detects completion when all chunks received
+    func testInboundTransferStateDetectsCompletion() {
+        // Test with 21 chunks (indices 0-20) to match the bug scenario
+        var state = InboundTransferState(
+            axdpSessionId: 1491564977,
+            sourceCallsign: "TEST-1",
+            fileName: "test.csv",
+            fileSize: 2688,  // 21 chunks of 128 bytes
+            expectedChunks: 21,
+            chunkSize: 128,
+            sha256: Data(repeating: 0xAB, count: 32),
+            compressionAlgorithm: .none
+        )
+
+        // Receive chunks 0-19 (20 chunks)
+        for i in 0..<20 {
+            state.receiveChunk(index: i, data: Data(repeating: UInt8(i), count: 128))
+            XCTAssertFalse(state.isComplete, "Should not be complete after \(i+1) chunks")
+        }
+        XCTAssertEqual(state.receivedChunks.count, 20)
+
+        // Receive final chunk (index 20) - should complete
+        state.receiveChunk(index: 20, data: Data(repeating: 0x14, count: 128))
+        XCTAssertTrue(state.isComplete, "Should be complete after receiving all 21 chunks (indices 0-20)")
+        XCTAssertEqual(state.receivedChunks.count, 21, "Should have received all 21 chunks")
+        XCTAssertNotNil(state.endTime, "endTime should be set when complete")
+    }
+
+    /// Test that sender shows awaitingAcceptance status correctly
+    func testSenderShowsAwaitingAcceptanceStatus() {
+        var transfer = BulkTransfer(
+            id: UUID(),
+            fileName: "test.txt",
+            fileSize: 1024,
+            destination: "TEST-2",
+            direction: .outbound
+        )
+
+        transfer.status = .awaitingAcceptance
+        XCTAssertEqual(transfer.status, .awaitingAcceptance)
+        XCTAssertTrue(transfer.canCancel, "Should be able to cancel while awaiting acceptance")
+        XCTAssertFalse(transfer.canPause, "Cannot pause while awaiting acceptance")
+    }
+
+    // MARK: - Completion Request / NACK SACK Bitmap (Robust File Transfer)
+
+    /// Completion request and completion ACK message ID constants
+    func testCompletionRequestAndTransferCompleteMessageIdConstants() {
+        XCTAssertEqual(SessionCoordinator.transferCompleteMessageId, 0xFFFFFFFF)
+        XCTAssertEqual(SessionCoordinator.completionRequestMessageId, 0xFFFFFFFE)
+    }
+
+    /// NACK with SACK bitmap (missing chunks) must not mark transfer as failed; transfer stays awaitingCompletion
+    func testNackWithSackBitmapDoesNotFailTransfer() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        let transferId = UUID()
+        var transfer = BulkTransfer(
+            id: transferId,
+            fileName: "test.txt",
+            fileSize: 512,
+            destination: "TEST-2",
+            direction: .outbound
+        )
+        transfer.status = .awaitingCompletion
+        coordinator.transfers = [transfer]
+
+        let axdpSessionId: UInt32 = 0x1234_5678
+        coordinator.storeAXDPSessionId(axdpSessionId, for: transferId)
+
+        // SACK bitmap: receiver has chunks 0,1,3 (missing 2) out of 4
+        var sack = AXDPSACKBitmap(baseChunk: 0, windowSize: 4)
+        sack.markReceived(chunk: 0)
+        sack.markReceived(chunk: 1)
+        sack.markReceived(chunk: 3)
+
+        let sackData = sack.encode()
+        XCTAssertFalse(sackData.isEmpty, "SACK bitmap should not be empty")
+
+        let nack = AXDP.Message(
+            type: .nack,
+            sessionId: axdpSessionId,
+            messageId: SessionCoordinator.transferCompleteMessageId,
+            chunkIndex: nil,
+            totalChunks: nil,
+            payload: nil,
+            payloadCRC32: nil,
+            sackBitmap: sackData
+        )
+        XCTAssertNotNil(nack.sackBitmap, "NACK must carry SACK bitmap for this test")
+        XCTAssertEqual(nack.messageId, SessionCoordinator.transferCompleteMessageId)
+
+        let from = AX25Address(call: "TEST-2")
+        coordinator.handleNackMessage(nack, from: from)
+
+        XCTAssertEqual(coordinator.transfers.count, 1, "Transfer should still be in list")
+        let status = coordinator.transfers[0].status
+        XCTAssertEqual(status, .awaitingCompletion, "NACK with SACK bitmap must not mark transfer as failed; got \(status)")
+    }
+
+    /// NACK with SACK bitmap but no transfer in transferSessionIds (e.g. unknown session) must not touch transfers
+    func testNackWithSackBitmapNoFileDataDoesNotFailTransfer() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        let transferId = UUID()
+        var transfer = BulkTransfer(
+            id: transferId,
+            fileName: "test.txt",
+            fileSize: 512,
+            destination: "TEST-2",
+            direction: .outbound
+        )
+        transfer.status = .awaitingCompletion
+        coordinator.transfers = [transfer]
+
+        let axdpSessionId: UInt32 = 0xCAFE_BABE
+        // Do NOT call storeAXDPSessionId - so NACK is "completion with SACK" but no matching transfer;
+        // handler must return without marking any transfer as failed
+        var sack = AXDPSACKBitmap(baseChunk: 0, windowSize: 4)
+        sack.markReceived(chunk: 0)
+
+        let sackData = sack.encode()
+        let nack = AXDP.Message(
+            type: .nack,
+            sessionId: axdpSessionId,
+            messageId: SessionCoordinator.transferCompleteMessageId,
+            chunkIndex: nil,
+            totalChunks: nil,
+            payload: nil,
+            payloadCRC32: nil,
+            sackBitmap: sackData
+        )
+        XCTAssertNotNil(nack.sackBitmap)
+
+        let from = AX25Address(call: "TEST-2")
+        coordinator.handleNackMessage(nack, from: from)
+
+        XCTAssertEqual(coordinator.transfers.count, 1)
+        XCTAssertEqual(coordinator.transfers[0].status, .awaitingCompletion, "NACK with SACK must not mark transfer failed when no session mapping")
     }
 }

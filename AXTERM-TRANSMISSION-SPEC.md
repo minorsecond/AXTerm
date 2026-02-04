@@ -758,6 +758,32 @@ Receiver can send:
 
 Sender can restart from missing set.
 
+### 9.3.1 Manifest + end verification + selective retransmit (recommended)
+**Goal:** Cover lost chunks, corrupt chunks (bad checksum), and collisions without blind retransmit.
+
+**At start (manifest):**
+- `FILE_META` already provides: filename, length, whole-file SHA256, chunk size, total chunks.
+- Optional: per-chunk checksums in a manifest TLV (or send `PayloadCRC32` on each `FILE_CHUNK` per 6.x.4).
+- Receiver then knows exactly what set of chunks to expect (indices `0..totalChunks-1`).
+
+**Per chunk (integrity):**
+- Sender: include TLV `0x07 PayloadCRC32` on each `FILE_CHUNK` (CRC32 of payload; spec 6.x.4).
+- Receiver: verify CRC on each chunk; treat bad CRC as "missing" for retransmit (do not count as received).
+
+**At end (ask recipient):**
+- Sender: after sending all chunks, enter "awaiting completion" and periodically send **completion request** (ACK with messageId=0xFFFFFFFE). Receiver responds with completion ACK (all good) or NACK with SACK bitmap (missing/corrupt chunks).
+- Receiver: on completion request, when `receivedChunks.count >= expectedChunks` **and** all CRCs pass:
+  - Reassemble, verify whole-file SHA256, save, send **completion ACK**.
+- Receiver: when still missing chunks or has bad CRCs:
+  - Send **NACK** with SACK bitmap (what we have) so sender can **selectively retransmit** only missing chunks.
+
+**Selective retransmit:**
+- Sender: on NACK with SACK bitmap, decode bitmap, compute missing chunk indices, retransmit only those chunks (with PayloadCRC32). Next completion request will prompt receiver to confirm again.
+- Avoids wasting airtime retransmitting chunks the receiver already has.
+
+**Implementation status:**
+- Implemented: FILE_META, whole-file SHA256 at end, per-chunk PayloadCRC32 on send/verify, completion request (ACK 0xFFFFFFFE), receiver response with completion ACK or NACK+SACK bitmap, sender selective retransmit from NACK, completion ACK/NACK for success/failure.
+
 ### 9.4 Connected mode transfer framing
 Even in connected mode, keep your **AXDP TLV envelope**:
 - It simplifies decoding and future extension

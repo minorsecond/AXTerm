@@ -389,7 +389,11 @@ struct BulkTransferRow: View {
     }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
-        if seconds < 60 {
+        if seconds < 0.1 {
+            // Show milliseconds for very small durations (< 100ms)
+            let ms = Int(seconds * 1000)
+            return "\(ms)ms"
+        } else if seconds < 60 {
             return String(format: "%.1fs", seconds)
         } else if seconds < 3600 {
             let mins = Int(seconds / 60)
