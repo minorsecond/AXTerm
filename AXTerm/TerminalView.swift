@@ -57,6 +57,19 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// This prevents subsequent AXDP fragments (which lack magic) from being displayed as raw text.
     private var peersInAXDPReassembly: Set<String> = []
     
+    /// Clear the AXDP reassembly flag for a peer when reassembly completes.
+    /// Called by SessionCoordinator via onAXDPReassemblyComplete callback.
+    /// This allows subsequent plain text from this peer to be delivered to the console.
+    func clearAXDPReassemblyFlag(for address: AX25Address) {
+        let peerKey = address.display.uppercased()
+        if peersInAXDPReassembly.contains(peerKey) {
+            peersInAXDPReassembly.remove(peerKey)
+            TxLog.debug(.axdp, "Cleared AXDP reassembly flag on completion", [
+                "peer": peerKey
+            ])
+        }
+    }
+    
     #if DEBUG
     /// Test helper: Check if a peer is currently marked as in AXDP reassembly.
     /// Only available in DEBUG builds for testing purposes.
@@ -482,26 +495,27 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             return
         }
         
-        // If this peer was mid-AXDP-reassembly but sent non-AXDP data:
-        // - They switched from AXDP to plain text (e.g., fallback or different message type)
-        // - Clear the reassembly flag so plain text is delivered
-        // - This handles the case where AXDP reassembly completes via timeout or user switches to plain text
+        // If peer is mid-AXDP-reassembly, suppress ALL non-magic data.
+        // AXDP continuation fragments don't have the magic header - only the first chunk does.
+        // The raw bytes will be reconstructed by SessionCoordinator and delivered via
+        // appendAXDPChatToTranscript when the complete AXDP message is extracted.
         //
-        // BUG FIX: Previously, if a peer ever sent AXDP data, they would remain in peersInAXDPReassembly
-        // and ALL subsequent non-AXDP data would be suppressed. This was incorrect.
-        // The flag should only suppress data that is a continuation of an AXDP message (no magic),
-        // not data from a peer who has switched to plain text entirely.
+        // The flag is cleared when:
+        // 1. SessionCoordinator signals AXDP reassembly completed (via onAXDPReassemblyComplete)
+        // 2. Session disconnects (via onSessionStateChanged)
         //
-        // Heuristic: If the data doesn't start with magic AND the peer was in reassembly,
-        // this could be either: (1) an AXDP fragment continuation, or (2) plain text.
-        // Since AXDP fragments are delivered by the reassembly process (via SessionCoordinator),
-        // any data reaching appendToSessionTranscript that isn't AXDP is plain text.
-        // Clear the flag and deliver it.
+        // This means if a peer switches from AXDP to plain text mid-session without completing
+        // the AXDP message, their plain text may be suppressed. This is acceptable because:
+        // - AXDP reassembly has timeouts that will eventually clear stale buffers
+        // - The flag is cleared on disconnect
+        // - Mixed AXDP/plain text mid-message is an edge case
         if peersInAXDPReassembly.contains(peerKey) {
-            // Peer was in reassembly but this data isn't AXDP (no magic)
-            // This means they've switched to plain text - clear the flag and deliver
-            peersInAXDPReassembly.remove(peerKey)
-            // Fall through to deliver the plain text data
+            // Suppress AXDP continuation fragment - SessionCoordinator handles reassembly
+            TxLog.debug(.axdp, "Suppressing AXDP continuation fragment", [
+                "peer": peerKey,
+                "size": data.count
+            ])
+            return
         }
 
         // Auto-select the session when data arrives:
@@ -909,6 +923,14 @@ struct TerminalView: View {
             sessionCoordinator.onPeerAxdpDisabled = { [weak txViewModel] from in
                 Task { @MainActor in
                     txViewModel?.pendingPeerAxdpDisabledNotification = from.display
+                }
+            }
+            
+            // Clear AXDP reassembly flag when a complete message is extracted.
+            // This allows subsequent plain text from this peer to be delivered.
+            sessionCoordinator.onAXDPReassemblyComplete = { [weak txViewModel] from in
+                Task { @MainActor in
+                    txViewModel?.clearAXDPReassemblyFlag(for: from)
                 }
             }
 

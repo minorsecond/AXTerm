@@ -97,6 +97,11 @@ final class SessionCoordinator: ObservableObject {
     /// Used to deliver chat to the terminal transcript regardless of AXDP badge state.
     var onAXDPChatReceived: ((AX25Address, String) -> Void)?
 
+    /// Callback when AXDP reassembly completes (a full message was extracted). Parameter: peer address.
+    /// Used to clear the peersInAXDPReassembly flag in TerminalView so subsequent plain text
+    /// messages from this peer will be delivered to the console.
+    var onAXDPReassemblyComplete: ((AX25Address) -> Void)?
+
     /// Callback when peer sends peerAxdpEnabled (they turned on AXDP). Parameter: peer address.
     /// Used to show a toast prompting the local user to enable AXDP.
     var onPeerAxdpEnabled: ((AX25Address) -> Void)?
@@ -736,10 +741,49 @@ final class SessionCoordinator: ObservableObject {
     }
 
     /// Append delivered (in-order) data to reassembly buffer and extract complete AXDP messages.
+    /// Non-AXDP data (plain text I-frames) is not buffered to prevent polluting AXDP reassembly.
     private func appendToReassemblyAndExtract(from: AX25Address, path: DigiPath, data: Data) {
         let key = reassemblyKey(from: from, path: path)
         var buf = inboundReassemblyBuffer[key] ?? Data()
         let beforeLen = buf.count
+        
+        // Handle non-AXDP data properly to prevent buffer pollution:
+        // 1. If buffer is empty and data doesn't start with magic → non-AXDP data, skip
+        // 2. If buffer has garbage (no magic at start) → clear it before processing
+        // 3. If buffer starts with magic → valid AXDP reassembly in progress
+        
+        if buf.isEmpty {
+            // Empty buffer: only start buffering if data is AXDP (starts with magic)
+            if !AXDP.hasMagic(data) {
+                print("[DEBUG:REASSEMBLY] skip non-AXDP | from=\(from.display) size=\(data.count) prefix=\(data.prefix(4).map { String(format: "%02X", $0) }.joined())")
+                TxLog.debug(.axdp, "Skipping non-AXDP data (no magic header)", [
+                    "from": from.display,
+                    "size": data.count
+                ])
+                return  // Don't buffer non-AXDP data
+            }
+        } else if !AXDP.hasMagic(buf) {
+            // Buffer has garbage that doesn't start with magic
+            print("[DEBUG:REASSEMBLY] clear garbage | from=\(from.display) garbageLen=\(buf.count)")
+            TxLog.debug(.axdp, "Clearing garbage from reassembly buffer", [
+                "from": from.display,
+                "garbageLen": buf.count
+            ])
+            buf = Data()  // Clear the garbage
+            
+            // Now check if new data is AXDP
+            if !AXDP.hasMagic(data) {
+                print("[DEBUG:REASSEMBLY] skip non-AXDP after clear | from=\(from.display) size=\(data.count)")
+                inboundReassemblyBuffer.removeValue(forKey: key)
+                return  // Don't buffer non-AXDP data
+            }
+        }
+        
+        // At this point, either:
+        // - Buffer was empty and data starts with magic (new AXDP message)
+        // - Buffer starts with magic (continuation of AXDP message)
+        // - Buffer was garbage and cleared, data starts with magic (new AXDP message)
+        
         buf.append(data)
         inboundReassemblyBuffer[key] = buf
 
@@ -767,6 +811,10 @@ final class SessionCoordinator: ObservableObject {
             #if DEBUG
             onReassemblyEvent?(key, buf.count, true)  // extracted message
             #endif
+            // Notify that AXDP reassembly completed for this peer.
+            // This allows TerminalView to clear the peersInAXDPReassembly flag,
+            // so subsequent plain text from this peer will be delivered.
+            onAXDPReassemblyComplete?(from)
             handleAXDPMessageDecoded(from: from, path: path, message: message)
         }
         if buf.count > 0 {
