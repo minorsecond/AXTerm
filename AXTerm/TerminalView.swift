@@ -25,8 +25,10 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// retransmitted packets don't scramble the on-screen text.
     @Published private(set) var sessionTranscriptLines: [String] = []
 
-    /// Buffer for assembling the current line between CR/LF terminators.
-    private var currentLineBuffer = Data()
+    /// Per-peer buffer for assembling the current line between CR/LF terminators.
+    /// Each peer has its own buffer to prevent data from one peer contaminating another.
+    /// Key is the peer's callsign (uppercased).
+    private var currentLineBuffers: [String: Data] = [:]
 
     /// Current session (if any) for the active destination
     @Published private(set) var currentSession: AX25Session?
@@ -112,11 +114,14 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                     self?.updateCurrentSession()
                 }
                 
-                // When a session disconnects, clear the AXDP reassembly flag for that peer.
-                // This prevents stale flags from suppressing future plain-text data.
+                // When a session disconnects, clear per-peer state to prevent contamination
+                // of future sessions with the same peer.
                 if newState == .disconnected {
                     let peerKey = session.remoteAddress.display.uppercased()
+                    // Clear AXDP reassembly flag to prevent stale flags from suppressing future plain-text data
                     self?.peersInAXDPReassembly.remove(peerKey)
+                    // Clear plain text line buffer to prevent contamination of future messages
+                    self?.currentLineBuffers.removeValue(forKey: peerKey)
                 }
                 
                 self?.objectWillChange.send()
@@ -550,13 +555,16 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             }
         }
 
+        // Get or create the per-peer buffer
+        var peerBuffer = currentLineBuffers[peerKey] ?? Data()
+        
         for byte in data {
             if byte == 0x0D || byte == 0x0A {
                 // End-of-line: flush current buffer if it has any content.
-                if !currentLineBuffer.isEmpty {
-                    let line = String(data: currentLineBuffer, encoding: .utf8) ??
-                               String(data: currentLineBuffer, encoding: .ascii) ??
-                               currentLineBuffer.map { String(format: "%02X", $0) }.joined()
+                if !peerBuffer.isEmpty {
+                    let line = String(data: peerBuffer, encoding: .utf8) ??
+                               String(data: peerBuffer, encoding: .ascii) ??
+                               peerBuffer.map { String(format: "%02X", $0) }.joined()
                     sessionTranscriptLines.append(line)
                     // Plain-text chat must go to console (sessionTranscriptLines is legacy).
                     TxLog.debug(.session, "Delivering plain text line to console", [
@@ -569,12 +577,21 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                     if sessionTranscriptLines.count > 1000 {
                         sessionTranscriptLines.removeFirst(sessionTranscriptLines.count - 1000)
                     }
-                    currentLineBuffer.removeAll(keepingCapacity: true)
+                    peerBuffer.removeAll(keepingCapacity: true)
                 }
             } else {
-                currentLineBuffer.append(byte)
+                peerBuffer.append(byte)
             }
         }
+        
+        // Store the updated buffer back
+        currentLineBuffers[peerKey] = peerBuffer
+    }
+    
+    /// Clear the plain text line buffer for a peer (called when session disconnects)
+    func clearPlainTextBuffer(for address: AX25Address) {
+        let peerKey = address.display.uppercased()
+        currentLineBuffers.removeValue(forKey: peerKey)
     }
 
     // MARK: - Actions

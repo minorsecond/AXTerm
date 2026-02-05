@@ -603,6 +603,133 @@ final class ProtocolSwitchingTests: XCTestCase {
         }
     }
     
+    /// CRITICAL REGRESSION TEST: Per-peer buffer isolation
+    /// This tests the fix for the bug where plain text data from one peer
+    /// would contaminate another peer's message (e.g., "ullamcorper.test 2 long").
+    /// The root cause was that `currentLineBuffer` was a single shared buffer
+    /// instead of a per-peer dictionary.
+    func testPerPeerBufferIsolation() async {
+        await MainActor.run {
+            var receivedFromPeerA: [String] = []
+            var receivedFromPeerB: [String] = []
+            
+            let sessionManager = AX25SessionManager()
+            sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
+            
+            let viewModel = ObservableTerminalTxViewModel(
+                sourceCall: "TEST-1",
+                sessionManager: sessionManager
+            )
+            
+            viewModel.onPlainTextChatReceived = { address, text in
+                if address.call.uppercased() == "PEERA" {
+                    receivedFromPeerA.append(text)
+                } else if address.call.uppercased() == "PEERB" {
+                    receivedFromPeerB.append(text)
+                }
+            }
+            
+            let peerA = AX25Address(call: "PEERA", ssid: 0)
+            let sessionA = sessionManager.session(for: peerA)
+            sessionA.stateMachine.handle(event: .connectRequest)
+            sessionA.stateMachine.handle(event: .receivedUA)
+            
+            let peerB = AX25Address(call: "PEERB", ssid: 0)
+            let sessionB = sessionManager.session(for: peerB)
+            sessionB.stateMachine.handle(event: .connectRequest)
+            sessionB.stateMachine.handle(event: .receivedUA)
+            
+            // SCENARIO: Peer A sends partial data (no newline), then Peer B sends complete data
+            // BUG: If buffers are shared, Peer A's partial data would prepend Peer B's message
+            
+            // Peer A sends partial data WITHOUT newline (stays in buffer)
+            viewModel.sessionManager.onDataReceived?(sessionA, Data("ullamcorper".utf8))
+            
+            // Peer B sends complete message WITH newline
+            viewModel.sessionManager.onDataReceived?(sessionB, Data("test 2 long: Lorem ipsum\r\n".utf8))
+            
+            // EXPECTED: Peer B's message should NOT have "ullamcorper" prepended
+            XCTAssertEqual(receivedFromPeerB.count, 1, "Peer B should receive exactly one message")
+            XCTAssertEqual(receivedFromPeerB.first, "test 2 long: Lorem ipsum",
+                           "Peer B's message should NOT be contaminated by Peer A's buffer data")
+            
+            // Peer A's partial data should still be in Peer A's buffer
+            XCTAssertEqual(receivedFromPeerA.count, 0, "Peer A's partial data should not be delivered yet")
+            
+            // Now complete Peer A's message
+            viewModel.sessionManager.onDataReceived?(sessionA, Data(" is the end\r\n".utf8))
+            
+            // Peer A should get their complete message
+            XCTAssertEqual(receivedFromPeerA.count, 1)
+            XCTAssertEqual(receivedFromPeerA.first, "ullamcorper is the end")
+            
+            // Peer B should still only have their original message (no contamination)
+            XCTAssertEqual(receivedFromPeerB.count, 1)
+        }
+    }
+    
+    /// Test that interleaved partial messages from multiple peers don't contaminate each other
+    func testInterleavedPartialMessagesFromMultiplePeers() async {
+        await MainActor.run {
+            var receivedFromPeer1: [String] = []
+            var receivedFromPeer2: [String] = []
+            var receivedFromPeer3: [String] = []
+            
+            let sessionManager = AX25SessionManager()
+            sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
+            
+            let viewModel = ObservableTerminalTxViewModel(
+                sourceCall: "TEST-1",
+                sessionManager: sessionManager
+            )
+            
+            viewModel.onPlainTextChatReceived = { address, text in
+                switch address.call.uppercased() {
+                case "PEER1": receivedFromPeer1.append(text)
+                case "PEER2": receivedFromPeer2.append(text)
+                case "PEER3": receivedFromPeer3.append(text)
+                default: break
+                }
+            }
+            
+            // Create three sessions
+            let peer1 = AX25Address(call: "PEER1", ssid: 0)
+            let session1 = sessionManager.session(for: peer1)
+            session1.stateMachine.handle(event: .connectRequest)
+            session1.stateMachine.handle(event: .receivedUA)
+            
+            let peer2 = AX25Address(call: "PEER2", ssid: 0)
+            let session2 = sessionManager.session(for: peer2)
+            session2.stateMachine.handle(event: .connectRequest)
+            session2.stateMachine.handle(event: .receivedUA)
+            
+            let peer3 = AX25Address(call: "PEER3", ssid: 0)
+            let session3 = sessionManager.session(for: peer3)
+            session3.stateMachine.handle(event: .connectRequest)
+            session3.stateMachine.handle(event: .receivedUA)
+            
+            // Interleave partial and complete messages from all three peers
+            viewModel.sessionManager.onDataReceived?(session1, Data("Hello from ".utf8))      // partial
+            viewModel.sessionManager.onDataReceived?(session2, Data("Peer 2 says hi\r\n".utf8)) // complete
+            viewModel.sessionManager.onDataReceived?(session3, Data("Greetings ".utf8))        // partial
+            viewModel.sessionManager.onDataReceived?(session1, Data("peer 1!\r\n".utf8))      // complete
+            viewModel.sessionManager.onDataReceived?(session3, Data("from peer 3!\r\n".utf8)) // complete
+            viewModel.sessionManager.onDataReceived?(session2, Data("More from ".utf8))       // partial
+            viewModel.sessionManager.onDataReceived?(session2, Data("peer 2\r\n".utf8))       // complete
+            
+            // Each peer should have their own isolated messages
+            XCTAssertEqual(receivedFromPeer1.count, 1)
+            XCTAssertEqual(receivedFromPeer1.first, "Hello from peer 1!")
+            
+            XCTAssertEqual(receivedFromPeer2.count, 2)
+            XCTAssertEqual(receivedFromPeer2[0], "Peer 2 says hi")
+            XCTAssertEqual(receivedFromPeer2[1], "More from peer 2")
+            
+            XCTAssertEqual(receivedFromPeer3.count, 1)
+            XCTAssertEqual(receivedFromPeer3.first, "Greetings from peer 3!")
+        }
+    }
+    
     /// Test two different peers with different protocol preferences
     func testTwoPeersWithDifferentProtocols() async {
         await MainActor.run {
