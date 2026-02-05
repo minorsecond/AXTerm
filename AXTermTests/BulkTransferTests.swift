@@ -354,6 +354,36 @@ final class BulkTransferTests: XCTestCase {
         XCTAssertEqual(transfer.completedChunks, 3)
     }
 
+    /// Regression test: markCompleted() should mark ALL chunks as completed.
+    /// This fixes the bug where file transfer sender showed "0/21" instead of "21/21"
+    /// because chunks were marked sent but never marked completed on completion ACK.
+    func testMarkCompletedMarksAllChunksAsCompleted() {
+        var transfer = BulkTransfer(
+            id: UUID(),
+            fileName: "test.csv",
+            fileSize: 2688,  // 21 chunks of 128 bytes
+            destination: "TEST-2",
+            chunkSize: 128
+        )
+
+        XCTAssertEqual(transfer.totalChunks, 21)
+        XCTAssertEqual(transfer.completedChunks, 0, "Initially no chunks completed")
+
+        // Simulate sending all chunks (but not completing them via ACK)
+        for chunk in 0..<21 {
+            transfer.markChunkSent(chunk)
+        }
+        XCTAssertEqual(transfer.completedChunks, 0, "Sent chunks are not yet completed")
+
+        // When transfer completion ACK is received, markCompleted() is called
+        transfer.markCompleted()
+
+        // All chunks should now be marked as completed
+        XCTAssertEqual(transfer.completedChunks, 21, "markCompleted() must mark all chunks as completed")
+        XCTAssertEqual(transfer.status, .completed)
+        XCTAssertEqual(transfer.bytesSent, 2688, "bytesSent should equal full transfer size")
+    }
+
     func testTransferNextChunkToSend() {
         var transfer = BulkTransfer(
             id: UUID(),

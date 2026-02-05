@@ -505,6 +505,19 @@ struct BulkTransfer: Identifiable, Sendable {
             dataPhaseCompletedAt = completedAt
         }
         status = .completed
+        
+        // Mark all chunks as completed (for outbound transfers, this ensures the UI shows
+        // the correct final chunk count e.g. "21/21" instead of "0/21")
+        let total = totalChunks
+        for chunk in 0..<total {
+            completedChunks_.insert(chunk)
+        }
+        sentChunks.removeAll()  // All sent chunks are now completed
+        retryChunks.removeAll()
+        
+        // Ensure bytesSent reflects full transfer
+        let targetSize = transmissionSize > 0 ? transmissionSize : fileSize
+        bytesSent = targetSize
     }
 
     /// Throughput in bytes per second (data throughput, not air throughput)
