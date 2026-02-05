@@ -85,6 +85,11 @@ final class SessionCoordinator: ObservableObject {
     private let capabilityDiscoveryTimeout: TimeInterval = 900.0
     /// Cache for peers that did not respond to AXDP discovery
     private var axdpNotSupported: [String: Date] = [:]
+    
+    /// Set of peers implicitly confirmed as AXDP-capable because we received an AXDP message from them.
+    /// This supplements the capability store - if a peer sends us ANY AXDP message, they obviously support AXDP.
+    private var implicitlyConfirmedAXDP: Set<String> = []
+    
     /// Set of (from, messageId, sessionId) for displayed chat messages; prevents duplicates from retransmissions
     private var displayedChatMessageIds: Set<String> = []
     /// How long to remember "not supported" before allowing auto-discovery again
@@ -522,7 +527,22 @@ final class SessionCoordinator: ObservableObject {
     /// where we are the initiator. This is used when auto-negotiation is turned
     /// on while a session is already connected.
     func triggerCapabilityDiscoveryForConnectedInitiators() {
-        debugAXDP("triggerCapabilityDiscoveryForConnectedInitiators called", [
+        triggerCapabilityDiscovery(initiatorOnly: true)
+    }
+    
+    /// Trigger capability discovery for ALL connected sessions (both initiator and responder).
+    /// This is the preferred method when the user manually enables AXDP, since they may be
+    /// the responder in the session and still need capability confirmation.
+    func triggerCapabilityDiscoveryForAllConnected() {
+        triggerCapabilityDiscovery(initiatorOnly: false)
+    }
+    
+    /// Internal implementation of capability discovery triggering.
+    /// - Parameter initiatorOnly: If true, only send PING for sessions where we initiated.
+    ///   If false, send PING for ALL connected sessions.
+    private func triggerCapabilityDiscovery(initiatorOnly: Bool) {
+        debugAXDP("triggerCapabilityDiscovery called", [
+            "initiatorOnly": initiatorOnly,
             "axdpEnabled": globalAdaptiveSettings.axdpExtensionsEnabled,
             "autoNegotiate": globalAdaptiveSettings.autoNegotiateCapabilities,
             "connectedCount": connectedSessions.count
@@ -530,24 +550,32 @@ final class SessionCoordinator: ObservableObject {
         
         guard globalAdaptiveSettings.axdpExtensionsEnabled,
               globalAdaptiveSettings.autoNegotiateCapabilities else {
-            debugAXDP("triggerCapabilityDiscoveryForConnectedInitiators: guards failed", [
+            debugAXDP("triggerCapabilityDiscovery: guards failed", [
                 "axdpEnabled": globalAdaptiveSettings.axdpExtensionsEnabled,
                 "autoNegotiate": globalAdaptiveSettings.autoNegotiateCapabilities
             ])
             return
         }
 
-        let initiatorSessions = connectedSessions.filter { $0.isInitiator }
-        debugAXDP("triggerCapabilityDiscoveryForConnectedInitiators: found initiator sessions", [
+        let targetSessions: [AX25Session]
+        if initiatorOnly {
+            targetSessions = connectedSessions.filter { $0.isInitiator }
+        } else {
+            targetSessions = connectedSessions
+        }
+        
+        debugAXDP("triggerCapabilityDiscovery: found target sessions", [
+            "initiatorOnly": initiatorOnly,
             "totalConnected": connectedSessions.count,
-            "initiatorCount": initiatorSessions.count,
-            "sessions": initiatorSessions.map { ["peer": $0.remoteAddress.display, "isInitiator": $0.isInitiator] }
+            "targetCount": targetSessions.count,
+            "sessions": targetSessions.map { ["peer": $0.remoteAddress.display, "isInitiator": $0.isInitiator] }
         ])
 
-        for session in initiatorSessions {
-            debugAXDP("triggerCapabilityDiscoveryForConnectedInitiators: sending PING", [
+        for session in targetSessions {
+            debugAXDP("triggerCapabilityDiscovery: sending PING", [
                 "peer": session.remoteAddress.display,
-                "sessionId": session.id.uuidString
+                "sessionId": session.id.uuidString,
+                "isInitiator": session.isInitiator
             ])
             // sendCapabilityPing() is internally idempotent with respect to
             // pending/confirmed/not-supported state.
@@ -900,6 +928,9 @@ final class SessionCoordinator: ObservableObject {
             "messageId": message.messageId,
             "len": message.payload?.count ?? 0
         ])
+        
+        // Any successfully decoded AXDP message proves the sender supports AXDP
+        markImplicitlyConfirmedAXDP(for: from.display)
 
         switch message.type {
         case .ping, .pong:
@@ -1962,9 +1993,50 @@ final class SessionCoordinator: ObservableObject {
     // MARK: - Capability Status
 
     /// Check if a station has confirmed AXDP capability
+    /// Returns true if:
+    /// 1. The capability store has confirmed capabilities (via PING/PONG exchange), OR
+    /// 2. The peer has been implicitly confirmed by sending us any AXDP message
     func hasConfirmedAXDPCapability(for callsign: String) -> Bool {
-        return packetEngine?.capabilityStore.hasCapabilities(for: callsign) ?? false
+        let call = callsign.uppercased()
+        // Check capability store first (from explicit PING/PONG)
+        if packetEngine?.capabilityStore.hasCapabilities(for: callsign) == true {
+            return true
+        }
+        // Check implicit confirmation (received any AXDP message from peer)
+        return implicitlyConfirmedAXDP.contains(call)
     }
+    
+    /// Mark a peer as implicitly AXDP-capable because we received an AXDP message from them.
+    /// This is called whenever we successfully parse any AXDP message from a peer.
+    private func markImplicitlyConfirmedAXDP(for callsign: String) {
+        let call = callsign.uppercased()
+        if !implicitlyConfirmedAXDP.contains(call) {
+            implicitlyConfirmedAXDP.insert(call)
+            clearAXDPNotSupported(for: call)
+            TxLog.debug(.capability, "Implicitly confirmed AXDP capability", [
+                "peer": callsign,
+                "reason": "Received AXDP message from peer"
+            ])
+        }
+    }
+    
+    #if DEBUG
+    /// Test helper to check implicit confirmation status
+    func isImplicitlyConfirmedAXDP(for callsign: String) -> Bool {
+        return implicitlyConfirmedAXDP.contains(callsign.uppercased())
+    }
+    
+    /// Test helper to clear all implicit confirmations
+    func clearAllImplicitConfirmations() {
+        implicitlyConfirmedAXDP.removeAll()
+    }
+    
+    /// Test helper to simulate receiving an AXDP message (goes through full routing logic).
+    /// This is the correct way to test AXDP message handling as it triggers implicit capability confirmation.
+    func testHandleAXDPMessage(_ message: AXDP.Message, from: AX25Address, path: DigiPath = DigiPath()) {
+        handleAXDPMessageDecoded(from: from, path: path, message: message)
+    }
+    #endif
 
     /// Check if capability discovery is pending for a station
     func isCapabilityDiscoveryPending(for callsign: String) -> Bool {

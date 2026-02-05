@@ -908,14 +908,15 @@ struct SettingsView: View {
         print("[SettingsView]   coordinator.connectedSessions.count = \(coordinator.connectedSessions.count)")
 
         // If auto-negotiation is now enabled while sessions are already
-        // connected, proactively trigger capability discovery for those
-        // initiator sessions so the user doesn't have to reconnect manually.
+        // connected, proactively trigger capability discovery for ALL connected
+        // sessions (not just initiators) so the user doesn't have to reconnect.
+        // This handles the case where the user is the responder in a session.
         if txAdaptiveSettings.axdpExtensionsEnabled &&
             txAdaptiveSettings.autoNegotiateCapabilities {
-            print("[SettingsView] Calling triggerCapabilityDiscoveryForConnectedInitiators()")
-            coordinator.triggerCapabilityDiscoveryForConnectedInitiators()
+            print("[SettingsView] Calling triggerCapabilityDiscoveryForAllConnected()")
+            coordinator.triggerCapabilityDiscoveryForAllConnected()
         } else {
-            print("[SettingsView] NOT calling triggerCapabilityDiscoveryForConnectedInitiators() - conditions not met")
+            print("[SettingsView] NOT calling triggerCapabilityDiscoveryForAllConnected() - conditions not met")
         }
     }
 
