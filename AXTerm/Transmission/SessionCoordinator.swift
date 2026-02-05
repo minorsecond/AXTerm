@@ -350,6 +350,14 @@ final class SessionCoordinator: ObservableObject {
         sessionManager.onRetransmitFrame = { [weak self] frame in
             self?.sendFrame(frame)
         }
+        
+        // Wire up AXDP reassembly - must use in-order delivered data only.
+        // Out-of-window or buffered frames are discarded/buffered by AX.25; appending them
+        // would corrupt reassembly (chunks arrive out of order over KISS relay).
+        sessionManager.onDataDeliveredForReassembly = { [weak self] session, data in
+            print("[DEBUG:DELIVERY] Data delivered for reassembly | from=\(session.remoteAddress.display) size=\(data.count) hex=\(data.prefix(16).map { String(format: "%02X", $0) }.joined())")
+            self?.appendToReassemblyAndExtract(from: session.remoteAddress, path: session.path, data: data)
+        }
 
         sessionManager.onLinkQualitySample = { [weak self] session, lossRate, etx, srtt in
             let routeKey = RouteAdaptiveKey(
@@ -421,10 +429,16 @@ final class SessionCoordinator: ObservableObject {
                 }
             }
 
-            // When a session disconnects, invalidate cached capabilities
+            // When a session disconnects, invalidate cached capabilities and clear reassembly buffer.
             // This ensures we re-discover on next connection (station might switch software)
+            // and prevents stale partial AXDP messages from corrupting future communications.
             if oldState == .connected && (newState == .disconnected || newState == .error) {
                 self.invalidateCapability(for: session.remoteAddress.display)
+                
+                // Clear reassembly buffer for this peer to prevent stale data corruption.
+                // This is critical for multi-fragment AXDP messages - if partial data remains
+                // and the peer reconnects, the old fragments could corrupt the new message.
+                self.clearAllReassemblyBuffers(for: session.remoteAddress)
             }
         }
     }
@@ -610,14 +624,7 @@ final class SessionCoordinator: ObservableObject {
     /// Subscribe to incoming packets from PacketEngine
     func subscribeToPackets(from client: PacketEngine) {
         self.packetEngine = client
-
-        // AXDP reassembly must use in-order delivered data only, not raw packets.
-        // Out-of-window or buffered frames are discarded/buffered by AX.25; appending them
-        // would corrupt reassembly (chunks arrive out of order over KISS relay).
-        sessionManager.onDataDeliveredForReassembly = { [weak self] session, data in
-            print("[DEBUG:DELIVERY] Data delivered for reassembly | from=\(session.remoteAddress.display) size=\(data.count) hex=\(data.prefix(16).map { String(format: "%02X", $0) }.joined())")
-            self?.appendToReassemblyAndExtract(from: session.remoteAddress, path: session.path, data: data)
-        }
+        // Note: onDataDeliveredForReassembly is wired up in setupCallbacks() already
 
         client.packetPublisher
             .receive(on: DispatchQueue.main)
@@ -835,6 +842,37 @@ final class SessionCoordinator: ObservableObject {
 
     private func reassemblyKey(from: AX25Address, path: DigiPath) -> String {
         "\(from.display)-\(path.display)"
+    }
+    
+    /// Clear the reassembly buffer for a specific peer/path.
+    /// Called when a session disconnects to prevent stale buffer data from corrupting future messages.
+    /// This is critical for multi-fragment AXDP messages - if partial data remains in the buffer
+    /// and the peer reconnects, the old fragments could corrupt the new message.
+    private func clearReassemblyBuffer(for peer: AX25Address, path: DigiPath = DigiPath()) {
+        let key = reassemblyKey(from: peer, path: path)
+        if let removed = inboundReassemblyBuffer.removeValue(forKey: key) {
+            TxLog.debug(.axdp, "Cleared reassembly buffer on disconnect", [
+                "peer": peer.display,
+                "bufferSize": removed.count
+            ])
+            print("[DEBUG:REASSEMBLY] cleared on disconnect | peer=\(peer.display) size=\(removed.count)")
+        }
+    }
+    
+    /// Clear all reassembly buffers associated with a peer (any path).
+    /// This is a more aggressive clear that handles cases where the path might differ.
+    func clearAllReassemblyBuffers(for peer: AX25Address) {
+        let peerPrefix = "\(peer.display)-"
+        let keysToRemove = inboundReassemblyBuffer.keys.filter { $0.hasPrefix(peerPrefix) }
+        for key in keysToRemove {
+            if let removed = inboundReassemblyBuffer.removeValue(forKey: key) {
+                TxLog.debug(.axdp, "Cleared reassembly buffer (all paths)", [
+                    "key": key,
+                    "bufferSize": removed.count
+                ])
+                print("[DEBUG:REASSEMBLY] cleared all paths | key=\(key) size=\(removed.count)")
+            }
+        }
     }
 
     /// Extract one complete AXDP message from buffer. Returns (message, consumedBytes) or nil if incomplete.
