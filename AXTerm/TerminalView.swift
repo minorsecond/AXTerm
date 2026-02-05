@@ -53,8 +53,23 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Tracks peers that are currently mid-AXDP reassembly.
     /// When data with AXDP magic is received, the peer is added here.
     /// When AXDP message extraction completes via appendAXDPChatToTranscript, the peer is removed.
+    /// When non-AXDP data arrives from a peer in this set, the flag is cleared (they switched to plain text).
     /// This prevents subsequent AXDP fragments (which lack magic) from being displayed as raw text.
     private var peersInAXDPReassembly: Set<String> = []
+    
+    #if DEBUG
+    /// Test helper: Check if a peer is currently marked as in AXDP reassembly.
+    /// Only available in DEBUG builds for testing purposes.
+    func isPeerInAXDPReassembly(_ peerKey: String) -> Bool {
+        return peersInAXDPReassembly.contains(peerKey)
+    }
+    
+    /// Test helper: Set the current session for testing purposes.
+    /// Only available in DEBUG builds.
+    func setCurrentSession(_ session: AX25Session?) {
+        currentSession = session
+    }
+    #endif
 
     init(sourceCall: String = "", sessionManager: AX25SessionManager? = nil) {
         var vm = TerminalTxViewModel()
@@ -467,17 +482,58 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             return
         }
         
-        // If this peer is mid-AXDP-reassembly, suppress subsequent fragments (they lack magic).
-        // The reassembly will complete via appendAXDPChatToTranscript which clears the flag.
+        // If this peer was mid-AXDP-reassembly but sent non-AXDP data:
+        // - They switched from AXDP to plain text (e.g., fallback or different message type)
+        // - Clear the reassembly flag so plain text is delivered
+        // - This handles the case where AXDP reassembly completes via timeout or user switches to plain text
+        //
+        // BUG FIX: Previously, if a peer ever sent AXDP data, they would remain in peersInAXDPReassembly
+        // and ALL subsequent non-AXDP data would be suppressed. This was incorrect.
+        // The flag should only suppress data that is a continuation of an AXDP message (no magic),
+        // not data from a peer who has switched to plain text entirely.
+        //
+        // Heuristic: If the data doesn't start with magic AND the peer was in reassembly,
+        // this could be either: (1) an AXDP fragment continuation, or (2) plain text.
+        // Since AXDP fragments are delivered by the reassembly process (via SessionCoordinator),
+        // any data reaching appendToSessionTranscript that isn't AXDP is plain text.
+        // Clear the flag and deliver it.
         if peersInAXDPReassembly.contains(peerKey) {
-            return
+            // Peer was in reassembly but this data isn't AXDP (no magic)
+            // This means they've switched to plain text - clear the flag and deliver
+            peersInAXDPReassembly.remove(peerKey)
+            // Fall through to deliver the plain text data
         }
 
-        // Only show text for the active session, if one is selected; otherwise
-        // use the most recently active connected session as the source of truth.
-        if let active = currentSession, active.id != session.id {
-            // Ignore data for other sessions in this view.
-            return
+        // Auto-select the session when data arrives:
+        // - If no currentSession is set, use the incoming session
+        // - If currentSession is set but to a different session, check if the incoming
+        //   session is connected and auto-switch to it (this handles the responder case
+        //   where data arrives before updateCurrentSession() has run)
+        // - Only ignore data if the incoming session is NOT connected (shouldn't happen)
+        if currentSession == nil {
+            // No session selected yet, use this one
+            currentSession = session
+            TxLog.debug(.session, "Auto-selected session on first data", [
+                "peer": session.remoteAddress.display,
+                "sessionId": session.id.uuidString
+            ])
+        } else if currentSession?.id != session.id {
+            // Different session - if it's connected, switch to it
+            if session.state == .connected {
+                TxLog.debug(.session, "Auto-switching to connected session with incoming data", [
+                    "oldPeer": currentSession?.remoteAddress.display ?? "nil",
+                    "newPeer": session.remoteAddress.display,
+                    "sessionId": session.id.uuidString
+                ])
+                currentSession = session
+            } else {
+                // Incoming data from a non-connected session, ignore (shouldn't happen normally)
+                TxLog.debug(.session, "Ignoring data from non-connected session", [
+                    "peer": session.remoteAddress.display,
+                    "state": String(describing: session.state)
+                ])
+                return
+            }
         }
 
         for byte in data {
@@ -489,6 +545,11 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                                currentLineBuffer.map { String(format: "%02X", $0) }.joined()
                     sessionTranscriptLines.append(line)
                     // Plain-text chat must go to console (sessionTranscriptLines is legacy).
+                    TxLog.debug(.session, "Delivering plain text line to console", [
+                        "peer": session.remoteAddress.display,
+                        "lineLength": line.count,
+                        "preview": String(line.prefix(50))
+                    ])
                     onPlainTextChatReceived?(session.remoteAddress, line)
                     // Keep transcript bounded for performance.
                     if sessionTranscriptLines.count > 1000 {
