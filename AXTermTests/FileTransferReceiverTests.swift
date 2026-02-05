@@ -32,7 +32,7 @@ final class FileTransferReceiverTests: XCTestCase {
         )
 
         let encoded = msg.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .fileMeta)
@@ -56,7 +56,7 @@ final class FileTransferReceiverTests: XCTestCase {
         )
 
         let encoded = msg.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .fileChunk)

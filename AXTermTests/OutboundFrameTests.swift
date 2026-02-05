@@ -483,7 +483,7 @@ final class OutboundFrameTests: XCTestCase {
         // Verify AXDP can be extracted and decoded
         if let info = decoded?.info {
             XCTAssertTrue(AXDP.hasMagic(info))
-            let decodedAXDP = AXDP.Message.decode(from: info)
+            let decodedAXDP = AXDP.Message.decodeMessage(from: info)
             XCTAssertNotNil(decodedAXDP)
             XCTAssertEqual(decodedAXDP?.type, .chat)
             XCTAssertEqual(decodedAXDP?.payload, Data("Hello via AXDP".utf8))
@@ -519,7 +519,7 @@ final class OutboundFrameTests: XCTestCase {
         XCTAssertNotNil(decoded)
 
         if let info = decoded?.info {
-            let decodedAXDP = AXDP.Message.decode(from: info)
+            let decodedAXDP = AXDP.Message.decodeMessage(from: info)
             XCTAssertNotNil(decodedAXDP)
             XCTAssertEqual(decodedAXDP?.type, .fileChunk)
             XCTAssertEqual(decodedAXDP?.chunkIndex, 0)

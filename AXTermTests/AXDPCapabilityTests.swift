@@ -126,7 +126,7 @@ final class AXDPCapabilityTests: XCTestCase {
         let encoded = ping.encode()
         XCTAssertTrue(AXDP.hasMagic(encoded))
 
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .ping)
         XCTAssertNotNil(decoded?.capabilities)
@@ -142,7 +142,7 @@ final class AXDPCapabilityTests: XCTestCase {
         )
 
         let encoded = pong.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .pong)
@@ -258,7 +258,7 @@ final class AXDPCapabilityTests: XCTestCase {
         )
 
         let encoded = msg.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .fileChunk)
@@ -278,7 +278,7 @@ final class AXDPCapabilityTests: XCTestCase {
         )
 
         let encoded = msg.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertEqual(decoded?.payload, payload)
     }
@@ -425,7 +425,7 @@ final class AXDPCapabilityTests: XCTestCase {
         )
 
         let encoded = msg.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .fileMeta)
@@ -443,7 +443,7 @@ final class AXDPCapabilityTests: XCTestCase {
         data.append(AXDP.TLV(type: AXDP.TLVType.sessionId.rawValue, value: AXDP.encodeUInt32(0)).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.messageId.rawValue, value: AXDP.encodeUInt32(1)).encode())
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .ping)
@@ -489,7 +489,7 @@ final class AXDPCapabilityTests: XCTestCase {
             data.append(AXDP.TLV(type: AXDP.TLVType.originalLength.rawValue, value: AXDP.encodeUInt32(UInt32(payload.count))).encode())
             data.append(AXDP.TLV(type: AXDP.TLVType.payloadCompressed.rawValue, value: compressed).encode())
 
-            let decoded = AXDP.Message.decode(from: data)
+            let decoded = AXDP.Message.decodeMessage(from: data)
 
             XCTAssertNotNil(decoded)
             XCTAssertEqual(decoded?.payload, payload)

@@ -133,9 +133,11 @@ final class AX25Session: @unchecked Sendable {
         stateMachine.sequenceState.va
     }
 
-    /// Number of outstanding (unacked) frames
+    /// Number of outstanding (unacked) frames.
+    /// Use sendBuffer.count so it matches actual buffered frames after RR acks;
+    /// (vs-va) can be wrong across wrap when we remove by RR(nr) semantics.
     var outstandingCount: Int {
-        stateMachine.sequenceState.outstandingCount
+        sendBuffer.count
     }
 
     /// Whether we can send another I-frame (window not full)
@@ -169,16 +171,27 @@ final class AX25Session: @unchecked Sendable {
         return sendTimeByNs[ackedNs]
     }
 
-    /// Remove acknowledged frames from buffer
-    func acknowledgeUpTo(nr: Int) {
+    /// Remove acknowledged frames from buffer.
+    /// RR(N(R)) means "I expect N(R) next" = receiver has received 0..<N(R) (when N(R)>0)
+    /// or all frames (when N(R)==0). Remove exactly those keys from sendBuffer so the
+    /// sender clears acks correctly and stops retransmitting (fixes freeze and dupes).
+    func acknowledgeUpTo(from va: Int, to nr: Int) {
         let modulo = stateMachine.config.modulo
-        // Remove all frames with sequence numbers < nr (accounting for wraparound)
-        sendBuffer = sendBuffer.filter { (ns, _) in
-            // Check if ns is still unacked (ns >= va in modular arithmetic)
-            // nr is the next expected, so ack everything < nr
-            let diff = (nr - ns + modulo) % modulo
-            return diff > modulo / 2 || diff == 0  // ns >= nr in modular space
+        if nr == 0 {
+            for k in 0..<modulo {
+                sendBuffer.removeValue(forKey: k)
+            }
+        } else {
+            for k in 0..<nr {
+                sendBuffer.removeValue(forKey: k)
+            }
         }
+    }
+
+    /// Legacy entry point for callers that don't have va; uses current va (must be
+    /// called before state machine updates va). Prefer acknowledgeUpTo(from:to:).
+    func acknowledgeUpTo(nr: Int) {
+        acknowledgeUpTo(from: stateMachine.sequenceState.va, to: nr)
     }
 
     /// Get frames that need retransmission (from nr onwards)
@@ -262,6 +275,11 @@ final class AX25SessionManager: ObservableObject {
     /// Callback when data is received from a connected session
     var onDataReceived: ((AX25Session, Data) -> Void)?
 
+    /// Callback when data is delivered (in-order) from a connected session.
+    /// Used for AXDP reassembly - must only append chunks that were accepted by the AX.25 layer,
+    /// not out-of-window or buffered frames (those will be delivered later in sequence).
+    var onDataDeliveredForReassembly: ((AX25Session, Data) -> Void)?
+
     /// Callback when session state changes
     var onSessionStateChanged: ((AX25Session, AX25SessionState, AX25SessionState) -> Void)?
 
@@ -270,6 +288,10 @@ final class AX25SessionManager: ObservableObject {
 
     /// Callback when we have a link quality sample (e.g. after RR with RTT) for adaptive tuning. Parameters: session, lossRate, etx, srtt.
     var onLinkQualitySample: ((AX25Session, Double, Double, Double?) -> Void)?
+
+    /// Callback when peer ACKs frames (RR received). Parameters: session, newVa (V(A) after ack).
+    /// Used for sender UI to show progressive send/ack highlighting.
+    var onOutboundAckReceived: ((AX25Session, Int) -> Void)?
 
     /// When set, used to get session config per route (destination + path) so direct vs via-digi use separate learned params. If nil, use defaultConfig.
     var getConfigForDestination: ((String, String) -> AX25SessionConfig)?
@@ -599,9 +621,23 @@ final class AX25SessionManager: ObservableObject {
 
     // MARK: - Data Transmission
 
+    /// Fragment payload into paclen-sized chunks for transmission
+    private func fragment(_ data: Data, paclen: Int) -> [Data] {
+        guard paclen > 0, !data.isEmpty else { return [] }
+        if data.count <= paclen { return [data] }
+        var chunks: [Data] = []
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + paclen, data.count)
+            chunks.append(data.subdata(in: offset..<end))
+            offset = end
+        }
+        return chunks
+    }
+
     /// Send data over a connected session
     /// Handles connection establishment if not yet connected
-    /// Returns frames to send (may include SABM if not connected)
+    /// Fragments payload per paclen; returns frames to send (may include SABM if not connected)
     func sendData(
         _ data: Data,
         to destination: AX25Address,
@@ -611,6 +647,8 @@ final class AX25SessionManager: ObservableObject {
         displayInfo: String? = nil
     ) -> [OutboundFrame] {
         let session = selectSession(for: destination, path: path, channel: channel)
+        let paclen = session.stateMachine.config.paclen
+        let chunks = fragment(data, paclen: paclen)
         var frames: [OutboundFrame] = []
 
         switch session.state {
@@ -619,44 +657,65 @@ final class AX25SessionManager: ObservableObject {
             if let sabm = connect(to: destination, path: path, channel: channel) {
                 frames.append(sabm)
             }
-            // Queue the data for when connection is established
-            session.pendingDataQueue.append((data: data, pid: pid, displayInfo: displayInfo))
+            // Queue each chunk for when connection is established
+            for (i, chunk) in chunks.enumerated() {
+                let info = (i == 0) ? displayInfo : nil
+                session.pendingDataQueue.append((data: chunk, pid: pid, displayInfo: info))
+            }
             TxLog.debug(.session, "Queued data pending connection", [
                 "peer": destination.display,
                 "size": data.count,
+                "chunks": chunks.count,
                 "queueDepth": session.pendingDataQueue.count
             ])
 
         case .connecting:
-            // Already connecting, queue the data
-            session.pendingDataQueue.append((data: data, pid: pid, displayInfo: displayInfo))
+            // Already connecting, queue each chunk
+            for (i, chunk) in chunks.enumerated() {
+                let info = (i == 0) ? displayInfo : nil
+                session.pendingDataQueue.append((data: chunk, pid: pid, displayInfo: info))
+            }
             TxLog.debug(.session, "Queued data, connection in progress", [
                 "peer": destination.display,
                 "size": data.count,
+                "chunks": chunks.count,
                 "queueDepth": session.pendingDataQueue.count
             ])
 
         case .connected:
-            // Can send immediately if window allows
-            if session.canSendIFrame {
+            // Send chunks that fit in window; queue the rest
+            var remaining: [(data: Data, pid: UInt8, displayInfo: String?)] = []
+            print("[DEBUG:AX25:SEND] sendData connected | dest=\(destination.display) totalChunks=\(chunks.count) paclen=\(paclen) canSend=\(session.canSendIFrame) va=\(session.va) vs=\(session.vs)")
+            for (i, chunk) in chunks.enumerated() {
+                guard session.canSendIFrame else {
+                    let info = (i == 0) ? displayInfo : nil
+                    remaining.append((data: chunk, pid: pid, displayInfo: info))
+                    print("[DEBUG:AX25:SEND] window full, queue chunk \(i) | remaining=\(remaining.count)")
+                    continue
+                }
+                let info = (i == 0) ? displayInfo : nil
                 let wasIdle = session.outstandingCount == 0
-                let iFrame = buildIFrame(for: session, payload: data, pid: pid, displayInfo: displayInfo)
+                let ns = session.vs  // Capture before buildIFrame increments vs
+                let iFrame = buildIFrame(for: session, payload: chunk, pid: pid, displayInfo: info)
                 frames.append(iFrame)
+                print("[DEBUG:AX25:SEND] immediate tx chunk \(i) | N(S)=\(ns) payload=\(chunk.count)")
 
-                // Buffer for potential retransmission
-                let ns = session.vs - 1
-                session.bufferFrame(iFrame, ns: ns)
+                session.bufferFrame(iFrame, ns: ns)  // ns, not vs-1 (avoids -1 when vs wraps 7->0)
                 session.recordSendTime(ns: ns, time: Date())
-                session.statistics.recordSent(bytes: data.count)
+                session.statistics.recordSent(bytes: chunk.count)
                 session.touch()
 
                 if wasIdle {
                     startT1Timer(for: session)
                 }
-            } else {
-                TxLog.warning(.session, "Window full, cannot send", [
-                    "outstanding": session.outstandingCount,
-                    "windowSize": session.stateMachine.config.windowSize
+            }
+            session.pendingDataQueue.insert(contentsOf: remaining, at: 0)
+            if !remaining.isEmpty {
+                print("[DEBUG:AX25:SEND] queued remaining | count=\(remaining.count) queueDepth=\(session.pendingDataQueue.count)")
+                TxLog.debug(.session, "Window filled, queued remaining chunks", [
+                    "peer": destination.display,
+                    "remaining": remaining.count,
+                    "queueDepth": session.pendingDataQueue.count
                 ])
             }
 
@@ -1103,6 +1162,9 @@ final class AX25SessionManager: ObservableObject {
             return nil
         }
 
+        // Capture V(A) before state machine updates it - piggybacked N(R) acks [V(A), N(R))
+        let vaBefore = session.va
+
         let oldState = session.state
         let actions = session.stateMachine.handle(event: .receivedIFrame(ns: ns, nr: nr, pf: pf, payload: payload))
 
@@ -1115,10 +1177,12 @@ final class AX25SessionManager: ObservableObject {
             onSessionStateChanged?(session, oldState, session.state)
         }
 
-        // Acknowledge received frames in our send buffer
-        session.acknowledgeUpTo(nr: nr)
+        // Acknowledge received frames in our send buffer: remove [vaBefore, nr)
+        session.acknowledgeUpTo(from: vaBefore, to: nr)
         session.statistics.recordReceived(bytes: payload.count)
         session.touch()
+
+        onOutboundAckReceived?(session, session.va)
 
         // Deep debug snapshot whenever we successfully process an inbound I-frame.
         debugDumpSessionState(session, context: "inbound-I")
@@ -1176,6 +1240,9 @@ final class AX25SessionManager: ObservableObject {
         }
         session.clearSendTimesAcked(by: nr)
 
+        // Capture V(A) BEFORE state machine update - RR only acks [V(A), N(R))
+        let vaBefore = session.va
+
         let oldState = session.state
         let actions = session.stateMachine.handle(event: .receivedRR(nr: nr))
 
@@ -1188,9 +1255,36 @@ final class AX25SessionManager: ObservableObject {
             onSessionStateChanged?(session, oldState, session.state)
         }
 
-        // Acknowledge received frames
-        session.acknowledgeUpTo(nr: nr)
+        // Acknowledge received frames: remove only [vaBefore, nr) - not all ns < nr.
+        // When N(S) wraps, ns=0,1,2 may be newer frames; RR(nr=4) acks the FIRST use
+        // of 0,1,2,3 (PING/test/chunks), not the WRAPPED use (later chunks).
+        let sendBufKeysBefore = session.sendBuffer.keys.sorted()
+        session.acknowledgeUpTo(from: vaBefore, to: nr)
+        let sendBufKeysAfter = session.sendBuffer.keys.sorted()
         session.touch()
+
+        print("[DEBUG:AX25:RR] rx | nr=\(nr) va=\(session.va) vs=\(session.vs) sendBufBefore=\(sendBufKeysBefore) sendBufAfter=\(sendBufKeysAfter) outstanding=\(session.outstandingCount)")
+        onOutboundAckReceived?(session, session.va)
+
+        TxLog.debug(.session, "RR ACK state", [
+            "peer": source.display,
+            "va": session.va,
+            "vs": session.vs,
+            "outstanding": session.outstandingCount,
+            "queueDepth": session.pendingDataQueue.count
+        ])
+
+        // Drain pending queue now that window space freed (paclen-fragmented chunks)
+        let queueBeforeDrain = session.pendingDataQueue.count
+        drainPendingDataQueue(for: session)
+        let drained = queueBeforeDrain - session.pendingDataQueue.count
+        if drained > 0 {
+            TxLog.debug(.session, "Drain completed", [
+                "peer": source.display,
+                "drained": drained,
+                "remaining": session.pendingDataQueue.count
+            ])
+        }
 
         // Deep debug snapshot whenever we advance ACK state from RR.
         debugDumpSessionState(session, context: isPoll ? "inbound-RR-poll" : "inbound-RR")
@@ -1273,9 +1367,10 @@ final class AX25SessionManager: ObservableObject {
             onSessionStateChanged?(session, oldState, session.state)
         }
 
+        // REJ(nr) means "retransmit from nr" — do NOT clear send buffer (unlike RR which acks frames).
         // Get frames to retransmit
         let retransmitFrames = session.framesToRetransmit(from: nr)
-        for frame in retransmitFrames {
+        for _ in retransmitFrames {
             session.statistics.recordRetransmit()
         }
 
@@ -1317,6 +1412,18 @@ final class AX25SessionManager: ObservableObject {
 
         if session.state == .connected, session.outstandingCount > 0 {
             let retransmitFrames = session.framesToRetransmit(from: session.va)
+            let nsValues = retransmitFrames.compactMap { f -> Int? in
+                guard let ctrl = f.controlByte else { return nil }
+                return Int((ctrl >> 1) & 0x07)  // N(S) from AX.25 control byte
+            }
+            print("[DEBUG:AX25:T1] retransmit | va=\(session.va) vs=\(session.vs) outstanding=\(session.outstandingCount) sendBufKeys=\(session.sendBuffer.keys.sorted()) retransmitNS=\(nsValues) retransmitCount=\(retransmitFrames.count)")
+            TxLog.debug(.session, "T1 retransmit", [
+                "peer": session.remoteAddress.display,
+                "va": session.va,
+                "outstanding": session.outstandingCount,
+                "retransmitCount": retransmitFrames.count,
+                "retransmitNS": nsValues.map { String($0) }.joined(separator: ",")
+            ])
             for frame in retransmitFrames {
                 debugTrace("TX I (retransmit)", ["frame": describeFrame(frame)])
                 session.statistics.recordRetransmit()
@@ -1460,7 +1567,7 @@ final class AX25SessionManager: ObservableObject {
 
     // MARK: - Private Helpers
 
-    /// Drain the pending data queue for a session that just connected
+    /// Drain the pending data queue (paclen-fragmented chunks) when window has space
     private func drainPendingDataQueue(for session: AX25Session) {
         guard !session.pendingDataQueue.isEmpty else { return }
 
@@ -1469,29 +1576,32 @@ final class AX25SessionManager: ObservableObject {
             "queueDepth": session.pendingDataQueue.count
         ])
 
-        // Copy and clear the queue
-        let pendingData = session.pendingDataQueue
-        session.pendingDataQueue.removeAll()
-
-        // Send each queued item
-        for item in pendingData {
-            guard session.canSendIFrame else {
-                // Window full, re-queue remaining items
-                session.pendingDataQueue.append(item)
-                TxLog.warning(.session, "Window full during queue drain, re-queued", [
-                    "remaining": session.pendingDataQueue.count
-                ])
-                continue
+        var drained: [(data: Data, pid: UInt8, displayInfo: String?)] = []
+        var remaining: [(data: Data, pid: UInt8, displayInfo: String?)] = []
+        for item in session.pendingDataQueue {
+            if session.canSendIFrame {
+                drained.append(item)
+            } else {
+                remaining.append(item)
             }
+        }
+        session.pendingDataQueue = remaining
 
+        var wasIdle = session.outstandingCount == 0
+        for item in drained {
+            let ns = session.vs  // Capture before buildIFrame increments vs
             let iFrame = buildIFrame(for: session, payload: item.data, pid: item.pid, displayInfo: item.displayInfo)
             debugTrace("TX I (drain queue)", ["frame": describeFrame(iFrame)])
-
-            // Buffer for potential retransmission
-            session.bufferFrame(iFrame, ns: session.vs - 1)
+            print("[DEBUG:AX25:DRAIN] tx | N(S)=\(ns) payload=\(item.data.count) va=\(session.va) vs=\(session.vs)")
+            // Use ns directly - (vs-1) wraps to -1 when vs goes 7->0, corrupting sendBuffer
+            session.bufferFrame(iFrame, ns: ns)
+            session.recordSendTime(ns: ns, time: Date())
             session.statistics.recordSent(bytes: item.data.count)
 
-            // Send via callback
+            if wasIdle {
+                startT1Timer(for: session)
+                wasIdle = false
+            }
             onSendFrame?(iFrame)
 
             TxLog.debug(.session, "Sent queued data", [
@@ -1500,6 +1610,11 @@ final class AX25SessionManager: ObservableObject {
             ])
         }
 
+        if !remaining.isEmpty {
+            TxLog.debug(.session, "Window filled during drain, re-queued", [
+                "remaining": remaining.count
+            ])
+        }
         session.touch()
     }
 
@@ -1544,7 +1659,6 @@ final class AX25SessionManager: ObservableObject {
                 )
                 debugTrace("TX SABM", ["frame": describeFrame(frame)])
                 frames.append(frame)
-                onSendFrame?(frame)
 
             case .sendUA:
                 let frame = AX25FrameBuilder.buildUA(
@@ -1554,7 +1668,6 @@ final class AX25SessionManager: ObservableObject {
                 )
                 debugTrace("TX UA", ["frame": describeFrame(frame)])
                 frames.append(frame)
-                onSendFrame?(frame)
 
             case .sendDM:
                 let frame = AX25FrameBuilder.buildDM(
@@ -1564,7 +1677,6 @@ final class AX25SessionManager: ObservableObject {
                 )
                 debugTrace("TX DM", ["frame": describeFrame(frame)])
                 frames.append(frame)
-                onSendFrame?(frame)
 
             case .sendDISC:
                 let frame = AX25FrameBuilder.buildDISC(
@@ -1574,7 +1686,6 @@ final class AX25SessionManager: ObservableObject {
                 )
                 debugTrace("TX DISC", ["frame": describeFrame(frame)])
                 frames.append(frame)
-                onSendFrame?(frame)
 
             case .sendRR(let nr, let pf):
                 let frame = AX25FrameBuilder.buildRR(
@@ -1586,7 +1697,6 @@ final class AX25SessionManager: ObservableObject {
                 )
                 debugTrace("TX RR", ["frame": describeFrame(frame)])
                 frames.append(frame)
-                onSendFrame?(frame)
 
             case .sendRNR(let nr, let pf):
                 let frame = AX25FrameBuilder.buildRNR(
@@ -1598,7 +1708,6 @@ final class AX25SessionManager: ObservableObject {
                 )
                 debugTrace("TX RNR", ["frame": describeFrame(frame)])
                 frames.append(frame)
-                onSendFrame?(frame)
 
             case .sendREJ(let nr, let pf):
                 let frame = AX25FrameBuilder.buildREJ(
@@ -1610,7 +1719,6 @@ final class AX25SessionManager: ObservableObject {
                 )
                 debugTrace("TX REJ", ["frame": describeFrame(frame)])
                 frames.append(frame)
-                onSendFrame?(frame)
 
             case .sendIFrame(let ns, let nr, let payload):
                 let frame = AX25FrameBuilder.buildIFrame(
@@ -1624,9 +1732,10 @@ final class AX25SessionManager: ObservableObject {
                 )
                 debugTrace("TX I", ["frame": describeFrame(frame)])
                 frames.append(frame)
-                onSendFrame?(frame)
 
             case .deliverData(let data):
+                print("[DEBUG:AX25:DELIVER] I-frame payload to reassembly | from=\(session.remoteAddress.display) size=\(data.count)")
+                onDataDeliveredForReassembly?(session, data)
                 onDataReceived?(session, data)
 
             case .notifyConnected:

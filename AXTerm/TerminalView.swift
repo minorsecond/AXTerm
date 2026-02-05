@@ -37,11 +37,24 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// When a peer sends peerAxdpDisabled, set this to trigger a toast.
     @Published var pendingPeerAxdpDisabledNotification: String?
 
+    /// Current outbound message progress for sender UI highlighting (pending → sent → acked)
+    @Published private(set) var currentOutboundProgress: OutboundMessageProgress?
+
     /// Cancellables for Combine subscriptions
     private var cancellables = Set<AnyCancellable>()
 
     /// Callback for sending response frames (RR, REJ, etc.)
     var onSendResponseFrame: ((OutboundFrame) -> Void)?
+
+    /// Callback when plain-text (non-AXDP) data is received from connected session.
+    /// Used to add to console when sender uses plain text instead of AXDP.
+    var onPlainTextChatReceived: ((AX25Address, String) -> Void)?
+
+    /// Tracks peers that are currently mid-AXDP reassembly.
+    /// When data with AXDP magic is received, the peer is added here.
+    /// When AXDP message extraction completes via appendAXDPChatToTranscript, the peer is removed.
+    /// This prevents subsequent AXDP fragments (which lack magic) from being displayed as raw text.
+    private var peersInAXDPReassembly: Set<String> = []
 
     init(sourceCall: String = "", sessionManager: AX25SessionManager? = nil) {
         var vm = TerminalTxViewModel()
@@ -70,6 +83,14 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                 if newState == .connected {
                     self?.updateCurrentSession()
                 }
+                
+                // When a session disconnects, clear the AXDP reassembly flag for that peer.
+                // This prevents stale flags from suppressing future plain-text data.
+                if newState == .disconnected {
+                    let peerKey = session.remoteAddress.display.uppercased()
+                    self?.peersInAXDPReassembly.remove(peerKey)
+                }
+                
                 self?.objectWillChange.send()
             }
         }
@@ -85,6 +106,108 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             ])
             self.appendToSessionTranscript(from: session, data: data)
         }
+
+        // Chain onOutboundAckReceived for sender progress highlighting
+        let previousAckCallback = self.sessionManager.onOutboundAckReceived
+        self.sessionManager.onOutboundAckReceived = { [weak self] session, va in
+            previousAckCallback?(session, va)
+            Task { @MainActor in
+                self?.updateOutboundBytesAcked(session: session, va: va)
+            }
+        }
+    }
+
+    /// Start tracking an outbound message for progressive highlighting
+    /// - Parameters:
+    ///   - text: The message text being sent
+    ///   - totalBytes: Total bytes in the message
+    ///   - destination: Remote callsign
+    ///   - hasAcks: True for connected-mode (AXDP), false for datagram
+    ///   - startingVs: The V(S) sequence number when transmission starts (for modulo-8 ack tracking)
+    ///   - paclen: Packet length for fragmentation
+    func startOutboundProgress(text: String, totalBytes: Int, destination: String, hasAcks: Bool, startingVs: Int, paclen: Int) {
+        let chunks = (totalBytes + paclen - 1) / paclen
+        currentOutboundProgress = OutboundMessageProgress(
+            id: UUID(),
+            text: text,
+            totalBytes: totalBytes,
+            bytesSent: 0,
+            bytesAcked: 0,
+            destination: destination,
+            timestamp: Date(),
+            hasAcks: hasAcks,
+            startingVs: startingVs,
+            totalChunks: chunks,
+            paclen: paclen,
+            lastKnownVa: startingVs,  // Initially, no frames are acked, so va == startingVs
+            chunksAcked: 0
+        )
+        objectWillChange.send()
+    }
+
+    /// Update bytes-sent count when a chunk is transmitted
+    func updateOutboundBytesSent(additionalBytes: Int) {
+        guard var prog = currentOutboundProgress else { return }
+        prog.bytesSent = min(prog.bytesSent + additionalBytes, prog.totalBytes)
+        currentOutboundProgress = prog
+        if prog.isComplete {
+            clearOutboundProgressAfterDelay()
+        }
+        objectWillChange.send()
+    }
+
+    /// Update bytes-acked from RR (va = N(R) sequence number, uses modulo-8)
+    /// Correctly handles sequence number wraparound for messages spanning >7 frames.
+    func updateOutboundBytesAcked(session: AX25Session, va: Int) {
+        guard var prog = currentOutboundProgress, prog.hasAcks,
+              session.remoteAddress.display.uppercased() == prog.destination.uppercased()
+        else { return }
+        
+        // Calculate delta using modulo-8 arithmetic
+        // va is the N(R) from RR, meaning all frames with N(S) < N(R) are acknowledged
+        let modulus = 8
+        let delta = (va - prog.lastKnownVa + modulus) % modulus
+        
+        // Only update if there's forward progress (delta > 0 and we haven't acked everything yet)
+        if delta > 0 && prog.chunksAcked < prog.totalChunks {
+            prog.lastKnownVa = va
+            prog.chunksAcked = min(prog.chunksAcked + delta, prog.totalChunks)
+            
+            // Calculate bytesAcked from chunksAcked
+            var bytes: Int = 0
+            for i in 0..<prog.chunksAcked {
+                if i < prog.totalChunks - 1 {
+                    bytes += prog.paclen
+                } else {
+                    // Last chunk may be smaller
+                    bytes += prog.totalBytes - (prog.totalChunks - 1) * prog.paclen
+                }
+            }
+            prog.bytesAcked = min(bytes, prog.totalBytes)
+            currentOutboundProgress = prog
+            
+            if prog.isComplete {
+                clearOutboundProgressAfterDelay()
+            }
+            objectWillChange.send()
+        }
+    }
+
+    /// Clear progress after a short delay when complete (so user sees final state)
+    private func clearOutboundProgressAfterDelay() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)  // 1.5s
+            if currentOutboundProgress?.isComplete == true {
+                currentOutboundProgress = nil
+                objectWillChange.send()
+            }
+        }
+    }
+
+    /// Clear progress immediately (e.g. user sends another message)
+    func clearOutboundProgress() {
+        currentOutboundProgress = nil
+        objectWillChange.send()
     }
 
     /// Append decoded AXDP chat text to the session transcript.
@@ -97,6 +220,11 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             ])
             return
         }
+        // Clear the AXDP reassembly flag for this peer—reassembly is complete.
+        // This must happen BEFORE appendToSessionTranscript so the text isn't suppressed.
+        let peerKey = from.display.uppercased()
+        peersInAXDPReassembly.remove(peerKey)
+        
         // Append with newline so appendToSessionTranscript flushes the line
         let data = Data((text.trimmingCharacters(in: .whitespacesAndNewlines) + "\r\n").utf8)
         appendToSessionTranscript(from: session, data: data)
@@ -330,8 +458,20 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// session transcript, respecting CR/LF line boundaries and keeping
     /// messages grouped in arrival order.
     private func appendToSessionTranscript(from session: AX25Session, data: Data) {
+        let peerKey = session.remoteAddress.display.uppercased()
+        
         // Suppress raw AXDP envelope bytes—AXDP chat is delivered via appendAXDPChatToTranscript.
-        if AXDP.hasMagic(data) { return }
+        // When we see AXDP magic, mark this peer as mid-reassembly.
+        if AXDP.hasMagic(data) {
+            peersInAXDPReassembly.insert(peerKey)
+            return
+        }
+        
+        // If this peer is mid-AXDP-reassembly, suppress subsequent fragments (they lack magic).
+        // The reassembly will complete via appendAXDPChatToTranscript which clears the flag.
+        if peersInAXDPReassembly.contains(peerKey) {
+            return
+        }
 
         // Only show text for the active session, if one is selected; otherwise
         // use the most recently active connected session as the source of truth.
@@ -348,6 +488,8 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                                String(data: currentLineBuffer, encoding: .ascii) ??
                                currentLineBuffer.map { String(format: "%02X", $0) }.joined()
                     sessionTranscriptLines.append(line)
+                    // Plain-text chat must go to console (sessionTranscriptLines is legacy).
+                    onPlainTextChatReceived?(session.remoteAddress, line)
                     // Keep transcript bounded for performance.
                     if sessionTranscriptLines.count > 1000 {
                         sessionTranscriptLines.removeFirst(sessionTranscriptLines.count - 1000)
@@ -428,6 +570,28 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             path: path,
             displayInfo: displayInfo
         )
+    }
+    
+    /// Get session info (vs, paclen) for the current destination.
+    /// Used to properly initialize outbound progress tracking with modulo-8 ack handling.
+    func sessionInfo(for destination: String) -> (vs: Int, paclen: Int)? {
+        guard !destination.isEmpty else { return nil }
+        let dest = parseCallsign(destination)
+        let path = parsePath(viewModel.digiPath)
+        
+        // Check for existing connected session first
+        if let session = sessionManager.connectedSession(withPeer: dest) {
+            return (vs: session.vs, paclen: session.stateMachine.config.paclen)
+        }
+        
+        // Check for any existing session (even if not yet connected)
+        if let session = sessionManager.existingSession(for: dest, path: path) {
+            return (vs: session.vs, paclen: session.stateMachine.config.paclen)
+        }
+        
+        // No session yet - return default config values
+        // The session will be created when sendConnected is called
+        return (vs: 0, paclen: AX25Constants.defaultPacketLength)
     }
 
     /// Update the current session based on destination/path
@@ -658,11 +822,21 @@ struct TerminalView: View {
             handleFileDrop(providers)
         }
         .onAppear {
+            // Wire sender progress: I-frames transmitted (incl. from drain) update bytesSent
+            client.onUserFrameTransmitted = { [weak txViewModel] bytes in
+                txViewModel?.updateOutboundBytesSent(additionalBytes: bytes)
+            }
+
             // Wire AXDP chat received to terminal transcript (regardless of AXDP badge state).
-            // Must add to client.consoleLines—that's what the UI displays. sessionTranscriptLines
-            // is legacy and not shown in ConsoleView.
-            sessionCoordinator.onAXDPChatReceived = { [weak txViewModel, weak client] from, text in
+            // appendAXDPChatToTranscript handles adding to console via appendToSessionTranscript
+            // → onPlainTextChatReceived → appendSessionChatLine. Do NOT call appendSessionChatLine
+            // here directly or the message will appear twice.
+            sessionCoordinator.onAXDPChatReceived = { [weak txViewModel] from, text in
                 txViewModel?.appendAXDPChatToTranscript(from: from, text: text)
+            }
+
+            // Wire plain-text chat (non-AXDP) to console when sender uses plain text.
+            txViewModel.onPlainTextChatReceived = { [weak client] from, text in
                 client?.appendSessionChatLine(from: from.display, text: text)
             }
 
@@ -860,6 +1034,17 @@ struct TerminalView: View {
 
                 // Session output (reuse console view for now, filtered by session)
                 sessionOutputView
+
+                // Outbound progress (sender: pending → sent → acked highlighting)
+                if let progress = txViewModel.currentOutboundProgress {
+                    OutboundProgressView(progress: progress, sourceCall: txViewModel.viewModel.sourceCall)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .bottom).combined(with: .opacity),
+                            removal: .opacity
+                        ))
+                }
 
                 // TX Queue (collapsible)
                 if !txViewModel.queueEntries.isEmpty {
@@ -1061,12 +1246,28 @@ struct TerminalView: View {
         // Get the last queued entry and actually send it
         guard let entry = txViewModel.queueEntries.last else { return }
 
-        // Send via PacketEngine
+        // Start outbound progress (datagram has no ACKs; fire-and-forget)
+        // For datagrams, vs/paclen don't matter since we don't track acks
+        let text = entry.frame.displayInfo ?? String(data: entry.frame.payload, encoding: .utf8) ?? ""
+        txViewModel.startOutboundProgress(
+            text: text,
+            totalBytes: entry.frame.payload.count,
+            destination: txViewModel.viewModel.destinationCall.isEmpty ? "BROADCAST" : txViewModel.viewModel.destinationCall,
+            hasAcks: false,
+            startingVs: 0,
+            paclen: AX25Constants.defaultPacketLength
+        )
+
+        // Send via PacketEngine (bytesSent for I-frame via onUserFrameTransmitted; UI frames use payload)
         client.send(frame: entry.frame) { [weak txViewModel] result in
             Task { @MainActor in
                 switch result {
                 case .success:
                     txViewModel?.updateFrameStatus(entry.frame.id, status: .sent)
+                    // For UI frames (datagram), update progress when sent
+                    if entry.frame.frameType.lowercased() == "ui" {
+                        txViewModel?.updateOutboundBytesSent(additionalBytes: entry.frame.payload.count)
+                    }
                 case .failure:
                     txViewModel?.updateFrameStatus(entry.frame.id, status: .failed)
                 }
@@ -1091,6 +1292,15 @@ struct TerminalView: View {
                 // Fall back to plain text
                 var data = Data(text.utf8)
                 data.append(0x0D)  // CR
+                let fallbackSessionInfo = txViewModel.sessionInfo(for: txViewModel.viewModel.destinationCall)
+                txViewModel.startOutboundProgress(
+                    text: text,
+                    totalBytes: data.count,
+                    destination: txViewModel.viewModel.destinationCall,
+                    hasAcks: true,
+                    startingVs: fallbackSessionInfo?.vs ?? 0,
+                    paclen: fallbackSessionInfo?.paclen ?? AX25Constants.defaultPacketLength
+                )
                 let frames = txViewModel.sendConnected(
                     payload: data,
                     displayInfo: text
@@ -1134,13 +1344,25 @@ struct TerminalView: View {
             payload = data
         }
 
+        // Start outbound progress for sender highlighting (AXDP/connected has ACKs)
+        // Get session info for proper modulo-8 ack tracking
+        let sessionInfo = txViewModel.sessionInfo(for: txViewModel.viewModel.destinationCall)
+        txViewModel.startOutboundProgress(
+            text: text,
+            totalBytes: payload.count,
+            destination: txViewModel.viewModel.destinationCall,
+            hasAcks: true,
+            startingVs: sessionInfo?.vs ?? 0,
+            paclen: sessionInfo?.paclen ?? AX25Constants.defaultPacketLength
+        )
+
         // Get frames from session manager (may include SABM if not connected)
         let frames = txViewModel.sendConnected(
             payload: payload,
             displayInfo: text
         )
 
-        // Send all frames
+        // Send all frames (bytesSent updated via client.onUserFrameTransmitted)
         for frame in frames {
             client.send(frame: frame) { result in
                 Task { @MainActor in

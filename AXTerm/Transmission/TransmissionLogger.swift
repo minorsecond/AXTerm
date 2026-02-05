@@ -409,15 +409,16 @@ final class TxLog {
         debug(.adaptive, "Learning", data)
     }
 
-    static func adaptiveConfigSynced(window: Int, rtoMin: Double, rtoMax: Double, maxRetries: Int) {
+    static func adaptiveConfigSynced(window: Int, paclen: Int, rtoMin: Double, rtoMax: Double, maxRetries: Int) {
         let data: [String: Any] = [
             "window": window,
+            "paclen": paclen,
             "rtoMin": String(format: "%.1f", rtoMin),
             "rtoMax": String(format: "%.1f", rtoMax),
             "maxRetries": maxRetries
         ]
         #if DEBUG
-        print("[ADAPTIVE] 📊 Config synced | K=\(window) RTO=\(String(format: "%.1f", rtoMin))–\(String(format: "%.1f", rtoMax))s N2=\(maxRetries)")
+        print("[ADAPTIVE] 📊 Config synced | K=\(window) P=\(paclen) RTO=\(String(format: "%.1f", rtoMin))–\(String(format: "%.1f", rtoMax))s N2=\(maxRetries)")
         #endif
         debug(.adaptive, "Config synced", data)
     }

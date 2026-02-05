@@ -122,7 +122,7 @@ final class BackwardsCompatibilityTests: XCTestCase {
         XCTAssertTrue(AXDP.hasMagic(decoded!.info), "Decoded frame info should have AXDP magic")
 
         // Should be decodable as AXDP
-        let decodedAXDP = AXDP.Message.decode(from: decoded!.info)
+        let decodedAXDP = AXDP.Message.decodeMessage(from: decoded!.info)
         XCTAssertNotNil(decodedAXDP)
         XCTAssertEqual(decodedAXDP?.type, .chat)
         XCTAssertEqual(decodedAXDP?.sessionId, 123)
@@ -145,7 +145,7 @@ final class BackwardsCompatibilityTests: XCTestCase {
             XCTAssertEqual(hasAXDP, shouldBeAXDP, "\(name) AXDP detection mismatch")
 
             if hasAXDP {
-                let decoded = AXDP.Message.decode(from: payload)
+                let decoded = AXDP.Message.decodeMessage(from: payload)
                 XCTAssertNotNil(decoded, "\(name) should decode as AXDP")
             }
         }
@@ -167,7 +167,7 @@ final class BackwardsCompatibilityTests: XCTestCase {
             XCTAssertFalse(AXDP.hasMagic(payload), "Binary payload should not be detected as AXDP: \(payload.hexString)")
 
             // Attempting to decode should return nil, not crash
-            let decoded = AXDP.Message.decode(from: payload)
+            let decoded = AXDP.Message.decodeMessage(from: payload)
             XCTAssertNil(decoded, "Binary payload should not decode as AXDP")
         }
     }
@@ -183,7 +183,7 @@ final class BackwardsCompatibilityTests: XCTestCase {
         XCTAssertFalse(AXDP.hasMagic(randomData))
 
         // Attempting to decode should return nil
-        let decoded = AXDP.Message.decode(from: randomData)
+        let decoded = AXDP.Message.decodeMessage(from: randomData)
         XCTAssertNil(decoded)
     }
 
@@ -215,7 +215,7 @@ final class BackwardsCompatibilityTests: XCTestCase {
         for payload in standardPayloads {
             XCTAssertFalse(AXDP.hasMagic(payload), "Standard payload should not have AXDP magic")
             // Attempting to decode as AXDP should return nil
-            XCTAssertNil(AXDP.Message.decode(from: payload))
+            XCTAssertNil(AXDP.Message.decodeMessage(from: payload))
         }
     }
 
@@ -233,7 +233,7 @@ final class BackwardsCompatibilityTests: XCTestCase {
             XCTAssertTrue(AXDP.hasMagic(encoded), "AXDP message should have magic header")
 
             // Should decode back correctly
-            let decoded = AXDP.Message.decode(from: encoded)
+            let decoded = AXDP.Message.decodeMessage(from: encoded)
             XCTAssertNotNil(decoded)
             XCTAssertEqual(decoded?.type, msg.type)
         }
@@ -327,7 +327,7 @@ final class BackwardsCompatibilityTests: XCTestCase {
         XCTAssertTrue(AXDP.hasMagic(magicOnly))
 
         // But it shouldn't decode to a valid message (no TLVs)
-        let decoded = AXDP.Message.decode(from: magicOnly)
+        let decoded = AXDP.Message.decodeMessage(from: magicOnly)
         XCTAssertNil(decoded, "Magic only without TLVs should not decode")
     }
 }

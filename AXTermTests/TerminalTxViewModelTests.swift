@@ -95,7 +95,7 @@ final class TerminalTxViewModelTests: XCTestCase {
         if let payload = frame?.payload {
             XCTAssertTrue(AXDP.hasMagic(payload), "Payload should have AXDP magic header")
             // Decode and verify the message
-            if let msg = AXDP.Message.decode(from: payload) {
+            if let (msg, _) = AXDP.Message.decode(from: payload) {
                 XCTAssertEqual(msg.type, .chat)
                 if let textData = msg.payload, let text = String(data: textData, encoding: .utf8) {
                     XCTAssertEqual(text, "Hello World")

@@ -8,6 +8,23 @@
 
 import Foundation
 
+// MARK: - AX.25 Constants
+
+/// Common AX.25 protocol constants
+enum AX25Constants {
+    /// Default packet length (paclen) in bytes
+    static let defaultPacketLength: Int = 128
+    
+    /// Default window size (max outstanding I-frames in modulo-8)
+    static let defaultWindowSize: Int = 4
+    
+    /// Sequence number modulo for standard AX.25
+    static let modulo8: Int = 8
+    
+    /// Sequence number modulo for extended AX.25
+    static let modulo128: Int = 128
+}
+
 // MARK: - Session State
 
 /// State of an AX.25 connected-mode session
@@ -25,6 +42,9 @@ enum AX25SessionState: String, Equatable, Sendable {
 struct AX25SessionConfig: Sendable {
     /// Window size K (max outstanding I-frames)
     let windowSize: Int
+
+    /// Maximum payload bytes per I-frame (paclen). Frames are fragmented at this size.
+    let paclen: Int
 
     /// Maximum receive buffer size for out-of-sequence frames. When nil, equals windowSize.
     /// Can be set smaller than windowSize to force discard-oldest behavior under load (e.g. testing).
@@ -50,6 +70,7 @@ struct AX25SessionConfig: Sendable {
 
     init(
         windowSize: Int = 4,
+        paclen: Int = 128,
         maxReceiveBufferSize: Int? = nil,
         maxRetries: Int = 10,
         extended: Bool = false,
@@ -61,6 +82,7 @@ struct AX25SessionConfig: Sendable {
         let maxWindow = extended ? 127 : 7
         let ws = max(1, min(windowSize, maxWindow))
         self.windowSize = ws
+        self.paclen = max(32, min(paclen, 256))
         self.maxReceiveBufferSize = maxReceiveBufferSize.map { max(1, min($0, ws)) }
         self.maxRetries = max(1, maxRetries)
         self.extended = extended
@@ -537,6 +559,11 @@ struct AX25StateMachine: Sendable {
 
     private mutating func handleIFrame(ns: Int, nr: Int, pf: Bool, payload: Data) -> [AX25SessionAction] {
         var actions: [AX25SessionAction] = []
+        let vr = sequenceState.vr
+        let modulo = config.modulo
+        let windowHigh = (vr + config.windowSize - 1) % modulo
+
+        print("[DEBUG:AX25:IFRAME] rx | N(S)=\(ns) N(R)=\(nr) V(R)=\(vr) window=[\(vr)..\(windowHigh)] payload=\(payload.count) P/F=\(pf) inSeq=\(ns == vr) inWindow=\(isWithinReceiveWindow(ns: ns))")
 
         // Process N(R) - acknowledge our sent frames
         if sequenceState.outstandingCount > 0 {

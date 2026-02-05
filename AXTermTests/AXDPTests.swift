@@ -109,7 +109,7 @@ final class AXDPTests: XCTestCase {
         data.append(AXDP.TLV(type: 0x01, value: Data([0x01])).encode())  // CHAT
         data.append(AXDP.TLV(type: 0x02, value: AXDP.encodeUInt32(12345)).encode())
 
-        let tlvs = AXDP.decodeTLVs(from: data)
+        let (tlvs, _, _) = AXDP.decodeTLVs(from: data)
 
         XCTAssertEqual(tlvs.count, 2)
         XCTAssertEqual(tlvs[0].type, 0x01)
@@ -123,7 +123,7 @@ final class AXDPTests: XCTestCase {
         data.append(AXDP.TLV(type: 0x99, value: Data([0xDE, 0xAD, 0xBE, 0xEF])).encode())  // Unknown
         data.append(AXDP.TLV(type: 0x03, value: AXDP.encodeUInt32(42)).encode())
 
-        let tlvs = AXDP.decodeTLVs(from: data)
+        let (tlvs, _, _) = AXDP.decodeTLVs(from: data)
 
         // Should parse all three, including unknown
         XCTAssertEqual(tlvs.count, 3)
@@ -147,7 +147,7 @@ final class AXDPTests: XCTestCase {
         // Should start with magic
         XCTAssertTrue(AXDP.hasMagic(encoded))
         // Should be decodable
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .chat)
         XCTAssertEqual(decoded?.sessionId, 1)
@@ -167,7 +167,7 @@ final class AXDPTests: XCTestCase {
         )
 
         let encoded = msg.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .fileChunk)
@@ -192,7 +192,7 @@ final class AXDPTests: XCTestCase {
         )
 
         let encoded = msg.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.payload, chunkData)
@@ -209,7 +209,7 @@ final class AXDPTests: XCTestCase {
         )
 
         let encoded = msg.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .ack)
@@ -231,7 +231,7 @@ final class AXDPTests: XCTestCase {
         )
 
         let encoded = msg.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.transferMetrics, metrics)
@@ -247,7 +247,7 @@ final class AXDPTests: XCTestCase {
         )
 
         let encoded = msg.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.sackBitmap, sackBitmap)
@@ -260,7 +260,7 @@ final class AXDPTests: XCTestCase {
         var data = AXDP.magic
         data.append(AXDP.TLV(type: 0x01, value: Data([0x01])).encode())  // Just type
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         // Should parse what it can
         XCTAssertNotNil(decoded)
@@ -276,7 +276,7 @@ final class AXDPTests: XCTestCase {
         // Future unknown TLV type
         data.append(AXDP.TLV(type: 0x8F, value: Data([0x01, 0x02, 0x03, 0x04])).encode())
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         // Should decode successfully, ignoring unknown TLV
         XCTAssertNotNil(decoded)
@@ -294,7 +294,7 @@ final class AXDPTests: XCTestCase {
         ]
 
         for (index, data) in testCases.enumerated() {
-            let decoded = AXDP.Message.decode(from: data)
+            let decoded = AXDP.Message.decodeMessage(from: data)
             // Should return nil, not crash
             XCTAssertNil(decoded, "Test case \(index) should return nil for malformed data")
         }
@@ -305,7 +305,7 @@ final class AXDPTests: XCTestCase {
         var data = AXDP.magic
         data.append(Data([0x01, 0xFF, 0xFF, 0x01]))  // Type=1, Length=65535, only 1 byte value
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
         XCTAssertNil(decoded)
     }
 
@@ -355,7 +355,7 @@ final class AXDPTests: XCTestCase {
         for msgType in types {
             let msg = AXDP.Message(type: msgType, sessionId: 1, messageId: 1)
             let encoded = msg.encode()
-            let decoded = AXDP.Message.decode(from: encoded)
+            let decoded = AXDP.Message.decodeMessage(from: encoded)
 
             XCTAssertNotNil(decoded, "Failed to decode \(msgType)")
             XCTAssertEqual(decoded?.type, msgType)
@@ -378,7 +378,7 @@ final class AXDPTests: XCTestCase {
         )
 
         let encoded = original.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, original.type)

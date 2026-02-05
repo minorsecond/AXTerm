@@ -122,7 +122,7 @@ final class TransmissionEdgeCaseTests: XCTestCase {
         // Just the magic header, nothing else
         let data = AXDP.magic
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         XCTAssertNil(decoded)  // Not enough data
     }
@@ -134,11 +134,11 @@ final class TransmissionEdgeCaseTests: XCTestCase {
         // Corrupted: claims 100 bytes but only has 2
         data.append(Data([0x99, 0x00, 0x64, 0x01, 0x02]))
 
-        let decoded = AXDP.Message.decode(from: data)
+        let result = AXDP.Message.decodeMessage(from: data)
 
         // Should decode the first TLV at minimum
-        XCTAssertNotNil(decoded)
-        XCTAssertEqual(decoded?.type, .chat)
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.type, .chat)
     }
 
     func testAXDPDecodeMissingRequiredField() {
@@ -146,7 +146,7 @@ final class TransmissionEdgeCaseTests: XCTestCase {
         var data = AXDP.magic
         data.append(AXDP.TLV(type: 0x02, value: AXDP.encodeUInt32(12345)).encode())
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         XCTAssertNil(decoded)  // MessageType is required
     }
@@ -156,7 +156,7 @@ final class TransmissionEdgeCaseTests: XCTestCase {
         var data = AXDP.magic
         data.append(AXDP.TLV(type: 0x01, value: Data([0xFF])).encode())  // Invalid type
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         XCTAssertNil(decoded)  // Invalid message type
     }
@@ -167,7 +167,7 @@ final class TransmissionEdgeCaseTests: XCTestCase {
         data.append(AXDP.TLV(type: 0x01, value: Data([0x01])).encode())
         data.append(AXDP.TLV(type: 0x02, value: Data([0x01, 0x02])).encode())  // Too short
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         // Should decode with sessionId=0 (graceful degradation)
         XCTAssertNotNil(decoded)
@@ -181,11 +181,11 @@ final class TransmissionEdgeCaseTests: XCTestCase {
         data.append(AXDP.TLV(type: 0xFE, value: Data([0xFF])).encode())
         data.append(AXDP.TLV(type: 0x03, value: AXDP.encodeUInt32(42)).encode())
 
-        let decoded = AXDP.Message.decode(from: data)
+        let result = AXDP.Message.decodeMessage(from: data)
 
-        XCTAssertNotNil(decoded)
-        XCTAssertEqual(decoded?.unknownTLVs.count, 2)
-        XCTAssertEqual(decoded?.messageId, 42)
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.unknownTLVs.count, 2)
+        XCTAssertEqual(result?.messageId, 42)
     }
 
     // MARK: - SACK Bitmap Edge Cases

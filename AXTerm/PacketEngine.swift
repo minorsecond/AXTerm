@@ -86,6 +86,10 @@ final class PacketEngine: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
     private let packetInsertSubject = PassthroughSubject<Packet, Never>()
 
+    /// Called when an I-frame (AXDP/user payload) is successfully transmitted.
+    /// Parameter: payload byte count. Used for sender progress highlighting.
+    var onUserFrameTransmitted: ((Int) -> Void)?
+
     // MARK: - Debug Logging (Debug Builds Only)
     private func debugTrace(_ message: String, _ data: [String: Any] = [:]) {
         #if DEBUG
@@ -406,6 +410,10 @@ final class PacketEngine: ObservableObject {
                         "size": kissData.count
                     ])
                     self?.addSystemLine("Frame sent successfully", category: .transmission)
+                    // Notify for sender progress highlighting (I-frames with AXDP PID)
+                    if frame.frameType.lowercased() == "i", frame.pid == 0xF0 {
+                        self?.onUserFrameTransmitted?(frame.payload.count)
+                    }
                     completion?(.success(()))
                 }
             }
@@ -745,7 +753,11 @@ final class PacketEngine: ObservableObject {
         // Check for AXDP capabilities in UI frames
         detectAXDPCapabilities(from: packet)
 
-        if let text = packet.infoText {
+        // Skip raw I-frame console lines when payload is AXDP (PID 0xF0) – SessionCoordinator
+        // will deliver reassembled chat via appendSessionChatLine. Raw chunks would show truncated text.
+        let skipRawIFrameLine = packet.frameType == .i && packet.pid == 0xF0
+
+        if !skipRawIFrameLine, let text = packet.infoText {
             // Extract via path as array of callsign strings
             let viaPath = Packet.normalizedViaItems(from: packet.via)
 
@@ -808,7 +820,7 @@ final class PacketEngine: ObservableObject {
         guard AXDP.hasMagic(packet.info) else { return }
 
         // Decode AXDP message
-        guard let message = AXDP.Message.decode(from: packet.info) else { return }
+        guard let (message, _) = AXDP.Message.decode(from: packet.info) else { return }
 
         // PING and PONG messages carry capability information
         if (message.type == .ping || message.type == .pong), let caps = message.capabilities {

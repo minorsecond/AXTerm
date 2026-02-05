@@ -85,6 +85,8 @@ final class SessionCoordinator: ObservableObject {
     private let capabilityDiscoveryTimeout: TimeInterval = 900.0
     /// Cache for peers that did not respond to AXDP discovery
     private var axdpNotSupported: [String: Date] = [:]
+    /// Set of (from, messageId, sessionId) for displayed chat messages; prevents duplicates from retransmissions
+    private var displayedChatMessageIds: Set<String> = []
     /// How long to remember "not supported" before allowing auto-discovery again
     private let axdpNotSupportedTTL: TimeInterval = 86400.0
 
@@ -135,6 +137,20 @@ final class SessionCoordinator: ObservableObject {
     /// TTL for per-route cache: after this many seconds without a sample for that route, we fall back to global.
     private static let adaptiveCacheTTLSeconds: TimeInterval = 30 * 60  // 30 minutes
 
+    /// Reassembly buffer for fragmented AXDP messages over connected-mode I-frames.
+    /// Key: "callsign-path"; value: accumulated bytes.
+    private var inboundReassemblyBuffer: [String: Data] = [:]
+    
+    #if DEBUG
+    /// Test-only accessor for reassembly buffer state (for integration tests)
+    var testReassemblyBufferState: [String: Int] {
+        inboundReassemblyBuffer.mapValues { $0.count }
+    }
+    
+    /// Test-only callback for monitoring reassembly events
+    var onReassemblyEvent: ((String, Int, Bool) -> Void)?  // key, bufferSize, extracted
+    #endif
+
     init() {
         SessionCoordinator.shared = self
         setupCallbacks()
@@ -145,12 +161,13 @@ final class SessionCoordinator: ObservableObject {
     func syncSessionManagerConfigFromAdaptive() {
         guard adaptiveTransmissionEnabled else {
             sessionManager.defaultConfig = AX25SessionConfig()
-            TxLog.adaptiveConfigSynced(window: 4, rtoMin: 1, rtoMax: 30, maxRetries: 10)
+            TxLog.adaptiveConfigSynced(window: 4, paclen: 128, rtoMin: 1, rtoMax: 30, maxRetries: 10)
             return
         }
         let a = globalAdaptiveSettings
         sessionManager.defaultConfig = AX25SessionConfig(
             windowSize: a.windowSize.effectiveValue,
+            paclen: a.paclen.effectiveValue,
             maxReceiveBufferSize: nil,
             maxRetries: a.maxRetries.effectiveValue,
             extended: false,
@@ -160,6 +177,7 @@ final class SessionCoordinator: ObservableObject {
         )
         TxLog.adaptiveConfigSynced(
             window: a.windowSize.effectiveValue,
+            paclen: a.paclen.effectiveValue,
             rtoMin: a.rtoMin.effectiveValue,
             rtoMax: a.rtoMax.effectiveValue,
             maxRetries: a.maxRetries.effectiveValue
@@ -217,6 +235,7 @@ final class SessionCoordinator: ObservableObject {
     private func configFromAdaptive(_ a: TxAdaptiveSettings) -> AX25SessionConfig {
         AX25SessionConfig(
             windowSize: a.windowSize.effectiveValue,
+            paclen: a.paclen.effectiveValue,
             maxReceiveBufferSize: nil,
             maxRetries: a.maxRetries.effectiveValue,
             extended: false,
@@ -241,11 +260,13 @@ final class SessionCoordinator: ObservableObject {
         }
         guard let first = configs.first else { return AX25SessionConfig() }
         let windowSize = configs.map(\.windowSize).min() ?? first.windowSize
+        let paclen = configs.map(\.paclen).min() ?? first.paclen
         let rtoMin = configs.compactMap(\.rtoMin).max() ?? first.rtoMin ?? 1.0
         let rtoMax = configs.compactMap(\.rtoMax).max() ?? first.rtoMax ?? 30.0
         let maxRetries = configs.map(\.maxRetries).max() ?? first.maxRetries
         return AX25SessionConfig(
             windowSize: windowSize,
+            paclen: paclen,
             maxReceiveBufferSize: nil,
             maxRetries: maxRetries,
             extended: false,
@@ -292,7 +313,7 @@ final class SessionCoordinator: ObservableObject {
     /// Explicit deinit to ensure any background tasks are cancelled cleanly.
     /// Marked nonisolated to avoid actor deallocation bookkeeping that has
     /// been triggering a Swift concurrency runtime bug in unit tests.
-    nonisolated(unsafe) deinit {
+    nonisolated deinit {
         awaitingCompletionRequestTask?.cancel()
     }
 
@@ -315,7 +336,12 @@ final class SessionCoordinator: ObservableObject {
     // MARK: - Setup
 
     private func setupCallbacks() {
-        // Wire up response frame sending
+        // Wire up frame sending for drain queue and immediate sends
+        sessionManager.onSendFrame = { [weak self] frame in
+            self?.sendFrame(frame)
+        }
+
+        // Wire up frame sending for timer-based retransmissions
         sessionManager.onRetransmitFrame = { [weak self] frame in
             self?.sendFrame(frame)
         }
@@ -453,7 +479,7 @@ final class SessionCoordinator: ObservableObject {
         scheduleCapabilityTimeout(for: peerCallsign)
 
         // For connected sessions, route through session manager (I-frames)
-        sendAXDPPayload(
+        _ = sendAXDPPayload(
             pingMessage.encode(),
             to: session.remoteAddress,
             path: session.path,
@@ -521,7 +547,7 @@ final class SessionCoordinator: ObservableObject {
         )
 
         // Respond via I-frames if connected, UI otherwise
-        sendAXDPPayload(
+        _ = sendAXDPPayload(
             pongMessage.encode(),
             to: address,
             path: path,
@@ -579,6 +605,14 @@ final class SessionCoordinator: ObservableObject {
     /// Subscribe to incoming packets from PacketEngine
     func subscribeToPackets(from client: PacketEngine) {
         self.packetEngine = client
+
+        // AXDP reassembly must use in-order delivered data only, not raw packets.
+        // Out-of-window or buffered frames are discarded/buffered by AX.25; appending them
+        // would corrupt reassembly (chunks arrive out of order over KISS relay).
+        sessionManager.onDataDeliveredForReassembly = { [weak self] session, data in
+            print("[DEBUG:DELIVERY] Data delivered for reassembly | from=\(session.remoteAddress.display) size=\(data.count) hex=\(data.prefix(16).map { String(format: "%02X", $0) }.joined())")
+            self?.appendToReassemblyAndExtract(from: session.remoteAddress, path: session.path, data: data)
+        }
 
         client.packetPublisher
             .receive(on: DispatchQueue.main)
@@ -696,24 +730,89 @@ final class SessionCoordinator: ObservableObject {
         ) {
             sendFrame(rrFrame)
         }
-
-        // Handle all AXDP messages (capabilities, file transfers, etc.)
-        handleAXDPMessage(from: from, path: path, payload: packet.info)
+        // AXDP in I-frames is processed only via reassembly (onDataDeliveredForReassembly -> appendToReassemblyAndExtract).
+        // Do not call handleAXDPMessage here: the same payload is delivered to reassembly and would cause duplicate
+        // handling (e.g. ping/pong delivered twice).
     }
 
-    /// Handle all AXDP messages from incoming packets.
-    /// Routes to appropriate handlers based on message type.
-    private func handleAXDPMessage(from: AX25Address, path: DigiPath, payload: Data) {
-        guard AXDP.hasMagic(payload) else { return }
-        guard let message = AXDP.Message.decode(from: payload) else { return }
+    /// Append delivered (in-order) data to reassembly buffer and extract complete AXDP messages.
+    private func appendToReassemblyAndExtract(from: AX25Address, path: DigiPath, data: Data) {
+        let key = reassemblyKey(from: from, path: path)
+        var buf = inboundReassemblyBuffer[key] ?? Data()
+        let beforeLen = buf.count
+        buf.append(data)
+        inboundReassemblyBuffer[key] = buf
 
+        print("[DEBUG:REASSEMBLY] append | from=\(from.display) chunkLen=\(data.count) before=\(beforeLen) after=\(buf.count)")
+        TxLog.debug(.axdp, "Reassembly append chunk", [
+            "from": from.display,
+            "key": key,
+            "chunkLen": data.count,
+            "before": beforeLen,
+            "after": buf.count
+        ])
+        #if DEBUG
+        onReassemblyEvent?(key, buf.count, false)  // appended chunk
+        #endif
+
+        while let (message, consumed) = extractOneAXDPMessage(from: buf), consumed > 0, consumed <= buf.count {
+            print("[DEBUG:REASSEMBLY] extracted complete | from=\(from.display) type=\(message.type) consumed=\(consumed) payloadLen=\(message.payload?.count ?? 0)")
+            TxLog.debug(.axdp, "Reassembly extracted complete message", [
+                "from": from.display,
+                "type": String(describing: message.type),
+                "consumed": consumed,
+                "payloadLen": message.payload?.count ?? 0
+            ])
+            buf.removeFirst(consumed)
+            #if DEBUG
+            onReassemblyEvent?(key, buf.count, true)  // extracted message
+            #endif
+            handleAXDPMessageDecoded(from: from, path: path, message: message)
+        }
+        if buf.count > 0 {
+            let canExtract = extractOneAXDPMessage(from: buf) != nil
+            if !canExtract {
+                print("[DEBUG:REASSEMBLY] incomplete | from=\(from.display) bufLen=\(buf.count) hasMagic=\(AXDP.hasMagic(buf))")
+            }
+        }
+        if buf.count > 65_536 {
+            print("[DEBUG:REASSEMBLY] overflow discard | from=\(from.display) bufLen=\(buf.count)")
+            inboundReassemblyBuffer.removeValue(forKey: key)
+        } else if buf.isEmpty {
+            inboundReassemblyBuffer.removeValue(forKey: key)
+        } else {
+            inboundReassemblyBuffer[key] = buf
+        }
+    }
+
+    private func reassemblyKey(from: AX25Address, path: DigiPath) -> String {
+        "\(from.display)-\(path.display)"
+    }
+
+    /// Extract one complete AXDP message from buffer. Returns (message, consumedBytes) or nil if incomplete.
+    /// When decode succeeds, only the bytes actually consumed by the decoded message are returned.
+    private func extractOneAXDPMessage(from buffer: Data) -> (AXDP.Message, Int)? {
+        guard AXDP.hasMagic(buffer) else {
+            print("[DEBUG:REASSEMBLY:EXTRACT] nil | bufLen=\(buffer.count) reason=noMagic")
+            return nil
+        }
+        guard let (message, consumedBytes) = AXDP.Message.decode(from: buffer) else {
+            print("[DEBUG:REASSEMBLY:EXTRACT] nil | bufLen=\(buffer.count) reason=decodeFailed")
+            return nil
+        }
+        print("[DEBUG:REASSEMBLY:EXTRACT] ok | bufLen=\(buffer.count) consumed=\(consumedBytes) type=\(message.type) payloadLen=\(message.payload?.count ?? 0)")
+        return (message, consumedBytes)
+    }
+
+    /// Handle a fully decoded AXDP message (used after reassembly or single-frame).
+    private func handleAXDPMessageDecoded(from: AX25Address, path: DigiPath, message: AXDP.Message) {
         debugAXDP("RX", [
             "type": String(describing: message.type),
             "from": from.display,
             "path": path.display,
             "sessionId": message.sessionId,
             "messageId": message.messageId,
-            "len": payload.count
+            "len": message.payload?.count ?? 0
         ])
 
         switch message.type {
@@ -741,12 +840,20 @@ final class SessionCoordinator: ObservableObject {
         case .peerAxdpDisabled:
             handlePeerAxdpDisabled(from: from)
 
-        default:
+        @unknown default:
             TxLog.debug(.axdp, "Unhandled AXDP message type", [
                 "type": String(describing: message.type),
                 "from": from.display
             ])
         }
+    }
+
+    /// Handle all AXDP messages from incoming packets (UI frames or single I-frame).
+    /// Routes to appropriate handlers based on message type.
+    private func handleAXDPMessage(from: AX25Address, path: DigiPath, payload: Data) {
+        guard AXDP.hasMagic(payload) else { return }
+        guard let (message, _) = AXDP.Message.decode(from: payload) else { return }
+        handleAXDPMessageDecoded(from: from, path: path, message: message)
     }
 
     /// Handle peerAxdpEnabled: peer turned on their AXDP toggle; notify UI to show toast.
@@ -766,6 +873,13 @@ final class SessionCoordinator: ObservableObject {
     private func handleChatMessage(_ message: AXDP.Message, from: AX25Address) {
         guard let payload = message.payload, !payload.isEmpty else { return }
         guard let text = String(data: payload, encoding: .utf8), !text.isEmpty else { return }
+        let dedupeKey = "\(from.display)-\(message.messageId)-\(message.sessionId)"
+        guard !displayedChatMessageIds.contains(dedupeKey) else {
+            TxLog.debug(.axdp, "Skipping duplicate chat message", ["from": from.display, "messageId": message.messageId])
+            return
+        }
+        displayedChatMessageIds.insert(dedupeKey)
+        if displayedChatMessageIds.count > 2000 { displayedChatMessageIds.removeAll() }
         onAXDPChatReceived?(from, text)
     }
 
@@ -929,7 +1043,7 @@ final class SessionCoordinator: ObservableObject {
             "from": from.display,
             "file": fileMeta.filename,
             "size": fileMeta.fileSize,
-            "chunks": message.totalChunks,
+            "chunks": message.totalChunks ?? 0,
             "session": axdpSessionId,
             "compression": compressionAlgorithm == .none ? "none" : compressionAlgorithm.displayName
         ])
@@ -1281,7 +1395,7 @@ final class SessionCoordinator: ObservableObject {
                 transferMetrics: globalAdaptiveSettings.axdpExtensionsEnabled ? metricsExtension : nil
             )
 
-            sendAXDPPayload(
+            _ = sendAXDPPayload(
                 completionAck.encode(),
                 to: sourceAddress,
                 path: path,
@@ -1303,7 +1417,7 @@ final class SessionCoordinator: ObservableObject {
                 messageId: SessionCoordinator.transferCompleteMessageId
             )
 
-            sendAXDPPayload(
+            _ = sendAXDPPayload(
                 completionNack.encode(),
                 to: sourceAddress,
                 path: path,
@@ -1441,7 +1555,7 @@ final class SessionCoordinator: ObservableObject {
                     messageId: SessionCoordinator.transferCompleteMessageId,
                     sackBitmap: sack.encode()
                 )
-                sendAXDPPayload(
+                _ = sendAXDPPayload(
                     nackMessage.encode(),
                     to: from,
                     path: path,
@@ -1591,7 +1705,7 @@ final class SessionCoordinator: ObservableObject {
                                 compression: .none
                             )
                             // This internally guards on packetEngine being set.
-                            sendAXDPPayload(
+                            _ = sendAXDPPayload(
                                 chunkMessage.encode(),
                                 to: destAddress,
                                 path: path,
@@ -1746,7 +1860,7 @@ final class SessionCoordinator: ObservableObject {
         scheduleCapabilityTimeout(for: destAddress.display)
 
         // Manual discovery: prefer connected session, but do not force connection
-        sendAXDPPayload(
+        _ = sendAXDPPayload(
             pingMessage.encode(),
             to: destAddress,
             path: path,
@@ -2098,7 +2212,7 @@ final class SessionCoordinator: ObservableObject {
             fileMeta: fileMeta
         )
 
-        sendAXDPPayload(
+        _ = sendAXDPPayload(
             metaMessage.encode(),
             to: destAddress,
             path: path,
@@ -2281,7 +2395,7 @@ final class SessionCoordinator: ObservableObject {
                 sessionId: axdpSessionId,
                 messageId: SessionCoordinator.completionRequestMessageId
             )
-            sendAXDPPayload(
+            _ = sendAXDPPayload(
                 completionRequest.encode(),
                 to: destAddress,
                 path: path,
@@ -2357,7 +2471,7 @@ final class SessionCoordinator: ObservableObject {
                 messageId: 1
             )
 
-            sendAXDPPayload(
+            _ = sendAXDPPayload(
                 ackMessage.encode(),
                 to: sourceAddress,
                 path: path,
@@ -2398,7 +2512,7 @@ final class SessionCoordinator: ObservableObject {
                 messageId: 1
             )
 
-            sendAXDPPayload(
+            _ = sendAXDPPayload(
                 nackMessage.encode(),
                 to: sourceAddress,
                 path: path,

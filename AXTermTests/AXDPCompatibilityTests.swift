@@ -21,7 +21,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         var data = AXDP.magic
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.chat.rawValue])).encode())
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         XCTAssertNotNil(decoded, "Should decode minimal v1 message")
         XCTAssertEqual(decoded?.type, .chat)
@@ -36,7 +36,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.ack.rawValue])).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.messageId.rawValue, value: AXDP.encodeUInt32(42)).encode())
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .ack)
@@ -51,7 +51,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         data.append(AXDP.TLV(type: AXDP.TLVType.sessionId.rawValue, value: AXDP.encodeUInt32(0)).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.messageId.rawValue, value: AXDP.encodeUInt32(1)).encode())
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .ping)
@@ -70,7 +70,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         data.append(AXDP.TLV(type: AXDP.TLVType.payload.rawValue, value: payload).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.payloadCRC32.rawValue, value: AXDP.encodeUInt32(AXDP.crc32(payload))).encode())
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .fileChunk)
@@ -93,7 +93,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         // Known TLV after unknown ones
         data.append(AXDP.TLV(type: AXDP.TLVType.payload.rawValue, value: Data("Hello".utf8)).encode())
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         XCTAssertNotNil(decoded, "Should decode despite unknown TLVs")
         XCTAssertEqual(decoded?.type, .chat)
@@ -109,7 +109,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         data.append(AXDP.TLV(type: 0xFE, value: Data([0xBE, 0xEF])).encode())
         data.append(AXDP.TLV(type: 0xFF, value: Data()).encode())
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.unknownTLVs.count, 3)
@@ -120,7 +120,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         var data = AXDP.magic
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([0x10])).encode())  // Unknown type
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         // Should fail gracefully for completely unknown message type
         XCTAssertNil(decoded, "Unknown message type should return nil")
@@ -152,7 +152,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         data.append(AXDP.TLV(type: AXDP.TLVType.messageId.rawValue, value: AXDP.encodeUInt32(1)).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.capabilities.rawValue, value: capData).encode())
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .pong)
@@ -173,7 +173,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         data.append(AXDP.TLV(type: AXDP.TLVType.originalLength.rawValue, value: AXDP.encodeUInt32(100)).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.payloadCompressed.rawValue, value: Data(repeating: 0x42, count: 50)).encode())
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
 
         // Should decode but payload might be nil (can't decompress unknown algo)
         XCTAssertNotNil(decoded)
@@ -200,7 +200,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         // Extract and decode AXDP from info field
         if let info = decodedFrame?.info {
             XCTAssertTrue(AXDP.hasMagic(info), "Info should contain AXDP magic")
-            let decodedAXDP = AXDP.Message.decode(from: info)
+            let decodedAXDP = AXDP.Message.decodeMessage(from: info)
             XCTAssertNotNil(decodedAXDP)
             XCTAssertEqual(decodedAXDP?.type, .chat)
             XCTAssertEqual(decodedAXDP?.payload, Data("Hello".utf8))
@@ -280,7 +280,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         // TLV with zero-length value (valid)
         data.append(Data([0x09, 0x00, 0x00]))  // metadata TLV with empty value
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
         XCTAssertNotNil(decoded)
     }
 
@@ -292,7 +292,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         data.append(Data([0x06, 0xFF, 0xFF]))  // payload type, length 65535
         data.append(Data(repeating: 0x42, count: 65535))
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.payload?.count, 65535)
     }
@@ -305,7 +305,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         data.append(Data([0x06, 0x03, 0xE8]))  // type=6, length=1000
         data.append(Data(repeating: 0x42, count: 10))
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
         // Should handle gracefully - either partial decode or nil
         // The important thing is no crash
         XCTAssertNotNil(decoded)  // Should still decode the chat type
@@ -403,7 +403,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         ]
 
         for testCase in testCases {
-            let decoded = AXDP.Message.decode(from: testCase)
+            let decoded = AXDP.Message.decodeMessage(from: testCase)
             XCTAssertNil(decoded, "Should return nil for invalid magic: \(testCase.map { String(format: "%02X", $0) }.joined())")
         }
     }
@@ -416,7 +416,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         data.append(Data([0x50, 0xFF, 0xFE]))  // Claims huge length
         // This won't be reached due to above
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
         // Should at least decode the message type
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .chat)
@@ -430,7 +430,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         data.append(AXDP.TLV(type: AXDP.TLVType.sessionId.rawValue, value: AXDP.encodeUInt32(200)).encode())
         data.append(AXDP.TLV(type: AXDP.TLVType.sessionId.rawValue, value: AXDP.encodeUInt32(300)).encode())
 
-        let decoded = AXDP.Message.decode(from: data)
+        let decoded = AXDP.Message.decodeMessage(from: data)
         XCTAssertNotNil(decoded)
         // Implementation-dependent: check it handles consistently without crash
     }
@@ -448,7 +448,7 @@ final class AXDPCompatibilityTests: XCTestCase {
             )
 
             let encoded = original.encode()
-            let decoded = AXDP.Message.decode(from: encoded)
+            let decoded = AXDP.Message.decodeMessage(from: encoded)
 
             XCTAssertNotNil(decoded, "Round-trip failed for \(msgType)")
             XCTAssertEqual(decoded?.type, original.type)
@@ -472,7 +472,7 @@ final class AXDPCompatibilityTests: XCTestCase {
         )
 
         let encoded = original.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.payload, payload)

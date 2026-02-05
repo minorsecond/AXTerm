@@ -55,8 +55,9 @@ struct TerminalTxViewModel {
     var connectionMode: TxConnectionMode = .connected  // Default to connected for proper packet radio behavior
 
     /// Whether to use AXDP encoding (vs plain text)
-    /// Set to false when communicating with non-AXDP stations
-    var useAXDP: Bool = false  // Default to plain text to avoid Direwolf confusion
+    /// Default true so connected sessions use AXDP when peer supports it.
+    /// Toggle off for legacy/non-AXDP stations.
+    var useAXDP: Bool = true
 
     // MARK: - Queue State
 

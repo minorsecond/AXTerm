@@ -108,7 +108,7 @@ final class SessionCoordinatorTests: XCTestCase {
         let encoded = msg.encode()
         XCTAssertTrue(AXDP.hasMagic(encoded))
 
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .fileMeta)
         XCTAssertEqual(decoded?.sessionId, 12345)
@@ -130,7 +130,7 @@ final class SessionCoordinatorTests: XCTestCase {
         )
 
         let encoded = msg.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .fileChunk)
@@ -147,7 +147,7 @@ final class SessionCoordinatorTests: XCTestCase {
         )
 
         let encoded = msg.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .ack)
@@ -163,7 +163,7 @@ final class SessionCoordinatorTests: XCTestCase {
         )
 
         let encoded = msg.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .nack)
@@ -182,7 +182,7 @@ final class SessionCoordinatorTests: XCTestCase {
         )
 
         let encoded = msg.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .ping)
@@ -200,7 +200,7 @@ final class SessionCoordinatorTests: XCTestCase {
         )
 
         let encoded = msg.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.type, .pong)

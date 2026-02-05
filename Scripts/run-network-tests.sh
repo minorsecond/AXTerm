@@ -109,6 +109,7 @@ UNIT_TEST_ARGS+=("-only-testing:AXTermTests/TerminalTxViewModelTests")
 UNIT_TEST_ARGS+=("-only-testing:AXTermTests/TxSchedulerTests")
 UNIT_TEST_ARGS+=("-only-testing:AXTermTests/TxSchedulerIntegrationTests")
 UNIT_TEST_ARGS+=("-only-testing:AXTermTests/TransmissionEdgeCaseTests")
+UNIT_TEST_ARGS+=("-only-testing:AXTermTests/TransmissionFragmentationTests")
 
 echo "Running unit networking tests..."
 echo "  xcodebuild test ${UNIT_TEST_ARGS[*]}"

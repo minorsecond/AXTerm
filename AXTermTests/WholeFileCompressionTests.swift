@@ -263,7 +263,7 @@ final class WholeFileCompressionTests: XCTestCase {
 
         // Encode and decode
         let encoded = message.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         // Verify the compression algorithm is preserved
         XCTAssertNotNil(decoded, "FILE_META message should decode successfully")
@@ -293,7 +293,7 @@ final class WholeFileCompressionTests: XCTestCase {
         )
 
         let encoded = message.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.compression, AXDPCompression.Algorithm.none)
@@ -316,7 +316,7 @@ final class WholeFileCompressionTests: XCTestCase {
         )
 
         let encoded = chunkMessage.encode()
-        let decoded = AXDP.Message.decode(from: encoded)
+        let decoded = AXDP.Message.decodeMessage(from: encoded)
 
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.payload, preCompressedChunk)

@@ -90,7 +90,10 @@ enum AXDP {
         /// Returns nil if data is truncated or malformed.
         static func decode(from data: Data, at offset: Int) -> DecodeResult? {
             // Need at least 3 bytes: type (1) + length (2)
-            guard offset + 3 <= data.count else { return nil }
+            guard offset + 3 <= data.count else {
+                print("[DEBUG:AXDP:TLV] truncate header | offset=\(offset) need=3 dataLen=\(data.count)")
+                return nil
+            }
 
             let type = data[offset]
             let length = decodeUInt16(data.subdata(in: (offset + 1)..<(offset + 3)))
@@ -99,7 +102,14 @@ enum AXDP {
             let valueEnd = valueStart + Int(length)
 
             // Check value doesn't exceed data
-            guard valueEnd <= data.count else { return nil }
+            guard valueEnd <= data.count else {
+                if type == TLVType.payload.rawValue {
+                    print("[DEBUG:AXDP:TLV] truncate payload TLV | offset=\(offset) length=\(length) valueEnd=\(valueEnd) dataLen=\(data.count) SHORT=\(valueEnd - data.count) bytes")
+                } else {
+                    print("[DEBUG:AXDP:TLV] truncate value | type=0x\(String(format: "%02X", type)) offset=\(offset) length=\(length) valueEnd=\(valueEnd) dataLen=\(data.count)")
+                }
+                return nil
+            }
 
             let value = data.subdata(in: valueStart..<valueEnd)
             return DecodeResult(tlv: TLV(type: type, value: value), nextOffset: valueEnd)
@@ -252,20 +262,24 @@ enum AXDP {
         }
 
         /// Decode message from bytes.
-        /// Returns nil if magic header is missing or data is malformed.
+        /// Returns (message, consumedBytes) or nil if magic header is missing or data is malformed.
         /// Unknown TLVs are safely skipped (forward compatibility).
-        static func decode(from data: Data) -> Message? {
+        static func decode(from data: Data) -> (Message, Int)? {
             // Check magic header
             guard hasMagic(data) else {
+                print("[DEBUG:AXDP:DECODE] no magic | dataLen=\(data.count) prefix=\(data.prefix(4).map { String(format: "%02X", $0) }.joined())")
                 TxLog.debug(.axdp, "No AXDP magic header", ["size": data.count])
                 return nil
             }
 
             // Parse TLVs after magic
             let tlvData = data.subdata(in: magic.count..<data.count)
-            let tlvs = decodeTLVs(from: tlvData)
+            let (tlvs, truncated, tlvConsumedBytes) = decodeTLVs(from: tlvData)
 
-            guard !tlvs.isEmpty else { return nil }
+            guard !tlvs.isEmpty else {
+                print("[DEBUG:AXDP:DECODE] empty tlvs | dataLen=\(data.count) tlvDataLen=\(tlvData.count)")
+                return nil
+            }
 
             // Build message from TLVs
             var msg = Message(type: .chat, sessionId: 0, messageId: 0)
@@ -354,6 +368,19 @@ enum AXDP {
                 }
             }
 
+            // Truncated buffer: for payload-carrying types, return nil so reassembly keeps accumulating.
+            // Returning a Message with payload=nil would corrupt reassembly (partial treated as complete).
+            if truncated, msg.type == .chat || msg.type == .fileChunk {
+                TxLog.debug(.axdp, "Truncated chat/fileChunk buffer - return nil for reassembly", [
+                    "type": String(describing: msg.type),
+                    "bufferLen": data.count
+                ])
+                return nil
+            }
+            
+            // Calculate total consumed bytes: magic header + TLV data consumed
+            let consumedBytes = magic.count + tlvConsumedBytes
+
             // Handle compressed payload
             if let compressed = compressedPayload,
                compressionAlgo != .none,
@@ -376,6 +403,22 @@ enum AXDP {
                 return nil
             }
 
+            // Chat and fileChunk: prefer full decode with payload. If payload is nil (truncated/corrupt),
+            // return message anyway for graceful degradation so callers can handle (e.g. skip display).
+            // Reassembly still accumulates when decode returns nil for truly incomplete buffers.
+            switch msg.type {
+            case .chat, .fileChunk:
+                if msg.payload == nil {
+                    print("[DEBUG:AXDP:DECODE] incomplete msg | type=\(msg.type) bufferLen=\(data.count) payload=nil (graceful)")
+                    TxLog.debug(.axdp, "Message decoded without payload (truncated/corrupt)", [
+                        "type": String(describing: msg.type),
+                        "bufferLen": data.count
+                    ])
+                }
+            default:
+                break
+            }
+
             TxLog.axdpDecode(
                 type: String(describing: msg.type),
                 sessionId: UInt16(msg.sessionId & 0xFFFF),
@@ -384,9 +427,8 @@ enum AXDP {
             )
 
             if !msg.unknownTLVs.isEmpty {
-                TxLog.debug(.axdp, "Unknown TLVs preserved", [
-                    "count": msg.unknownTLVs.count,
-                    "types": msg.unknownTLVs.map { String(format: "0x%02X", $0.type) }.joined(separator: ", ")
+                TxLog.debug(.axdp, "Message contains unknown TLVs (preserved for forward compatibility)", [
+                    "count": msg.unknownTLVs.count
                 ])
             }
 
@@ -395,7 +437,13 @@ enum AXDP {
             print("[AXDP WIRE][DEC] type=\(msg.type) sessionId=\(msg.sessionId) messageId=\(msg.messageId) bytes=\(data.count) hex=\(hex)")
             #endif
 
-            return msg
+            return (msg, consumedBytes)
+        }
+        
+        /// Convenience method that returns just the message (discarding consumed bytes).
+        /// Useful for tests and callers that don't need reassembly tracking.
+        static func decodeMessage(from data: Data) -> Message? {
+            return decode(from: data)?.0
         }
     }
 
@@ -471,20 +519,22 @@ enum AXDP {
         return data.prefix(limit).map { String(format: "%02X", $0) }.joined()
     }
 
-    /// Decode all TLVs from data, skipping malformed ones
-    static func decodeTLVs(from data: Data) -> [TLV] {
+    /// Decode all TLVs from data, stopping on first malformed or truncated TLV.
+    /// Returns (parsed TLVs, wasTruncated). wasTruncated is true when parsing stopped because
+    /// a TLV header or value extended past end of data (caller must return nil for payload-carrying messages).
+    static func decodeTLVs(from data: Data) -> (tlvs: [TLV], truncated: Bool, consumedBytes: Int) {
         var tlvs: [TLV] = []
         var offset = 0
 
         while offset < data.count {
             guard let result = TLV.decode(from: data, at: offset) else {
-                break  // Stop on malformed TLV
+                return (tlvs, offset < data.count, offset)
             }
             tlvs.append(result.tlv)
             offset = result.nextOffset
         }
 
-        return tlvs
+        return (tlvs, false, offset)
     }
 
     // MARK: - Integer Encoding (Big-Endian)

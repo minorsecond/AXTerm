@@ -378,7 +378,7 @@ final class KISSRelayIntegrationTests: XCTestCase {
         if let info = ax25Decoded?.info {
             XCTAssertTrue(AXDP.hasMagic(info), "Should have AXDP magic")
 
-            let axdpDecoded = AXDP.Message.decode(from: info)
+            let axdpDecoded = AXDP.Message.decodeMessage(from: info)
             XCTAssertNotNil(axdpDecoded)
             XCTAssertEqual(axdpDecoded?.type, .chat)
             XCTAssertEqual(axdpDecoded?.sessionId, 1)
@@ -441,7 +441,7 @@ final class KISSRelayIntegrationTests: XCTestCase {
         XCTAssertNotNil(ax25Decoded)
 
         if let info = ax25Decoded?.info {
-            let axdpDecoded = AXDP.Message.decode(from: info)
+            let axdpDecoded = AXDP.Message.decodeMessage(from: info)
             XCTAssertNotNil(axdpDecoded)
             XCTAssertEqual(axdpDecoded?.type, .fileChunk)
             XCTAssertEqual(axdpDecoded?.chunkIndex, 3)
@@ -729,7 +729,7 @@ final class KISSRelayIntegrationTests: XCTestCase {
         XCTAssertNotNil(decoded2)
         XCTAssertTrue(AXDP.hasMagic(decoded2?.info ?? Data()), "Should have AXDP magic")
 
-        let axdpDecoded = AXDP.Message.decode(from: decoded2?.info ?? Data())
+        let axdpDecoded = AXDP.Message.decodeMessage(from: decoded2?.info ?? Data())
         XCTAssertNotNil(axdpDecoded)
         XCTAssertEqual(axdpDecoded?.type, .chat)
         print("AXDP packet received: '\(String(data: axdpDecoded?.payload ?? Data(), encoding: .utf8) ?? "?")'")
