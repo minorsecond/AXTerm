@@ -1055,4 +1055,70 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(iRetransmits.first?.nr, 2,
             "Retransmitted frame C must use current V(R)=2")
     }
+
+    // MARK: - Duplicate I-Frame Processing (KB5YZB-7 bug)
+
+    /// Proves that feeding the same I-frame to handleInboundIFrame twice produces
+    /// a spurious duplicate RR. The first call advances V(R) and generates a valid RR.
+    /// The second call sees the I-frame as outside-window and generates a SECOND RR
+    /// with the same N(R) — exactly the behavior observed in the KB5YZB-7 live session.
+    func testDuplicateIFrameProcessingProducesDuplicateRR() {
+        let manager = AX25SessionManager()
+        let peer = AX25Address(call: "KB5YZB", ssid: 7)
+        let session = connectSession(manager: manager, destination: peer, path: DigiPath())
+
+        // First processing: ns=0 arrives when V(R)=0 → in-sequence → RR(nr=1)
+        let rr1 = manager.handleInboundIFrame(
+            from: peer, path: DigiPath(), channel: 0,
+            ns: 0, nr: 0, pf: false,
+            payload: Data("Welcome".utf8)
+        )
+        XCTAssertNotNil(rr1, "First I-frame processing must produce an RR")
+        XCTAssertEqual(session.vr, 1, "V(R) must advance to 1 after accepting ns=0")
+
+        // Second processing of same frame: ns=0 arrives when V(R)=1 → outside window
+        let rr2 = manager.handleInboundIFrame(
+            from: peer, path: DigiPath(), channel: 0,
+            ns: 0, nr: 0, pf: false,
+            payload: Data("Welcome".utf8)
+        )
+
+        // This is the bug: the second call ALSO returns an RR, causing a duplicate on the wire.
+        // The state machine correctly produces an RR for outside-window frames (per spec),
+        // so the fix must be upstream: prevent the second call from ever happening.
+        XCTAssertNotNil(rr2,
+            "Second invocation of the same I-frame produces a duplicate RR (this is the bug mechanism)")
+        XCTAssertEqual(session.vr, 1,
+            "V(R) must NOT advance again for an outside-window duplicate")
+    }
+
+    /// Verifies that only one data delivery occurs even if the same I-frame is processed twice.
+    /// The second processing must NOT deliver duplicate payload to the application.
+    func testDuplicateIFrameDoesNotDeliverDataTwice() {
+        let manager = AX25SessionManager()
+        let peer = AX25Address(call: "KB5YZB", ssid: 7)
+        _ = connectSession(manager: manager, destination: peer, path: DigiPath())
+
+        var deliveryCount = 0
+        manager.onDataReceived = { _, _ in
+            deliveryCount += 1
+        }
+
+        // First processing delivers data
+        _ = manager.handleInboundIFrame(
+            from: peer, path: DigiPath(), channel: 0,
+            ns: 0, nr: 0, pf: false,
+            payload: Data("Hello".utf8)
+        )
+        XCTAssertEqual(deliveryCount, 1, "First I-frame must deliver data")
+
+        // Second processing (duplicate) must NOT deliver data again
+        _ = manager.handleInboundIFrame(
+            from: peer, path: DigiPath(), channel: 0,
+            ns: 0, nr: 0, pf: false,
+            payload: Data("Hello".utf8)
+        )
+        XCTAssertEqual(deliveryCount, 1,
+            "Duplicate I-frame must NOT deliver payload again (would corrupt user data)")
+    }
 }

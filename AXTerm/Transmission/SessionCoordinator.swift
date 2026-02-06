@@ -61,6 +61,9 @@ final class SessionCoordinator: ObservableObject {
 
     /// Cancellables for subscriptions
     private var cancellables = Set<AnyCancellable>()
+    /// Dedicated subscription for packet processing — kept separate from `cancellables`
+    /// so that repeated calls to `subscribeToPackets` replace (not accumulate) subscriptions.
+    private var packetSubscription: AnyCancellable?
 
     /// File data cache for active transfers (keyed by transfer ID)
     private var transferFileData: [UUID: Data] = [:]
@@ -654,17 +657,21 @@ final class SessionCoordinator: ObservableObject {
         sessionManager.localCallsign = AX25Address(call: baseCall, ssid: ssid)
     }
 
-    /// Subscribe to incoming packets from PacketEngine
+    /// Subscribe to incoming packets from PacketEngine.
+    /// Safe to call multiple times — replaces any existing subscription.
     func subscribeToPackets(from client: PacketEngine) {
         self.packetEngine = client
         // Note: onDataDeliveredForReassembly is wired up in setupCallbacks() already
 
-        client.packetPublisher
+        // Cancel previous subscription to prevent duplicate packet processing.
+        // ContentView.init() can be called multiple times by SwiftUI, each time
+        // calling subscribeToPackets on the same shared coordinator instance.
+        packetSubscription?.cancel()
+        packetSubscription = client.packetPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] packet in
                 self?.handleIncomingPacket(packet)
             }
-            .store(in: &cancellables)
     }
 
     /// Send a frame via PacketEngine

@@ -778,4 +778,113 @@ final class SessionCoordinatorTests: XCTestCase {
         let configUpper = coordinator.sessionManager.getConfigForDestination?("PEER-0", "") ?? AX25SessionConfig()
         XCTAssertEqual(configLower.windowSize, configUpper.windowSize, "Lookup should normalize destination for cache hit")
     }
+
+    // MARK: - Duplicate Subscription Prevention (KB5YZB-7 bug)
+
+    /// Proves that calling subscribeToPackets twice does NOT produce duplicate processing.
+    /// Before the fix, each call added another Combine subscriber, causing every inbound
+    /// I-frame to be processed N times — generating N RR frames per packet.
+    func testSubscribeToPacketsTwiceDoesNotDuplicateProcessing() async throws {
+        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        defaults.set(false, forKey: AppSettingsStore.persistKey)
+        let settings = AppSettingsStore(defaults: defaults)
+        settings.myCallsign = "LOCAL-7"
+
+        let client = PacketEngine(maxPackets: 100, maxConsoleLines: 100, maxRawChunks: 100, settings: settings)
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+        coordinator.localCallsign = "LOCAL-7"
+
+        // Simulate SwiftUI calling ContentView.init() twice — calls subscribeToPackets twice
+        coordinator.subscribeToPackets(from: client)
+        coordinator.subscribeToPackets(from: client)
+
+        // Set up a connected session
+        let peer = AX25Address(call: "PEER", ssid: 7)
+        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath(), channel: 0)
+        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+
+        // Count data deliveries to detect duplicate processing
+        var dataDeliveryCount = 0
+        coordinator.sessionManager.onDataReceived = { _, _ in
+            dataDeliveryCount += 1
+        }
+
+        // Inject an I-frame packet addressed to us
+        let iFramePacket = Packet(
+            timestamp: Date(),
+            from: peer,
+            to: AX25Address(call: "LOCAL", ssid: 7),
+            via: [],
+            frameType: .i,
+            control: 0x00, // ns=0, nr=0, P=0
+            controlByte1: nil,
+            pid: 0xF0,
+            info: Data("Hello from peer".utf8),
+            rawAx25: Data()
+        )
+
+        client.handleIncomingPacket(iFramePacket)
+
+        // Yield to allow Combine's receive(on: DispatchQueue.main) to deliver
+        try await Task.sleep(nanoseconds: 200_000_000) // 200ms
+
+        // With the fix, data should be delivered exactly once.
+        // Before the fix, it was delivered twice (once per subscriber).
+        XCTAssertEqual(dataDeliveryCount, 1,
+            "I-frame data must be delivered exactly once; duplicate subscriptions must not cause double processing")
+    }
+
+    /// Proves that after multiple subscribeToPackets calls, the session state machine
+    /// receives each I-frame exactly once — preventing duplicate RR generation.
+    func testSubscribeToPacketsReplacesNotAccumulatesSubscriptions() async throws {
+        let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
+        defaults.set(false, forKey: AppSettingsStore.persistKey)
+        let settings = AppSettingsStore(defaults: defaults)
+        settings.myCallsign = "LOCAL-7"
+
+        let client = PacketEngine(maxPackets: 100, maxConsoleLines: 100, maxRawChunks: 100, settings: settings)
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+        coordinator.localCallsign = "LOCAL-7"
+
+        // Subscribe three times (simulating aggressive SwiftUI re-init)
+        coordinator.subscribeToPackets(from: client)
+        coordinator.subscribeToPackets(from: client)
+        coordinator.subscribeToPackets(from: client)
+
+        // Set up connected session
+        let peer = AX25Address(call: "PEER", ssid: 7)
+        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath(), channel: 0)
+        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+
+        var deliveryCount = 0
+        coordinator.sessionManager.onDataReceived = { _, _ in
+            deliveryCount += 1
+        }
+
+        // Send two sequential I-frames
+        for ns in 0..<2 {
+            let control = UInt8(ns << 1) // N(S) in bits 1-3, N(R)=0
+            let packet = Packet(
+                timestamp: Date(),
+                from: peer,
+                to: AX25Address(call: "LOCAL", ssid: 7),
+                via: [],
+                frameType: .i,
+                control: control,
+                controlByte1: nil,
+                pid: 0xF0,
+                info: Data("Frame \(ns)".utf8),
+                rawAx25: Data()
+            )
+            client.handleIncomingPacket(packet)
+        }
+
+        // Yield to allow Combine delivery
+        try await Task.sleep(nanoseconds: 200_000_000) // 200ms
+
+        XCTAssertEqual(deliveryCount, 2,
+            "Two I-frames must produce exactly two data deliveries, not 2×N from accumulated subscriptions")
+    }
 }
