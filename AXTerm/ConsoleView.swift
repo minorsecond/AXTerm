@@ -57,26 +57,7 @@ struct ConsoleView: View {
     /// Group duplicates together by content signature.
     /// Only collapse lines that are explicitly marked as duplicates (received via a different path).
     private var groupedLines: [ConsoleLineGroup] {
-        var groups: [ConsoleLineGroup] = []
-        var signatureToIndex: [String: Int] = [:]
-
-        for line in typeFilteredLines {
-            if line.isDuplicate,
-               let signature = line.contentSignature,
-               let existingIndex = signatureToIndex[signature] {
-                groups[existingIndex].duplicates.append(line)
-                continue
-            }
-
-            // New group
-            let group = ConsoleLineGroup(primary: line)
-            if let signature = line.contentSignature {
-                signatureToIndex[signature] = groups.count
-            }
-            groups.append(group)
-        }
-
-        return groups
+        ConsoleLineGrouper.group(typeFilteredLines)
     }
 
     var body: some View {
@@ -283,6 +264,32 @@ struct ConsoleView: View {
         .padding(.vertical, 10)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
         .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+    }
+}
+
+// MARK: - Console Line Grouping
+
+enum ConsoleLineGrouper {
+    static func group(_ lines: [ConsoleLine]) -> [ConsoleLineGroup] {
+        var groups: [ConsoleLineGroup] = []
+        var signatureToIndex: [String: Int] = [:]
+
+        for line in lines {
+            if line.isDuplicate,
+               let signature = line.contentSignature,
+               let existingIndex = signatureToIndex[signature] {
+                groups[existingIndex].duplicates.append(line)
+                continue
+            }
+
+            let group = ConsoleLineGroup(primary: line)
+            if let signature = line.contentSignature {
+                signatureToIndex[signature] = groups.count
+            }
+            groups.append(group)
+        }
+
+        return groups
     }
 }
 
