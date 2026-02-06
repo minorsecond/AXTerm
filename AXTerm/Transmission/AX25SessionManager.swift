@@ -172,19 +172,17 @@ final class AX25Session: @unchecked Sendable {
     }
 
     /// Remove acknowledged frames from buffer.
-    /// RR(N(R)) means "I expect N(R) next" = receiver has received 0..<N(R) (when N(R)>0)
-    /// or all frames (when N(R)==0). Remove exactly those keys from sendBuffer so the
-    /// sender clears acks correctly and stops retransmitting (fixes freeze and dupes).
+    /// RR(N(R)) means "I expect N(R) next" = receiver has received frames in the range
+    /// [V(A), N(R)) with modulo wrap. Remove exactly that range so the sender clears
+    /// acks correctly and stops retransmitting (fixes freeze and dupes).
     func acknowledgeUpTo(from va: Int, to nr: Int) {
         let modulo = stateMachine.config.modulo
-        if nr == 0 {
-            for k in 0..<modulo {
-                sendBuffer.removeValue(forKey: k)
-            }
-        } else {
-            for k in 0..<nr {
-                sendBuffer.removeValue(forKey: k)
-            }
+        let start = ((va % modulo) + modulo) % modulo
+        let target = ((nr % modulo) + modulo) % modulo
+        var current = start
+        while current != target {
+            sendBuffer.removeValue(forKey: current)
+            current = (current + 1) % modulo
         }
     }
 

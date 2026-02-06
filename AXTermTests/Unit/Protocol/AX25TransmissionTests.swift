@@ -43,6 +43,62 @@ final class AX25TransmissionTests: XCTestCase {
         XCTAssertEqual(remaining, expected, "RR(4) acks 0,1,2,3; keep 4,5,6,7")
     }
 
+    /// When VA has wrapped and NR=7, only VA..NR-1 are acked (6 only); wrapped frames 0,1 remain.
+    func testAcknowledgeUpToWrappedVaDoesNotClearEarlierWrappedFrames() {
+        let manager = AX25SessionManager()
+        let dest = AX25Address(call: "TEST", ssid: 2)
+        let src = AX25Address(call: "TEST", ssid: 1)
+        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
+        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+
+        let payload = Data([0x41])
+        for ns in [6, 7, 0, 1] {
+            session.sendBuffer[ns] = OutboundFrame(
+                destination: dest,
+                source: src,
+                payload: payload,
+                frameType: "i",
+                pid: 0xF0,
+                ns: ns,
+                nr: 0
+            )
+        }
+
+        session.acknowledgeUpTo(from: 6, to: 7)
+
+        let remaining = Set(session.sendBuffer.keys)
+        XCTAssertEqual(remaining, Set([7, 0, 1]), "RR(7) with VA=6 should only ack 6; wrapped 0,1 must remain")
+    }
+
+    /// When VA has wrapped and NR=2, ack spans 6,7,0,1. Remaining should be only 2.. (here 2,3).
+    func testAcknowledgeUpToWrapAcrossZeroRemovesWrappedAckRange() {
+        let manager = AX25SessionManager()
+        let dest = AX25Address(call: "TEST", ssid: 2)
+        let src = AX25Address(call: "TEST", ssid: 1)
+        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
+        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+
+        let payload = Data([0x41])
+        for ns in [6, 7, 0, 1, 2, 3] {
+            session.sendBuffer[ns] = OutboundFrame(
+                destination: dest,
+                source: src,
+                payload: payload,
+                frameType: "i",
+                pid: 0xF0,
+                ns: ns,
+                nr: 0
+            )
+        }
+
+        session.acknowledgeUpTo(from: 6, to: 2)
+
+        let remaining = Set(session.sendBuffer.keys)
+        XCTAssertEqual(remaining, Set([2, 3]), "RR(2) with VA=6 should ack 6,7,0,1; keep 2,3")
+    }
+
     /// RR(0) means "I expect 0 next" = receiver has received through 7. Remove all 0..<mod.
     func testAcknowledgeUpToWrapCaseNr0RemovesAll() {
         let manager = AX25SessionManager()

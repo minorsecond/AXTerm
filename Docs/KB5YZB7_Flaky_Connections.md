@@ -13,6 +13,22 @@ Observed flaky AX.25 session behavior when connecting to `KB5YZB-7` via digipeat
 
 This doc will be updated as tests and fixes progress.
 
+## Findings (so far)
+- `AX25Session.acknowledgeUpTo(from:to:)` ignores `va` and removes keys `0..<nr` (or all when `nr==0`).
+- This is wrong when `va` has wrapped (e.g., `va=6`, `nr=2` should remove `6,7,0,1` but current code only removes `0,1`).
+- This can leave already-acked frames in `sendBuffer`, causing retransmits, REJ/out-of-window behavior, and stuck sessions.
+
+## Tests Added
+- `testAcknowledgeUpToWrappedVaDoesNotClearEarlierWrappedFrames`
+- `testAcknowledgeUpToWrapAcrossZeroRemovesWrappedAckRange`
+
+## Fix Implemented
+- Update `acknowledgeUpTo(from:to:)` to remove only the range `[va, nr)` with wraparound.
+
+## Test Execution Notes
+- `xcodebuild` failed in this environment due to permission/DerivedData issues (CoreSimulator and cache write errors).
+- Re-run tests once the build environment is writable to confirm green.
+
 ## Evidence
 ### Screenshots
 - See user-provided screenshots: Image #1 and Image #2 in the thread context.
@@ -60,10 +76,7 @@ This doc will be updated as tests and fixes progress.
 - Disconnect enters disconnecting and keeps sending DISC for extended periods.
 
 ## Next Steps
-- Locate session/AX25 retry logic around `sendBuffer` / `retransmitNS` selection.
-- Inspect AXDP negotiation gating of outgoing payloads.
-- Add tests to reproduce:
-  - I-frame retransmission includes payloads for unacked frames.
-  - Pending AXDP discovery does not block plain-text commands.
-  - Disconnect sequence clears timers and pending queues.
-- Fix behavior; update this doc with findings and test coverage.
+- Add tests that cover `acknowledgeUpTo` with wrapped `va` (non-zero) to reproduce stale `sendBuffer` entries.
+- Fix `acknowledgeUpTo` to remove only the range `[va, nr)` with wraparound.
+- Re-run protocol tests to confirm retransmit and RR behavior is stable.
+- Follow up on AXDP gating and disconnect cleanup if issues persist after fix.
