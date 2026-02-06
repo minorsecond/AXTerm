@@ -54,30 +54,18 @@ struct ConsoleView: View {
         }
     }
 
-    /// Group duplicates together by content signature
-    /// Groups messages with identical content (same from+to+text) that arrive within a short time window
+    /// Group duplicates together by content signature.
+    /// Only collapse lines that are explicitly marked as duplicates (received via a different path).
     private var groupedLines: [ConsoleLineGroup] {
         var groups: [ConsoleLineGroup] = []
         var signatureToIndex: [String: Int] = [:]
 
-        // Time window for considering messages as duplicates (even if not marked)
-        let duplicateWindow: TimeInterval = 30.0  // 30 seconds
-
         for line in typeFilteredLines {
-            if let signature = line.contentSignature,
+            if line.isDuplicate,
+               let signature = line.contentSignature,
                let existingIndex = signatureToIndex[signature] {
-                // Check if within time window of the primary
-                let primary = groups[existingIndex].primary
-                let timeDiff = abs(line.timestamp.timeIntervalSince(primary.timestamp))
-
-                if timeDiff <= duplicateWindow {
-                    // Within time window - add as duplicate
-                    groups[existingIndex].duplicates.append(line)
-                    continue
-                } else {
-                    // Outside time window - treat as new message, update index
-                    signatureToIndex[signature] = groups.count
-                }
+                groups[existingIndex].duplicates.append(line)
+                continue
             }
 
             // New group

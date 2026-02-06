@@ -137,3 +137,88 @@ The fix includes debug logging to monitor reassembly:
 ```
 
 Key indicator: `consumed=1084` should match the actual message size, not the entire buffer size.
+
+## New Evidence (Feb 6, 2026)
+
+Recent logs show the receiver repeatedly skipping non‑AXDP payloads:
+```
+[DEBUG:REASSEMBLY] skip non-AXDP | from=TEST-1 size=128 prefix=73207665
+[AXDP] Skipping non-AXDP data (no magic header) | from=TEST-1 size=128
+```
+
+The payload prefixes decode to plain ASCII (“s ve…”, “rpis…”, etc.), which indicates the sender is sending **plain text** (no `AXT1` magic) even when long messages are fragmented across I‑frames. This means reassembly never starts because no AXDP magic is present at the wire level.
+
+Additional receiver logs (Feb 6, 2026) confirm the payloads are not AXDP even though PID=0xF0:
+```
+[AXDP] I-frame received at wire | from=TEST-1 hasMagic=false infoLen=128 pid=Optional(240)
+[AXDP] I-frame payload delivered to reassembly | hasMagic=false peer=TEST-1
+[AXDP] Skipping non-AXDP data (no magic header) | from=TEST-1 prefixAscii=...
+```
+
+Conclusion: the receiver is displaying plain‑text lines; the missing paragraphs are not a reassembly bug—AXDP is not being used on the wire for these long messages.
+
+### Actions Taken
+
+To make this unambiguous in future traces, additional debug hooks were added:
+1. **UI Send Decision**: Logs whether AXDP was requested, capability status, and whether a fallback to plain text occurred.
+2. **Data In Flight**: Logs each I‑frame payload delivered to reassembly with `hasMagic` + prefix hex.
+3. **Wire-Level**: Logs each I‑frame received at PacketEngine with `pid`, `hasMagic`, and prefix hex.
+4. **Reassembly Resync**: If a buffer is corrupted (magic not at offset 0), the reassembly now logs and resyncs to the first valid magic header instead of discarding everything.
+
+### New Regression Test
+
+Added a regression test that simulates a corrupted buffer with garbage bytes before `AXT1`. The new resync logic must still decode the message:
+- `ReassemblyResyncTests.testResyncSkipsLeadingGarbageBeforeMagic`
+
+## New Evidence (Feb 6, 2026) — AXDP Toggle State Contamination
+
+### Symptom
+When both sender and receiver toggle AXDP **off**, the first paragraph of a long plain‑text message appears, but subsequent paragraphs do not. If AXDP is toggled **off before any other tests**, the long message displays correctly. This indicates a **state contamination** issue triggered by repeated AXDP on/off transitions, not a wire‑level loss.
+
+### Observations
+- The wire payloads show `hasMagic=false` and ASCII prefixes for the long message, confirming **plain text** at the wire level.
+- The problem only appears **after** AXDP is toggled on/off during a session.
+- Starting with AXDP off avoids the issue, strongly implicating **stale AXDP state** (reassembly flag/buffer) and/or **plain‑text line buffer contamination**.
+
+### Actions Taken (Feb 6, 2026)
+1. **Reset per‑peer AXDP state on toggle off**:
+   - Clear `peersInAXDPReassembly` and `currentLineBuffers`.
+   - Clear SessionCoordinator reassembly buffers for all connected peers.
+2. **Reset per‑peer state when peer disables AXDP**:
+   - On `peerAxdpDisabled`, clear reassembly and line buffers for that peer.
+3. **Extra debug hooks for plain‑text assembly**:
+   - Log per‑chunk size, buffer length, and CR/LF counts in `appendToSessionTranscript`.
+4. **New regression test**:
+   - `testPlainTextAfterAxdpToggleOffStateReset` verifies that stale reassembly state does not suppress plain text after toggling off.
+
+### Expected Outcome
+- Repeated AXDP on/off toggles should no longer suppress subsequent plain‑text paragraphs.
+- Long plain‑text messages should consistently appear in full on the receiver UI regardless of prior AXDP toggles.
+
+## New Evidence (Feb 6, 2026) — UI Duplicate Grouping Hiding Repeated Paragraphs
+
+### Symptom
+- After running `test 1-3 short` and `test 1-2 long`, `test 3 long` (AXDP off) appears to show only the first paragraph in the receiver UI.
+- Logs show multiple plain‑text lines are delivered to the console, but the UI only shows the first paragraph for the repeated long message.
+
+### Observations
+- `appendToSessionTranscript` logs show multiple flushes with distinct line previews:
+  - `Delivering plain text line to console | lineLength=961 preview=test 3 long Lorem ipsum...`
+  - `Delivering plain text line to console | lineLength=784 preview=Suspendisse potenti...`
+  - `Delivering plain text line to console | lineLength=819 preview=In accumsan elit...`
+  - `Delivering plain text line to console | lineLength=934 preview=Donec sed mauris...`
+  - `Delivering plain text line to console | lineLength=726 preview=Praesent imperdiet...`
+- These lines are appended via `appendSessionChatLine`, so data is present in `consoleLines`.
+- The missing paragraphs match earlier long‑message paragraphs sent moments before.
+
+### Root Cause (UI Layer)
+`ConsoleView` was grouping lines by `contentSignature` within a 30‑second window even when they were not marked as duplicates. This collapsed repeated paragraphs from subsequent tests into the earlier long‑message entries, making it look like only the first paragraph arrived.
+
+### Actions Taken (Feb 6, 2026)
+1. **Restrict duplicate grouping to explicit duplicates only**:
+   - In `ConsoleView.groupedLines`, only collapse lines where `line.isDuplicate == true`.
+   - Repeated messages (same content, same path) now render as distinct lines.
+
+### Expected Outcome
+- Repeated long‑message paragraphs should appear in full, even if the same content was sent moments earlier.
+- Only true path‑based duplicates (same content received via different digipeater paths) are collapsed under a single entry.
