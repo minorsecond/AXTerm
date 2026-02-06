@@ -257,6 +257,7 @@ enum AX25SessionEvent: Sendable {
     // Local requests
     case connectRequest
     case disconnectRequest
+    case forceDisconnect
     case sendData(Data)
 
     // Received U-frames
@@ -439,6 +440,10 @@ struct AX25StateMachine: Sendable {
             return [.sendSABM, .startT1]
 
         case (.connecting, .disconnectRequest):
+            state = .disconnecting
+            return [.stopT1, .sendDISC, .startT1]
+
+        case (.connecting, .forceDisconnect):
             state = .disconnected
             return [.stopT1, .notifyDisconnected]
 
@@ -451,6 +456,11 @@ struct AX25StateMachine: Sendable {
             state = .disconnecting
             retryCount = 0
             return [.sendDISC, .stopT3, .startT1]
+
+        case (.connected, .forceDisconnect):
+            state = .disconnected
+            retryCount = 0
+            return [.stopT1, .stopT3, .notifyDisconnected]
 
         case (.connected, .receivedDISC):
             state = .disconnected
@@ -531,6 +541,10 @@ struct AX25StateMachine: Sendable {
             state = .disconnected
             return [.stopT1, .notifyDisconnected]
 
+        case (.disconnecting, .forceDisconnect):
+            state = .disconnected
+            return [.stopT1, .notifyDisconnected]
+
         case (.disconnecting, .t1Timeout):
             retryCount += 1
             if retryCount > config.maxRetries {
@@ -549,6 +563,10 @@ struct AX25StateMachine: Sendable {
             retryCount = 0
             resetSessionState()
             return [.sendSABM, .startT1]
+
+        case (.error, .forceDisconnect):
+            state = .disconnected
+            return [.stopT1, .stopT3, .notifyDisconnected]
 
         case (.error, _):
             return []

@@ -15,6 +15,7 @@ struct ConnectionModeToggle: View {
     @Binding var mode: TxConnectionMode
     let sessionState: AX25SessionState?
     let onDisconnect: () -> Void
+    let onForceDisconnect: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -69,6 +70,7 @@ struct SessionStatusBadge: View {
     let state: AX25SessionState?
     let destinationCall: String
     let onDisconnect: () -> Void
+    let onForceDisconnect: () -> Void
     /// Optional AXDP capability for the remote station
     var peerCapability: AXDPCapability?
     /// AXDP capability negotiation status for this peer
@@ -76,47 +78,71 @@ struct SessionStatusBadge: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            // Status indicator dot
-            Circle()
-                .fill(stateColor)
-                .frame(width: 8, height: 8)
+            HStack(spacing: 6) {
+                // Status indicator dot
+                Circle()
+                    .fill(stateColor)
+                    .frame(width: 8, height: 8)
 
-            // Status text
-            Text(stateText)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(stateColor == .green ? .primary : .secondary)
+                // Status text
+                Text(stateText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(stateColor == .green ? .primary : .secondary)
 
-            // AXDP negotiation / capability indicators (connected sessions only)
-            if state == .connected {
-                switch capabilityStatus {
-                case .pending:
-                    // Subtle spinner-style indicator while negotiating
-                    ProgressView()
-                        .scaleEffect(0.5)
-                        .controlSize(.mini)
-                        .help(axdpStatusHelp)
-                case .confirmed:
-                    if let peerCapability {
-                        AXDPCapabilityBadge(capability: peerCapability, compact: true)
+                // AXDP negotiation / capability indicators (connected sessions only)
+                if state == .connected {
+                    switch capabilityStatus {
+                    case .pending:
+                        // Subtle spinner-style indicator while negotiating
+                        ProgressView()
+                            .scaleEffect(0.5)
+                            .controlSize(.mini)
                             .help(axdpStatusHelp)
-                    } else {
-                        // Fallback text when we know it's supported but lack details
-                        Text("AXDP")
-                            .font(.system(size: 9, weight: .semibold))
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Color.accentColor.opacity(0.15))
-                            .clipShape(Capsule())
+                    case .confirmed:
+                        if let peerCapability {
+                            AXDPCapabilityBadge(capability: peerCapability, compact: true)
+                                .help(axdpStatusHelp)
+                        } else {
+                            // Fallback text when we know it's supported but lack details
+                            Text("AXDP")
+                                .font(.system(size: 9, weight: .semibold))
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(Color.accentColor.opacity(0.15))
+                                .clipShape(Capsule())
+                                .help(axdpStatusHelp)
+                        }
+                    case .notSupported:
+                        Image(systemName: "bolt.slash")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
                             .help(axdpStatusHelp)
+                    case .unknown:
+                        EmptyView()
                     }
-                case .notSupported:
-                    Image(systemName: "bolt.slash")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .help(axdpStatusHelp)
-                case .unknown:
-                    EmptyView()
                 }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(.thinMaterial, in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 0.5)
+            )
+            .fixedSize()
+
+            // Stop button when connecting
+            if state == .connecting {
+                Button {
+                    onForceDisconnect()
+                } label: {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Stop immediately")
+                .keyboardShortcut(.escape, modifiers: [])
             }
 
             // Disconnect button when connected
@@ -130,12 +156,39 @@ struct SessionStatusBadge: View {
                 }
                 .buttonStyle(.plain)
                 .help("Disconnect from \(destinationCall)")
+                .contextMenu {
+                    Button("Disconnect Immediately", role: .destructive) {
+                        onForceDisconnect()
+                    }
+                }
+                Menu {
+                    Button("Disconnect", role: .cancel) {
+                        onDisconnect()
+                    }
+                    Button("Disconnect Immediately", role: .destructive) {
+                        onForceDisconnect()
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .help("More session actions")
+            }
+
+            if state == .disconnecting {
+                Button {
+                    onForceDisconnect()
+                } label: {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Stop immediately")
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(stateColor.opacity(0.1))
-        .clipShape(Capsule())
         .help(stateHelp)
     }
 
@@ -157,11 +210,11 @@ struct SessionStatusBadge: View {
         case .disconnected, nil:
             return "Not Connected"
         case .connecting:
-            return "Connecting..."
+            return "Connecting"
         case .connected:
             return "Connected"
         case .disconnecting:
-            return "Disconnecting..."
+            return "Stopping…"
         case .error:
             return "Error"
         }
@@ -172,11 +225,11 @@ struct SessionStatusBadge: View {
         case .disconnected, nil:
             return "No active session"
         case .connecting:
-            return "Sending SABM, waiting for UA..."
+            return "Sending SABM, waiting for UA... Stop immediately if needed."
         case .connected:
             return "Session active - click × to disconnect"
         case .disconnecting:
-            return "Sending DISC, waiting for UA..."
+            return "Sending DISC, waiting for UA... Stop immediately if needed."
         case .error:
             return "Session error - try reconnecting"
         }
@@ -227,6 +280,7 @@ struct TerminalComposeView: View {
     let onClear: () -> Void
     let onConnect: () -> Void
     let onDisconnect: () -> Void
+    let onForceDisconnect: () -> Void
 
     @FocusState private var isTextFieldFocused: Bool
 
@@ -266,17 +320,40 @@ struct TerminalComposeView: View {
                     }
 
                     // Send or Connect button
-                    if connectionMode == .connected && sessionState != .connected {
-                        Button {
-                            onConnect()
-                        } label: {
-                            Image(systemName: "link.circle.fill")
-                                .font(.system(size: 20))
+                    if connectionMode == .connected {
+                        switch sessionState {
+                        case .connected:
+                            Button {
+                                onSend()
+                            } label: {
+                                Image(systemName: "arrow.up.circle.fill")
+                                    .font(.system(size: 20))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(canSendMessage && isConnected ? Color.accentColor : Color.secondary.opacity(0.3))
+                            .disabled(!canSendMessage || !isConnected)
+                            .keyboardShortcut(.return, modifiers: .command)
+                            .help("Send (⌘ Return)")
+                        case .connecting:
+                            ProgressView()
+                                .controlSize(.small)
+                                .help("Connecting...")
+                        case .disconnecting:
+                            ProgressView()
+                                .controlSize(.small)
+                                .help("Stopping…")
+                        case .disconnected, .error, .none:
+                            Button {
+                                onConnect()
+                            } label: {
+                                Image(systemName: "link.circle.fill")
+                                    .font(.system(size: 20))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(isConnected && !destinationCall.isEmpty ? Color.accentColor : Color.secondary.opacity(0.3))
+                            .disabled(!isConnected || destinationCall.isEmpty)
+                            .help("Connect to \(destinationCall.isEmpty ? "destination" : destinationCall)")
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(isConnected && !destinationCall.isEmpty ? Color.accentColor : Color.secondary.opacity(0.3))
-                        .disabled(!isConnected || destinationCall.isEmpty)
-                        .help("Connect to \(destinationCall.isEmpty ? "destination" : destinationCall)")
                     } else {
                         Button {
                             onSend()
@@ -324,7 +401,8 @@ struct TerminalComposeView: View {
                     ConnectionModeToggle(
                         mode: $connectionMode,
                         sessionState: sessionState,
-                        onDisconnect: onDisconnect
+                        onDisconnect: onDisconnect,
+                        onForceDisconnect: onForceDisconnect
                     )
 
                     // Session status (for connected mode)
@@ -333,6 +411,7 @@ struct TerminalComposeView: View {
                             state: sessionState,
                             destinationCall: destinationCall,
                             onDisconnect: onDisconnect,
+                            onForceDisconnect: onForceDisconnect,
                             peerCapability: destinationCapability,
                             capabilityStatus: capabilityStatus
                         )
@@ -591,7 +670,8 @@ struct TxQueueView: View {
         onSend: {},
         onClear: {},
         onConnect: {},
-        onDisconnect: {}
+        onDisconnect: {},
+        onForceDisconnect: {}
     )
     .frame(width: 700)
 }
@@ -612,7 +692,8 @@ struct TxQueueView: View {
         onSend: {},
         onClear: {},
         onConnect: {},
-        onDisconnect: {}
+        onDisconnect: {},
+        onForceDisconnect: {}
     )
     .frame(width: 700)
 }
@@ -633,7 +714,8 @@ struct TxQueueView: View {
         onSend: {},
         onClear: {},
         onConnect: {},
-        onDisconnect: {}
+        onDisconnect: {},
+        onForceDisconnect: {}
     )
     .frame(width: 700)
 }
@@ -643,13 +725,15 @@ struct TxQueueView: View {
         ConnectionModeToggle(
             mode: .constant(.datagram),
             sessionState: nil,
-            onDisconnect: {}
+            onDisconnect: {},
+            onForceDisconnect: {}
         )
 
         ConnectionModeToggle(
             mode: .constant(.connected),
             sessionState: .connected,
-            onDisconnect: {}
+            onDisconnect: {},
+            onForceDisconnect: {}
         )
     }
     .padding()
@@ -657,11 +741,11 @@ struct TxQueueView: View {
 
 #Preview("Session Status Badges") {
     VStack(spacing: 12) {
-        SessionStatusBadge(state: nil, destinationCall: "N0CALL", onDisconnect: {})
-        SessionStatusBadge(state: .connecting, destinationCall: "N0CALL", onDisconnect: {})
-        SessionStatusBadge(state: .connected, destinationCall: "N0CALL", onDisconnect: {}, capabilityStatus: .pending)
-        SessionStatusBadge(state: .connected, destinationCall: "N0CALL", onDisconnect: {}, capabilityStatus: .notSupported)
-        SessionStatusBadge(state: .error, destinationCall: "N0CALL", onDisconnect: {})
+        SessionStatusBadge(state: nil, destinationCall: "N0CALL", onDisconnect: {}, onForceDisconnect: {})
+        SessionStatusBadge(state: .connecting, destinationCall: "N0CALL", onDisconnect: {}, onForceDisconnect: {})
+        SessionStatusBadge(state: .connected, destinationCall: "N0CALL", onDisconnect: {}, onForceDisconnect: {}, capabilityStatus: .pending)
+        SessionStatusBadge(state: .connected, destinationCall: "N0CALL", onDisconnect: {}, onForceDisconnect: {}, capabilityStatus: .notSupported)
+        SessionStatusBadge(state: .error, destinationCall: "N0CALL", onDisconnect: {}, onForceDisconnect: {})
     }
     .padding()
 }

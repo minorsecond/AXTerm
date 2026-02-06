@@ -119,6 +119,107 @@ final class AX25TransmissionTests: XCTestCase {
         XCTAssertEqual(nsValues, [2, 3, 4])
     }
 
+    func testDisconnectWhileConnectingClearsQueuedStandardPayload() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "ME", ssid: 1)
+
+        let dest = AX25Address(call: "PEER", ssid: 0)
+        let path = DigiPath.from(["WIDE1-1"])
+
+        _ = manager.sendData(Data("hello".utf8), to: dest, path: path, channel: 0)
+        let session = manager.session(for: dest, path: path, channel: 0)
+
+        XCTAssertEqual(session.state, .connecting)
+        XCTAssertFalse(session.pendingDataQueue.isEmpty)
+
+        let disc = manager.disconnect(session: session)
+        XCTAssertEqual(disc?.displayInfo, "DISC")
+        XCTAssertTrue(session.pendingDataQueue.isEmpty)
+    }
+
+    func testDisconnectWhileConnectingClearsQueuedAXDPPayload() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "ME", ssid: 1)
+
+        let dest = AX25Address(call: "PEER", ssid: 0)
+        let path = DigiPath.from(["WIDE1-1"])
+
+        let axdpPayload = AXDP.Message(
+            type: .chat,
+            sessionId: 1,
+            messageId: 42,
+            payload: Data("AXDP".utf8)
+        ).encode()
+
+        _ = manager.sendData(axdpPayload, to: dest, path: path, channel: 0)
+        let session = manager.session(for: dest, path: path, channel: 0)
+
+        XCTAssertEqual(session.state, .connecting)
+        XCTAssertFalse(session.pendingDataQueue.isEmpty)
+
+        let disc = manager.disconnect(session: session)
+        XCTAssertEqual(disc?.displayInfo, "DISC")
+        XCTAssertTrue(session.pendingDataQueue.isEmpty)
+    }
+
+    func testDisconnectWhileConnectedClearsSendBufferAndQueue() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "ME", ssid: 1)
+
+        let dest = AX25Address(call: "PEER", ssid: 0)
+        let path = DigiPath()
+
+        _ = manager.connect(to: dest, path: path, channel: 0)
+        manager.handleInboundUA(from: dest, path: path, channel: 0)
+        let session = manager.session(for: dest, path: path, channel: 0)
+
+        session.pendingDataQueue = [(data: Data("queued".utf8), pid: 0xF0, displayInfo: "queued")]
+        session.sendBuffer[0] = OutboundFrame(
+            destination: dest,
+            source: manager.localCallsign,
+            path: path,
+            payload: Data("inflight".utf8),
+            frameType: "i",
+            pid: 0xF0,
+            ns: 0,
+            nr: 0
+        )
+
+        let disc = manager.disconnect(session: session)
+        XCTAssertEqual(disc?.displayInfo, "DISC")
+        XCTAssertTrue(session.pendingDataQueue.isEmpty)
+        XCTAssertTrue(session.sendBuffer.isEmpty)
+    }
+
+    func testForceDisconnectClearsQueueAndBufferWithoutFrame() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "ME", ssid: 1)
+
+        let dest = AX25Address(call: "PEER", ssid: 0)
+        let path = DigiPath()
+
+        _ = manager.connect(to: dest, path: path, channel: 0)
+        manager.handleInboundUA(from: dest, path: path, channel: 0)
+        let session = manager.session(for: dest, path: path, channel: 0)
+
+        session.pendingDataQueue = [(data: Data("queued".utf8), pid: 0xF0, displayInfo: "queued")]
+        session.sendBuffer[0] = OutboundFrame(
+            destination: dest,
+            source: manager.localCallsign,
+            path: path,
+            payload: Data("inflight".utf8),
+            frameType: "i",
+            pid: 0xF0,
+            ns: 0,
+            nr: 0
+        )
+
+        manager.forceDisconnect(session: session)
+        XCTAssertEqual(session.state, .disconnected)
+        XCTAssertTrue(session.pendingDataQueue.isEmpty)
+        XCTAssertTrue(session.sendBuffer.isEmpty)
+    }
+
     // MARK: - AXDP Chat Deduplication Tests
 
     /// Same chat message (from, messageId, sessionId) delivered twice invokes onAXDPChatReceived only once.

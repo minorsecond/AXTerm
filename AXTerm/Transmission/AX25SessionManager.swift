@@ -164,6 +164,11 @@ final class AX25Session: @unchecked Sendable {
         }
     }
 
+    /// Clear all send times (used when aborting or disconnecting)
+    func clearSendTimes() {
+        sendTimeByNs.removeAll()
+    }
+
     /// Get send time for the last frame acked by RR(nr), if any, for RTT sample
     func sendTimeForAckedBy(nr: Int) -> Date? {
         let modulo = stateMachine.config.modulo
@@ -214,6 +219,18 @@ final class AX25Session: @unchecked Sendable {
     /// Update last activity timestamp
     func touch() {
         lastActivityAt = Date()
+    }
+
+    /// Clear all pending transmission state for a graceful stop.
+    func clearPendingTransmission(reason: String) {
+        pendingDataQueue.removeAll()
+        sendBuffer.removeAll()
+        clearSendTimes()
+        TxLog.debug(.session, "Cleared pending transmission state", [
+            "session": String(id.uuidString.prefix(8)),
+            "peer": remoteAddress.display,
+            "reason": reason
+        ])
     }
 }
 
@@ -603,8 +620,8 @@ final class AX25SessionManager: ObservableObject {
     /// Disconnect from a connected session
     /// Returns the DISC frame to send
     func disconnect(session: AX25Session) -> OutboundFrame? {
-        guard session.state == .connected else {
-            TxLog.warning(.session, "Cannot disconnect: session not connected", [
+        guard session.state == .connected || session.state == .connecting else {
+            TxLog.warning(.session, "Cannot disconnect: session not connected/connecting", [
                 "state": session.state.rawValue
             ])
             return nil
@@ -617,8 +634,25 @@ final class AX25SessionManager: ObservableObject {
             onSessionStateChanged?(session, oldState, session.state)
         }
 
+        // Stop any queued or in-flight data immediately on local disconnect request.
+        session.clearPendingTransmission(reason: "Local disconnect requested")
         session.touch()
         return processActions(actions, for: session).first
+    }
+
+    /// Force disconnect immediately without on-air DISC/UA exchange.
+    /// Use for emergency stop or immediate cancellation of a stuck connection.
+    func forceDisconnect(session: AX25Session) {
+        let oldState = session.state
+        let actions = session.stateMachine.handle(event: .forceDisconnect)
+
+        if oldState != session.state {
+            onSessionStateChanged?(session, oldState, session.state)
+        }
+
+        session.clearPendingTransmission(reason: "Force disconnect")
+        session.touch()
+        _ = processActions(actions, for: session)
     }
 
     // MARK: - Data Transmission
@@ -1756,6 +1790,7 @@ final class AX25SessionManager: ObservableObject {
                 )
 
             case .notifyDisconnected:
+                session.clearPendingTransmission(reason: "Session disconnected")
                 TxLog.sessionClose(
                     sessionId: session.id,
                     peer: session.remoteAddress.display,
@@ -1763,6 +1798,9 @@ final class AX25SessionManager: ObservableObject {
                 )
 
             case .notifyError(let message):
+                if session.state == .error || session.state == .disconnected {
+                    session.clearPendingTransmission(reason: "Session error: \(message)")
+                }
                 TxLog.error(.session, message, error: nil, [
                     "session": String(session.id.uuidString.prefix(8)),
                     "peer": session.remoteAddress.display

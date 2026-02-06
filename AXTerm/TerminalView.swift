@@ -384,17 +384,16 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
         // Debug: show all packets and check if they're addressed to us
         let decoded = AX25ControlFieldDecoder.decode(control: packet.control, controlByte1: packet.controlByte1)
-        let localCall = sessionManager.localCallsign.call.uppercased()
-        let toCall = to.call.uppercased()
+        let localAddress = sessionManager.localCallsign
 
         // Log if it's a U-frame (which includes SABM)
         if decoded.frameClass == .U {
-            print("[TerminalView.handleIncomingPacket] U-frame: from=\(from.display), to.call='\(toCall)' ssid=\(to.ssid), localCallsign.call='\(localCall)' ssid=\(sessionManager.localCallsign.ssid), uType=\(decoded.uType?.rawValue ?? "nil")")
+            print("[TerminalView.handleIncomingPacket] U-frame: from=\(from.display), to=\(to.display) local=\(localAddress.display) uType=\(decoded.uType?.rawValue ?? "nil")")
         }
 
-        guard toCall == localCall else {
+        guard CallsignNormalizer.addressesMatch(to, localAddress) else {
             if decoded.frameClass == .U && (decoded.uType == .SABM || decoded.uType == .SABME) {
-                print("[TerminalView.handleIncomingPacket] SABM filtered: to.call='\(toCall)' (len=\(toCall.count)) != localCallsign.call='\(localCall)' (len=\(localCall.count))")
+                print("[TerminalView.handleIncomingPacket] SABM filtered: to=\(to.display) local=\(localAddress.display)")
             }
             return
         }
@@ -767,6 +766,12 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     func disconnect() -> OutboundFrame? {
         guard let session = currentSession else { return nil }
         return sessionManager.disconnect(session: session)
+    }
+
+    /// Force disconnect immediately (no DISC/UA)
+    func forceDisconnect() {
+        guard let session = currentSession else { return }
+        sessionManager.forceDisconnect(session: session)
     }
 
     /// Send data through connected session
@@ -1332,6 +1337,9 @@ struct TerminalView: View {
                 },
                 onDisconnect: {
                     disconnectFromDestination()
+                },
+                onForceDisconnect: {
+                    forceDisconnectFromDestination()
                 }
             )
             }
@@ -1688,6 +1696,11 @@ struct TerminalView: View {
                 }
             }
         }
+    }
+
+    /// Force disconnect immediately without DISC/UA exchange
+    private func forceDisconnectFromDestination() {
+        txViewModel.forceDisconnect()
     }
 
     // MARK: - Transfers View
