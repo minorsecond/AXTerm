@@ -1,0 +1,34 @@
+# Direwolf TNC Docker Image for AXTerm Integration Testing
+#
+# This image runs Direwolf configured for KISS TCP access,
+# simulating a real TNC/radio setup for packet radio testing.
+
+FROM debian:bookworm-slim
+
+# Install Direwolf and dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    direwolf \
+    alsa-utils \
+    pulseaudio \
+    pulseaudio-utils \
+    sox \
+    netcat-openbsd \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directories
+RUN mkdir -p /etc/direwolf /var/log/direwolf /audio
+
+# Copy startup script
+COPY direwolf-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/direwolf-entrypoint.sh
+
+# Environment variables for configuration
+ENV MYCALL="TEST-1"
+ENV KISS_PORT="8001"
+ENV AUDIO_DEVICE="default"
+ENV DIREWOLF_OPTS=""
+
+EXPOSE 8001
+
+ENTRYPOINT ["/usr/local/bin/direwolf-entrypoint.sh"]

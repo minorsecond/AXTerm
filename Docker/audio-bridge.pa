@@ -1,0 +1,20 @@
+# PulseAudio configuration for AXTerm Direwolf testing
+# Creates a virtual "RF channel" that all Direwolf instances share
+
+# Load modules
+.include /etc/pulse/default.pa
+
+# Create a virtual sink that acts as the "RF channel"
+# All Direwolf TX audio goes here
+load-module module-null-sink sink_name=rf_channel sink_properties=device.description="RF_Channel"
+
+# Create a virtual source from the RF channel
+# All Direwolf instances listen to this
+load-module module-virtual-source source_name=rf_input master=rf_channel.monitor
+
+# Enable network access for other containers
+load-module module-native-protocol-tcp auth-anonymous=1
+
+# Loopback: anything sent to rf_channel comes back as rf_input
+# This simulates RF broadcast where all stations hear all transmissions
+load-module module-loopback source=rf_channel.monitor sink=rf_channel latency_msec=50

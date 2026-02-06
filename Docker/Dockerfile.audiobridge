@@ -1,0 +1,24 @@
+# Audio Bridge for Direwolf Inter-Communication
+# Creates a virtual audio environment where both Direwolf instances
+# can "hear" each other, simulating RF broadcast behavior
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pulseaudio \
+    pulseaudio-utils \
+    sox \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create audio directory and PulseAudio config
+RUN mkdir -p /audio /run/pulse
+
+# PulseAudio configuration for shared audio
+COPY audio-bridge.pa /etc/pulse/default.pa.d/
+COPY audio-bridge-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/audio-bridge-entrypoint.sh
+
+EXPOSE 4713
+
+ENTRYPOINT ["/usr/local/bin/audio-bridge-entrypoint.sh"]

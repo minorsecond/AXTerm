@@ -132,4 +132,100 @@ final class KISSTests: XCTestCase {
 
         XCTAssertEqual(frames.count, 0, "Empty payload should be ignored")
     }
+
+    // MARK: - KISS Escape Tests (TX)
+
+    func testEscapeFEND() {
+        // FEND -> FESC TFEND
+        let data = Data([0xC0])
+        let escaped = KISS.escape(data)
+        XCTAssertEqual(escaped, Data([0xDB, 0xDC]))
+    }
+
+    func testEscapeFESC() {
+        // FESC -> FESC TFESC
+        let data = Data([0xDB])
+        let escaped = KISS.escape(data)
+        XCTAssertEqual(escaped, Data([0xDB, 0xDD]))
+    }
+
+    func testEscapeMixed() {
+        // Test mixed content with bytes that need escaping
+        let data = Data([0x01, 0x02, 0xC0, 0x03, 0xDB, 0x04])
+        let escaped = KISS.escape(data)
+        XCTAssertEqual(escaped, Data([0x01, 0x02, 0xDB, 0xDC, 0x03, 0xDB, 0xDD, 0x04]))
+    }
+
+    func testEscapeNoEscapesNeeded() {
+        // No escapes needed, should pass through unchanged
+        let data = Data([0x01, 0x02, 0x03, 0x04])
+        let escaped = KISS.escape(data)
+        XCTAssertEqual(escaped, data)
+    }
+
+    func testEscapeEmpty() {
+        let data = Data()
+        let escaped = KISS.escape(data)
+        XCTAssertEqual(escaped, Data())
+    }
+
+    func testEscapeUnescapeRoundTrip() {
+        // Round-trip: escape then unescape should return original
+        let original = Data([0x01, 0xC0, 0x02, 0xDB, 0x03, 0xC0, 0xDB])
+        let escaped = KISS.escape(original)
+        let unescaped = KISS.unescape(escaped)
+        XCTAssertEqual(unescaped, original)
+    }
+
+    func testEscapeUnescapeRoundTripAllBytes() {
+        // Test all possible byte values round-trip correctly
+        var original = Data()
+        for byte in UInt8.min...UInt8.max {
+            original.append(byte)
+        }
+        let escaped = KISS.escape(original)
+        let unescaped = KISS.unescape(escaped)
+        XCTAssertEqual(unescaped, original)
+    }
+
+    // MARK: - KISS Frame Encoding Tests (TX)
+
+    func testEncodeFrameBasic() {
+        // Build a complete KISS frame from AX.25 payload
+        let ax25Payload = Data([0x01, 0x02, 0x03, 0x04])
+        let kissFrame = KISS.encodeFrame(payload: ax25Payload, port: 0)
+
+        // Expected: FEND + command(0x00) + payload + FEND
+        XCTAssertEqual(kissFrame, Data([0xC0, 0x00, 0x01, 0x02, 0x03, 0x04, 0xC0]))
+    }
+
+    func testEncodeFrameWithEscaping() {
+        // Payload contains FEND - should be escaped
+        let ax25Payload = Data([0x01, 0xC0, 0x02])
+        let kissFrame = KISS.encodeFrame(payload: ax25Payload, port: 0)
+
+        // Expected: FEND + cmd + 0x01 + FESC+TFEND + 0x02 + FEND
+        XCTAssertEqual(kissFrame, Data([0xC0, 0x00, 0x01, 0xDB, 0xDC, 0x02, 0xC0]))
+    }
+
+    func testEncodeFramePort1() {
+        // Test non-zero port encoding
+        let ax25Payload = Data([0x01, 0x02])
+        let kissFrame = KISS.encodeFrame(payload: ax25Payload, port: 1)
+
+        // Command byte for port 1: 0x10
+        XCTAssertEqual(kissFrame, Data([0xC0, 0x10, 0x01, 0x02, 0xC0]))
+    }
+
+    func testEncodeDecodeRoundTrip() {
+        // Encode a frame, then parse it back
+        let originalPayload = Data([0x01, 0xC0, 0xDB, 0x02, 0x03])
+        let kissFrame = KISS.encodeFrame(payload: originalPayload, port: 0)
+
+        var parser = KISSFrameParser()
+        let frames = parser.feed(kissFrame)
+
+        XCTAssertEqual(frames.count, 1)
+        XCTAssertEqual(frames[0], originalPayload)
+    }
 }

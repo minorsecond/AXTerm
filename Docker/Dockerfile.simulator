@@ -1,0 +1,16 @@
+# RF Channel Simulator for AXTerm Testing
+# Simulates an RF channel with realistic behavior including
+# propagation delay, collision detection, and AX.25 frame logging
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install netcat for health checks
+RUN apt-get update && apt-get install -y netcat-openbsd && rm -rf /var/lib/apt/lists/*
+
+COPY rf_simulator.py /app/
+
+EXPOSE 8001 8002 8003 8004
+
+CMD ["python", "-u", "rf_simulator.py"]
