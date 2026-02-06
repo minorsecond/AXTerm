@@ -26,8 +26,9 @@ This doc will be updated as tests and fixes progress.
 - Update `acknowledgeUpTo(from:to:)` to remove only the range `[va, nr)` with wraparound.
 
 ## Test Execution Notes
-- `xcodebuild` failed in this environment due to permission/DerivedData issues (CoreSimulator and cache write errors).
-- Re-run tests once the build environment is writable to confirm green.
+- `xcodebuild test -scheme AXTermTests -destination platform=macOS "-only-testing:AXTermTests/Unit/Protocol/AX25TransmissionTests"` fails because the project does not expose a scheme named `AXTermTests`. Use the real application scheme (e.g. `AXTerm`) when rerunning.
+- `xcodebuild -project AXTerm.xcodeproj -list` now fails on this host because CoreSimulator services cannot be contacted and DerivedData / module cache files under `~/Library/Developer` and `~/Library/Caches` are not writable (error `Operation not permitted`, `Connection invalid`). This also triggers SwiftPM dependency resolution errors for Sentry and GRDB.
+- Re-run the targeted `AXTerm` scheme tests once the simulator/service permissions are restored and DerivedData caches are writable, then update this document with the success state.
 
 ## Evidence
 ### Screenshots
