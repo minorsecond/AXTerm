@@ -765,6 +765,16 @@ final class PacketEngine: ObservableObject {
         // Skip raw I-frame console lines when payload is AXDP (PID 0xF0) – SessionCoordinator
         // will deliver reassembled chat via appendSessionChatLine. Raw chunks would show truncated text.
         let skipRawIFrameLine = packet.frameType == .i && packet.pid == 0xF0
+        if packet.frameType == .i {
+            TxLog.debug(.axdp, "I-frame received at wire", [
+                "from": packet.fromDisplay,
+                "to": packet.toDisplay,
+                "pid": packet.pid,
+                "infoLen": packet.info.count,
+                "hasMagic": AXDP.hasMagic(packet.info),
+                "prefixHex": packet.info.prefix(8).map { String(format: "%02X", $0) }.joined()
+            ])
+        }
 
         if !skipRawIFrameLine, let text = packet.infoText {
             // Extract via path as array of callsign strings

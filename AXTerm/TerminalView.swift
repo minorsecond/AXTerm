@@ -71,6 +71,35 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             ])
         }
     }
+
+    /// Clear AXDP/plain-text per-peer state (reassembly flag + line buffer).
+    /// Used when toggling AXDP or when a peer disables AXDP mid-session.
+    func resetAxdpState(for address: AX25Address, reason: String) {
+        let peerKey = address.display.uppercased()
+        let hadFlag = peersInAXDPReassembly.contains(peerKey)
+        peersInAXDPReassembly.remove(peerKey)
+        let hadBuffer = currentLineBuffers.removeValue(forKey: peerKey) != nil
+        TxLog.debug(.axdp, "Reset AXDP/plain-text state", [
+            "peer": peerKey,
+            "reason": reason,
+            "hadFlag": hadFlag,
+            "hadBuffer": hadBuffer
+        ])
+    }
+
+    /// Clear AXDP/plain-text per-peer state for all known sessions.
+    func resetAxdpStateForAllPeers(reason: String) {
+        let peers = sessionManager.sessions.values.map { $0.remoteAddress }
+        var resetCount = 0
+        for peer in peers {
+            resetAxdpState(for: peer, reason: reason)
+            resetCount += 1
+        }
+        TxLog.debug(.axdp, "Reset AXDP/plain-text state for all peers", [
+            "count": resetCount,
+            "reason": reason
+        ])
+    }
     
     #if DEBUG
     /// Test helper: Check if a peer is currently marked as in AXDP reassembly.
@@ -565,11 +594,27 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// messages grouped in arrival order.
     private func appendToSessionTranscript(from session: AX25Session, data: Data) {
         let peerKey = session.remoteAddress.display.uppercased()
+        let bufferLen = currentLineBuffers[peerKey]?.count ?? 0
+        let lineBreaks = data.reduce(0) { count, byte in
+            count + ((byte == 0x0D || byte == 0x0A) ? 1 : 0)
+        }
+        TxLog.debug(.session, "appendToSessionTranscript chunk", [
+            "peer": peerKey,
+            "size": data.count,
+            "hasMagic": AXDP.hasMagic(data),
+            "bufferLen": bufferLen,
+            "lineBreaks": lineBreaks
+        ])
         
         // Suppress raw AXDP envelope bytes—AXDP chat is delivered via appendAXDPChatToTranscript.
         // When we see AXDP magic, mark this peer as mid-reassembly.
         if AXDP.hasMagic(data) {
             peersInAXDPReassembly.insert(peerKey)
+            TxLog.debug(.axdp, "AXDP magic detected in I-frame payload (suppress raw)", [
+                "peer": peerKey,
+                "size": data.count,
+                "prefixHex": data.prefix(8).map { String(format: "%02X", $0) }.joined()
+            ])
             return
         }
         
@@ -591,7 +636,9 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             // Suppress AXDP continuation fragment - SessionCoordinator handles reassembly
             TxLog.debug(.axdp, "Suppressing AXDP continuation fragment", [
                 "peer": peerKey,
-                "size": data.count
+                "size": data.count,
+                "prefixHex": data.prefix(8).map { String(format: "%02X", $0) }.joined(),
+                "useAXDP": viewModel.useAXDP
             ])
             return
         }
@@ -643,7 +690,8 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                     TxLog.debug(.session, "Delivering plain text line to console", [
                         "peer": session.remoteAddress.display,
                         "lineLength": line.count,
-                        "preview": String(line.prefix(50))
+                        "preview": String(line.prefix(50)),
+                        "bufferLenBeforeFlush": bufferLen
                     ])
                     onPlainTextChatReceived?(session.remoteAddress, line)
                     // Keep transcript bounded for performance.
@@ -1028,6 +1076,8 @@ struct TerminalView: View {
             sessionCoordinator.onPeerAxdpDisabled = { [weak txViewModel] from in
                 Task { @MainActor in
                     txViewModel?.pendingPeerAxdpDisabledNotification = from.display
+                    txViewModel?.resetAxdpState(for: from, reason: "peerAxdpDisabled")
+                    sessionCoordinator.clearAllReassemblyBuffers(for: from)
                 }
             }
             
@@ -1160,9 +1210,18 @@ struct TerminalView: View {
             set: { newValue in
                 let wasOn = txViewModel.viewModel.useAXDP
                 txViewModel.setUseAXDP(newValue)
+                TxLog.debug(.axdp, "AXDP toggle changed", [
+                    "wasOn": wasOn,
+                    "isOn": newValue
+                ])
                 if newValue, !wasOn {
                     sendPeerAxdpEnabledToConnectedSessions()
                 } else if !newValue, wasOn {
+                    // Clearing state avoids stale AXDP reassembly flags suppressing plain text after toggles.
+                    txViewModel.resetAxdpStateForAllPeers(reason: "localAxdpDisabled")
+                    for session in sessionCoordinator.connectedSessions {
+                        sessionCoordinator.clearAllReassemblyBuffers(for: session.remoteAddress)
+                    }
                     for session in sessionCoordinator.connectedSessions {
                         if sessionCoordinator.hasConfirmedAXDPCapability(for: session.remoteAddress.display) {
                             sessionCoordinator.sendPeerAxdpDisabled(to: session.remoteAddress, path: session.path)
@@ -1472,6 +1531,11 @@ struct TerminalView: View {
         // If AXDP is requested, verify capability is confirmed
         if useAXDP {
             let capabilityStatus = sessionCoordinator.capabilityStatus(for: txViewModel.viewModel.destinationCall)
+            TxLog.debug(.axdp, "AXDP send decision", [
+                "destination": txViewModel.viewModel.destinationCall,
+                "useAXDP": useAXDP,
+                "capabilityStatus": String(describing: capabilityStatus)
+            ])
             if capabilityStatus != .confirmed {
                 TxLog.warning(.axdp, "Cannot send AXDP message - capability not confirmed", [
                     "destination": txViewModel.viewModel.destinationCall,
@@ -1480,6 +1544,11 @@ struct TerminalView: View {
                 // Fall back to plain text
                 var data = Data(text.utf8)
                 data.append(0x0D)  // CR
+                TxLog.debug(.axdp, "AXDP fallback to plain text", [
+                    "destination": txViewModel.viewModel.destinationCall,
+                    "payloadLen": data.count,
+                    "hasMagic": AXDP.hasMagic(data)
+                ])
                 let fallbackSessionInfo = txViewModel.sessionInfo(for: txViewModel.viewModel.destinationCall)
                 txViewModel.startOutboundProgress(
                     text: text,
@@ -1524,12 +1593,22 @@ struct TerminalView: View {
                 payload: Data(text.utf8)
             )
             payload = message.encode()
+            TxLog.debug(.axdp, "AXDP payload encoded for connected send", [
+                "destination": txViewModel.viewModel.destinationCall,
+                "messageId": message.messageId,
+                "payloadLen": payload.count,
+                "hasMagic": AXDP.hasMagic(payload)
+            ])
         } else {
             // Standard plain-text: append CR for BBS/node compatibility
             // BBSes expect commands to end with carriage return (0x0D)
             var data = Data(text.utf8)
             data.append(0x0D)  // CR
             payload = data
+            TxLog.debug(.session, "Plain-text payload encoded for connected send", [
+                "destination": txViewModel.viewModel.destinationCall,
+                "payloadLen": payload.count
+            ])
         }
 
         // Start outbound progress for sender highlighting (AXDP/connected has ACKs)

@@ -781,6 +781,8 @@ final class SessionCoordinator: ObservableObject {
         let key = reassemblyKey(from: from, path: path)
         var buf = inboundReassemblyBuffer[key] ?? Data()
         let beforeLen = buf.count
+        let dataPrefixHex = data.prefix(8).map { String(format: "%02X", $0) }.joined()
+        let dataPrefixAscii = asciiPreview(data, maxLen: 16)
         
         // Handle non-AXDP data properly to prevent buffer pollution:
         // 1. If buffer is empty and data doesn't start with magic → non-AXDP data, skip
@@ -790,27 +792,40 @@ final class SessionCoordinator: ObservableObject {
         if buf.isEmpty {
             // Empty buffer: only start buffering if data is AXDP (starts with magic)
             if !AXDP.hasMagic(data) {
-                print("[DEBUG:REASSEMBLY] skip non-AXDP | from=\(from.display) size=\(data.count) prefix=\(data.prefix(4).map { String(format: "%02X", $0) }.joined())")
+                print("[DEBUG:REASSEMBLY] skip non-AXDP | from=\(from.display) size=\(data.count) prefix=\(data.prefix(4).map { String(format: "%02X", $0) }.joined()) ascii=\(dataPrefixAscii)")
                 TxLog.debug(.axdp, "Skipping non-AXDP data (no magic header)", [
                     "from": from.display,
-                    "size": data.count
+                    "size": data.count,
+                    "prefixHex": dataPrefixHex,
+                    "prefixAscii": dataPrefixAscii
                 ])
                 return  // Don't buffer non-AXDP data
             }
         } else if !AXDP.hasMagic(buf) {
-            // Buffer has garbage that doesn't start with magic
-            print("[DEBUG:REASSEMBLY] clear garbage | from=\(from.display) garbageLen=\(buf.count)")
-            TxLog.debug(.axdp, "Clearing garbage from reassembly buffer", [
-                "from": from.display,
-                "garbageLen": buf.count
-            ])
-            buf = Data()  // Clear the garbage
-            
-            // Now check if new data is AXDP
-            if !AXDP.hasMagic(data) {
-                print("[DEBUG:REASSEMBLY] skip non-AXDP after clear | from=\(from.display) size=\(data.count)")
-                inboundReassemblyBuffer.removeValue(forKey: key)
-                return  // Don't buffer non-AXDP data
+            // Buffer has garbage that doesn't start with magic.
+            // Attempt a resync if magic appears later (e.g., previous decode left extra bytes).
+            if let magicOffset = magicOffset(in: buf), magicOffset > 0 {
+                print("[DEBUG:REASSEMBLY] resync to magic | from=\(from.display) offset=\(magicOffset) bufLen=\(buf.count)")
+                TxLog.debug(.axdp, "Resyncing reassembly buffer to magic header", [
+                    "from": from.display,
+                    "offset": magicOffset,
+                    "bufLen": buf.count
+                ])
+                buf = buf.subdata(in: magicOffset..<buf.count)
+            } else {
+                print("[DEBUG:REASSEMBLY] clear garbage | from=\(from.display) garbageLen=\(buf.count)")
+                TxLog.debug(.axdp, "Clearing garbage from reassembly buffer", [
+                    "from": from.display,
+                    "garbageLen": buf.count
+                ])
+                buf = Data()  // Clear the garbage
+
+                // Now check if new data is AXDP
+                if !AXDP.hasMagic(data) {
+                    print("[DEBUG:REASSEMBLY] skip non-AXDP after clear | from=\(from.display) size=\(data.count) ascii=\(dataPrefixAscii)")
+                    inboundReassemblyBuffer.removeValue(forKey: key)
+                    return  // Don't buffer non-AXDP data
+                }
             }
         }
         
@@ -855,7 +870,14 @@ final class SessionCoordinator: ObservableObject {
         if buf.count > 0 {
             let canExtract = extractOneAXDPMessage(from: buf) != nil
             if !canExtract {
-                print("[DEBUG:REASSEMBLY] incomplete | from=\(from.display) bufLen=\(buf.count) hasMagic=\(AXDP.hasMagic(buf))")
+                let magicOffset = magicOffset(in: buf) ?? -1
+                print("[DEBUG:REASSEMBLY] incomplete | from=\(from.display) bufLen=\(buf.count) hasMagic=\(AXDP.hasMagic(buf)) magicOffset=\(magicOffset)")
+                TxLog.debug(.axdp, "Reassembly incomplete", [
+                    "from": from.display,
+                    "bufLen": buf.count,
+                    "hasMagic": AXDP.hasMagic(buf),
+                    "magicOffset": magicOffset
+                ])
             }
         }
         if buf.count > 65_536 {
@@ -917,6 +939,34 @@ final class SessionCoordinator: ObservableObject {
         print("[DEBUG:REASSEMBLY:EXTRACT] ok | bufLen=\(buffer.count) consumed=\(consumedBytes) type=\(message.type) payloadLen=\(message.payload?.count ?? 0)")
         return (message, consumedBytes)
     }
+
+    private func magicOffset(in data: Data) -> Int? {
+        guard !data.isEmpty else { return nil }
+        guard let range = data.range(of: AXDP.magic) else { return nil }
+        return data.distance(from: data.startIndex, to: range.lowerBound)
+    }
+
+    private func asciiPreview(_ data: Data, maxLen: Int) -> String {
+        let prefix = data.prefix(maxLen)
+        var out = ""
+        out.reserveCapacity(prefix.count)
+        for byte in prefix {
+            if byte >= 0x20 && byte <= 0x7E {
+                out.append(Character(UnicodeScalar(UInt32(byte))!))
+            } else {
+                out.append(".")
+            }
+        }
+        return out
+    }
+
+    #if DEBUG
+    /// Test-only: force a reassembly buffer for a peer/path.
+    func testInjectReassemblyBuffer(for peer: AX25Address, path: DigiPath = DigiPath(), data: Data) {
+        let key = reassemblyKey(from: peer, path: path)
+        inboundReassemblyBuffer[key] = data
+    }
+    #endif
 
     /// Handle a fully decoded AXDP message (used after reassembly or single-frame).
     private func handleAXDPMessageDecoded(from: AX25Address, path: DigiPath, message: AXDP.Message) {

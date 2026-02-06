@@ -185,6 +185,49 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
             XCTAssertEqual(receivedLines.first, "Plain text after AXDP")
         }
     }
+
+    /// Regression: toggling AXDP off should clear stale reassembly flags and allow plain text.
+    func testPlainTextAfterAxdpToggleOffStateReset() async {
+        await MainActor.run {
+            var receivedLines: [String] = []
+
+            let sessionManager = AX25SessionManager()
+            sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
+
+            let viewModel = ObservableTerminalTxViewModel(
+                sourceCall: "TEST-1",
+                sessionManager: sessionManager
+            )
+            viewModel.setupSessionCallbacks()
+
+            viewModel.onPlainTextChatReceived = { _, text in
+                receivedLines.append(text)
+            }
+
+            let peer = AX25Address(call: "PEER", ssid: 1)
+            let session = sessionManager.session(for: peer)
+            session.stateMachine.handle(event: .connectRequest)
+            session.stateMachine.handle(event: .receivedUA)
+
+            // Simulate receiving AXDP magic (sets reassembly flag).
+            viewModel.sessionManager.onDataReceived?(
+                session,
+                AXDP.Message(type: .ping, sessionId: 1, messageId: 1).encode()
+            )
+
+            let peerKey = peer.display.uppercased()
+            XCTAssertTrue(viewModel.isPeerInAXDPReassembly(peerKey))
+
+            // Simulate user toggling AXDP off: reset per-peer AXDP/plain-text state.
+            viewModel.resetAxdpState(for: peer, reason: "test-toggle-off")
+
+            // Plain text should be delivered after reset.
+            viewModel.sessionManager.onDataReceived?(session, Data("After toggle off\r\n".utf8))
+
+            XCTAssertEqual(receivedLines.count, 1)
+            XCTAssertEqual(receivedLines.first, "After toggle off")
+        }
+    }
     
     /// Test multiple alternations between AXDP and plain text with proper reassembly completion
     func testAlternatingAXDPAndPlainText() async {

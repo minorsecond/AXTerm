@@ -599,3 +599,47 @@ final class SessionCoordinatorBufferClearingTests: XCTestCase {
         return fullData.prefix(fullData.count / 2)
     }
 }
+
+// MARK: - Reassembly Resync Tests
+
+final class ReassemblyResyncTests: XCTestCase {
+    
+    /// Test that a corrupted buffer (leading garbage before AXDP magic)
+    /// can resync and still decode a complete message.
+    func testResyncSkipsLeadingGarbageBeforeMagic() async {
+        await MainActor.run {
+            let coordinator = SessionCoordinator()
+            let sessionManager = coordinator.sessionManager
+            sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 2)
+            
+            var received: [(String, String)] = []
+            coordinator.onAXDPChatReceived = { from, text in
+                received.append((from.display, text))
+            }
+            
+            let peer = AX25Address(call: "TEST", ssid: 1)
+            let session = sessionManager.session(for: peer)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
+            
+            let message = AXDP.Message(
+                type: .chat,
+                sessionId: 0,
+                messageId: 1,
+                payload: Data("Resync message".utf8)
+            )
+            let garbage = Data([0x00, 0x01, 0x02, 0x03, 0xFF])
+            var corruptedBuffer = garbage
+            corruptedBuffer.append(message.encode())
+            
+            #if DEBUG
+            coordinator.testInjectReassemblyBuffer(for: peer, data: corruptedBuffer)
+            // Trigger a reassembly pass with an empty delivery (existing buffer should decode)
+            sessionManager.onDataDeliveredForReassembly?(session, Data())
+            #endif
+            
+            XCTAssertEqual(received.count, 1, "Expected one AXDP message after resync")
+            XCTAssertEqual(received.first?.1, "Resync message")
+        }
+    }
+}

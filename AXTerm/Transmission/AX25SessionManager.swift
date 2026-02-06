@@ -1736,7 +1736,15 @@ final class AX25SessionManager: ObservableObject {
                 frames.append(frame)
 
             case .deliverData(let data):
-                print("[DEBUG:AX25:DELIVER] I-frame payload to reassembly | from=\(session.remoteAddress.display) size=\(data.count)")
+                let prefixHex = data.prefix(8).map { String(format: "%02X", $0) }.joined()
+                let hasMagic = AXDP.hasMagic(data)
+                print("[DEBUG:AX25:DELIVER] I-frame payload to reassembly | from=\(session.remoteAddress.display) size=\(data.count) hasMagic=\(hasMagic) prefix=\(prefixHex)")
+                TxLog.debug(.axdp, "I-frame payload delivered to reassembly", [
+                    "peer": session.remoteAddress.display,
+                    "size": data.count,
+                    "hasMagic": hasMagic,
+                    "prefixHex": prefixHex
+                ])
                 onDataDeliveredForReassembly?(session, data)
                 onDataReceived?(session, data)
 
