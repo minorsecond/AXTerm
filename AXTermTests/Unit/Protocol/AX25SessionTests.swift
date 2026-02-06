@@ -213,8 +213,12 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(frames.count, 1)
 
         let retransmitFrames = manager.handleT1Timeout(session: session)
-        XCTAssertEqual(retransmitFrames.count, 1)
-        XCTAssertEqual(retransmitFrames.first?.sessionId, session.id)
+        // Expect RR poll (P=1) + retransmitted I-frame
+        let iFrames = retransmitFrames.filter { $0.frameType == "i" }
+        let sFrames = retransmitFrames.filter { $0.frameType == "s" }
+        XCTAssertEqual(iFrames.count, 1, "Should retransmit the outstanding I-frame")
+        XCTAssertEqual(iFrames.first?.sessionId, session.id)
+        XCTAssertEqual(sFrames.count, 1, "Should include RR poll (P=1)")
     }
 
     func testRejRetransmitsWithConnectedSessionPathMismatch() {
@@ -731,6 +735,10 @@ final class AX25SessionTests: XCTestCase {
             if case .deliverData = action { return true }
             return false
         })
+        XCTAssertTrue(actionsDup.contains { action in
+            if case .sendRR(let nr, _) = action { return nr == 2 }
+            return false
+        }, "Duplicate I-frame should trigger RR for current V(R)")
     }
 
     func testStateMachineReceivedRRAcknowledgesFrames() {
@@ -805,4 +813,246 @@ final class AX25SessionTests: XCTestCase {
     // Note: Pending data queue property is tested implicitly through
     // integration tests in the session manager tests, where sessions
     // are created and managed properly with MainActor context.
+
+    // MARK: - Bug Fix: Stale N(R) in Retransmitted I-Frames (KB5YZB-7)
+
+    func testRetransmittedIFrameUsesCurrentVR() {
+        // BUG: When I-frames are retransmitted from sendBuffer, they carry the
+        // original N(R) from when they were first built. After receiving more
+        // I-frames from the remote, V(R) advances but retransmits still have
+        // the old N(R), confusing the peer about our receive state.
+        //
+        // Repro from Direwolf log: AXDP frame sent with N(R)=0 before welcome
+        // frames are processed. If retransmitted later, should use current V(R).
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let destination = AX25Address(call: "KB5YZB", ssid: 7)
+        let path = DigiPath.from(["DRL"])
+
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        // Send an I-frame (simulating AXDP PING). V(R) is 0 at this point.
+        let frames = manager.sendData(Data([0x41, 0x58, 0x54, 0x31]), to: destination, path: path, channel: 0)
+        XCTAssertEqual(frames.count, 1)
+        XCTAssertEqual(frames.first?.nr, 0, "Initial I-frame should have N(R)=0")
+
+        // Now receive two I-frames from the remote (welcome messages).
+        // This advances V(R) to 2.
+        _ = manager.handleInboundIFrame(
+            from: destination, path: path, channel: 0,
+            ns: 0, nr: 0, pf: false,
+            payload: Data("Welcome part 1".utf8)
+        )
+        _ = manager.handleInboundIFrame(
+            from: destination, path: path, channel: 0,
+            ns: 1, nr: 0, pf: false,
+            payload: Data("Welcome part 2".utf8)
+        )
+        XCTAssertEqual(session.vr, 2, "V(R) should advance to 2 after receiving 2 I-frames")
+
+        // T1 fires - retransmit the outstanding I-frame.
+        // The retransmitted frame MUST have N(R)=2 (current V(R)), not N(R)=0 (stale).
+        let retransmitFrames = manager.handleT1Timeout(session: session)
+
+        let iFrameRetransmits = retransmitFrames.filter { $0.frameType == "i" }
+        XCTAssertFalse(iFrameRetransmits.isEmpty, "Should retransmit the outstanding I-frame")
+
+        for frame in iFrameRetransmits {
+            XCTAssertEqual(frame.nr, 2,
+                "Retransmitted I-frame must use current V(R)=2, not stale N(R)=0")
+        }
+    }
+
+    // MARK: - Bug Fix: T1 Timeout Must Send RR Poll P=1 (KB5YZB-7)
+
+    func testT1TimeoutInConnectedStateSendsRRPoll() {
+        // BUG: When T1 fires in connected state with outstanding frames,
+        // AXTerm only retransmits I-frames but never sends an RR poll (P=1).
+        // Per AX.25 spec, the station should send a supervisory command with
+        // P=1 to force the peer to respond with its current state.
+        //
+        // This is critical when our I-frame was received but the response was
+        // lost - polling lets us discover the peer already processed our command.
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+
+        // Simulate sending an I-frame (increment V(S))
+        sm.sequenceState.incrementVS()  // vs=1, va=0, outstanding=1
+
+        // Also advance V(R) to simulate having received frames
+        _ = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, pf: false, payload: Data("test".utf8)))
+        XCTAssertEqual(sm.sequenceState.vr, 1)
+
+        // T1 fires
+        let actions = sm.handle(event: .t1Timeout)
+
+        // Must include an RR poll (P=1) with current V(R)
+        let rrPollActions = actions.filter { action in
+            if case .sendRR(let nr, let pf) = action {
+                return pf == true && nr == 1
+            }
+            return false
+        }
+        XCTAssertFalse(rrPollActions.isEmpty,
+            "T1 timeout with outstanding frames must send RR poll (P=1) with current V(R)")
+    }
+
+    // MARK: - Bug Fix: retryCount Not Reset on RR ACK (KB5YZB-7)
+
+    func testRetryCountResetsOnRRAcknowledgment() {
+        // BUG: When RR(N(R)) is received and V(A) advances (frames acknowledged),
+        // retryCount is not reset. This means retry counts from earlier T1 timeouts
+        // accumulate, causing premature "retries exceeded" link failure.
+        //
+        // Repro: AXDP PING triggers T1 timeouts (retryCount goes up). PING is
+        // eventually ACKed. User sends "?" which also times out. The accumulated
+        // retryCount from the PING phase pushes total retries over maxRetries.
+        var sm = AX25StateMachine(config: AX25SessionConfig(maxRetries: 5))
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+
+        // Simulate sending I-frame
+        sm.sequenceState.incrementVS()  // vs=1, outstanding=1
+
+        // T1 fires twice
+        _ = sm.handle(event: .t1Timeout)  // retryCount=1
+        _ = sm.handle(event: .t1Timeout)  // retryCount=2
+        XCTAssertEqual(sm.retryCount, 2)
+
+        // RR received, acknowledging our frame
+        let actions = sm.handle(event: .receivedRR(nr: 1))
+        XCTAssertEqual(sm.sequenceState.va, 1)
+        XCTAssertEqual(sm.sequenceState.outstandingCount, 0)
+
+        // retryCount MUST be reset since the peer acknowledged our frames
+        XCTAssertEqual(sm.retryCount, 0,
+            "retryCount must reset to 0 when RR advances V(A) - successful ACK clears retry state")
+
+        // Verify T1 stopped and T3 started (all frames acked)
+        XCTAssertTrue(actions.contains(.stopT1))
+        XCTAssertTrue(actions.contains(.startT3))
+    }
+
+    func testRetryCountDoesNotResetOnDuplicateRR() {
+        // retryCount should NOT reset if RR doesn't advance V(A) (duplicate RR)
+        var sm = AX25StateMachine(config: AX25SessionConfig(maxRetries: 5))
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+
+        sm.sequenceState.incrementVS()  // vs=1, outstanding=1
+
+        _ = sm.handle(event: .t1Timeout)  // retryCount=1
+        XCTAssertEqual(sm.retryCount, 1)
+
+        // RR with nr=0 doesn't advance V(A) (duplicate/stale RR)
+        _ = sm.handle(event: .receivedRR(nr: 0))
+        XCTAssertEqual(sm.sequenceState.va, 0)
+
+        // retryCount should remain since no progress was made
+        XCTAssertEqual(sm.retryCount, 1,
+            "retryCount should not reset on duplicate RR that doesn't advance V(A)")
+    }
+
+    // MARK: - Regression: Full KB5YZB-7 Scenario
+
+    func testFullKB5YZBScenario_AXDPThenCommandRecovery() {
+        // Regression test for the full KB5YZB-7 scenario:
+        // 1. Connect to remote node via digipeater
+        // 2. Send AXDP PING (I-frame with binary payload)
+        // 3. Receive welcome messages from remote
+        // 4. AXDP PING eventually ACKed
+        // 5. Send "?" command
+        // 6. T1 fires - must retransmit with current N(R) and poll
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let destination = AX25Address(call: "KB5YZB", ssid: 7)
+        let path = DigiPath.from(["DRL"])
+
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        // Step 1: Send AXDP PING immediately after connect
+        let axdpPayload = Data([0x41, 0x58, 0x54, 0x31, 0x01, 0x00])
+        let axdpFrames = manager.sendData(axdpPayload, to: destination, path: path, channel: 0)
+        XCTAssertEqual(axdpFrames.count, 1)
+        XCTAssertEqual(axdpFrames.first?.nr, 0, "AXDP PING sent before welcome, N(R)=0")
+
+        // Step 2: Receive welcome I-frames from KB5YZB-7
+        _ = manager.handleInboundIFrame(
+            from: destination, path: path, channel: 0,
+            ns: 0, nr: 0, pf: false,
+            payload: Data("Welcome to YZBBPQ".utf8)
+        )
+        _ = manager.handleInboundIFrame(
+            from: destination, path: path, channel: 0,
+            ns: 1, nr: 0, pf: false,
+            payload: Data("S USERS MHEARD".utf8)
+        )
+        XCTAssertEqual(session.vr, 2)
+
+        // Step 3: Remote ACKs our AXDP frame (RR nr=1)
+        _ = manager.handleInboundRR(from: destination, path: path, channel: 0, nr: 1)
+        XCTAssertEqual(session.outstandingCount, 0, "AXDP frame should be ACKed")
+
+        // Step 4: Send "?" command
+        let cmdFrames = manager.sendData(Data("?\r".utf8), to: destination, path: path, channel: 0)
+        XCTAssertEqual(cmdFrames.count, 1)
+        let cmdFrame = cmdFrames.first!
+        XCTAssertEqual(cmdFrame.nr, 2, "Command should carry current V(R)=2")
+        XCTAssertEqual(cmdFrame.ns, 1, "Command should be at N(S)=1")
+
+        // Step 5: T1 fires (remote didn't respond)
+        let retransmitFrames = manager.handleT1Timeout(session: session)
+
+        // Verify retransmit carries updated N(R) and there's an RR poll
+        let iRetransmits = retransmitFrames.filter { $0.frameType == "i" }
+        XCTAssertFalse(iRetransmits.isEmpty, "Must retransmit the ? command")
+        for frame in iRetransmits {
+            XCTAssertEqual(frame.nr, 2,
+                "Retransmitted ? command must have current V(R)=2")
+        }
+    }
+
+    func testRetransmitAfterPartialAckUpdatesNR() {
+        // Test: send 3 frames, peer ACKs first 2, T1 fires for frame 3.
+        // Frame 3's retransmit must use current V(R) not the original.
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let destination = AX25Address(call: "N0HI", ssid: 7)
+        let path = DigiPath.from(["DRL"])
+
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        // Send 3 frames
+        _ = manager.sendData(Data("A".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("B".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("C".utf8), to: destination, path: path, channel: 0)
+        XCTAssertEqual(session.outstandingCount, 3)
+
+        // Receive 2 I-frames from remote (V(R) advances to 2)
+        _ = manager.handleInboundIFrame(
+            from: destination, path: path, channel: 0,
+            ns: 0, nr: 2, pf: false,
+            payload: Data("resp1".utf8)
+        )
+        _ = manager.handleInboundIFrame(
+            from: destination, path: path, channel: 0,
+            ns: 1, nr: 2, pf: false,
+            payload: Data("resp2".utf8)
+        )
+        XCTAssertEqual(session.vr, 2)
+
+        // Peer ACKed our first 2 frames (piggybacked nr=2 in I-frames above)
+        XCTAssertEqual(session.outstandingCount, 1, "Only frame C outstanding")
+
+        // T1 fires for frame C
+        let retransmitFrames = manager.handleT1Timeout(session: session)
+        let iRetransmits = retransmitFrames.filter { $0.frameType == "i" }
+        XCTAssertEqual(iRetransmits.count, 1)
+        XCTAssertEqual(iRetransmits.first?.nr, 2,
+            "Retransmitted frame C must use current V(R)=2")
+    }
 }

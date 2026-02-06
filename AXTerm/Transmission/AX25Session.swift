@@ -345,6 +345,17 @@ struct AX25StateMachine: Sendable {
         rejSent = false
     }
 
+    /// Force recovery from late UA. Called by session manager only when it determines
+    /// a late UA should be accepted (SABM sent recently, within timeout window).
+    /// This is a manager-level override — the spec-strict handle(event:) ignores UA
+    /// in disconnected/error states per AX.25 §6.3.
+    mutating func forceRecoverFromLateUA() -> [AX25SessionAction] {
+        state = .connected
+        retryCount = 0
+        resetSessionState()
+        return [.stopT1, .startT3, .notifyConnected]
+    }
+
     /// Handle an event and return the list of actions to execute
     mutating func handle(event: AX25SessionEvent) -> [AX25SessionAction] {
         let oldState = state
@@ -393,13 +404,6 @@ struct AX25StateMachine: Sendable {
             TxLog.inbound(.ax25, "Connection request received (SABM)")
             return [.sendUA, .startT3, .notifyConnected]
 
-        case (.disconnected, .receivedUA):
-            // Late UA for a session we initiated (timing/path mismatch)
-            state = .connected
-            retryCount = 0
-            TxLog.inbound(.ax25, "Connection established (late UA)")
-            return [.startT3, .notifyConnected]
-
         case (.disconnected, .receivedDISC):
             // Respond with DM (not connected)
             return [.sendDM]
@@ -420,13 +424,6 @@ struct AX25StateMachine: Sendable {
             state = .disconnected
             TxLog.error(.ax25, "Connection refused", error: nil, ["reason": "DM received"])
             return [.stopT1, .notifyError("Connection refused (DM received)")]
-
-        case (.error, .receivedUA):
-            // Late UA after error state, recover to connected
-            state = .connected
-            retryCount = 0
-            TxLog.inbound(.ax25, "Connection established (late UA from error)")
-            return [.startT3, .notifyConnected]
 
         case (.connecting, .t1Timeout):
             retryCount += 1
@@ -511,8 +508,17 @@ struct AX25StateMachine: Sendable {
                 ])
                 return [.stopT1, .stopT3, .notifyError("Link failure (retries exceeded)")]
             }
-            // Retransmit would happen here
-            return [.startT1]
+            // Per AX.25 spec: on T1 timeout with outstanding frames, send RR
+            // with P=1 (poll) to force the peer to respond with its current
+            // state. This recovers from lost responses - if the peer already
+            // processed our I-frame but its RR was lost, the poll elicits a
+            // fresh RR(F=1) instead of wasting airtime on duplicate I-frames.
+            // The session manager also retransmits outstanding I-frames.
+            var actions: [AX25SessionAction] = [.startT1]
+            if sequenceState.outstandingCount > 0 {
+                actions.append(.sendRR(nr: sequenceState.vr, pf: true))
+            }
+            return actions
 
         case (.connected, .t3Timeout):
             // Send RR as poll to check link
@@ -594,10 +600,9 @@ struct AX25StateMachine: Sendable {
         } else {
             // Outside window - this is likely a duplicate of an already-received frame
             print("[AX25Session] I-frame OUTSIDE WINDOW: received N(S)=\(ns), V(R)=\(sequenceState.vr), discarding")
-            // Still respond with RR if P=1 to indicate we're alive
-            if pf {
-                actions.append(.sendRR(nr: sequenceState.vr, pf: true))
-            }
+            // Always send RR to re-ack current V(R). This helps peers recover when
+            // our previous RR was lost and they retransmit a duplicate.
+            actions.append(.sendRR(nr: sequenceState.vr, pf: pf))
         }
 
         return actions
@@ -690,7 +695,15 @@ struct AX25StateMachine: Sendable {
     private mutating func handleRR(nr: Int) -> [AX25SessionAction] {
         var actions: [AX25SessionAction] = []
 
+        // Reset retryCount when RR advances V(A) (peer acknowledged new frames).
+        // This prevents retry counts from earlier T1 timeouts accumulating across
+        // unrelated I-frame exchanges, which caused premature "retries exceeded"
+        // link failures in the KB5YZB-7 scenario.
+        let vaBeforeAck = sequenceState.va
         sequenceState.ackUpTo(nr: nr)
+        if sequenceState.va != vaBeforeAck {
+            retryCount = 0
+        }
 
         if sequenceState.outstandingCount == 0 {
             // All frames acked

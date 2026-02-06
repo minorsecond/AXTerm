@@ -237,12 +237,13 @@ final class FlagClearingRaceConditionTests: XCTestCase {
         await MainActor.run {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 2)
-            
+
             let viewModel = ObservableTerminalTxViewModel(
                 sourceCall: "TEST-2",
                 sessionManager: sessionManager
             )
-            
+            viewModel.setupSessionCallbacks()
+
             let peer = AX25Address(call: "TEST", ssid: 1)
             let session = sessionManager.session(for: peer)
             session.stateMachine.handle(event: .connectRequest)
@@ -258,12 +259,17 @@ final class FlagClearingRaceConditionTests: XCTestCase {
             XCTAssertTrue(viewModel.isPeerInAXDPReassembly(peerKey),
                 "Flag should be set after receiving AXDP data")
             
-            // Simulate AXDP chat delivery (this should clear the flag)
+            // Simulate AXDP chat delivery — flag stays set to suppress raw bytes from same I-frame
             viewModel.appendAXDPChatToTranscript(from: peer, text: "Chat message")
-            
-            // EXPECTED: Flag should be cleared
+            XCTAssertTrue(viewModel.isPeerInAXDPReassembly(peerKey),
+                "Flag must remain set after appendAXDPChatToTranscript to suppress raw bytes")
+
+            // Simulate async reassembly-complete callback clearing the flag
+            viewModel.clearAXDPReassemblyFlag(for: peer)
+
+            // EXPECTED: Flag should now be cleared
             XCTAssertFalse(viewModel.isPeerInAXDPReassembly(peerKey),
-                "Flag MUST be cleared after AXDP chat delivery")
+                "Flag MUST be cleared after clearAXDPReassemblyFlag")
         }
     }
     
@@ -271,15 +277,16 @@ final class FlagClearingRaceConditionTests: XCTestCase {
     func testPlainTextDeliveredAfterAXDPChatCompletion() async {
         await MainActor.run {
             var receivedLines: [String] = []
-            
+
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 2)
-            
+
             let viewModel = ObservableTerminalTxViewModel(
                 sourceCall: "TEST-2",
                 sessionManager: sessionManager
             )
-            
+            viewModel.setupSessionCallbacks()
+
             viewModel.onPlainTextChatReceived = { _, text in
                 receivedLines.append(text)
             }
@@ -294,9 +301,12 @@ final class FlagClearingRaceConditionTests: XCTestCase {
             let axdpData = AXDP.Message(type: .ping, sessionId: 1, messageId: 1).encode()
             viewModel.sessionManager.onDataReceived?(session, axdpData)
             
-            // Step 2: AXDP chat delivered (clears flag)
+            // Step 2: AXDP chat delivered (flag stays set to suppress raw bytes from same I-frame)
             viewModel.appendAXDPChatToTranscript(from: peer, text: "AXDP Chat")
-            
+
+            // Step 2b: Simulate async reassembly-complete callback clearing the flag
+            viewModel.clearAXDPReassemblyFlag(for: peer)
+
             // Step 3: Plain text arrives (should be delivered, not suppressed)
             viewModel.sessionManager.onDataReceived?(session, Data("Plain text after AXDP\r\n".utf8))
             

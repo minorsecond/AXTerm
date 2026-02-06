@@ -193,6 +193,33 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
         try c.encodeIfPresent(nr, forKey: .nr)
     }
 
+    /// Create a copy of this I-frame with an updated N(R) and control byte.
+    /// Used during retransmission so the peer sees our current receive state
+    /// instead of the stale N(R) from the original transmission.
+    func withUpdatedNR(_ newNR: Int) -> OutboundFrame {
+        guard frameType == "i", let oldNS = ns else { return self }
+        let newControl = AX25Control.iFrame(ns: oldNS, nr: newNR, pf: false)
+        return OutboundFrame(
+            id: UUID(),  // New ID for retransmit tracking
+            channel: channel,
+            destination: destination,
+            source: source,
+            path: path,
+            createdAt: Date(),
+            payload: payload,
+            priority: priority,
+            frameType: frameType,
+            pid: pid,
+            sessionId: sessionId,
+            axdpMessageId: axdpMessageId,
+            controlByte: newControl,
+            ns: oldNS,
+            nr: newNR,
+            displayInfo: displayInfo,
+            isUserPayload: isUserPayload
+        )
+    }
+
     /// Encode as raw AX.25 frame bytes (for KISS transport)
     func encodeAX25() -> Data {
         var data = Data()

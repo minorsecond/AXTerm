@@ -76,7 +76,7 @@ final class AXDPProtocolTests: XCTestCase {
             XCTAssertTrue(TestAXDPBuilder.hasAXDPMagic(payloadData))
 
             // Verify it can be decoded by the real AXDP decoder
-            if let message = AXDP.Message.decode(from: Data(payloadData)) {
+            if let (message, _) = AXDP.Message.decode(from: Data(payloadData)) {
                 XCTAssertEqual(message.type, .chat, "Should be a chat message")
                 if let textData = message.payload, let text = String(data: textData, encoding: .utf8) {
                     XCTAssertEqual(text, testMessage, "Message text should match")
@@ -103,7 +103,7 @@ final class AXDPProtocolTests: XCTestCase {
             let payloadData = received.suffix(from: 16)
             XCTAssertTrue(TestAXDPBuilder.hasAXDPMagic(payloadData))
 
-            if let message = AXDP.Message.decode(from: Data(payloadData)) {
+            if let (message, _) = AXDP.Message.decode(from: Data(payloadData)) {
                 XCTAssertEqual(message.type, .ping, "Should be a ping message")
             }
         }

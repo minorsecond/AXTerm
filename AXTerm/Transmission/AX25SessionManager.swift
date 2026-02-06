@@ -192,16 +192,21 @@ final class AX25Session: @unchecked Sendable {
         acknowledgeUpTo(from: stateMachine.sequenceState.va, to: nr)
     }
 
-    /// Get frames that need retransmission (from nr onwards)
+    /// Get frames that need retransmission (from nr onwards).
+    /// Each retransmitted I-frame is rebuilt with the current V(R) so the peer
+    /// sees our up-to-date receive state instead of the stale N(R) from the
+    /// original transmission. This fixes the KB5YZB-7 bug where retransmits
+    /// carried N(R)=0 even after we had received the welcome messages.
     func framesToRetransmit(from nr: Int) -> [OutboundFrame] {
         let modulo = stateMachine.config.modulo
+        let currentVR = stateMachine.sequenceState.vr
         var frames: [(Int, OutboundFrame)] = []
 
         for (ns, frame) in sendBuffer {
             // Include frames from nr up to vs
             let diff = (ns - nr + modulo) % modulo
             if diff < outstandingCount {
-                frames.append((ns, frame))
+                frames.append((ns, frame.withUpdatedNR(currentVR)))
             }
         }
 
@@ -946,7 +951,15 @@ final class AX25SessionManager: ObservableObject {
             )
         }
 
-        let actions = session.stateMachine.handle(event: .receivedUA)
+        // Use forceRecoverFromLateUA() for late-UA path (disconnected/error states).
+        // The spec-strict handle(event:) correctly ignores UA in these states per §6.3,
+        // but the manager allows late UA when SABM was sent recently.
+        let actions: [AX25SessionAction]
+        if oldState == .disconnected || oldState == .error {
+            actions = session.stateMachine.forceRecoverFromLateUA()
+        } else {
+            actions = session.stateMachine.handle(event: .receivedUA)
+        }
 
         if oldState != session.state {
             debugTrace("state change (UA)", [

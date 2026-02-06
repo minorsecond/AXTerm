@@ -54,7 +54,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
     /// Tracks peers that are currently mid-AXDP reassembly.
     /// When data with AXDP magic is received, the peer is added here.
-    /// When AXDP message extraction completes via appendAXDPChatToTranscript, the peer is removed.
+    /// When AXDP reassembly completes, the peer is removed via clearAXDPReassemblyFlag.
     /// When non-AXDP data arrives from a peer in this set, the flag is cleared (they switched to plain text).
     /// This prevents subsequent AXDP fragments (which lack magic) from being displayed as raw text.
     private var peersInAXDPReassembly: Set<String> = []
@@ -341,7 +341,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         currentLineBuffers.removeValue(forKey: peerKey)
         
         // DO NOT clear peersInAXDPReassembly here!
-        // The flag must remain set until onAXDPReassemblyComplete's async callback runs.
+        // The flag must remain set until clearAXDPReassemblyFlag's async callback runs.
         // This ensures raw bytes from the last I-frame (delivered via onDataReceived
         // AFTER this method returns) are properly suppressed.
         

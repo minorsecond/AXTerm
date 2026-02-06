@@ -36,11 +36,11 @@ final class AX25TransmissionTests: XCTestCase {
             )
         }
 
-        session.acknowledgeUpTo(from: 2, to: 4)
+        session.acknowledgeUpTo(from: 0, to: 4)
 
         let remaining = Set(session.sendBuffer.keys)
         let expected = Set([4, 5, 6, 7])
-        XCTAssertEqual(remaining, expected, "RR(4) acks 0,1,2,3; keep 4,5,6,7")
+        XCTAssertEqual(remaining, expected, "RR(4) with va=0 acks 0,1,2,3; keep 4,5,6,7")
     }
 
     /// When VA has wrapped and NR=7, only VA..NR-1 are acked (6 only); wrapped frames 0,1 remain.
@@ -99,7 +99,8 @@ final class AX25TransmissionTests: XCTestCase {
         XCTAssertEqual(remaining, Set([2, 3]), "RR(2) with VA=6 should ack 6,7,0,1; keep 2,3")
     }
 
-    /// RR(0) means "I expect 0 next" = receiver has received through 7. Remove all 0..<mod.
+    /// RR(0) means "I expect 0 next" = receiver has received through 7.
+    /// With va=4, only frames 4,5,6,7 remain (0-3 already acked). RR(0) clears them all.
     func testAcknowledgeUpToWrapCaseNr0RemovesAll() {
         let manager = AX25SessionManager()
         let dest = AX25Address(call: "TEST", ssid: 2)
@@ -109,7 +110,8 @@ final class AX25TransmissionTests: XCTestCase {
         let session = manager.session(for: dest, path: DigiPath(), channel: 0)
 
         let payload = Data([0x41, 0x58, 0x54, 0x31])
-        for ns in 0..<8 {
+        // Only frames 4-7 remain; 0-3 were already acked (va=4)
+        for ns in [4, 5, 6, 7] {
             session.sendBuffer[ns] = OutboundFrame(
                 destination: dest,
                 source: src,
@@ -124,7 +126,7 @@ final class AX25TransmissionTests: XCTestCase {
         session.acknowledgeUpTo(from: 4, to: 0)
 
         let remaining = Set(session.sendBuffer.keys)
-        XCTAssertTrue(remaining.isEmpty, "RR(0) acks all; sendBuffer should be empty")
+        XCTAssertTrue(remaining.isEmpty, "RR(0) with va=4 acks 4,5,6,7; sendBuffer should be empty")
     }
 
     /// When va=0, nr=3: remove 0,1,2; keep 3,4,5,6,7.
@@ -331,7 +333,7 @@ final class AX25TransmissionTests: XCTestCase {
             )
         }
 
-        session.acknowledgeUpTo(from: 3, to: 4)
+        session.acknowledgeUpTo(from: 0, to: 4)
 
         let remaining = Set(session.sendBuffer.keys)
         XCTAssertEqual(remaining, Set([4, 5, 6, 7]), "RR(4) must clear 0,1,2,3 so sender does not retransmit them")

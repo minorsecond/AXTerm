@@ -437,7 +437,7 @@ final class SessionCoordinator: ObservableObject {
             // When a session disconnects, invalidate cached capabilities and clear reassembly buffer.
             // This ensures we re-discover on next connection (station might switch software)
             // and prevents stale partial AXDP messages from corrupting future communications.
-            if oldState == .connected && (newState == .disconnected || newState == .error) {
+            if (oldState == .connected || oldState == .disconnecting) && (newState == .disconnected || newState == .error) {
                 self.invalidateCapability(for: session.remoteAddress.display)
                 
                 // Clear reassembly buffer for this peer to prevent stale data corruption.
