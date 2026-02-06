@@ -531,3 +531,51 @@ final class BidirectionalCapabilityTests: XCTestCase {
         }
     }
 }
+
+// MARK: - Disconnect Invalidation and Filename Sanitization Tests
+
+final class CapabilityInvalidationAndFilenameSanitizationTests: XCTestCase {
+
+    func testDisconnectInvalidatesImplicitAXDPCapability() async {
+        await MainActor.run {
+            let coordinator = SessionCoordinator()
+            let sessionManager = coordinator.sessionManager
+            sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
+
+            let peer = AX25Address(call: "PEER", ssid: 1)
+            let session = sessionManager.session(for: peer)
+
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
+            XCTAssertEqual(session.state, .connected)
+
+            let enabledMessage = AXDP.Message(type: .peerAxdpEnabled, sessionId: 1, messageId: 1)
+            coordinator.testHandleAXDPMessage(enabledMessage, from: peer, path: DigiPath())
+
+            XCTAssertTrue(coordinator.hasConfirmedAXDPCapability(for: peer.display))
+            XCTAssertTrue(coordinator.isImplicitlyConfirmedAXDP(for: peer.display))
+
+            _ = sessionManager.disconnect(session: session)
+            sessionManager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+
+            XCTAssertEqual(session.state, .disconnected)
+            XCTAssertFalse(
+                coordinator.hasConfirmedAXDPCapability(for: peer.display),
+                "Disconnect should clear implicit AXDP capability confirmation"
+            )
+            XCTAssertFalse(coordinator.isImplicitlyConfirmedAXDP(for: peer.display))
+        }
+    }
+
+    func testIncomingFilenameSanitizationUsesSafeBasename() async {
+        await MainActor.run {
+            let coordinator = SessionCoordinator()
+
+            XCTAssertEqual(coordinator.sanitizeIncomingFileNameForTests("../secret.txt"), "secret.txt")
+            XCTAssertEqual(coordinator.sanitizeIncomingFileNameForTests("..\\nested\\payload.bin"), "payload.bin")
+            XCTAssertEqual(coordinator.sanitizeIncomingFileNameForTests("   \n\t  "), "received-file")
+            XCTAssertEqual(coordinator.sanitizeIncomingFileNameForTests("."), "received-file")
+            XCTAssertEqual(coordinator.sanitizeIncomingFileNameForTests(".."), "received-file")
+        }
+    }
+}

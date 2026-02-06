@@ -456,6 +456,11 @@ final class SessionCoordinator: ObservableObject {
         // Clear from capability store
         packetEngine?.capabilityStore.remove(for: call)
 
+        // Clear implicit confirmation and stale "not supported" state so
+        // reconnects always perform fresh capability discovery.
+        implicitlyConfirmedAXDP.remove(call)
+        clearAXDPNotSupported(for: call)
+
         // Clear pending discovery status
         pendingCapabilityDiscovery.removeValue(forKey: call)
 
@@ -1624,6 +1629,7 @@ final class SessionCoordinator: ObservableObject {
     /// - Returns: The path where the file was saved, or nil if save failed
     private func saveReceivedFile(fileName: String, data: Data) -> String? {
         let fileManager = FileManager.default
+        let safeFileName = sanitizedReceivedFileName(fileName)
 
         // Try Downloads folder first, then Documents as fallback
         var baseURL: URL?
@@ -1660,12 +1666,12 @@ final class SessionCoordinator: ObservableObject {
             return nil
         }
 
-        var targetURL = downloadsURL.appendingPathComponent(fileName)
+        var targetURL = downloadsURL.appendingPathComponent(safeFileName)
 
         // Handle filename conflicts - append (1), (2), etc.
         var counter = 1
-        let baseName = (fileName as NSString).deletingPathExtension
-        let ext = (fileName as NSString).pathExtension
+        let baseName = (safeFileName as NSString).deletingPathExtension
+        let ext = (safeFileName as NSString).pathExtension
         while fileManager.fileExists(atPath: targetURL.path) {
             let newName = ext.isEmpty ? "\(baseName) (\(counter))" : "\(baseName) (\(counter)).\(ext)"
             targetURL = downloadsURL.appendingPathComponent(newName)
@@ -1689,6 +1695,20 @@ final class SessionCoordinator: ObservableObject {
             ])
             return nil
         }
+    }
+
+    /// Sanitize untrusted remote file metadata into a safe local basename.
+    /// This prevents path traversal when appending to our writable transfer folder.
+    private func sanitizedReceivedFileName(_ fileName: String) -> String {
+        let normalizedSeparators = fileName.replacingOccurrences(of: "\\", with: "/")
+        let candidate = (normalizedSeparators as NSString).lastPathComponent
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmed.isEmpty || trimmed == "." || trimmed == ".." {
+            return "received-file"
+        }
+
+        return trimmed
     }
 
     /// Handle ACK message (transfer accepted, chunk acknowledged, completion request, or transfer complete)
@@ -2079,6 +2099,11 @@ final class SessionCoordinator: ObservableObject {
     /// Test helper to clear all implicit confirmations
     func clearAllImplicitConfirmations() {
         implicitlyConfirmedAXDP.removeAll()
+    }
+
+    /// Test helper to run incoming filename sanitization logic.
+    func sanitizeIncomingFileNameForTests(_ fileName: String) -> String {
+        sanitizedReceivedFileName(fileName)
     }
     
     /// Test helper to simulate receiving an AXDP message (goes through full routing logic).
