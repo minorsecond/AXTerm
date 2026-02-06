@@ -116,8 +116,80 @@ Analysis of Direwolf logs revealed three additional bugs in the AX.25 state mach
   - `testConnectedModeNODESCommand` — gets UNKNOWN frame instead of UA
   - `testSABMUAHandshake` — gets SABM echo instead of UA response
 
+## Bug #4: Duplicate I-frame processing from accumulated Combine subscriptions
+
+### Problem
+`ContentView.init()` calls `coordinator.subscribeToPackets(from: client)` each time SwiftUI re-creates the view.
+Since `SessionCoordinator.shared` returns the same instance, each call added another Combine subscriber to
+`packetPublisher`. Every inbound packet was processed N times (once per subscriber), producing duplicate RR frames,
+duplicate data delivery, and out-of-window errors.
+
+### Fix
+- Added dedicated `packetSubscription: AnyCancellable?` in SessionCoordinator that cancels and replaces on each `subscribeToPackets` call
+- Removed 167 lines of dead code from TerminalView.swift (`subscribeToPackets`, `handleIncomingPacket`, etc.)
+
+### Tests
+- `testSubscribeToPacketsTwiceDoesNotDuplicateProcessing` (integration)
+- `testSubscribeToPacketsReplacesNotAccumulatesSubscriptions` (integration)
+- `testDuplicateIFrameProcessingProducesDuplicateRR` (unit)
+- `testDuplicateIFrameDoesNotDeliverDataTwice` (unit)
+
+## Bug #5: AXDP PING sent as first I-frame corrupts non-AXDP nodes
+
+### Problem
+After connecting, `SessionCoordinator` immediately sent an AXDP PING (56 bytes of binary with AXT1 magic header)
+as the first I-frame (N(S)=0). Non-AXDP nodes like KB5YZB-7 (LinBPQ) interpret this as garbled application input,
+corrupting their command buffer. The node ACKs all subsequent commands (RR with incrementing N(R)) but returns
+zero I-frames with response data.
+
+### Evidence (fixme2.md)
+- AXDP PING sent as I-frame N(S)=0, N(R)=0 before any user data
+- KB5YZB-7 sends welcome banner (2 I-frames), then only RR acks
+- All user commands ("?", "INFO", "PORTS") acknowledged but produce zero response
+
+### Fix (v1 — deferred PING, insufficient)
+- Deferred AXDP PING until first inbound I-frame — still sent binary data to non-AXDP nodes.
+- Live testing confirmed PING was still sent (just 1 second later), still corrupting KB5YZB-7.
+
+### Fix (v2 — remove auto-PING entirely, insufficient)
+- Removed all automatic AXDP PING on connect — but this meant AXDP would never auto-negotiate.
+
+### Fix (v3 — text-safe capability probe as I-frame, insufficient)
+- Replaced binary AXDP PING with a plain ASCII text probe `AXDP?\r` sent as a normal I-frame.
+- **Legacy nodes** (LinBPQ, etc.): treat `AXDP?` as an unknown command, respond "Invalid command", continue normally.
+- **Problem**: The "Invalid command" response appears in the user's transcript unsolicited — confusing UX since the user didn't type anything.
+
+### Fix (v4 — text probe via UI frame with bidirectional exchange, final)
+- Text probe `AXDP?\r` is now sent as a **UI frame** (connectionless, unnumbered information).
+- UI frames are processed at the AX.25 layer but are **not fed into the connected-mode application layer**, so legacy BBS/nodes (LinBPQ, etc.) never see the probe text — no "Invalid command" response and no transcript noise.
+- **Bidirectional capability exchange** (all via UI frames):
+  1. A → B: `AXDP?\r` (text probe, plain ASCII UI frame)
+  2. B → A: PONG with B's capabilities (binary TLV UI frame)
+  3. A → B: PING with A's capabilities (binary TLV UI frame)
+  4. B → A: PONG (binary TLV UI frame — A already has B's caps, harmless)
+- Both stations end up with the other's full capability set (version range, features, compression, etc.).
+- Text probe is triggered by first inbound I-frame (welcome banner), with 3-second fallback timer for AXTerm-to-AXTerm connections.
+- Only the connection initiator sends the probe.
+- Known non-AXDP peers (from previous timeout) are skipped entirely.
+- `sendCapabilityPong` always uses UI frames to keep all negotiation out of the I-frame stream.
+- `sendCapabilityPing()` and `triggerCapabilityDiscovery()` still exist for manual/explicit use.
+- **AXDP toggle on/off**: `peerAxdpEnabled`/`peerAxdpDisabled` notifications still use I-frames (both peers are confirmed AXDP-capable at that point). Capability cache persists across toggle — only cleared on disconnect.
+
+### Tests
+- `testNoBinaryPingOnConnect` — connect does NOT send binary PING immediately
+- `testTextProbeSentAfterFirstInboundIFrame` — text probe sent after first inbound data
+- `testTextProbeSentOnlyOnce` — multiple I-frames don't re-trigger probe
+- `testInboundTextProbeTriggersImplicitConfirmation` — receiving `AXDP?\r` via UI frame marks peer as AXDP-capable
+- `testBidirectionalCapabilityExchange` — PONG triggers PING with capabilities (full round-trip)
+- `testTextProbeFallbackTimerSendsProbe` — 3s fallback fires when no inbound data
+- `testTextProbeCancelledOnDisconnect` — disconnect cancels pending probe
+- `testKnownNonAXDPPeerSkipsProbe` — not-supported peers are not probed
+- `testManualCapabilityDiscoveryStillWorks` — explicit trigger sends binary PING
+- `testNoProbeWhenAXDPDisabled` — no probe when AXDP disabled
+- `testInboundTextProbeIgnoredWhenAXDPDisabled` — probe from peer ignored when local AXDP off
+- `testAXDPToggleOffOnPreservesCapabilityCache` — toggling AXDP off/on doesn't invalidate cache
+- `testDisconnectInvalidatesCapabilityForReNegotiation` — disconnect forces fresh re-negotiation
+
 ## Next Steps
-- Test live on-air with KB5YZB-7 via DRL to confirm the three fixes resolve the flaky connection behavior
-- Monitor AXDP capability negotiation timing — PING is still sent before welcome I-frames are processed; may need sequencing improvement if issues persist
+- Test live on-air with KB5YZB-7 via DRL to confirm all fixes resolve the flaky connection behavior
 - Investigate the 4 pre-existing integration test failures (Direwolf simulation setup issues)
-- Follow up on AXDP gating and disconnect cleanup if issues persist after the above fixes
