@@ -617,9 +617,18 @@ final class PacketEngine: ObservableObject {
     /// Called when AXDP chat is received—the raw I-frame payload is binary so it never
     /// reaches the console via the normal packet path.
     func appendSessionChatLine(from fromDisplay: String, text: String) {
+        TxLog.debug(.session, "appendSessionChatLine called", [
+            "from": fromDisplay,
+            "textLength": text.count,
+            "preview": String(text.prefix(50)),
+            "currentLineCount": consoleLines.count
+        ])
         let toDisplay = settings.myCallsign
         let line = ConsoleLine.packet(from: fromDisplay, to: toDisplay, text: text)
         appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
+        TxLog.debug(.session, "appendSessionChatLine complete", [
+            "newLineCount": consoleLines.count
+        ])
     }
 
     // MARK: - Console Line Duplicate Detection

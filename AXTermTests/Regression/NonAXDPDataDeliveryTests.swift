@@ -126,6 +126,7 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { _, text in
                 receivedLines.append(text)
@@ -158,6 +159,7 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { _, text in
                 receivedLines.append(text)
@@ -196,6 +198,7 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { _, text in
                 receivedLines.append(text)
@@ -250,6 +253,7 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
@@ -280,6 +284,7 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
@@ -324,10 +329,12 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
         }
         
         let viewModel = await MainActor.run {
-            ObservableTerminalTxViewModel(
+            let vm = ObservableTerminalTxViewModel(
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            vm.setupSessionCallbacks()  // Must be called for callbacks to work
+            return vm
         }
         
         let (session, peerKey) = await MainActor.run {
@@ -375,6 +382,7 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { _, text in
                 receivedLines.append(text)
@@ -433,6 +441,7 @@ final class ProtocolSwitchingTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { _, text in
                 receivedLines.append(text)
@@ -476,6 +485,7 @@ final class ProtocolSwitchingTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { _, text in
                 receivedLines.append(text)
@@ -519,6 +529,7 @@ final class ProtocolSwitchingTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { _, text in
                 receivedLines.append(text)
@@ -555,6 +566,104 @@ final class ProtocolSwitchingTests: XCTestCase {
         }
     }
     
+    /// CRITICAL REGRESSION TEST: Raw bytes from last AXDP I-frame must not contaminate plain text buffer.
+    ///
+    /// BUG DESCRIPTION:
+    /// When the last I-frame of an AXDP message arrives:
+    /// 1. onDataDeliveredForReassembly triggers SessionCoordinator to complete reassembly
+    /// 2. SessionCoordinator calls onAXDPChatReceived → appendAXDPChatToTranscript
+    /// 3. (BUG) appendAXDPChatToTranscript clears the peersInAXDPReassembly flag
+    /// 4. THEN onDataReceived is called for the SAME I-frame's raw bytes
+    /// 5. Since flag is cleared, raw bytes go into plain text buffer!
+    /// 6. These bytes have no newline, so they stay in buffer
+    /// 7. Next plain text arrives and gets contaminated with AXDP payload remnants
+    ///
+    /// OBSERVED: "ullamcorper.test 2 long" instead of "test 2 long: Lorem ipsum..."
+    /// The "ullamcorper" came from the end of the previous AXDP message.
+    ///
+    /// FIX: appendAXDPChatToTranscript must NOT clear the flag. The flag should only
+    /// be cleared by the async onAXDPReassemblyComplete callback, which runs AFTER
+    /// onDataReceived returns. This ensures raw bytes from the last I-frame are suppressed.
+    ///
+    /// REAL CODE FLOW:
+    /// 1. onAXDPReassemblyComplete schedules async Task to clear flag
+    /// 2. handleAXDPMessageDecoded → appendAXDPChatToTranscript (flag STAYS SET)
+    /// 3. Return, then onDataReceived fires (flag still set → raw bytes suppressed)
+    /// 4. Async Task runs, clears flag
+    /// 5. Future plain text works
+    func testAXDPLastIFrameBytesMustNotContaminatePlainTextBuffer() async {
+        await MainActor.run {
+            var receivedLines: [String] = []
+            
+            let sessionManager = AX25SessionManager()
+            sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
+            
+            let viewModel = ObservableTerminalTxViewModel(
+                sourceCall: "TEST-1",
+                sessionManager: sessionManager
+            )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
+            
+            viewModel.onPlainTextChatReceived = { _, text in
+                receivedLines.append(text)
+            }
+            
+            let peer = AX25Address(call: "PEER", ssid: 1)
+            let session = sessionManager.session(for: peer)
+            session.stateMachine.handle(event: .connectRequest)
+            session.stateMachine.handle(event: .receivedUA)
+            
+            // STEP 1: AXDP first chunk arrives (sets flag)
+            let axdpMessage = AXDP.Message(
+                type: .chat,
+                sessionId: 1,
+                messageId: 1,
+                payload: Data("Long AXDP message ending with ullamcorper.".utf8)
+            )
+            viewModel.sessionManager.onDataReceived?(session, axdpMessage.encode())
+            
+            let peerKey = peer.display.uppercased()
+            XCTAssertTrue(viewModel.isPeerInAXDPReassembly(peerKey), "Flag should be set after AXDP magic")
+            
+            // STEP 2: Simulate SessionCoordinator completing reassembly:
+            // appendAXDPChatToTranscript is called with the decoded AXDP text.
+            // CRITICAL: The fix ensures the flag remains SET after this call.
+            viewModel.appendAXDPChatToTranscript(from: peer, text: "Long AXDP message ending with ullamcorper.")
+            
+            // The decoded AXDP text should be delivered
+            XCTAssertEqual(receivedLines.count, 1, "Decoded AXDP text should be delivered")
+            XCTAssertEqual(receivedLines[0], "Long AXDP message ending with ullamcorper.")
+            
+            // CRITICAL: Flag should STILL be set after appendAXDPChatToTranscript!
+            // This is the key assertion that verifies the fix.
+            XCTAssertTrue(viewModel.isPeerInAXDPReassembly(peerKey),
+                          "Flag must remain SET after appendAXDPChatToTranscript to suppress raw bytes from onDataReceived")
+            
+            // Clear received lines for next test
+            receivedLines.removeAll()
+            
+            // STEP 3: Simulate onDataReceived being called for the SAME I-frame's raw bytes.
+            // Because the flag is still set, these should be SUPPRESSED.
+            let rawLastIFrameBytes = Data("ullamcorper.".utf8)  // No newline - would stay in buffer!
+            viewModel.sessionManager.onDataReceived?(session, rawLastIFrameBytes)
+            
+            // STEP 4: Simulate the async callback clearing the flag.
+            // In real code, this happens when the async Task from onAXDPReassemblyComplete runs.
+            viewModel.clearAXDPReassemblyFlag(for: peer)
+            
+            // STEP 5: Now plain text arrives (user's "test 2 long" scenario)
+            viewModel.sessionManager.onDataReceived?(session, Data("test 2 long: Lorem ipsum\r\n".utf8))
+            
+            // VERIFY: Plain text should NOT be contaminated!
+            // The raw bytes from step 3 should have been suppressed because the flag was set.
+            XCTAssertEqual(receivedLines.count, 1, "Should receive exactly one plain text line")
+            XCTAssertEqual(receivedLines.first, "test 2 long: Lorem ipsum",
+                           "Plain text should NOT be contaminated by raw AXDP bytes - got: \(receivedLines.first ?? "nil")")
+            XCTAssertFalse(receivedLines.first?.contains("ullamcorper") ?? false,
+                           "Plain text should NOT contain AXDP content remnants")
+        }
+    }
+    
     /// Test flag state is correctly maintained through multiple switches via clearAXDPReassemblyFlag
     func testFlagStateAcrossMultipleSwitches() async {
         await MainActor.run {
@@ -565,6 +674,7 @@ final class ProtocolSwitchingTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             let peer = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: peer)
@@ -620,6 +730,7 @@ final class ProtocolSwitchingTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { address, text in
                 if address.call.uppercased() == "PEERA" {
@@ -682,6 +793,7 @@ final class ProtocolSwitchingTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { address, text in
                 switch address.call.uppercased() {
@@ -743,6 +855,7 @@ final class ProtocolSwitchingTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { address, text in
                 if address.call.uppercased() == "PEERA" {
@@ -808,6 +921,7 @@ final class ProtocolSwitchingTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { _, text in
                 receivedLines.append(text)
@@ -851,6 +965,7 @@ final class NonAXDPDeliveryIntegrationTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { _, text in
                 receivedLines.append(text)
@@ -890,6 +1005,7 @@ final class NonAXDPDeliveryIntegrationTests: XCTestCase {
                 sourceCall: "USER",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { _, text in
                 receivedLines.append(text)
@@ -935,6 +1051,7 @@ final class SessionAutoSwitchTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { _, text in
                 receivedLines.append(text)
@@ -974,6 +1091,7 @@ final class SessionAutoSwitchTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { _, text in
                 receivedLines.append(text)
@@ -1021,6 +1139,7 @@ final class SessionAutoSwitchTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { _, text in
                 receivedLines.append(text)
@@ -1062,6 +1181,7 @@ final class SessionAutoSwitchTests: XCTestCase {
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
             viewModel.onPlainTextChatReceived = { address, text in
                 if address.call.uppercased() == "PEER1" {

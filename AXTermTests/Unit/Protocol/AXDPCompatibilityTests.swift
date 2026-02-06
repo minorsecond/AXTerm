@@ -298,15 +298,17 @@ final class AXDPCompatibilityTests: XCTestCase {
     }
 
     func testDecodeTLVWithLengthExceedingData() {
-        // Malformed: TLV claims more bytes than available
+        // Malformed: TLV claims more bytes than available (using unknown type to represent garbage)
+        // Note: Using unknown type 0x99 (not a known TLV type) so the decoder treats this as
+        // corruption/garbage rather than a truncated known TLV that might need more data.
         var data = AXDP.magic
         data.append(AXDP.TLV(type: AXDP.TLVType.messageType.rawValue, value: Data([AXDP.MessageType.chat.rawValue])).encode())
-        // Claims 1000 bytes but only provides 10
-        data.append(Data([0x06, 0x03, 0xE8]))  // type=6, length=1000
+        // Claims 1000 bytes but only provides 10 (using unknown type 0x99)
+        data.append(Data([0x99, 0x03, 0xE8]))  // type=0x99 (unknown), length=1000
         data.append(Data(repeating: 0x42, count: 10))
 
         let decoded = AXDP.Message.decodeMessage(from: data)
-        // Should handle gracefully - either partial decode or nil
+        // Should handle gracefully - return partial decode since the garbage is at an unknown type
         // The important thing is no crash
         XCTAssertNotNil(decoded)  // Should still decode the chat type
     }

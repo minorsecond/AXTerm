@@ -274,7 +274,7 @@ enum AXDP {
 
             // Parse TLVs after magic
             let tlvData = data.subdata(in: magic.count..<data.count)
-            let (tlvs, truncated, tlvConsumedBytes) = decodeTLVs(from: tlvData)
+            let (tlvs, truncated, tlvConsumedBytes, truncatedAtKnownType) = decodeTLVs(from: tlvData)
 
             guard !tlvs.isEmpty else {
                 print("[DEBUG:AXDP:DECODE] empty tlvs | dataLen=\(data.count) tlvDataLen=\(tlvData.count)")
@@ -368,14 +368,29 @@ enum AXDP {
                 }
             }
 
-            // Truncated buffer: for payload-carrying types, return nil so reassembly keeps accumulating.
-            // Returning a Message with payload=nil would corrupt reassembly (partial treated as complete).
-            if truncated, msg.type == .chat || msg.type == .fileChunk {
-                TxLog.debug(.axdp, "Truncated chat/fileChunk buffer - return nil for reassembly", [
-                    "type": String(describing: msg.type),
-                    "bufferLen": data.count
-                ])
-                return nil
+            // Truncated buffer handling:
+            // - If truncation happened at a KNOWN TLV type (like payload), we might be waiting
+            //   for more data to arrive → return nil so reassembly can accumulate
+            // - If truncation happened at an UNKNOWN TLV type, it's likely garbage/corruption
+            //   after valid TLVs → return what we have for graceful degradation
+            // - If we haven't parsed messageType yet (no valid TLVs), always wait for more data
+            if truncated {
+                if !hasType {
+                    // No messageType parsed yet - definitely need more data
+                    TxLog.debug(.axdp, "Truncated buffer without message type - return nil for reassembly", [
+                        "bufferLen": data.count
+                    ])
+                    return nil
+                }
+                if truncatedAtKnownType {
+                    // Truncation at a known type (like payload) - might be waiting for real data
+                    TxLog.debug(.axdp, "Truncated at known TLV type - return nil for reassembly", [
+                        "type": String(describing: msg.type),
+                        "bufferLen": data.count
+                    ])
+                    return nil
+                }
+                // Truncation at unknown type with valid messageType - likely garbage, return what we have
             }
             
             // Calculate total consumed bytes: magic header + TLV data consumed
@@ -520,21 +535,51 @@ enum AXDP {
     }
 
     /// Decode all TLVs from data, stopping on first malformed or truncated TLV.
-    /// Returns (parsed TLVs, wasTruncated). wasTruncated is true when parsing stopped because
-    /// a TLV header or value extended past end of data (caller must return nil for payload-carrying messages).
-    static func decodeTLVs(from data: Data) -> (tlvs: [TLV], truncated: Bool, consumedBytes: Int) {
+    /// Returns (parsed TLVs, wasTruncated, consumedBytes, truncatedAtKnownType).
+    /// - wasTruncated: true when parsing stopped because a TLV header or value extended past end of data
+    /// - truncatedAtKnownType: true if truncation happened at a known TLV type (like payload),
+    ///   meaning we should wait for more data. False if it was an unknown type (likely garbage).
+    ///
+    /// IMPORTANT: If parsing stops because we encounter another AXDP magic header ("AXT1"),
+    /// that means the current message is COMPLETE - not truncated. The magic header of the next
+    /// message looks like a malformed TLV (type='A', length='XT'), but it's actually a message boundary.
+    static func decodeTLVs(from data: Data) -> (tlvs: [TLV], truncated: Bool, consumedBytes: Int, truncatedAtKnownType: Bool) {
         var tlvs: [TLV] = []
         var offset = 0
 
         while offset < data.count {
+            // Check if we've reached another AXDP message boundary (back-to-back messages)
+            // The next message's "AXT1" magic would look like a malformed TLV to the parser:
+            // - type = 'A' (0x41)
+            // - length = 'XT' (0x5854 = 22612 bytes) - exceeds available data
+            // If we see another magic header, the CURRENT message is complete - not truncated.
+            let remaining = data.suffix(from: offset)
+            if remaining.count >= magic.count && remaining.prefix(magic.count) == magic {
+                // Another AXDP message starts here - current message is complete
+                return (tlvs, false, offset, false)
+            }
+            
             guard let result = TLV.decode(from: data, at: offset) else {
-                return (tlvs, offset < data.count, offset)
+                // Parsing failed - check if it's because of actual truncation or just message boundary
+                // If we have data remaining but it's not a magic header, it's truly truncated
+                let isTruncated = offset < data.count
+                
+                // Check if truncation happened at a known TLV type
+                // Known types indicate we might be waiting for real data (e.g., payload)
+                // Unknown types (like garbage) suggest we should return what we have
+                var truncatedAtKnown = false
+                if isTruncated && offset < data.count {
+                    let typeAtOffset = data[offset]
+                    truncatedAtKnown = TLVType(rawValue: typeAtOffset) != nil
+                }
+                
+                return (tlvs, isTruncated, offset, truncatedAtKnown)
             }
             tlvs.append(result.tlv)
             offset = result.nextOffset
         }
 
-        return (tlvs, false, offset)
+        return (tlvs, false, offset, false)
     }
 
     // MARK: - Integer Encoding (Big-Endian)

@@ -109,7 +109,7 @@ final class AXDPTests: XCTestCase {
         data.append(AXDP.TLV(type: 0x01, value: Data([0x01])).encode())  // CHAT
         data.append(AXDP.TLV(type: 0x02, value: AXDP.encodeUInt32(12345)).encode())
 
-        let (tlvs, _, _) = AXDP.decodeTLVs(from: data)
+        let (tlvs, _, _, _) = AXDP.decodeTLVs(from: data)
 
         XCTAssertEqual(tlvs.count, 2)
         XCTAssertEqual(tlvs[0].type, 0x01)
@@ -123,7 +123,7 @@ final class AXDPTests: XCTestCase {
         data.append(AXDP.TLV(type: 0x99, value: Data([0xDE, 0xAD, 0xBE, 0xEF])).encode())  // Unknown
         data.append(AXDP.TLV(type: 0x03, value: AXDP.encodeUInt32(42)).encode())
 
-        let (tlvs, _, _) = AXDP.decodeTLVs(from: data)
+        let (tlvs, _, _, _) = AXDP.decodeTLVs(from: data)
 
         // Should parse all three, including unknown
         XCTAssertEqual(tlvs.count, 3)
@@ -557,5 +557,284 @@ final class AXDPTests: XCTestCase {
         XCTAssertTrue(state.pendingChunks.contains(1))
         XCTAssertFalse(state.pendingChunks.contains(2))
         XCTAssertTrue(state.pendingChunks.contains(3))
+    }
+
+    // MARK: - Back-to-Back Message Extraction Tests (Regression)
+
+    /// Regression test: When two complete AXDP messages are back-to-back in a buffer,
+    /// the first message should be extractable even if the second message's magic
+    /// header ("AXT1") looks like a malformed TLV to the TLV parser.
+    ///
+    /// BUG: TLV parser would interpret "AXT1" as TLV with type='A' (0x41), length='XT' (0x5854),
+    /// set truncated=true, causing decoder to return nil for FILE_CHUNK messages even though
+    /// the first message is COMPLETE.
+    func testBackToBackFileChunkMessagesCanBeExtracted() {
+        // Create first FILE_CHUNK message (complete)
+        let fileChunk1 = AXDP.Message(
+            type: .fileChunk,
+            sessionId: 12345,
+            messageId: 1,
+            chunkIndex: 0,
+            totalChunks: 10,
+            payload: Data(repeating: 0xAB, count: 1024),
+            payloadCRC32: AXDP.crc32(Data(repeating: 0xAB, count: 1024))
+        )
+
+        // Create second FILE_CHUNK message (also complete)
+        let fileChunk2 = AXDP.Message(
+            type: .fileChunk,
+            sessionId: 12345,
+            messageId: 2,
+            chunkIndex: 1,
+            totalChunks: 10,
+            payload: Data(repeating: 0xCD, count: 1024),
+            payloadCRC32: AXDP.crc32(Data(repeating: 0xCD, count: 1024))
+        )
+
+        // Encode both and concatenate (simulates back-to-back in reassembly buffer)
+        let encoded1 = fileChunk1.encode()
+        let encoded2 = fileChunk2.encode()
+        let combinedBuffer = encoded1 + encoded2
+
+        // Verify both have magic headers
+        XCTAssertTrue(AXDP.hasMagic(encoded1), "First message should have magic")
+        XCTAssertTrue(AXDP.hasMagic(encoded2), "Second message should have magic")
+        XCTAssertTrue(AXDP.hasMagic(combinedBuffer), "Combined buffer should have magic at start")
+
+        // CRITICAL: First message MUST be decodable from combined buffer
+        // BUG: This was returning nil because TLV parser set truncated=true
+        // when it encountered the second message's "AXT1" header
+        let decoded = AXDP.Message.decode(from: combinedBuffer)
+        XCTAssertNotNil(decoded, "First message should be decodable from combined buffer")
+
+        if let (message, consumed) = decoded {
+            XCTAssertEqual(message.type, .fileChunk)
+            XCTAssertEqual(message.sessionId, 12345)
+            XCTAssertEqual(message.messageId, 1)
+            XCTAssertEqual(message.chunkIndex, 0)
+            XCTAssertEqual(message.payload?.count, 1024)
+            XCTAssertEqual(consumed, encoded1.count, "Consumed bytes should equal first message size")
+
+            // After consuming first message, remainder should be second message
+            let remainder = combinedBuffer.suffix(from: consumed)
+            XCTAssertTrue(AXDP.hasMagic(remainder), "Remainder should start with second message's magic")
+        }
+    }
+
+    /// Regression test: Back-to-back CHAT messages should also be extractable.
+    func testBackToBackChatMessagesCanBeExtracted() {
+        let chat1 = AXDP.Message(
+            type: .chat,
+            sessionId: 0,
+            messageId: 100,
+            payload: Data("Hello World".utf8)
+        )
+
+        let chat2 = AXDP.Message(
+            type: .chat,
+            sessionId: 0,
+            messageId: 101,
+            payload: Data("Second message".utf8)
+        )
+
+        let encoded1 = chat1.encode()
+        let encoded2 = chat2.encode()
+        let combined = encoded1 + encoded2
+
+        let decoded = AXDP.Message.decode(from: combined)
+        XCTAssertNotNil(decoded, "First chat message should be decodable from combined buffer")
+
+        if let (message, consumed) = decoded {
+            XCTAssertEqual(message.type, .chat)
+            XCTAssertEqual(message.messageId, 100)
+            XCTAssertEqual(String(data: message.payload ?? Data(), encoding: .utf8), "Hello World")
+            XCTAssertEqual(consumed, encoded1.count)
+        }
+    }
+
+    /// Regression test: FILE_CHUNK followed by ACK (completion request) should both be extractable.
+    /// This is the exact scenario from the PDF transfer bug.
+    func testFileChunkFollowedByCompletionRequestCanBeExtracted() {
+        // FILE_CHUNK message
+        let fileChunk = AXDP.Message(
+            type: .fileChunk,
+            sessionId: 44669,
+            messageId: 1,
+            chunkIndex: 329,
+            totalChunks: 330,
+            payload: Data(repeating: 0xFF, count: 1024),
+            payloadCRC32: AXDP.crc32(Data(repeating: 0xFF, count: 1024))
+        )
+
+        // Completion request ACK (messageId = 0xFFFFFFFE)
+        let completionRequest = AXDP.Message(
+            type: .ack,
+            sessionId: 44669,
+            messageId: 0xFFFFFFFE  // completionRequestMessageId
+        )
+
+        let encodedChunk = fileChunk.encode()
+        let encodedRequest = completionRequest.encode()
+        let combined = encodedChunk + encodedRequest
+
+        // First decode: should get FILE_CHUNK
+        let firstDecode = AXDP.Message.decode(from: combined)
+        XCTAssertNotNil(firstDecode, "FILE_CHUNK should be decodable when followed by completion request")
+
+        if let (msg1, consumed1) = firstDecode {
+            XCTAssertEqual(msg1.type, .fileChunk)
+            XCTAssertEqual(msg1.chunkIndex, 329)
+
+            // Second decode from remainder: should get ACK
+            let remainder = combined.suffix(from: consumed1)
+            let secondDecode = AXDP.Message.decode(from: Data(remainder))
+            XCTAssertNotNil(secondDecode, "Completion request should be decodable from remainder")
+
+            if let (msg2, _) = secondDecode {
+                XCTAssertEqual(msg2.type, .ack)
+                XCTAssertEqual(msg2.messageId, 0xFFFFFFFE)
+            }
+        }
+    }
+
+    /// Regression test: Simulates the PDF transfer reassembly scenario where many FILE_CHUNK 
+    /// messages accumulate in the buffer. The extraction loop should successfully extract all of them.
+    func testMultipleFileChunksCanBeExtractedSequentially() {
+        // Simulate 3 FILE_CHUNK messages back-to-back (like what happens during file transfer)
+        let sessionId: UInt32 = 1328066173  // Same session ID from the PDF bug
+        
+        // Create messages individually first to verify they work
+        let chunk0 = AXDP.Message(
+            type: .fileChunk,
+            sessionId: sessionId,
+            messageId: 1,
+            chunkIndex: 0,
+            totalChunks: 330,
+            payload: Data(repeating: 0x00, count: 128),
+            payloadCRC32: AXDP.crc32(Data(repeating: 0x00, count: 128))
+        )
+        let chunk1 = AXDP.Message(
+            type: .fileChunk,
+            sessionId: sessionId,
+            messageId: 2,
+            chunkIndex: 1,
+            totalChunks: 330,
+            payload: Data(repeating: 0x01, count: 128),
+            payloadCRC32: AXDP.crc32(Data(repeating: 0x01, count: 128))
+        )
+        let chunk2 = AXDP.Message(
+            type: .fileChunk,
+            sessionId: sessionId,
+            messageId: 3,
+            chunkIndex: 2,
+            totalChunks: 330,
+            payload: Data(repeating: 0x02, count: 128),
+            payloadCRC32: AXDP.crc32(Data(repeating: 0x02, count: 128))
+        )
+        
+        // Encode individually
+        let encoded0 = chunk0.encode()
+        let encoded1 = chunk1.encode()
+        let encoded2 = chunk2.encode()
+        
+        // Verify individual messages can be decoded
+        XCTAssertNotNil(AXDP.Message.decode(from: encoded0), "Chunk 0 should decode")
+        XCTAssertNotNil(AXDP.Message.decode(from: encoded1), "Chunk 1 should decode")
+        XCTAssertNotNil(AXDP.Message.decode(from: encoded2), "Chunk 2 should decode")
+        
+        // Combine them
+        var combined = Data()
+        combined.append(encoded0)
+        combined.append(encoded1)
+        combined.append(encoded2)
+        
+        // Extract all 3 messages sequentially
+        var extractedCount = 0
+        var offset = 0
+        
+        // Use offset-based extraction instead of removeFirst to avoid potential mutation issues
+        while offset < combined.count {
+            let remaining = combined.suffix(from: offset)
+            guard AXDP.hasMagic(remaining) else { break }
+            
+            guard let (message, consumed) = AXDP.Message.decode(from: Data(remaining)) else {
+                break
+            }
+            
+            XCTAssertEqual(message.type, .fileChunk)
+            XCTAssertEqual(message.chunkIndex, UInt32(extractedCount))
+            extractedCount += 1
+            offset += consumed
+        }
+        
+        XCTAssertEqual(extractedCount, 3, "All 3 FILE_CHUNK messages should be extracted")
+        XCTAssertEqual(offset, combined.count, "All bytes should be consumed")
+    }
+
+    /// Regression test: Simulates the exact PDF bug scenario where the reassembly buffer
+    /// accumulated 42KB of FILE_CHUNK data. After the fix, all chunks should be extractable
+    /// and the buffer should be properly drained.
+    func testLargeFileTransferChunksExtractCorrectly() {
+        // Create a realistic file transfer scenario: 330 chunks of 128 bytes each
+        // This simulates a ~42KB PDF file transfer
+        var combined = Data()
+        let sessionId: UInt32 = 1328066173
+        let totalChunks: UInt32 = 330
+        let chunkSize = 128
+        
+        // Only test with 10 chunks for speed, but the logic is the same
+        let testChunks = 10
+        for i in 0..<testChunks {
+            let payload = Data(repeating: UInt8(i % 256), count: chunkSize)
+            let chunk = AXDP.Message(
+                type: .fileChunk,
+                sessionId: sessionId,
+                messageId: UInt32(i + 1),
+                chunkIndex: UInt32(i),
+                totalChunks: totalChunks,
+                payload: payload,
+                payloadCRC32: AXDP.crc32(payload)
+            )
+            combined.append(chunk.encode())
+        }
+        
+        // Add a completion request at the end (like the sender does after sending all chunks)
+        let completionRequest = AXDP.Message(
+            type: .ack,
+            sessionId: sessionId,
+            messageId: 0xFFFFFFFE
+        )
+        combined.append(completionRequest.encode())
+        
+        // Extract all messages using offset-based approach to avoid Data mutation issues
+        var chunkCount = 0
+        var gotCompletionRequest = false
+        var offset = 0
+        
+        while offset < combined.count {
+            let remaining = combined.suffix(from: offset)
+            guard AXDP.hasMagic(remaining) else { break }
+            
+            guard let (message, consumed) = AXDP.Message.decode(from: Data(remaining)), consumed > 0 else {
+                break
+            }
+            
+            switch message.type {
+            case .fileChunk:
+                chunkCount += 1
+            case .ack:
+                if message.messageId == 0xFFFFFFFE {
+                    gotCompletionRequest = true
+                }
+            default:
+                break
+            }
+            
+            offset += consumed
+        }
+        
+        XCTAssertEqual(chunkCount, testChunks, "All FILE_CHUNK messages should be extracted")
+        XCTAssertTrue(gotCompletionRequest, "Completion request should be extracted")
+        XCTAssertEqual(offset, combined.count, "All bytes should be consumed")
     }
 }

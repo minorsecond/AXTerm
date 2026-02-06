@@ -90,16 +90,32 @@ TOTAL_RESULT=0
 if [ "$RUN_UNIT" = true ]; then
     echo -e "${GREEN}=== Adaptive unit tests ===${NC}"
     echo "  AdaptiveSettingsTests"
+    echo "  AdaptiveTuningTests"
     echo "  SessionCoordinatorTests"
     echo "  AdaptiveTransmissionIntegrationTests"
     echo "  TxAdaptiveSettingsViewModelTests"
+    echo "  RttEstimatorComprehensiveTests"
+    echo "  LinkRttTrackerComprehensiveTests"
+    echo "  AIMDWindowComprehensiveTests"
+    echo "  PaclenAdapterComprehensiveTests"
+    echo "  TxAdaptiveSettingsComprehensiveTests"
+    echo "  AdaptiveIntegrationStressTests"
+    echo "  AdaptiveRegressionTests"
     echo ""
 
     UNIT_ARGS=(
         "-only-testing:AXTermTests/AdaptiveSettingsTests"
+        "-only-testing:AXTermTests/AdaptiveTuningTests"
         "-only-testing:AXTermTests/SessionCoordinatorTests"
         "-only-testing:AXTermTests/AdaptiveTransmissionIntegrationTests"
         "-only-testing:AXTermTests/TxAdaptiveSettingsViewModelTests"
+        "-only-testing:AXTermTests/RttEstimatorComprehensiveTests"
+        "-only-testing:AXTermTests/LinkRttTrackerComprehensiveTests"
+        "-only-testing:AXTermTests/AIMDWindowComprehensiveTests"
+        "-only-testing:AXTermTests/PaclenAdapterComprehensiveTests"
+        "-only-testing:AXTermTests/TxAdaptiveSettingsComprehensiveTests"
+        "-only-testing:AXTermTests/AdaptiveIntegrationStressTests"
+        "-only-testing:AXTermTests/AdaptiveRegressionTests"
     )
 
     if run_xcode_test "AXTerm" "${UNIT_ARGS[@]}"; then

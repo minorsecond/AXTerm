@@ -308,7 +308,9 @@ final class AX25SessionManager: ObservableObject {
         let vs = sm.sequenceState.vs
         let vr = sm.sequenceState.vr
         let va = sm.sequenceState.va
-        let outstanding = sm.sequenceState.outstandingCount
+        // Use session.outstandingCount (sendBuffer.count) not sequenceState.outstandingCount (vs-va mod 8)
+        // After RR ack clears sendBuffer, va may advance past vs causing (vs-va) to wrap incorrectly
+        let outstanding = session.outstandingCount
 
         var fields: [String: Any] = [
             "peer": session.remoteAddress.display,

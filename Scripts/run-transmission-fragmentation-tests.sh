@@ -42,6 +42,7 @@ cd "$PROJECT_ROOT"
 
 TEST_ARGS=("-scheme" "AXTerm" "-destination" "platform=macOS")
 TEST_ARGS+=("-only-testing:AXTermTests/TransmissionFragmentationTests")
+TEST_ARGS+=("-only-testing:AXTermTests/PlainTextAndMixedModeTests")
 
 echo -e "${GREEN}=== Transmission Fragmentation Tests ===${NC}"
 echo "  xcodebuild test ${TEST_ARGS[*]}"

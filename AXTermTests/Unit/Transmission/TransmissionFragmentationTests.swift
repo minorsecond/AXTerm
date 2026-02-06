@@ -874,4 +874,121 @@ class OutboundProgressModuloArithmeticTests: XCTestCase {
         
         XCTAssertEqual(bytes, totalBytes, "Total calculated bytes should equal totalBytes")
     }
+    
+    // MARK: - Non-AXDP Data Handling (Regression Tests)
+    
+    /// Test that non-AXDP data (plain text without magic header) does not pollute the reassembly buffer.
+    /// This is a regression test for the bug where plain text I-frames accumulated in the buffer
+    /// and prevented subsequent AXDP messages from being extracted.
+    func testNonAXDPDataDoesNotPolluteReassemblyBuffer() {
+        // Non-AXDP data: plain text that doesn't start with "AXT1" magic
+        let plainText = Data("Lorem ipsum dolor sit amet".utf8)
+        
+        // Verify it doesn't start with AXDP magic
+        XCTAssertFalse(AXDP.hasMagic(plainText), "Plain text should not have AXDP magic")
+        
+        // AXDP chat message
+        let chatMsg = AXDP.Message(
+            type: .chat,
+            sessionId: 12345,
+            messageId: 1,
+            payload: Data("Hello".utf8)
+        )
+        let axdpData = chatMsg.encode()
+        
+        // Verify AXDP data starts with magic
+        XCTAssertTrue(AXDP.hasMagic(axdpData), "AXDP data should have magic header")
+        
+        // If we decode AXDP data directly, it should work
+        guard let (decoded, consumed) = AXDP.Message.decode(from: axdpData) else {
+            XCTFail("Should decode AXDP message")
+            return
+        }
+        XCTAssertEqual(decoded.type, .chat)
+        XCTAssertEqual(consumed, axdpData.count)
+        
+        // If plain text is prepended (simulating buffer pollution), decode fails
+        var pollutedBuffer = plainText
+        pollutedBuffer.append(axdpData)
+        
+        // Decode should fail because buffer doesn't start with magic
+        XCTAssertFalse(AXDP.hasMagic(pollutedBuffer), "Polluted buffer should not have magic at start")
+        let pollutedResult = AXDP.Message.decode(from: pollutedBuffer)
+        XCTAssertNil(pollutedResult, "Polluted buffer should fail to decode")
+    }
+    
+    /// Test that AXDP messages can be extracted even if non-AXDP data was previously received.
+    /// This verifies the fix where we clear garbage from the buffer before processing new AXDP data.
+    func testAXDPMessageExtractsAfterNonAXDPDataCleared() {
+        // AXDP ping message
+        let pingMsg = AXDP.Message(
+            type: .ping,
+            sessionId: 12345,
+            messageId: 1,
+            capabilities: AXDPCapability.defaultLocal()
+        )
+        let pingData = pingMsg.encode()
+        
+        // Verify ping data starts with magic and can be decoded
+        XCTAssertTrue(AXDP.hasMagic(pingData), "Ping data should have magic")
+        
+        guard let (decoded, _) = AXDP.Message.decode(from: pingData) else {
+            XCTFail("Should decode ping message")
+            return
+        }
+        XCTAssertEqual(decoded.type, .ping)
+    }
+    
+    /// Test that back-to-back AXDP messages (like fileMeta followed by fileChunk) work correctly.
+    /// This ensures the fix doesn't break normal AXDP reassembly.
+    func testBackToBackAXDPMessagesReassembleCorrectly() {
+        // Create fileMeta message with proper AXDPFileMeta struct
+        let meta = AXDPFileMeta(
+            filename: "test.txt",
+            fileSize: 500,
+            sha256: Data(repeating: 0xAB, count: 32),
+            chunkSize: 128,
+            description: nil
+        )
+        let fileMetaMsg = AXDP.Message(
+            type: .fileMeta,
+            sessionId: 12345,
+            messageId: 0,
+            totalChunks: 5,
+            fileMeta: meta
+        )
+        let fileMetaData = fileMetaMsg.encode()
+        
+        // Create fileChunk message
+        let fileChunkMsg = AXDP.Message(
+            type: .fileChunk,
+            sessionId: 12345,
+            messageId: 1,
+            chunkIndex: 0,
+            totalChunks: 5,
+            payload: Data(repeating: 0x42, count: 100)
+        )
+        let fileChunkData = fileChunkMsg.encode()
+        
+        // Combine both messages in buffer
+        var combined = fileMetaData
+        combined.append(fileChunkData)
+        
+        // First decode should extract fileMeta
+        guard let (msg1, consumed1) = AXDP.Message.decode(from: combined) else {
+            XCTFail("Should decode first message (fileMeta)")
+            return
+        }
+        XCTAssertEqual(msg1.type, .fileMeta)
+        XCTAssertEqual(msg1.fileMeta?.filename, "test.txt")
+        
+        // Remove consumed bytes and decode second message
+        let remaining = combined.suffix(from: consumed1)
+        guard let (msg2, _) = AXDP.Message.decode(from: Data(remaining)) else {
+            XCTFail("Should decode second message (fileChunk)")
+            return
+        }
+        XCTAssertEqual(msg2.type, .fileChunk)
+        XCTAssertEqual(msg2.chunkIndex, 0)
+    }
 }

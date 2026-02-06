@@ -86,6 +86,12 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     }
     #endif
 
+    /// Flag to ensure callbacks are only set up once per instance.
+    /// This prevents the @StateObject gotcha where init() is called multiple times
+    /// but only the first instance is kept - subsequent instances would overwrite
+    /// callbacks with weak refs to deallocated objects.
+    private var callbacksConfigured = false
+    
     init(sourceCall: String = "", sessionManager: AX25SessionManager? = nil) {
         var vm = TerminalTxViewModel()
         vm.sourceCall = sourceCall
@@ -94,10 +100,31 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         // Use shared session manager if provided, otherwise create one
         self.sessionManager = sessionManager ?? AX25SessionManager()
 
-        // Set up session manager callbacks - parse callsign-SSID format
+        // Set up local callsign - this is safe to do in init as it's just data assignment
         let (baseCall, ssid) = CallsignNormalizer.parse(sourceCall.isEmpty ? "NOCALL" : sourceCall)
         self.sessionManager.localCallsign = AX25Address(call: baseCall.isEmpty ? "NOCALL" : baseCall, ssid: ssid)
         print("[ObservableTerminalTxViewModel.init] Set localCallsign: call='\(baseCall)', ssid=\(ssid)")
+        
+        // NOTE: Callbacks are NOT set up here to avoid @StateObject gotcha.
+        // When SwiftUI re-renders, init() is called for a new instance, but @StateObject
+        // discards it and keeps the original. If we set callbacks here, they would point
+        // to the discarded instance (weak ref -> nil), causing data loss.
+        // Call setupSessionCallbacks() from a stable location (like onAppear) instead.
+    }
+    
+    /// Set up session manager callbacks. Must be called from a stable location
+    /// (e.g., TerminalView.onAppear) to ensure callbacks point to the actual
+    /// @StateObject instance, not a discarded temporary instance.
+    ///
+    /// This method is idempotent - calling it multiple times is safe.
+    func setupSessionCallbacks() {
+        // Only configure once per instance
+        guard !callbacksConfigured else {
+            print("[ObservableTerminalTxViewModel] Callbacks already configured, skipping")
+            return
+        }
+        callbacksConfigured = true
+        print("[ObservableTerminalTxViewModel] Setting up session callbacks")
 
         // Chain session state callback - preserve any existing callback (e.g., from SessionCoordinator)
         let previousStateCallback = self.sessionManager.onSessionStateChanged
@@ -129,7 +156,15 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         }
 
         self.sessionManager.onDataReceived = { [weak self] session, data in
-            guard let self = self else { return }
+            guard let self = self else {
+                // This should NEVER happen now that callbacks are set up correctly
+                print("[ObservableTerminalTxViewModel] ERROR: onDataReceived called but self is nil!")
+                TxLog.error(.session, "onDataReceived: self is nil - data lost!", error: nil, [
+                    "peer": session.remoteAddress.display,
+                    "size": data.count
+                ])
+                return
+            }
             // Handle received data from connected session. The AX.25 state machine
             // only delivers in-order, de-duplicated payloads here, so we can safely
             // build a linear text transcript for the UI.
@@ -245,6 +280,21 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
     /// Append decoded AXDP chat text to the session transcript.
     /// Called when AXDP chat is received regardless of local AXDP badge state.
+    ///
+    /// CRITICAL: This method must NOT clear peersInAXDPReassembly!
+    /// Here's why: In AX25SessionManager.handleAction, when an I-frame delivers data:
+    ///   1. onDataDeliveredForReassembly is called → SessionCoordinator processes
+    ///   2. If AXDP reassembly completes, this method is called
+    ///   3. THEN onDataReceived is called for the SAME I-frame's raw bytes
+    ///
+    /// If we clear the flag here, step 3 will see the flag cleared and let raw bytes
+    /// leak into the plain text buffer, causing contamination like "ullamcorper.test 2 long".
+    ///
+    /// Instead, we:
+    /// - Clear the plain text buffer (any leaked raw bytes are discarded)
+    /// - Deliver the decoded AXDP text directly (bypassing appendToSessionTranscript)
+    /// - Leave the flag set so step 3's raw bytes are suppressed
+    /// - The async onAXDPReassemblyComplete callback clears the flag after all returns
     func appendAXDPChatToTranscript(from: AX25Address, text: String) {
         guard let session = sessionManager.connectedSession(withPeer: from) else {
             TxLog.debug(.axdp, "AXDP chat: no connected session for peer", [
@@ -253,14 +303,37 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             ])
             return
         }
-        // Clear the AXDP reassembly flag for this peer—reassembly is complete.
-        // This must happen BEFORE appendToSessionTranscript so the text isn't suppressed.
-        let peerKey = from.display.uppercased()
-        peersInAXDPReassembly.remove(peerKey)
         
-        // Append with newline so appendToSessionTranscript flushes the line
-        let data = Data((text.trimmingCharacters(in: .whitespacesAndNewlines) + "\r\n").utf8)
-        appendToSessionTranscript(from: session, data: data)
+        let peerKey = from.display.uppercased()
+        
+        // Clear any partial data in the plain text buffer for this peer.
+        // This prevents any raw AXDP bytes that may have leaked through from
+        // contaminating the decoded message or subsequent plain text.
+        currentLineBuffers.removeValue(forKey: peerKey)
+        
+        // DO NOT clear peersInAXDPReassembly here!
+        // The flag must remain set until onAXDPReassemblyComplete's async callback runs.
+        // This ensures raw bytes from the last I-frame (delivered via onDataReceived
+        // AFTER this method returns) are properly suppressed.
+        
+        // Deliver the decoded AXDP text directly to the console.
+        // We can't use appendToSessionTranscript because the peersInAXDPReassembly flag
+        // is still set and would incorrectly suppress this decoded text.
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedText.isEmpty {
+            sessionTranscriptLines.append(trimmedText)
+            TxLog.debug(.axdp, "Delivering AXDP chat to console", [
+                "peer": peerKey,
+                "length": trimmedText.count,
+                "preview": String(trimmedText.prefix(50))
+            ])
+            onPlainTextChatReceived?(session.remoteAddress, trimmedText)
+            
+            // Keep transcript bounded for performance
+            if sessionTranscriptLines.count > 1000 {
+                sessionTranscriptLines.removeFirst(sessionTranscriptLines.count - 1000)
+            }
+        }
     }
 
     /// Subscribe to incoming packets from PacketEngine
@@ -914,6 +987,12 @@ struct TerminalView: View {
             handleFileDrop(providers)
         }
         .onAppear {
+            // CRITICAL: Set up session callbacks FIRST, before any data can arrive.
+            // This must be done in onAppear (not in ObservableTerminalTxViewModel.init)
+            // to avoid the @StateObject gotcha where init() is called multiple times
+            // but only the first instance is kept. See setupSessionCallbacks() for details.
+            txViewModel.setupSessionCallbacks()
+            
             // Wire sender progress: I-frames transmitted (incl. from drain) update bytesSent
             client.onUserFrameTransmitted = { [weak txViewModel] bytes in
                 txViewModel?.updateOutboundBytesSent(additionalBytes: bytes)
@@ -929,7 +1008,16 @@ struct TerminalView: View {
 
             // Wire plain-text chat (non-AXDP) to console when sender uses plain text.
             txViewModel.onPlainTextChatReceived = { [weak client] from, text in
-                client?.appendSessionChatLine(from: from.display, text: text)
+                if let client = client {
+                    TxLog.debug(.session, "onPlainTextChatReceived callback executing", [
+                        "from": from.display,
+                        "textLength": text.count,
+                        "preview": String(text.prefix(50))
+                    ])
+                    client.appendSessionChatLine(from: from.display, text: text)
+                } else {
+                    TxLog.error(.session, "onPlainTextChatReceived: client is nil!", ["from": from.display])
+                }
             }
 
             sessionCoordinator.onPeerAxdpEnabled = { [weak txViewModel] from in

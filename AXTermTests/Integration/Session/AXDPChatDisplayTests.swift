@@ -16,6 +16,8 @@ final class AXDPChatDisplayTests: XCTestCase {
 
     /// When SessionCoordinator receives an I-frame with AXDP chat payload addressed to us,
     /// it MUST invoke onAXDPChatReceived with the decoded text—regardless of AXDP badge state.
+    /// NOTE: I-frames require an established session to be delivered. This test first establishes
+    /// a session via SABM/UA handshake before sending the I-frame.
     func testSessionCoordinatorInvokesOnAXDPChatReceivedWhenReceivingAXDPChatIFrame() async throws {
         let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
         defaults.set(false, forKey: AppSettingsStore.persistKey)
@@ -41,6 +43,25 @@ final class AXDPChatDisplayTests: XCTestCase {
             capturedFrom = from
             capturedText = text
         }
+
+        // First, establish a session by sending SABM from TEST-1
+        // This is required because I-frames are only processed for established sessions
+        let sabmPacket = Packet(
+            timestamp: Date(),
+            from: AX25Address(call: "TEST", ssid: 1),
+            to: AX25Address(call: "TEST", ssid: 2),
+            via: [],
+            frameType: .u,
+            control: 0x2F,  // SABM P=1
+            controlByte1: nil,
+            pid: nil,
+            info: Data(),
+            rawAx25: Data(),
+            kissEndpoint: nil,
+            infoText: nil
+        )
+        client.handleIncomingPacket(sabmPacket)
+        try await Task.sleep(nanoseconds: 50_000_000)  // 50ms for session setup
 
         // Build AXDP chat payload (same format TerminalTxViewModel uses)
         let messageText = "test with axdp on at sender"
@@ -136,6 +157,7 @@ final class AXDPChatDisplayTests: XCTestCase {
 
     /// When SessionCoordinator receives an I-frame with AXDP peerAxdpEnabled payload,
     /// it MUST invoke onPeerAxdpEnabled with the peer address.
+    /// NOTE: I-frames require an established session to be delivered.
     func testSessionCoordinatorInvokesOnPeerAxdpEnabledWhenReceivingPeerAxdpEnabledIFrame() async throws {
         let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
         defaults.set(false, forKey: AppSettingsStore.persistKey)
@@ -159,6 +181,24 @@ final class AXDPChatDisplayTests: XCTestCase {
         coordinator.onPeerAxdpEnabled = { from in
             capturedFrom = from
         }
+
+        // First, establish a session by sending SABM from TEST-1
+        let sabmPacket = Packet(
+            timestamp: Date(),
+            from: AX25Address(call: "TEST", ssid: 1),
+            to: AX25Address(call: "TEST", ssid: 2),
+            via: [],
+            frameType: .u,
+            control: 0x2F,  // SABM P=1
+            controlByte1: nil,
+            pid: nil,
+            info: Data(),
+            rawAx25: Data(),
+            kissEndpoint: nil,
+            infoText: nil
+        )
+        client.handleIncomingPacket(sabmPacket)
+        try await Task.sleep(nanoseconds: 50_000_000)
 
         let axdpPayload = AXDP.Message(
             type: .peerAxdpEnabled,
@@ -245,6 +285,7 @@ final class AXDPChatDisplayTests: XCTestCase {
 
     // MARK: - peerAxdpDisabled notification
 
+    /// NOTE: I-frames require an established session to be delivered.
     func testSessionCoordinatorInvokesOnPeerAxdpDisabledWhenReceivingPeerAxdpDisabledIFrame() async throws {
         let defaults = UserDefaults(suiteName: "test_\(UUID().uuidString)")!
         defaults.set(false, forKey: AppSettingsStore.persistKey)
@@ -268,6 +309,24 @@ final class AXDPChatDisplayTests: XCTestCase {
         coordinator.onPeerAxdpDisabled = { from in
             capturedFrom = from
         }
+
+        // First, establish a session by sending SABM from TEST-1
+        let sabmPacket = Packet(
+            timestamp: Date(),
+            from: AX25Address(call: "TEST", ssid: 1),
+            to: AX25Address(call: "TEST", ssid: 2),
+            via: [],
+            frameType: .u,
+            control: 0x2F,  // SABM P=1
+            controlByte1: nil,
+            pid: nil,
+            info: Data(),
+            rawAx25: Data(),
+            kissEndpoint: nil,
+            infoText: nil
+        )
+        client.handleIncomingPacket(sabmPacket)
+        try await Task.sleep(nanoseconds: 50_000_000)
 
         let axdpPayload = AXDP.Message(
             type: .peerAxdpDisabled,
