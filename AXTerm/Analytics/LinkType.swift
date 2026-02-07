@@ -91,17 +91,35 @@ enum GraphViewMode: String, Hashable, Sendable, CaseIterable, Identifiable {
     var description: String {
         switch self {
         case .connectivity:
-            return "Direct connections"
+            return GraphCopy.ViewMode.connectivityDescription
         case .routing:
-            return "Packet flow paths"
+            return GraphCopy.ViewMode.routingDescription
         case .all:
-            return "Everything"
+            return GraphCopy.ViewMode.allDescription
         case .netromClassic:
-            return "NET/ROM broadcast routes"
+            return GraphCopy.ViewMode.netromClassicDescription
         case .netromInferred:
-            return "NET/ROM inferred routes"
+            return GraphCopy.ViewMode.netromInferredDescription
         case .netromHybrid:
-            return "NET/ROM combined routes"
+            return GraphCopy.ViewMode.netromHybridDescription
+        }
+    }
+
+    /// Informative tooltip
+    var tooltip: String {
+        switch self {
+        case .connectivity:
+            return GraphCopy.ViewMode.connectivityTooltip
+        case .routing:
+            return GraphCopy.ViewMode.routingTooltip
+        case .all:
+            return GraphCopy.ViewMode.allTooltip
+        case .netromClassic:
+            return GraphCopy.ViewMode.netromClassicTooltip
+        case .netromInferred:
+            return GraphCopy.ViewMode.netromInferredTooltip
+        case .netromHybrid:
+            return GraphCopy.ViewMode.netromHybridTooltip
         }
     }
 
