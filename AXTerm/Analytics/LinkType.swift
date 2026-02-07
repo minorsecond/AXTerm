@@ -91,17 +91,35 @@ enum GraphViewMode: String, Hashable, Sendable, CaseIterable, Identifiable {
     var description: String {
         switch self {
         case .connectivity:
-            return "Direct connections"
+            return GraphCopy.ViewMode.connectivityDescription
         case .routing:
-            return "Packet flow paths"
+            return GraphCopy.ViewMode.routingDescription
         case .all:
-            return "Everything"
+            return GraphCopy.ViewMode.allDescription
         case .netromClassic:
-            return "NET/ROM broadcast routes"
+            return GraphCopy.ViewMode.netromClassicDescription
         case .netromInferred:
-            return "NET/ROM inferred routes"
+            return GraphCopy.ViewMode.netromInferredDescription
         case .netromHybrid:
-            return "NET/ROM combined routes"
+            return GraphCopy.ViewMode.netromHybridDescription
+        }
+    }
+
+    /// Informative tooltip
+    var tooltip: String {
+        switch self {
+        case .connectivity:
+            return GraphCopy.ViewMode.connectivityTooltip
+        case .routing:
+            return GraphCopy.ViewMode.routingTooltip
+        case .all:
+            return GraphCopy.ViewMode.allTooltip
+        case .netromClassic:
+            return GraphCopy.ViewMode.netromClassicTooltip
+        case .netromInferred:
+            return GraphCopy.ViewMode.netromInferredTooltip
+        case .netromHybrid:
+            return GraphCopy.ViewMode.netromHybridTooltip
         }
     }
 
@@ -187,9 +205,30 @@ struct ClassifiedEdge: Hashable, Sendable {
     let targetID: String
     let linkType: LinkType
     let weight: Int           // Packet count (or evidence count)
-    let bytes: Int            // Total payload bytes (where applicable)
+    let bytes: Int64          // Total payload bytes (where applicable, or quality for NET/ROM)
     let lastHeard: Date?      // Most recent packet timestamp
     let viaDigipeaters: [String]  // For heardVia: which digipeaters were in path
+    let isStale: Bool         // For NET/ROM: whether route is stale (for dimmed rendering)
+    
+    init(
+        sourceID: String,
+        targetID: String,
+        linkType: LinkType,
+        weight: Int,
+        bytes: Int64 = 0,
+        lastHeard: Date? = nil,
+        viaDigipeaters: [String] = [],
+        isStale: Bool = false
+    ) {
+        self.sourceID = sourceID
+        self.targetID = targetID
+        self.linkType = linkType
+        self.weight = weight
+        self.bytes = bytes
+        self.lastHeard = lastHeard
+        self.viaDigipeaters = viaDigipeaters
+        self.isStale = isStale
+    }
 }
 
 /// Station relationship data for inspector display.

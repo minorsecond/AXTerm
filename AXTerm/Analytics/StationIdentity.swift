@@ -12,9 +12,11 @@ import Foundation
 ///
 /// - **station**: Group all SSIDs under a single base callsign (e.g., ANH, ANH-1, ANH-15 => "ANH")
 /// - **ssid**: Show each SSID as a separate node (e.g., ANH and ANH-15 are distinct)
-enum StationIdentityMode: String, CaseIterable, Codable, Sendable {
+enum StationIdentityMode: String, CaseIterable, Codable, Sendable, Identifiable {
     case station = "station"    // Group by base callsign (default)
     case ssid = "ssid"          // Split by full callsign with SSID
+
+    var id: String { rawValue }
 
     /// Human-readable label for UI
     var displayName: String {

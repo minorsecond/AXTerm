@@ -275,6 +275,26 @@ struct AnalyticsDashboardView: View {
                     }
                 )
 
+                // Legend
+                HStack(spacing: 16) {
+                    LegendItem(color: .systemPurple, label: "My Node")
+                    LegendItem(color: .systemOrange, label: "Routing Node")
+                    LegendItem(color: .secondaryLabelColor, label: "Station")
+                    
+                    Spacer()
+                    
+                    if viewModel.graphViewMode.isNetRomMode {
+                        Text("Size = Route Centrality • Edge = Link Quality")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(AnalyticsStyle.Colors.neutralFill)
+                            .cornerRadius(4)
+                    }
+                }
+                .padding(.horizontal, 4)
+
                 // Graph and sidebar
                 HStack(alignment: .top, spacing: AnalyticsStyle.Layout.cardSpacing) {
                     AnalyticsGraphView(
@@ -395,37 +415,79 @@ struct AnalyticsDashboardView: View {
                 Text(GraphCopy.ViewMode.pickerLabel)
                     .font(.caption)
                     .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                Picker("", selection: $viewModel.graphViewMode) {
-                    ForEach(GraphViewMode.allCases) { mode in
-                        Text(mode.rawValue)
-                            .tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .fixedSize()
-                .controlSize(.small)
+                
+                AnalyticsSegmentedPicker(
+                    selection: $viewModel.graphViewMode,
+                    items: GraphViewMode.allCases,
+                    label: { $0.rawValue },
+                    tooltip: { $0.tooltip }
+                )
             }
-            .help(GraphCopy.ViewMode.pickerTooltip)
 
             // Station Identity: Station | SSID
             HStack(spacing: 4) {
                 Text(GraphCopy.StationIdentity.pickerLabel)
                     .font(.caption)
                     .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                Picker("", selection: $viewModel.stationIdentityMode) {
-                    Text(StationIdentityMode.station.shortName)
-                        .tag(StationIdentityMode.station)
-                    Text(StationIdentityMode.ssid.shortName)
-                        .tag(StationIdentityMode.ssid)
-                }
-                .pickerStyle(.segmented)
-                .fixedSize()
-                .controlSize(.small)
+                
+                AnalyticsSegmentedPicker(
+                    selection: $viewModel.stationIdentityMode,
+                    items: StationIdentityMode.allCases,
+                    label: { $0.shortName },
+                    tooltip: { $0.tooltip }
+                )
             }
-            .help(GraphCopy.StationIdentity.pickerTooltip)
         }
     }
+}
 
+// MARK: - Custom Segmented Picker
+
+/// A custom segmented control that supports individual tooltips on macOS,
+/// which the native Picker with .segmented style does not reliably do.
+struct AnalyticsSegmentedPicker<T: Hashable & Identifiable>: View {
+    @Binding var selection: T
+    let items: any RandomAccessCollection<T>
+    let label: (T) -> String
+    let tooltip: (T) -> String
+    
+    var body: some View {
+        HStack(spacing: 0) {
+            let itemsArray = Array(items)
+            ForEach(0..<itemsArray.count, id: \.self) { index in
+                let item = itemsArray[index]
+                let isSelected = selection == item
+                
+                Text(label(item))
+                    .font(.system(size: 11, weight: isSelected ? .medium : .regular))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 3)
+                    .frame(minWidth: 40)
+                    .background(isSelected ? Color.accentColor : Color.clear)
+                    .foregroundColor(isSelected ? .white : .primary)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        selection = item
+                    }
+                    .help(tooltip(item))
+                
+                if index < itemsArray.count - 1 && !isSelected && selection != itemsArray[index + 1] {
+                    Divider()
+                        .frame(height: 12)
+                }
+            }
+        }
+        .background(Color(NSColor.controlBackgroundColor).opacity(0.8))
+        .cornerRadius(5)
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+        )
+        .fixedSize()
+    }
+}
+
+extension AnalyticsDashboardView {
     private var metricColumns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: AnalyticsStyle.Layout.cardSpacing), count: AnalyticsStyle.Layout.metricColumns)
     }
@@ -521,6 +583,23 @@ private struct SummaryMetricCard: View {
         .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
     }
 }
+
+private struct LegendItem: View {
+    let color: NSColor
+    let label: String
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(Color(nsColor: color))
+                .frame(width: 8, height: 8)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+    }
+}
+
 
 private struct ChartCard<Content: View>: View {
     let title: String

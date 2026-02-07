@@ -508,11 +508,11 @@ final class KHopFilteringTests: XCTestCase {
     
     func testKHop1ReturnsImmediateNeighbors() {
         let adjacency: [String: [GraphNeighborStat]] = [
-            "A": [GraphNeighborStat(id: "B", weight: 1, bytes: 0), GraphNeighborStat(id: "C", weight: 1, bytes: 0)],
-            "B": [GraphNeighborStat(id: "A", weight: 1, bytes: 0), GraphNeighborStat(id: "D", weight: 1, bytes: 0)],
-            "C": [GraphNeighborStat(id: "A", weight: 1, bytes: 0)],
-            "D": [GraphNeighborStat(id: "B", weight: 1, bytes: 0), GraphNeighborStat(id: "E", weight: 1, bytes: 0)],
-            "E": [GraphNeighborStat(id: "D", weight: 1, bytes: 0)]
+            "A": [GraphNeighborStat(id: "B", weight: 1, bytes: 0, isStale: false), GraphNeighborStat(id: "C", weight: 1, bytes: 0, isStale: false)],
+            "B": [GraphNeighborStat(id: "A", weight: 1, bytes: 0, isStale: false), GraphNeighborStat(id: "D", weight: 1, bytes: 0, isStale: false)],
+            "C": [GraphNeighborStat(id: "A", weight: 1, bytes: 0, isStale: false)],
+            "D": [GraphNeighborStat(id: "B", weight: 1, bytes: 0, isStale: false), GraphNeighborStat(id: "E", weight: 1, bytes: 0, isStale: false)],
+            "E": [GraphNeighborStat(id: "D", weight: 1, bytes: 0, isStale: false)]
         ]
         
         let (nodes, distances) = GraphAlgorithms.kHopNeighborhood(from: "A", maxHops: 1, adjacency: adjacency)
@@ -528,10 +528,10 @@ final class KHopFilteringTests: XCTestCase {
     
     func testKHop2Returns2HopNeighbors() {
         let adjacency: [String: [GraphNeighborStat]] = [
-            "A": [GraphNeighborStat(id: "B", weight: 1, bytes: 0)],
-            "B": [GraphNeighborStat(id: "A", weight: 1, bytes: 0), GraphNeighborStat(id: "C", weight: 1, bytes: 0)],
-            "C": [GraphNeighborStat(id: "B", weight: 1, bytes: 0), GraphNeighborStat(id: "D", weight: 1, bytes: 0)],
-            "D": [GraphNeighborStat(id: "C", weight: 1, bytes: 0)]
+            "A": [GraphNeighborStat(id: "B", weight: 1, bytes: 0, isStale: false)],
+            "B": [GraphNeighborStat(id: "A", weight: 1, bytes: 0, isStale: false), GraphNeighborStat(id: "C", weight: 1, bytes: 0, isStale: false)],
+            "C": [GraphNeighborStat(id: "B", weight: 1, bytes: 0, isStale: false), GraphNeighborStat(id: "D", weight: 1, bytes: 0, isStale: false)],
+            "D": [GraphNeighborStat(id: "C", weight: 1, bytes: 0, isStale: false)]
         ]
         
         let (nodes, distances) = GraphAlgorithms.kHopNeighborhood(from: "A", maxHops: 2, adjacency: adjacency)
@@ -546,10 +546,10 @@ final class KHopFilteringTests: XCTestCase {
     
     func testKHopWithDisconnectedNodes() {
         let adjacency: [String: [GraphNeighborStat]] = [
-            "A": [GraphNeighborStat(id: "B", weight: 1, bytes: 0)],
-            "B": [GraphNeighborStat(id: "A", weight: 1, bytes: 0)],
-            "C": [GraphNeighborStat(id: "D", weight: 1, bytes: 0)],  // Disconnected cluster
-            "D": [GraphNeighborStat(id: "C", weight: 1, bytes: 0)]
+            "A": [GraphNeighborStat(id: "B", weight: 1, bytes: 0, isStale: false)],
+            "B": [GraphNeighborStat(id: "A", weight: 1, bytes: 0, isStale: false)],
+            "C": [GraphNeighborStat(id: "D", weight: 1, bytes: 0, isStale: false)],  // Disconnected cluster
+            "D": [GraphNeighborStat(id: "C", weight: 1, bytes: 0, isStale: false)]
         ]
         
         let (nodes, _) = GraphAlgorithms.kHopNeighborhood(from: "A", maxHops: 10, adjacency: adjacency)
@@ -564,8 +564,8 @@ final class KHopFilteringTests: XCTestCase {
     func testKHopFromIsolatedNode() {
         let adjacency: [String: [GraphNeighborStat]] = [
             "A": [],  // Isolated
-            "B": [GraphNeighborStat(id: "C", weight: 1, bytes: 0)],
-            "C": [GraphNeighborStat(id: "B", weight: 1, bytes: 0)]
+            "B": [GraphNeighborStat(id: "C", weight: 1, bytes: 0, isStale: false)],
+            "C": [GraphNeighborStat(id: "B", weight: 1, bytes: 0, isStale: false)]
         ]
         
         let (nodes, distances) = GraphAlgorithms.kHopNeighborhood(from: "A", maxHops: 3, adjacency: adjacency)

@@ -104,5 +104,6 @@ enum AnalyticsStyle {
         static let graphEdge = Color(nsColor: .secondaryLabelColor).opacity(0.55)
         static let graphNode = Color(nsColor: .labelColor)
         static let graphNodeMuted = Color(nsColor: .secondaryLabelColor)
+        static let graphOfficialNode = Color(nsColor: .systemOrange)
     }
 }

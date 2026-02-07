@@ -61,13 +61,15 @@ struct NeighborInfo: Equatable {
     let lastSeen: Date
     let obsolescenceCount: Int
     let sourceType: String
+    let isOfficial: Bool
 
-    init(call: String, quality: Int, lastSeen: Date, obsolescenceCount: Int = 1, sourceType: String = "classic") {
+    init(call: String, quality: Int, lastSeen: Date, obsolescenceCount: Int = 1, sourceType: String = "classic", isOfficial: Bool = false) {
         self.call = call
         self.quality = quality
         self.lastSeen = lastSeen
         self.obsolescenceCount = obsolescenceCount
         self.sourceType = sourceType
+        self.isOfficial = isOfficial
     }
 }
 
@@ -102,6 +104,16 @@ private struct NeighborRecord {
     var lastUpdate: Date
     var obsolescenceCount: Int
     var sourceType: String  // "classic" or "inferred"
+    var isOfficial: Bool
+
+    init(call: String, pathQuality: Int, lastUpdate: Date, obsolescenceCount: Int, sourceType: String, isOfficial: Bool = false) {
+        self.call = call
+        self.pathQuality = pathQuality
+        self.lastUpdate = lastUpdate
+        self.obsolescenceCount = obsolescenceCount
+        self.sourceType = sourceType
+        self.isOfficial = isOfficial
+    }
 }
 
 private struct RouteRecord {
@@ -245,7 +257,7 @@ final class NetRomRouter {
         neighbors
             .values
             .sorted(by: neighborSort)
-            .map { NeighborInfo(call: $0.call, quality: $0.pathQuality, lastSeen: $0.lastUpdate, obsolescenceCount: $0.obsolescenceCount, sourceType: $0.sourceType) }
+            .map { NeighborInfo(call: $0.call, quality: $0.pathQuality, lastSeen: $0.lastUpdate, obsolescenceCount: $0.obsolescenceCount, sourceType: $0.sourceType, isOfficial: $0.isOfficial) }
     }
 
     func currentRoutes() -> [RouteInfo] {
@@ -320,7 +332,8 @@ final class NetRomRouter {
                 pathQuality: info.quality,
                 lastUpdate: info.lastSeen,
                 obsolescenceCount: 1,
-                sourceType: info.sourceType
+                sourceType: info.sourceType,
+                isOfficial: info.isOfficial
             )
         }
     }
@@ -379,14 +392,15 @@ final class NetRomRouter {
 
     // MARK: - Private helpers
 
-    private func updateNeighbor(call: String, observedQuality: Int, timestamp: Date, sourceType: String = "classic") {
+    private func updateNeighbor(call: String, observedQuality: Int, timestamp: Date, sourceType: String = "classic", isOfficial: Bool = false) {
         guard call != localCallsign else { return }
         var candidate = neighbors[call] ?? NeighborRecord(
             call: call,
             pathQuality: config.neighborBaseQuality,
             lastUpdate: timestamp,
             obsolescenceCount: 1,
-            sourceType: sourceType
+            sourceType: sourceType,
+            isOfficial: isOfficial
         )
         let normalizedQuality = clampQuality(observedQuality)
 
@@ -406,7 +420,17 @@ final class NetRomRouter {
         if candidate.sourceType != "classic" {
             candidate.sourceType = sourceType
         }
+        if isOfficial {
+            candidate.isOfficial = true
+        }
         neighbors[call] = candidate
+    }
+
+    /// Mark a neighbor as an official NET/ROM node (broadcast source).
+    func markAsOfficial(call: String) {
+        guard var neighbor = neighbors[call] else { return }
+        neighbor.isOfficial = true
+        neighbors[call] = neighbor
     }
 
     private func storeRoute(

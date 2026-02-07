@@ -485,7 +485,8 @@ struct ViewGraphDeriver {
                     sourceID: edge.sourceID,
                     targetID: edge.targetID,
                     weight: edge.weight,
-                    bytes: edge.bytes
+                    bytes: Int(edge.bytes),
+                    isStale: false
                 )
             }
 
@@ -493,10 +494,10 @@ struct ViewGraphDeriver {
         var adjacency: [String: [GraphNeighborStat]] = [:]
         for edge in filteredEdges {
             adjacency[edge.sourceID, default: []].append(
-                GraphNeighborStat(id: edge.targetID, weight: edge.weight, bytes: edge.bytes)
+                GraphNeighborStat(id: edge.targetID, weight: edge.weight, bytes: edge.bytes, isStale: false)
             )
             adjacency[edge.targetID, default: []].append(
-                GraphNeighborStat(id: edge.sourceID, weight: edge.weight, bytes: edge.bytes)
+                GraphNeighborStat(id: edge.sourceID, weight: edge.weight, bytes: edge.bytes, isStale: false)
             )
         }
 

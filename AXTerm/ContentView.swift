@@ -43,7 +43,7 @@ struct ContentView: View {
         _settings = ObservedObject(wrappedValue: settings)
         _inspectionRouter = ObservedObject(wrappedValue: inspectionRouter)
         // Initialize analytics view model with settings store for persistence
-        _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(settingsStore: settings))
+        _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(settingsStore: settings, netRomIntegration: client.netRomIntegration))
         // Get or create the shared session coordinator so Settings can update the same instance
         let coordinator: SessionCoordinator
         if let existing = SessionCoordinator.shared {
