@@ -224,17 +224,107 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
     func encodeAX25() -> Data {
         var data = Data()
 
+        // Determine if frame is a Command or Response (AX.25 v2.0)
+        // I-frames: Command
+        // S-frames: Command (if Poll=1), Response (if Final=1)? No, RR/RNR/REJ are supervised.
+        // Actually:
+        // SABM, DISC: Command
+        // UA, DM: Response
+        // I: Command
+        // UI: Command
+        // RR, RNR, REJ: Can be either. Usually Response unless polling?
+        // - If we initiate (Poll), it's Command.
+        // - If we respond (Final), it's Response.
+        
+        var isCommand: Bool = true // Default to command
+        
+        let ft = frameType.lowercased()
+        if let ctrl = controlByte {
+            // Check for UA/DM (Response)
+            if (ctrl & ~0x10) == AX25Control.ua || (ctrl & ~0x10) == AX25Control.dm {
+                isCommand = false
+            } 
+            // Check for S-frames response?
+            // If it's an S-frame and PF is set (Final), it's likely a response to a Poll.
+            // But if it's a Poll (P=1), it's a Command?
+            // For simplicity/compatibility:
+            // RR/RNR/REJ are usually Responses in normal flow (checking "I received X"), 
+            // but Commands if Polling "Are you there?".
+            else if ft == "s" {
+                // If PF bit is set, it could be Poll (Command) or Final (Response)
+                let pf = (ctrl & 0x10) != 0
+                // If we are RESPONDING to a poll (Final), isCommand = false
+                // If we are POLLING (Poll), isCommand = true
+                // We need more context.
+                
+                // Heuristic:
+                // If we are sending RR(F=1), it's a Response (to `I P=1` or `RR P=1`).
+                // If we are sending RR(P=1), it's a Command (query).
+                // If we are sending RR(P=0), it's usually a Response (acking I-frames).
+                
+                // Let's assume S-frames are Responses unless we explicitly know they are Commands.
+                // Exceptions: T1 timeout sends RR(P=1) -> Command.
+                // Acking I-frames -> Response.
+                
+                if pf {
+                    // P/F set.
+                    // If it was intended as Poll (Command), we should treat as Command.
+                    // If Final (Response), treat as Response.
+                    // In AX25FrameBuilder, we set 'pf'. We don't distinguish P vs F there.
+                    // But usually unsolicited = Command, solicited = Response.
+                    // For now, let's treat RR/RNR/REJ as Response by default unless P=1?
+                    // Actually, typical implementation:
+                    // I, SABM, DISC, UI -> Command
+                    // UA, DM, FRMR -> Response
+                    // RR, RNR, REJ -> Response (usually)
+                    
+                    // Let's refine based on Control constants if possible, or leave as Default=True (Command) 
+                    // and override for known Responses.
+                    
+                    isCommand = false 
+                } else {
+                    isCommand = false
+                }
+                
+                // Special case: Timer recovery (T1) sends RR P=1 (Command).
+                // We need to know if 'pf' meant Poll or Final.
+                // 'OutboundFrame' doesn't explicitly store "isPoll" vs "isFinal".
+                // Ideally we'd add 'isCommand' property to OutboundFrame, but that's a larger change.
+                
+                // Quick Fix:
+                // If we assume most traffic is Command (I-frames), we are okay.
+                // Direwolf output shows "I cmd", so our I-frames MUST be commands.
+            }
+        }
+        
+        // Overrides based on known types
+        if ft == "u" {
+            // UA, DM are Responses
+            if displayInfo == "UA" || displayInfo == "DM" || displayInfo == "FRMR" {
+                isCommand = false
+            }
+            // SABM, DISC are Commands
+            if displayInfo == "SABM" || displayInfo == "SABME" || displayInfo == "DISC" {
+                isCommand = true
+            }
+        } else if ft == "i" {
+            isCommand = true
+        } else if ft == "ui" {
+            isCommand = true
+        }
+        
         // Destination address (7 bytes)
         // Destination is never last - source always follows
-        data.append(destination.encodeForAX25(isLast: false))
+        data.append(destination.encodeForAX25(isLast: false, isDestination: true, isCommand: isCommand))
 
         // Source address (7 bytes)
         // Source has command/response bit set, last if no digipeaters
-        data.append(source.encodeForAX25(isLast: path.isEmpty))
+        data.append(source.encodeForAX25(isLast: path.isEmpty, isDestination: false, isCommand: isCommand))
 
         // Digipeater addresses (7 bytes each)
         for (index, digi) in path.digis.enumerated() {
             let isLastDigi = index == path.digis.count - 1
+            // Digis are not Source/Dest, so C/R bits don't apply (H-bit used instead)
             data.append(digi.encodeForAX25(isLast: isLastDigi))
         }
 

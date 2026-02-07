@@ -707,19 +707,21 @@ final class AX25SessionManager: ObservableObject {
             // Send chunks that fit in window; queue the rest
 
             var remaining: [(data: Data, pid: UInt8, displayInfo: String?)] = []
-            print("[DEBUG:AX25:SEND] sendData connected | dest=\(destination.display) totalChunks=\(chunks.count) paclen=\(paclen) canSend=\(session.canSendIFrame) va=\(session.va) vs=\(session.vs)")
+
             for (i, chunk) in chunks.enumerated() {
                 guard session.canSendIFrame else {
                     let info = (i == 0) ? displayInfo : nil
                     remaining.append((data: chunk, pid: pid, displayInfo: info))
-                    print("[DEBUG:AX25:SEND] window full, queue chunk \(i) | remaining=\(remaining.count)")
+
                     continue
                 }
                 let info = (i == 0) ? displayInfo : nil
                 let wasIdle = session.outstandingCount == 0
                 let ns = session.vs  // Capture before buildIFrame increments vs
-                let iFrame = buildIFrame(for: session, payload: chunk, pid: pid, displayInfo: info)
-                print("[DEBUG:AX25:SEND] immediate tx chunk \(i) | N(S)=\(ns) payload=\(chunk.count)")
+                // Set Poll bit (P=1) on the first frame of a burst to force an immediate response (RR)
+                // This matches behavior of other TNCs (direwolf) and prevents timeouts on some peers.
+                let iFrame = buildIFrame(for: session, payload: chunk, pid: pid, displayInfo: info, pf: wasIdle)
+
 
                 session.bufferFrame(iFrame, ns: ns)  // ns, not vs-1 (avoids -1 when vs wraps 7->0)
                 session.recordSendTime(ns: ns, time: Date())
@@ -735,7 +737,7 @@ final class AX25SessionManager: ObservableObject {
             }
             session.pendingDataQueue.insert(contentsOf: remaining, at: 0)
             if !remaining.isEmpty {
-                print("[DEBUG:AX25:SEND] queued remaining | count=\(remaining.count) queueDepth=\(session.pendingDataQueue.count)")
+
                 TxLog.debug(.session, "Window filled, queued remaining chunks", [
                     "peer": destination.display,
                     "remaining": remaining.count,
@@ -1129,11 +1131,11 @@ final class AX25SessionManager: ObservableObject {
 
         if session == nil {
             session = findConnectedSession(from: source, channel: channel)
-            print("DEBUG: handleInboundIFrame fallback1: found=\(session != nil)")
+
         }
         if session == nil {
             session = findConnectedSessionByCallsign(from: source, channel: channel)
-            print("DEBUG: handleInboundIFrame fallback2: found=\(session != nil)")
+
         }
 
 
@@ -1190,11 +1192,14 @@ final class AX25SessionManager: ObservableObject {
             return
         }
 
+
         // Capture V(A) before state machine updates it - piggybacked N(R) acks [V(A), N(R))
         let vaBefore = session.va
 
+
         let oldState = session.state
         let actions = session.stateMachine.handle(event: .receivedIFrame(ns: ns, nr: nr, pf: pf, payload: payload))
+
 
         if oldState != session.state {
             debugTrace("state change (I-frame)", [
@@ -1295,7 +1300,7 @@ final class AX25SessionManager: ObservableObject {
         let sendBufKeysAfter = session.sendBuffer.keys.sorted()
         session.touch()
 
-        print("[DEBUG:AX25:RR] rx | nr=\(nr) va=\(session.va) vs=\(session.vs) sendBufBefore=\(sendBufKeysBefore) sendBufAfter=\(sendBufKeysAfter) outstanding=\(session.outstandingCount)")
+
         onOutboundAckReceived?(session, session.va)
 
         TxLog.debug(.session, "RR ACK state", [
@@ -1449,7 +1454,7 @@ final class AX25SessionManager: ObservableObject {
                 guard let ctrl = f.controlByte else { return nil }
                 return Int((ctrl >> 1) & 0x07)  // N(S) from AX.25 control byte
             }
-            print("[DEBUG:AX25:T1] retransmit | va=\(session.va) vs=\(session.vs) outstanding=\(session.outstandingCount) sendBufKeys=\(session.sendBuffer.keys.sorted()) retransmitNS=\(nsValues) retransmitCount=\(retransmitFrames.count)")
+
             TxLog.debug(.session, "T1 retransmit", [
                 "peer": session.remoteAddress.display,
                 "va": session.va,
@@ -1621,7 +1626,7 @@ final class AX25SessionManager: ObservableObject {
         var wasIdle = session.outstandingCount == 0
         for item in drained {
             let ns = session.vs  // Capture before buildIFrame increments vs
-            let iFrame = buildIFrame(for: session, payload: item.data, pid: item.pid, displayInfo: item.displayInfo)
+            let iFrame = buildIFrame(for: session, payload: item.data, pid: item.pid, displayInfo: item.displayInfo, pf: wasIdle)
             debugTrace("TX I (drain queue)", ["frame": describeFrame(iFrame)])
             print("[DEBUG:AX25:DRAIN] tx | N(S)=\(ns) payload=\(item.data.count) va=\(session.va) vs=\(session.vs)")
             // Use ns directly - (vs-1) wraps to -1 when vs goes 7->0, corrupting sendBuffer
@@ -1654,7 +1659,8 @@ final class AX25SessionManager: ObservableObject {
         for session: AX25Session,
         payload: Data,
         pid: UInt8,
-        displayInfo: String?
+        displayInfo: String?,
+        pf: Bool = false
     ) -> OutboundFrame {
         let ns = session.vs
         let nr = session.vr
@@ -1670,6 +1676,7 @@ final class AX25SessionManager: ObservableObject {
             nr: nr,
             pid: pid,
             payload: payload,
+            pf: pf,
             sessionId: session.id,
             displayInfo: displayInfo
         )
@@ -1677,8 +1684,10 @@ final class AX25SessionManager: ObservableObject {
 
     /// Process actions from the state machine and return frames to send
     private func processActions(_ actions: [AX25SessionAction], for session: AX25Session) {
+        print("DEBUG: processActions called with \(actions.count) actions")
 
         for action in actions {
+            print("DEBUG: processActions processing \(action)")
 
 
             switch action {

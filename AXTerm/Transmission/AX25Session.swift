@@ -569,7 +569,7 @@ struct AX25StateMachine: Sendable {
         let modulo = config.modulo
         let windowHigh = (vr + config.windowSize - 1) % modulo
 
-        print("[DEBUG:AX25:IFRAME] rx | N(S)=\(ns) N(R)=\(nr) V(R)=\(vr) window=[\(vr)..\(windowHigh)] payload=\(payload.count) P/F=\(pf) inSeq=\(ns == vr) inWindow=\(isWithinReceiveWindow(ns: ns))")
+
 
         // Process N(R) - acknowledge our sent frames
         if sequenceState.outstandingCount > 0 {
@@ -587,11 +587,11 @@ struct AX25StateMachine: Sendable {
 
             // Send REJ only once per gap (with F=1 if remote sent P=1)
             if !rejSent {
-                print("[AX25Session] I-frame OUT OF SEQUENCE: received N(S)=\(ns), expected V(R)=\(sequenceState.vr), buffering")
+
                 actions.append(.sendREJ(nr: sequenceState.vr, pf: pf))
                 rejSent = true
             } else {
-                print("[AX25Session] I-frame OUT OF SEQUENCE: received N(S)=\(ns), expected V(R)=\(sequenceState.vr), buffered (REJ already sent)")
+
                 // Still need to respond if P=1, even if REJ already sent
                 if pf {
                     actions.append(.sendRR(nr: sequenceState.vr, pf: true))
@@ -599,7 +599,7 @@ struct AX25StateMachine: Sendable {
             }
         } else {
             // Outside window - this is likely a duplicate of an already-received frame
-            print("[AX25Session] I-frame OUTSIDE WINDOW: received N(S)=\(ns), V(R)=\(sequenceState.vr), discarding")
+
             // Always send RR to re-ack current V(R). This helps peers recover when
             // our previous RR was lost and they retransmit a duplicate.
             actions.append(.sendRR(nr: sequenceState.vr, pf: pf))
@@ -623,14 +623,14 @@ struct AX25StateMachine: Sendable {
         // Deliver the current frame
         let oldVR = sequenceState.vr
         sequenceState.incrementVR()
-        print("[AX25Session] I-frame accepted: N(S)=\(ns), V(R) \(oldVR)->\(sequenceState.vr), payload=\(payload.count) bytes, P/F=\(pf)")
+
         actions.append(.deliverData(payload))
 
         // Check for consecutive buffered frames and deliver them
         while let buffered = receiveBuffer.removeValue(forKey: sequenceState.vr) {
             let bufferedOldVR = sequenceState.vr
             sequenceState.incrementVR()
-            print("[AX25Session] Buffered I-frame delivered: N(S)=\(buffered.ns), V(R) \(bufferedOldVR)->\(sequenceState.vr), payload=\(buffered.payload.count) bytes")
+
             actions.append(.deliverData(buffered.payload))
         }
 
@@ -650,13 +650,13 @@ struct AX25StateMachine: Sendable {
     private mutating func bufferOutOfSequenceFrame(ns: Int, nr: Int, payload: Data) {
         // Don't buffer duplicates
         guard receiveBuffer[ns] == nil else {
-            print("[AX25Session] Duplicate buffered frame N(S)=\(ns), ignoring")
+
             return
         }
 
         let bufferLimit = config.maxReceiveBufferSize ?? config.windowSize
         if receiveBuffer.count >= bufferLimit {
-            print("[AX25Session] Receive buffer full, discarding farthest")
+
             // Remove the frame with the LARGEST distance from V(R), i.e. the one we will need last.
             // (Removing the smallest distance would drop the next frame we need—e.g. N(S)=4 when V(R)=0—
             // causing consistent loss of the same chunk index in file transfers.)
@@ -666,7 +666,7 @@ struct AX25StateMachine: Sendable {
         }
 
         receiveBuffer[ns] = BufferedIFrame(ns: ns, nr: nr, payload: payload)
-        print("[AX25Session] Buffered I-frame N(S)=\(ns), buffer size=\(receiveBuffer.count)")
+
     }
 
     /// Check if a sequence number is within the receive window
