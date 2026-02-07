@@ -665,6 +665,34 @@ final class PacketEngine: ObservableObject {
         }
     }
 
+    /// Determine if an I-frame should be skipped from console display.
+    /// Only skip I-frames (PID 0xF0) that belong to the user's active sessions,
+    /// since SessionCoordinator will deliver those via appendSessionChatLine.
+    /// Monitored traffic (other stations talking to each other) should appear in console.
+    private func shouldSkipIFrame(_ packet: Packet) -> Bool {
+        // Only consider I-frames with session data (PID 0xF0)
+        guard packet.frameType == .i, packet.pid == 0xF0 else {
+            return false
+        }
+        
+        // Check if the user is a participant in this session
+        // If source OR destination matches myCallsign, it's a user session - skip it
+        // because SessionCoordinator will deliver it via appendSessionChatLine
+        let myCall = settings.myCallsign.uppercased()
+        guard !myCall.isEmpty else {
+            // If myCallsign is not set, show all I-frames (nothing to match against)
+            return false
+        }
+        
+        let fromCall = packet.from?.call.uppercased() ?? ""
+        let toCall = packet.to?.call.uppercased() ?? ""
+        
+        let isUserSession = fromCall == myCall || toCall == myCall
+        
+        // Skip if it's the user's session, show if it's monitored traffic
+        return isUserSession
+    }
+
     /// True if displayInfo is a protocol label (AXDP PING, SABM, etc.), not user chat
     private func isProtocolDisplayInfo(_ s: String) -> Bool {
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -764,9 +792,11 @@ final class PacketEngine: ObservableObject {
         // Check for AXDP capabilities in UI frames
         detectAXDPCapabilities(from: packet)
 
-        // Skip raw I-frame console lines when payload is AXDP (PID 0xF0) – SessionCoordinator
-        // will deliver reassembled chat via appendSessionChatLine. Raw chunks would show truncated text.
-        let skipRawIFrameLine = packet.frameType == .i && packet.pid == 0xF0
+        // Skip raw I-frame console lines when payload is AXDP (PID 0xF0) AND the user is
+        // part of the session – SessionCoordinator will deliver reassembled chat via
+        // appendSessionChatLine. For monitored traffic (other stations' sessions),
+        // we DO want to show the I-frame content in the console.
+        let skipRawIFrameLine = shouldSkipIFrame(packet)
         if packet.frameType == .i {
             TxLog.debug(.axdp, "I-frame received at wire", [
                 "from": packet.fromDisplay,
