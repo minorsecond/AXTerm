@@ -267,7 +267,7 @@ enum GraphCopy {
 
         static let netromClassicLabel = "NET/ROM (Classic)"
         static let netromClassicDescription = "NET/ROM broadcast routes"
-        static let netromClassicTooltip = "Official NET/ROM network map based strictly on 'NODES' broadcasts. Shows the advertised backbone and paths as reported by node controllers."
+        static let netromClassicTooltip = "Official NET/ROM network map. Combines 'NODES' broadcasts for multi-hop routes with direct AX.25 neighbors for local topology. Best for backbone analysis."
 
         static let netromInferredLabel = "NET/ROM (Inferred)"
         static let netromInferredDescription = "NET/ROM inferred routes"
