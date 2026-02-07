@@ -187,9 +187,30 @@ struct ClassifiedEdge: Hashable, Sendable {
     let targetID: String
     let linkType: LinkType
     let weight: Int           // Packet count (or evidence count)
-    let bytes: Int            // Total payload bytes (where applicable)
+    let bytes: Int64          // Total payload bytes (where applicable, or quality for NET/ROM)
     let lastHeard: Date?      // Most recent packet timestamp
     let viaDigipeaters: [String]  // For heardVia: which digipeaters were in path
+    let isStale: Bool         // For NET/ROM: whether route is stale (for dimmed rendering)
+    
+    init(
+        sourceID: String,
+        targetID: String,
+        linkType: LinkType,
+        weight: Int,
+        bytes: Int64 = 0,
+        lastHeard: Date? = nil,
+        viaDigipeaters: [String] = [],
+        isStale: Bool = false
+    ) {
+        self.sourceID = sourceID
+        self.targetID = targetID
+        self.linkType = linkType
+        self.weight = weight
+        self.bytes = bytes
+        self.lastHeard = lastHeard
+        self.viaDigipeaters = viaDigipeaters
+        self.isStale = isStale
+    }
 }
 
 /// Station relationship data for inspector display.

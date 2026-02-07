@@ -52,6 +52,225 @@ struct NetworkGraphBuilder {
         return buildClassified(events: events, options: options, now: now)
     }
 
+    // MARK: - NET/ROM Graph Building
+
+    /// Build a classified graph from NET/ROM routing data.
+    ///
+    /// Converts NET/ROM neighbors and routes into a graph visualization.
+    /// - Nodes are sized by route centrality (number of routes passing through)
+    /// - Edges are weighted by NET/ROM quality (0-255)
+    /// - Stale routes are identified based on age
+    ///
+    /// Design decisions:
+    /// - Direct neighbors → DirectPeer edges
+    /// - Multi-hop routes → HeardVia edges  
+    /// - minimumEdgeCount is reinterpreted as minimum quality threshold (multiplied by 25)
+    static func buildFromNetRom(
+        netRomIntegration: NetRomIntegration,
+        localCallsign: String,
+        mode: NetRomRoutingMode,
+        options: Options,
+        now: Date = Date()
+    ) -> ClassifiedGraphModel {
+        let neighbors = netRomIntegration.currentNeighbors(forMode: mode)
+        let routes = netRomIntegration.currentRoutes(forMode: mode)
+        
+        guard !neighbors.isEmpty || !routes.isEmpty else { return .empty }
+        
+        let identityMode = options.stationIdentityMode
+        
+        // Helper: get identity key for a callsign
+        func identityKey(_ call: String) -> String {
+            CallsignParser.identityKey(for: call, mode: identityMode)
+        }
+        
+        // Helper: original callsign for a given identity key
+        func originalCallsign(_ call: String) -> String {
+            // For now, return the call itself if SSID mode, or base if station mode
+            if identityMode == .ssid { return call }
+            return CallsignParser.parse(call).base
+        }
+        
+        // Map quality threshold: slider value 1-10 → quality 25-250
+        let qualityThreshold = options.minimumEdgeCount * 25
+        
+        // Stale threshold: 30 minutes
+        let staleThreshold: TimeInterval = 1800
+        
+        // Phase 1: Collect all nodes from neighbors and routes
+        var nodeStats: [String: (inCount: Int, outCount: Int, inBytes: Int64, outBytes: Int64, routes: Int, ssids: Set<String>)] = [:]
+        
+        // Add neighbor nodes (direct connections)
+        let localKey = identityKey(localCallsign)
+        var localStats = nodeStats[localKey] ?? (0, 0, 0, 0, 0, [])
+        localStats.ssids.insert(localCallsign)
+        nodeStats[localKey] = localStats
+
+        for neighbor in neighbors {
+            // Skip low-quality neighbors
+            guard neighbor.quality >= qualityThreshold else { continue }
+            
+            let key = identityKey(neighbor.call)
+            var stats = nodeStats[key] ?? (0, 0, 0, 0, 0, [])
+            stats.ssids.insert(neighbor.call)
+            nodeStats[key] = stats
+        }
+        
+        // Add route nodes and count route centrality
+        for route in routes {
+            // Skip low-quality routes
+            guard route.quality >= qualityThreshold else { continue }
+            
+            let destKey = identityKey(route.destination)
+            let originKey = identityKey(route.origin)
+            
+            // Count routes for sizing nodes
+            var destStats = nodeStats[destKey] ?? (0, 0, 0, 0, 0, [])
+            destStats.routes += 1
+            destStats.ssids.insert(route.destination)
+            nodeStats[destKey] = destStats
+            
+            var originStats = nodeStats[originKey] ?? (0, 0, 0, 0, 0, [])
+            originStats.routes += 1
+            originStats.ssids.insert(route.origin)
+            nodeStats[originKey] = originStats
+            
+            // Add intermediate nodes in path
+            for hop in route.path {
+                let hopKey = identityKey(hop)
+                var hopStats = nodeStats[hopKey] ?? (0, 0, 0, 0, 0, [])
+                hopStats.routes += 1
+                hopStats.ssids.insert(hop)
+                nodeStats[hopKey] = hopStats
+            }
+        }
+        
+        // Phase 2: Build classified edges
+        var edges: [ClassifiedEdge] = []
+        var edgeKeys = Set<String>()
+        
+        // Add neighbor edges (DirectPeer)
+        for neighbor in neighbors {
+            // Skip low-quality neighbors
+            guard neighbor.quality >= qualityThreshold else { continue }
+            
+            // For now, we'll show bidirectional edges to local station
+            // This is a simplification - in reality we'd need to track directionality
+            let neighborKey = identityKey(neighbor.call)
+            let weight = max(1, neighbor.quality / 25) // Map quality 0-255 to weight
+            let isStale = now.timeIntervalSince(neighbor.lastSeen) > staleThreshold
+            
+            // Create edge between neighbor and local station (would need local callsign)
+            // For now, just mark this as a direct peer edge
+            // Create edge between neighbor and local station
+            edges.append(ClassifiedEdge(
+                sourceID: localKey,
+                targetID: neighborKey,
+                linkType: .directPeer,
+                weight: weight,
+                bytes: Int64(neighbor.quality),
+                isStale: isStale
+            ))
+        }
+        
+        // Add route edges (HeardVia for multi-hop, DirectPeer for single-hop)
+        for route in routes {
+            guard route.quality >= qualityThreshold else { continue }
+            
+            let destKey = identityKey(route.destination)
+            let originKey = identityKey(route.origin)
+            let weight = max(1, route.quality / 25)
+            let isStale = now.timeIntervalSince(route.lastUpdated) > staleThreshold
+            
+            // Determine link type based on path length
+            let linkType: LinkType = route.path.isEmpty || route.path.count <= 1 ? .directPeer : .heardVia
+            
+            // Create unique edge key
+            let edgeKey = "\(min(destKey, originKey))-\(max(destKey, originKey))"
+            guard !edgeKeys.contains(edgeKey) else { continue }
+            edgeKeys.insert(edgeKey)
+            
+            edges.append(ClassifiedEdge(
+                sourceID: destKey,
+                targetID: originKey,
+                linkType: linkType,
+                weight: weight,
+                bytes: Int64(route.quality),
+                isStale: isStale
+            ))
+        }
+        
+        // Phase 3: Apply maxNodes cap
+        var sortedNodes = nodeStats.map { (key, stats) in
+            (key: key, weight: stats.routes, stats: stats)
+        }
+        sortedNodes.sort { lhs, rhs in
+            if lhs.weight != rhs.weight {
+                return lhs.weight > rhs.weight
+            }
+            return lhs.key < rhs.key
+        }
+        
+        let droppedCount = max(0, sortedNodes.count - options.maxNodes)
+        if sortedNodes.count > options.maxNodes {
+            sortedNodes = Array(sortedNodes.prefix(options.maxNodes))
+        }
+        
+        let keptNodeKeys = Set(sortedNodes.map { $0.key })
+        
+        // Filter edges to only include kept nodes
+        edges = edges.filter { edge in
+            keptNodeKeys.contains(edge.sourceID) && keptNodeKeys.contains(edge.targetID)
+        }
+        
+        // Phase 4: Build final nodes
+        let nodes = sortedNodes.map { item -> NetworkGraphNode in
+            let stats = item.stats
+            return NetworkGraphNode(
+                id: item.key,
+                callsign: originalCallsign(item.key),
+                weight: item.weight, // Route count
+                inCount: stats.inCount,
+                outCount: stats.outCount,
+                inBytes: Int(stats.inBytes),
+                outBytes: Int(stats.outBytes),
+                degree: 0, // Will be recalculated during view derivation
+                groupedSSIDs: identityMode == .station ? Array(stats.ssids).sorted() : []
+            )
+        }
+        
+        // Phase 5: Build relationships for inspector
+        var relationshipsByNode: [String: [StationRelationship]] = [:]
+        for edge in edges {
+            let rel = StationRelationship(
+                id: edge.targetID,
+                linkType: edge.linkType,
+                packetCount: edge.weight,
+                lastHeard: nil, // We don't have per-edge lastHeard here easily
+                viaDigipeaters: [],
+                score: 1.0
+            )
+            relationshipsByNode[edge.sourceID, default: []].append(rel)
+            
+            let reverseRel = StationRelationship(
+                id: edge.sourceID,
+                linkType: edge.linkType,
+                packetCount: edge.weight,
+                lastHeard: nil,
+                viaDigipeaters: [],
+                score: 1.0
+            )
+            relationshipsByNode[edge.targetID, default: []].append(reverseRel)
+        }
+        
+        return ClassifiedGraphModel(
+            nodes: nodes,
+            edges: edges,
+            adjacency: relationshipsByNode,
+            droppedNodesCount: droppedCount
+        )
+    }
+
     static func buildClassified(events: [PacketEvent], options: Options, now: Date = Date()) -> ClassifiedGraphModel {
         guard !events.isEmpty else { return .empty }
 
@@ -231,7 +450,7 @@ struct NetworkGraphBuilder {
                         targetID: key.target,
                         linkType: .directPeer,
                         weight: totalCount,
-                        bytes: biAgg.forwardBytes + biAgg.reverseBytes,
+                        bytes: Int64(biAgg.forwardBytes + biAgg.reverseBytes),
                         lastHeard: biAgg.lastHeard,
                         viaDigipeaters: []
                     )
@@ -323,7 +542,8 @@ struct NetworkGraphBuilder {
                         weight: combinedCount,
                         bytes: 0,
                         lastHeard: last == .distantPast ? nil : last,
-                        viaDigipeaters: []
+                        viaDigipeaters: [],
+                        isStale: false
                     )
                 )
             }
@@ -370,7 +590,8 @@ struct NetworkGraphBuilder {
                     weight: agg.count,
                     bytes: 0,
                     lastHeard: agg.lastHeard == .distantPast ? nil : agg.lastHeard,
-                    viaDigipeaters: []
+                    viaDigipeaters: [],
+                    isStale: false
                 )
             )
         }
@@ -419,7 +640,8 @@ struct NetworkGraphBuilder {
                     weight: agg.count,
                     bytes: 0,
                     lastHeard: agg.lastHeard == .distantPast ? nil : agg.lastHeard,
-                    viaDigipeaters: topDigis
+                    viaDigipeaters: topDigis,
+                    isStale: false
                 )
             )
         }
@@ -442,9 +664,10 @@ struct NetworkGraphBuilder {
                         targetID: key.target,
                         linkType: .heardVia,
                         weight: agg.count,
-                        bytes: agg.bytes,
+                        bytes: Int64(agg.bytes),
                         lastHeard: agg.lastHeard,
-                        viaDigipeaters: []
+                        viaDigipeaters: [],
+                        isStale: false
                     )
                 )
             }
@@ -737,10 +960,10 @@ struct NetworkGraphBuilder {
         var adjacency: [String: [GraphNeighborStat]] = [:]
         for (key, aggregate) in edgesExcludingSpecial {
             adjacency[key.source, default: []].append(
-                GraphNeighborStat(id: key.target, weight: aggregate.count, bytes: aggregate.bytes)
+                GraphNeighborStat(id: key.target, weight: aggregate.count, bytes: Int(aggregate.bytes), isStale: false)
             )
             adjacency[key.target, default: []].append(
-                GraphNeighborStat(id: key.source, weight: aggregate.count, bytes: aggregate.bytes)
+                GraphNeighborStat(id: key.source, weight: aggregate.count, bytes: Int(aggregate.bytes), isStale: false)
             )
         }
 
@@ -762,8 +985,8 @@ struct NetworkGraphBuilder {
                 weight: totalWeight,
                 inCount: stats.inCount,
                 outCount: stats.outCount,
-                inBytes: stats.inBytes,
-                outBytes: stats.outBytes,
+                inBytes: Int(stats.inBytes),
+                outBytes: Int(stats.outBytes),
                 degree: neighbors.count,
                 groupedSSIDs: groupedSSIDs
             )
@@ -787,7 +1010,8 @@ struct NetworkGraphBuilder {
                     sourceID: key.source,
                     targetID: key.target,
                     weight: aggregate.count,
-                    bytes: aggregate.bytes
+                    bytes: Int(aggregate.bytes),
+                    isStale: false
                 )
             }
             .sorted { lhs, rhs in

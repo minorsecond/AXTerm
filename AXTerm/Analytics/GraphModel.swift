@@ -61,12 +61,14 @@ struct NetworkGraphEdge: Hashable, Sendable {
     let targetID: String
     let weight: Int
     let bytes: Int
+    let isStale: Bool
 }
 
 struct GraphNeighborStat: Hashable, Sendable {
     let id: String
     let weight: Int
     let bytes: Int
+    let isStale: Bool
 }
 
 struct GraphModel: Hashable, Sendable {

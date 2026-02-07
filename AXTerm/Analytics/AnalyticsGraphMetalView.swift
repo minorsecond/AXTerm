@@ -1077,7 +1077,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             let info = GraphEdgeInfo(
                 source: source,
                 target: target,
-                weight: edge.weight
+                weight: edge.weight,
+                isStale: edge.isStale
             )
             edgeCache.append(info)
         }
@@ -1097,8 +1098,11 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     private func rebuildBaseEdgeBuffer() {
         guard let device = view?.device else { return }
         let instances: [EdgeInstance] = edgeCache.map { edge in
-            let alpha = metrics.edgeAlpha(for: edge.weight)
-            let baseColor = colorVector(.secondaryLabelColor, alpha: Float(alpha))
+            var alpha = Float(metrics.edgeAlpha(for: edge.weight))
+            if edge.isStale {
+                alpha *= 0.3 // Dim stale routes
+            }
+            let baseColor = colorVector(.secondaryLabelColor, alpha: alpha)
             let thickness = metrics.edgeThickness(for: edge.weight)
             return EdgeInstance(
                 start: edge.source.position,
@@ -1135,8 +1139,11 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         let instances = edgeCache.compactMap { edge -> EdgeInstance? in
             guard focusIDs.contains(edge.source.id) || focusIDs.contains(edge.target.id) else { return nil }
             let thickness = metrics.edgeThickness(for: edge.weight)
-            let alpha = max(metrics.edgeAlpha(for: edge.weight), CGFloat(AnalyticsStyle.Graph.hoverEdgeAlpha))
-            let color = colorVector(.controlAccentColor, alpha: Float(alpha))
+            var alpha = Float(max(metrics.edgeAlpha(for: edge.weight), CGFloat(AnalyticsStyle.Graph.hoverEdgeAlpha)))
+            if edge.isStale {
+                alpha *= 0.4 // Still dim even when highlighted, but slightly less than base
+            }
+            let color = colorVector(.controlAccentColor, alpha: alpha)
             return EdgeInstance(
                 start: edge.source.position,
                 end: edge.target.position,
@@ -1371,6 +1378,7 @@ private struct GraphEdgeInfo: Hashable {
     let source: GraphNodeInfo
     let target: GraphNodeInfo
     let weight: Int
+    let isStale: Bool
 }
 
 private struct GraphMetrics {

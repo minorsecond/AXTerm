@@ -23,7 +23,7 @@ enum NetRomRoutingMode: Sendable {
 /// passive inference engine, and link quality estimator.
 @MainActor
 final class NetRomIntegration {
-    private let localCallsign: String
+    let localCallsign: String
     private var mode: NetRomRoutingMode
 
     private let router: NetRomRouter

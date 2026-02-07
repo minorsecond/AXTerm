@@ -17,6 +17,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     /// Reference to settings store for persistence (optional for backward compat)
     private weak var settingsStore: AppSettingsStore?
 
+    /// Reference to NET/ROM routing system for real-time routing graphs
+    private let netRomIntegration: NetRomIntegration?
+
     @Published var timeframe: AnalyticsTimeframe {
         didSet {
             guard timeframe != oldValue else { return }
@@ -115,11 +118,19 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     /// - `.all`: Shows all edge types
     @Published var graphViewMode: GraphViewMode = .connectivity {
         didSet {
-            guard graphViewMode != oldValue else { return }
             trackFilterChange(reason: "graphViewMode")
-            // View mode only affects edge filtering, not the underlying classified graph.
-            // Recompute the filtered view graph from the cached classified model.
-            applyViewModeFilter()
+            
+            if graphViewMode.isNetRomMode {
+                // For NET/ROM modes, we need a full rebuild from the routing table
+                scheduleGraphBuild(reason: "graphViewMode (NET/ROM)")
+            } else if oldValue.isNetRomMode {
+                // If switching BACK from NET/ROM to standard, we also need a rebuild
+                scheduleGraphBuild(reason: "graphViewMode (Return to Packet)")
+            } else {
+                // Standard view mode only affects edge filtering, not the underlying classified graph.
+                // Recompute the filtered view graph from the cached classified model.
+                applyViewModeFilter()
+            }
         }
     }
 
@@ -173,12 +184,14 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     ///   - packetScheduler: RunLoop for packet processing.
     init(
         settingsStore: AppSettingsStore? = nil,
+        netRomIntegration: NetRomIntegration? = nil,
         calendar: Calendar = .current,
         packetDebounce: TimeInterval = 0.25,
         graphDebounce: TimeInterval = 0.4,
         packetScheduler: RunLoop = .main
     ) {
         self.settingsStore = settingsStore
+        self.netRomIntegration = netRomIntegration
         self.calendar = calendar
 
         // Load from settings store or use defaults
@@ -628,6 +641,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             minEdgeCount: minEdgeSnapshot,
             maxNodes: maxNodesSnapshot,
             stationIdentityMode: identityModeSnapshot,
+            viewMode: graphViewMode, // Added to differentiate NET/ROM vs Packet modes
             packetCount: packetSnapshot.count,
             lastTimestamp: packetSnapshot.map { $0.timestamp }.max(),
             customStart: customRangeStart,
@@ -661,20 +675,42 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             ]
         )
 
+        let routingModeSnapshot = graphViewMode.netRomRoutingMode
+        let netRomIntegrationSnapshot = netRomIntegration
+        
         graphTask?.cancel()
         graphTask = Task.detached(priority: .userInitiated) {
             let start = Date()
-            // Build the classified graph with typed edges
-            let classifiedModel = NetworkGraphBuilder.buildClassified(
-                packets: packetSnapshot,
-                options: NetworkGraphBuilder.Options(
-                    includeViaDigipeaters: includeViaSnapshot,
-                    minimumEdgeCount: minEdgeSnapshot,
-                    maxNodes: maxNodesSnapshot,
-                    stationIdentityMode: identityModeSnapshot
-                ),
-                now: now
-            )
+            
+            let classifiedModel: ClassifiedGraphModel
+            if let mode = routingModeSnapshot, let integration = netRomIntegrationSnapshot {
+                // NEW: Build from NET/ROM routing tables
+                classifiedModel = NetworkGraphBuilder.buildFromNetRom(
+                    netRomIntegration: integration,
+                    localCallsign: integration.localCallsign,
+                    mode: mode,
+                    options: NetworkGraphBuilder.Options(
+                        includeViaDigipeaters: includeViaSnapshot,
+                        minimumEdgeCount: minEdgeSnapshot,
+                        maxNodes: maxNodesSnapshot,
+                        stationIdentityMode: identityModeSnapshot
+                    ),
+                    now: now
+                )
+            } else {
+                // Build the classified graph with typed edges from packets
+                classifiedModel = NetworkGraphBuilder.buildClassified(
+                    packets: packetSnapshot,
+                    options: NetworkGraphBuilder.Options(
+                        includeViaDigipeaters: includeViaSnapshot,
+                        minimumEdgeCount: minEdgeSnapshot,
+                        maxNodes: maxNodesSnapshot,
+                        stationIdentityMode: identityModeSnapshot
+                    ),
+                    now: now
+                )
+            }
+            
             let duration = Date().timeIntervalSince(start) * 1000
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
@@ -732,7 +768,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                     sourceID: edge.sourceID,
                     targetID: edge.targetID,
                     weight: edge.weight,
-                    bytes: edge.bytes
+                    bytes: Int(edge.bytes),
+                    isStale: edge.isStale
                 )
             }
 
@@ -740,10 +777,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         var adjacency: [String: [GraphNeighborStat]] = [:]
         for edge in filteredEdges {
             adjacency[edge.sourceID, default: []].append(
-                GraphNeighborStat(id: edge.targetID, weight: edge.weight, bytes: edge.bytes)
+                GraphNeighborStat(id: edge.targetID, weight: edge.weight, bytes: edge.bytes, isStale: edge.isStale)
             )
             adjacency[edge.targetID, default: []].append(
-                GraphNeighborStat(id: edge.sourceID, weight: edge.weight, bytes: edge.bytes)
+                GraphNeighborStat(id: edge.sourceID, weight: edge.weight, bytes: edge.bytes, isStale: edge.isStale)
             )
         }
 
@@ -1151,6 +1188,7 @@ private struct GraphCacheKey: Hashable {
     let minEdgeCount: Int
     let maxNodes: Int
     let stationIdentityMode: StationIdentityMode
+    let viewMode: GraphViewMode
     let packetCount: Int
     let lastTimestamp: Date?
     let customStart: Date
