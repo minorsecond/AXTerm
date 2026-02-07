@@ -220,6 +220,36 @@ final class AX25TransmissionTests: XCTestCase {
         XCTAssertTrue(session.sendBuffer.isEmpty)
     }
 
+    func testDisconnectClearsSabmSentAtToPreventLateUA() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "ME", ssid: 1)
+
+        let dest = AX25Address(call: "PEER", ssid: 0)
+        let path = DigiPath()
+
+        _ = manager.connect(to: dest, path: path, channel: 0)
+        let session = manager.session(for: dest, path: path, channel: 0)
+        XCTAssertNotNil(session.sabmSentAt, "SABM sent timestamp should be recorded")
+
+        _ = manager.disconnect(session: session)
+        XCTAssertNil(session.sabmSentAt, "sabmSentAt must be cleared to prevent late UA from reopening")
+    }
+
+    func testForceDisconnectClearsSabmSentAtToPreventLateUA() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "ME", ssid: 1)
+
+        let dest = AX25Address(call: "PEER", ssid: 0)
+        let path = DigiPath()
+
+        _ = manager.connect(to: dest, path: path, channel: 0)
+        let session = manager.session(for: dest, path: path, channel: 0)
+        XCTAssertNotNil(session.sabmSentAt, "SABM sent timestamp should be recorded")
+
+        manager.forceDisconnect(session: session)
+        XCTAssertNil(session.sabmSentAt, "sabmSentAt must be cleared to prevent late UA from reopening")
+    }
+
     // MARK: - AXDP Chat Deduplication Tests
 
     /// Same chat message (from, messageId, sessionId) delivered twice invokes onAXDPChatReceived only once.

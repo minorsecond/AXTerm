@@ -634,6 +634,8 @@ final class AX25SessionManager: ObservableObject {
             onSessionStateChanged?(session, oldState, session.state)
         }
 
+        // Clear sabmSentAt to prevent late UA from reopening the session
+        session.sabmSentAt = nil
         // Stop any queued or in-flight data immediately on local disconnect request.
         session.clearPendingTransmission(reason: "Local disconnect requested")
         session.touch()
@@ -650,6 +652,8 @@ final class AX25SessionManager: ObservableObject {
             onSessionStateChanged?(session, oldState, session.state)
         }
 
+        // Clear sabmSentAt to prevent late UA from reopening the session
+        session.sabmSentAt = nil
         session.clearPendingTransmission(reason: "Force disconnect")
         session.touch()
         _ = processActions(actions, for: session)
@@ -1059,7 +1063,6 @@ final class AX25SessionManager: ObservableObject {
             ])
             onSessionStateChanged?(session, oldState, session.state)
         }
-
         session.touch()
         _ = processActions(actions, for: session)
     }
@@ -1075,7 +1078,9 @@ final class AX25SessionManager: ObservableObject {
             "path": path.display.isEmpty ? "(empty)" : path.display,
             "channel": channel
         ])
-        guard let session = existingSession(for: source, path: path, channel: channel) else {
+        // Use findConnectedSession instead of existingSession to match any connected
+        // session from this peer, even if return path differs (common with digipeaters)
+        guard let session = findConnectedSession(from: source, channel: channel) else {
             debugTrace("DISC with no session -> DM", [
                 "from": source.display
             ])
