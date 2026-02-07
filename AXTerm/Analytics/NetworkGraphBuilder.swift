@@ -98,11 +98,11 @@ struct NetworkGraphBuilder {
         let staleThreshold: TimeInterval = 1800
         
         // Phase 1: Collect all nodes from neighbors and routes
-        var nodeStats: [String: (inCount: Int, outCount: Int, inBytes: Int64, outBytes: Int64, routes: Int, ssids: Set<String>)] = [:]
+        var nodeStats: [String: (inCount: Int, outCount: Int, inBytes: Int64, outBytes: Int64, routes: Int, ssids: Set<String>, isOfficial: Bool)] = [:]
         
         // Add neighbor nodes (direct connections)
         let localKey = identityKey(localCallsign)
-        var localStats = nodeStats[localKey] ?? (0, 0, 0, 0, 0, [])
+        var localStats = nodeStats[localKey] ?? (0, 0, 0, 0, 0, [], false)
         localStats.ssids.insert(localCallsign)
         nodeStats[localKey] = localStats
 
@@ -111,8 +111,11 @@ struct NetworkGraphBuilder {
             guard neighbor.quality >= qualityThreshold else { continue }
             
             let key = identityKey(neighbor.call)
-            var stats = nodeStats[key] ?? (0, 0, 0, 0, 0, [])
+            var stats = nodeStats[key] ?? (0, 0, 0, 0, 0, [], false)
             stats.ssids.insert(neighbor.call)
+            if neighbor.isOfficial {
+                stats.isOfficial = true
+            }
             nodeStats[key] = stats
         }
         
@@ -125,20 +128,23 @@ struct NetworkGraphBuilder {
             let originKey = identityKey(route.origin)
             
             // Count routes for sizing nodes
-            var destStats = nodeStats[destKey] ?? (0, 0, 0, 0, 0, [])
+            var destStats = nodeStats[destKey] ?? (0, 0, 0, 0, 0, [], false)
             destStats.routes += 1
             destStats.ssids.insert(route.destination)
             nodeStats[destKey] = destStats
             
-            var originStats = nodeStats[originKey] ?? (0, 0, 0, 0, 0, [])
+            var originStats = nodeStats[originKey] ?? (0, 0, 0, 0, 0, [], false)
             originStats.routes += 1
             originStats.ssids.insert(route.origin)
+            if route.sourceType == "broadcast" || route.sourceType == "classic" {
+                originStats.isOfficial = true
+            }
             nodeStats[originKey] = originStats
             
             // Add intermediate nodes in path
             for hop in route.path {
                 let hopKey = identityKey(hop)
-                var hopStats = nodeStats[hopKey] ?? (0, 0, 0, 0, 0, [])
+                var hopStats = nodeStats[hopKey] ?? (0, 0, 0, 0, 0, [], false)
                 hopStats.routes += 1
                 hopStats.ssids.insert(hop)
                 nodeStats[hopKey] = hopStats
@@ -235,7 +241,8 @@ struct NetworkGraphBuilder {
                 inBytes: Int(stats.inBytes),
                 outBytes: Int(stats.outBytes),
                 degree: 0, // Will be recalculated during view derivation
-                groupedSSIDs: identityMode == .station ? Array(stats.ssids).sorted() : []
+                groupedSSIDs: identityMode == .station ? Array(stats.ssids).sorted() : [],
+                isNetRomOfficial: stats.isOfficial
             )
         }
         

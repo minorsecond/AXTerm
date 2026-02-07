@@ -189,4 +189,43 @@ final class NetRomGraphBuilderTests: XCTestCase {
         XCTAssertEqual(model.edges.count, 1)
         XCTAssertEqual(model.edges.first?.targetID, neighbor1)
     }
+    
+    func testOfficialNodeHighlighting() {
+        let integration = makeIntegration()
+        let officialNeighbor = "W0ABC"
+        let regularNeighbor = "W0XYZ"
+        let now = Date()
+        
+        // Seed neighbors
+        integration.importNeighbors([
+            NeighborInfo(call: officialNeighbor, quality: 200, lastSeen: now, sourceType: "classic", isOfficial: true),
+            NeighborInfo(call: regularNeighbor, quality: 200, lastSeen: now, sourceType: "classic", isOfficial: false)
+        ])
+        
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: false,
+            minimumEdgeCount: 1,
+            maxNodes: 10,
+            stationIdentityMode: .ssid
+        )
+        
+        let model = NetworkGraphBuilder.buildFromNetRom(
+            netRomIntegration: integration,
+            localCallsign: localCallsign,
+            mode: .hybrid,
+            options: options,
+            now: now
+        )
+        
+        XCTAssertEqual(model.nodes.count, 3)
+        
+        let officialNode = model.nodes.first { $0.id == officialNeighbor }
+        let regularNode = model.nodes.first { $0.id == regularNeighbor }
+        
+        XCTAssertNotNil(officialNode)
+        XCTAssertNotNil(regularNode)
+        
+        XCTAssertTrue(officialNode?.isNetRomOfficial ?? false, "Official neighbor should be marked as official in graph node")
+        XCTAssertFalse(regularNode?.isNetRomOfficial ?? true, "Regular neighbor should NOT be marked as official in graph node")
+    }
 }

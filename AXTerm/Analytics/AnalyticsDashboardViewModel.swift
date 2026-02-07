@@ -797,7 +797,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                 inBytes: node.inBytes,
                 outBytes: node.outBytes,
                 degree: neighbors.count,
-                groupedSSIDs: node.groupedSSIDs
+                groupedSSIDs: node.groupedSSIDs,
+                isNetRomOfficial: node.isNetRomOfficial
             )
         }
 

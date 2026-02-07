@@ -275,6 +275,26 @@ struct AnalyticsDashboardView: View {
                     }
                 )
 
+                // Legend
+                HStack(spacing: 16) {
+                    LegendItem(color: .systemPurple, label: "My Node")
+                    LegendItem(color: .systemOrange, label: "Routing Node")
+                    LegendItem(color: .secondaryLabelColor, label: "Station")
+                    
+                    Spacer()
+                    
+                    if viewModel.graphViewMode.isNetRomMode {
+                        Text("Size = Route Centrality • Edge = Link Quality")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(AnalyticsStyle.Colors.neutralFill)
+                            .cornerRadius(4)
+                    }
+                }
+                .padding(.horizontal, 4)
+
                 // Graph and sidebar
                 HStack(alignment: .top, spacing: AnalyticsStyle.Layout.cardSpacing) {
                     AnalyticsGraphView(
@@ -563,6 +583,23 @@ private struct SummaryMetricCard: View {
         .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
     }
 }
+
+private struct LegendItem: View {
+    let color: NSColor
+    let label: String
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(Color(nsColor: color))
+                .frame(width: 8, height: 8)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+    }
+}
+
 
 private struct ChartCard<Content: View>: View {
     let title: String

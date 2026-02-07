@@ -226,6 +226,7 @@ final class NetRomIntegration {
         if shouldRefreshNeighbor(for: classification) {
             let observedQuality = linkQualityForNeighbor(normalizedOrigin)
             router.observePacket(syntheticPacket, observedQuality: max(observedQuality, 200), direction: .incoming, timestamp: result.timestamp)
+            router.markAsOfficial(call: normalizedOrigin)
         }
 
         // Convert broadcast entries to RouteInfo and feed to router

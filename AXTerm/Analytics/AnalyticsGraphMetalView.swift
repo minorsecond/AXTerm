@@ -462,8 +462,21 @@ private struct GraphTooltipView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(node.callsign)
-                .font(.caption.weight(.semibold))
+            HStack(spacing: 4) {
+                Text(node.callsign)
+                    .font(.caption.weight(.semibold))
+                
+                if node.isNetRomOfficial {
+                    Text("Routing Node")
+                        .font(.system(size: 8, weight: .bold))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.orange.opacity(0.8))
+                        .foregroundColor(.white)
+                        .cornerRadius(3)
+                }
+            }
+            
             Text("Packets: \(node.weight)")
                 .font(.caption2)
             Text("Bytes: \((node.inBytes + node.outBytes).formatted())")
@@ -1060,7 +1073,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
                 callsign: node.callsign,
                 position: SIMD2(Float(position.x), Float(position.y)),
                 weight: node.weight,
-                isMyNode: isMyNode
+                isMyNode: isMyNode,
+                isOfficial: node.isNetRomOfficial
             )
             nodeCache.append(info)
             nodeIndex[node.id] = info
@@ -1164,6 +1178,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         let hoverColor = colorVector(.labelColor, alpha: 1.0)
         let selectedColor = colorVector(.controlAccentColor, alpha: 1.0)
         let myNodeColor = colorVector(.systemPurple, alpha: 1.0)
+        let officialNodeColor = colorVector(.systemOrange, alpha: 1.0)
         let outlineColor = colorVector(.controlAccentColor, alpha: 0.55)
         let myNodeOutline = colorVector(.systemPurple, alpha: 0.7)
 
@@ -1184,6 +1199,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
                 color = hoverColor
             } else if isMyNode {
                 color = myNodeColor
+            } else if node.isOfficial {
+                color = officialNodeColor
             } else {
                 color = baseColor
             }
@@ -1372,6 +1389,7 @@ private struct GraphNodeInfo: Hashable {
     let position: SIMD2<Float>
     let weight: Int
     let isMyNode: Bool
+    let isOfficial: Bool
 }
 
 private struct GraphEdgeInfo: Hashable {
