@@ -54,6 +54,15 @@ struct DigiPath: Codable, Hashable, Sendable {
     var display: String {
         digis.map { $0.display }.joined(separator: ",")
     }
+
+    /// Returns a version of the path with all H-bits (repeated flags) cleared.
+    /// Used for matching sessions where the H-bit state (has-been-repeated) shouldn't affect identity.
+    var normalized: DigiPath {
+        let cleanDigis = digis.map {
+            AX25Address(call: $0.call, ssid: $0.ssid, repeated: false)
+        }
+        return DigiPath(cleanDigis)
+    }
 }
 
 /// Status of an outbound frame in the TX queue

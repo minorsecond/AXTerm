@@ -869,6 +869,18 @@ final class AX25SessionManager: ObservableObject {
         // Try to find session with exact path match first
         var session = existingSession(for: source, path: path, channel: channel)
 
+        // Try normalized path (ignoring H-bits/repeated flags)
+        if session == nil {
+            session = existingSession(for: source, path: path.normalized, channel: channel)
+            if session != nil {
+                TxLog.debug(.session, "Found session with normalized path (ignoring H-bits)", [
+                    "from": source.display,
+                    "originalPath": path.display,
+                    "normalizedPath": path.normalized.display
+                ])
+            }
+        }
+
         // If not found, try to find any session to this remote address that's expecting a UA
         // This handles the common case where the return path differs from the outbound path
         // (digipeaters modify the path on return, or the path is empty on the response)
@@ -1024,6 +1036,11 @@ final class AX25SessionManager: ObservableObject {
         // Try to find session with exact path match first
         var session = existingSession(for: source, path: path, channel: channel)
 
+        // Try normalized path lookup
+        if session == nil {
+            session = existingSession(for: source, path: path.normalized, channel: channel)
+        }
+
         // If not found, try to find any session to this remote address that's expecting a response
         if session == nil {
             session = findSessionExpectingUA(from: source, channel: channel)
@@ -1070,11 +1087,32 @@ final class AX25SessionManager: ObservableObject {
             "path": path.display.isEmpty ? "(empty)" : path.display,
             "channel": channel
         ])
-        guard let session = existingSession(for: source, path: path, channel: channel) else {
+        
+        // Try strict lookup first
+        var session = existingSession(for: source, path: path, channel: channel)
+        
+        // Try normalized path lookup
+        if session == nil {
+            session = existingSession(for: source, path: path.normalized, channel: channel)
+        }
+        
+        // Fallback: connected session on ANY path/channel (remote might be using different path or channel)
+        if session == nil {
+            session = findConnectedSession(from: source, channel: channel)
+        }
+        if session == nil {
+            session = findConnectedSessionByCallsign(from: source, channel: channel)
+        }
+        if session == nil {
+            session = findAnySession(from: source, channel: channel)
+        }
+        
+        guard let session = session else {
             debugTrace("DISC with no session -> DM", [
                 "from": source.display
             ])
-            // No session - respond with DM
+            TxLog.warning(.session, "DISC received with no matching session; sending DM", ["from": source.display])
+            // No session - respond with DM to confirm we are disconnected
             let dm = AX25FrameBuilder.buildDM(
                 from: localCallsign,
                 to: source,
@@ -1128,6 +1166,11 @@ final class AX25SessionManager: ObservableObject {
         // Try exact path match first, then fall back to address-only lookup
         var session = existingSession(for: source, path: path, channel: channel)
 
+        // Try normalized path lookup
+        if session == nil {
+            session = existingSession(for: source, path: path.normalized, channel: channel)
+        }
+
 
         if session == nil {
             session = findConnectedSession(from: source, channel: channel)
@@ -1147,8 +1190,16 @@ final class AX25SessionManager: ObservableObject {
                     "peer": source.display,
                     "state": anySession.state.rawValue
                 ])
-                return
+                // If we found a session but it's not "connected" (e.g. connecting), 
+                // we should still process the frame to see if it updates state (late UA, etc.)
+                // or at least prevent sending a DM which would kill the link.
+                session = anySession
             }
+        }
+        
+        if session == nil {
+            // No session found at all -> DM
+            // Check if we have a session with SSID mismatch to log better warning
             if let anySession = findAnySessionByCallsign(from: source, channel: channel) {
                 TxLog.warning(.session, "I-frame received for non-connected session (SSID mismatch)", [
                     "peer": source.display,
@@ -1250,6 +1301,12 @@ final class AX25SessionManager: ObservableObject {
         ])
         // Try exact path match first, then fall back to address-only lookup
         var session = existingSession(for: source, path: path, channel: channel)
+        
+        // Try normalized path lookup
+        if session == nil {
+            session = existingSession(for: source, path: path.normalized, channel: channel)
+        }
+        
         if session == nil {
             session = findConnectedSession(from: source, channel: channel)
         }
@@ -1371,6 +1428,12 @@ final class AX25SessionManager: ObservableObject {
             "channel": channel
         ])
         var session = existingSession(for: source, path: path, channel: channel)
+        
+        // Try normalized path lookup
+        if session == nil {
+            session = existingSession(for: source, path: path.normalized, channel: channel)
+        }
+
         if session == nil {
             session = findConnectedSession(from: source, channel: channel)
             if let connected = session {
@@ -1628,7 +1691,6 @@ final class AX25SessionManager: ObservableObject {
             let ns = session.vs  // Capture before buildIFrame increments vs
             let iFrame = buildIFrame(for: session, payload: item.data, pid: item.pid, displayInfo: item.displayInfo, pf: wasIdle)
             debugTrace("TX I (drain queue)", ["frame": describeFrame(iFrame)])
-            print("[DEBUG:AX25:DRAIN] tx | N(S)=\(ns) payload=\(item.data.count) va=\(session.va) vs=\(session.vs)")
             // Use ns directly - (vs-1) wraps to -1 when vs goes 7->0, corrupting sendBuffer
             session.bufferFrame(iFrame, ns: ns)
             session.recordSendTime(ns: ns, time: Date())

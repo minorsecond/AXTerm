@@ -901,9 +901,19 @@ final class SessionCoordinator: ObservableObject {
         let decoded = AX25ControlFieldDecoder.decode(control: packet.control, controlByte1: packet.controlByte1)
         let localCall = sessionManager.localCallsign.call.uppercased()
         let toCall = to.call.uppercased()
+        let fromCall = from.call.uppercased()
 
         // Only process packets addressed to us
         guard toCall == localCall else { return }
+
+        // Ignore packets from ourselves (TNC echo)
+        guard fromCall != localCall else {
+            TxLog.debug(.session, "Ignoring echoed frame from local callsign", [
+                "from": from.display,
+                "to": to.display
+            ])
+            return
+        }
 
         let channel: UInt8 = 0
 

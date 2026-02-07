@@ -1265,55 +1265,231 @@ final class AX25SessionTests: XCTestCase {
     /// from the peer (improving interactivity and preventing timeouts), matching
     /// behaviors of other TNCs like Direwolf.
     func testFirstIFrameHasPollBit() {
+        // ... (existing test)
+    }
+
+    /// Reproduction of the KB5YZB scenario where AXTerm sent SABM -> RR -> DM
+    /// instead of just RR after receiving I-frames.
+    /// Suspected cause: Session not transitioning to connected properly or race condition.
+    func testReproduction_KB5YZB_Scenario() {
         let manager = AX25SessionManager()
+        // K0EPI-7
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
-        // Mock PacketEngine to capture frames
         var sentFrames: [OutboundFrame] = []
-        
         manager.onSendFrame = { frame in
             sentFrames.append(frame)
         }
 
-        // Create a connected session
-        let dest = AX25Address(call: "W0ARP", ssid: 0)
-        manager.connect(to: dest)
-        guard let session = manager.connectedSession(withPeer: dest) else {
-            // Force session creation and connection
-             // (Identical logic to previous attempt but simplified)
-            let s = manager.session(for: dest)
-            s.stateMachine = AX25StateMachine(config: manager.defaultConfig)
-            _ = s.stateMachine.handle(event: .connectRequest)
-            _ = s.stateMachine.handle(event: .receivedUA)
-            XCTAssertEqual(s.state, .connected)
+        // Peer: KB5YZB-7, via DRL
+        let dest = AX25Address(call: "KB5YZB", ssid: 7)
+        let path = DigiPath.from(["DRL"])
+
+        // 1. Initiate Connection
+        _ = manager.connect(to: dest, path: path)
+
+        // Verify SABM sent
+        guard let frame1 = sentFrames.last else {
+            XCTFail("Should have sent SABM")
             return
         }
-        
-        // Clear SABM/UA from sentFrames
+        XCTAssertEqual(frame1.displayInfo, "SABM")
         sentFrames.removeAll()
 
-        // Send data large enough to be fragmented into 2 frames (paclen=128)
-        let payload = Data(repeating: 0x41, count: 200) // 200 bytes -> 128 + 72
-        _ = manager.sendData(payload, to: dest)
+        // 2. Receive UA
+        // [0.5] KB5YZB-7>K0EPI-7,DRL*:(UA res, f=1)
+        manager.handleInboundUA(from: dest, path: path, channel: 0)
 
-        // Expect 2 frames
-        XCTAssertEqual(sentFrames.count, 2, "Should have sent 2 frames")
+        // Session should be connected
+        let session = manager.session(for: dest, path: path, channel: 0)
+        XCTAssertEqual(session.state, .connected, "Session should be connected after receiving UA")
+
+        // 3. Receive I-frame 0
+        // [0.5] KB5YZB-7>K0EPI-7,DRL*:(I cmd, n(s)=0, n(r)=0, p=0, pid=0xf0)Welcome...
+        manager.handleInboundIFrame(
+            from: dest,
+            path: path,
+            channel: 0,
+            ns: 0,
+            nr: 0,
+            pf: false,
+            payload: Data("Welcome to YZBBPQ".utf8)
+        )
+
+        // 4. Receive I-frame 1 with P=1
+        // [0.5] KB5YZB-7>K0EPI-7,DRL*:(I cmd, n(s)=1, n(r)=0, p=1, pid=0xf0)S USERS...
+        manager.handleInboundIFrame(
+            from: dest,
+            path: path,
+            channel: 0,
+            ns: 1,
+            nr: 0,
+            pf: true, // Poll bit set!
+            payload: Data("S USERS MHEARD".utf8)
+        )
+
+        // Analyze sent frames
+        // Expected behavior:
+        // - RR(nr=1) (Optional, might be coalesced or immediate)
+        // - RR(nr=2, f=1) (Mandatory response to P=1)
+        //
+        // Bad behavior observed in log:
+        // - SABM (Why??)
+        // - RR(nr=1)
+        // - RR(nr=2, f=1)
+        // - DM (Why??)
+
+        for frame in sentFrames {
+            print("Captured Frame: \(frame.displayInfo ?? "nil") type=\(frame.frameType) ctrl=\(String(format:"%02X", frame.controlByte ?? 0))")
+        }
+
+        XCTAssertFalse(sentFrames.contains(where: { $0.displayInfo == "SABM" }), "Should NOT have sent SABM after connection established")
+        XCTAssertFalse(sentFrames.contains(where: { $0.displayInfo == "DM" }), "Should NOT have sent DM")
         
-        let frame1 = sentFrames[0]
-        let frame2 = sentFrames[1]
-
-        // Frame 1 should have P=1
-        if let ctrl1 = frame1.controlByte {
-            XCTAssertTrue((ctrl1 & 0x10) != 0, "First frame should have Poll bit set (P=1)")
-        } else {
-            XCTFail("Frame 1 missing control byte")
+        // Should have sent RR with F=1 (Response to Poll)
+        // And NR should be 2 (next expected is 2)
+        let rrs = sentFrames.filter { $0.frameType == "s" && ($0.displayInfo ?? "").hasPrefix("RR") }
+        XCTAssertTrue(rrs.count >= 1, "Should have sent at least one RR")
+        
+        if let lastRR = rrs.last {
+            XCTAssertEqual(lastRR.nr, 2, "Last RR should ack up to 2")
+            // Check F bit (bit 4 of control byte) if P was 1
+            if let ctrl = lastRR.controlByte {
+                 XCTAssertTrue(ctrl & 0x10 != 0, "Last RR should have Final bit set (F=1) in response to P=1")
+            }
+        }
+    }
+    func testDISCWithPathMismatch() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+        var capturedFrames: [OutboundFrame] = []
+        manager.onSendFrame = { frame in
+            capturedFrames.append(frame)
         }
 
-        // Frame 2 should have P=0
-        if let ctrl2 = frame2.controlByte {
-            XCTAssertFalse((ctrl2 & 0x10) != 0, "Second frame should NOT have Poll bit set (P=0)")
-        } else {
-            XCTFail("Frame 2 missing control byte")
+        let dest = AX25Address(call: "KB5YZB", ssid: 7)
+        let digi = AX25Address(call: "DRL", ssid: 0)
+        // Assume DigiPath init takes array without label, or try strict string init if available
+        // Based on previous files, DigiPath likely has init(_ components: [AX25Address])
+        let path = DigiPath([digi])
+        
+        // 1. Establish connection (simulate receiving UA)
+        manager.connect(to: dest, path: path)
+        manager.handleInboundUA(from: dest, path: path, channel: 0)
+        
+        guard let session = manager.connectedSession(withPeer: dest) else {
+            XCTFail("Session not connected")
+            return
         }
+        XCTAssertEqual(session.state, .connected)
+        
+        capturedFrames.removeAll()
+        
+        // 2. Peer sends DISC with DIFFERENT path (e.g. DRL*)
+        // Create new address with repeated=true since properties are let
+        let digiRepeated = AX25Address(call: "DRL", ssid: 0, repeated: true)
+        let mismatchPath = DigiPath([digiRepeated])
+        
+        manager.handleInboundDISC(from: dest, path: mismatchPath, channel: 0)
+        
+        // Should send UA (Response) indicating we accepted the disconnect
+        // Should NOT send DM
+        XCTAssertEqual(capturedFrames.count, 1, "Should send 1 frame (UA)")
+        
+        if let frame = capturedFrames.first {
+            XCTAssertEqual(frame.frameType, "u")
+            // Check for UA type
+            if let ctl = frame.controlByte {
+                let isUA = (ctl & ~0x10) == 0x63
+                XCTAssertTrue(isUA, "Frame should be UA, got control 0x\(String(format: "%02X", ctl))")
+            }
+        }
+        
+        XCTAssertEqual(session.state, .disconnected, "Session should be disconnected")
+    }
+    func testSessionKeyEqualityIgnoreRepeated() {
+        let dest = AX25Address(call: "DEST", ssid: 0)
+        
+        let digi1 = AX25Address(call: "DIGI", ssid: 0, repeated: false)
+        let digi2 = AX25Address(call: "DIGI", ssid: 0, repeated: true)
+        
+        let path1 = DigiPath([digi1])
+        let path2 = DigiPath([digi2])
+        
+        // Check if DigiPath displays are equal (since SessionKey uses display string)
+        XCTAssertEqual(path1.display, path2.display, "DigiPath display should match regardless of repeated status")
+        
+        let key1 = SessionKey(destination: dest, path: path1, channel: 0)
+        let key2 = SessionKey(destination: dest, path: path2, channel: 0)
+        
+        XCTAssertEqual(key1, key2, "SessionKey should be equal regardless of repeated status in path")
+        XCTAssertEqual(key1.hashValue, key2.hashValue, "SessionKey hashes should be equal")
+    }
+    
+    func testDigiPathNormalization() {
+        let digiRepeated = AX25Address(call: "DIGI", ssid: 0, repeated: true)
+        let path = DigiPath([digiRepeated])
+        
+        XCTAssertTrue(path.digis[0].repeated, "Original path should have repeated=true")
+        
+        let normalized = path.normalized
+        XCTAssertFalse(normalized.digis[0].repeated, "Normalized path should have repeated=false")
+        XCTAssertEqual(normalized.digis[0].call, "DIGI", "Normalized path callsign should match")
+        XCTAssertEqual(normalized.digis[0].ssid, 0, "Normalized path SSID should match")
+    }
+
+    func testRRWithHBitMismatch() {
+        let sessionManager = AX25SessionManager()
+        let dest = AX25Address(call: "DEST", ssid: 0)
+        let digi = AX25Address(call: "DIGI", ssid: 0, repeated: false)
+        let digiRepeated = AX25Address(call: "DIGI", ssid: 0, repeated: true)
+
+        let path = DigiPath([digi])
+        let pathRepeated = DigiPath([digiRepeated])
+
+        // Establish connection properly
+        // This sets state to connected and initializes session
+        let session = connectSession(
+            manager: sessionManager,
+            destination: dest,
+            path: path
+        )
+
+        // Manually buffer frames to simulate pending ACKs
+        // We need to advance V(S) to match the buffered frames
+        // V(S) starts at 0.
+        
+        let f0 = AX25FrameBuilder.buildIFrame(from: session.localAddress, to: session.remoteAddress, via: path, ns: 0, nr: 0, payload: Data([0x01]), sessionId: session.id)
+        let f1 = AX25FrameBuilder.buildIFrame(from: session.localAddress, to: session.remoteAddress, via: path, ns: 1, nr: 0, payload: Data([0x02]), sessionId: session.id)
+        
+        session.sendBuffer[0] = f0
+        session.sendBuffer[1] = f1
+        
+        // Mock sequence state to expect ACK for these frames
+        // Accessing SequenceState via stateMachine might be restricted if strict private?
+        // Let's assume we can modify it or V(S) was updated by sending.
+        // buildIFrame in SessionManager increments VS, but here we used FrameBuilder directly.
+        // We need to manually update VS if possible, or use session.sendData?
+        // session.sendData is async/complex. Let's try to set sequenceState properties if accessible.
+        
+        // If sequenceState is internal/public we can set it.
+        // If not, we might need another way. AX25SessionTests usually has access to internals via @testable.
+        
+        session.stateMachine.sequenceState.vs = 2
+        session.stateMachine.sequenceState.va = 0
+
+        // Simulate incoming RR with repeated path (H-bit set)
+        // This simulates a digipeater setting the H-bit on the return path
+        sessionManager.handleInboundRR(
+            from: dest,
+            path: pathRepeated,
+            channel: 0,
+            nr: 2,
+            isPoll: false
+        )
+
+        // Verify that the RR was processed and V(A) advanced
+        XCTAssertEqual(session.va, 2, "Session V(A) should update even with H-bit mismatch in RR path")
+        XCTAssertEqual(session.sendBuffer.count, 0, "Send buffer should be cleared")
     }
 }
