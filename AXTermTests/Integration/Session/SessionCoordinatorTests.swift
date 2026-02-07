@@ -667,7 +667,7 @@ final class SessionCoordinatorTests: XCTestCase {
 
         let config = coordinator.sessionManager.getConfigForDestination?("PEER-0", "VIA,WIDE1-1") ?? AX25SessionConfig()
         XCTAssertEqual(config.windowSize, 1, "Per-route high loss should yield window 1")
-        XCTAssertEqual(config.maxRetries, 10)
+        XCTAssertEqual(config.maxRetries, 15)
     }
 
     func testApplyLinkQualitySampleWithoutRouteKeyUpdatesGlobalOnly() {

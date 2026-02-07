@@ -252,27 +252,15 @@ final class AX25SessionTests: XCTestCase {
         let frames = manager.sendData(Data([0x41]), to: destination, path: path, channel: 0)
         XCTAssertEqual(frames.count, 1)
 
-        var retransmitFrames: [OutboundFrame] = []
-        manager.onRetransmitFrame = { frame in
-            retransmitFrames.append(frame)
-        }
-        var sentFrames: [OutboundFrame] = []
-        manager.onSendFrame = { frame in
-            sentFrames.append(frame)
-        }
+        let retransmitFrames = manager.handleT1Timeout(session: session)
 
-        manager.handleT1Timeout(session: session)
-
-        // Expect RR poll (P=1) + retransmitted I-frame
+        // Expect retransmitted I-frame
         let iFrames = retransmitFrames.filter { $0.frameType == "i" }
-        // RR poll is sent via onSendFrame
-        let sFrames = sentFrames.filter { $0.frameType == "s" && ($0.controlByte ?? 0) & 0x10 != 0 } // Check P/F bit if possible, or just checks frames
         
         XCTAssertEqual(iFrames.count, 1, "Should retransmit the outstanding I-frame")
         XCTAssertEqual(iFrames.first?.sessionId, session.id)
-        // The RR poll might be in sentFrames
-        // We can check if ANY S-frame was sent
-        let pollFrames = sentFrames.filter { $0.frameType == "s" }
+        // Now check for S-frames (RR poll) in the retransmit response
+        let pollFrames = retransmitFrames.filter { $0.frameType == "s" }
         XCTAssertEqual(pollFrames.count, 1, "Should include RR poll (P=1)")
 
     }
@@ -294,12 +282,8 @@ final class AX25SessionTests: XCTestCase {
         let frames = manager.sendData(Data([0x41]), to: destination, path: originalPath, channel: 0)
         XCTAssertEqual(frames.count, 1)
 
-        var retransmitFrames: [OutboundFrame] = []
-        manager.onRetransmitFrame = { frame in
-            retransmitFrames.append(frame)
-        }
-
-        manager.handleInboundREJ(from: destination, path: incomingPath, channel: 0, nr: 0)
+        // Capture retransmissions returned by handleInboundREJ
+        let retransmitFrames = manager.handleInboundREJ(from: destination, path: incomingPath, channel: 0, nr: 0)
         
         XCTAssertEqual(retransmitFrames.count, 1)
         XCTAssertEqual(retransmitFrames.first?.sessionId, session.id)
@@ -317,7 +301,8 @@ final class AX25SessionTests: XCTestCase {
         _ = manager.connect(to: destination, path: path, channel: 0)
         let session = manager.session(for: destination, path: path, channel: 0)
 
-        manager.handleInboundUA(from: uaSource, path: path, channel: 0)
+        // Return value of handleInboundUA is irrelevant here, checking state transition
+        _ = manager.handleInboundUA(from: uaSource, path: path, channel: 0)
 
         XCTAssertEqual(session.state, .connected)
         XCTAssertEqual(session.remoteAddress.display, destination.display)
@@ -333,12 +318,7 @@ final class AX25SessionTests: XCTestCase {
 
         let session = connectSession(manager: manager, destination: destination, path: path)
 
-        var sentFrame: OutboundFrame?
-        manager.onSendFrame = { frame in
-            sentFrame = frame
-        }
-
-        manager.handleInboundIFrame(
+        let sentFrame = manager.handleInboundIFrame(
             from: mismatchSource,
             path: path,
             channel: 0,
@@ -383,16 +363,11 @@ final class AX25SessionTests: XCTestCase {
         let session = connectSession(manager: manager, destination: destination, path: path)
         _ = manager.sendData(Data([0x41]), to: destination, path: path, channel: 0)
 
-        var retransmitFrames: [OutboundFrame] = []
-        manager.onRetransmitFrame = { frame in
-            retransmitFrames.append(frame)
-        }
-
-        manager.handleInboundREJ(from: mismatchSource, path: path, channel: 0, nr: 0)
+        // Capture retransmissions returned by handleInboundREJ
+        let retransmitFrames = manager.handleInboundREJ(from: mismatchSource, path: path, channel: 0, nr: 0)
         
         XCTAssertEqual(retransmitFrames.count, 1)
         XCTAssertEqual(retransmitFrames.first?.sessionId, session.id)
-
     }
 
     func testHandleInboundDMWithSSIDMismatchDisconnectsSession() {
@@ -405,7 +380,8 @@ final class AX25SessionTests: XCTestCase {
 
         let session = connectSession(manager: manager, destination: destination, path: path)
 
-        manager.handleInboundDM(from: mismatchSource, path: path, channel: 0)
+        // Only checking side effect on session state
+        _ = manager.handleInboundDM(from: mismatchSource, path: path, channel: 0)
 
         XCTAssertEqual(session.state, .disconnected)
     }
@@ -435,10 +411,7 @@ final class AX25SessionTests: XCTestCase {
 
         _ = manager.connect(to: destination, path: path, channel: 0)
 
-        var sentFrame: OutboundFrame?
-        manager.onSendFrame = { frame in sentFrame = frame }
-
-        manager.handleInboundIFrame(
+        let sentFrame = manager.handleInboundIFrame(
             from: destination,
             path: path,
             channel: 0,
@@ -461,10 +434,7 @@ final class AX25SessionTests: XCTestCase {
 
         // No sessions created at all. An unexpected I-frame should be safely ignored
         // and MUST NOT trigger a DM, to avoid tearing down a valid remote link.
-        var sentFrame: OutboundFrame?
-        manager.onSendFrame = { frame in sentFrame = frame }
-
-        manager.handleInboundIFrame(
+        let sentFrame = manager.handleInboundIFrame(
             from: source,
             path: path,
             channel: 0,
@@ -492,12 +462,7 @@ final class AX25SessionTests: XCTestCase {
         // First delivery of an in-sequence I-frame — with delayed ACK, returns nil
         // but stores the RR in delayedAckFrame.
         // First delivery of an in-sequence I-frame
-        var firstResponse: OutboundFrame?
-        manager.onSendFrame = { frame in
-            firstResponse = frame
-        }
-
-        manager.handleInboundIFrame(
+        let firstResponse = manager.handleInboundIFrame(
             from: destination,
             path: path,
             channel: 0,
@@ -514,12 +479,7 @@ final class AX25SessionTests: XCTestCase {
         // (e.g. without the repeated marker) must NOT cause a DM.
         // It should trigger another RR (immediate) to ensure the peer knows we have it.
         let altPath = DigiPath.from(["W0ARP-7*"])
-        var duplicateResponse: OutboundFrame?
-        manager.onSendFrame = { frame in
-            duplicateResponse = frame
-        }
-        
-        manager.handleInboundIFrame(
+        let duplicateResponse = manager.handleInboundIFrame(
             from: destination,
             path: altPath,
             channel: 0,
@@ -547,12 +507,7 @@ final class AX25SessionTests: XCTestCase {
         let source = AX25Address(call: "N0HI", ssid: 7)
         let path = DigiPath.from(["W0ARP-7"])
 
-        var sentFrame: OutboundFrame?
-        manager.onSendFrame = { frame in
-            sentFrame = frame
-        }
-
-        manager.handleInboundRR(
+        let sentFrame = manager.handleInboundRR(
             from: source,
             path: path,
             channel: 0,
@@ -573,12 +528,7 @@ final class AX25SessionTests: XCTestCase {
         let source = AX25Address(call: "N0HI", ssid: 7)
         let path = DigiPath.from(["W0ARP-7"])
 
-        var retransmitFrames: [OutboundFrame] = []
-        manager.onRetransmitFrame = { frame in
-            retransmitFrames.append(frame)
-        }
-
-        manager.handleInboundREJ(
+        let retransmitFrames = manager.handleInboundREJ(
             from: source,
             path: path,
             channel: 0,
@@ -602,12 +552,7 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(session.outstandingCount, 0)
 
         // No outstanding frames: T1 timeout should not produce retransmits.
-        var retransmitFrames: [OutboundFrame] = []
-        manager.onRetransmitFrame = { frame in
-            retransmitFrames.append(frame)
-        }
-
-        manager.handleT1Timeout(session: session)
+        let retransmitFrames = manager.handleT1Timeout(session: session)
         
         XCTAssertTrue(retransmitFrames.isEmpty)
     }
@@ -971,11 +916,7 @@ final class AX25SessionTests: XCTestCase {
 
         // T1 fires - retransmit the outstanding I-frame.
         // The retransmitted frame MUST have N(R)=2 (current V(R)), not N(R)=0 (stale).
-        var retransmitFrames: [OutboundFrame] = []
-        manager.onRetransmitFrame = { frame in retransmitFrames.append(frame) }
-
-        manager.handleT1Timeout(session: session)
-
+        let retransmitFrames = manager.handleT1Timeout(session: session)
 
         let iFrameRetransmits = retransmitFrames.filter { $0.frameType == "i" }
         XCTAssertFalse(iFrameRetransmits.isEmpty, "Should retransmit the outstanding I-frame")
@@ -1126,11 +1067,7 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(cmdFrame.ns, 1, "Command should be at N(S)=1")
 
         // Step 5: T1 fires (remote didn't respond)
-        var retransmitFrames: [OutboundFrame] = []
-        manager.onRetransmitFrame = { frame in retransmitFrames.append(frame) }
-
-        manager.handleT1Timeout(session: session)
-
+        let retransmitFrames = manager.handleT1Timeout(session: session)
 
         // Verify retransmit carries updated N(R) and there's an RR poll
         let iRetransmits = retransmitFrames.filter { $0.frameType == "i" }
@@ -1175,10 +1112,7 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(session.outstandingCount, 1, "Only frame C outstanding")
 
         // T1 fires for frame C
-        var retransmitFrames: [OutboundFrame] = []
-        manager.onRetransmitFrame = { frame in retransmitFrames.append(frame) }
-
-        manager.handleT1Timeout(session: session)
+        let retransmitFrames = manager.handleT1Timeout(session: session)
 
         let iRetransmits = retransmitFrames.filter { $0.frameType == "i" }
         XCTAssertEqual(iRetransmits.count, 1)
@@ -1198,12 +1132,7 @@ final class AX25SessionTests: XCTestCase {
         let session = connectSession(manager: manager, destination: peer, path: DigiPath())
 
         // First processing: ns=0 arrives when V(R)=0 → in-sequence → immediate RR(nr=1)
-        var rr1: OutboundFrame?
-        manager.onSendFrame = { frame in
-            rr1 = frame
-        }
-
-        manager.handleInboundIFrame(
+        let rr1 = manager.handleInboundIFrame(
             from: peer, path: DigiPath(), channel: 0,
             ns: 0, nr: 0, pf: false,
             payload: Data("Welcome".utf8)
@@ -1214,12 +1143,7 @@ final class AX25SessionTests: XCTestCase {
 
         // Second processing of same frame: ns=0 arrives when V(R)=1 → outside window
         // It triggers another RR (immediate) to ensure the peer knows we have it.
-        var rr2: OutboundFrame?
-        manager.onSendFrame = { frame in
-            rr2 = frame
-        }
-
-        manager.handleInboundIFrame(
+        let rr2 = manager.handleInboundIFrame(
             from: peer, path: DigiPath(), channel: 0,
             ns: 0, nr: 0, pf: false,
             payload: Data("Welcome".utf8)
@@ -1266,6 +1190,7 @@ final class AX25SessionTests: XCTestCase {
     /// Tests that RR frames sent immediately after receiving I-frames include the correct N(R) in the metadata.
     /// This ensures that downstream consumers (logging, etc.) and potential serialization logic
     /// perceive the frame correctly. A missing N(R) in `OutboundFrame` was causing issues.
+
     func testImmediateRRIncludesNR() {
         let manager = AX25SessionManager()
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
@@ -1277,13 +1202,8 @@ final class AX25SessionTests: XCTestCase {
         let session = connectSession(manager: manager, destination: destination, path: path)
         XCTAssertEqual(session.state, .connected)
         
-        var sentFrame: OutboundFrame?
-        manager.onSendFrame = { frame in
-            sentFrame = frame
-        }
-        
         // Receive I-frame
-        manager.handleInboundIFrame(
+        let sentFrame = manager.handleInboundIFrame(
             from: destination,
             path: path,
             channel: 0,
@@ -1326,15 +1246,14 @@ final class AX25SessionTests: XCTestCase {
         let path = DigiPath.from(["DRL"])
 
         // 1. Initiate Connection
-        _ = manager.connect(to: dest, path: path)
+        let frame1 = manager.connect(to: dest, path: path)
 
         // Verify SABM sent
-        guard let frame1 = sentFrames.last else {
+        guard let sabm = frame1 else {
             XCTFail("Should have sent SABM")
             return
         }
-        XCTAssertEqual(frame1.displayInfo, "SABM")
-        sentFrames.removeAll()
+        XCTAssertEqual(sabm.displayInfo, "SABM")
 
         // 2. Receive UA
         // [0.5] KB5YZB-7>K0EPI-7,DRL*:(UA res, f=1)
@@ -1346,7 +1265,7 @@ final class AX25SessionTests: XCTestCase {
 
         // 3. Receive I-frame 0
         // [0.5] KB5YZB-7>K0EPI-7,DRL*:(I cmd, n(s)=0, n(r)=0, p=0, pid=0xf0)Welcome...
-        manager.handleInboundIFrame(
+        let sentFrame1 = manager.handleInboundIFrame(
             from: dest,
             path: path,
             channel: 0,
@@ -1355,10 +1274,13 @@ final class AX25SessionTests: XCTestCase {
             pf: false,
             payload: Data("Welcome to YZBBPQ".utf8)
         )
+        if let frame = sentFrame1 {
+            sentFrames.append(frame)
+        }
 
         // 4. Receive I-frame 1 with P=1
         // [0.5] KB5YZB-7>K0EPI-7,DRL*:(I cmd, n(s)=1, n(r)=0, p=1, pid=0xf0)S USERS...
-        manager.handleInboundIFrame(
+        let sentFrame2 = manager.handleInboundIFrame(
             from: dest,
             path: path,
             channel: 0,
@@ -1367,6 +1289,13 @@ final class AX25SessionTests: XCTestCase {
             pf: true, // Poll bit set!
             payload: Data("S USERS MHEARD".utf8)
         )
+
+        // Analyze sent frames - collate from both handleInboundIFrame calls
+        // The first call might not return anything (immediate ack or queued)
+        // The second call with P=1 MUST return RR(F=1)
+        if let frame = sentFrame2 {
+            sentFrames.append(frame)
+        }
 
         // Analyze sent frames
         // Expected behavior:
@@ -1402,10 +1331,6 @@ final class AX25SessionTests: XCTestCase {
     func testDISCWithPathMismatch() {
         let manager = AX25SessionManager()
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
-        var capturedFrames: [OutboundFrame] = []
-        manager.onSendFrame = { frame in
-            capturedFrames.append(frame)
-        }
 
         let dest = AX25Address(call: "KB5YZB", ssid: 7)
         let digi = AX25Address(call: "DRL", ssid: 0)
@@ -1423,26 +1348,25 @@ final class AX25SessionTests: XCTestCase {
         }
         XCTAssertEqual(session.state, .connected)
         
-        capturedFrames.removeAll()
         
         // 2. Peer sends DISC with DIFFERENT path (e.g. DRL*)
         // Create new address with repeated=true since properties are let
         let digiRepeated = AX25Address(call: "DRL", ssid: 0, repeated: true)
         let mismatchPath = DigiPath([digiRepeated])
         
-        manager.handleInboundDISC(from: dest, path: mismatchPath, channel: 0)
+        let capturedFrames = manager.handleInboundDISC(from: dest, path: mismatchPath, channel: 0)
         
         // Should send UA (Response) indicating we accepted the disconnect
         // Should NOT send DM
-        XCTAssertEqual(capturedFrames.count, 1, "Should send 1 frame (UA)")
-        
-        if let frame = capturedFrames.first {
+        if let frame = capturedFrames {
             XCTAssertEqual(frame.frameType, "u")
             // Check for UA type
             if let ctl = frame.controlByte {
                 let isUA = (ctl & ~0x10) == 0x63
                 XCTAssertTrue(isUA, "Frame should be UA, got control 0x\(String(format: "%02X", ctl))")
             }
+        } else {
+             XCTFail("Should send 1 frame (UA)")
         }
         
         XCTAssertEqual(session.state, .disconnected, "Session should be disconnected")
@@ -1520,7 +1444,8 @@ final class AX25SessionTests: XCTestCase {
 
         // Simulate incoming RR with repeated path (H-bit set)
         // This simulates a digipeater setting the H-bit on the return path
-        sessionManager.handleInboundRR(
+        // Return value is irrelevant for this test, checking side effects
+        _ = sessionManager.handleInboundRR(
             from: dest,
             path: pathRepeated,
             channel: 0,

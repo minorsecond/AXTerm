@@ -182,14 +182,12 @@ final class AX25Session: @unchecked Sendable {
     /// sender clears acks correctly and stops retransmitting (fixes freeze and dupes).
     func acknowledgeUpTo(from va: Int, to nr: Int) {
         let modulo = stateMachine.config.modulo
-        if nr == 0 {
-            for k in 0..<modulo {
-                sendBuffer.removeValue(forKey: k)
-            }
-        } else {
-            for k in 0..<nr {
-                sendBuffer.removeValue(forKey: k)
-            }
+        var current = va
+        
+        // Loop from va up to (but not including) nr, acknowledging each frame
+        while current != nr {
+            sendBuffer.removeValue(forKey: current)
+            current = (current + 1) % modulo
         }
     }
 
@@ -212,8 +210,12 @@ final class AX25Session: @unchecked Sendable {
             }
         }
 
-        // Sort by sequence number
-        return frames.sorted { $0.0 < $1.0 }.map { $0.1 }
+        // Sort by distance from va (maintains correct order for wrapped sequences)
+        return frames.sorted { (a, b) in
+            let distA = (a.0 - nr + modulo) % modulo
+            let distB = (b.0 - nr + modulo) % modulo
+            return distA < distB
+        }.map { $0.1 }
     }
 
     /// Update last activity timestamp
@@ -1409,9 +1411,9 @@ final class AX25SessionManager: ObservableObject {
         }
 
         // REJ(nr) means "retransmit from nr" — do NOT clear send buffer (unlike RR which acks frames).
-        // Get frames to retransmit
+        // Get frames to retransmit and update their N(R) to current V(R)
         let retransmitFrames = session.framesToRetransmit(from: nr)
-        for _ in retransmitFrames {
+        for frame in retransmitFrames {
             session.statistics.recordRetransmit()
         }
 
@@ -1420,9 +1422,12 @@ final class AX25SessionManager: ObservableObject {
         // Deep debug snapshot when peer explicitly requests retransmit.
         debugDumpSessionState(session, context: "inbound-REJ")
 
-        // Process actions first, then return retransmit frames
+        // Process actions first, then return retransmit frames with updated N(R)
         var frames = processActions(actions, for: session)
-        frames.append(contentsOf: retransmitFrames)
+        for frame in retransmitFrames {
+            let updatedFrame = frame.withUpdatedNR(session.vr)
+            frames.append(updatedFrame)
+        }
         return frames
     }
 
@@ -1457,7 +1462,7 @@ final class AX25SessionManager: ObservableObject {
                 guard let ctrl = f.controlByte else { return nil }
                 return Int((ctrl >> 1) & 0x07)  // N(S) from AX.25 control byte
             }
-            print("[DEBUG:AX25:T1] retransmit | va=\(session.va) vs=\(session.vs) outstanding=\(session.outstandingCount) sendBufKeys=\(session.sendBuffer.keys.sorted()) retransmitNS=\(nsValues) retransmitCount=\(retransmitFrames.count)")
+            print("[DEBUG:AX25:T1] retransmit | va=\(session.va) vs=\(session.vs) vr=\(session.vr) outstanding=\(session.outstandingCount) sendBufKeys=\(session.sendBuffer.keys.sorted()) retransmitNS=\(nsValues) retransmitCount=\(retransmitFrames.count)")
             TxLog.debug(.session, "T1 retransmit", [
                 "peer": session.remoteAddress.display,
                 "va": session.va,
@@ -1466,9 +1471,11 @@ final class AX25SessionManager: ObservableObject {
                 "retransmitNS": nsValues.map { String($0) }.joined(separator: ",")
             ])
             for frame in retransmitFrames {
-                debugTrace("TX I (retransmit)", ["frame": describeFrame(frame)])
+                // Update N(R) to current V(R) so the peer sees our latest receive state
+                let updatedFrame = frame.withUpdatedNR(session.vr)
+                debugTrace("TX I (retransmit)", ["frame": describeFrame(updatedFrame)])
                 session.statistics.recordRetransmit()
-                frames.append(frame)
+                frames.append(updatedFrame)
             }
         }
 
@@ -1490,7 +1497,7 @@ final class AX25SessionManager: ObservableObject {
     // MARK: - Timer Management
 
     /// Start T1 (retransmit) timer for a session
-    private func startT1Timer(for session: AX25Session) {
+    func startT1Timer(for session: AX25Session) {
         // Cancel any existing T1 timer
         session.t1TimerTask?.cancel()
 
