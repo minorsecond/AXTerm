@@ -228,4 +228,51 @@ final class NetRomGraphBuilderTests: XCTestCase {
         XCTAssertTrue(officialNode?.isNetRomOfficial ?? false, "Official neighbor should be marked as official in graph node")
         XCTAssertFalse(regularNode?.isNetRomOfficial ?? true, "Regular neighbor should NOT be marked as official in graph node")
     }
+    
+    func testNodeExpiration() {
+        let integration = makeIntegration()
+        let neighbor = "W0ABC"
+        let now = Date()
+        
+        // 1. Seed a neighbor
+        integration.importNeighbors([
+            NeighborInfo(call: neighbor, quality: 200, lastSeen: now, sourceType: "classic")
+        ])
+        
+        // 2. Verify it exists in the graph initially
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: false,
+            minimumEdgeCount: 1,
+            maxNodes: 10,
+            stationIdentityMode: .ssid
+        )
+        
+        var model = NetworkGraphBuilder.buildFromNetRom(
+            netRomIntegration: integration,
+            localCallsign: localCallsign,
+            mode: .hybrid,
+            options: options,
+            now: now
+        )
+        XCTAssertTrue(model.nodes.contains { $0.id == neighbor }, "Neighbor should be in the graph initially")
+        
+        // 3. Simulate 31 minutes passing (TTL is 30 mins)
+        let thirtyOneMinutesLater = now.addingTimeInterval(31 * 60)
+        
+        // 4. Purge stale data
+        integration.purgeStaleData(currentDate: thirtyOneMinutesLater)
+        
+        // 5. Build graph again at the new time
+        model = NetworkGraphBuilder.buildFromNetRom(
+            netRomIntegration: integration,
+            localCallsign: localCallsign,
+            mode: .hybrid,
+            options: options,
+            now: thirtyOneMinutesLater
+        )
+        
+        // 6. Verify neighbor is gone
+        // Note: buildFromNetRom returns .empty (0 nodes) if no neighbors/routes exist
+        XCTAssertTrue(model.nodes.isEmpty, "Graph should be empty after all neighbors expire")
+    }
 }

@@ -1377,8 +1377,13 @@ final class PacketEngine: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.saveNetRomSnapshot()
-                // Prune old entries periodically (first run will be after initial interval)
+                // Prune old entries from persistence
                 self?.pruneOldNetRomEntries()
+                // Purge stale routes and neighbors from in-memory integration
+                self?.netRomIntegration?.purgeStaleData(currentDate: Date())
+                #if DEBUG
+                print("[NETROM:ENGINE] Purged stale data at \(Date())")
+                #endif
             }
         }
     }

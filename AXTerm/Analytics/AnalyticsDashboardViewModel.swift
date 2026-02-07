@@ -154,6 +154,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private let packetSubject = CurrentValueSubject<[Packet], Never>([])
     private var cancellables: Set<AnyCancellable> = []
     private var packets: [Packet] = []
+    private var netRomUpdateCount: Int = 0
     private var chartWidth: CGFloat = 640
     private var graphLayoutSeed: Int = 1
     private var selectionState = GraphSelectionState()
@@ -232,6 +233,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         self.focusState.hubMetric = loadedHubMetric
 
         bindPackets(packetScheduler: packetScheduler)
+        bindNetRomUpdates()
         bindFocusState()
     }
 
@@ -437,11 +439,22 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             .removeDuplicates(by: { lhs, rhs in
                 lhs.count == rhs.count && lhs.last?.id == rhs.last?.id
             })
-            .receive(on: packetScheduler)
             .sink { [weak self] packets in
                 self?.packets = packets
                 self?.scheduleAggregation(reason: "packets")
                 self?.scheduleGraphBuild(reason: "packets")
+            }
+            .store(in: &cancellables)
+    }
+
+    private func bindNetRomUpdates() {
+        guard let netRomIntegration else { return }
+        
+        netRomIntegration.didUpdate
+            .receive(on: RunLoop.main)
+            .sink { [weak self] in
+                self?.netRomUpdateCount += 1
+                self?.scheduleGraphBuild(reason: "NET/ROM update")
             }
             .store(in: &cancellables)
     }
@@ -644,6 +657,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             viewMode: graphViewMode, // Added to differentiate NET/ROM vs Packet modes
             packetCount: packetSnapshot.count,
             lastTimestamp: packetSnapshot.map { $0.timestamp }.max(),
+            netRomUpdateCount: netRomUpdateCount,
             customStart: customRangeStart,
             customEnd: customRangeEnd
         )
@@ -1192,6 +1206,7 @@ private struct GraphCacheKey: Hashable {
     let viewMode: GraphViewMode
     let packetCount: Int
     let lastTimestamp: Date?
+    let netRomUpdateCount: Int
     let customStart: Date
     let customEnd: Date
 }

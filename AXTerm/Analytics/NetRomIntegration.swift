@@ -5,6 +5,7 @@
 //  Created by Codex on 1/30/26.
 //
 
+import Combine
 import Foundation
 
 /// Routing mode for NET/ROM integration.
@@ -34,6 +35,15 @@ final class NetRomIntegration {
     private let routerConfig: NetRomConfig
     private let inferenceConfig: NetRomInferenceConfig
     private let linkConfig: LinkQualityConfig
+    
+    // MARK: - Publishers
+    
+    private let updateSubject = PassthroughSubject<Void, Never>()
+    
+    /// Publishes when the integration state changes (e.g. new routing data, expiration)
+    var didUpdate: AnyPublisher<Void, Never> {
+        updateSubject.eraseToAnyPublisher()
+    }
 
     /// Optional persistence for recording broadcast intervals (adaptive stale threshold).
     private weak var persistence: NetRomPersistence?
@@ -348,6 +358,7 @@ final class NetRomIntegration {
         linkEstimator.purgeStaleData(currentDate: currentDate)
         passiveInference?.purgeStaleEvidence(currentDate: currentDate)
         router.purgeStaleRoutes(currentDate: currentDate)
+        updateSubject.send()
     }
 
     // MARK: - Export/Import
