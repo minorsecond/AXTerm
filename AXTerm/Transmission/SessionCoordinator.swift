@@ -899,11 +899,8 @@ final class SessionCoordinator: ObservableObject {
         }
 
         let decoded = AX25ControlFieldDecoder.decode(control: packet.control, controlByte1: packet.controlByte1)
-        let localCall = sessionManager.localCallsign.call.uppercased()
-        let toCall = to.call.uppercased()
-
-        // Only process packets addressed to us
-        guard toCall == localCall else { return }
+        // Only process packets addressed to us (call + SSID)
+        guard CallsignNormalizer.addressesMatch(to, sessionManager.localCallsign) else { return }
 
         // Ignore packets from ourselves (TNC echo) - match both call AND SSID
         // This allows same-base-callsign but different-SSID traffic (e.g., K0EPI-1 talking to K0EPI-7)

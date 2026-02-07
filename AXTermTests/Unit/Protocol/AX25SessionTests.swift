@@ -41,6 +41,46 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(AX25SessionState.disconnecting.rawValue, "disconnecting")
     }
 
+    func testDisconnectRequestWhileConnectingSendsDISC() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+
+        let connectActions = sm.handle(event: .connectRequest)
+        XCTAssertEqual(sm.state, .connecting)
+        XCTAssertTrue(connectActions.contains(.sendSABM))
+
+        let disconnectActions = sm.handle(event: .disconnectRequest)
+        XCTAssertEqual(sm.state, .disconnecting)
+        XCTAssertTrue(disconnectActions.contains(.sendDISC))
+        XCTAssertTrue(disconnectActions.contains(.stopT1))
+        XCTAssertTrue(disconnectActions.contains(.startT1))
+    }
+
+    func testForceDisconnectFromConnectingStopsTimersAndNotifies() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        XCTAssertEqual(sm.state, .connecting)
+
+        let actions = sm.handle(event: .forceDisconnect)
+        XCTAssertEqual(sm.state, .disconnected)
+        XCTAssertTrue(actions.contains(.stopT1))
+        XCTAssertTrue(actions.contains(.notifyDisconnected))
+        XCTAssertFalse(actions.contains(.sendDISC))
+    }
+
+    func testForceDisconnectFromConnectedStopsTimersAndNotifies() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+        XCTAssertEqual(sm.state, .connected)
+
+        let actions = sm.handle(event: .forceDisconnect)
+        XCTAssertEqual(sm.state, .disconnected)
+        XCTAssertTrue(actions.contains(.stopT1))
+        XCTAssertTrue(actions.contains(.stopT3))
+        XCTAssertTrue(actions.contains(.notifyDisconnected))
+        XCTAssertFalse(actions.contains(.sendDISC))
+    }
+
     // MARK: - Session Configuration Tests
 
     func testSessionConfigDefaults() {
