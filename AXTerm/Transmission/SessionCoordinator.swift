@@ -901,16 +901,17 @@ final class SessionCoordinator: ObservableObject {
         let decoded = AX25ControlFieldDecoder.decode(control: packet.control, controlByte1: packet.controlByte1)
         let localCall = sessionManager.localCallsign.call.uppercased()
         let toCall = to.call.uppercased()
-        let fromCall = from.call.uppercased()
 
         // Only process packets addressed to us
         guard toCall == localCall else { return }
 
-        // Ignore packets from ourselves (TNC echo)
-        guard fromCall != localCall else {
+        // Ignore packets from ourselves (TNC echo) - match both call AND SSID
+        // This allows same-base-callsign but different-SSID traffic (e.g., K0EPI-1 talking to K0EPI-7)
+        guard from.call.uppercased() != localCall || from.ssid != sessionManager.localCallsign.ssid else {
             TxLog.debug(.session, "Ignoring echoed frame from local callsign", [
                 "from": from.display,
-                "to": to.display
+                "to": to.display,
+                "localCallsign": sessionManager.localCallsign.display
             ])
             return
         }
@@ -1329,13 +1330,24 @@ final class SessionCoordinator: ObservableObject {
         
         // Check for connected session first (more efficient path)
         if sessionManager.connectedSession(withPeer: destination) != nil {
-            sessionManager.sendData(
+            let frames = sessionManager.sendData(
                 payload,
                 to: destination,
                 path: path,
                 pid: 0xF0,
                 displayInfo: displayInfo
             )
+            // If window is full, sendData returns empty array - don't send anything
+            guard !frames.isEmpty else {
+                TxLog.debug(.axdp, "Window full, cannot send AXDP payload", [
+                    "destination": destination.display,
+                    "payloadSize": payload.count
+                ])
+                return false
+            }
+            for frame in frames {
+                sendFrame(frame)
+            }
             return true
         }
 
