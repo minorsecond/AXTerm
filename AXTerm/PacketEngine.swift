@@ -244,10 +244,12 @@ final class PacketEngine: ObservableObject {
             // Load persisted NET/ROM state if available
             loadNetRomSnapshot()
 
-            // Prune old entries based on retention settings
-            pruneOldNetRomEntries()
+            // NOTE: Pruning is deferred to avoid database lock during init.
+            // It will run via the scheduled timer below (first run after 60s).
+            // See: database_lock_analysis.md for details.
+            // pruneOldNetRomEntries()
 
-            // Start periodic snapshot timer
+            // Start periodic snapshot timer (will also handle deferred pruning)
             startNetRomSnapshotTimer()
         }
 
@@ -1336,6 +1338,7 @@ final class PacketEngine: ObservableObject {
     }
 
     /// Start the periodic snapshot timer.
+    /// Also triggers initial pruning after first interval to avoid init-time database lock.
     private func startNetRomSnapshotTimer() {
         netRomSnapshotTimer?.invalidate()
         netRomSnapshotTimer = Timer.scheduledTimer(
@@ -1344,6 +1347,8 @@ final class PacketEngine: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.saveNetRomSnapshot()
+                // Prune old entries periodically (first run will be after initial interval)
+                self?.pruneOldNetRomEntries()
             }
         }
     }

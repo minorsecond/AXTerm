@@ -606,31 +606,34 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     }
 
     /// Connect to the current destination (for connected mode)
-    func connect() -> OutboundFrame? {
-        guard !viewModel.destinationCall.isEmpty else { return nil }
+    func connect() {
+        guard !viewModel.destinationCall.isEmpty else { return }
 
         let dest = parseCallsign(viewModel.destinationCall)
         let path = parsePath(viewModel.digiPath)
 
         currentSession = sessionManager.session(for: dest, path: path)
-        return sessionManager.connect(to: dest, path: path)
+        sessionManager.connect(to: dest, path: path)
     }
 
     /// Disconnect from the current session
-    func disconnect() -> OutboundFrame? {
-        guard let session = currentSession else { return nil }
-        return sessionManager.disconnect(session: session)
+    /// Disconnect from the current session
+    func disconnect() {
+        guard let session = currentSession else { return }
+        sessionManager.disconnect(session: session)
     }
 
     /// Send data through connected session
     /// Returns frames to send (may include SABM if not connected)
-    func sendConnected(payload: Data, displayInfo: String?) -> [OutboundFrame] {
-        guard !viewModel.destinationCall.isEmpty else { return [] }
+    /// Send data through connected session
+    /// Returns frames to send (may include SABM if not connected)
+    func sendConnected(payload: Data, displayInfo: String?) {
+        guard !viewModel.destinationCall.isEmpty else { return }
 
         let dest = parseCallsign(viewModel.destinationCall)
         let path = parsePath(viewModel.digiPath)
 
-        return sessionManager.sendData(
+        sessionManager.sendData(
             payload,
             to: dest,
             path: path,
@@ -1391,28 +1394,11 @@ struct TerminalView: View {
                     startingVs: fallbackSessionInfo?.vs ?? 0,
                     paclen: fallbackSessionInfo?.paclen ?? AX25Constants.defaultPacketLength
                 )
-                let frames = txViewModel.sendConnected(
+                txViewModel.sendConnected(
                     payload: data,
                     displayInfo: text
                 )
-                for frame in frames {
-                    client.send(frame: frame) { result in
-                        Task { @MainActor in
-                            switch result {
-                            case .success:
-                                TxLog.outbound(.ax25, "Frame sent (fallback to plain text)", [
-                                    "type": frame.frameType,
-                                    "dest": frame.destination.display
-                                ])
-                            case .failure(let error):
-                                TxLog.error(.ax25, "Frame send failed", error: error)
-                            }
-                        }
-                    }
-                }
-                if !frames.isEmpty {
-                    txViewModel.clearCompose()
-                }
+                txViewModel.clearCompose()
                 return
             }
         }
@@ -1457,70 +1443,30 @@ struct TerminalView: View {
         )
 
         // Get frames from session manager (may include SABM if not connected)
-        let frames = txViewModel.sendConnected(
+        // Send (handled by session manager callbacks)
+        txViewModel.sendConnected(
             payload: payload,
             displayInfo: text
         )
 
-        // Send all frames (bytesSent updated via client.onUserFrameTransmitted)
-        for frame in frames {
-            client.send(frame: frame) { result in
-                Task { @MainActor in
-                    switch result {
-                    case .success:
-                        TxLog.outbound(.ax25, "Frame sent", [
-                            "type": frame.frameType,
-                            "dest": frame.destination.display
-                        ])
-                    case .failure(let error):
-                        TxLog.error(.ax25, "Frame send failed", error: error)
-                    }
-                }
-            }
-        }
-
-        // Clear compose text if we sent something
-        if !frames.isEmpty {
-            txViewModel.clearCompose()
-        }
+        // Clear compose text
+        txViewModel.clearCompose()
     }
 
     /// Establish connection to current destination
     private func connectToDestination() {
-        guard let frame = txViewModel.connect() else { return }
-
-        // Send SABM
-        client.send(frame: frame) { result in
-            Task { @MainActor in
-                switch result {
-                case .success:
-                    TxLog.outbound(.session, "SABM sent", [
-                        "dest": frame.destination.display
-                    ])
-                case .failure(let error):
-                    TxLog.error(.session, "SABM send failed", error: error)
-                }
-            }
-        }
+        txViewModel.connect()
+        TxLog.outbound(.session, "Initiating connection", [
+            "dest": txViewModel.viewModel.destinationCall
+        ])
     }
 
     /// Disconnect from current session
     private func disconnectFromDestination() {
-        guard let frame = txViewModel.disconnect() else { return }
-
-        // Send DISC
-        client.send(frame: frame) { result in
-            Task { @MainActor in
-                switch result {
-                case .success:
-                    TxLog.outbound(.session, "DISC sent", [
-                        "dest": frame.destination.display
-                    ])
-                case .failure(let error):
-                    TxLog.error(.session, "DISC send failed", error: error)
-                }
-            }
-        }
+        txViewModel.disconnect()
+        TxLog.outbound(.session, "Initiating disconnect", [
+            "dest": txViewModel.viewModel.destinationCall
+        ])
     }
 
     // MARK: - Transfers View

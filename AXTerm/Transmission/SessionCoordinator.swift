@@ -188,7 +188,7 @@ final class SessionCoordinator: ObservableObject {
     func syncSessionManagerConfigFromAdaptive() {
         guard adaptiveTransmissionEnabled else {
             sessionManager.defaultConfig = AX25SessionConfig()
-            TxLog.adaptiveConfigSynced(window: 4, paclen: 128, rtoMin: 1, rtoMax: 30, maxRetries: 10)
+            TxLog.adaptiveConfigSynced(window: 4, paclen: 128, rtoMin: 1, rtoMax: 30, maxRetries: 10, initialRto: 4.0)
             return
         }
         let a = globalAdaptiveSettings
@@ -207,7 +207,8 @@ final class SessionCoordinator: ObservableObject {
             paclen: a.paclen.effectiveValue,
             rtoMin: a.rtoMin.effectiveValue,
             rtoMax: a.rtoMax.effectiveValue,
-            maxRetries: a.maxRetries.effectiveValue
+            maxRetries: a.maxRetries.effectiveValue,
+            initialRto: max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, 4.0))
         )
     }
 
@@ -231,8 +232,10 @@ final class SessionCoordinator: ObservableObject {
                 lossRate: lossRate,
                 etx: etx,
                 srtt: srtt,
+                rto: a.currentRto,
                 window: a.windowSize.effectiveValue,
                 paclen: a.paclen.effectiveValue,
+                maxRetries: a.maxRetries.effectiveValue,
                 reason: reason + " [route \(normalizedKey.destination) \(normalizedKey.pathSignature.isEmpty ? "direct" : normalizedKey.pathSignature)]"
             )
         } else {
@@ -244,8 +247,10 @@ final class SessionCoordinator: ObservableObject {
                 lossRate: lossRate,
                 etx: etx,
                 srtt: srtt,
+                rto: a.currentRto,
                 window: a.windowSize.effectiveValue,
                 paclen: a.paclen.effectiveValue,
+                maxRetries: a.maxRetries.effectiveValue,
                 reason: reason
             )
             syncSessionManagerConfigFromAdaptive()
@@ -925,18 +930,14 @@ final class SessionCoordinator: ObservableObject {
         case .DM:
             sessionManager.handleInboundDM(from: from, path: path, channel: channel)
         case .DISC:
-            if let responseFrame = sessionManager.handleInboundDISC(from: from, path: path, channel: channel) {
-                sendFrame(responseFrame)
-            }
+            sessionManager.handleInboundDISC(from: from, path: path, channel: channel)
         case .SABM, .SABME:
-            if let uaFrame = sessionManager.handleInboundSABM(
+            sessionManager.handleInboundSABM(
                 from: from,
                 to: to,
                 path: path,
                 channel: channel
-            ) {
-                sendFrame(uaFrame)
-            }
+            )
         case .UI:
             // Check for text-safe AXDP probe ("AXDP?\r") before binary AXDP check.
             // Text probes don't have AXDP magic, so handleAXDPMessage would skip them.
@@ -950,7 +951,7 @@ final class SessionCoordinator: ObservableObject {
 
     private func handleIFrame(packet: Packet, from: AX25Address, ns: Int, nr: Int, pf: Bool, channel: UInt8) {
         let path = DigiPath.from(packet.via.map { $0.display })
-        if let rrFrame = sessionManager.handleInboundIFrame(
+        sessionManager.handleInboundIFrame(
             from: from,
             path: path,
             channel: channel,
@@ -958,9 +959,7 @@ final class SessionCoordinator: ObservableObject {
             nr: nr,
             pf: pf,
             payload: packet.info
-        ) {
-            sendFrame(rrFrame)
-        }
+        )
         // AXDP in I-frames is processed only via reassembly (onDataDeliveredForReassembly -> appendToReassemblyAndExtract).
         // Do not call handleAXDPMessage here: the same payload is delivered to reassembly and would cause duplicate
         // handling (e.g. ping/pong delivered twice).
@@ -1320,24 +1319,13 @@ final class SessionCoordinator: ObservableObject {
         
         // Check for connected session first (more efficient path)
         if sessionManager.connectedSession(withPeer: destination) != nil {
-            let frames = sessionManager.sendData(
+            sessionManager.sendData(
                 payload,
                 to: destination,
                 path: path,
                 pid: 0xF0,
                 displayInfo: displayInfo
             )
-            // If window is full, sendData returns empty array - don't send anything
-            guard !frames.isEmpty else {
-                TxLog.debug(.axdp, "Window full, cannot send AXDP payload", [
-                    "destination": destination.display,
-                    "payloadSize": payload.count
-                ])
-                return false
-            }
-            for frame in frames {
-                sendFrame(frame)
-            }
             return true
         }
 
@@ -2198,14 +2186,9 @@ final class SessionCoordinator: ObservableObject {
 
         switch sType {
         case .RR:
-            if let responseFrame = sessionManager.handleInboundRR(from: from, path: path, channel: channel, nr: nr, isPoll: isPoll) {
-                sendFrame(responseFrame)
-            }
+            sessionManager.handleInboundRR(from: from, path: path, channel: channel, nr: nr, isPoll: isPoll)
         case .REJ:
-            let retransmitFrames = sessionManager.handleInboundREJ(from: from, path: path, channel: channel, nr: nr)
-            for frame in retransmitFrames {
-                sendFrame(frame)
-            }
+            sessionManager.handleInboundREJ(from: from, path: path, channel: channel, nr: nr)
         case .RNR, .SREJ:
             break
         }

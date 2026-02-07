@@ -181,7 +181,7 @@ struct AX25SessionTimers: Sendable {
     /// Default initial RTO (seconds)
     private static let defaultInitialRto: Double = 4.0
 
-    init(rtoMin: Double = 1.0, rtoMax: Double = 30.0, initialRto: Double = 4.0) {
+    init(rtoMin: Double = 3.0, rtoMax: Double = 30.0, initialRto: Double = 4.0) {
         self.rtoMin = max(0.5, rtoMin)
         self.rtoMax = max(self.rtoMin, min(60.0, rtoMax))
         self.rto = max(self.rtoMin, min(self.rtoMax, initialRto))

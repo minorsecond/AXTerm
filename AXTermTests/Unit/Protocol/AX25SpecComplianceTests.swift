@@ -1643,9 +1643,13 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
         XCTAssertEqual(session.outstandingCount, 1)
 
         // Inbound RR with poll=true
-        let response = manager.handleInboundRR(
+        var response: OutboundFrame?
+        manager.onSendFrame = { frame in response = frame }
+
+        manager.handleInboundRR(
             from: destination, path: path, channel: 0, nr: 1, isPoll: true
         )
+
 
         XCTAssertNotNil(response, "Should respond to RR poll")
         XCTAssertEqual(response?.frameType, "s")
@@ -1664,9 +1668,13 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
         _ = manager.sendData(Data("C".utf8), to: destination, path: path, channel: 0)
 
         // REJ(1) — retransmit from ns=1 onwards
-        let retransmitFrames = manager.handleInboundREJ(
+        var retransmitFrames: [OutboundFrame] = []
+        manager.onRetransmitFrame = { frame in retransmitFrames.append(frame) }
+
+        manager.handleInboundREJ(
             from: destination, path: path, channel: 0, nr: 1
         )
+
 
         // Should retransmit frames 1,2 (frame 0 was acked by REJ(1))
         let iFrames = retransmitFrames.filter { $0.frameType == "i" }
@@ -1691,9 +1699,13 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
         )
         XCTAssertEqual(session.vr, 2)
 
-        let retransmitFrames = manager.handleInboundREJ(
+        var retransmitFrames: [OutboundFrame] = []
+        manager.onRetransmitFrame = { frame in retransmitFrames.append(frame) }
+
+        manager.handleInboundREJ(
             from: destination, path: path, channel: 0, nr: 0
         )
+
 
         let iFrames = retransmitFrames.filter { $0.frameType == "i" }
         for frame in iFrames {
@@ -1713,9 +1725,13 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
         XCTAssertEqual(session.outstandingCount, 3)
 
         // REJ(2) acks frames 0,1 and requests retransmit from 2
-        let retransmitFrames = manager.handleInboundREJ(
+        var retransmitFrames: [OutboundFrame] = []
+        manager.onRetransmitFrame = { frame in retransmitFrames.append(frame) }
+
+        manager.handleInboundREJ(
             from: destination, path: path, channel: 0, nr: 2
         )
+
 
         let iFrames = retransmitFrames.filter { $0.frameType == "i" }
         XCTAssertEqual(iFrames.count, 1, "Should only retransmit frame 2")
@@ -1778,7 +1794,11 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
         let payload = Data("Important data".utf8)
         _ = manager.sendData(payload, to: destination, path: path, channel: 0)
 
-        let retransmitFrames = manager.handleT1Timeout(session: session)
+        var retransmitFrames: [OutboundFrame] = []
+        manager.onRetransmitFrame = { frame in retransmitFrames.append(frame) }
+
+        manager.handleT1Timeout(session: session)
+
         let iFrames = retransmitFrames.filter { $0.frameType == "i" }
 
         XCTAssertFalse(iFrames.isEmpty)

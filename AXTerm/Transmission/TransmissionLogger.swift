@@ -393,32 +393,35 @@ final class TxLog {
 
     // MARK: - Adaptive transmission logging (always to console in DEBUG so user can verify it's working)
 
-    static func adaptiveLearning(source: String, lossRate: Double, etx: Double, srtt: Double?, window: Int, paclen: Int, reason: String) {
+    static func adaptiveLearning(source: String, lossRate: Double, etx: Double, srtt: Double?, rto: Double?, window: Int, paclen: Int, maxRetries: Int, reason: String) {
         var data: [String: Any] = [
             "source": source,
             "loss": String(format: "%.2f", lossRate),
             "etx": String(format: "%.2f", etx),
             "window": window,
             "paclen": paclen,
+            "maxRetries": maxRetries,
             "reason": reason
         ]
         if let s = srtt { data["srtt"] = String(format: "%.2fs", s) }
+        if let r = rto { data["rto"] = String(format: "%.2fs", r) }
         #if DEBUG
-        print("[ADAPTIVE] 📊 Learning | \(source) | loss=\(String(format: "%.2f", lossRate)) etx=\(String(format: "%.2f", etx))\(srtt.map { " srtt=\(String(format: "%.2fs", $0))" } ?? "") → K=\(window) P=\(paclen) | \(reason)")
+        print("[ADAPTIVE] 📊 Learning | \(source) | loss=\(String(format: "%.2f", lossRate)) etx=\(String(format: "%.2f", etx))\(srtt.map { " srtt=\(String(format: "%.2fs", $0))" } ?? "")\(rto.map { " rto=\(String(format: "%.2fs", $0))" } ?? "") → K=\(window) P=\(paclen) N2=\(maxRetries) | \(reason)")
         #endif
         debug(.adaptive, "Learning", data)
     }
 
-    static func adaptiveConfigSynced(window: Int, paclen: Int, rtoMin: Double, rtoMax: Double, maxRetries: Int) {
+    static func adaptiveConfigSynced(window: Int, paclen: Int, rtoMin: Double, rtoMax: Double, maxRetries: Int, initialRto: Double) {
         let data: [String: Any] = [
             "window": window,
             "paclen": paclen,
             "rtoMin": String(format: "%.1f", rtoMin),
             "rtoMax": String(format: "%.1f", rtoMax),
+            "initialRto": String(format: "%.1f", initialRto),
             "maxRetries": maxRetries
         ]
         #if DEBUG
-        print("[ADAPTIVE] 📊 Config synced | K=\(window) P=\(paclen) RTO=\(String(format: "%.1f", rtoMin))–\(String(format: "%.1f", rtoMax))s N2=\(maxRetries)")
+        print("[ADAPTIVE] 📊 Config synced | K=\(window) P=\(paclen) RTO=\(String(format: "%.1f", rtoMin))–\(String(format: "%.1f", rtoMax))s (init=\(String(format: "%.1f", initialRto))s) N2=\(maxRetries)")
         #endif
         debug(.adaptive, "Config synced", data)
     }
