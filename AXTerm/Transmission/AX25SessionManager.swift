@@ -1097,6 +1097,20 @@ final class AX25SessionManager: ObservableObject {
         let oldState = session.state
         let actions = session.stateMachine.handle(event: .receivedDISC)
 
+        // Clear send buffer and notify UI that frames are acknowledged.
+        // When remote sends DISC in response to our I-frame (e.g., "bye" command),
+        // they clearly received it. Mark as delivered for UX purposes.
+        if !session.sendBuffer.isEmpty {
+            let bufferedFrames = session.sendBuffer.keys.sorted()
+            TxLog.debug(.session, "Clearing send buffer on DISC", [
+                "peer": source.display,
+                "bufferedNS": bufferedFrames.map { String($0) }.joined(separator: ",")
+            ])
+            session.clearPendingTransmission(reason: "remote DISC")
+            // Notify that all frames are considered acknowledged
+            onOutboundAckReceived?(session, session.vs)
+        }
+
         if oldState != session.state {
             debugTrace("state change (DISC)", [
                 "peer": source.display,
