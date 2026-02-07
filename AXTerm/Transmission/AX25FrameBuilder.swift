@@ -204,6 +204,7 @@ struct AX25FrameBuilder {
             frameType: "s",
             pid: nil,
             controlByte: AX25Control.sFrame(base: AX25Control.rrBase, nr: nr, pf: pf),
+            nr: nr,
             displayInfo: "RR(\(nr))"
         )
     }
@@ -225,6 +226,7 @@ struct AX25FrameBuilder {
             frameType: "s",
             pid: nil,
             controlByte: AX25Control.sFrame(base: AX25Control.rnrBase, nr: nr, pf: pf),
+            nr: nr,
             displayInfo: "RNR(\(nr))"
         )
     }
@@ -246,6 +248,7 @@ struct AX25FrameBuilder {
             frameType: "s",
             pid: nil,
             controlByte: AX25Control.sFrame(base: AX25Control.rejBase, nr: nr, pf: pf),
+            nr: nr,
             displayInfo: "REJ(\(nr))"
         )
     }

@@ -42,19 +42,13 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Current outbound message progress for sender UI highlighting (pending → sent → acked)
     @Published private(set) var currentOutboundProgress: OutboundMessageProgress?
 
-    /// Cancellables for Combine subscriptions
-    private var cancellables = Set<AnyCancellable>()
-
-    /// Callback for sending response frames (RR, REJ, etc.)
-    var onSendResponseFrame: ((OutboundFrame) -> Void)?
-
     /// Callback when plain-text (non-AXDP) data is received from connected session.
     /// Used to add to console when sender uses plain text instead of AXDP.
     var onPlainTextChatReceived: ((AX25Address, String) -> Void)?
 
     /// Tracks peers that are currently mid-AXDP reassembly.
     /// When data with AXDP magic is received, the peer is added here.
-    /// When AXDP message extraction completes via appendAXDPChatToTranscript, the peer is removed.
+    /// When AXDP reassembly completes, the peer is removed via clearAXDPReassemblyFlag.
     /// When non-AXDP data arrives from a peer in this set, the flag is cleared (they switched to plain text).
     /// This prevents subsequent AXDP fragments (which lack magic) from being displayed as raw text.
     private var peersInAXDPReassembly: Set<String> = []
@@ -341,7 +335,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         currentLineBuffers.removeValue(forKey: peerKey)
         
         // DO NOT clear peersInAXDPReassembly here!
-        // The flag must remain set until onAXDPReassemblyComplete's async callback runs.
+        // The flag must remain set until clearAXDPReassemblyFlag's async callback runs.
         // This ensures raw bytes from the last I-frame (delivered via onDataReceived
         // AFTER this method returns) are properly suppressed.
         
@@ -362,147 +356,6 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             if sessionTranscriptLines.count > 1000 {
                 sessionTranscriptLines.removeFirst(sessionTranscriptLines.count - 1000)
             }
-        }
-    }
-
-    /// Subscribe to incoming packets from PacketEngine
-    func subscribeToPackets(from client: PacketEngine) {
-        client.packetPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] packet in
-                self?.handleIncomingPacket(packet)
-            }
-            .store(in: &cancellables)
-    }
-
-    /// Process an incoming packet and route it to the session manager if relevant
-    private func handleIncomingPacket(_ packet: Packet) {
-        // Only process packets addressed to us
-        guard let from = packet.from, let to = packet.to else {
-            return
-        }
-
-        // Debug: show all packets and check if they're addressed to us
-        let decoded = AX25ControlFieldDecoder.decode(control: packet.control, controlByte1: packet.controlByte1)
-        let localCall = sessionManager.localCallsign.call.uppercased()
-        let toCall = to.call.uppercased()
-
-        // Log if it's a U-frame (which includes SABM)
-        if decoded.frameClass == .U {
-            print("[TerminalView.handleIncomingPacket] U-frame: from=\(from.display), to.call='\(toCall)' ssid=\(to.ssid), localCallsign.call='\(localCall)' ssid=\(sessionManager.localCallsign.ssid), uType=\(decoded.uType?.rawValue ?? "nil")")
-        }
-
-        guard toCall == localCall else {
-            if decoded.frameClass == .U && (decoded.uType == .SABM || decoded.uType == .SABME) {
-                print("[TerminalView.handleIncomingPacket] SABM filtered: to.call='\(toCall)' (len=\(toCall.count)) != localCallsign.call='\(localCall)' (len=\(localCall.count))")
-            }
-            return
-        }
-
-        print("[TerminalView.handleIncomingPacket] Packet addressed to us: from=\(from.display), frameClass=\(decoded.frameClass.rawValue), uType=\(decoded.uType?.rawValue ?? "nil")")
-
-        // Use channel 0 for default KISS port
-        let channel: UInt8 = 0
-
-        switch decoded.frameClass {
-        case .U:
-            handleUFrame(packet: packet, from: from, uType: decoded.uType, channel: channel)
-        case .I:
-            handleIFrame(packet: packet, from: from, ns: decoded.ns ?? 0, nr: decoded.nr ?? 0, pf: (decoded.pf ?? 0) == 1, channel: channel)
-        case .S:
-            handleSFrame(packet: packet, from: from, sType: decoded.sType, nr: decoded.nr ?? 0, pf: decoded.pf ?? 0, channel: channel)
-        case .unknown:
-            break
-        }
-    }
-
-    private func handleUFrame(packet: Packet, from: AX25Address, uType: AX25UType?, channel: UInt8) {
-        guard let uType = uType else { return }
-
-        // Get the digipeater path from the packet
-        let path = DigiPath.from(packet.via.map { $0.display })
-
-        switch uType {
-        case .UA:
-            sessionManager.handleInboundUA(from: from, path: path, channel: channel)
-            updateCurrentSession()
-        case .DM:
-            sessionManager.handleInboundDM(from: from, path: path, channel: channel)
-            updateCurrentSession()
-        case .DISC:
-            if let responseFrame = sessionManager.handleInboundDISC(from: from, path: path, channel: channel) {
-                sendResponseFrame(responseFrame)
-            }
-            updateCurrentSession()
-        case .SABM, .SABME:
-            // Respond with UA to accept the incoming connection
-            print("[TerminalView] Received SABM from \(from.display), calling handleInboundSABM")
-            if let uaFrame = sessionManager.handleInboundSABM(
-                from: from,
-                to: sessionManager.localCallsign,
-                path: path,
-                channel: channel
-            ) {
-                print("[TerminalView] Got UA frame back, calling sendResponseFrame")
-                sendResponseFrame(uaFrame)
-            } else {
-                print("[TerminalView] WARNING: handleInboundSABM returned nil!")
-            }
-            updateCurrentSession()
-        default:
-            break
-        }
-    }
-
-    private func handleIFrame(packet: Packet, from: AX25Address, ns: Int, nr: Int, pf: Bool, channel: UInt8) {
-        let path = DigiPath.from(packet.via.map { $0.display })
-        if let rrFrame = sessionManager.handleInboundIFrame(
-            from: from,
-            path: path,
-            channel: channel,
-            ns: ns,
-            nr: nr,
-            pf: pf,
-            payload: packet.info
-        ) {
-            // Send the RR/REJ acknowledgement frame
-            sendResponseFrame(rrFrame)
-        }
-    }
-
-    /// Send a response frame (RR, REJ, etc.) via the callback
-    private func sendResponseFrame(_ frame: OutboundFrame) {
-        print("[TerminalView.sendResponseFrame] Sending frame type=\(frame.frameType) to \(frame.destination.display)")
-        if onSendResponseFrame != nil {
-            print("[TerminalView.sendResponseFrame] Callback is set, calling it")
-            onSendResponseFrame?(frame)
-        } else {
-            print("[TerminalView.sendResponseFrame] WARNING: onSendResponseFrame callback is nil!")
-        }
-    }
-
-    private func handleSFrame(packet: Packet, from: AX25Address, sType: AX25SType?, nr: Int, pf: Int, channel: UInt8) {
-        guard let sType = sType else { return }
-        let path = DigiPath.from(packet.via.map { $0.display })
-        let isPoll = pf == 1
-
-        switch sType {
-        case .RR:
-            // Handle RR - if it's a poll (P=1), we need to respond
-            if let responseFrame = sessionManager.handleInboundRR(from: from, path: path, channel: channel, nr: nr, isPoll: isPoll) {
-                sendResponseFrame(responseFrame)
-            }
-        case .REJ:
-            // REJ returns frames that need to be retransmitted
-            let retransmitFrames = sessionManager.handleInboundREJ(from: from, path: path, channel: channel, nr: nr)
-            for frame in retransmitFrames {
-                sendResponseFrame(frame)
-            }
-        case .RNR:
-            // RNR handling could be added to session manager
-            break
-        case .SREJ:
-            break
         }
     }
 
@@ -753,31 +606,34 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     }
 
     /// Connect to the current destination (for connected mode)
-    func connect() -> OutboundFrame? {
-        guard !viewModel.destinationCall.isEmpty else { return nil }
+    func connect() {
+        guard !viewModel.destinationCall.isEmpty else { return }
 
         let dest = parseCallsign(viewModel.destinationCall)
         let path = parsePath(viewModel.digiPath)
 
         currentSession = sessionManager.session(for: dest, path: path)
-        return sessionManager.connect(to: dest, path: path)
+        sessionManager.connect(to: dest, path: path)
     }
 
     /// Disconnect from the current session
-    func disconnect() -> OutboundFrame? {
-        guard let session = currentSession else { return nil }
-        return sessionManager.disconnect(session: session)
+    /// Disconnect from the current session
+    func disconnect() {
+        guard let session = currentSession else { return }
+        sessionManager.disconnect(session: session)
     }
 
     /// Send data through connected session
     /// Returns frames to send (may include SABM if not connected)
-    func sendConnected(payload: Data, displayInfo: String?) -> [OutboundFrame] {
-        guard !viewModel.destinationCall.isEmpty else { return [] }
+    /// Send data through connected session
+    /// Returns frames to send (may include SABM if not connected)
+    func sendConnected(payload: Data, displayInfo: String?) {
+        guard !viewModel.destinationCall.isEmpty else { return }
 
         let dest = parseCallsign(viewModel.destinationCall)
         let path = parsePath(viewModel.digiPath)
 
-        return sessionManager.sendData(
+        sessionManager.sendData(
             payload,
             to: dest,
             path: path,
@@ -1086,26 +942,6 @@ struct TerminalView: View {
             sessionCoordinator.onAXDPReassemblyComplete = { [weak txViewModel] from in
                 Task { @MainActor in
                     txViewModel?.clearAXDPReassemblyFlag(for: from)
-                }
-            }
-
-            // Wire up response frame sending (for RR, REJ, etc.)
-            txViewModel.onSendResponseFrame = { [weak client] frame in
-                print("[TerminalView.onAppear] onSendResponseFrame callback invoked for \(frame.destination.display)")
-                client?.send(frame: frame) { result in
-                    Task { @MainActor in
-                        switch result {
-                        case .success:
-                            print("[TerminalView] Response frame sent successfully")
-                            TxLog.outbound(.ax25, "Response frame sent", [
-                                "type": frame.frameType,
-                                "dest": frame.destination.display
-                            ])
-                        case .failure(let error):
-                            print("[TerminalView] Response frame send FAILED: \(error)")
-                            TxLog.error(.ax25, "Response frame send failed", error: error)
-                        }
-                    }
                 }
             }
 
@@ -1558,28 +1394,11 @@ struct TerminalView: View {
                     startingVs: fallbackSessionInfo?.vs ?? 0,
                     paclen: fallbackSessionInfo?.paclen ?? AX25Constants.defaultPacketLength
                 )
-                let frames = txViewModel.sendConnected(
+                txViewModel.sendConnected(
                     payload: data,
                     displayInfo: text
                 )
-                for frame in frames {
-                    client.send(frame: frame) { result in
-                        Task { @MainActor in
-                            switch result {
-                            case .success:
-                                TxLog.outbound(.ax25, "Frame sent (fallback to plain text)", [
-                                    "type": frame.frameType,
-                                    "dest": frame.destination.display
-                                ])
-                            case .failure(let error):
-                                TxLog.error(.ax25, "Frame send failed", error: error)
-                            }
-                        }
-                    }
-                }
-                if !frames.isEmpty {
-                    txViewModel.clearCompose()
-                }
+                txViewModel.clearCompose()
                 return
             }
         }
@@ -1624,70 +1443,30 @@ struct TerminalView: View {
         )
 
         // Get frames from session manager (may include SABM if not connected)
-        let frames = txViewModel.sendConnected(
+        // Send (handled by session manager callbacks)
+        txViewModel.sendConnected(
             payload: payload,
             displayInfo: text
         )
 
-        // Send all frames (bytesSent updated via client.onUserFrameTransmitted)
-        for frame in frames {
-            client.send(frame: frame) { result in
-                Task { @MainActor in
-                    switch result {
-                    case .success:
-                        TxLog.outbound(.ax25, "Frame sent", [
-                            "type": frame.frameType,
-                            "dest": frame.destination.display
-                        ])
-                    case .failure(let error):
-                        TxLog.error(.ax25, "Frame send failed", error: error)
-                    }
-                }
-            }
-        }
-
-        // Clear compose text if we sent something
-        if !frames.isEmpty {
-            txViewModel.clearCompose()
-        }
+        // Clear compose text
+        txViewModel.clearCompose()
     }
 
     /// Establish connection to current destination
     private func connectToDestination() {
-        guard let frame = txViewModel.connect() else { return }
-
-        // Send SABM
-        client.send(frame: frame) { result in
-            Task { @MainActor in
-                switch result {
-                case .success:
-                    TxLog.outbound(.session, "SABM sent", [
-                        "dest": frame.destination.display
-                    ])
-                case .failure(let error):
-                    TxLog.error(.session, "SABM send failed", error: error)
-                }
-            }
-        }
+        txViewModel.connect()
+        TxLog.outbound(.session, "Initiating connection", [
+            "dest": txViewModel.viewModel.destinationCall
+        ])
     }
 
     /// Disconnect from current session
     private func disconnectFromDestination() {
-        guard let frame = txViewModel.disconnect() else { return }
-
-        // Send DISC
-        client.send(frame: frame) { result in
-            Task { @MainActor in
-                switch result {
-                case .success:
-                    TxLog.outbound(.session, "DISC sent", [
-                        "dest": frame.destination.display
-                    ])
-                case .failure(let error):
-                    TxLog.error(.session, "DISC send failed", error: error)
-                }
-            }
-        }
+        txViewModel.disconnect()
+        TxLog.outbound(.session, "Initiating disconnect", [
+            "dest": txViewModel.viewModel.destinationCall
+        ])
     }
 
     // MARK: - Transfers View

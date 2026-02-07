@@ -181,7 +181,7 @@ struct AX25SessionTimers: Sendable {
     /// Default initial RTO (seconds)
     private static let defaultInitialRto: Double = 4.0
 
-    init(rtoMin: Double = 1.0, rtoMax: Double = 30.0, initialRto: Double = 4.0) {
+    init(rtoMin: Double = 3.0, rtoMax: Double = 30.0, initialRto: Double = 4.0) {
         self.rtoMin = max(0.5, rtoMin)
         self.rtoMax = max(self.rtoMin, min(60.0, rtoMax))
         self.rto = max(self.rtoMin, min(self.rtoMax, initialRto))
@@ -345,6 +345,17 @@ struct AX25StateMachine: Sendable {
         rejSent = false
     }
 
+    /// Force recovery from late UA. Called by session manager only when it determines
+    /// a late UA should be accepted (SABM sent recently, within timeout window).
+    /// This is a manager-level override — the spec-strict handle(event:) ignores UA
+    /// in disconnected/error states per AX.25 §6.3.
+    mutating func forceRecoverFromLateUA() -> [AX25SessionAction] {
+        state = .connected
+        retryCount = 0
+        resetSessionState()
+        return [.stopT1, .startT3, .notifyConnected]
+    }
+
     /// Handle an event and return the list of actions to execute
     mutating func handle(event: AX25SessionEvent) -> [AX25SessionAction] {
         let oldState = state
@@ -393,13 +404,6 @@ struct AX25StateMachine: Sendable {
             TxLog.inbound(.ax25, "Connection request received (SABM)")
             return [.sendUA, .startT3, .notifyConnected]
 
-        case (.disconnected, .receivedUA):
-            // Late UA for a session we initiated (timing/path mismatch)
-            state = .connected
-            retryCount = 0
-            TxLog.inbound(.ax25, "Connection established (late UA)")
-            return [.startT3, .notifyConnected]
-
         case (.disconnected, .receivedDISC):
             // Respond with DM (not connected)
             return [.sendDM]
@@ -420,13 +424,6 @@ struct AX25StateMachine: Sendable {
             state = .disconnected
             TxLog.error(.ax25, "Connection refused", error: nil, ["reason": "DM received"])
             return [.stopT1, .notifyError("Connection refused (DM received)")]
-
-        case (.error, .receivedUA):
-            // Late UA after error state, recover to connected
-            state = .connected
-            retryCount = 0
-            TxLog.inbound(.ax25, "Connection established (late UA from error)")
-            return [.startT3, .notifyConnected]
 
         case (.connecting, .t1Timeout):
             retryCount += 1
@@ -511,8 +508,17 @@ struct AX25StateMachine: Sendable {
                 ])
                 return [.stopT1, .stopT3, .notifyError("Link failure (retries exceeded)")]
             }
-            // Retransmit would happen here
-            return [.startT1]
+            // Per AX.25 spec: on T1 timeout with outstanding frames, send RR
+            // with P=1 (poll) to force the peer to respond with its current
+            // state. This recovers from lost responses - if the peer already
+            // processed our I-frame but its RR was lost, the poll elicits a
+            // fresh RR(F=1) instead of wasting airtime on duplicate I-frames.
+            // The session manager also retransmits outstanding I-frames.
+            var actions: [AX25SessionAction] = [.startT1]
+            if sequenceState.outstandingCount > 0 {
+                actions.append(.sendRR(nr: sequenceState.vr, pf: true))
+            }
+            return actions
 
         case (.connected, .t3Timeout):
             // Send RR as poll to check link
@@ -563,7 +569,7 @@ struct AX25StateMachine: Sendable {
         let modulo = config.modulo
         let windowHigh = (vr + config.windowSize - 1) % modulo
 
-        print("[DEBUG:AX25:IFRAME] rx | N(S)=\(ns) N(R)=\(nr) V(R)=\(vr) window=[\(vr)..\(windowHigh)] payload=\(payload.count) P/F=\(pf) inSeq=\(ns == vr) inWindow=\(isWithinReceiveWindow(ns: ns))")
+
 
         // Process N(R) - acknowledge our sent frames
         if sequenceState.outstandingCount > 0 {
@@ -581,11 +587,11 @@ struct AX25StateMachine: Sendable {
 
             // Send REJ only once per gap (with F=1 if remote sent P=1)
             if !rejSent {
-                print("[AX25Session] I-frame OUT OF SEQUENCE: received N(S)=\(ns), expected V(R)=\(sequenceState.vr), buffering")
+
                 actions.append(.sendREJ(nr: sequenceState.vr, pf: pf))
                 rejSent = true
             } else {
-                print("[AX25Session] I-frame OUT OF SEQUENCE: received N(S)=\(ns), expected V(R)=\(sequenceState.vr), buffered (REJ already sent)")
+
                 // Still need to respond if P=1, even if REJ already sent
                 if pf {
                     actions.append(.sendRR(nr: sequenceState.vr, pf: true))
@@ -593,11 +599,10 @@ struct AX25StateMachine: Sendable {
             }
         } else {
             // Outside window - this is likely a duplicate of an already-received frame
-            print("[AX25Session] I-frame OUTSIDE WINDOW: received N(S)=\(ns), V(R)=\(sequenceState.vr), discarding")
-            // Still respond with RR if P=1 to indicate we're alive
-            if pf {
-                actions.append(.sendRR(nr: sequenceState.vr, pf: true))
-            }
+
+            // Always send RR to re-ack current V(R). This helps peers recover when
+            // our previous RR was lost and they retransmit a duplicate.
+            actions.append(.sendRR(nr: sequenceState.vr, pf: pf))
         }
 
         return actions
@@ -618,14 +623,14 @@ struct AX25StateMachine: Sendable {
         // Deliver the current frame
         let oldVR = sequenceState.vr
         sequenceState.incrementVR()
-        print("[AX25Session] I-frame accepted: N(S)=\(ns), V(R) \(oldVR)->\(sequenceState.vr), payload=\(payload.count) bytes, P/F=\(pf)")
+
         actions.append(.deliverData(payload))
 
         // Check for consecutive buffered frames and deliver them
         while let buffered = receiveBuffer.removeValue(forKey: sequenceState.vr) {
             let bufferedOldVR = sequenceState.vr
             sequenceState.incrementVR()
-            print("[AX25Session] Buffered I-frame delivered: N(S)=\(buffered.ns), V(R) \(bufferedOldVR)->\(sequenceState.vr), payload=\(buffered.payload.count) bytes")
+
             actions.append(.deliverData(buffered.payload))
         }
 
@@ -645,13 +650,13 @@ struct AX25StateMachine: Sendable {
     private mutating func bufferOutOfSequenceFrame(ns: Int, nr: Int, payload: Data) {
         // Don't buffer duplicates
         guard receiveBuffer[ns] == nil else {
-            print("[AX25Session] Duplicate buffered frame N(S)=\(ns), ignoring")
+
             return
         }
 
         let bufferLimit = config.maxReceiveBufferSize ?? config.windowSize
         if receiveBuffer.count >= bufferLimit {
-            print("[AX25Session] Receive buffer full, discarding farthest")
+
             // Remove the frame with the LARGEST distance from V(R), i.e. the one we will need last.
             // (Removing the smallest distance would drop the next frame we need—e.g. N(S)=4 when V(R)=0—
             // causing consistent loss of the same chunk index in file transfers.)
@@ -661,7 +666,7 @@ struct AX25StateMachine: Sendable {
         }
 
         receiveBuffer[ns] = BufferedIFrame(ns: ns, nr: nr, payload: payload)
-        print("[AX25Session] Buffered I-frame N(S)=\(ns), buffer size=\(receiveBuffer.count)")
+
     }
 
     /// Check if a sequence number is within the receive window
@@ -690,7 +695,15 @@ struct AX25StateMachine: Sendable {
     private mutating func handleRR(nr: Int) -> [AX25SessionAction] {
         var actions: [AX25SessionAction] = []
 
+        // Reset retryCount when RR advances V(A) (peer acknowledged new frames).
+        // This prevents retry counts from earlier T1 timeouts accumulating across
+        // unrelated I-frame exchanges, which caused premature "retries exceeded"
+        // link failures in the KB5YZB-7 scenario.
+        let vaBeforeAck = sequenceState.va
         sequenceState.ackUpTo(nr: nr)
+        if sequenceState.va != vaBeforeAck {
+            retryCount = 0
+        }
 
         if sequenceState.outstandingCount == 0 {
             // All frames acked

@@ -460,8 +460,12 @@ final class TransmissionFragmentationTests: XCTestCase {
         XCTAssertEqual(session.state, .connected)
 
         // RR (no data sent) - should not drain anything
-        let rrResponse = manager.handleInboundRR(from: dest, path: DigiPath(), channel: 0, nr: 0, isPoll: false)
+        var rrResponse: OutboundFrame?
+        manager.onSendFrame = { frame in rrResponse = frame }
+
+        manager.handleInboundRR(from: dest, path: DigiPath(), channel: 0, nr: 0, isPoll: false)
         XCTAssertNil(rrResponse)
+
         XCTAssertEqual(session.pendingDataQueue.count, 0)
     }
 

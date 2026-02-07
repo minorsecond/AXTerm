@@ -108,15 +108,16 @@ struct TxAdaptiveSettings: Sendable {
     var maxRetries = AdaptiveSetting<Int>(
         name: "maxRetries",
         displayName: "Max Retries",
-        defaultValue: 10,
+        defaultValue: 15,
         range: 1...20
     )
 
     /// Minimum RTO (seconds)
+    /// Digipeated paths often exceed 1s RTT; 3.0s is a safer default start point
     var rtoMin = AdaptiveSetting<Double>(
         name: "rtoMin",
         displayName: "Min RTO",
-        defaultValue: 1.0,
+        defaultValue: 3.0,
         range: 0.5...5.0
     )
 
@@ -158,6 +159,9 @@ struct TxAdaptiveSettings: Sendable {
 
     /// Show AXDP decode details in transcript
     var showAXDPDecodeDetails: Bool = false
+    
+    /// Last calculated RTO from adaptive logic
+    var currentRto: Double? = nil
 
     // MARK: - Initialization
 
@@ -209,6 +213,9 @@ struct TxAdaptiveSettings: Sendable {
             let clampedRto = max(rtoMin.effectiveValue, min(rtoMax.effectiveValue, suggestedRto))
             rtoMin.adaptiveReason = "Based on measured RTT \(String(format: "%.1f", rtt))s"
             rtoMax.adaptiveReason = "Suggested RTO: \(String(format: "%.1f", clampedRto))s"
+            currentRto = clampedRto
         }
+        // If SRTT is nil (e.g. pure loss update), preserve the last calculated currentRTOnull
+
     }
 }

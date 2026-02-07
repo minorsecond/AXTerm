@@ -61,6 +61,9 @@ final class SessionCoordinator: ObservableObject {
 
     /// Cancellables for subscriptions
     private var cancellables = Set<AnyCancellable>()
+    /// Dedicated subscription for packet processing — kept separate from `cancellables`
+    /// so that repeated calls to `subscribeToPackets` replace (not accumulate) subscriptions.
+    private var packetSubscription: AnyCancellable?
 
     /// File data cache for active transfers (keyed by transfer ID)
     private var transferFileData: [UUID: Data] = [:]
@@ -89,7 +92,21 @@ final class SessionCoordinator: ObservableObject {
     /// Set of peers implicitly confirmed as AXDP-capable because we received an AXDP message from them.
     /// This supplements the capability store - if a peer sends us ANY AXDP message, they obviously support AXDP.
     private var implicitlyConfirmedAXDP: Set<String> = []
-    
+
+    /// Plain ASCII text probe for safe AXDP capability discovery, sent as a UI frame.
+    /// UI frames are connectionless and not fed into the connected-mode application layer,
+    /// so legacy BBS/nodes never see this text — no "Invalid command" and no transcript noise.
+    /// AXTerm peers detect the probe in their UI frame handler and respond with AXDP PONG.
+    static let axdpTextProbe = "AXDP?\r"
+
+    /// Peers where a text-safe AXDP probe is pending (waiting for first inbound I-frame or fallback timer).
+    private var pendingTextProbe: Set<String> = []
+
+    /// Peers where we sent a text probe and received their PONG, but haven't yet sent
+    /// our own PING with capabilities.  After receiving PONG we send a binary PING (UI frame)
+    /// so the peer also learns our capabilities (bidirectional exchange).
+    private var awaitingCapabilityExchange: Set<String> = []
+
     /// Set of (from, messageId, sessionId) for displayed chat messages; prevents duplicates from retransmissions
     private var displayedChatMessageIds: Set<String> = []
     /// How long to remember "not supported" before allowing auto-discovery again
@@ -171,7 +188,7 @@ final class SessionCoordinator: ObservableObject {
     func syncSessionManagerConfigFromAdaptive() {
         guard adaptiveTransmissionEnabled else {
             sessionManager.defaultConfig = AX25SessionConfig()
-            TxLog.adaptiveConfigSynced(window: 4, paclen: 128, rtoMin: 1, rtoMax: 30, maxRetries: 10)
+            TxLog.adaptiveConfigSynced(window: 4, paclen: 128, rtoMin: 1, rtoMax: 30, maxRetries: 10, initialRto: 4.0)
             return
         }
         let a = globalAdaptiveSettings
@@ -190,7 +207,8 @@ final class SessionCoordinator: ObservableObject {
             paclen: a.paclen.effectiveValue,
             rtoMin: a.rtoMin.effectiveValue,
             rtoMax: a.rtoMax.effectiveValue,
-            maxRetries: a.maxRetries.effectiveValue
+            maxRetries: a.maxRetries.effectiveValue,
+            initialRto: max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, 4.0))
         )
     }
 
@@ -214,8 +232,10 @@ final class SessionCoordinator: ObservableObject {
                 lossRate: lossRate,
                 etx: etx,
                 srtt: srtt,
+                rto: a.currentRto,
                 window: a.windowSize.effectiveValue,
                 paclen: a.paclen.effectiveValue,
+                maxRetries: a.maxRetries.effectiveValue,
                 reason: reason + " [route \(normalizedKey.destination) \(normalizedKey.pathSignature.isEmpty ? "direct" : normalizedKey.pathSignature)]"
             )
         } else {
@@ -227,8 +247,10 @@ final class SessionCoordinator: ObservableObject {
                 lossRate: lossRate,
                 etx: etx,
                 srtt: srtt,
+                rto: a.currentRto,
                 window: a.windowSize.effectiveValue,
                 paclen: a.paclen.effectiveValue,
+                maxRetries: a.maxRetries.effectiveValue,
                 reason: reason
             )
             syncSessionManagerConfigFromAdaptive()
@@ -362,6 +384,11 @@ final class SessionCoordinator: ObservableObject {
         sessionManager.onDataDeliveredForReassembly = { [weak self] session, data in
             print("[DEBUG:DELIVERY] Data delivered for reassembly | from=\(session.remoteAddress.display) size=\(data.count) hex=\(data.prefix(16).map { String(format: "%02X", $0) }.joined())")
             self?.appendToReassemblyAndExtract(from: session.remoteAddress, path: session.path, data: data)
+
+            // Send our text probe (UI frame) after receiving first inbound I-frame (if pending).
+            // Note: inbound text probes arrive via UI frames, not I-frames, so detection
+            // is handled in handleUFrame's .UI case instead of here.
+            self?.sendTextProbeIfNeeded(for: session)
         }
 
         sessionManager.onLinkQualitySample = { [weak self] session, lossRate, etx, srtt in
@@ -387,49 +414,45 @@ final class SessionCoordinator: ObservableObject {
             return self.configFromAdaptive(self.globalAdaptiveSettings)
         }
 
-        // Wire up session state changes for automatic capability discovery
+        // Wire up session state changes for capability discovery
         sessionManager.onSessionStateChanged = { [weak self] session, oldState, newState in
             guard let self = self else { return }
 
             // Force UI update for any session state change - ensures both stations update
             self.objectWillChange.send()
 
-            // When a session becomes connected AND we are the initiator, send AXDP PING
-            // The responder will receive PING and reply with PONG
             if oldState != .connected && newState == .connected {
                 let axdpEnabled = self.globalAdaptiveSettings.axdpExtensionsEnabled
                 let autoNegotiate = self.globalAdaptiveSettings.autoNegotiateCapabilities
                 let isInitiator = session.isInitiator
-                
-                self.debugAXDP("Session connected - checking PING conditions", [
-                    "peer": session.remoteAddress.display,
-                    "isInitiator": isInitiator,
-                    "axdpEnabled": axdpEnabled,
-                    "autoNegotiate": autoNegotiate,
-                    "willSendPING": (isInitiator && axdpEnabled && autoNegotiate)
-                ])
-                
-                if isInitiator &&
-                    axdpEnabled &&
-                    autoNegotiate {
-                    self.sendCapabilityPing(to: session)
-                    self.debugAXDP("Session connected, sending PING", [
-                        "peer": session.remoteAddress.display,
-                        "path": session.path.display,
-                        "sessionId": session.id.uuidString
-                    ])
-                    TxLog.debug(.capability, "Session connected (initiator), sending AXDP PING", [
-                        "peer": session.remoteAddress.display
-                    ])
+                let peer = session.remoteAddress.display.uppercased()
+
+                if isInitiator && axdpEnabled && autoNegotiate {
+                    if self.isAXDPNotSupported(for: peer) {
+                        // Known non-AXDP peer — skip entirely
+                        self.debugAXDP("Session connected, skipping probe (peer marked not-supported)", [
+                            "peer": session.remoteAddress.display
+                        ])
+                    } else {
+                        // Schedule text-safe probe after first inbound I-frame (or 3s fallback).
+                        // Text probes are plain ASCII — harmless to legacy nodes (treated as unknown command).
+                        // Note: invalidateCapability clears confirmed state on disconnect, so peers
+                        // are always re-probed on reconnect. This is intentional — the peer may have
+                        // changed software between sessions.
+                        self.pendingTextProbe.insert(peer)
+                        self.scheduleTextProbeFallback(for: session)
+                        self.debugAXDP("Session connected, scheduling text probe", [
+                            "peer": session.remoteAddress.display
+                        ])
+                        TxLog.debug(.capability, "Session connected (initiator), will send text probe", [
+                            "peer": session.remoteAddress.display
+                        ])
+                    }
                 } else {
-                    self.debugAXDP("Session connected, no PING (either responder or AXDP disabled)", [
+                    self.debugAXDP("Session connected, no probe (responder or AXDP disabled)", [
                         "peer": session.remoteAddress.display,
-                        "initiator": isInitiator,
-                        "axdpEnabled": axdpEnabled,
-                        "autoNegotiate": autoNegotiate
-                    ])
-                    TxLog.debug(.capability, "Session connected (responder), waiting for PING from initiator", [
-                        "peer": session.remoteAddress.display
+                        "isInitiator": isInitiator,
+                        "axdpEnabled": axdpEnabled
                     ])
                 }
             }
@@ -437,7 +460,7 @@ final class SessionCoordinator: ObservableObject {
             // When a session disconnects, invalidate cached capabilities and clear reassembly buffer.
             // This ensures we re-discover on next connection (station might switch software)
             // and prevents stale partial AXDP messages from corrupting future communications.
-            if oldState == .connected && (newState == .disconnected || newState == .error) {
+            if (oldState == .connected || oldState == .disconnecting) && (newState == .disconnected || newState == .error) {
                 self.invalidateCapability(for: session.remoteAddress.display)
                 
                 // Clear reassembly buffer for this peer to prevent stale data corruption.
@@ -463,6 +486,10 @@ final class SessionCoordinator: ObservableObject {
 
         // Clear pending discovery status
         pendingCapabilityDiscovery.removeValue(forKey: call)
+
+        // Cancel any pending text probe or pending capability exchange
+        pendingTextProbe.remove(call)
+        awaitingCapabilityExchange.remove(call)
 
         TxLog.debug(.capability, "Invalidated capability cache", [
             "peer": callsign
@@ -528,6 +555,159 @@ final class SessionCoordinator: ObservableObject {
         ))
     }
 
+    // MARK: - Text-Safe AXDP Capability Probe
+
+    /// Send the text-safe AXDP probe if this peer has one pending.
+    /// Called when we receive the first inbound I-frame, indicating the peer's
+    /// application layer has initialized.
+    private func sendTextProbeIfNeeded(for session: AX25Session) {
+        let peer = session.remoteAddress.display.uppercased()
+        guard pendingTextProbe.remove(peer) != nil else { return }
+        sendTextProbe(to: session)
+    }
+
+    /// Send the plain-text `AXDP?\r` probe as a **UI frame** (connectionless).
+    /// UI frames are not fed into the connected-mode application layer, so legacy
+    /// BBS/nodes never see the probe text — no "Invalid command" response, no
+    /// transcript noise.  AXTerm peers detect the probe in their UI frame handler
+    /// and respond with an AXDP PONG (also via UI frame).
+    private func sendTextProbe(to session: AX25Session) {
+        let peerCallsign = session.remoteAddress.display.uppercased()
+
+        if isAXDPNotSupported(for: peerCallsign) { return }
+        if hasConfirmedAXDPCapability(for: peerCallsign) { return }
+        if isCapabilityDiscoveryPending(for: peerCallsign) { return }
+
+        guard let probeData = Self.axdpTextProbe.data(using: .ascii) else { return }
+
+        // Track that we're waiting for a response, and that we still need to send
+        // our own capabilities after receiving theirs (bidirectional exchange).
+        pendingCapabilityDiscovery[peerCallsign] = Date()
+        awaitingCapabilityExchange.insert(peerCallsign)
+        scheduleCapabilityTimeout(for: peerCallsign)
+
+        // Send as UI frame — outside the connected-mode data flow
+        let frame = OutboundFrame(
+            destination: session.remoteAddress,
+            source: sessionManager.localCallsign,
+            path: session.path,
+            payload: probeData,
+            frameType: "ui",
+            pid: 0xF0,
+            displayInfo: "AXDP probe"
+        )
+        sendFrame(frame)
+
+        debugAXDP("Sent text probe (UI frame)", ["peer": session.remoteAddress.display])
+        TxLog.outbound(.capability, "Sent AXDP text probe via UI frame", [
+            "dest": session.remoteAddress.display
+        ])
+
+        onCapabilityEvent?(CapabilityDebugEvent(
+            type: .pingSent,
+            peer: session.remoteAddress.display,
+            capabilities: nil
+        ))
+    }
+
+    /// Send a binary AXDP PING (with our capabilities) via UI frame.
+    /// Used to complete the bidirectional exchange after receiving a PONG in response
+    /// to our text probe.  The peer already proved AXDP support so binary is safe.
+    private func sendCapabilityPingViaUI(to address: AX25Address, path: DigiPath) {
+        let localCaps = AXDPCapability.defaultLocal()
+        let pingMessage = AXDP.Message(
+            type: .ping,
+            sessionId: 0,
+            messageId: 2,  // Distinct from probe's messageId
+            capabilities: localCaps
+        )
+        let frame = OutboundFrame(
+            destination: address,
+            source: sessionManager.localCallsign,
+            path: path,
+            payload: pingMessage.encode(),
+            frameType: "ui",
+            displayInfo: "AXDP PING"
+        )
+        sendFrame(frame)
+
+        debugAXDP("Sent capability PING via UI frame (bidirectional exchange)", ["peer": address.display])
+        TxLog.outbound(.capability, "Sent AXDP PING via UI frame", [
+            "dest": address.display,
+            "features": localCaps.features.description
+        ])
+
+        onCapabilityEvent?(CapabilityDebugEvent(
+            type: .pingSent,
+            peer: address.display,
+            capabilities: localCaps
+        ))
+    }
+
+    /// Detect inbound `AXDP?\r` text probe from a peer (received via UI frame) and
+    /// respond with AXDP PONG (also via UI frame).  The peer sent us a text probe,
+    /// which proves they understand AXDP — so responding with binary PONG is safe.
+    /// Internal access for testability.
+    func handleInboundTextProbe(from: AX25Address, path: DigiPath, payload: Data) {
+        guard globalAdaptiveSettings.axdpExtensionsEnabled else { return }
+        guard let text = String(data: payload, encoding: .ascii) else { return }
+        guard text.hasPrefix("AXDP?") else { return }
+
+        let peerCallsign = from.display.uppercased()
+        debugAXDP("Received text probe from peer (UI frame)", ["peer": peerCallsign])
+        TxLog.debug(.capability, "Received AXDP text probe via UI frame, responding with PONG", [
+            "peer": peerCallsign
+        ])
+
+        // Mark peer as AXDP-capable (they sent a probe, so they understand AXDP)
+        markImplicitlyConfirmedAXDP(for: peerCallsign)
+
+        // Respond with binary AXDP PONG via UI frame (stays out of connected-mode data flow)
+        let localCaps = AXDPCapability.defaultLocal()
+        let pongMessage = AXDP.Message(
+            type: .pong,
+            sessionId: 0,
+            messageId: 1,
+            capabilities: localCaps
+        )
+        let pongFrame = OutboundFrame(
+            destination: from,
+            source: sessionManager.localCallsign,
+            path: path,
+            payload: pongMessage.encode(),
+            frameType: "ui",
+            displayInfo: "AXDP PONG"
+        )
+        sendFrame(pongFrame)
+
+        TxLog.outbound(.capability, "Sent AXDP PONG via UI frame", [
+            "dest": from.display,
+            "features": localCaps.features.description
+        ])
+
+        onCapabilityEvent?(CapabilityDebugEvent(
+            type: .pongSent,
+            peer: from.display,
+            capabilities: localCaps
+        ))
+    }
+
+    /// Fallback timer: send text probe after 3 seconds even without inbound data.
+    /// Handles AXTerm-to-AXTerm connections where neither side sends a welcome banner.
+    /// Text probe is safe for legacy nodes (treated as unknown command).
+    private func scheduleTextProbeFallback(for session: AX25Session) {
+        let peer = session.remoteAddress.display.uppercased()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard self.pendingTextProbe.remove(peer) != nil else { return }
+            guard session.state == .connected else { return }
+            self.debugAXDP("Text probe fallback timer fired", [
+                "peer": session.remoteAddress.display
+            ])
+            self.sendTextProbe(to: session)
+        }
+    }
+
     /// Trigger AXDP capability discovery for all currently connected sessions
     /// where we are the initiator. This is used when auto-negotiation is turned
     /// on while a session is already connected.
@@ -588,7 +768,8 @@ final class SessionCoordinator: ObservableObject {
         }
     }
 
-    /// Send an AXDP PONG response to a received PING
+    /// Send an AXDP PONG response to a received PING, always via UI frame.
+    /// Keeps all capability negotiation out of the connected-mode I-frame stream.
     private func sendCapabilityPong(to address: AX25Address, path: DigiPath, sessionId: UInt32, messageId: UInt32) {
         let localCaps = AXDPCapability.defaultLocal()
         let pongMessage = AXDP.Message(
@@ -598,15 +779,18 @@ final class SessionCoordinator: ObservableObject {
             capabilities: localCaps
         )
 
-        // Respond via I-frames if connected, UI otherwise
-        _ = sendAXDPPayload(
-            pongMessage.encode(),
-            to: address,
+        // Always respond via UI frame — capability exchange stays outside connected-mode data flow
+        let frame = OutboundFrame(
+            destination: address,
+            source: sessionManager.localCallsign,
             path: path,
+            payload: pongMessage.encode(),
+            frameType: "ui",
             displayInfo: "AXDP PONG"
         )
+        sendFrame(frame)
 
-        TxLog.outbound(.capability, "Sent AXDP PONG", [
+        TxLog.outbound(.capability, "Sent AXDP PONG via UI frame", [
             "dest": address.display,
             "features": localCaps.features.description
         ])
@@ -654,17 +838,21 @@ final class SessionCoordinator: ObservableObject {
         sessionManager.localCallsign = AX25Address(call: baseCall, ssid: ssid)
     }
 
-    /// Subscribe to incoming packets from PacketEngine
+    /// Subscribe to incoming packets from PacketEngine.
+    /// Safe to call multiple times — replaces any existing subscription.
     func subscribeToPackets(from client: PacketEngine) {
         self.packetEngine = client
         // Note: onDataDeliveredForReassembly is wired up in setupCallbacks() already
 
-        client.packetPublisher
+        // Cancel previous subscription to prevent duplicate packet processing.
+        // ContentView.init() can be called multiple times by SwiftUI, each time
+        // calling subscribeToPackets on the same shared coordinator instance.
+        packetSubscription?.cancel()
+        packetSubscription = client.packetPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] packet in
                 self?.handleIncomingPacket(packet)
             }
-            .store(in: &cancellables)
     }
 
     /// Send a frame via PacketEngine
@@ -717,6 +905,17 @@ final class SessionCoordinator: ObservableObject {
         // Only process packets addressed to us
         guard toCall == localCall else { return }
 
+        // Ignore packets from ourselves (TNC echo) - match both call AND SSID
+        // This allows same-base-callsign but different-SSID traffic (e.g., K0EPI-1 talking to K0EPI-7)
+        guard from.call.uppercased() != localCall || from.ssid != sessionManager.localCallsign.ssid else {
+            TxLog.debug(.session, "Ignoring echoed frame from local callsign", [
+                "from": from.display,
+                "to": to.display,
+                "localCallsign": sessionManager.localCallsign.display
+            ])
+            return
+        }
+
         let channel: UInt8 = 0
 
         switch decoded.frameClass {
@@ -742,20 +941,19 @@ final class SessionCoordinator: ObservableObject {
         case .DM:
             sessionManager.handleInboundDM(from: from, path: path, channel: channel)
         case .DISC:
-            if let responseFrame = sessionManager.handleInboundDISC(from: from, path: path, channel: channel) {
-                sendFrame(responseFrame)
-            }
+            sessionManager.handleInboundDISC(from: from, path: path, channel: channel)
         case .SABM, .SABME:
-            if let uaFrame = sessionManager.handleInboundSABM(
+            sessionManager.handleInboundSABM(
                 from: from,
                 to: to,
                 path: path,
                 channel: channel
-            ) {
-                sendFrame(uaFrame)
-            }
+            )
         case .UI:
-            // UI frames can contain AXDP messages (capability discovery, file transfers)
+            // Check for text-safe AXDP probe ("AXDP?\r") before binary AXDP check.
+            // Text probes don't have AXDP magic, so handleAXDPMessage would skip them.
+            handleInboundTextProbe(from: from, path: path, payload: packet.info)
+            // UI frames can also contain binary AXDP messages (capability discovery, file transfers)
             handleAXDPMessage(from: from, path: path, payload: packet.info)
         default:
             break
@@ -764,7 +962,7 @@ final class SessionCoordinator: ObservableObject {
 
     private func handleIFrame(packet: Packet, from: AX25Address, ns: Int, nr: Int, pf: Bool, channel: UInt8) {
         let path = DigiPath.from(packet.via.map { $0.display })
-        if let rrFrame = sessionManager.handleInboundIFrame(
+        sessionManager.handleInboundIFrame(
             from: from,
             path: path,
             channel: channel,
@@ -772,9 +970,7 @@ final class SessionCoordinator: ObservableObject {
             nr: nr,
             pf: pf,
             payload: packet.info
-        ) {
-            sendFrame(rrFrame)
-        }
+        )
         // AXDP in I-frames is processed only via reassembly (onDataDeliveredForReassembly -> appendToReassemblyAndExtract).
         // Do not call handleAXDPMessage here: the same payload is delivered to reassembly and would cause duplicate
         // handling (e.g. ping/pong delivered twice).
@@ -1063,6 +1259,9 @@ final class SessionCoordinator: ObservableObject {
         let peerCallsign = from.display.uppercased()
         clearAXDPNotSupported(for: peerCallsign)
 
+        // Receiving a valid PING/PONG proves the peer supports AXDP
+        markImplicitlyConfirmedAXDP(for: peerCallsign)
+
         // Store capabilities in the capability store
         packetEngine?.capabilityStore.store(caps, for: from.call, ssid: from.ssid)
 
@@ -1081,6 +1280,13 @@ final class SessionCoordinator: ObservableObject {
                 peer: from.display,
                 capabilities: caps
             ))
+
+            // Bidirectional exchange: if this PONG was in response to our text probe,
+            // the peer now has our PONG but not our capabilities.  Send our PING
+            // (with capability TLVs) via UI frame so the peer learns our features too.
+            if awaitingCapabilityExchange.remove(peerCallsign) != nil {
+                sendCapabilityPingViaUI(to: from, path: path)
+            }
         } else if message.type == .ping {
             TxLog.debug(.capability, "Detected AXDP capabilities via PING", [
                 "peer": from.display,
@@ -2002,14 +2208,9 @@ final class SessionCoordinator: ObservableObject {
 
         switch sType {
         case .RR:
-            if let responseFrame = sessionManager.handleInboundRR(from: from, path: path, channel: channel, nr: nr, isPoll: isPoll) {
-                sendFrame(responseFrame)
-            }
+            sessionManager.handleInboundRR(from: from, path: path, channel: channel, nr: nr, isPoll: isPoll)
         case .REJ:
-            let retransmitFrames = sessionManager.handleInboundREJ(from: from, path: path, channel: channel, nr: nr)
-            for frame in retransmitFrames {
-                sendFrame(frame)
-            }
+            sessionManager.handleInboundREJ(from: from, path: path, channel: channel, nr: nr)
         case .RNR, .SREJ:
             break
         }
@@ -2078,7 +2279,7 @@ final class SessionCoordinator: ObservableObject {
     
     /// Mark a peer as implicitly AXDP-capable because we received an AXDP message from them.
     /// This is called whenever we successfully parse any AXDP message from a peer.
-    private func markImplicitlyConfirmedAXDP(for callsign: String) {
+    func markImplicitlyConfirmedAXDP(for callsign: String) {
         let call = callsign.uppercased()
         if !implicitlyConfirmedAXDP.contains(call) {
             implicitlyConfirmedAXDP.insert(call)

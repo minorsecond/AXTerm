@@ -70,9 +70,12 @@ struct AX25Address: Hashable, Codable, Identifiable, Sendable {
     }
 
     /// Encode address as 7 bytes for AX.25 frame
-    /// - Parameter isLast: Whether this is the last address in the path (sets HDLC address extension bit)
+    /// - Parameters:
+    ///   - isLast: Whether this is the last address in the path (sets HDLC address extension bit)
+    ///   - isDestination: Whether this is the destination address (affects C/R bit)
+    ///   - isCommand: Whether the frame is a Command (affects C/R bit). If nil, defaults to V1.x (C=0).
     /// - Returns: 7-byte encoded address
-    func encodeForAX25(isLast: Bool) -> Data {
+    func encodeForAX25(isLast: Bool, isDestination: Bool = false, isCommand: Bool? = nil) -> Data {
         var data = Data()
 
         // Callsign: 6 bytes, left-justified, space-padded, each byte shifted left by 1
@@ -82,16 +85,47 @@ struct AX25Address: Hashable, Codable, Identifiable, Sendable {
             data.append(ascii << 1)
         }
 
-        // SSID byte: bits 7-5 = reserved (110), bit 4 = command/response, bits 3-1 = SSID, bit 0 = HDLC extension
-        // For simplicity: 0b01100000 | (ssid << 1) | (isLast ? 1 : 0)
-        var ssidByte: UInt8 = 0b01100000
+        // SSID byte:
+        // Bits 1-4: SSID
+        // Bit 0: HDLC extension (0=more, 1=last)
+        // Bit 5-6: Reserved (usually 11 for "local significance" or 00, we use 11/0x60 base)
+        // Bit 7: C/R bit or H bit
+        
+        // Base: 01100000 (0x60) - Reserved bits set
+        var ssidByte: UInt8 = 0x60
+        
+        // Add SSID (bits 1-4)
         ssidByte |= UInt8(ssid & 0x0F) << 1
+        
+        // HDLC Extension (bit 0)
         if isLast {
-            ssidByte |= 0x01  // HDLC address extension bit
+            ssidByte |= 0x01
         }
+        
         if repeated {
-            ssidByte |= 0x80  // H-bit (has been repeated)
+            // Repeater/Digipeater logic: Bit 7 is H-bit (Has-been-repeated)
+            ssidByte |= 0x80
+        } else if let isCommand = isCommand {
+            // Source/Destination logic: Bit 7 is C/R bit (AX.25 v2.0)
+            // Command: Dest=1, Src=0
+            // Response: Dest=0, Src=1
+            
+            if isCommand {
+                if isDestination {
+                    ssidByte |= 0x80 // Command + Dest = 1
+                } else {
+                    ssidByte &= ~0x80 // Command + Src = 0
+                }
+            } else {
+                // Response
+                if isDestination {
+                    ssidByte &= ~0x80 // Response + Dest = 0
+                } else {
+                    ssidByte |= 0x80 // Response + Src = 1
+                }
+            }
         }
+        
         data.append(ssidByte)
 
         return data

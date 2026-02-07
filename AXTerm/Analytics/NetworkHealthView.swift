@@ -539,7 +539,7 @@ struct ScoreExplainerView: View {
                             .frame(width: 6, height: 6)
                         Text(component.name)
                             .font(.caption.weight(.medium))
-                            .frame(width: 90, alignment: .leading)
+                            .frame(width: 130, alignment: .leading)
                         Text("\(Int(component.weight))%")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(AnalyticsStyle.Colors.textSecondary)

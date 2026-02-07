@@ -101,7 +101,7 @@ final class AdaptiveTransmissionIntegrationTests: XCTestCase {
         if received.count > 16 {
             let payloadData = Data(received.suffix(from: 16))
             XCTAssertTrue(TestAXDPBuilder.hasAXDPMagic(payloadData))
-            if let decoded = AXDP.Message.decode(from: payloadData) {
+            if let (decoded, _) = AXDP.Message.decode(from: payloadData) {
                 XCTAssertEqual(decoded.type, .chat)
                 if let textData = decoded.payload, let text = String(data: textData, encoding: .utf8) {
                     XCTAssertEqual(text, message)
