@@ -904,7 +904,7 @@ final class SessionCoordinator: ObservableObject {
 
         // Ignore packets from ourselves (TNC echo) - match both call AND SSID
         // This allows same-base-callsign but different-SSID traffic (e.g., K0EPI-1 talking to K0EPI-7)
-        guard from.call.uppercased() != localCall || from.ssid != sessionManager.localCallsign.ssid else {
+        guard from.call.uppercased() != sessionManager.localCallsign.call || from.ssid != sessionManager.localCallsign.ssid else {
             TxLog.debug(.session, "Ignoring echoed frame from local callsign", [
                 "from": from.display,
                 "to": to.display,
@@ -2205,9 +2205,14 @@ final class SessionCoordinator: ObservableObject {
 
         switch sType {
         case .RR:
-            sessionManager.handleInboundRR(from: from, path: path, channel: channel, nr: nr, isPoll: isPoll)
+            if let response = sessionManager.handleInboundRR(from: from, path: path, channel: channel, nr: nr, isPoll: isPoll) {
+                sendFrame(response)
+            }
         case .REJ:
-            sessionManager.handleInboundREJ(from: from, path: path, channel: channel, nr: nr)
+            let retransmits = sessionManager.handleInboundREJ(from: from, path: path, channel: channel, nr: nr)
+            for frame in retransmits {
+                sendFrame(frame)
+            }
         case .RNR, .SREJ:
             break
         }
