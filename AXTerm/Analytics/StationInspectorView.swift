@@ -10,6 +10,8 @@ import SwiftUI
 struct StationInspectorView: View {
     @ObservedObject var viewModel: StationInspectorViewModel
     var onClose: (() -> Void)?
+    /// AXDP capability for this station (if known)
+    var capability: AXDPCapability?
 
     @Environment(\.dismiss) private var dismiss
 
@@ -34,8 +36,15 @@ struct StationInspectorView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(viewModel.stats.stationID)
-                .font(.title3.weight(.semibold))
+            HStack(spacing: 8) {
+                Text(viewModel.stats.stationID)
+                    .font(.title3.weight(.semibold))
+
+                // AXDP capability badge
+                if capability != nil {
+                    AXDPCapabilityBadge(capability: capability, compact: false)
+                }
+            }
             Text("Inspect Station")
                 .font(.caption)
                 .foregroundStyle(.secondary)

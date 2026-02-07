@@ -405,11 +405,18 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     deinit {
-        aggregationTask?.cancel()
-        graphTask?.cancel()
-        layoutTask?.cancel()
-        aggregationScheduler.cancel()
-        graphScheduler.cancel()
+        let aggTask = aggregationTask
+        let grTask = graphTask
+        let layTask = layoutTask
+        let aggSched = aggregationScheduler
+        let grSched = graphScheduler
+        Task {
+            aggTask?.cancel()
+            grTask?.cancel()
+            layTask?.cancel()
+            aggSched.cancel()
+            grSched.cancel()
+        }
     }
 
     private func bindPackets(packetScheduler: RunLoop) {

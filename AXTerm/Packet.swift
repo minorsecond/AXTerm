@@ -46,10 +46,7 @@ struct Packet: Identifiable, Hashable, Sendable {
     }
 
     var viaDisplay: String {
-        guard !via.isEmpty else { return "" }
-        return via.map { addr in
-            addr.repeated ? "\(addr.display)*" : addr.display
-        }.joined(separator: ",")
+        Packet.normalizedViaItems(from: via).joined(separator: ",")
     }
 
     var typeDisplay: String {
@@ -162,6 +159,30 @@ struct Packet: Identifiable, Hashable, Sendable {
         self.infoText = infoText ?? Self.computeInfoText(from: info)
         self.rawAx25 = rawAx25
         self.kissEndpoint = kissEndpoint
+    }
+
+    static func normalizedViaItems(from via: [AX25Address]) -> [String] {
+        guard !via.isEmpty else { return [] }
+
+        var order: [String] = []
+        var displayByKey: [String: String] = [:]
+        var repeatedByKey: [String: Bool] = [:]
+
+        for address in via {
+            let key = "\(address.call)-\(address.ssid)"
+            if displayByKey[key] == nil {
+                displayByKey[key] = address.display
+                order.append(key)
+            }
+            if address.repeated {
+                repeatedByKey[key] = true
+            }
+        }
+
+        return order.compactMap { key in
+            guard let display = displayByKey[key] else { return nil }
+            return (repeatedByKey[key] ?? false) ? "\(display)*" : display
+        }
     }
 }
 

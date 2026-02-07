@@ -115,31 +115,21 @@ enum AX25ControlFieldDecoder {
 
     /// Decode an I-frame (Information frame)
     ///
-    /// Modulo-8 I-frame (2 bytes):
-    /// - ctl0 bit 0 = 0
-    /// - N(S) = (ctl0 >> 1) & 0x07 (bits 1-3)
-    /// - ctl1 bit 4 = P/F
-    /// - N(R) = (ctl1 >> 5) & 0x07 (bits 5-7)
+    /// Modulo-8 I-frame (1 byte):
+    /// - bit 0 = 0 (I-frame indicator)
+    /// - bits 1-3 = N(S)
+    /// - bit 4 = P/F
+    /// - bits 5-7 = N(R)
+    ///
+    /// Modulo-128 I-frame (2 bytes) - not yet implemented:
+    /// - ctl0 bits 0 = 0, bits 1-7 = N(S)
+    /// - ctl1 bit 0 = 0, bits 1-7 = N(R)
     private static func decodeIFrame(ctl0: UInt8, ctl1: UInt8?) -> AX25ControlFieldDecoded {
-        // I-frames require 2 control bytes in modulo-8 mode
-        // If ctl1 is missing, we can't fully decode
-        guard let ctl1 = ctl1 else {
-            return AX25ControlFieldDecoded(
-                frameClass: .unknown,
-                sType: nil,
-                uType: nil,
-                ns: nil,
-                nr: nil,
-                pf: nil,
-                ctl0: ctl0,
-                ctl1: nil,
-                isExtended: false
-            )
-        }
-
+        // Modulo-8 mode: all information is in a single control byte
+        // Format: NNNPSSS0 where NNN=N(R), P=P/F, SSS=N(S), 0=I-frame indicator
         let ns = Int((ctl0 >> 1) & 0x07)
-        let pf = Int((ctl1 >> 4) & 0x01)
-        let nr = Int((ctl1 >> 5) & 0x07)
+        let pf = Int((ctl0 >> 4) & 0x01)
+        let nr = Int((ctl0 >> 5) & 0x07)
 
         return AX25ControlFieldDecoded(
             frameClass: .I,

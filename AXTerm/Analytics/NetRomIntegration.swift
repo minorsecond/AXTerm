@@ -45,13 +45,18 @@ final class NetRomIntegration {
     init(
         localCallsign: String,
         mode: NetRomRoutingMode,
-        routerConfig: NetRomConfig = .default,
-        inferenceConfig: NetRomInferenceConfig = .default,
-        linkConfig: LinkQualityConfig = .default,
+        routerConfig: NetRomConfig? = nil,
+        inferenceConfig: NetRomInferenceConfig? = nil,
+        linkConfig: LinkQualityConfig? = nil,
         persistence: NetRomPersistence? = nil
     ) {
         self.localCallsign = CallsignValidator.normalize(localCallsign)
         self.mode = mode
+        
+        let routerConfig = routerConfig ?? .default
+        let inferenceConfig = inferenceConfig ?? .default
+        let linkConfig = linkConfig ?? .default
+        
         self.routerConfig = routerConfig
         self.inferenceConfig = inferenceConfig
         self.linkConfig = linkConfig

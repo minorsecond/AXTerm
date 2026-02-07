@@ -105,6 +105,9 @@ class KISSRelay:
             # Extract payload info for logging
             payload_len = len(frame) - 3 if len(frame) > 3 else 0  # Subtract FEND + cmd + FEND
             logger.info(f"Frame #{frame_id}: {from_port}->{to_port} ({payload_len} bytes) to {len(recipients)} client(s)")
+        # Debug: log order and hex prefix for fragmentation diagnosis
+        hex_prefix = frame[:min(32, len(frame))].hex() if len(frame) > 0 else ""
+        print(f"[DEBUG:KISS_RELAY] frame_id={frame_id} {from_port}->{to_port} len={len(frame)} payload_len={payload_len} hex={hex_prefix}...")
 
         # Send to all clients on peer port
         for client in recipients:
@@ -134,9 +137,9 @@ class KISSRelay:
                 for byte in data:
                     if byte == FEND:
                         if in_frame and len(buffer) > 0:
-                            # Complete frame - relay it
+                            # Complete frame - relay it (await to preserve order)
                             frame = bytes([FEND]) + bytes(buffer) + bytes([FEND])
-                            asyncio.create_task(self.relay_frame(frame, port, client))
+                            await self.relay_frame(frame, port, client)
                         buffer.clear()
                         in_frame = True
                     elif in_frame:

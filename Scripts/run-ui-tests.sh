@@ -7,7 +7,7 @@
 # real-time diagnostics and frame traffic.
 #
 # Usage:
-#   ./run-ui-tests.sh [mode]
+#   ./run-ui-tests.sh [--clean-rebuild|clean_rebuild] [mode]
 #
 # Modes:
 #   manual      - Launch apps for manual testing (default)
@@ -20,7 +20,11 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 DOCKER_DIR="$PROJECT_DIR/Docker"
-BUILD_DIR="$PROJECT_DIR/build"
+
+# Dedicated, sandboxed build root for UI tests only.
+# This keeps all test builds and ephemeral data completely separate from any
+# build products you use during normal development.
+BUILD_DIR="$PROJECT_DIR/.ui-test-build"
 
 # Colors
 RED='\033[0;31m'
@@ -30,7 +34,19 @@ CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m'
 
-MODE="${1:-manual}"
+CLEAN_REBUILD=0
+MODE="manual"
+
+for arg in "$@"; do
+    case "$arg" in
+        --clean-rebuild|clean_rebuild|clean_build)
+            CLEAN_REBUILD=1
+            ;;
+        manual|automated|monitor|build|stop|help|-h|--help)
+            MODE="$arg"
+            ;;
+    esac
+done
 
 print_banner() {
     echo -e "${CYAN}"
@@ -75,9 +91,15 @@ check_dependencies() {
 build_app() {
     echo -e "${YELLOW}Building AXTerm...${NC}"
 
+    if [ "$CLEAN_REBUILD" -eq 1 ]; then
+        echo -e "${YELLOW}Cleaning build artifacts...${NC}"
+        rm -rf "$BUILD_DIR"
+    fi
+
     # Check if we need to build
     APP_PATH="$BUILD_DIR/Build/Products/Debug/AXTerm.app"
-    if [ -d "$APP_PATH" ]; then
+    EXEC_PATH="$APP_PATH/Contents/MacOS/AXTerm"
+    if [ -d "$APP_PATH" ] && [ -x "$EXEC_PATH" ]; then
         echo -e "${GREEN}✓ AXTerm.app found at $APP_PATH${NC}"
         return 0
     fi
@@ -101,8 +123,9 @@ build_app() {
             fi
         done
 
-    if [ ! -d "$APP_PATH" ]; then
-        echo -e "${RED}Error: Build failed - AXTerm.app not found${NC}"
+    if [ ! -d "$APP_PATH" ] || [ ! -x "$EXEC_PATH" ]; then
+        echo -e "${RED}Error: Build failed - AXTerm.app executable not found at:${NC}"
+        echo "  $EXEC_PATH"
         exit 1
     fi
 
@@ -143,10 +166,20 @@ start_kiss_relay() {
 launch_axterm_instances() {
     echo -e "${YELLOW}Launching AXTerm instances...${NC}"
 
-    APP_PATH="$BUILD_DIR/Build/Products/Debug/AXTerm.app/Contents/MacOS/AXTerm"
+    # Allow overriding the executable path so developers can point at an
+    # already-installed AXTerm.app (e.g. from Xcode's DerivedData).
+    if [ -n "$AXTERM_EXECUTABLE" ]; then
+        APP_PATH="$AXTERM_EXECUTABLE"
+    else
+        APP_PATH="$BUILD_DIR/Build/Products/Debug/AXTerm.app/Contents/MacOS/AXTerm"
+    fi
 
-    if [ ! -f "$APP_PATH" ]; then
-        echo -e "${RED}Error: AXTerm executable not found at $APP_PATH${NC}"
+    if [ ! -x "$APP_PATH" ]; then
+        echo -e "${RED}Error: AXTerm executable not found or not executable at:$NC"
+        echo "  $APP_PATH"
+        echo ""
+        echo "You can point this script at a known-good build by setting:"
+        echo "  AXTERM_EXECUTABLE=\"/path/to/AXTerm.app/Contents/MacOS/AXTerm\" ./run-ui-tests.sh"
         exit 1
     fi
 
@@ -197,7 +230,7 @@ run_automated_tests() {
 
     cd "$PROJECT_DIR"
 
-    xcodebuild \
+    AXTERM_DUAL_INSTANCE_TESTS=1 xcodebuild \
         -project AXTerm.xcodeproj \
         -scheme AXTermUITests \
         -destination 'platform=macOS' \
@@ -232,7 +265,10 @@ cleanup() {
 }
 
 show_usage() {
-    echo "Usage: $0 [mode]"
+    echo "Usage: $0 [--clean-rebuild|clean_rebuild|clean_build] [mode]"
+    echo ""
+    echo "Options:"
+    echo "  --clean-rebuild, clean_rebuild  - Remove build artifacts before building"
     echo ""
     echo "Modes:"
     echo "  manual      - Launch apps for manual testing (default)"

@@ -93,20 +93,30 @@ struct AXTermCommands: Commands {
         }
 
         CommandMenu("View") {
-            Button("Packets") {
-                selectNavigation?.action(.packets)
+            Button("Terminal") {
+                selectNavigation?.action(.terminal)
             }
             .keyboardShortcut("1", modifiers: [.command])
 
-            Button("Console") {
-                selectNavigation?.action(.console)
+            Button("Packets") {
+                selectNavigation?.action(.packets)
             }
             .keyboardShortcut("2", modifiers: [.command])
+
+            Button("Routes") {
+                selectNavigation?.action(.routes)
+            }
+            .keyboardShortcut("3", modifiers: [.command])
+
+            Button("Analytics") {
+                selectNavigation?.action(.analytics)
+            }
+            .keyboardShortcut("4", modifiers: [.command])
 
             Button("Raw") {
                 selectNavigation?.action(.raw)
             }
-            .keyboardShortcut("3", modifiers: [.command])
+            .keyboardShortcut("5", modifiers: [.command])
         }
 
         CommandGroup(after: .help) {

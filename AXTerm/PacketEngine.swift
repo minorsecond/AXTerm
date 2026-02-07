@@ -86,6 +86,42 @@ final class PacketEngine: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
     private let packetInsertSubject = PassthroughSubject<Packet, Never>()
 
+    /// Called when an I-frame (AXDP/user payload) is successfully transmitted.
+    /// Parameter: payload byte count. Used for sender progress highlighting.
+    var onUserFrameTransmitted: ((Int) -> Void)?
+
+    // MARK: - Debug Logging (Debug Builds Only)
+    private func debugTrace(_ message: String, _ data: [String: Any] = [:]) {
+        #if DEBUG
+        if data.isEmpty {
+            print("[KISS TRACE] \(message)")
+        } else {
+            let details = data.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+            print("[KISS TRACE] \(message) | \(details)")
+        }
+        #endif
+    }
+
+    /// AXDP-specific debug logging for capability detection and routing.
+    private func debugAXDP(_ message: String, _ data: [String: Any] = [:]) {
+        #if DEBUG
+        if data.isEmpty {
+            print("[AXDP TRACE][Packets] \(message)")
+        } else {
+            let details = data
+                .map { "\($0.key)=\($0.value)" }
+                .sorted()
+                .joined(separator: " ")
+            print("[AXDP TRACE][Packets] \(message) | \(details)")
+        }
+        #endif
+    }
+
+    private func hexPrefix(_ data: Data, limit: Int = 32) -> String {
+        guard !data.isEmpty else { return "" }
+        return data.prefix(limit).map { String(format: "%02X", $0) }.joined()
+    }
+
     // MARK: - NET/ROM Integration
 
     /// NET/ROM routing integration for passive route inference and link quality estimation.
@@ -112,6 +148,12 @@ final class PacketEngine: ObservableObject {
     private var netRomObserveCount: Int = 0
     #endif
 
+    // MARK: - AXDP Capability Tracking
+
+    /// AXDP capability store for tracking peer capabilities
+    /// Used by UI to display capability badges for stations
+    let capabilityStore = AXDPCapabilityStore()
+
     // MARK: - Published State
 
     @Published private(set) var status: ConnectionStatus = .disconnected
@@ -128,11 +170,23 @@ final class PacketEngine: ObservableObject {
     @Published var selectedStationCall: String?
     @Published private(set) var pinnedPacketIDs: Set<Packet.ID> = []
 
+    /// Publisher for incoming packets - subscribe to receive all decoded packets
+    var packetPublisher: AnyPublisher<Packet, Never> {
+        packetInsertSubject.eraseToAnyPublisher()
+    }
+
     // MARK: - Private State
 
     private var connection: NWConnection?
     private var parser = KISSFrameParser()
     private var stationTracker = StationTracker()
+
+    // MARK: - Console Line Duplicate Detection
+
+    /// Tracks recent console line signatures to detect duplicates received via different paths
+    private var recentConsoleSignatures: [String: (timestamp: Date, viaPath: [String])] = [:]
+    /// Time window for considering console lines as duplicates (5 seconds)
+    private let consoleDuplicateWindow: TimeInterval = 5.0
 
     // MARK: - Initialization
 
@@ -190,15 +244,18 @@ final class PacketEngine: ObservableObject {
             // Load persisted NET/ROM state if available
             loadNetRomSnapshot()
 
-            // Prune old entries based on retention settings
-            pruneOldNetRomEntries()
+            // NOTE: Pruning is deferred to avoid database lock during init.
+            // It will run via the scheduled timer below (first run after 60s).
+            // See: database_lock_analysis.md for details.
+            // pruneOldNetRomEntries()
 
-            // Start periodic snapshot timer
+            // Start periodic snapshot timer (will also handle deferred pruning)
             startNetRomSnapshotTimer()
         }
 
         configureStationSubscription()
         observeSettings()
+        observeCapabilityStore()
         loadPersistedPackets(reason: "startup")
     }
 
@@ -266,6 +323,105 @@ final class PacketEngine: ObservableObject {
         SentryManager.shared.breadcrumbDisconnect()
     }
 
+    // MARK: - Transmission
+
+    /// Send an outbound frame via KISS
+    /// - Parameter frame: The frame to send
+    /// - Parameter completion: Callback with success or error
+    func send(frame: OutboundFrame, completion: ((Result<Void, Error>) -> Void)? = nil) {
+        guard status == .connected, let conn = connection else {
+            let error = NSError(domain: "PacketEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not connected"])
+            TxLog.error(.transport, "Send failed: not connected", error: error, ["frameId": String(frame.id.uuidString.prefix(8))])
+            addErrorLine("Send failed: not connected", category: .transmission)
+            completion?(.failure(error))
+            return
+        }
+
+        // Encode the frame as AX.25
+        let ax25Data = frame.encodeAX25()
+        debugTrace("TX AX.25", [
+            "src": frame.source.display,
+            "dest": frame.destination.display,
+            "type": frame.frameType,
+            "ctl": frame.controlByte.map { String(format: "0x%02X", $0) } ?? "nil",
+            "pid": frame.pid.map { String(format: "0x%02X", $0) } ?? "nil",
+            "len": ax25Data.count,
+            "infoHex": hexPrefix(frame.payload)
+        ])
+        TxLog.ax25Encode(
+            dest: frame.destination.display,
+            src: frame.source.display,
+            type: frame.frameType,
+            size: ax25Data.count
+        )
+        TxLog.hexDump(.ax25, "AX.25 frame", data: ax25Data)
+
+        // Wrap in KISS frame (port 0, data frame)
+        let kissData = KISS.encodeFrame(payload: ax25Data, port: frame.channel)
+        debugTrace("TX KISS", [
+            "port": frame.channel,
+            "len": kissData.count,
+            "hex": hexPrefix(kissData)
+        ])
+        TxLog.kissSend(frameId: frame.id, size: kissData.count)
+        TxLog.hexDump(.kiss, "KISS frame", data: kissData)
+
+        // Log the transmission: user payload as DATA (purple), protocol as SYS
+        let showAsData: Bool
+        if let text = frame.displayInfo, !text.isEmpty {
+            showAsData = frame.isUserPayload || (frame.frameType.lowercased() == "i" && !isProtocolDisplayInfo(text))
+            if showAsData {
+                let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: text)
+                appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
+            } else {
+                addSystemLine("TX: \(frame.source.display) → \(frame.destination.display): \(text)", category: .transmission)
+            }
+        } else {
+            addSystemLine("TX: \(frame.source.display) → \(frame.destination.display): \(frame.displayInfo ?? "")", category: .transmission)
+        }
+        eventLogger?.log(
+            level: .info,
+            category: .transmission,
+            message: "Sending frame",
+            metadata: [
+                "frameId": frame.id.uuidString,
+                "destination": frame.destination.display,
+                "source": frame.source.display,
+                "size": "\(ax25Data.count)"
+            ]
+        )
+
+        // Send via connection
+        conn.send(content: kissData, completion: .contentProcessed { [weak self] error in
+            Task { @MainActor in
+                if let error = error {
+                    TxLog.kissSendComplete(frameId: frame.id, success: false, error: error)
+                    self?.addErrorLine("Send failed: \(error.localizedDescription)", category: .transmission)
+                    self?.eventLogger?.log(
+                        level: .error,
+                        category: .transmission,
+                        message: "Send failed: \(error.localizedDescription)",
+                        metadata: ["frameId": frame.id.uuidString]
+                    )
+                    completion?(.failure(error))
+                } else {
+                    TxLog.kissSendComplete(frameId: frame.id, success: true)
+                    TxLog.outbound(.frame, "Frame transmitted", [
+                        "frameId": String(frame.id.uuidString.prefix(8)),
+                        "dest": frame.destination.display,
+                        "size": kissData.count
+                    ])
+                    self?.addSystemLine("Frame sent successfully", category: .transmission)
+                    // Notify for sender progress highlighting (I-frames with AXDP PID)
+                    if frame.frameType.lowercased() == "i", frame.pid == 0xF0 {
+                        self?.onUserFrameTransmitted?(frame.payload.count)
+                    }
+                    completion?(.success(()))
+                }
+            }
+        })
+    }
+
     private func handleConnectionState(_ state: NWConnection.State, host: String, port: UInt16) {
         switch state {
         case .ready:
@@ -329,11 +485,21 @@ final class PacketEngine: ObservableObject {
     func handleIncomingData(_ data: Data) {
         bytesReceived += data.count
 
+        TxLog.kissReceive(size: data.count)
+        debugTrace("RX KISS chunk", [
+            "len": data.count,
+            "hex": hexPrefix(data)
+        ])
+
         // Always log raw chunk
         appendRawChunk(RawChunk(data: data))
 
         // Parse KISS frames from the chunk
         let ax25Frames = parser.feed(data)
+
+        if !ax25Frames.isEmpty {
+            TxLog.debug(.kiss, "Parsed KISS frames", ["count": ax25Frames.count])
+        }
 
         for ax25Data in ax25Frames {
             processAX25Frame(ax25Data)
@@ -341,7 +507,14 @@ final class PacketEngine: ObservableObject {
     }
 
     private func processAX25Frame(_ ax25Data: Data) {
+        TxLog.hexDump(.ax25, "Received AX.25 frame", data: ax25Data)
+        debugTrace("RX AX.25 raw", [
+            "len": ax25Data.count,
+            "hex": hexPrefix(ax25Data)
+        ])
+
         guard let decoded = AX25.decodeFrame(ax25: ax25Data) else {
+            TxLog.ax25DecodeError(reason: "Invalid frame structure", size: ax25Data.count)
             eventLogger?.log(
                 level: .warning,
                 category: .parser,
@@ -351,6 +524,24 @@ final class PacketEngine: ObservableObject {
             SentryManager.shared.captureDecodeFailure(byteCount: ax25Data.count)
             return
         }
+
+        TxLog.ax25Decode(
+            dest: decoded.to?.display ?? "?",
+            src: decoded.from?.display ?? "?",
+            type: decoded.frameType.rawValue,
+            size: ax25Data.count
+        )
+        debugTrace("RX AX.25 decoded", [
+            "src": decoded.from?.display ?? "?",
+            "dest": decoded.to?.display ?? "?",
+            "via": decoded.via.map { $0.display }.joined(separator: ",").isEmpty ? "(direct)" : decoded.via.map { $0.display }.joined(separator: ","),
+            "type": decoded.frameType.rawValue,
+            "ctl": String(format: "0x%02X", decoded.control),
+            "ctl1": decoded.controlByte1.map { String(format: "0x%02X", $0) } ?? "nil",
+            "pid": decoded.pid.map { String(format: "0x%02X", $0) } ?? "nil",
+            "infoLen": decoded.info.count,
+            "infoHex": hexPrefix(decoded.info)
+        ])
 
         let host = connectedHost ?? settings.host
         let port = connectedPort ?? settings.portValue
@@ -395,8 +586,7 @@ final class PacketEngine: ObservableObject {
     private func insertPacketSorted(_ packet: Packet) {
         // NOTE: Persisted packets load newest-first; appending new packets at the end
         // caused "All Packets" to appear stale because fresh rows landed off-screen.
-        let insertionIndex = PacketEngine.insertionIndex(for: packet, in: packets)
-        packets.insert(packet, at: insertionIndex)
+        PacketOrdering.insert(packet, into: &packets)
         if packets.count > maxPackets {
             packets.removeLast(packets.count - maxPackets)
         }
@@ -423,6 +613,73 @@ final class PacketEngine: ObservableObject {
 
     private func addErrorLine(_ text: String, category: ConsoleEntryRecord.Category) {
         appendConsoleLine(ConsoleLine.error(text), category: category)
+    }
+
+    /// Append decoded AXDP/session chat to the console so it appears in the terminal.
+    /// Called when AXDP chat is received—the raw I-frame payload is binary so it never
+    /// reaches the console via the normal packet path.
+    func appendSessionChatLine(from fromDisplay: String, text: String) {
+        TxLog.debug(.session, "appendSessionChatLine called", [
+            "from": fromDisplay,
+            "textLength": text.count,
+            "preview": String(text.prefix(50)),
+            "currentLineCount": consoleLines.count
+        ])
+        let toDisplay = settings.myCallsign
+        let line = ConsoleLine.packet(from: fromDisplay, to: toDisplay, text: text)
+        appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
+        TxLog.debug(.session, "appendSessionChatLine complete", [
+            "newLineCount": consoleLines.count
+        ])
+    }
+
+    // MARK: - Console Line Duplicate Detection
+
+    /// Check if a console line with this signature was recently seen (within duplicate window)
+    private func isDuplicateConsoleLine(signature: String, timestamp: Date, viaPath: [String]) -> Bool {
+        // First, prune old entries
+        pruneOldConsoleSignatures(before: timestamp)
+
+        // Check if we've seen this signature recently
+        if let existing = recentConsoleSignatures[signature] {
+            // Same content seen within the time window
+            // Only consider it a duplicate if it came via a different path
+            let sameViaPath = existing.viaPath == viaPath
+            if !sameViaPath {
+                return true  // Different path, same content = duplicate
+            }
+        }
+        return false
+    }
+
+    /// Record a console line signature for future duplicate detection
+    private func recordConsoleLineSignature(signature: String, timestamp: Date, viaPath: [String]) {
+        recentConsoleSignatures[signature] = (timestamp: timestamp, viaPath: viaPath)
+    }
+
+    /// Remove signatures older than the duplicate window
+    private func pruneOldConsoleSignatures(before timestamp: Date) {
+        let cutoff = timestamp.addingTimeInterval(-consoleDuplicateWindow)
+        recentConsoleSignatures = recentConsoleSignatures.filter { _, value in
+            value.timestamp > cutoff
+        }
+    }
+
+    /// True if displayInfo is a protocol label (AXDP PING, SABM, etc.), not user chat
+    private func isProtocolDisplayInfo(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { return true }
+        if t.hasPrefix("AXDP ") { return true }
+        if t == "SABM" || t == "SABME" || t == "UA" || t == "DM" || t == "DISC" { return true }
+        if t.hasPrefix("RR(") || t.hasPrefix("RNR(") || t.hasPrefix("REJ(") { return true }
+        if t.hasPrefix("I(") { return true }
+        return false
+    }
+
+    /// Compute content signature for duplicate detection
+    private func computeContentSignature(from: String, to: String, text: String) -> String {
+        let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return "\(from.uppercased())|\(to.uppercased())|\(normalizedText)"
     }
 
     // MARK: - Filtering
@@ -504,13 +761,45 @@ final class PacketEngine: ObservableObject {
         // Feed packet to NET/ROM integration for route inference
         observePacketForNetRom(packet)
 
-        if let text = packet.infoText {
+        // Check for AXDP capabilities in UI frames
+        detectAXDPCapabilities(from: packet)
+
+        // Skip raw I-frame console lines when payload is AXDP (PID 0xF0) – SessionCoordinator
+        // will deliver reassembled chat via appendSessionChatLine. Raw chunks would show truncated text.
+        let skipRawIFrameLine = packet.frameType == .i && packet.pid == 0xF0
+        if packet.frameType == .i {
+            TxLog.debug(.axdp, "I-frame received at wire", [
+                "from": packet.fromDisplay,
+                "to": packet.toDisplay,
+                "pid": packet.pid,
+                "infoLen": packet.info.count,
+                "hasMagic": AXDP.hasMagic(packet.info),
+                "prefixHex": packet.info.prefix(8).map { String(format: "%02X", $0) }.joined()
+            ])
+        }
+
+        if !skipRawIFrameLine, let text = packet.infoText {
+            // Extract via path as array of callsign strings
+            let viaPath = Packet.normalizedViaItems(from: packet.via)
+
+            // Check for duplicate (same content via different path)
+            var isDuplicate = false
+            let signature = computeContentSignature(from: packet.fromDisplay, to: packet.toDisplay, text: text)
+            if isDuplicateConsoleLine(signature: signature, timestamp: packet.timestamp, viaPath: viaPath) {
+                isDuplicate = true
+            }
+            // Track this signature for future duplicate detection
+            recordConsoleLineSignature(signature: signature, timestamp: packet.timestamp, viaPath: viaPath)
+
             let line = ConsoleLine.packet(
                 from: packet.fromDisplay,
                 to: packet.toDisplay,
                 text: text,
-                timestamp: packet.timestamp
+                timestamp: packet.timestamp,
+                via: viaPath,
+                isDuplicate: isDuplicate
             )
+
             appendConsoleLine(line, category: .packet, packetID: packet.id, byteCount: packet.info.count)
         }
 
@@ -534,10 +823,44 @@ final class PacketEngine: ObservableObject {
         if netRomObserveCount <= 5 || netRomObserveCount % 100 == 0 {
             let fromDisplay = packet.from?.display ?? "?"
             let toDisplay = packet.to?.display ?? "?"
-            let viaPath = packet.via.map { $0.display }.joined(separator: ",")
+            let viaPath = Packet.normalizedViaItems(from: packet.via).joined(separator: ",")
             print("[NETROM] observe #\(netRomObserveCount): \(fromDisplay) → \(toDisplay) via=[\(viaPath)]")
         }
         #endif
+    }
+
+    /// Detect and store AXDP capabilities from packet payload (UI frames).
+    /// Capability discovery happens via PING/PONG message exchange.
+    private func detectAXDPCapabilities(from packet: Packet) {
+        guard let fromAddress = packet.from else { return }
+
+        // Only check UI frames for AXDP - I-frames are handled by SessionCoordinator
+        guard packet.frameType == .ui || packet.frameType == .i else { return }
+
+        // Check for AXDP magic header
+        guard AXDP.hasMagic(packet.info) else { return }
+
+        // Decode AXDP message
+        guard let (message, _) = AXDP.Message.decode(from: packet.info) else { return }
+
+        // PING and PONG messages carry capability information
+        if (message.type == .ping || message.type == .pong), let caps = message.capabilities {
+            capabilityStore.store(caps, for: fromAddress.call, ssid: fromAddress.ssid)
+
+            let kind = message.type == .ping ? "PING" : "PONG"
+            TxLog.debug(.capability, "Detected AXDP capabilities from UI frame", [
+                "peer": fromAddress.display,
+                "type": kind,
+                "protoMax": caps.protoMax,
+                "features": caps.features.description
+            ])
+            debugAXDP("Capability \(kind) via UI/I frame", [
+                "peer": fromAddress.display,
+                "protoRange": "\(caps.protoMin)-\(caps.protoMax)",
+                "features": caps.features.description,
+                "infoLen": packet.info.count
+            ])
+        }
     }
 
     private func handleWatchMatch(for packet: Packet) {
@@ -602,7 +925,7 @@ final class PacketEngine: ObservableObject {
     }
 
     private func applyLoadedPackets(_ loaded: [Packet], pinnedIDs: Set<Packet.ID>) {
-        packets = loaded.sorted(by: PacketEngine.shouldPrecede)
+        packets = loaded.sorted(by: PacketOrdering.shouldPrecede)
         pinnedPacketIDs = pinnedIDs
         rebuildStations(from: loaded)
     }
@@ -656,27 +979,6 @@ final class PacketEngine: ObservableObject {
         }
     }
 
-    private static func shouldPrecede(_ lhs: Packet, _ rhs: Packet) -> Bool {
-        if lhs.timestamp != rhs.timestamp {
-            return lhs.timestamp > rhs.timestamp
-        }
-        return lhs.id.uuidString > rhs.id.uuidString
-    }
-
-    private static func insertionIndex(for packet: Packet, in packets: [Packet]) -> Int {
-        var lowerBound = 0
-        var upperBound = packets.count
-        while lowerBound < upperBound {
-            let mid = (lowerBound + upperBound) / 2
-            if shouldPrecede(packet, packets[mid]) {
-                upperBound = mid
-            } else {
-                lowerBound = mid + 1
-            }
-        }
-        return lowerBound
-    }
-
     private func persistConsoleLine(
         _ line: ConsoleLine,
         category: ConsoleEntryRecord.Category,
@@ -684,7 +986,7 @@ final class PacketEngine: ObservableObject {
         byteCount: Int? = nil
     ) {
         guard settings.persistHistory, let persistenceWorker else { return }
-        let metadata = ConsoleEntryMetadata(from: line.from, to: line.to)
+        let metadata = ConsoleEntryMetadata(from: line.from, to: line.to, via: line.via.isEmpty ? nil : line.via)
         let metadataJSON = metadata.hasValues ? DeterministicJSON.encode(metadata) : nil
         let entry = ConsoleEntryRecord(
             id: line.id,
@@ -767,6 +1069,15 @@ final class PacketEngine: ObservableObject {
             .sink { [weak self] enabled in
                 guard enabled else { return }
                 self?.loadPersistedHistory()
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Forward capability store changes to trigger view updates
+    private func observeCapabilityStore() {
+        capabilityStore.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
             }
             .store(in: &cancellables)
     }
@@ -1027,6 +1338,7 @@ final class PacketEngine: ObservableObject {
     }
 
     /// Start the periodic snapshot timer.
+    /// Also triggers initial pruning after first interval to avoid init-time database lock.
     private func startNetRomSnapshotTimer() {
         netRomSnapshotTimer?.invalidate()
         netRomSnapshotTimer = Timer.scheduledTimer(
@@ -1035,6 +1347,8 @@ final class PacketEngine: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.saveNetRomSnapshot()
+                // Prune old entries periodically (first run will be after initial interval)
+                self?.pruneOldNetRomEntries()
             }
         }
     }
@@ -1292,9 +1606,10 @@ struct DebugRebuildResult {
 private struct ConsoleEntryMetadata: Codable {
     let from: String?
     let to: String?
+    let via: [String]?
 
     var hasValues: Bool {
-        from != nil || to != nil
+        from != nil || to != nil || (via != nil && !via!.isEmpty)
     }
 }
 

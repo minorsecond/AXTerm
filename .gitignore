@@ -2,6 +2,7 @@
 CLAUDE.md
 
 DerivedDataTest/
+.ui-test-build
 
 # ---------------------------------------
 # macOS
@@ -116,4 +117,10 @@ fastlane/test_output/
 # ---------------------------------------
 .swiftlint_cache/
 .swiftformat
+
+# ---------------------------------------
+# Docker
+# ---------------------------------------
+Docker/.env
+*.log
 

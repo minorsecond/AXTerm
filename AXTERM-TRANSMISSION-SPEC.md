@@ -1,4 +1,5 @@
 # transmitting.md — AXTerm Transmission Logic (state-of-the-art, compatible)
+Status: 2/2 items complete
 
 > **Scope:** This document guides AI coders implementing **packet transmission** features in **AXTerm** (macOS, Swift/SwiftUI) **above Direwolf** via **KISS**. AXTerm already decodes/sniffs RX frames; this adds a modern TX pipeline, unnumbered (UI) app protocols, and **AX.25 connected-mode** session support (implemented in-app, transmitted via Direwolf).  
 > **Compatibility rule:** Everything must remain usable on existing packet networks. Unknown frames should be ignorable by legacy stations. No “requires everyone to upgrade” assumptions.
@@ -553,7 +554,33 @@ Connected vs UI differences
 
 ⸻
 
-6.x.5 UX requirements for AXDP negotiation + compression
+6.x.5 Transfer metrics extension (completion ACK)
+
+Purpose
+	•	Provide receiver-measured data-phase and processing metrics to the sender
+	•	Avoid wall-clock timestamp dependencies (durations only)
+	•	Keep wire format additive and safely ignorable by older peers
+
+New TLV
+	•	0x40 TransferMetrics (bytes; versioned)
+	•	Currently attached only to the transfer completion ACK (MessageType=ACK, MessageId=0xFFFFFFFF)
+
+TransferMetrics v1 payload (little payload, fixed order)
+	•	version: UInt8 (must be 1)
+	•	dataDurationMs: UInt32 (receiver-measured duration from first valid chunk to last valid chunk)
+	•	processingDurationMs: UInt32 (receiver-side reassembly/decompress/hash/save time)
+	•	bytesReceived: UInt32 (total bytes received over the air, i.e., compressed bytes if used)
+	•	decompressedBytes: UInt32? (optional; present if decompressed size is known)
+
+Checklist
+- [x] Encode TransferMetrics TLV on completion ACK (AXDP extensions only).
+  - Implementation notes: `AXTerm/Transmission/SessionCoordinator.swift` builds AXDP.AXDPTransferMetrics and includes it in completion ACK when `axdpExtensionsEnabled` is true.
+- [x] Decode TransferMetrics TLV and display receiver-measured stats on sender side.
+  - Implementation notes: `AXTerm/Transmission/AXDP.swift` decodes TLV 0x40; `AXTerm/Transmission/SessionCoordinator.swift` stores it on the transfer; `AXTerm/BulkTransferView.swift` displays receiver data rate/duration/processing.
+
+⸻
+
+6.x.6 UX requirements for AXDP negotiation + compression
 
 In the transcript/terminal:
 	•	Show a small “badge” for AXDP:
@@ -577,7 +604,7 @@ In settings:
 
 ⸻
 
-6.x.6 Implementation notes (important correctness points)
+6.x.7 Implementation notes (important correctness points)
 	•	AXDP parser must be strict about lengths (no overruns, no negative lengths).
 	•	Unknown TLVs must be safely skipped.
 	•	Nested TLVs (Capabilities sub-TLVs) must also be length-checked.
@@ -668,6 +695,10 @@ Maintain send buffer for unacked frames:
   - window, paclen, RTO, retries, RTT, ETX/ETT estimates
 - In the terminal transcript, visually group retransmissions and mark them subtly (don’t spam the user).
 
+### 7.8 Session config fixed at connection start; multi-connection stabilization
+- **No mid-transmission changes:** Session parameters (window K, RTO min/max, N2, etc.) are chosen once when the session is created and MUST NOT be changed for the lifetime of that session. Changing parameters during an active transfer would risk corrupting in-flight data and sequence state.
+- **Multiple simultaneous connections to the same destination:** When more than one session exists to the same peer (e.g. direct and via digi), do not flip between per-route learned params. Use a **conservative merged config**: min(window), max(RTO min), max(RTO max), max(N2) across all relevant learned/config sources for that destination. This gives a stable middle ground and avoids chaotic parameter switching or corrupting any of the connections.
+
 ---
 
 ## 8) “Modern networking ideas” that *do* fit amateur packet constraints
@@ -730,6 +761,32 @@ Receiver can send:
 - Or `ACK` with “have up to N, plus these bits”
 
 Sender can restart from missing set.
+
+### 9.3.1 Manifest + end verification + selective retransmit (recommended)
+**Goal:** Cover lost chunks, corrupt chunks (bad checksum), and collisions without blind retransmit.
+
+**At start (manifest):**
+- `FILE_META` already provides: filename, length, whole-file SHA256, chunk size, total chunks.
+- Optional: per-chunk checksums in a manifest TLV (or send `PayloadCRC32` on each `FILE_CHUNK` per 6.x.4).
+- Receiver then knows exactly what set of chunks to expect (indices `0..totalChunks-1`).
+
+**Per chunk (integrity):**
+- Sender: include TLV `0x07 PayloadCRC32` on each `FILE_CHUNK` (CRC32 of payload; spec 6.x.4).
+- Receiver: verify CRC on each chunk; treat bad CRC as "missing" for retransmit (do not count as received).
+
+**At end (ask recipient):**
+- Sender: after sending all chunks, enter "awaiting completion" and periodically send **completion request** (ACK with messageId=0xFFFFFFFE). Receiver responds with completion ACK (all good) or NACK with SACK bitmap (missing/corrupt chunks).
+- Receiver: on completion request, when `receivedChunks.count >= expectedChunks` **and** all CRCs pass:
+  - Reassemble, verify whole-file SHA256, save, send **completion ACK**.
+- Receiver: when still missing chunks or has bad CRCs:
+  - Send **NACK** with SACK bitmap (what we have) so sender can **selectively retransmit** only missing chunks.
+
+**Selective retransmit:**
+- Sender: on NACK with SACK bitmap, decode bitmap, compute missing chunk indices, retransmit only those chunks (with PayloadCRC32). Next completion request will prompt receiver to confirm again.
+- Avoids wasting airtime retransmitting chunks the receiver already has.
+
+**Implementation status:**
+- Implemented: FILE_META, whole-file SHA256 at end, per-chunk PayloadCRC32 on send/verify, completion request (ACK 0xFFFFFFFE), receiver response with completion ACK or NACK+SACK bitmap, sender selective retransmit from NACK, completion ACK/NACK for success/failure.
 
 ### 9.4 Connected mode transfer framing
 Even in connected mode, keep your **AXDP TLV envelope**:
@@ -912,6 +969,7 @@ Reserved TLV ranges:
 	•	Core TLVs: 0x01–0x1F
 	•	Capabilities: 0x20–0x2F
 	•	Compression: 0x30–0x3F
+	•	Extensions: 0x40–0x4F
 	•	Future: 0x80–0xFF experimental/private
 
 LinkKey / PeerKey Definition:

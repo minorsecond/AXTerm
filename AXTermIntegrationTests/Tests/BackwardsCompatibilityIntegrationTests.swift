@@ -168,7 +168,7 @@ final class BackwardsCompatibilityIntegrationTests: XCTestCase {
             XCTAssertTrue(AXDP.hasMagic(payload), "Real AXDP should be detected")
 
             // Verify it decodes correctly
-            if let decoded = AXDP.Message.decode(from: payload) {
+            if let (decoded, _) = AXDP.Message.decode(from: payload) {
                 XCTAssertEqual(decoded.type, .chat)
                 XCTAssertEqual(decoded.messageId, 12345)
             } else {

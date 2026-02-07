@@ -74,6 +74,8 @@ services:
       - MYCALL=TEST-1
       - KISS_PORT=8001
       - AUDIO_DEVICE=pulse
+      # Set MODEM_SPEED to 300, 1200, or 9600 to simulate different baud rates.
+      - MODEM_SPEED=1200
     ports:
       - "8001:8001"
     volumes:
@@ -95,6 +97,8 @@ services:
       - MYCALL=TEST-2
       - KISS_PORT=8002
       - AUDIO_DEVICE=pulse
+      # Set MODEM_SPEED to 300, 1200, or 9600 to simulate different baud rates.
+      - MODEM_SPEED=1200
     ports:
       - "8002:8002"
     volumes:

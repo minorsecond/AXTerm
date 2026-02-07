@@ -32,6 +32,10 @@ final class AppSettingsStore: ObservableObject {
     static let sentrySendPacketContentsKey = "sentrySendPacketContents"
     static let sentrySendConnectionDetailsKey = "sentrySendConnectionDetails"
 
+    // File transfer settings keys
+    static let allowedFileTransferCallsignsKey = "allowedFileTransferCallsigns"
+    static let deniedFileTransferCallsignsKey = "deniedFileTransferCallsigns"
+
     // Analytics settings keys
     static let analyticsTimeframeKey = "analyticsTimeframe"
     static let analyticsBucketKey = "analyticsBucket"
@@ -40,6 +44,15 @@ final class AppSettingsStore: ObservableObject {
     static let analyticsMaxNodesKey = "analyticsMaxNodes"
     static let analyticsHubMetricKey = "analyticsHubMetric"
     static let analyticsStationIdentityModeKey = "analyticsStationIdentityMode"
+
+    // AXDP / transmission extension settings keys
+    static let axdpExtensionsEnabledKey = "axdpExtensionsEnabled"
+    static let axdpAutoNegotiateKey = "axdpAutoNegotiateCapabilities"
+    static let axdpCompressionEnabledKey = "axdpCompressionEnabled"
+    static let axdpCompressionAlgorithmKey = "axdpCompressionAlgorithm"
+    static let axdpMaxDecompressedPayloadKey = "axdpMaxDecompressedPayload"
+    static let axdpShowDecodeDetailsKey = "axdpShowAXDPDecodeDetails"
+    static let adaptiveTransmissionEnabledKey = "adaptiveTransmissionEnabled"
 
     // NET/ROM route settings keys
     static let hideExpiredRoutesKey = "hideExpiredRoutes"
@@ -81,6 +94,15 @@ final class AppSettingsStore: ObservableObject {
     static let defaultAnalyticsHubMetric = "Degree"  // Matches HubMetric.degree.rawValue
     static let defaultAnalyticsStationIdentityMode = "station"  // Group SSIDs by default
 
+    // AXDP defaults (match TxAdaptiveSettings defaults)
+    static let defaultAXDPExtensionsEnabled = true
+    static let defaultAXDPAutoNegotiate = false
+    static let defaultAXDPCompressionEnabled = true
+    static let defaultAXDPCompressionAlgorithm: UInt8 = 1  // AXDPCompression.Algorithm.lz4
+    static let defaultAXDPMaxDecompressedPayload = 4096
+    static let defaultAXDPShowDecodeDetails = false
+    static let defaultAdaptiveTransmissionEnabled = true
+
     // NET/ROM route defaults
     static let defaultHideExpiredRoutes = true  // Hide expired routes by default for clean UI
     static let defaultRouteRetentionDays = 60   // Keep routes for 60 days before pruning
@@ -103,6 +125,11 @@ final class AppSettingsStore: ObservableObject {
     static let defaultLinkStatStaleTTLHours = 12  // Link stats stale after 12 hours of no activity
     static let minLinkStatStaleTTLHours = 1
     static let maxLinkStatStaleTTLHours = 168     // 1 week max
+
+    // Clear timestamp keys for views
+    static let terminalClearedAtKey = "terminalClearedAt"
+    static let consoleClearedAtKey = "consoleClearedAt"
+    static let rawClearedAtKey = "rawClearedAt"
 
     @Published var host: String {
         didSet {
@@ -257,6 +284,99 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistSentrySendConnectionDetails() }
     }
 
+    // MARK: - AXDP / Transmission Extension Settings
+
+    /// Whether AXDP extensions are enabled globally.
+    @Published var axdpExtensionsEnabled: Bool {
+        didSet { persistAXDPExtensionsEnabled() }
+    }
+
+    /// Whether to automatically negotiate AXDP capabilities on connect.
+    @Published var axdpAutoNegotiateCapabilities: Bool {
+        didSet { persistAXDPAutoNegotiateCapabilities() }
+    }
+
+    /// Whether AXDP compression is enabled for AXTerm peers.
+    @Published var axdpCompressionEnabled: Bool {
+        didSet { persistAXDPCompressionEnabled() }
+    }
+
+    /// Preferred AXDP compression algorithm (raw value, mapped to enum elsewhere).
+    @Published var axdpCompressionAlgorithmRaw: UInt8 {
+        didSet { persistAXDPCompressionAlgorithm() }
+    }
+
+    /// Maximum allowed decompressed AXDP payload size (bytes).
+    @Published var axdpMaxDecompressedPayload: Int {
+        didSet { persistAXDPMaxDecompressedPayload() }
+    }
+
+    /// Whether to show detailed AXDP decode information in the transcript.
+    @Published var axdpShowDecodeDetails: Bool {
+        didSet { persistAXDPShowDecodeDetails() }
+    }
+
+    /// Whether adaptive transmission (learning from session and network) is enabled.
+    @Published var adaptiveTransmissionEnabled: Bool {
+        didSet { persistAdaptiveTransmissionEnabled() }
+    }
+
+    // MARK: - File Transfer Settings
+
+    /// Callsigns that are always allowed to send files without prompting
+    @Published var allowedFileTransferCallsigns: [String] {
+        didSet {
+            persistAllowedFileTransferCallsigns()
+        }
+    }
+
+    /// Check if a callsign is in the allowed list
+    func isCallsignAllowedForFileTransfer(_ callsign: String) -> Bool {
+        let normalized = CallsignValidator.normalize(callsign)
+        return allowedFileTransferCallsigns.contains { CallsignValidator.normalize($0) == normalized }
+    }
+
+    /// Add a callsign to the allowed list
+    func allowCallsignForFileTransfer(_ callsign: String) {
+        let normalized = CallsignValidator.normalize(callsign)
+        guard !normalized.isEmpty, !isCallsignAllowedForFileTransfer(normalized) else { return }
+        allowedFileTransferCallsigns.append(normalized)
+    }
+
+    /// Remove a callsign from the allowed list
+    func removeCallsignFromFileTransferAllowlist(_ callsign: String) {
+        let normalized = CallsignValidator.normalize(callsign)
+        allowedFileTransferCallsigns.removeAll { CallsignValidator.normalize($0) == normalized }
+    }
+
+    /// Callsigns that are always denied from sending files
+    @Published var deniedFileTransferCallsigns: [String] {
+        didSet {
+            persistDeniedFileTransferCallsigns()
+        }
+    }
+
+    /// Check if a callsign is in the denied list
+    func isCallsignDeniedForFileTransfer(_ callsign: String) -> Bool {
+        let normalized = CallsignValidator.normalize(callsign)
+        return deniedFileTransferCallsigns.contains { CallsignValidator.normalize($0) == normalized }
+    }
+
+    /// Add a callsign to the denied list
+    func denyCallsignForFileTransfer(_ callsign: String) {
+        let normalized = CallsignValidator.normalize(callsign)
+        guard !normalized.isEmpty, !isCallsignDeniedForFileTransfer(normalized) else { return }
+        deniedFileTransferCallsigns.append(normalized)
+        // Also remove from allow list if present
+        removeCallsignFromFileTransferAllowlist(callsign)
+    }
+
+    /// Remove a callsign from the denied list
+    func removeCallsignFromFileTransferDenylist(_ callsign: String) {
+        let normalized = CallsignValidator.normalize(callsign)
+        deniedFileTransferCallsigns.removeAll { CallsignValidator.normalize($0) == normalized }
+    }
+
     // MARK: - Analytics Settings
 
     @Published var analyticsTimeframe: String {
@@ -384,6 +504,21 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
+    /// Terminal session clear timestamp - messages before this are hidden
+    @Published var terminalClearedAt: Date? {
+        didSet { persistTerminalClearedAt() }
+    }
+
+    /// Console view clear timestamp - messages before this are hidden
+    @Published var consoleClearedAt: Date? {
+        didSet { persistConsoleClearedAt() }
+    }
+
+    /// Raw view clear timestamp - chunks before this are hidden
+    @Published var rawClearedAt: Date? {
+        didSet { persistRawClearedAt() }
+    }
+
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -410,6 +545,8 @@ final class AppSettingsStore: ObservableObject {
         let storedSentryEnabled = defaults.object(forKey: Self.sentryEnabledKey) as? Bool ?? Self.defaultSentryEnabled
         let storedSentrySendPacketContents = defaults.object(forKey: Self.sentrySendPacketContentsKey) as? Bool ?? Self.defaultSentrySendPacketContents
         let storedSentrySendConnectionDetails = defaults.object(forKey: Self.sentrySendConnectionDetailsKey) as? Bool ?? Self.defaultSentrySendConnectionDetails
+        let storedAllowedFileTransferCallsigns = defaults.stringArray(forKey: Self.allowedFileTransferCallsignsKey) ?? []
+        let storedDeniedFileTransferCallsigns = defaults.stringArray(forKey: Self.deniedFileTransferCallsignsKey) ?? []
 
         // Analytics settings
         let storedAnalyticsTimeframe = defaults.string(forKey: Self.analyticsTimeframeKey) ?? Self.defaultAnalyticsTimeframe
@@ -428,6 +565,37 @@ final class AppSettingsStore: ObservableObject {
         let storedAdaptiveStaleMissedBroadcasts = defaults.object(forKey: Self.adaptiveStaleMissedBroadcastsKey) as? Int ?? Self.defaultAdaptiveStaleMissedBroadcasts
         let storedNeighborStaleTTLHours = defaults.object(forKey: Self.neighborStaleTTLHoursKey) as? Int ?? Self.defaultNeighborStaleTTLHours
         let storedLinkStatStaleTTLHours = defaults.object(forKey: Self.linkStatStaleTTLHoursKey) as? Int ?? Self.defaultLinkStatStaleTTLHours
+
+        // AXDP / transmission extension settings
+        let storedAXDPExtensionsEnabled = defaults.object(forKey: Self.axdpExtensionsEnabledKey) as? Bool ?? Self.defaultAXDPExtensionsEnabled
+        let storedAXDPAutoNegotiate = defaults.object(forKey: Self.axdpAutoNegotiateKey) as? Bool ?? Self.defaultAXDPAutoNegotiate
+        let storedAXDPCompressionEnabled = defaults.object(forKey: Self.axdpCompressionEnabledKey) as? Bool ?? Self.defaultAXDPCompressionEnabled
+        let storedAXDPCompressionAlgorithm = (defaults.object(forKey: Self.axdpCompressionAlgorithmKey) as? Int).map { UInt8($0) } ?? Self.defaultAXDPCompressionAlgorithm
+        let storedAXDPMaxDecompressedPayload = defaults.object(forKey: Self.axdpMaxDecompressedPayloadKey) as? Int ?? Self.defaultAXDPMaxDecompressedPayload
+        let storedAXDPShowDecodeDetails = defaults.object(forKey: Self.axdpShowDecodeDetailsKey) as? Bool ?? Self.defaultAXDPShowDecodeDetails
+        let storedAdaptiveTransmissionEnabled = defaults.object(forKey: Self.adaptiveTransmissionEnabledKey) as? Bool ?? Self.defaultAdaptiveTransmissionEnabled
+
+        // Clear timestamps (stored as TimeInterval)
+        let storedTerminalClearedAt: Date?
+        if let timeInterval = defaults.object(forKey: Self.terminalClearedAtKey) as? TimeInterval {
+            storedTerminalClearedAt = Date(timeIntervalSince1970: timeInterval)
+        } else {
+            storedTerminalClearedAt = nil
+        }
+
+        let storedConsoleClearedAt: Date?
+        if let timeInterval = defaults.object(forKey: Self.consoleClearedAtKey) as? TimeInterval {
+            storedConsoleClearedAt = Date(timeIntervalSince1970: timeInterval)
+        } else {
+            storedConsoleClearedAt = nil
+        }
+
+        let storedRawClearedAt: Date?
+        if let timeInterval = defaults.object(forKey: Self.rawClearedAtKey) as? TimeInterval {
+            storedRawClearedAt = Date(timeIntervalSince1970: timeInterval)
+        } else {
+            storedRawClearedAt = nil
+        }
 
         self.host = Self.sanitizeHost(storedHost)
         self.port = Self.sanitizePort(storedPort)
@@ -450,6 +618,8 @@ final class AppSettingsStore: ObservableObject {
         self.sentryEnabled = storedSentryEnabled
         self.sentrySendPacketContents = storedSentrySendPacketContents
         self.sentrySendConnectionDetails = storedSentrySendConnectionDetails
+        self.allowedFileTransferCallsigns = storedAllowedFileTransferCallsigns
+        self.deniedFileTransferCallsigns = storedDeniedFileTransferCallsigns
 
         // Analytics settings
         self.analyticsTimeframe = storedAnalyticsTimeframe
@@ -468,6 +638,20 @@ final class AppSettingsStore: ObservableObject {
         self.adaptiveStaleMissedBroadcasts = max(Self.minAdaptiveStaleMissedBroadcasts, min(Self.maxAdaptiveStaleMissedBroadcasts, storedAdaptiveStaleMissedBroadcasts))
         self.neighborStaleTTLHours = max(Self.minNeighborStaleTTLHours, min(Self.maxNeighborStaleTTLHours, storedNeighborStaleTTLHours))
         self.linkStatStaleTTLHours = max(Self.minLinkStatStaleTTLHours, min(Self.maxLinkStatStaleTTLHours, storedLinkStatStaleTTLHours))
+
+        // AXDP / transmission extension settings
+        self.axdpExtensionsEnabled = storedAXDPExtensionsEnabled
+        self.axdpAutoNegotiateCapabilities = storedAXDPAutoNegotiate
+        self.axdpCompressionEnabled = storedAXDPCompressionEnabled
+        self.axdpCompressionAlgorithmRaw = storedAXDPCompressionAlgorithm
+        self.axdpMaxDecompressedPayload = storedAXDPMaxDecompressedPayload
+        self.axdpShowDecodeDetails = storedAXDPShowDecodeDetails
+        self.adaptiveTransmissionEnabled = storedAdaptiveTransmissionEnabled
+
+        // Clear timestamps
+        self.terminalClearedAt = storedTerminalClearedAt
+        self.consoleClearedAt = storedConsoleClearedAt
+        self.rawClearedAt = storedRawClearedAt
 
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             Self.testRetainedStores.append(self)
@@ -598,6 +782,44 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(sentrySendConnectionDetails, forKey: Self.sentrySendConnectionDetailsKey)
     }
 
+    // MARK: - AXDP / Transmission Extension Persistence
+
+    private func persistAXDPExtensionsEnabled() {
+        defaults.set(axdpExtensionsEnabled, forKey: Self.axdpExtensionsEnabledKey)
+    }
+
+    private func persistAXDPAutoNegotiateCapabilities() {
+        defaults.set(axdpAutoNegotiateCapabilities, forKey: Self.axdpAutoNegotiateKey)
+    }
+
+    private func persistAXDPCompressionEnabled() {
+        defaults.set(axdpCompressionEnabled, forKey: Self.axdpCompressionEnabledKey)
+    }
+
+    private func persistAXDPCompressionAlgorithm() {
+        defaults.set(Int(axdpCompressionAlgorithmRaw), forKey: Self.axdpCompressionAlgorithmKey)
+    }
+
+    private func persistAXDPMaxDecompressedPayload() {
+        defaults.set(axdpMaxDecompressedPayload, forKey: Self.axdpMaxDecompressedPayloadKey)
+    }
+
+    private func persistAXDPShowDecodeDetails() {
+        defaults.set(axdpShowDecodeDetails, forKey: Self.axdpShowDecodeDetailsKey)
+    }
+
+    private func persistAdaptiveTransmissionEnabled() {
+        defaults.set(adaptiveTransmissionEnabled, forKey: Self.adaptiveTransmissionEnabledKey)
+    }
+
+    private func persistAllowedFileTransferCallsigns() {
+        defaults.set(allowedFileTransferCallsigns, forKey: Self.allowedFileTransferCallsignsKey)
+    }
+
+    private func persistDeniedFileTransferCallsigns() {
+        defaults.set(deniedFileTransferCallsigns, forKey: Self.deniedFileTransferCallsignsKey)
+    }
+
     // MARK: - Analytics Settings Persistence
 
     private func persistAnalyticsTimeframe() {
@@ -658,6 +880,30 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(linkStatStaleTTLHours, forKey: Self.linkStatStaleTTLHoursKey)
     }
 
+    private func persistTerminalClearedAt() {
+        if let date = terminalClearedAt {
+            defaults.set(date.timeIntervalSince1970, forKey: Self.terminalClearedAtKey)
+        } else {
+            defaults.removeObject(forKey: Self.terminalClearedAtKey)
+        }
+    }
+
+    private func persistConsoleClearedAt() {
+        if let date = consoleClearedAt {
+            defaults.set(date.timeIntervalSince1970, forKey: Self.consoleClearedAtKey)
+        } else {
+            defaults.removeObject(forKey: Self.consoleClearedAtKey)
+        }
+    }
+
+    private func persistRawClearedAt() {
+        if let date = rawClearedAt {
+            defaults.set(date.timeIntervalSince1970, forKey: Self.rawClearedAtKey)
+        } else {
+            defaults.removeObject(forKey: Self.rawClearedAtKey)
+        }
+    }
+
     private static func registerDefaultsIfNeeded(on defaults: UserDefaults) {
         defaults.register(defaults: [
             Self.hostKey: Self.defaultHost,
@@ -681,6 +927,8 @@ final class AppSettingsStore: ObservableObject {
             Self.sentryEnabledKey: Self.defaultSentryEnabled,
             Self.sentrySendPacketContentsKey: Self.defaultSentrySendPacketContents,
             Self.sentrySendConnectionDetailsKey: Self.defaultSentrySendConnectionDetails,
+            Self.allowedFileTransferCallsignsKey: [String](),
+            Self.deniedFileTransferCallsignsKey: [String](),
             Self.analyticsTimeframeKey: Self.defaultAnalyticsTimeframe,
             Self.analyticsBucketKey: Self.defaultAnalyticsBucket,
             Self.analyticsIncludeViaKey: Self.defaultAnalyticsIncludeVia,
@@ -694,7 +942,14 @@ final class AppSettingsStore: ObservableObject {
             Self.globalStaleTTLHoursKey: Self.defaultGlobalStaleTTLHours,
             Self.adaptiveStaleMissedBroadcastsKey: Self.defaultAdaptiveStaleMissedBroadcasts,
             Self.neighborStaleTTLHoursKey: Self.defaultNeighborStaleTTLHours,
-            Self.linkStatStaleTTLHoursKey: Self.defaultLinkStatStaleTTLHours
+            Self.linkStatStaleTTLHoursKey: Self.defaultLinkStatStaleTTLHours,
+            Self.axdpExtensionsEnabledKey: Self.defaultAXDPExtensionsEnabled,
+            Self.axdpAutoNegotiateKey: Self.defaultAXDPAutoNegotiate,
+            Self.axdpCompressionEnabledKey: Self.defaultAXDPCompressionEnabled,
+            Self.axdpCompressionAlgorithmKey: Self.defaultAXDPCompressionAlgorithm,
+            Self.axdpMaxDecompressedPayloadKey: Self.defaultAXDPMaxDecompressedPayload,
+            Self.axdpShowDecodeDetailsKey: Self.defaultAXDPShowDecodeDetails,
+            Self.adaptiveTransmissionEnabledKey: Self.defaultAdaptiveTransmissionEnabled
         ])
     }
 
