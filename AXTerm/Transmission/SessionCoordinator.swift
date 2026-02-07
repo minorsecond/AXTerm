@@ -938,14 +938,18 @@ final class SessionCoordinator: ObservableObject {
         case .DM:
             sessionManager.handleInboundDM(from: from, path: path, channel: channel)
         case .DISC:
-            sessionManager.handleInboundDISC(from: from, path: path, channel: channel)
+            if let response = sessionManager.handleInboundDISC(from: from, path: path, channel: channel) {
+                sendFrame(response)
+            }
         case .SABM, .SABME:
-            sessionManager.handleInboundSABM(
+            if let response = sessionManager.handleInboundSABM(
                 from: from,
                 to: to,
                 path: path,
                 channel: channel
-            )
+            ) {
+                sendFrame(response)
+            }
         case .UI:
             // Check for text-safe AXDP probe ("AXDP?\r") before binary AXDP check.
             // Text probes don't have AXDP magic, so handleAXDPMessage would skip them.
@@ -959,7 +963,7 @@ final class SessionCoordinator: ObservableObject {
 
     private func handleIFrame(packet: Packet, from: AX25Address, ns: Int, nr: Int, pf: Bool, channel: UInt8) {
         let path = DigiPath.from(packet.via.map { $0.display })
-        sessionManager.handleInboundIFrame(
+        if let response = sessionManager.handleInboundIFrame(
             from: from,
             path: path,
             channel: channel,
@@ -967,7 +971,9 @@ final class SessionCoordinator: ObservableObject {
             nr: nr,
             pf: pf,
             payload: packet.info
-        )
+        ) {
+            sendFrame(response)
+        }
         // AXDP in I-frames is processed only via reassembly (onDataDeliveredForReassembly -> appendToReassemblyAndExtract).
         // Do not call handleAXDPMessage here: the same payload is delivered to reassembly and would cause duplicate
         // handling (e.g. ping/pong delivered twice).
