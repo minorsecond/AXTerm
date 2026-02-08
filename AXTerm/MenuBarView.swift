@@ -81,7 +81,7 @@ struct MenuBarView: View {
 
     private var connectionDetail: String {
         let host = client.connectedHost ?? settings.host
-        let port = client.connectedPort.map(String.init) ?? settings.port
+        let port = client.connectedPort.map(String.init) ?? String(settings.port)
         return "\(host):\(port)"
     }
 

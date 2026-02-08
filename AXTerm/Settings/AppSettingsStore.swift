@@ -198,7 +198,7 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
-    @Published var port: String {
+    @Published var port: Int {
         didSet {
             let sanitized = Self.sanitizePort(port)
             guard sanitized == port else {
@@ -604,7 +604,7 @@ final class AppSettingsStore: ObservableObject {
         self.defaults = defaults
         Self.registerDefaultsIfNeeded(on: defaults)
         let storedHost = defaults.string(forKey: Self.hostKey) ?? Self.defaultHost
-        let storedPort = defaults.string(forKey: Self.portKey) ?? String(Self.defaultPort)
+        let storedPort = defaults.object(forKey: Self.portKey) as? Int ?? Self.defaultPort
         let storedRetention = defaults.object(forKey: Self.retentionKey) as? Int ?? Self.defaultRetention
         let storedConsoleRetention = defaults.object(forKey: Self.consoleRetentionKey) as? Int ?? Self.defaultConsoleRetention
         let storedRawRetention = defaults.object(forKey: Self.rawRetentionKey) as? Int ?? Self.defaultRawRetention
@@ -757,7 +757,7 @@ final class AppSettingsStore: ObservableObject {
     }
 
     var portValue: UInt16 {
-        UInt16(Self.sanitizePort(port)) ?? UInt16(Self.defaultPort)
+        UInt16(port)
     }
 
     private func deferUpdate(_ update: @MainActor @escaping () -> Void) {
@@ -771,11 +771,8 @@ final class AppSettingsStore: ObservableObject {
         return trimmed.isEmpty ? defaultHost : trimmed
     }
 
-    static func sanitizePort(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let portValue = Int(trimmed) else { return String(defaultPort) }
-        let clamped = min(max(portValue, 1), 65_535)
-        return String(clamped)
+    static func sanitizePort(_ value: Int) -> Int {
+        return min(max(value, 1), 65_535)
     }
 
     static func sanitizeRetention(_ value: Int) -> Int {

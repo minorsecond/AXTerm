@@ -238,7 +238,10 @@ final class FlagClearingRaceConditionTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 2)
 
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-2",
                 sessionManager: sessionManager
             )
@@ -281,7 +284,10 @@ final class FlagClearingRaceConditionTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 2)
 
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-2",
                 sessionManager: sessionManager
             )
@@ -328,7 +334,10 @@ final class FlagClearingRaceConditionTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 2)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-2",
                 sessionManager: sessionManager
             )

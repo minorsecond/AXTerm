@@ -26,8 +26,9 @@ struct ContentView: View {
     @StateObject private var sessionCoordinator: SessionCoordinator
 
     @State private var selectedNav: NavigationItem = .terminal
-    @State private var searchText: String = ""
+    @StateObject private var searchModel = AppToolbarSearchModel()
     @State private var filters = PacketFilters()
+    @State private var showFilterPopover = false
 
     @State private var selection = Set<Packet.ID>()
     @State private var inspectorSelection: PacketInspectorSelection?
@@ -81,7 +82,7 @@ struct ContentView: View {
             detailView
         }
         .accessibilityIdentifier("mainWindowRoot")
-        .searchable(text: $searchText, prompt: "Search packets...")
+        .searchable(text: $searchModel.query, prompt: searchPlaceholder)
         .searchFocused($isSearchFocused)
         .toolbar {
             toolbarContent
@@ -174,6 +175,19 @@ struct ContentView: View {
         })
         .onChange(of: settings.myCallsign) { _, newValue in
             sessionCoordinator.localCallsign = newValue
+        }
+        .onChange(of: selectedNav) { _, newValue in
+            syncSearchScope(for: newValue)
+        }
+    }
+
+    private func syncSearchScope(for item: NavigationItem) {
+        switch item {
+        case .terminal: searchModel.scope = .terminal
+        case .packets: searchModel.scope = .packets
+        case .routes: searchModel.scope = .routes
+        case .analytics: searchModel.scope = .analytics
+        case .raw: searchModel.scope = .terminal // Fallback or new scope if needed
         }
     }
 
@@ -270,7 +284,7 @@ struct ContentView: View {
 
             switch selectedNav {
             case .terminal:
-                TerminalView(client: client, settings: settings, sessionCoordinator: sessionCoordinator)
+                TerminalView(client: client, settings: settings, sessionCoordinator: sessionCoordinator, searchModel: searchModel)
             case .packets:
                 packetsView
             case .routes:
@@ -310,7 +324,7 @@ struct ContentView: View {
                 inspectorSelection = nil
             }
         }
-        .onChange(of: searchText) { _, _ in scheduleSelectionSync(with: rows) }
+        .onChange(of: searchModel.query) { _, _ in scheduleSelectionSync(with: rows) }
         .onChange(of: filters) { _, _ in scheduleSelectionSync(with: rows) }
         .onChange(of: client.selectedStationCall) { _, _ in scheduleSelectionSync(with: rows) }
         .onChange(of: client.packets) { _, _ in scheduleSelectionSync(with: rows) }
@@ -320,126 +334,139 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        // Left: Connection status
+        ToolbarItem(placement: .navigation) {
+            connectionStatusIndicator
+        }
+        
+        ToolbarItemGroup(placement: .principal) {
+            if activeFilterCount > 0 {
+                filterSummary
+            }
+        }
+        
+        // Right: Actions
         ToolbarItemGroup(placement: .primaryAction) {
-            connectionControls
-        }
-
-        ToolbarItemGroup(placement: .automatic) {
-            filterControls
-        }
-
-        ToolbarItem(placement: .status) {
-            statusPill
+            connectionActionButton
+            filterButton
         }
     }
 
+    // MARK: - Toolbar Components
+    
+    /// Left zone: Connection status indicator
     @ViewBuilder
-    private var connectionControls: some View {
-        if client.status == .disconnected || client.status == .failed {
-            HStack(spacing: 4) {
-                TextField("Host", text: $settings.host)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 120)
-                    .help("Hostname or IP of the KISS TNC")
-
-                TextField("Port", text: $settings.port)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 60)
-                    .help("TCP port for the KISS TNC")
-
-                Button("Connect") {
-                    client.connect(host: settings.host, port: settings.portValue)
-                }
-                .buttonStyle(.borderedProminent)
-                .help("Connect to the TNC")
-            }
-        } else {
-            Button("Disconnect") {
-                client.disconnect()
-            }
-            .buttonStyle(.bordered)
-            .help("Disconnect from the TNC")
-        }
-    }
-
-    @ViewBuilder
-    private var filterControls: some View {
-        Toggle("UI", isOn: $filters.showUI)
-            .toggleStyle(.button)
-            .buttonStyle(.bordered)
-            .disabled(client.packets.isEmpty)
-            .help("Show UI frames")
-
-        Toggle("I", isOn: $filters.showI)
-            .toggleStyle(.button)
-            .buttonStyle(.bordered)
-            .disabled(client.packets.isEmpty)
-            .help("Show I frames")
-
-        Toggle("S", isOn: $filters.showS)
-            .toggleStyle(.button)
-            .buttonStyle(.bordered)
-            .disabled(client.packets.isEmpty)
-            .help("Show S frames")
-
-        Toggle("U", isOn: $filters.showU)
-            .toggleStyle(.button)
-            .buttonStyle(.bordered)
-            .disabled(client.packets.isEmpty)
-            .help("Show U control frames")
-
-        Divider()
-
-        Toggle("Payload Only", isOn: $filters.payloadOnly)
-            .toggleStyle(.button)
-            .buttonStyle(.bordered)
-            .disabled(client.packets.isEmpty)
-            .help("Show I frames and UI frames with payload")
-
-        Toggle("Pinned", isOn: $filters.onlyPinned)
-            .toggleStyle(.button)
-            .buttonStyle(.bordered)
-            .disabled(client.pinnedPacketIDs.isEmpty)
-            .help("Show pinned packets only")
-
-        if client.selectedStationCall != nil {
-            Button {
-                client.selectedStationCall = nil
-            } label: {
-                Label("Clear Filter", systemImage: "xmark.circle")
-            }
-            .help("Clear station filter")
-        }
-    }
-
-    private var statusPill: some View {
+    private var connectionStatusIndicator: some View {
         HStack(spacing: 6) {
-            // Status indicator dot
             Circle()
                 .fill(statusColor)
                 .frame(width: 8, height: 8)
-
-            // Status text - simple and clean
+            
             Text(statusText)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-
-            // Stats when connected
-            if client.status == .connected {
-                Text("•")
-                    .foregroundStyle(.quaternary)
-                Text(statusDetail)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-            }
         }
         .animation(.easeInOut(duration: 0.2), value: client.status)
     }
+    
+    
+    /// Center zone: Filter summary badge
+    @ViewBuilder
+    private var filterSummary: some View {
+        Text("\(activeFilterCount) filter\(activeFilterCount == 1 ? "" : "s")")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+    
+    /// Right zone: Connection action button (state-aware)
+    @ViewBuilder
+    private var connectionActionButton: some View {
+        switch client.status {
+        case .disconnected, .failed:
+            Menu {
+                Button("Connect…") {
+                    client.connect(host: settings.host, port: settings.portValue)
+                }
+            } label: {
+                Text("Connect…")
+            } primaryAction: {
+                client.connect(host: settings.host, port: settings.portValue)
+            }
+            .buttonStyle(.borderedProminent)
+            .help("Connect to TNC at \(settings.host):\(settings.port)")
+            
+        case .connecting:
+            Button("Cancel") {
+                client.disconnect()
+            }
+            .buttonStyle(.bordered)
+            .help("Cancel connection attempt")
+            
+        case .connected:
+            Menu {
+                Button("Disconnect") {
+                    client.disconnect()
+                }
+                Button("Reconnect") {
+                    client.disconnect()
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        client.connect(host: settings.host, port: settings.portValue)
+                    }
+                }
+                Divider()
+                Button("Copy Address") {
+                    let address = "\(settings.host):\(settings.port)"
+                    ClipboardWriter.copy(address)
+                }
+            } label: {
+                Text("Disconnect")
+            } primaryAction: {
+                client.disconnect()
+            }
+            .buttonStyle(.bordered)
+            .help("Disconnect from TNC")
+        }
+    }
+    
+    /// Right zone: Filter button with popover
+    @ViewBuilder
+    private var filterButton: some View {
+        Button {
+            showFilterPopover.toggle()
+        } label: {
+            Label("Filters", systemImage: "line.3.horizontal.decrease.circle")
+                .labelStyle(.iconOnly)
+        }
+        .buttonStyle(.bordered)
+        .help("Packet filters")
+        .popover(isPresented: $showFilterPopover) {
+            FilterPopoverView(
+                filters: $filters,
+                hasPackets: !client.packets.isEmpty,
+                hasPinnedPackets: !client.pinnedPacketIDs.isEmpty,
+                onReset: {
+                    filters = PacketFilters()
+                    showFilterPopover = false
+                }
+            )
+        }
+        .overlay(alignment: .topTrailing) {
+            if activeFilterCount > 0 {
+                Circle()
+                    .fill(.blue)
+                    .frame(width: 8, height: 8)
+                    .offset(x: 4, y: -4)
+            }
+        }
+    }
+
+    // MARK: - Computed Properties
 
     private var statusText: String {
         switch client.status {
         case .connected:
-            return connectionHostPort
+            return "TNC: \(connectionHostPort)"
         case .connecting:
             return "Connecting..."
         case .disconnected:
@@ -447,6 +474,29 @@ struct ContentView: View {
         case .failed:
             return "Connection Failed"
         }
+    }
+    
+    private var searchPlaceholder: String {
+        switch selectedNav {
+        case .terminal:
+            return "Filter terminal output"
+        case .packets:
+            return "Search packets"
+        default:
+            return "Search"
+        }
+    }
+    
+    private var activeFilterCount: Int {
+        var count = 0
+        let defaultFilters = PacketFilters()
+        if filters.showUI != defaultFilters.showUI { count += 1 }
+        if filters.showI != defaultFilters.showI { count += 1 }
+        if filters.showS != defaultFilters.showS { count += 1 }
+        if filters.showU != defaultFilters.showU { count += 1 }
+        if filters.payloadOnly != defaultFilters.payloadOnly { count += 1 }
+        if filters.onlyPinned != defaultFilters.onlyPinned { count += 1 }
+        return count
     }
 
     private var statusDetail: String {
@@ -464,7 +514,7 @@ struct ContentView: View {
 
     private var connectionHostPort: String {
         let hostValue = client.connectedHost ?? settings.host
-        let portValue = client.connectedPort.map(String.init) ?? settings.port
+        let portValue = client.connectedPort.map(String.init) ?? String(settings.port)
         return "\(hostValue):\(portValue)"
     }
 
@@ -498,7 +548,7 @@ struct ContentView: View {
 
     private var filteredPackets: [Packet] {
         client.filteredPackets(
-            search: searchText,
+            search: searchModel.query,
             filters: filters,
             stationCall: client.selectedStationCall
         )
