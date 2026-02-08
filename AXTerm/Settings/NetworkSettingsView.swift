@@ -90,7 +90,7 @@ struct NetworkSettingsView: View {
                     }
                 }
                 
-                Divider()
+
                 
                 LabeledContent("Route Retention Period") {
                     HStack(spacing: 8) {

@@ -92,7 +92,7 @@ struct TransmissionSettingsView: View {
                     }
                     .padding(.vertical, 4)
                     
-                    Divider()
+
                     
                     LabeledContent("Overrides") {
                         HStack {
@@ -288,7 +288,7 @@ struct TransmissionSettingsView: View {
                         .monospaced()
                         .frame(width: 50, alignment: .trailing)
                 } else {
-                     TextField("Value", value: Binding(
+                     TextField("", value: Binding(
                          get: { setting.manualValue },
                          set: { onValueChange($0) }
                      ), format: .number)

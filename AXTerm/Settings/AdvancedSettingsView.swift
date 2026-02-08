@@ -159,8 +159,7 @@ struct HistorySettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                     
-                    Divider()
-                        .padding(.vertical, 4)
+
                     
                     // Custom Limits Section
                     if settings.retentionDuration == .custom {

@@ -28,7 +28,7 @@ struct NumericInput: View {
     
     var body: some View {
         HStack(spacing: 8) {
-            TextField(title, text: $textValue)
+            TextField("", text: $textValue)
                 .textFieldStyle(.roundedBorder)
                 .multilineTextAlignment(.trailing)
                 .focused($isFocused)
