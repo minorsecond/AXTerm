@@ -81,6 +81,10 @@ final class AX25Session: @unchecked Sendable {
     /// Whether we initiated this session (vs responding to incoming SABM)
     let isInitiator: Bool
 
+    /// Via path from the most recently received inbound I-frame (for display only).
+    /// Updated each time handleInboundIFrame delivers data.
+    var lastReceivedVia: [String] = []
+
     init(
         localAddress: AX25Address,
         remoteAddress: AX25Address,
@@ -1235,6 +1239,9 @@ final class AX25SessionManager: ObservableObject {
         session.acknowledgeUpTo(from: vaBefore, to: nr)
         session.statistics.recordReceived(bytes: payload.count)
         session.touch()
+
+        // Record the actual inbound via path so callbacks can thread it to the UI.
+        session.lastReceivedVia = path.digis.map { $0.display }
 
         onOutboundAckReceived?(session, session.va)
 

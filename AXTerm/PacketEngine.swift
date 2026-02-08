@@ -618,15 +618,16 @@ final class PacketEngine: ObservableObject {
     /// Append decoded AXDP/session chat to the console so it appears in the terminal.
     /// Called when AXDP chat is received—the raw I-frame payload is binary so it never
     /// reaches the console via the normal packet path.
-    func appendSessionChatLine(from fromDisplay: String, text: String) {
+    func appendSessionChatLine(from fromDisplay: String, text: String, via: [String] = []) {
         TxLog.debug(.session, "appendSessionChatLine called", [
             "from": fromDisplay,
             "textLength": text.count,
             "preview": String(text.prefix(50)),
+            "via": via.joined(separator: ","),
             "currentLineCount": consoleLines.count
         ])
         let toDisplay = settings.myCallsign
-        let line = ConsoleLine.packet(from: fromDisplay, to: toDisplay, text: text)
+        let line = ConsoleLine.packet(from: fromDisplay, to: toDisplay, text: text, via: via)
         appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
         TxLog.debug(.session, "appendSessionChatLine complete", [
             "newLineCount": consoleLines.count
@@ -677,17 +678,18 @@ final class PacketEngine: ObservableObject {
         
         // Check if the user is a participant in this session
         // If source OR destination matches myCallsign, it's a user session - skip it
-        // because SessionCoordinator will deliver it via appendSessionChatLine
-        let myCall = settings.myCallsign.uppercased()
-        guard !myCall.isEmpty else {
+        // because SessionCoordinator will deliver it via appendSessionChatLine.
+        // Use addressMatchesDisplay() to correctly handle SSID (e.g. "K0EPI-7" vs base "K0EPI")
+        let myCallDisplay = settings.myCallsign
+        guard !myCallDisplay.isEmpty else {
             // If myCallsign is not set, show all I-frames (nothing to match against)
             return false
         }
-        
-        let fromCall = packet.from?.call.uppercased() ?? ""
-        let toCall = packet.to?.call.uppercased() ?? ""
-        
-        let isUserSession = fromCall == myCall || toCall == myCall
+
+        let fromMatch = packet.from.map { CallsignNormalizer.addressMatchesDisplay($0, myCallDisplay) } ?? false
+        let toMatch = packet.to.map { CallsignNormalizer.addressMatchesDisplay($0, myCallDisplay) } ?? false
+
+        let isUserSession = fromMatch || toMatch
         
         // Skip if it's the user's session, show if it's monitored traffic
         return isUserSession
