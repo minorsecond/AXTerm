@@ -37,6 +37,8 @@ final class SQLiteEventLogStore: EventLogStore, @unchecked Sendable {
     func deleteAll() throws {
         try dbQueue.write { db in
             _ = try AppEventRecord.deleteAll(db)
+            // Reclaim disk space immediately
+            try db.execute(sql: "PRAGMA incremental_vacuum")
         }
     }
 
@@ -58,6 +60,8 @@ final class SQLiteEventLogStore: EventLogStore, @unchecked Sendable {
                 """,
                 arguments: [overflow]
             )
+            // Reclaim disk space incrementally (up to 100 pages ~400KB at a time)
+            try db.execute(sql: "PRAGMA incremental_vacuum(100)")
         }
     }
 }
