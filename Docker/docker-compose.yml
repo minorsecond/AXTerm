@@ -1,0 +1,126 @@
+version: "3.8"
+
+# AXTerm Packet Radio Test Environment
+#
+# This provides several testing configurations:
+#
+# 1. Simple KISS Relay (default):
+#    docker compose up kiss-relay
+#    - Fastest, simplest option for basic connectivity tests
+#    - Just forwards KISS frames between ports
+#
+# 2. RF Channel Simulator:
+#    docker compose up rf-simulator
+#    - Simulates actual RF channel behavior
+#    - Includes propagation delay, collision detection
+#    - Decodes and logs AX.25 frames
+#    - Good for protocol testing
+#
+# 3. Full Direwolf Setup:
+#    docker compose --profile direwolf up
+#    - Two real Direwolf TNC instances
+#    - Simulated audio link between them
+#    - Most realistic but requires more resources
+
+services:
+  # Simple KISS frame relay (default)
+  kiss-relay:
+    build:
+      context: .
+      dockerfile: Dockerfile.relay
+    container_name: axterm-kiss-relay
+    ports:
+      - "8001:8001"   # Station A
+      - "8002:8002"   # Station B
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8001"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # RF Channel Simulator with AX.25 awareness
+  rf-simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile.simulator
+    container_name: axterm-rf-simulator
+    ports:
+      - "8001:8001"   # Station A
+      - "8002:8002"   # Station B
+      - "8003:8003"   # Station C (optional)
+      - "8004:8004"   # Station D (optional)
+    environment:
+      - PROPAGATION_DELAY_MS=10
+      - TX_DELAY_MS=100
+      - BIT_ERROR_RATE=0.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8001"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    profiles:
+      - simulator
+
+  # Direwolf TNC - Station A (TEST-1)
+  direwolf-a:
+    build:
+      context: .
+      dockerfile: Dockerfile.direwolf
+    container_name: axterm-direwolf-a
+    hostname: station-a
+    environment:
+      - MYCALL=TEST-1
+      - KISS_PORT=8001
+      - AUDIO_DEVICE=pulse
+      # Set MODEM_SPEED to 300, 1200, or 9600 to simulate different baud rates.
+      - MODEM_SPEED=1200
+    ports:
+      - "8001:8001"
+    volumes:
+      - audio-channel:/audio
+    depends_on:
+      - audio-bridge
+    restart: unless-stopped
+    profiles:
+      - direwolf
+
+  # Direwolf TNC - Station B (TEST-2)
+  direwolf-b:
+    build:
+      context: .
+      dockerfile: Dockerfile.direwolf
+    container_name: axterm-direwolf-b
+    hostname: station-b
+    environment:
+      - MYCALL=TEST-2
+      - KISS_PORT=8002
+      - AUDIO_DEVICE=pulse
+      # Set MODEM_SPEED to 300, 1200, or 9600 to simulate different baud rates.
+      - MODEM_SPEED=1200
+    ports:
+      - "8002:8002"
+    volumes:
+      - audio-channel:/audio
+    depends_on:
+      - audio-bridge
+    restart: unless-stopped
+    profiles:
+      - direwolf
+
+  # Audio bridge for Direwolf inter-communication
+  audio-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.audiobridge
+    container_name: axterm-audio-bridge
+    volumes:
+      - audio-channel:/audio
+    restart: unless-stopped
+    profiles:
+      - direwolf
+
+volumes:
+  audio-channel:
+    driver: local

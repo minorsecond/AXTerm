@@ -11,13 +11,23 @@ struct StationRowView: View {
     let station: Station
     let isSelected: Bool
 
+    /// AXDP capability for this station (nil if not known)
+    var capability: AXDPCapability?
+
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(station.call)
-                    .font(.system(.body, design: .monospaced))
-                    .fontWeight(isSelected ? .semibold : .regular)
-                    .help("Station callsign")
+                HStack(spacing: 6) {
+                    Text(station.call)
+                        .font(.system(.body, design: .monospaced))
+                        .fontWeight(isSelected ? .semibold : .regular)
+                        .help("Station callsign")
+
+                    // AXDP capability badge
+                    if capability != nil {
+                        AXDPCapabilityBadge(capability: capability, compact: true)
+                    }
+                }
 
                 Text(station.subtitle)
                     .font(.caption)
@@ -43,4 +53,36 @@ struct StationRowView: View {
         .background(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
         .cornerRadius(4)
     }
+}
+
+// MARK: - Preview
+
+#Preview {
+    VStack(spacing: 8) {
+        StationRowView(
+            station: Station(call: "N0CALL", lastHeard: Date(), heardCount: 15, lastVia: ["WIDE1-1"]),
+            isSelected: false,
+            capability: .defaultLocal()
+        )
+
+        StationRowView(
+            station: Station(call: "K0ABC-5", lastHeard: Date(), heardCount: 3, lastVia: []),
+            isSelected: true,
+            capability: nil
+        )
+
+        StationRowView(
+            station: Station(call: "W0XYZ", lastHeard: Date(), heardCount: 42, lastVia: ["RELAY", "DIGI"]),
+            isSelected: false,
+            capability: AXDPCapability(
+                protoMin: 1, protoMax: 1,
+                features: [.sack],
+                compressionAlgos: [],
+                maxDecompressedLen: 4096,
+                maxChunkLen: 128
+            )
+        )
+    }
+    .padding()
+    .frame(width: 250)
 }

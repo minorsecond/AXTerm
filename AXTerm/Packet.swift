@@ -18,6 +18,8 @@ struct Packet: Identifiable, Hashable, Sendable {
     let via: [AX25Address]
     let frameType: FrameType
     let control: UInt8
+    /// Second control byte (used for I-frames in modulo-8 mode)
+    let controlByte1: UInt8?
     let pid: UInt8?
     let info: Data
     /// Cached text decoding of `info` (if mostly printable ASCII).
@@ -44,10 +46,7 @@ struct Packet: Identifiable, Hashable, Sendable {
     }
 
     var viaDisplay: String {
-        guard !via.isEmpty else { return "" }
-        return via.map { addr in
-            addr.repeated ? "\(addr.display)*" : addr.display
-        }.joined(separator: ",")
+        Packet.normalizedViaItems(from: via).joined(separator: ",")
     }
 
     var typeDisplay: String {
@@ -55,6 +54,10 @@ struct Packet: Identifiable, Hashable, Sendable {
     }
     
     var infoDisplay: String {
+        // Check for NET/ROM broadcast first
+        if let netromSummary = netRomBroadcastSummary {
+            return netromSummary
+        }
         if let text = infoText {
             return text
                 .replacingOccurrences(of: "\r", with: " ")
@@ -65,6 +68,10 @@ struct Packet: Identifiable, Hashable, Sendable {
     }
 
     var infoPreview: String {
+        // Check for NET/ROM broadcast first
+        if let netromSummary = netRomBroadcastSummary {
+            return netromSummary.wordSafeTruncate(limit: Self.infoPreviewLimit)
+        }
         if let text = infoText {
             let trimmed = text.replacingOccurrences(of: "\r", with: " ")
                               .replacingOccurrences(of: "\n", with: " ")
@@ -74,6 +81,30 @@ struct Packet: Identifiable, Hashable, Sendable {
             return ""
         }
         return "[\(info.count) bytes]"
+    }
+
+    /// Returns a human-readable summary if this is a NET/ROM broadcast packet.
+    var netRomBroadcastSummary: String? {
+        guard isNetRomBroadcast else { return nil }
+        if let result = NetRomBroadcastParser.parse(packet: self) {
+            let count = result.entries.count
+            let routeWord = count == 1 ? "route" : "routes"
+            return "NET/ROM broadcast: \(count) \(routeWord)"
+        }
+        return nil
+    }
+
+    /// Returns true if this packet is a NET/ROM routing broadcast (PID 0xCF to NODES).
+    var isNetRomBroadcast: Bool {
+        guard let pid = pid, pid == NetRomBroadcastParser.netromPID else { return false }
+        guard let toCall = to?.call.uppercased(), toCall == "NODES" else { return false }
+        return true
+    }
+
+    /// Returns parsed NET/ROM broadcast entries if this is a valid broadcast packet.
+    var netRomBroadcastResult: NetRomBroadcastResult? {
+        guard isNetRomBroadcast else { return nil }
+        return NetRomBroadcastParser.parse(packet: self)
     }
 
     var infoTooltip: String {
@@ -95,6 +126,11 @@ struct Packet: Identifiable, Hashable, Sendable {
         PayloadFormatter.hexString(info)
     }
 
+    /// Decoded control field information
+    var controlFieldDecoded: AX25ControlFieldDecoded {
+        AX25ControlFieldDecoder.decode(control: control, controlByte1: controlByte1)
+    }
+
     init(
         id: UUID = UUID(),
         timestamp: Date = Date(),
@@ -103,6 +139,7 @@ struct Packet: Identifiable, Hashable, Sendable {
         via: [AX25Address] = [],
         frameType: FrameType = .unknown,
         control: UInt8 = 0,
+        controlByte1: UInt8? = nil,
         pid: UInt8? = nil,
         info: Data = Data(),
         rawAx25: Data = Data(),
@@ -116,11 +153,36 @@ struct Packet: Identifiable, Hashable, Sendable {
         self.via = via
         self.frameType = frameType
         self.control = control
+        self.controlByte1 = controlByte1
         self.pid = pid
         self.info = info
         self.infoText = infoText ?? Self.computeInfoText(from: info)
         self.rawAx25 = rawAx25
         self.kissEndpoint = kissEndpoint
+    }
+
+    static func normalizedViaItems(from via: [AX25Address]) -> [String] {
+        guard !via.isEmpty else { return [] }
+
+        var order: [String] = []
+        var displayByKey: [String: String] = [:]
+        var repeatedByKey: [String: Bool] = [:]
+
+        for address in via {
+            let key = "\(address.call)-\(address.ssid)"
+            if displayByKey[key] == nil {
+                displayByKey[key] = address.display
+                order.append(key)
+            }
+            if address.repeated {
+                repeatedByKey[key] = true
+            }
+        }
+
+        return order.compactMap { key in
+            guard let display = displayByKey[key] else { return nil }
+            return (repeatedByKey[key] ?? false) ? "\(display)*" : display
+        }
     }
 }
 

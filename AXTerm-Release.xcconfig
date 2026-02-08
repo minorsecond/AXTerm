@@ -9,7 +9,7 @@
 
 // Note: Use $(/) to escape the // in URLs so they are not interpreted as comments.
 // Using the same DSN for now; swap for production DSN later if needed.
-SENTRY_DSN = https:/$(/)87147bb8450faa84e947bc14d48c710d@o4510791186776064.ingest.us.sentry.io/4510791187759104
+SENTRY_DSN = https:$(/)$(/)5fb37d1ce28b0cf2345b87e31630a442@o4510791070908416.ingest.us.sentry.io$(/)4510791072940032
 
 // Environment tag sent to Sentry to distinguish events by build type.
 SENTRY_ENVIRONMENT = production

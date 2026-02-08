@@ -27,6 +27,13 @@
 			remoteGlobalIDString = 3487E89C2F2AA2A700DF0172;
 			remoteInfo = AXTerm;
 		};
+		INTG00012F3C000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 3487E8952F2AA2A700DF0172 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 3487E89C2F2AA2A700DF0172;
+			remoteInfo = AXTerm;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
@@ -35,11 +42,32 @@
 		3487E8B42F2AA2A800DF0172 /* AXTermUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AXTermUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AABBCC112F3B000000000001 /* AXTerm-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AXTerm-Debug.xcconfig"; sourceTree = "<group>"; };
 		AABBCC112F3B000000000002 /* AXTerm-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AXTerm-Release.xcconfig"; sourceTree = "<group>"; };
+		INTG00012F3C000000000001 /* AXTermIntegrationTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AXTermIntegrationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		34C5FAA12F2F600000E7F39B /* Exceptions for "AXTerm" folder in "AXTerm" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 3487E89C2F2AA2A700DF0172 /* AXTerm */;
+		};
+		INTG00012F3C00000000000D /* Exceptions for "AXTermIntegrationTests" folder in "AXTermIntegrationTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = INTG00012F3C000000000005 /* AXTermIntegrationTests */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		3487E89F2F2AA2A700DF0172 /* AXTerm */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				34C5FAA12F2F600000E7F39B /* Exceptions for "AXTerm" folder in "AXTerm" target */,
+			);
 			path = AXTerm;
 			sourceTree = "<group>";
 		};
@@ -51,6 +79,14 @@
 		3487E8B72F2AA2A800DF0172 /* AXTermUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = AXTermUITests;
+			sourceTree = "<group>";
+		};
+		INTG00012F3C000000000003 /* AXTermIntegrationTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				INTG00012F3C00000000000D /* Exceptions for "AXTermIntegrationTests" folder in "AXTermIntegrationTests" target */,
+			);
+			path = AXTermIntegrationTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -80,6 +116,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		INTG00012F3C000000000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -91,6 +134,7 @@
 				3487E89F2F2AA2A700DF0172 /* AXTerm */,
 				3487E8AD2F2AA2A800DF0172 /* AXTermTests */,
 				3487E8B72F2AA2A800DF0172 /* AXTermUITests */,
+				INTG00012F3C000000000003 /* AXTermIntegrationTests */,
 				3487E89E2F2AA2A700DF0172 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -101,6 +145,7 @@
 				3487E89D2F2AA2A700DF0172 /* AXTerm.app */,
 				3487E8AA2F2AA2A800DF0172 /* AXTermTests.xctest */,
 				3487E8B42F2AA2A800DF0172 /* AXTermUITests.xctest */,
+				INTG00012F3C000000000001 /* AXTermIntegrationTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -179,6 +224,29 @@
 			productReference = 3487E8B42F2AA2A800DF0172 /* AXTermUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		INTG00012F3C000000000005 /* AXTermIntegrationTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = INTG00012F3C00000000000A /* Build configuration list for PBXNativeTarget "AXTermIntegrationTests" */;
+			buildPhases = (
+				INTG00012F3C000000000006 /* Sources */,
+				INTG00012F3C000000000004 /* Frameworks */,
+				INTG00012F3C000000000007 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				INTG00012F3C000000000008 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				INTG00012F3C000000000003 /* AXTermIntegrationTests */,
+			);
+			name = AXTermIntegrationTests;
+			packageProductDependencies = (
+			);
+			productName = AXTermIntegrationTests;
+			productReference = INTG00012F3C000000000001 /* AXTermIntegrationTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -197,6 +265,10 @@
 						TestTargetID = 3487E89C2F2AA2A700DF0172;
 					};
 					3487E8B32F2AA2A800DF0172 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = 3487E89C2F2AA2A700DF0172;
+					};
+					INTG00012F3C000000000005 = {
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = 3487E89C2F2AA2A700DF0172;
 					};
@@ -223,6 +295,7 @@
 				3487E89C2F2AA2A700DF0172 /* AXTerm */,
 				3487E8A92F2AA2A800DF0172 /* AXTermTests */,
 				3487E8B32F2AA2A800DF0172 /* AXTermUITests */,
+				INTG00012F3C000000000005 /* AXTermIntegrationTests */,
 			);
 		};
 /* End PBXProject section */
@@ -243,6 +316,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		3487E8B22F2AA2A800DF0172 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		INTG00012F3C000000000007 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -273,6 +353,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		INTG00012F3C000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -285,6 +372,11 @@
 			isa = PBXTargetDependency;
 			target = 3487E89C2F2AA2A700DF0172 /* AXTerm */;
 			targetProxy = 3487E8B52F2AA2A800DF0172 /* PBXContainerItemProxy */;
+		};
+		INTG00012F3C000000000008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 3487E89C2F2AA2A700DF0172 /* AXTerm */;
+			targetProxy = INTG00012F3C000000000002 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -413,10 +505,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = AXTerm/AXTerm.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readwrite;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
@@ -430,9 +524,11 @@
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_FILE = AXTerm/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AXTerm;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.travel";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "2026 Ross Wardrup";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AXTerm needs local network access to connect to local packet-radio services (e.g., Direwolf KISS TCP) running on this Mac or on the LAN.";
-				INFOPLIST_KEY_SentryDSN = "$(SENTRY_DSN)";
 				INFOPLIST_KEY_SentryDebug = "$(SENTRY_DEBUG)";
 				INFOPLIST_KEY_SentryEnvironment = "$(SENTRY_ENVIRONMENT)";
 				INFOPLIST_KEY_SentryProfilesSampleRate = "$(SENTRY_PROFILES_SAMPLE_RATE)";
@@ -460,10 +556,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = AXTerm/AXTerm.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_APP_SANDBOX = YES;
+				ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER = readwrite;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
@@ -477,9 +575,11 @@
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_FILE = AXTerm/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AXTerm;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.travel";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "2026 Ross Wardrup";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AXTerm needs local network access to connect to local packet-radio services (e.g., Direwolf KISS TCP) running on this Mac or on the LAN.";
-				INFOPLIST_KEY_SentryDSN = "$(SENTRY_DSN)";
 				INFOPLIST_KEY_SentryDebug = "$(SENTRY_DEBUG)";
 				INFOPLIST_KEY_SentryEnvironment = "$(SENTRY_ENVIRONMENT)";
 				INFOPLIST_KEY_SentryProfilesSampleRate = "$(SENTRY_PROFILES_SAMPLE_RATE)";
@@ -577,6 +677,48 @@
 			};
 			name = Release;
 		};
+		INTG00012F3C00000000000B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AXTermIntegrationTests/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rosswardrup.AXTermIntegrationTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AXTerm.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AXTerm";
+			};
+			name = Debug;
+		};
+		INTG00012F3C00000000000C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AXTermIntegrationTests/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rosswardrup.AXTermIntegrationTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AXTerm.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AXTerm";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -612,6 +754,15 @@
 			buildConfigurations = (
 				3487E8C52F2AA2A800DF0172 /* Debug */,
 				3487E8C62F2AA2A800DF0172 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		INTG00012F3C00000000000A /* Build configuration list for PBXNativeTarget "AXTermIntegrationTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				INTG00012F3C00000000000B /* Debug */,
+				INTG00012F3C00000000000C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

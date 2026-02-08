@@ -19,6 +19,7 @@ struct PacketInspectorView: View {
     private enum PayloadViewMode: String, CaseIterable {
         case hex = "Hex"
         case ascii = "ASCII"
+        case formatted = "Formatted"
     }
 
     private enum InspectorTab: String, CaseIterable {
@@ -112,8 +113,8 @@ struct PacketInspectorView: View {
                 }
 
                 HStack(spacing: 10) {
-                    FrameTypeBadge(text: packet.frameType.shortLabel)
-                        .help(packet.frameType.helpText)
+                    FrameTypeBadge(text: packet.classification.badge)
+                        .help(packet.classification.tooltip)
                     Text(packet.timestamp, style: .date)
                         .foregroundStyle(.secondary)
                     Text(packet.timestamp, style: .time)
@@ -151,15 +152,27 @@ struct PacketInspectorView: View {
             pathSection
             frameSection
             actionSection
-            detectionSection
+            if packet.isNetRomBroadcast {
+                netRomBroadcastSection
+            } else {
+                detectionSection
+            }
         }
     }
 
     private var payloadTab: some View {
         VStack(alignment: .leading, spacing: 16) {
             payloadToolbar
-            payloadFindBar
+            if payloadViewMode != .formatted {
+                payloadFindBar
+            }
             payloadContent
+        }
+        .onAppear {
+            // Default to formatted view for NET/ROM broadcasts
+            if packet.isNetRomBroadcast && payloadViewMode == .hex {
+                payloadViewMode = .formatted
+            }
         }
     }
 
@@ -276,12 +289,27 @@ struct PacketInspectorView: View {
 
     private var frameSection: some View {
         GroupBox("Frame") {
+            let decoded = packet.controlFieldDecoded
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
                 GridRow {
                     Text("Type:")
                         .foregroundStyle(.secondary)
                     Text(packet.frameType.displayName)
                         .font(.system(.body, design: .monospaced))
+                }
+
+                GridRow {
+                    Text("Classification:")
+                        .foregroundStyle(.secondary)
+                    Text(packet.classification.badge)
+                        .font(.system(.body, design: .monospaced))
+                }
+
+                GridRow {
+                    Text("Explanation:")
+                        .foregroundStyle(.secondary)
+                    Text(packet.classification.tooltip)
+                        .font(.system(.body))
                 }
 
                 if let pid = packet.pid {
@@ -301,6 +329,33 @@ struct PacketInspectorView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)
+
+            DisclosureGroup("Technical details") {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
+                    GridRow {
+                        Text("N(S):")
+                            .foregroundStyle(.secondary)
+                        Text(decoded.ns.map { "\($0)" } ?? "—")
+                            .font(.system(.body, design: .monospaced))
+                    }
+
+                    GridRow {
+                        Text("N(R):")
+                            .foregroundStyle(.secondary)
+                        Text(decoded.nr.map { "\($0)" } ?? "—")
+                            .font(.system(.body, design: .monospaced))
+                    }
+
+                    GridRow {
+                        Text("P/F:")
+                            .foregroundStyle(.secondary)
+                        Text(decoded.pf.map { $0 == 1 ? "Set" : "Clear" } ?? "—")
+                            .font(.system(.body, design: .monospaced))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 6)
+            }
         }
     }
 
@@ -355,6 +410,84 @@ struct PacketInspectorView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+    }
+
+    // MARK: - NET/ROM Broadcast Section
+
+    private var netRomBroadcastSection: some View {
+        GroupBox("NET/ROM Routing Broadcast") {
+            VStack(alignment: .leading, spacing: 12) {
+                if let result = packet.netRomBroadcastResult {
+                    // Header info
+                    HStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Origin")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(result.originCallsign)
+                                .font(.system(.body, design: .monospaced).weight(.medium))
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Routes")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("\(result.entries.count)")
+                                .font(.system(.body, design: .monospaced).weight(.medium))
+                        }
+
+                        Spacer()
+                    }
+                    .padding(.bottom, 4)
+
+                    Divider()
+
+                    // Routing entries table
+                    if result.entries.isEmpty {
+                        Text("No routing entries parsed.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        // Column headers
+                        HStack(spacing: 0) {
+                            Text("Destination")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 100, alignment: .leading)
+                            Text("Alias")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 70, alignment: .leading)
+                            Text("Next Hop")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 100, alignment: .leading)
+                            Text("Quality")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 80, alignment: .leading)
+                        }
+                        .padding(.horizontal, 8)
+
+                        // Scrollable list of entries
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                ForEach(Array(result.entries.enumerated()), id: \.offset) { index, entry in
+                                    NetRomRouteEntryRow(entry: entry, isAlternate: index % 2 == 1)
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 200)
+                        .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+                        .cornerRadius(6)
+                    }
+                } else {
+                    Text("Unable to parse NET/ROM broadcast data.")
+                        .foregroundStyle(.secondary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)
@@ -427,18 +560,26 @@ struct PacketInspectorView: View {
 
     // MARK: - Payload Tab
 
+    /// View modes available for the current packet's payload.
+    private var availablePayloadModes: [PayloadViewMode] {
+        if packet.isNetRomBroadcast {
+            return [.formatted, .hex, .ascii]
+        }
+        return [.hex, .ascii]
+    }
+
     private var payloadToolbar: some View {
         GroupBox("Payload") {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Picker("Payload View", selection: $payloadViewMode) {
-                        ForEach(PayloadViewMode.allCases, id: \.self) { mode in
+                        ForEach(availablePayloadModes, id: \.self) { mode in
                             Text(mode.rawValue)
                                 .tag(mode)
                         }
                     }
                     .pickerStyle(.segmented)
-                    .frame(maxWidth: 180)
+                    .frame(maxWidth: packet.isNetRomBroadcast ? 240 : 180)
 
                     Spacer()
 
@@ -513,21 +654,81 @@ struct PacketInspectorView: View {
         .cornerRadius(6)
     }
 
+    @ViewBuilder
     private var payloadContent: some View {
-        ScrollView {
-            if findQuery.isEmpty {
-                Text(payloadText)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                Text(highlightedPayload)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        if payloadViewMode == .formatted, let result = packet.netRomBroadcastResult {
+            // Formatted NET/ROM view
+            formattedNetRomPayload(result: result)
+        } else {
+            // Hex/ASCII view
+            ScrollView {
+                if findQuery.isEmpty {
+                    Text(payloadText)
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text(highlightedPayload)
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
+            .frame(maxHeight: 260)
+            .padding(8)
+            .background(.background.secondary)
+            .cornerRadius(6)
         }
-        .frame(maxHeight: 260)
+    }
+
+    private func formattedNetRomPayload(result: NetRomBroadcastResult) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Header
+            HStack {
+                Label("NET/ROM Routing Broadcast", systemImage: "antenna.radiowaves.left.and.right")
+                    .font(.headline)
+                Spacer()
+                Text("\(result.entries.count) routes")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.bottom, 4)
+
+            // Column headers
+            HStack(spacing: 0) {
+                Text("Destination")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 110, alignment: .leading)
+                Text("Alias")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 80, alignment: .leading)
+                Text("Via")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 110, alignment: .leading)
+                Text("Quality")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 100, alignment: .leading)
+            }
+            .padding(.horizontal, 8)
+
+            Divider()
+
+            // Scrollable entries
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(result.entries.enumerated()), id: \.offset) { index, entry in
+                        FormattedNetRomEntryRow(entry: entry, isAlternate: index % 2 == 1)
+                    }
+                }
+            }
+            .frame(maxHeight: 200)
+            .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+            .cornerRadius(6)
+        }
         .padding(8)
         .background(.background.secondary)
         .cornerRadius(6)
@@ -549,6 +750,9 @@ struct PacketInspectorView: View {
             return PayloadFormatter.hexString(data)
         case .ascii:
             return PayloadFormatter.asciiString(data)
+        case .formatted:
+            // Formatted view uses a different display, but fall back to hex if called
+            return PayloadFormatter.hexString(data)
         }
     }
 
@@ -687,6 +891,110 @@ private struct FrameTypeBadge: View {
             .padding(.vertical, 2)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
             .foregroundStyle(.primary)
+    }
+}
+
+/// Row view for a single NET/ROM routing entry in the inspector Summary tab.
+private struct NetRomRouteEntryRow: View {
+    let entry: NetRomBroadcastEntry
+    let isAlternate: Bool
+
+    private var qualityPercent: Double {
+        Double(entry.quality) / 255.0 * 100.0
+    }
+
+    private var qualityColor: Color {
+        let percent = qualityPercent
+        if percent >= 80 { return .green }
+        if percent >= 50 { return .yellow }
+        if percent >= 25 { return .orange }
+        return .red
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text(entry.destinationCallsign)
+                .font(.system(.caption, design: .monospaced))
+                .frame(width: 100, alignment: .leading)
+
+            Text(entry.destinationAlias.isEmpty ? "-" : entry.destinationAlias)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(entry.destinationAlias.isEmpty ? .tertiary : .secondary)
+                .frame(width: 70, alignment: .leading)
+
+            Text(entry.bestNeighborCallsign)
+                .font(.system(.caption, design: .monospaced))
+                .frame(width: 100, alignment: .leading)
+
+            HStack(spacing: 4) {
+                Text("\(entry.quality)")
+                    .font(.system(.caption, design: .monospaced).weight(.medium))
+                Text("(\(Int(qualityPercent))%)")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(qualityColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
+            .frame(width: 80, alignment: .leading)
+
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(isAlternate ? Color(NSColor.alternatingContentBackgroundColors[1]) : Color.clear)
+    }
+}
+
+/// Row view for a single NET/ROM routing entry in the Payload tab formatted view.
+private struct FormattedNetRomEntryRow: View {
+    let entry: NetRomBroadcastEntry
+    let isAlternate: Bool
+
+    private var qualityPercent: Double {
+        Double(entry.quality) / 255.0 * 100.0
+    }
+
+    private var qualityColor: Color {
+        let percent = qualityPercent
+        if percent >= 80 { return .green }
+        if percent >= 50 { return .yellow }
+        if percent >= 25 { return .orange }
+        return .red
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text(entry.destinationCallsign)
+                .font(.system(.body, design: .monospaced))
+                .frame(width: 110, alignment: .leading)
+
+            Text(entry.destinationAlias.isEmpty ? "-" : entry.destinationAlias)
+                .font(.system(.body, design: .monospaced))
+                .foregroundStyle(entry.destinationAlias.isEmpty ? .tertiary : .primary)
+                .frame(width: 80, alignment: .leading)
+
+            Text(entry.bestNeighborCallsign)
+                .font(.system(.body, design: .monospaced))
+                .frame(width: 110, alignment: .leading)
+
+            HStack(spacing: 6) {
+                Text("\(entry.quality)")
+                    .font(.system(.body, design: .monospaced).weight(.medium))
+                Text("(\(Int(qualityPercent))%)")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(qualityColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
+            .frame(width: 100, alignment: .leading)
+
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(isAlternate ? Color(NSColor.alternatingContentBackgroundColors[1]) : Color.clear)
     }
 }
 

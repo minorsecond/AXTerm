@@ -24,6 +24,43 @@ enum DatabaseManager {
         return folderURL.appendingPathComponent(databaseName)
     }
 
+    /// Creates a temporary database URL for test mode.
+    /// Each instance gets a unique database based on the instance identifier.
+    static func ephemeralDatabaseURL(instanceID: String) throws -> URL {
+        let tempDir = FileManager.default.temporaryDirectory
+        let testFolder = tempDir.appendingPathComponent("AXTerm-Test", isDirectory: true)
+        try FileManager.default.createDirectory(at: testFolder, withIntermediateDirectories: true)
+
+        // Sanitize instance ID for use in filename
+        let sanitizedID = instanceID
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "/", with: "_")
+        let dbName = "axterm-test-\(sanitizedID).sqlite"
+        return testFolder.appendingPathComponent(dbName)
+    }
+
+    /// Creates a database queue for test mode with an ephemeral database.
+    /// The database is created fresh each time (previous test data is deleted).
+    @MainActor
+    static func makeEphemeralDatabaseQueue(instanceID: String) throws -> DatabaseQueue {
+        let url = try ephemeralDatabaseURL(instanceID: instanceID)
+        let urlPath = url.path
+
+        // Delete any existing test database to start fresh
+        try? FileManager.default.removeItem(at: url)
+
+        print("AXTerm Test Mode: Using ephemeral database at \(urlPath)")
+
+        do {
+            let queue = try DatabaseQueue(path: urlPath)
+            try migrator.migrate(queue)
+            return queue
+        } catch {
+            print("AXTerm Test Mode: Failed to create ephemeral database: \(error)")
+            throw error
+        }
+    }
+
     @MainActor
     static func makeDatabaseQueue() throws -> DatabaseQueue {
         let url = try databaseURL()
@@ -155,6 +192,61 @@ enum DatabaseManager {
             """)
     }
 
+    private static func addControlFieldColumns(_ db: Database) throws {
+        // Add AX.25 control field decoded columns to packets table
+        try db.alter(table: PacketRecord.databaseTableName) { table in
+            table.add(column: "ax25FrameClass", .text)      // "I", "S", "U", or "unknown"
+            table.add(column: "ax25SType", .text)           // "RR", "RNR", "REJ", "SREJ" (S-frames only)
+            table.add(column: "ax25UType", .text)           // "UI", "SABM", etc. (U-frames only)
+            table.add(column: "ax25Ns", .integer)           // N(S) for I-frames
+            table.add(column: "ax25Nr", .integer)           // N(R) for I/S frames
+            table.add(column: "ax25Pf", .integer)           // Poll/Final bit (0/1)
+            table.add(column: "ax25Ctl0", .integer)         // Raw first control byte
+            table.add(column: "ax25Ctl1", .integer)         // Raw second control byte (if present)
+            table.add(column: "ax25IsExtended", .integer).defaults(to: 0)  // Extended mode flag
+        }
+
+        // Create index for frame class queries
+        try db.create(
+            index: "idx_packets_ax25FrameClass",
+            on: PacketRecord.databaseTableName,
+            columns: ["ax25FrameClass"]
+        )
+    }
+
+    /// Fix incorrectly decoded control field values for existing packets.
+    /// This recomputes ax25Ns, ax25Nr, and ax25Pf from the raw control byte (ax25Ctl0).
+    ///
+    /// I-frame control byte format (modulo-8): NNNPSSS0
+    /// - bits 5-7: N(R)
+    /// - bit 4: P/F
+    /// - bits 1-3: N(S)
+    /// - bit 0: 0 (I-frame indicator)
+    ///
+    /// S-frame control byte format: NNNPSS01
+    /// - bits 5-7: N(R)
+    /// - bit 4: P/F
+    /// - bits 2-3: subtype
+    /// - bits 0-1: 01 (S-frame indicator)
+    private static func fixControlFieldDecoding(_ db: Database) throws {
+        // Fix I-frame decoding: recompute N(S), N(R), P/F from raw control byte
+        try db.execute(sql: """
+            UPDATE \(PacketRecord.databaseTableName)
+            SET ax25Ns = (ax25Ctl0 >> 1) & 7,
+                ax25Nr = (ax25Ctl0 >> 5) & 7,
+                ax25Pf = (ax25Ctl0 >> 4) & 1
+            WHERE ax25FrameClass = 'I' AND ax25Ctl0 IS NOT NULL
+            """)
+
+        // Fix S-frame decoding: recompute N(R), P/F from raw control byte
+        try db.execute(sql: """
+            UPDATE \(PacketRecord.databaseTableName)
+            SET ax25Nr = (ax25Ctl0 >> 5) & 7,
+                ax25Pf = (ax25Ctl0 >> 4) & 1
+            WHERE ax25FrameClass = 'S' AND ax25Ctl0 IS NOT NULL
+            """)
+    }
+
     private static func createConsoleRawEventsTables(_ db: Database) throws {
         try db.create(table: ConsoleEntryRecord.databaseTableName) { table in
             table.column("id", .text).primaryKey()
@@ -224,6 +316,34 @@ enum DatabaseManager {
             try createConsoleRawEventsTables(db)
             Task { @MainActor in
                 SentryManager.shared.breadcrumbDatabaseMigration(version: 2, success: true)
+            }
+        }
+        migrator.registerMigration("addControlFieldColumns") { db in
+            Task { @MainActor in
+                SentryManager.shared.addBreadcrumb(
+                    category: "db.migration",
+                    message: "Running migration v3 (addControlFieldColumns)",
+                    level: .info,
+                    data: nil
+                )
+            }
+            try addControlFieldColumns(db)
+            Task { @MainActor in
+                SentryManager.shared.breadcrumbDatabaseMigration(version: 3, success: true)
+            }
+        }
+        migrator.registerMigration("fixControlFieldDecoding") { db in
+            Task { @MainActor in
+                SentryManager.shared.addBreadcrumb(
+                    category: "db.migration",
+                    message: "Running migration v4 (fixControlFieldDecoding)",
+                    level: .info,
+                    data: nil
+                )
+            }
+            try fixControlFieldDecoding(db)
+            Task { @MainActor in
+                SentryManager.shared.breadcrumbDatabaseMigration(version: 4, success: true)
             }
         }
         return migrator

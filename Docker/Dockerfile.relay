@@ -1,0 +1,15 @@
+# KISS Frame Relay for AXTerm Testing
+# Relays KISS frames between two TCP ports to simulate RF communication
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install netcat for health checks
+RUN apt-get update && apt-get install -y netcat-openbsd && rm -rf /var/lib/apt/lists/*
+
+COPY kiss_relay.py /app/
+
+EXPOSE 8001 8002
+
+CMD ["python", "-u", "kiss_relay.py"]

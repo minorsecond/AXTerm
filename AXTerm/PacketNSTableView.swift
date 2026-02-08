@@ -7,6 +7,7 @@
 
 import AppKit
 import SwiftUI
+import os
 
 struct PacketNSTableView: NSViewRepresentable {
     struct Constants {
@@ -26,6 +27,9 @@ struct PacketNSTableView: NSViewRepresentable {
 
     let packets: [Packet]
     @Binding var selection: Set<Packet.ID>
+    @Binding var isAtTop: Bool
+    @Binding var followNewest: Bool
+    let scrollToTopToken: Int
     let onInspectSelection: () -> Void
     let onCopyInfo: (Packet) -> Void
     let onCopyRawHex: (Packet) -> Void
@@ -33,6 +37,8 @@ struct PacketNSTableView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             selection: $selection,
+            isAtTop: $isAtTop,
+            followNewest: $followNewest,
             onInspectSelection: onInspectSelection,
             onCopyInfo: onCopyInfo,
             onCopyRawHex: onCopyRawHex
@@ -64,8 +70,9 @@ struct PacketNSTableView: NSViewRepresentable {
 
         context.coordinator.attach(tableView: tableView)
         configureColumns(for: tableView)
-        sizeColumnsToFitContent(in: tableView)
-        expandInfoColumnToFill(in: tableView)
+        let initialRows = packets.map { PacketRowViewModel.fromPacket($0) }
+        PacketNSTableView.sizeColumnsToFitContent(in: tableView, rows: initialRows)
+        PacketNSTableView.expandInfoColumnToFill(in: tableView)
 
         let scrollView = NSScrollView()
         scrollView.documentView = tableView
@@ -73,15 +80,16 @@ struct PacketNSTableView: NSViewRepresentable {
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.autoresizingMask = [.width, .height]
+        context.coordinator.attach(scrollView: scrollView)
         return scrollView
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
-        guard let tableView = nsView.documentView as? NSTableView else { return }
-        let rowViewModels = packets.map { PacketRowViewModel.fromPacket($0) }
-        context.coordinator.update(rows: rowViewModels, packets: packets, selection: selection)
-        sizeColumnsToFitContent(in: tableView)
-        expandInfoColumnToFill(in: tableView)
+        context.coordinator.enqueueUpdate(
+            packets: packets,
+            selection: selection,
+            scrollToTopToken: scrollToTopToken
+        )
     }
 
     private func configureColumns(for tableView: NSTableView) {
@@ -91,7 +99,7 @@ struct PacketNSTableView: NSViewRepresentable {
         let fromColumn = makeColumn(id: .from, title: "From", minWidth: 80, width: 100, toolTip: "Source callsign")
         let toColumn = makeColumn(id: .to, title: "To", minWidth: 80, width: 100, toolTip: "Destination callsign")
         let viaColumn = makeColumn(id: .via, title: "Via", minWidth: 60, width: 120, toolTip: "Digipeater path")
-        let typeColumn = makeColumn(id: .type, title: "Type", minWidth: 40, width: 50, toolTip: "AX.25 frame type")
+        let typeColumn = makeColumn(id: .type, title: "Frame Type", minWidth: 60, width: 70, toolTip: "Classified frame type")
         let infoColumn = makeColumn(id: .info, title: "Info", minWidth: 200, width: 400, toolTip: "Decoded payload preview")
         infoColumn.resizingMask = [.autoresizingMask, .userResizingMask]
 
@@ -147,9 +155,8 @@ struct PacketNSTableView: NSViewRepresentable {
     }
     #endif
 
-    private func sizeColumnsToFitContent(in tableView: NSTableView) {
+    private static func sizeColumnsToFitContent(in tableView: NSTableView, rows: [PacketRowViewModel]) {
         guard !tableView.tableColumns.isEmpty else { return }
-        let rows = packets.map { PacketRowViewModel.fromPacket($0) }
         let measurements = PacketTableColumnSizer(rows: rows)
         for column in tableView.tableColumns {
             guard let identifier = ColumnIdentifier(rawValue: column.identifier.rawValue) else { continue }
@@ -159,7 +166,7 @@ struct PacketNSTableView: NSViewRepresentable {
         }
     }
 
-    private func expandInfoColumnToFill(in tableView: NSTableView) {
+    private static func expandInfoColumnToFill(in tableView: NSTableView) {
         guard let infoColumn = tableView.tableColumns.first(where: { $0.identifier.rawValue == ColumnIdentifier.info.rawValue }) else {
             return
         }
@@ -177,7 +184,23 @@ struct PacketNSTableView: NSViewRepresentable {
 
 extension PacketNSTableView {
     final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+        private struct PendingUpdate {
+            let packets: [Packet]
+            let selection: Set<Packet.ID>
+            let scrollToTopToken: Int
+        }
+
+        private enum RowUpdate {
+            case none
+            case insert(count: Int)
+            case remove(range: Range<Int>)
+            case reload
+        }
+
+        private let logger = Logger(subsystem: "AXTerm", category: "PacketTable")
         private let selection: Binding<Set<Packet.ID>>
+        private let isAtTop: Binding<Bool>
+        private let followNewest: Binding<Bool>
         private let onInspectSelection: () -> Void
         private let onCopyInfo: (Packet) -> Void
         private let onCopyRawHex: (Packet) -> Void
@@ -186,30 +209,70 @@ extension PacketNSTableView {
         private(set) var packets: [Packet] = []
         private var isApplyingSelection = false
         private var lastContextRow: Int?
+        private var lastScrollToTopToken = 0
+        private var scrollObserver: NSObjectProtocol?
+        private var pendingUpdate: PendingUpdate?
+        private var isProgrammaticUpdate = false
+        private var scrollStateWorkItem: DispatchWorkItem?
+        private var pendingIsAtTop: Bool?
+        private var lastPublishedIsAtTop: Bool?
+        private let rowUpdateScheduler = CoalescingScheduler(delay: .milliseconds(80))
+        private let columnSizingScheduler = CoalescingScheduler(delay: .milliseconds(500))
 
         weak var tableView: NSTableView?
+        weak var scrollView: NSScrollView?
 
         init(
             selection: Binding<Set<Packet.ID>>,
+            isAtTop: Binding<Bool>,
+            followNewest: Binding<Bool>,
             onInspectSelection: @escaping () -> Void,
             onCopyInfo: @escaping (Packet) -> Void,
             onCopyRawHex: @escaping (Packet) -> Void
         ) {
             self.selection = selection
+            self.isAtTop = isAtTop
+            self.followNewest = followNewest
             self.onInspectSelection = onInspectSelection
             self.onCopyInfo = onCopyInfo
             self.onCopyRawHex = onCopyRawHex
         }
 
-        func update(rows: [PacketRowViewModel], packets: [Packet], selection: Set<Packet.ID>) {
-            self.rows = rows
-            self.packets = packets
-            tableView?.reloadData()
-            applySelection(selection)
+        func enqueueUpdate(
+            packets: [Packet],
+            selection: Set<Packet.ID>,
+            scrollToTopToken: Int
+        ) {
+            #if DEBUG
+            logger.debug("Packet table enqueue update (count: \(packets.count), token: \(scrollToTopToken))")
+            #endif
+            pendingUpdate = PendingUpdate(
+                packets: packets,
+                selection: selection,
+                scrollToTopToken: scrollToTopToken
+            )
+            rowUpdateScheduler.schedule { [weak self] in
+                await MainActor.run {
+                    self?.applyPendingUpdate()
+                }
+            }
         }
 
         func attach(tableView: NSTableView) {
             self.tableView = tableView
+        }
+
+        func attach(scrollView: NSScrollView) {
+            self.scrollView = scrollView
+            scrollView.contentView.postsBoundsChangedNotifications = true
+            scrollObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: scrollView.contentView,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self, let tableView = self.tableView else { return }
+                self.updateIsAtTop(in: tableView)
+            }
         }
 
         func applySelection(_ selection: Set<Packet.ID>) {
@@ -313,6 +376,60 @@ extension PacketNSTableView {
             }
         }
 
+        private func firstVisiblePacketID(in tableView: NSTableView) -> Packet.ID? {
+            let visibleRect = tableView.visibleRect
+            let visibleRows = tableView.rows(in: visibleRect)
+            guard visibleRows.length > 0 else { return nil }
+            let index = Int(visibleRows.location)
+            guard rows.indices.contains(index) else { return nil }
+            return rows[index].id
+        }
+
+        private func updateScrollPosition(
+            in tableView: NSTableView,
+            anchorID: Packet.ID?,
+            shouldScrollToTop: Bool
+        ) {
+            let isUserNearTop = isUserAtTop(in: tableView)
+            let shouldAutoScroll = AutoScrollDecision.shouldAutoScroll(
+                isUserAtTop: isUserNearTop,
+                followNewest: followNewest.wrappedValue,
+                didRequestScrollToTop: shouldScrollToTop
+            )
+            if shouldAutoScroll {
+                if rows.indices.contains(0) {
+                    let visibleRows = tableView.rows(in: tableView.visibleRect)
+                    if !visibleRows.contains(0) {
+                        tableView.scrollRowToVisible(0)
+                    }
+                }
+                return
+            }
+
+            guard let anchorID,
+                  let anchorIndex = rows.firstIndex(where: { $0.id == anchorID }) else {
+                return
+            }
+            let visibleRows = tableView.rows(in: tableView.visibleRect)
+            guard !visibleRows.contains(anchorIndex) else { return }
+            tableView.scrollRowToVisible(anchorIndex)
+        }
+
+        private func updateIsAtTop(in tableView: NSTableView) {
+            guard !isProgrammaticUpdate else { return }
+            let atTop = isUserAtTop(in: tableView)
+            scheduleScrollStateUpdate(isAtTop: atTop)
+        }
+
+        deinit {
+            if let scrollObserver {
+                NotificationCenter.default.removeObserver(scrollObserver)
+            }
+            rowUpdateScheduler.cancel()
+            columnSizingScheduler.cancel()
+            scrollStateWorkItem?.cancel()
+        }
+
         private func makeTextField(for identifier: NSUserInterfaceItemIdentifier, row: PacketRowViewModel) -> NSTextField {
             let field = NSTextField(labelWithString: "")
             field.usesSingleLineMode = true
@@ -351,6 +468,7 @@ extension PacketNSTableView {
                 field.textColor = row.isLowSignal ? .tertiaryLabelColor : .secondaryLabelColor
                 field.alignment = .center
                 field.toolTip = row.typeTooltip
+                field.setAccessibilityLabel(row.typeAccessibilityLabel)
             case ColumnIdentifier.info.rawValue:
                 field.stringValue = row.infoText
                 field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
@@ -368,7 +486,7 @@ extension PacketNSTableView {
         private func makeTypePillCell(for identifier: NSUserInterfaceItemIdentifier, row: PacketRowViewModel) -> NSTableCellView {
             let cell = NSTableCellView()
             cell.identifier = identifier
-            let pillView = TypePillView(text: row.typeLabel, isLowSignal: row.isLowSignal)
+            let pillView = TypePillView(text: row.typeLabel, isLowSignal: row.isLowSignal, accessibilityLabel: row.typeAccessibilityLabel)
             pillView.toolTip = row.typeTooltip
             cell.addSubview(pillView)
             pillView.translatesAutoresizingMaskIntoConstraints = false
@@ -378,19 +496,147 @@ extension PacketNSTableView {
             ])
             return cell
         }
+
+        private func applyPendingUpdate() {
+            guard let tableView else {
+                SentryManager.shared.captureMessage("Packet table update failed: missing tableView", level: .warning, extra: nil)
+                return
+            }
+            guard let pendingUpdate else { return }
+            self.pendingUpdate = nil
+
+            #if DEBUG
+            logger.debug("Packet table update started (rows: \(pendingUpdate.packets.count))")
+            #endif
+
+            isProgrammaticUpdate = true
+            let visibleAnchorID = firstVisiblePacketID(in: tableView)
+            let shouldScrollToTop = pendingUpdate.scrollToTopToken != lastScrollToTopToken
+            lastScrollToTopToken = pendingUpdate.scrollToTopToken
+            let updateAction = updateRows(
+                packets: pendingUpdate.packets,
+                in: tableView
+            )
+            applySelection(pendingUpdate.selection)
+            updateScrollPosition(
+                in: tableView,
+                anchorID: visibleAnchorID,
+                shouldScrollToTop: shouldScrollToTop
+            )
+            scheduleColumnSizing(for: tableView)
+            DispatchQueue.main.async { [weak self, weak tableView] in
+                guard let self, let tableView else { return }
+                self.isProgrammaticUpdate = false
+                self.updateIsAtTop(in: tableView)
+            }
+
+            #if DEBUG
+            logger.debug("Packet table update finished (\(String(describing: updateAction)))")
+            #endif
+
+            SentryManager.shared.addBreadcrumb(
+                category: "ui.packets",
+                message: "Packet list updated",
+                level: .info,
+                data: ["rowCount": rows.count]
+            )
+        }
+
+        private func updateRows(packets: [Packet], in tableView: NSTableView) -> RowUpdate {
+            let newIDs = packets.map(\.id)
+            let oldIDs = rows.map(\.id)
+
+            if newIDs == oldIDs {
+                self.packets = packets
+                return .none
+            }
+
+            if rows.isEmpty {
+                rows = packets.map { PacketRowViewModel.fromPacket($0) }
+                self.packets = packets
+                tableView.reloadData()
+                return .reload
+            }
+
+            if newIDs.count >= oldIDs.count {
+                let delta = newIDs.count - oldIDs.count
+                if delta > 0, Array(newIDs.dropFirst(delta)) == oldIDs {
+                    let newRows = packets.prefix(delta).map { PacketRowViewModel.fromPacket($0) }
+                    rows.insert(contentsOf: newRows, at: 0)
+                    self.packets = packets
+                    tableView.beginUpdates()
+                    tableView.insertRows(at: IndexSet(integersIn: 0..<delta), withAnimation: [])
+                    tableView.endUpdates()
+                    return .insert(count: delta)
+                }
+            }
+
+            if newIDs.count <= oldIDs.count {
+                let delta = oldIDs.count - newIDs.count
+                if delta > 0, Array(oldIDs.prefix(newIDs.count)) == newIDs {
+                    let start = oldIDs.count - delta
+                    rows.removeLast(delta)
+                    self.packets = packets
+                    tableView.beginUpdates()
+                    tableView.removeRows(at: IndexSet(integersIn: start..<oldIDs.count), withAnimation: [])
+                    tableView.endUpdates()
+                    return .remove(range: start..<oldIDs.count)
+                }
+            }
+
+            rows = packets.map { PacketRowViewModel.fromPacket($0) }
+            self.packets = packets
+            tableView.reloadData()
+            return .reload
+        }
+
+        private func scheduleScrollStateUpdate(isAtTop: Bool) {
+            guard lastPublishedIsAtTop != isAtTop else { return }
+            pendingIsAtTop = isAtTop
+            scrollStateWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self, let pendingIsAtTop = self.pendingIsAtTop else { return }
+                guard self.lastPublishedIsAtTop != pendingIsAtTop else { return }
+                #if DEBUG
+                self.logger.debug("Packet table scroll state update (isAtTop: \(pendingIsAtTop))")
+                #endif
+                self.lastPublishedIsAtTop = pendingIsAtTop
+                DispatchQueue.main.async { [weak self] in
+                    self?.isAtTop.wrappedValue = pendingIsAtTop
+                }
+            }
+            scrollStateWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
+        }
+
+        private func scheduleColumnSizing(for tableView: NSTableView) {
+            columnSizingScheduler.schedule { [weak self, weak tableView] in
+                await MainActor.run {
+                    guard let self, let tableView else { return }
+                    PacketNSTableView.sizeColumnsToFitContent(in: tableView, rows: self.rows)
+                    PacketNSTableView.expandInfoColumnToFill(in: tableView)
+                }
+            }
+        }
+
+        private func isUserAtTop(in tableView: NSTableView) -> Bool {
+            let visibleRect = tableView.visibleRect
+            return visibleRect.minY <= 2
+        }
     }
 }
 
 private final class TypePillView: NSView {
     private let textField = NSTextField(labelWithString: "")
 
-    init(text: String, isLowSignal: Bool) {
+    init(text: String, isLowSignal: Bool, accessibilityLabel: String) {
         super.init(frame: .zero)
         wantsLayer = true
         textField.stringValue = text
         textField.font = .monospacedSystemFont(ofSize: 11, weight: .medium)
         textField.alignment = .center
         textField.textColor = isLowSignal ? .tertiaryLabelColor : .secondaryLabelColor
+        setAccessibilityLabel(accessibilityLabel)
         textField.setContentHuggingPriority(.required, for: .horizontal)
         textField.setContentCompressionResistancePriority(.required, for: .horizontal)
         addSubview(textField)
@@ -430,7 +676,7 @@ private struct PacketTableColumnSizer {
         case .from: title = "From"
         case .to: title = "To"
         case .via: title = "Via"
-        case .type: title = "Type"
+        case .type: title = "Frame Type"
         case .info: title = "Info"
         }
         return title.size(withAttributes: [.font: NSFont.systemFont(ofSize: NSFont.systemFontSize)]).width

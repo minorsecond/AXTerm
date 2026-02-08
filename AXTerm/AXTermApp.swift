@@ -5,6 +5,7 @@
 //  Created by Ross Wardrup on 1/28/26.
 //
 
+import GRDB
 import SwiftUI
 
 @main
@@ -25,15 +26,57 @@ struct AXTermApp: App {
     private let client: PacketEngine
 
     init() {
-        let settingsStore = AppSettingsStore()
+        let isUnitTests = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        let testConfig = TestModeConfiguration.shared
+        let isTestModeRun = isUnitTests || testConfig.isTestMode
+        let defaults: UserDefaults
+        if isTestModeRun {
+            let suiteName = "com.rosswardrup.AXTerm.test.\(testConfig.instanceID)"
+            defaults = UserDefaults(suiteName: suiteName) ?? .standard
+            defaults.removePersistentDomain(forName: suiteName)
+        } else {
+            defaults = .standard
+        }
+        let settingsStore = AppSettingsStore(defaults: defaults)
         _settings = StateObject(wrappedValue: settingsStore)
         let router = PacketInspectionRouter()
         _inspectionRouter = StateObject(wrappedValue: router)
 
+        TxLog.configure(wireDebugEnabled: WireDebugSettings.isEnabled)
+
+        // Apply test mode overrides
+        if testConfig.isTestMode {
+            if let callsign = testConfig.callsign {
+                settingsStore.myCallsign = callsign
+            }
+            settingsStore.runInMenuBar = false
+
+            // In UI test mode we want AXDP capability negotiation and related
+            // features to be completely frictionless so the harness "just
+            // works" without touching Settings in each instance.
+            //
+            // This ONLY affects the ephemeral per-test UserDefaults suite
+            // created above, so it does not change behaviour for normal
+            // installs.
+            settingsStore.axdpExtensionsEnabled = true
+            settingsStore.axdpAutoNegotiateCapabilities = true
+            settingsStore.axdpCompressionEnabled = true
+        }
+
         SentryManager.shared.startIfEnabled(settings: settingsStore)
         SentryManager.shared.addBreadcrumb(category: "app.lifecycle", message: "App init", level: .info, data: nil)
 
-        let queue = try? DatabaseManager.makeDatabaseQueue()
+        // Use ephemeral database in test mode to avoid polluting the real database
+        let queue: DatabaseQueue?
+        let useEphemeralDatabase = (testConfig.isTestMode && testConfig.ephemeralDatabase) || isUnitTests || testConfig.isTestMode
+        if useEphemeralDatabase {
+            let instanceID = isUnitTests
+                ? "unit-\(ProcessInfo.processInfo.processIdentifier)"
+                : testConfig.instanceID
+            queue = try? DatabaseManager.makeEphemeralDatabaseQueue(instanceID: instanceID)
+        } else {
+            queue = try? DatabaseManager.makeDatabaseQueue()
+        }
         let packetStore = queue.map { SQLitePacketStore(dbQueue: $0) }
         let consoleStore = queue.map { SQLiteConsoleStore(dbQueue: $0) }
         let rawStore = queue.map { SQLiteRawStore(dbQueue: $0) }
@@ -57,24 +100,30 @@ struct AXTermApp: App {
             rawStore: rawStore,
             eventLogger: eventLogger,
             watchRecorder: watchRecorder,
-            notificationScheduler: notificationScheduler
+            notificationScheduler: notificationScheduler,
+            databaseWriter: queue
         )
-        SentryManager.shared.setConnectionTags(host: settingsStore.host, port: settingsStore.portValue)
-        if settingsStore.autoConnectOnLaunch {
-            self.client.connect(host: settingsStore.host, port: settingsStore.portValue)
+
+        // Determine connection settings (test mode overrides take precedence)
+        let effectiveHost = testConfig.effectiveHost(default: settingsStore.host)
+        let effectivePort = testConfig.effectivePort(default: settingsStore.portValue)
+
+        SentryManager.shared.setConnectionTags(host: effectiveHost, port: effectivePort)
+
+        // Auto-connect if settings say so OR if test mode requests it
+        if !isUnitTests && (settingsStore.autoConnectOnLaunch || testConfig.autoConnect) {
+            self.client.connect(host: effectiveHost, port: effectivePort)
         }
         appDelegate.settings = settingsStore
         appDelegate.notificationDelegate = notificationHandler
     }
 
     var body: some Scene {
-        WindowGroup("AXTerm", id: "main") {
+        let windowTitle = "AXTerm" + TestModeConfiguration.shared.windowTitleSuffix
+        WindowGroup(windowTitle, id: "main") {
             ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter)
         }
         .commands {
-            CommandGroup(replacing: .appSettings) {
-                SettingsLink()
-            }
             CommandGroup(after: .windowArrangement) {
                 Button("Close") {
                     NSApp.keyWindow?.performClose(nil)
@@ -106,6 +155,13 @@ struct AXTermApp: App {
                 settings: settings,
                 inspectionRouter: inspectionRouter
             )
+
+            #if DEBUG
+            Divider()
+            Button("Send Test Event to Sentry") {
+                SentryManager.shared.sendTestEvent()
+            }
+            #endif
         }
     }
 }
