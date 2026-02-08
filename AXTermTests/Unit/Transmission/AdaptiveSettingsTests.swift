@@ -87,8 +87,8 @@ final class AdaptiveSettingsTests: XCTestCase {
 
         XCTAssertEqual(settings.paclen.defaultValue, 128)
         XCTAssertEqual(settings.windowSize.defaultValue, 2)
-        XCTAssertEqual(settings.maxRetries.defaultValue, 10)
-        XCTAssertEqual(settings.rtoMin.defaultValue, 1.0, accuracy: 0.01)
+        XCTAssertEqual(settings.maxRetries.defaultValue, 15)
+        XCTAssertEqual(settings.rtoMin.defaultValue, 3.0, accuracy: 0.01)
         XCTAssertEqual(settings.rtoMax.defaultValue, 30.0, accuracy: 0.01)
     }
 

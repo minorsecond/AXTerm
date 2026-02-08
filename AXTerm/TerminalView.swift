@@ -50,7 +50,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
     /// Callback when plain-text (non-AXDP) data is received from connected session.
     /// Used to add to console when sender uses plain text instead of AXDP.
-    var onPlainTextChatReceived: ((AX25Address, String) -> Void)?
+    var onPlainTextChatReceived: ((AX25Address, String, [String]) -> Void)?
 
     /// Tracks peers that are currently mid-AXDP reassembly.
     /// When data with AXDP magic is received, the peer is added here.
@@ -356,7 +356,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                 "length": trimmedText.count,
                 "preview": String(trimmedText.prefix(50))
             ])
-            onPlainTextChatReceived?(session.remoteAddress, trimmedText)
+            onPlainTextChatReceived?(session.remoteAddress, trimmedText, session.lastReceivedVia)
             
             // Keep transcript bounded for performance
             if sessionTranscriptLines.count > 1000 {
@@ -692,7 +692,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                         "preview": String(line.prefix(50)),
                         "bufferLenBeforeFlush": bufferLen
                     ])
-                    onPlainTextChatReceived?(session.remoteAddress, line)
+                    onPlainTextChatReceived?(session.remoteAddress, line, session.lastReceivedVia)
                     // Keep transcript bounded for performance.
                     if sessionTranscriptLines.count > 1000 {
                         sessionTranscriptLines.removeFirst(sessionTranscriptLines.count - 1000)
@@ -1060,14 +1060,15 @@ struct TerminalView: View {
             }
 
             // Wire plain-text chat (non-AXDP) to console when sender uses plain text.
-            txViewModel.onPlainTextChatReceived = { [weak client] from, text in
+            txViewModel.onPlainTextChatReceived = { [weak client] from, text, via in
                 if let client = client {
                     TxLog.debug(.session, "onPlainTextChatReceived callback executing", [
                         "from": from.display,
                         "textLength": text.count,
-                        "preview": String(text.prefix(50))
+                        "preview": String(text.prefix(50)),
+                        "via": via.joined(separator: ",")
                     ])
-                    client.appendSessionChatLine(from: from.display, text: text)
+                    client.appendSessionChatLine(from: from.display, text: text, via: via)
                 } else {
                     TxLog.error(.session, "onPlainTextChatReceived: client is nil!", ["from": from.display])
                 }

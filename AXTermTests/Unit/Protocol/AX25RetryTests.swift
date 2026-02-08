@@ -187,12 +187,9 @@ final class AX25RetryTests: XCTestCase {
         
         // Receive REJ(nr=1) - Peer acked FRAME1 but missed FRAME2 (and FRAME3 sent out of order)
         // Peer is asking for retransmission starting from FRAME2 (nr=1)
-        var retransmitFrames: [OutboundFrame] = []
-        manager.onRetransmitFrame = { frame in retransmitFrames.append(frame) }
+        // Note: handleInboundREJ returns the retransmitted frames directly
+        let retransmitFrames = manager.handleInboundREJ(from: destination, path: path, channel: 0, nr: 1)
 
-        manager.handleInboundREJ(from: destination, path: path, channel: 0, nr: 1)
-
-        
         // Should retransmit FRAME2 and FRAME3
         XCTAssertEqual(retransmitFrames.count, 2)
         XCTAssertEqual(String(data: retransmitFrames[0].payload, encoding: .utf8), "FRAME2")

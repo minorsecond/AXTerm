@@ -255,15 +255,27 @@ enum GraphCopy {
 
         static let connectivityLabel = "Connectivity"
         static let connectivityDescription = "Direct connections"
-        static let connectivityTooltip = "Show direct peer exchanges and likely direct RF links. Best for understanding who you can work directly."
+        static let connectivityTooltip = "Visualize direct RF connections. High-fidelity map of stations you can reach without digipeaters. Best for antenna testing and propagation analysis."
 
         static let routingLabel = "Routing"
         static let routingDescription = "Packet flow paths"
-        static let routingTooltip = "Emphasize digipeater paths and network routing. Shows how packets flow through the network."
+        static let routingTooltip = "Visualize the multi-hop network. Show how packets are digipeated and which nodes act as relays. Best for understanding regional coverage and packet flow."
 
         static let allLabel = "All"
         static let allDescription = "Everything"
-        static let allTooltip = "Show all connection types with clear visual hierarchy."
+        static let allTooltip = "Complete AX.25 topology view. Combines direct connections with digipeated paths for a full view of all observed station interactions."
+
+        static let netromClassicLabel = "NET/ROM (Classic)"
+        static let netromClassicDescription = "NET/ROM broadcast routes"
+        static let netromClassicTooltip = "Official NET/ROM network map. Combines 'NODES' broadcasts for multi-hop routes with direct AX.25 neighbors for local topology. Best for backbone analysis."
+
+        static let netromInferredLabel = "NET/ROM (Inferred)"
+        static let netromInferredDescription = "NET/ROM inferred routes"
+        static let netromInferredTooltip = "Passive NET/ROM discovery map. Reveals neighbors and routes detected from live L3/L4 traffic, showing paths that are active but not broadcasted."
+
+        static let netromHybridLabel = "NET/ROM (Hybrid)"
+        static let netromHybridDescription = "NET/ROM combined routes"
+        static let netromHybridTooltip = "Comprehensive NET/ROM view merging official broadcasts with live traffic discovery for the most accurate and up-to-date routing map."
     }
 
     // MARK: Link Types (for legend and tooltips)

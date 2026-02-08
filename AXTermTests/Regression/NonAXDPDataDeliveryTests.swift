@@ -128,7 +128,7 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -161,7 +161,7 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -200,7 +200,7 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()
 
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
 
@@ -243,7 +243,7 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -427,7 +427,7 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -486,7 +486,7 @@ final class ProtocolSwitchingTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -530,7 +530,7 @@ final class ProtocolSwitchingTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -574,7 +574,7 @@ final class ProtocolSwitchingTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -647,7 +647,7 @@ final class ProtocolSwitchingTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -775,7 +775,7 @@ final class ProtocolSwitchingTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { address, text in
+            viewModel.onPlainTextChatReceived = { address, text, _ in
                 if address.call.uppercased() == "PEERA" {
                     receivedFromPeerA.append(text)
                 } else if address.call.uppercased() == "PEERB" {
@@ -838,7 +838,7 @@ final class ProtocolSwitchingTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { address, text in
+            viewModel.onPlainTextChatReceived = { address, text, _ in
                 switch address.call.uppercased() {
                 case "PEER1": receivedFromPeer1.append(text)
                 case "PEER2": receivedFromPeer2.append(text)
@@ -900,7 +900,7 @@ final class ProtocolSwitchingTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { address, text in
+            viewModel.onPlainTextChatReceived = { address, text, _ in
                 if address.call.uppercased() == "PEERA" {
                     receivedFromPeerA.append(text)
                 } else if address.call.uppercased() == "PEERB" {
@@ -966,7 +966,7 @@ final class ProtocolSwitchingTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -1010,7 +1010,7 @@ final class NonAXDPDeliveryIntegrationTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -1050,7 +1050,7 @@ final class NonAXDPDeliveryIntegrationTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -1096,7 +1096,7 @@ final class SessionAutoSwitchTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -1136,7 +1136,7 @@ final class SessionAutoSwitchTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -1184,7 +1184,7 @@ final class SessionAutoSwitchTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -1226,7 +1226,7 @@ final class SessionAutoSwitchTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { address, text in
+            viewModel.onPlainTextChatReceived = { address, text, _ in
                 if address.call.uppercased() == "PEER1" {
                     receivedFromPeer1.append(text)
                 } else if address.call.uppercased() == "PEER2" {

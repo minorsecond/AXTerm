@@ -81,6 +81,10 @@ final class AX25Session: @unchecked Sendable {
     /// Whether we initiated this session (vs responding to incoming SABM)
     let isInitiator: Bool
 
+    /// Via path from the most recently received inbound I-frame (for display only).
+    /// Updated each time handleInboundIFrame delivers data.
+    var lastReceivedVia: [String] = []
+
     init(
         localAddress: AX25Address,
         remoteAddress: AX25Address,
@@ -182,14 +186,12 @@ final class AX25Session: @unchecked Sendable {
     /// sender clears acks correctly and stops retransmitting (fixes freeze and dupes).
     func acknowledgeUpTo(from va: Int, to nr: Int) {
         let modulo = stateMachine.config.modulo
-        if nr == 0 {
-            for k in 0..<modulo {
-                sendBuffer.removeValue(forKey: k)
-            }
-        } else {
-            for k in 0..<nr {
-                sendBuffer.removeValue(forKey: k)
-            }
+        var current = va
+        
+        // Loop from va up to (but not including) nr, acknowledging each frame
+        while current != nr {
+            sendBuffer.removeValue(forKey: current)
+            current = (current + 1) % modulo
         }
     }
 
@@ -212,8 +214,12 @@ final class AX25Session: @unchecked Sendable {
             }
         }
 
-        // Sort by sequence number
-        return frames.sorted { $0.0 < $1.0 }.map { $0.1 }
+        // Sort by distance from va (maintains correct order for wrapped sequences)
+        return frames.sorted { (a, b) in
+            let distA = (a.0 - nr + modulo) % modulo
+            let distB = (b.0 - nr + modulo) % modulo
+            return distA < distB
+        }.map { $0.1 }
     }
 
     /// Update last activity timestamp
@@ -299,9 +305,6 @@ final class AX25SessionManager: ObservableObject {
 
     /// Callback when session state changes
     var onSessionStateChanged: ((AX25Session, AX25SessionState, AX25SessionState) -> Void)?
-
-    /// Callback when frames need to be sent from timer retransmission
-    var onRetransmitFrame: ((OutboundFrame) -> Void)?
 
     /// Callback when we have a link quality sample (e.g. after RR with RTT) for adaptive tuning. Parameters: session, lossRate, etx, srtt.
     var onLinkQualitySample: ((AX25Session, Double, Double, Double?) -> Void)?
@@ -1095,6 +1098,20 @@ final class AX25SessionManager: ObservableObject {
         let oldState = session.state
         let actions = session.stateMachine.handle(event: .receivedDISC)
 
+        // Clear send buffer and notify UI that frames are acknowledged.
+        // When remote sends DISC in response to our I-frame (e.g., "bye" command),
+        // they clearly received it. Mark as delivered for UX purposes.
+        if !session.sendBuffer.isEmpty {
+            let bufferedFrames = session.sendBuffer.keys.sorted()
+            TxLog.debug(.session, "Clearing send buffer on DISC", [
+                "peer": source.display,
+                "bufferedNS": bufferedFrames.map { String($0) }.joined(separator: ",")
+            ])
+            session.clearPendingTransmission(reason: "remote DISC")
+            // Notify that all frames are considered acknowledged
+            onOutboundAckReceived?(session, session.vs)
+        }
+
         if oldState != session.state {
             debugTrace("state change (DISC)", [
                 "peer": source.display,
@@ -1222,6 +1239,9 @@ final class AX25SessionManager: ObservableObject {
         session.acknowledgeUpTo(from: vaBefore, to: nr)
         session.statistics.recordReceived(bytes: payload.count)
         session.touch()
+
+        // Record the actual inbound via path so callbacks can thread it to the UI.
+        session.lastReceivedVia = path.digis.map { $0.display }
 
         onOutboundAckReceived?(session, session.va)
 
@@ -1409,9 +1429,9 @@ final class AX25SessionManager: ObservableObject {
         }
 
         // REJ(nr) means "retransmit from nr" — do NOT clear send buffer (unlike RR which acks frames).
-        // Get frames to retransmit
+        // Get frames to retransmit and update their N(R) to current V(R)
         let retransmitFrames = session.framesToRetransmit(from: nr)
-        for _ in retransmitFrames {
+        for frame in retransmitFrames {
             session.statistics.recordRetransmit()
         }
 
@@ -1420,9 +1440,12 @@ final class AX25SessionManager: ObservableObject {
         // Deep debug snapshot when peer explicitly requests retransmit.
         debugDumpSessionState(session, context: "inbound-REJ")
 
-        // Process actions first, then return retransmit frames
+        // Process actions first, then return retransmit frames with updated N(R)
         var frames = processActions(actions, for: session)
-        frames.append(contentsOf: retransmitFrames)
+        for frame in retransmitFrames {
+            let updatedFrame = frame.withUpdatedNR(session.vr)
+            frames.append(updatedFrame)
+        }
         return frames
     }
 
@@ -1457,7 +1480,7 @@ final class AX25SessionManager: ObservableObject {
                 guard let ctrl = f.controlByte else { return nil }
                 return Int((ctrl >> 1) & 0x07)  // N(S) from AX.25 control byte
             }
-            print("[DEBUG:AX25:T1] retransmit | va=\(session.va) vs=\(session.vs) outstanding=\(session.outstandingCount) sendBufKeys=\(session.sendBuffer.keys.sorted()) retransmitNS=\(nsValues) retransmitCount=\(retransmitFrames.count)")
+            print("[DEBUG:AX25:T1] retransmit | va=\(session.va) vs=\(session.vs) vr=\(session.vr) outstanding=\(session.outstandingCount) sendBufKeys=\(session.sendBuffer.keys.sorted()) retransmitNS=\(nsValues) retransmitCount=\(retransmitFrames.count)")
             TxLog.debug(.session, "T1 retransmit", [
                 "peer": session.remoteAddress.display,
                 "va": session.va,
@@ -1466,9 +1489,11 @@ final class AX25SessionManager: ObservableObject {
                 "retransmitNS": nsValues.map { String($0) }.joined(separator: ",")
             ])
             for frame in retransmitFrames {
-                debugTrace("TX I (retransmit)", ["frame": describeFrame(frame)])
+                // Update N(R) to current V(R) so the peer sees our latest receive state
+                let updatedFrame = frame.withUpdatedNR(session.vr)
+                debugTrace("TX I (retransmit)", ["frame": describeFrame(updatedFrame)])
                 session.statistics.recordRetransmit()
-                frames.append(frame)
+                frames.append(updatedFrame)
             }
         }
 
@@ -1490,9 +1515,11 @@ final class AX25SessionManager: ObservableObject {
     // MARK: - Timer Management
 
     /// Start T1 (retransmit) timer for a session
-    private func startT1Timer(for session: AX25Session) {
-        // Cancel any existing T1 timer
+    func startT1Timer(for session: AX25Session) {
+        // Cancel any existing T1 timer and pending grace-period retransmit
         session.t1TimerTask?.cancel()
+        session.t1PendingRetransmitTask?.cancel()
+        session.t1PendingRetransmitTask = nil
 
         let rto = session.timers.rto
         let sessionId = session.id
@@ -1537,7 +1564,7 @@ final class AX25SessionManager: ObservableObject {
                                 session.t1PendingRetransmitTask = nil
                                 let frames = self.handleT1Timeout(session: session)
                                 for frame in frames {
-                                    self.onRetransmitFrame?(frame)
+                                    self.onSendFrame?(frame)
                                 }
                             }
                         } catch {
@@ -1591,7 +1618,7 @@ final class AX25SessionManager: ObservableObject {
 
                     let frames = self.handleT3Timeout(session: session)
                     for frame in frames {
-                        self.onRetransmitFrame?(frame)
+                        self.onSendFrame?(frame)
                     }
                 }
             } catch {

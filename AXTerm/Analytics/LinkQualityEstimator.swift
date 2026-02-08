@@ -96,7 +96,7 @@ struct LinkQualityConfig: Equatable {
 
     static let `default` = LinkQualityConfig(
         source: .kiss,
-        slidingWindowSeconds: 300,
+        slidingWindowSeconds: FreshnessCalculator.defaultTTL,
         forwardHalfLifeSeconds: 30 * 60,
         reverseHalfLifeSeconds: 30 * 60,
         initialDeliveryRatio: 0.5,

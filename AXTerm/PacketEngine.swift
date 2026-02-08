@@ -618,15 +618,16 @@ final class PacketEngine: ObservableObject {
     /// Append decoded AXDP/session chat to the console so it appears in the terminal.
     /// Called when AXDP chat is received—the raw I-frame payload is binary so it never
     /// reaches the console via the normal packet path.
-    func appendSessionChatLine(from fromDisplay: String, text: String) {
+    func appendSessionChatLine(from fromDisplay: String, text: String, via: [String] = []) {
         TxLog.debug(.session, "appendSessionChatLine called", [
             "from": fromDisplay,
             "textLength": text.count,
             "preview": String(text.prefix(50)),
+            "via": via.joined(separator: ","),
             "currentLineCount": consoleLines.count
         ])
         let toDisplay = settings.myCallsign
-        let line = ConsoleLine.packet(from: fromDisplay, to: toDisplay, text: text)
+        let line = ConsoleLine.packet(from: fromDisplay, to: toDisplay, text: text, via: via)
         appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
         TxLog.debug(.session, "appendSessionChatLine complete", [
             "newLineCount": consoleLines.count
@@ -663,6 +664,35 @@ final class PacketEngine: ObservableObject {
         recentConsoleSignatures = recentConsoleSignatures.filter { _, value in
             value.timestamp > cutoff
         }
+    }
+
+    /// Determine if an I-frame should be skipped from console display.
+    /// Only skip I-frames (PID 0xF0) that belong to the user's active sessions,
+    /// since SessionCoordinator will deliver those via appendSessionChatLine.
+    /// Monitored traffic (other stations talking to each other) should appear in console.
+    private func shouldSkipIFrame(_ packet: Packet) -> Bool {
+        // Only consider I-frames with session data (PID 0xF0)
+        guard packet.frameType == .i, packet.pid == 0xF0 else {
+            return false
+        }
+        
+        // Check if the user is a participant in this session
+        // If source OR destination matches myCallsign, it's a user session - skip it
+        // because SessionCoordinator will deliver it via appendSessionChatLine.
+        // Use addressMatchesDisplay() to correctly handle SSID (e.g. "K0EPI-7" vs base "K0EPI")
+        let myCallDisplay = settings.myCallsign
+        guard !myCallDisplay.isEmpty else {
+            // If myCallsign is not set, show all I-frames (nothing to match against)
+            return false
+        }
+
+        let fromMatch = packet.from.map { CallsignNormalizer.addressMatchesDisplay($0, myCallDisplay) } ?? false
+        let toMatch = packet.to.map { CallsignNormalizer.addressMatchesDisplay($0, myCallDisplay) } ?? false
+
+        let isUserSession = fromMatch || toMatch
+        
+        // Skip if it's the user's session, show if it's monitored traffic
+        return isUserSession
     }
 
     /// True if displayInfo is a protocol label (AXDP PING, SABM, etc.), not user chat
@@ -764,9 +794,11 @@ final class PacketEngine: ObservableObject {
         // Check for AXDP capabilities in UI frames
         detectAXDPCapabilities(from: packet)
 
-        // Skip raw I-frame console lines when payload is AXDP (PID 0xF0) – SessionCoordinator
-        // will deliver reassembled chat via appendSessionChatLine. Raw chunks would show truncated text.
-        let skipRawIFrameLine = packet.frameType == .i && packet.pid == 0xF0
+        // Skip raw I-frame console lines when payload is AXDP (PID 0xF0) AND the user is
+        // part of the session – SessionCoordinator will deliver reassembled chat via
+        // appendSessionChatLine. For monitored traffic (other stations' sessions),
+        // we DO want to show the I-frame content in the console.
+        let skipRawIFrameLine = shouldSkipIFrame(packet)
         if packet.frameType == .i {
             TxLog.debug(.axdp, "I-frame received at wire", [
                 "from": packet.fromDisplay,
@@ -1347,8 +1379,13 @@ final class PacketEngine: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.saveNetRomSnapshot()
-                // Prune old entries periodically (first run will be after initial interval)
+                // Prune old entries from persistence
                 self?.pruneOldNetRomEntries()
+                // Purge stale routes and neighbors from in-memory integration
+                self?.netRomIntegration?.purgeStaleData(currentDate: Date())
+                #if DEBUG
+                print("[NETROM:ENGINE] Purged stale data at \(Date())")
+                #endif
             }
         }
     }
@@ -1546,7 +1583,11 @@ final class PacketEngine: ObservableObject {
 
         print("[DEBUG:REBUILD] ✓ Replayed \(processed) packets")
 
-        // Step 5: Get results
+        // Step 5: Purge stale entries that resulted from replaying old packets
+        integration.purgeStaleData(currentDate: Date())
+        print("[DEBUG:REBUILD] ✓ Purged stale entries")
+
+        // Step 6: Get results
         let neighbors = integration.currentNeighbors()
         let routes = integration.currentRoutes()
         let linkStats = integration.exportLinkStats()
@@ -1556,7 +1597,7 @@ final class PacketEngine: ObservableObject {
         print("[DEBUG:REBUILD]   - Routes: \(routes.count)")
         print("[DEBUG:REBUILD]   - Link Stats: \(linkStats.count)")
 
-        // Step 6: Save to persistence
+        // Step 7: Save to persistence
         do {
             try persistence.saveSnapshot(
                 neighbors: neighbors,

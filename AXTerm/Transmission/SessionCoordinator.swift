@@ -373,11 +373,6 @@ final class SessionCoordinator: ObservableObject {
             self?.sendFrame(frame)
         }
 
-        // Wire up frame sending for timer-based retransmissions
-        sessionManager.onRetransmitFrame = { [weak self] frame in
-            self?.sendFrame(frame)
-        }
-        
         // Wire up AXDP reassembly - must use in-order delivered data only.
         // Out-of-window or buffered frames are discarded/buffered by AX.25; appending them
         // would corrupt reassembly (chunks arrive out of order over KISS relay).

@@ -681,7 +681,7 @@ final class AX25TransmissionTests: XCTestCase {
         manager.localCallsign = AX25Address(call: "ME", ssid: 0)
 
         var sentFrames: [OutboundFrame] = []
-        manager.onSendFrame = { frame in sentFrames.append(frame) }
+        // manager.onSendFrame is no longer used for immediate responses; they are returned directly.
 
         let dest = AX25Address(call: "PEER", ssid: 1)
         let connectedSession = makeConnectedSession(manager: manager, dest: dest)
@@ -690,12 +690,9 @@ final class AX25TransmissionTests: XCTestCase {
         // Verify session is lookup-able
         XCTAssertNotNil(manager.existingSession(for: dest, path: DigiPath(), channel: 0), "Session should be found by existingSession")
 
-        // Clear frames sent during connection setup (SABM)
-        sentFrames.removeAll()
-
         // Send 5 in-sequence I-frames with P/F=false
         for ns in 0..<5 {
-            manager.handleInboundIFrame(
+            if let response = manager.handleInboundIFrame(
                 from: dest,
                 path: DigiPath(),
                 channel: 0,
@@ -703,7 +700,9 @@ final class AX25TransmissionTests: XCTestCase {
                 nr: 0,
                 pf: false,
                 payload: Data([UInt8(0x41 + ns)])
-            )
+            ) {
+                sentFrames.append(response)
+            }
         }
 
         // Each I-frame should trigger an immediate RR
@@ -726,16 +725,13 @@ final class AX25TransmissionTests: XCTestCase {
         manager.localCallsign = AX25Address(call: "ME", ssid: 0)
 
         var sentFrames: [OutboundFrame] = []
-        manager.onSendFrame = { frame in sentFrames.append(frame) }
+        // manager.onSendFrame is no longer used for immediate responses; they are returned directly.
 
         let dest = AX25Address(call: "PEER", ssid: 1)
         let session = makeConnectedSession(manager: manager, dest: dest)
 
-        // Clear frames sent during connection setup (SABM)
-        sentFrames.removeAll()
-
         // Send I-frame with P=1 (poll)
-        manager.handleInboundIFrame(
+        if let response = manager.handleInboundIFrame(
             from: dest,
             path: DigiPath(),
             channel: 0,
@@ -743,7 +739,9 @@ final class AX25TransmissionTests: XCTestCase {
             nr: 0,
             pf: true,
             payload: Data([0x41])
-        )
+        ) {
+            sentFrames.append(response)
+        }
 
         // Poll response must be returned immediately
         XCTAssertEqual(sentFrames.count, 1, "I-frame with P=1 should send immediate RR response")
@@ -779,12 +777,15 @@ final class AX25TransmissionTests: XCTestCase {
             nr: 0
         )
         session.stateMachine.sequenceState.vs = 1  // vs=1, va=0 -> outstanding=1
+        
+        // Manually start T1 since we bypassed the send logic
+        manager.startT1Timer(for: session)
 
         // Record the current T1 task (if any)
         let oldT1Task = session.t1TimerTask
-
+        
         // Receive an inbound I-frame
-        _ = manager.handleInboundIFrame(
+        let _ = manager.handleInboundIFrame(
             from: dest,
             path: DigiPath(),
             channel: 0,
@@ -891,4 +892,65 @@ final class AX25TransmissionTests: XCTestCase {
 
         XCTAssertEqual(receiveCount, 1, "Three identical messages must result in single display")
     }
+
+    // MARK: - DISC Handling Tests
+
+    /// Test that send buffer is cleared and acknowledgment callback fired when remote sends DISC.
+    /// This fixes the UX issue where disconnect commands like "bye" or "b" show as "sending"
+    /// forever because BBS nodes send DISC immediately instead of RR acknowledgment.
+    func testSendBufferClearedOnInboundDISC() {
+        let manager = AX25SessionManager()
+        manager.localCallsign = AX25Address(call: "ME", ssid: 0)
+
+        let dest = AX25Address(call: "BBS", ssid: 7)
+        let src = AX25Address(call: "ME", ssid: 0)
+
+        // Connect and establish session
+        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
+        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        XCTAssertEqual(session.state, .connected)
+
+        // Simulate sending "bye" command as I-frame (n(s)=0)
+        let byePayload = Data("bye\r".utf8)
+        session.sendBuffer[0] = OutboundFrame(
+            destination: dest,
+            source: src,
+            payload: byePayload,
+            frameType: "i",
+            pid: 0xF0,
+            ns: 0,
+            nr: 0,
+            displayInfo: "bye"
+        )
+        session.stateMachine.sequenceState.vs = 1  // Sent frame 0, vs advanced to 1
+        XCTAssertEqual(session.sendBuffer.count, 1, "Should have 1 unacknowledged frame")
+
+        // Track acknowledgment callback
+        var ackReceived = false
+        var ackedVS: Int?
+        manager.onOutboundAckReceived = { _, vs in
+            ackReceived = true
+            ackedVS = vs
+        }
+
+        // Remote BBS sends DISC instead of RR (common BBS behavior for disconnect commands)
+        let response = manager.handleInboundDISC(
+            from: dest,
+            path: DigiPath(),
+            channel: 0
+        )
+
+        // Verify DISC processed correctly
+        XCTAssertNotNil(response, "Should return UA response to DISC")
+        XCTAssertEqual(response?.frameType, "u", "Should be unnumbered frame")
+
+        // Verify send buffer cleared (frames marked as delivered)
+        XCTAssertTrue(session.sendBuffer.isEmpty, "Send buffer should be cleared on DISC")
+
+        // Verify acknowledgment callback was triggered
+        XCTAssertTrue(ackReceived, "onOutboundAckReceived should be called when DISC clears buffer")
+        XCTAssertEqual(ackedVS, 1, "Should acknowledge up to vs (all sent frames)")
+    }
 }
+

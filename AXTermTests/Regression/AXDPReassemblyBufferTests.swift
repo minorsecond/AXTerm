@@ -287,7 +287,7 @@ final class FlagClearingRaceConditionTests: XCTestCase {
             )
             viewModel.setupSessionCallbacks()
 
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -333,7 +333,7 @@ final class FlagClearingRaceConditionTests: XCTestCase {
                 sessionManager: sessionManager
             )
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
