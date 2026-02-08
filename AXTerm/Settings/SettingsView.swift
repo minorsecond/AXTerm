@@ -77,120 +77,11 @@ struct SettingsView: View {
                 }
             }
 
-            Section("History") {
-                Toggle("Persist history", isOn: $settings.persistHistory)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Packet retention")
-                        Spacer()
-                        Text("\(settings.retentionLimit) packets")
-                            .foregroundStyle(.secondary)
-                    }
-
-                    HStack(spacing: 8) {
-                        TextField(
-                            "",
-                            value: $settings.retentionLimit,
-                            format: .number
-                        )
-                        .frame(width: 80)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Retention limit")
-
-                        Stepper(
-                            "",
-                            value: $settings.retentionLimit,
-                            in: AppSettingsStore.minRetention...AppSettingsStore.maxRetention,
-                            step: retentionStep
-                        )
-                        .labelsHidden()
-                    }
-
-                    Text("Adjust how many packets are retained on disk. Older packets are pruned in the background.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .disabled(!settings.persistHistory)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Console retention")
-                        Spacer()
-                        Text("\(settings.consoleRetentionLimit) lines")
-                            .foregroundStyle(.secondary)
-                    }
-
-                    HStack(spacing: 8) {
-                        TextField(
-                            "",
-                            value: $settings.consoleRetentionLimit,
-                            format: .number
-                        )
-                        .frame(width: 80)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Console retention")
-
-                        Stepper(
-                            "",
-                            value: $settings.consoleRetentionLimit,
-                            in: AppSettingsStore.minLogRetention...AppSettingsStore.maxLogRetention,
-                            step: retentionStep
-                        )
-                        .labelsHidden()
-                    }
-
-                    Text("Console history includes system messages and packet summaries.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .disabled(!settings.persistHistory)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Raw retention")
-                        Spacer()
-                        Text("\(settings.rawRetentionLimit) chunks")
-                            .foregroundStyle(.secondary)
-                    }
-
-                    HStack(spacing: 8) {
-                        TextField(
-                            "",
-                            value: $settings.rawRetentionLimit,
-                            format: .number
-                        )
-                        .frame(width: 80)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Raw retention")
-
-                        Stepper(
-                            "",
-                            value: $settings.rawRetentionLimit,
-                            in: AppSettingsStore.minLogRetention...AppSettingsStore.maxLogRetention,
-                            step: retentionStep
-                        )
-                        .labelsHidden()
-                    }
-
-                    Text("Raw history stores KISS byte streams and parse errors.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .disabled(!settings.persistHistory)
-
-                HStack {
-                    Button("Clear History…") {
-                        showingClearConfirmation = true
-                    }
-
-                    if let feedback = clearFeedback {
-                        Text(feedback)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
+                HistorySettingsView(
+                    settings: settings,
+                    onClearHistory: clearHistory,
+                    clearFeedback: clearFeedback
+                )
 
             Section("Diagnostics") {
                 VStack(alignment: .leading, spacing: 8) {
@@ -202,25 +93,16 @@ struct SettingsView: View {
                     }
 
                     HStack(spacing: 8) {
-                        TextField(
-                            "",
+                        GuardedRetentionInput(
                             value: $settings.eventRetentionLimit,
-                            format: .number
-                        )
-                        .frame(width: 80)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Event retention")
-
-                        Stepper(
-                            "",
-                            value: $settings.eventRetentionLimit,
-                            in: AppSettingsStore.minLogRetention...AppSettingsStore.maxLogRetention,
+                            min: AppSettingsStore.minLogRetention,
+                            max: AppSettingsStore.maxLogRetention,
                             step: retentionStep
                         )
-                        .labelsHidden()
+                        .accessibilityLabel("Event retention")
                     }
 
-                    Text("Diagnostics entries are retained separately from packet history.")
+                    Text("Controls how many application usage events (errors, warnings, connectivity logs) are kept in the Diagnostics tab.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -493,17 +375,7 @@ struct SettingsView: View {
                 coordinator.syncSessionManagerConfigFromAdaptive()
             }
         }
-        .confirmationDialog(
-            "Clear all stored packet history?",
-            isPresented: $showingClearConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Clear History", role: .destructive) {
-                clearHistory()
-            }
-        } message: {
-            Text("This removes persisted packets, console history, and raw history. Live data will continue to appear.")
-        }
+        // History confirmation is now handled within HistorySettingsView
         .onChange(of: settings.retentionLimit) { _, newValue in
             eventLogger?.log(
                 level: .info,
@@ -1139,4 +1011,218 @@ struct SettingsView: View {
         eventLogger: nil,
         notificationManager: NotificationAuthorizationManager()
     )
+}
+
+
+struct HistorySettingsView: View {
+    @ObservedObject var settings: AppSettingsStore
+    @State private var showingClearConfirmation = false
+    
+    // Pass clear closure from parent
+    var onClearHistory: () -> Void
+    var clearFeedback: String?
+    
+    private let retentionStep = 1_000
+    
+    @State private var pendingRetentionChange: AppSettingsStore.HistoryRetentionDuration?
+    @State private var showingRetentionWarning = false
+
+    private var retentionBinding: Binding<AppSettingsStore.HistoryRetentionDuration> {
+        Binding(
+            get: { settings.retentionDuration },
+            set: { newDuration in
+                // improved safety check: valid if we are moving to a defined duration that has LOWER limits than current
+                // If custom, we don't warn here (manual limits have their own guards if edited, or maybe we should warns if custom -> preset lower?)
+                
+                let newPacketLimit = newDuration.packetLimit
+                let currentPacketLimit = settings.retentionLimit
+                
+                // If new limit is LOWER than current, warn user
+                // (Unless switching to Custom, which retains current values initially, so no data loss immediately)
+                if newDuration != .custom && newPacketLimit < currentPacketLimit {
+                    pendingRetentionChange = newDuration
+                    showingRetentionWarning = true
+                } else {
+                    settings.retentionDuration = newDuration
+                }
+            }
+        )
+    }
+
+    var body: some View {
+        Section {
+            Toggle("Persist history", isOn: $settings.persistHistory)
+            
+            if settings.persistHistory {
+                VStack(alignment: .leading, spacing: 12) {
+                    // Primary Control
+                    HStack {
+                        Text("Keep history for:")
+                        Spacer()
+                        Picker("", selection: retentionBinding) {
+                            ForEach(AppSettingsStore.HistoryRetentionDuration.allCases) { duration in
+                                Text(duration.rawValue).tag(duration)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(maxWidth: 150)
+                    }
+                    
+                    // Status Line
+                    HStack(spacing: 6) {
+                        Image(systemName: "info.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        
+                        Text(storageEstimateText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    
+                    Divider()
+                        .padding(.vertical, 4)
+                    
+                    // Custom Limits Section
+                    if settings.retentionDuration == .custom {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text("Custom Limits")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.secondary)
+                            
+                            // Packet Retention
+                            advancedRetentionRow(
+                                title: "Packet Limit",
+                                value: $settings.retentionLimit,
+                                suffix: "packets",
+                                min: AppSettingsStore.minRetention
+                            )
+                            
+                            // Console Retention
+                            advancedRetentionRow(
+                                title: "Console Limit",
+                                value: $settings.consoleRetentionLimit,
+                                suffix: "lines",
+                                min: AppSettingsStore.minLogRetention
+                            )
+                            
+                            // Raw Retention
+                            advancedRetentionRow(
+                                title: "Raw Limit",
+                                value: $settings.rawRetentionLimit,
+                                suffix: "chunks",
+                                min: AppSettingsStore.minLogRetention
+                            )
+                        }
+                        .padding(.top, 8)
+                        .transition(.opacity)
+                    }
+                }
+                
+                // Clear History Action
+                HStack {
+                    Button("Clear History…") {
+                        showingClearConfirmation = true
+                    }
+                    
+                    if let feedback = clearFeedback {
+                        Text(feedback)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.top, 8)
+            }
+        } header: {
+            Text("History")
+        }
+        .confirmationDialog(
+            "Clear all stored packet history?",
+            isPresented: $showingClearConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Clear History", role: .destructive) {
+                onClearHistory()
+            }
+        } message: {
+            Text("This removes persisted packets, console history, and raw history. Live data will continue to appear.")
+        }
+        .confirmationDialog(
+             "Reduce History Retention?",
+             isPresented: $showingRetentionWarning,
+             titleVisibility: .visible
+         ) {
+             Button("Reduce Retention", role: .destructive) {
+                 if let newDuration = pendingRetentionChange {
+                     settings.retentionDuration = newDuration
+                 }
+             }
+             Button("Cancel", role: .cancel) {
+                 pendingRetentionChange = nil
+             }
+         } message: {
+             if let newDuration = pendingRetentionChange {
+                 Text("You are reducing retention to \(newDuration.rawValue). Older history exceeding this limit will be permanently deleted.")
+             } else {
+                 Text("This action will permanently delete older history.")
+             }
+         }
+    }
+    
+    // MARK: - Helpers
+    
+    private var storageEstimateText: String {
+        if settings.retentionDuration == .forever {
+            return "History will grow indefinitely until disk is full."
+        }
+        
+        let packetBytes = settings.retentionLimit * AppSettingsStore.estimatedBytesPerPacket
+        let consoleBytes = settings.consoleRetentionLimit * AppSettingsStore.estimatedBytesPerConsoleLine
+        let rawBytes = settings.rawRetentionLimit * AppSettingsStore.estimatedBytesPerRawChunk
+        
+        let totalBytes = Double(packetBytes + consoleBytes + rawBytes)
+        let mb = totalBytes / 1_000_000.0
+        
+        let sizeStr = String(format: "%.1f MB", mb)
+        
+        // Coverage estimate
+        if settings.retentionDuration == .custom {
+            // Estimate based on packet limit
+            let days = settings.retentionLimit / AppSettingsStore.estimatedPacketsPerDay
+            let durationStr = "~" + (days < 1 ? "<1 day" : "\(days) days")
+            return "Max usage: \(sizeStr) • Estimated coverage: \(durationStr)"
+        }
+        
+        // Use simpler text if it's a fixed duration
+        return "Max usage: \(sizeStr)"
+    }
+    
+    @ViewBuilder
+    private func advancedRetentionRow(title: String, value: Binding<Int>, suffix: String, min: Int) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                Spacer()
+                if value.wrappedValue == Int.max {
+                    Text("Unlimited")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("\(value.wrappedValue) \(suffix)")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            
+            HStack {
+                // We use our GuardedRetentionInput here for safety, logic still holds
+                // (It accepts Int.max but stepper might be weird with it, so careful)
+                GuardedRetentionInput(
+                    value: value,
+                    min: min,
+                    max: Int.max, // Allow up to max
+                    step: retentionStep
+                )
+            }
+        }
+    }
 }
