@@ -1583,7 +1583,11 @@ final class PacketEngine: ObservableObject {
 
         print("[DEBUG:REBUILD] ✓ Replayed \(processed) packets")
 
-        // Step 5: Get results
+        // Step 5: Purge stale entries that resulted from replaying old packets
+        integration.purgeStaleData(currentDate: Date())
+        print("[DEBUG:REBUILD] ✓ Purged stale entries")
+
+        // Step 6: Get results
         let neighbors = integration.currentNeighbors()
         let routes = integration.currentRoutes()
         let linkStats = integration.exportLinkStats()
@@ -1593,7 +1597,7 @@ final class PacketEngine: ObservableObject {
         print("[DEBUG:REBUILD]   - Routes: \(routes.count)")
         print("[DEBUG:REBUILD]   - Link Stats: \(linkStats.count)")
 
-        // Step 6: Save to persistence
+        // Step 7: Save to persistence
         do {
             try persistence.saveSnapshot(
                 neighbors: neighbors,
