@@ -5,6 +5,7 @@
 //  Created by Codex on 1/30/26.
 //
 
+import Combine
 import Foundation
 
 /// Routing mode for NET/ROM integration.
@@ -23,7 +24,7 @@ enum NetRomRoutingMode: Sendable {
 /// passive inference engine, and link quality estimator.
 @MainActor
 final class NetRomIntegration {
-    private let localCallsign: String
+    let localCallsign: String
     private var mode: NetRomRoutingMode
 
     private let router: NetRomRouter
@@ -34,6 +35,15 @@ final class NetRomIntegration {
     private let routerConfig: NetRomConfig
     private let inferenceConfig: NetRomInferenceConfig
     private let linkConfig: LinkQualityConfig
+    
+    // MARK: - Publishers
+    
+    private let updateSubject = PassthroughSubject<Void, Never>()
+    
+    /// Publishes when the integration state changes (e.g. new routing data, expiration)
+    var didUpdate: AnyPublisher<Void, Never> {
+        updateSubject.eraseToAnyPublisher()
+    }
 
     /// Optional persistence for recording broadcast intervals (adaptive stale threshold).
     private weak var persistence: NetRomPersistence?
@@ -226,6 +236,7 @@ final class NetRomIntegration {
         if shouldRefreshNeighbor(for: classification) {
             let observedQuality = linkQualityForNeighbor(normalizedOrigin)
             router.observePacket(syntheticPacket, observedQuality: max(observedQuality, 200), direction: .incoming, timestamp: result.timestamp)
+            router.markAsOfficial(call: normalizedOrigin)
         }
 
         // Convert broadcast entries to RouteInfo and feed to router
@@ -347,6 +358,7 @@ final class NetRomIntegration {
         linkEstimator.purgeStaleData(currentDate: currentDate)
         passiveInference?.purgeStaleEvidence(currentDate: currentDate)
         router.purgeStaleRoutes(currentDate: currentDate)
+        updateSubject.send()
     }
 
     // MARK: - Export/Import

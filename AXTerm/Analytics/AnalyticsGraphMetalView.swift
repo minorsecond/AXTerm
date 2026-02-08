@@ -462,8 +462,21 @@ private struct GraphTooltipView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(node.callsign)
-                .font(.caption.weight(.semibold))
+            HStack(spacing: 4) {
+                Text(node.callsign)
+                    .font(.caption.weight(.semibold))
+                
+                if node.isNetRomOfficial {
+                    Text("Routing Node")
+                        .font(.system(size: 8, weight: .bold))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.orange.opacity(0.8))
+                        .foregroundColor(.white)
+                        .cornerRadius(3)
+                }
+            }
+            
             Text("Packets: \(node.weight)")
                 .font(.caption2)
             Text("Bytes: \((node.inBytes + node.outBytes).formatted())")
@@ -1060,7 +1073,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
                 callsign: node.callsign,
                 position: SIMD2(Float(position.x), Float(position.y)),
                 weight: node.weight,
-                isMyNode: isMyNode
+                isMyNode: isMyNode,
+                isOfficial: node.isNetRomOfficial
             )
             nodeCache.append(info)
             nodeIndex[node.id] = info
@@ -1077,7 +1091,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             let info = GraphEdgeInfo(
                 source: source,
                 target: target,
-                weight: edge.weight
+                weight: edge.weight,
+                isStale: edge.isStale
             )
             edgeCache.append(info)
         }
@@ -1097,8 +1112,11 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     private func rebuildBaseEdgeBuffer() {
         guard let device = view?.device else { return }
         let instances: [EdgeInstance] = edgeCache.map { edge in
-            let alpha = metrics.edgeAlpha(for: edge.weight)
-            let baseColor = colorVector(.secondaryLabelColor, alpha: Float(alpha))
+            var alpha = Float(metrics.edgeAlpha(for: edge.weight))
+            if edge.isStale {
+                alpha *= 0.3 // Dim stale routes
+            }
+            let baseColor = colorVector(.secondaryLabelColor, alpha: alpha)
             let thickness = metrics.edgeThickness(for: edge.weight)
             return EdgeInstance(
                 start: edge.source.position,
@@ -1135,8 +1153,11 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         let instances = edgeCache.compactMap { edge -> EdgeInstance? in
             guard focusIDs.contains(edge.source.id) || focusIDs.contains(edge.target.id) else { return nil }
             let thickness = metrics.edgeThickness(for: edge.weight)
-            let alpha = max(metrics.edgeAlpha(for: edge.weight), CGFloat(AnalyticsStyle.Graph.hoverEdgeAlpha))
-            let color = colorVector(.controlAccentColor, alpha: Float(alpha))
+            var alpha = Float(max(metrics.edgeAlpha(for: edge.weight), CGFloat(AnalyticsStyle.Graph.hoverEdgeAlpha)))
+            if edge.isStale {
+                alpha *= 0.4 // Still dim even when highlighted, but slightly less than base
+            }
+            let color = colorVector(.controlAccentColor, alpha: alpha)
             return EdgeInstance(
                 start: edge.source.position,
                 end: edge.target.position,
@@ -1157,6 +1178,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         let hoverColor = colorVector(.labelColor, alpha: 1.0)
         let selectedColor = colorVector(.controlAccentColor, alpha: 1.0)
         let myNodeColor = colorVector(.systemPurple, alpha: 1.0)
+        let officialNodeColor = colorVector(.systemOrange, alpha: 1.0)
         let outlineColor = colorVector(.controlAccentColor, alpha: 0.55)
         let myNodeOutline = colorVector(.systemPurple, alpha: 0.7)
 
@@ -1177,6 +1199,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
                 color = hoverColor
             } else if isMyNode {
                 color = myNodeColor
+            } else if node.isOfficial {
+                color = officialNodeColor
             } else {
                 color = baseColor
             }
@@ -1365,12 +1389,14 @@ private struct GraphNodeInfo: Hashable {
     let position: SIMD2<Float>
     let weight: Int
     let isMyNode: Bool
+    let isOfficial: Bool
 }
 
 private struct GraphEdgeInfo: Hashable {
     let source: GraphNodeInfo
     let target: GraphNodeInfo
     let weight: Int
+    let isStale: Bool
 }
 
 private struct GraphMetrics {

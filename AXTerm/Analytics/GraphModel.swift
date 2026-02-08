@@ -19,6 +19,7 @@ struct NetworkGraphNode: Hashable, Sendable, Identifiable {
     /// SSIDs grouped into this node (only populated when stationIdentityMode == .station)
     /// Example: When "ANH", "ANH-1", and "ANH-15" are grouped, this contains ["ANH", "ANH-1", "ANH-15"]
     let groupedSSIDs: [String]
+    let isNetRomOfficial: Bool
 
     init(
         id: String,
@@ -29,7 +30,8 @@ struct NetworkGraphNode: Hashable, Sendable, Identifiable {
         inBytes: Int,
         outBytes: Int,
         degree: Int,
-        groupedSSIDs: [String] = []
+        groupedSSIDs: [String] = [],
+        isNetRomOfficial: Bool = false
     ) {
         self.id = id
         self.callsign = callsign
@@ -40,6 +42,7 @@ struct NetworkGraphNode: Hashable, Sendable, Identifiable {
         self.outBytes = outBytes
         self.degree = degree
         self.groupedSSIDs = groupedSSIDs.isEmpty ? [callsign] : groupedSSIDs
+        self.isNetRomOfficial = isNetRomOfficial
     }
 
     /// Whether this node represents multiple grouped SSIDs
@@ -61,12 +64,14 @@ struct NetworkGraphEdge: Hashable, Sendable {
     let targetID: String
     let weight: Int
     let bytes: Int
+    let isStale: Bool
 }
 
 struct GraphNeighborStat: Hashable, Sendable {
     let id: String
     let weight: Int
     let bytes: Int
+    let isStale: Bool
 }
 
 struct GraphModel: Hashable, Sendable {

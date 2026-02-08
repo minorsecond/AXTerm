@@ -92,8 +92,8 @@ final class ForceLayoutEngineTests: XCTestCase {
             NetworkGraphNode(id: "N3CCC", callsign: "N3CCC", weight: 2, inCount: 2, outCount: 0, inBytes: 12, outBytes: 0, degree: 1)
         ]
         let edges = [
-            NetworkGraphEdge(sourceID: "W1AAA", targetID: "K2BBB", weight: 3, bytes: 30),
-            NetworkGraphEdge(sourceID: "K2BBB", targetID: "N3CCC", weight: 2, bytes: 20)
+            NetworkGraphEdge(sourceID: "W1AAA", targetID: "K2BBB", weight: 3, bytes: 30, isStale: false),
+            NetworkGraphEdge(sourceID: "K2BBB", targetID: "N3CCC", weight: 2, bytes: 20, isStale: false)
         ]
         return GraphModel(nodes: nodes, edges: edges, adjacency: [:], droppedNodesCount: 0)
     }

@@ -940,9 +940,9 @@ struct GraphSidebar_Previews: PreviewProvider {
                 groupedSSIDs: ["W0ARP", "W0ARP-1", "W0ARP-10", "W0ARP-15"]  // Grouped SSIDs
             ),
             neighbors: [
-                GraphNeighborStat(id: "N0XCR", weight: 44, bytes: 512),
-                GraphNeighborStat(id: "KC0LDY", weight: 11, bytes: 128),
-                GraphNeighborStat(id: "WB4CIW", weight: 11, bytes: 128)
+                GraphNeighborStat(id: "N0XCR", weight: 44, bytes: 512, isStale: false),
+                GraphNeighborStat(id: "KC0LDY", weight: 11, bytes: 128, isStale: false),
+                GraphNeighborStat(id: "WB4CIW", weight: 11, bytes: 128, isStale: false)
             ],
             directPeers: [
                 StationRelationship(id: "N0XCR", linkType: .directPeer, packetCount: 44, lastHeard: Date().addingTimeInterval(-300), viaDigipeaters: [], score: 1.0),
