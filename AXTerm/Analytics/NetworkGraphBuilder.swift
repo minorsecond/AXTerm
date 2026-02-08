@@ -13,17 +13,26 @@ struct NetworkGraphBuilder {
         let minimumEdgeCount: Int
         let maxNodes: Int
         let stationIdentityMode: StationIdentityMode
+        let hideStaleEntries: Bool
+        let neighborStaleTTL: TimeInterval
+        let routeStaleTTL: TimeInterval
 
         init(
             includeViaDigipeaters: Bool,
             minimumEdgeCount: Int,
             maxNodes: Int,
-            stationIdentityMode: StationIdentityMode = .station
+            stationIdentityMode: StationIdentityMode = .station,
+            hideStaleEntries: Bool = false,
+            neighborStaleTTL: TimeInterval = 1800,
+            routeStaleTTL: TimeInterval = 3600
         ) {
             self.includeViaDigipeaters = includeViaDigipeaters
             self.minimumEdgeCount = minimumEdgeCount
             self.maxNodes = maxNodes
             self.stationIdentityMode = stationIdentityMode
+            self.hideStaleEntries = hideStaleEntries
+            self.neighborStaleTTL = neighborStaleTTL
+            self.routeStaleTTL = routeStaleTTL
         }
     }
 
@@ -93,13 +102,10 @@ struct NetworkGraphBuilder {
         
         // Map quality threshold: slider value 1-10 → quality 25-250
         let qualityThreshold = options.minimumEdgeCount * 25
-        
-        // Stale threshold: 30 minutes
-        let staleThreshold: TimeInterval = 1800
-        
+
         // Phase 1: Collect all nodes from neighbors and routes
         var nodeStats: [String: (inCount: Int, outCount: Int, inBytes: Int64, outBytes: Int64, routes: Int, ssids: Set<String>, isOfficial: Bool)] = [:]
-        
+
         // Add neighbor nodes (direct connections)
         let localKey = identityKey(localCallsign)
         var localStats = nodeStats[localKey] ?? (0, 0, 0, 0, 0, [], false)
@@ -110,6 +116,10 @@ struct NetworkGraphBuilder {
         var bestNeighbors: [String: NeighborInfo] = [:]
         for neighbor in neighbors {
             guard neighbor.quality >= qualityThreshold else { continue }
+            // Skip stale neighbors when hideStaleEntries is enabled
+            if options.hideStaleEntries && now.timeIntervalSince(neighbor.lastSeen) > options.neighborStaleTTL {
+                continue
+            }
             let key = identityKey(neighbor.call)
             if let existing = bestNeighbors[key] {
                 if neighbor.quality > existing.quality {
@@ -133,7 +143,11 @@ struct NetworkGraphBuilder {
         for route in routes {
             // Skip low-quality routes
             guard route.quality >= qualityThreshold else { continue }
-            
+            // Skip stale routes when hideStaleEntries is enabled
+            if options.hideStaleEntries && now.timeIntervalSince(route.lastUpdated) > options.routeStaleTTL {
+                continue
+            }
+
             let destKey = identityKey(route.destination)
             let originKey = identityKey(route.origin)
             
@@ -173,7 +187,7 @@ struct NetworkGraphBuilder {
         for (_, neighbor) in bestNeighbors {
             let neighborKey = identityKey(neighbor.call)
             let weight = max(1, neighbor.quality / 25) // Map quality 0-255 to weight
-            let isStale = now.timeIntervalSince(neighbor.lastSeen) > staleThreshold
+            let isStale = now.timeIntervalSince(neighbor.lastSeen) > options.neighborStaleTTL
             
             // Create edge between neighbor and local station
             edges.append(ClassifiedEdge(
@@ -189,11 +203,14 @@ struct NetworkGraphBuilder {
         // Add route edges (HeardVia for multi-hop, DirectPeer for single-hop)
         for route in routes {
             guard route.quality >= qualityThreshold else { continue }
-            
+            if options.hideStaleEntries && now.timeIntervalSince(route.lastUpdated) > options.routeStaleTTL {
+                continue
+            }
+
             let destKey = identityKey(route.destination)
             let originKey = identityKey(route.origin)
             let weight = max(1, route.quality / 25)
-            let isStale = now.timeIntervalSince(route.lastUpdated) > staleThreshold
+            let isStale = now.timeIntervalSince(route.lastUpdated) > options.routeStaleTTL
             
             // Determine link type based on path length
             let linkType: LinkType = route.path.isEmpty || route.path.count <= 1 ? .directPeer : .heardVia
