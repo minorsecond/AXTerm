@@ -26,7 +26,7 @@ struct ContentView: View {
     @StateObject private var sessionCoordinator: SessionCoordinator
 
     @State private var selectedNav: NavigationItem = .terminal
-    @State private var searchText: String = ""
+    @StateObject private var searchModel = AppToolbarSearchModel()
     @State private var filters = PacketFilters()
     @State private var showFilterPopover = false
 
@@ -82,7 +82,7 @@ struct ContentView: View {
             detailView
         }
         .accessibilityIdentifier("mainWindowRoot")
-        .searchable(text: $searchText, prompt: "Search packets...")
+        .searchable(text: $searchModel.query, prompt: searchPlaceholder)
         .searchFocused($isSearchFocused)
         .toolbar {
             toolbarContent
@@ -175,6 +175,19 @@ struct ContentView: View {
         })
         .onChange(of: settings.myCallsign) { _, newValue in
             sessionCoordinator.localCallsign = newValue
+        }
+        .onChange(of: selectedNav) { _, newValue in
+            syncSearchScope(for: newValue)
+        }
+    }
+
+    private func syncSearchScope(for item: NavigationItem) {
+        switch item {
+        case .terminal: searchModel.scope = .terminal
+        case .packets: searchModel.scope = .packets
+        case .routes: searchModel.scope = .routes
+        case .analytics: searchModel.scope = .analytics
+        case .raw: searchModel.scope = .terminal // Fallback or new scope if needed
         }
     }
 
@@ -271,7 +284,7 @@ struct ContentView: View {
 
             switch selectedNav {
             case .terminal:
-                TerminalView(client: client, settings: settings, sessionCoordinator: sessionCoordinator, searchText: $searchText)
+                TerminalView(client: client, settings: settings, sessionCoordinator: sessionCoordinator, searchModel: searchModel)
             case .packets:
                 packetsView
             case .routes:
@@ -311,7 +324,7 @@ struct ContentView: View {
                 inspectorSelection = nil
             }
         }
-        .onChange(of: searchText) { _, _ in scheduleSelectionSync(with: rows) }
+        .onChange(of: searchModel.query) { _, _ in scheduleSelectionSync(with: rows) }
         .onChange(of: filters) { _, _ in scheduleSelectionSync(with: rows) }
         .onChange(of: client.selectedStationCall) { _, _ in scheduleSelectionSync(with: rows) }
         .onChange(of: client.packets) { _, _ in scheduleSelectionSync(with: rows) }
@@ -543,7 +556,7 @@ struct ContentView: View {
 
     private var filteredPackets: [Packet] {
         client.filteredPackets(
-            search: searchText,
+            search: searchModel.query,
             filters: filters,
             stationCall: client.selectedStationCall
         )

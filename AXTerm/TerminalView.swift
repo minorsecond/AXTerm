@@ -12,6 +12,8 @@ import UniformTypeIdentifiers
 
 // MARK: - Observable View Model Wrapper
 
+typealias TerminalLine = ConsoleLine
+
 /// Observable wrapper around TerminalTxViewModel for SwiftUI binding
 @MainActor
 final class ObservableTerminalTxViewModel: ObservableObject {
@@ -44,6 +46,26 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
     /// Cancellables for Combine subscriptions
     private var cancellables = Set<AnyCancellable>()
+
+    // MARK: - Filtering Pipeline
+    
+    /// Full in-memory buffer of console lines
+    @Published private(set) var allLines: [TerminalLine] = []
+    
+    /// Performance window (last N lines)
+    @Published private(set) var visibleLines: [TerminalLine] = []
+    
+    /// Final filtered lines for the UI
+    @Published private(set) var filteredLines: [TerminalLine] = []
+    
+    /// Debounced search query
+    @Published private(set) var debouncedQuery: String = ""
+    
+    /// Shared settings for type filtering (ID, BCN, etc)
+    private let settings: AppSettingsStore
+    
+    /// Max lines for the performance window
+    private let maxVisibleLines = 1000
 
     /// Session notification toast
     @Published var sessionNotification: SessionNotification?
@@ -127,24 +149,21 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// callbacks with weak refs to deallocated objects.
     private var callbacksConfigured = false
     
-    init(sourceCall: String = "", sessionManager: AX25SessionManager? = nil) {
+    init(client: PacketEngine, settings: AppSettingsStore, sourceCall: String, sessionManager: AX25SessionManager) {
         var vm = TerminalTxViewModel()
         vm.sourceCall = sourceCall
         self.viewModel = vm
+        self.settings = settings
+        self.sessionManager = sessionManager
 
-        // Use shared session manager if provided, otherwise create one
-        self.sessionManager = sessionManager ?? AX25SessionManager()
-
-        // Set up local callsign - this is safe to do in init as it's just data assignment
+        // Set up local callsign
         let (baseCall, ssid) = CallsignNormalizer.parse(sourceCall.isEmpty ? "NOCALL" : sourceCall)
         self.sessionManager.localCallsign = AX25Address(call: baseCall.isEmpty ? "NOCALL" : baseCall, ssid: ssid)
+        
         print("[ObservableTerminalTxViewModel.init] Set localCallsign: call='\(baseCall)', ssid=\(ssid)")
         
-        // NOTE: Callbacks are NOT set up here to avoid @StateObject gotcha.
-        // When SwiftUI re-renders, init() is called for a new instance, but @StateObject
-        // discards it and keeps the original. If we set callbacks here, they would point
-        // to the discarded instance (weak ref -> nil), causing data loss.
-        // Call setupSessionCallbacks() from a stable location (like onAppear) instead.
+        setupSearchDebounce()
+        setupConsoleSubscription(client: client)
     }
 
     private func createSessionNotification(for session: AX25Session, oldState: AX25SessionState, newState: AX25SessionState) -> SessionNotification? {
@@ -267,6 +286,71 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                 self?.updateOutboundBytesAcked(session: session, va: va)
             }
         }
+    }
+
+    // MARK: - Filtering Logic
+
+    private func setupSearchDebounce() {
+        $debouncedQuery
+            .dropFirst()
+            .debounce(for: .milliseconds(200), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.applyFiltering()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func setupConsoleSubscription(client: PacketEngine) {
+        client.$consoleLines
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] lines in
+                guard let self = self else { return }
+                self.allLines = lines
+                self.applyFiltering()
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Update the current search query (to be called when the shared search model changes)
+    func updateSearchQuery(_ query: String) {
+        if debouncedQuery != query {
+            debouncedQuery = query
+            // applyFiltering will be called by the debounce sink
+        }
+    }
+
+    /// Primary filtering pipeline implementation
+    func applyFiltering() {
+        // 1. apply performance window (visibleLines)
+        let totalCount = allLines.count
+        visibleLines = Array(allLines.suffix(maxVisibleLines))
+        
+        // 2. apply global view filters and search query
+        var result = visibleLines
+        
+        // Filter by clear timestamp
+        if let cutoff = settings.terminalClearedAt {
+            result = result.filter { $0.timestamp > cutoff }
+        }
+        
+        // HIG: Terminal filters in-memory output (case-insensitive substring match on rendered text)
+        if !debouncedQuery.isEmpty {
+            let searchLower = debouncedQuery.lowercased()
+            result = result.filter { line in
+                line.text.lowercased().contains(searchLower) ||
+                line.from?.lowercased().contains(searchLower) == true ||
+                line.to?.lowercased().contains(searchLower) == true
+            }
+        }
+        
+        filteredLines = result
+        
+        #if DEBUG
+        print("[TerminalSearch] query=\"\(debouncedQuery)\" all=\(totalCount) visible=\(visibleLines.count) filtered=\(filteredLines.count)")
+        #endif
+        
+        // Ensure UI updates reliably
+        objectWillChange.send()
     }
 
     /// Start tracking an outbound message for progressive highlighting
@@ -936,7 +1020,7 @@ struct TerminalView: View {
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var sessionCoordinator: SessionCoordinator
     @StateObject private var txViewModel: ObservableTerminalTxViewModel
-    @Binding var searchText: String
+    @ObservedObject var searchModel: AppToolbarSearchModel
 
     @State private var selectedTab: TerminalTab = .session
     @State private var showingTransferSheet = false
@@ -952,18 +1036,17 @@ struct TerminalView: View {
     @State private var showConnectionBanner = false
     @State private var connectionBannerTask: Task<Void, Never>?
     
-    // Debounced search for performance with large terminal logs
-    @State private var debouncedSearchText = ""
-    @State private var searchDebounceTask: Task<Void, Never>?
-
     @State private var showAdaptiveSettingsPopover = false
 
-    init(client: PacketEngine, settings: AppSettingsStore, sessionCoordinator: SessionCoordinator, searchText: Binding<String>) {
+    init(client: PacketEngine, settings: AppSettingsStore, sessionCoordinator: SessionCoordinator, searchModel: AppToolbarSearchModel) {
         self.client = client
         _settings = ObservedObject(wrappedValue: settings)
         _sessionCoordinator = ObservedObject(wrappedValue: sessionCoordinator)
-        _searchText = searchText
+        self.searchModel = searchModel
+        
         _txViewModel = StateObject(wrappedValue: ObservableTerminalTxViewModel(
+            client: client,
+            settings: settings,
             sourceCall: settings.myCallsign,
             sessionManager: sessionCoordinator.sessionManager
         ))
@@ -971,10 +1054,14 @@ struct TerminalView: View {
 
     var body: some View {
         mainLayout
+            .onChange(of: searchModel.query) { _, newValue in
+                txViewModel.updateSearchQuery(newValue)
+            }
+            .onAppear {
+                txViewModel.updateSearchQuery(searchModel.query)
+            }
             .modifier(TerminalViewModifiers(
-                searchText: $searchText,
-                debouncedSearchText: $debouncedSearchText,
-                searchDebounceTask: $searchDebounceTask,
+                searchModel: searchModel,
                 showingTransferSheet: $showingTransferSheet,
                 showingTransferError: $showingTransferError,
                 currentIncomingRequest: $currentIncomingRequest,
@@ -1430,57 +1517,52 @@ struct TerminalView: View {
 
     @ViewBuilder
     private var sessionOutputView: some View {
-        // Restore original ConsoleView-based UI so we keep timestamps,
-        // message-type pills, colors, etc. Improvements to grouping are
-        // handled at the data level rather than replacing this view.
-        ConsoleView(
-            lines: client.consoleLines,
-            showDaySeparators: settings.showConsoleDaySeparators,
-            clearedAt: $settings.terminalClearedAt
-        )
-        .overlay(alignment: .center) {
-            if filteredConsoleLines.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "text.bubble")
-                        .font(.system(size: 48))
-                        .foregroundStyle(.tertiary)
-
-                    Text("No messages yet")
-                        .foregroundStyle(.secondary)
-
-                    if settings.terminalClearedAt != nil {
-                        Text("Session cleared")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    } else {
-                        Text("Connect to a TNC to start receiving packets")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
+        ZStack {
+            ConsoleView(
+                lines: txViewModel.filteredLines,
+                showDaySeparators: settings.showConsoleDaySeparators,
+                clearedAt: $settings.terminalClearedAt
+            )
+            .opacity(txViewModel.filteredLines.isEmpty ? 0 : 1)
+            
+            if txViewModel.filteredLines.isEmpty {
+                emptyStateView
             }
         }
     }
 
-    /// Console lines filtered by clear timestamp and search text
-    /// Search is debounced to avoid performance issues with large logs
-    private var filteredConsoleLines: [ConsoleLine] {
-        var lines = client.consoleLines
-        
-        // Filter by clear timestamp
-        if let cutoff = settings.terminalClearedAt {
-            lines = lines.filter { $0.timestamp > cutoff }
-        }
-        
-        // Filter by search text (case-insensitive, debounced)
-        if !debouncedSearchText.isEmpty {
-            let searchLower = debouncedSearchText.lowercased()
-            lines = lines.filter { (line: ConsoleLine) -> Bool in
-                line.text.lowercased().contains(searchLower)
+    @ViewBuilder
+    private var emptyStateView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: txViewModel.allLines.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
+                .font(.system(size: 48))
+                .foregroundStyle(.tertiary)
+            
+            VStack(spacing: 8) {
+                if txViewModel.allLines.isEmpty {
+                    Text("No messages yet")
+                        .font(.headline)
+                    Text("Monitoring network traffic and active sessions.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("No Results")
+                        .font(.headline)
+                    Text("No messages matching \"\(searchModel.query)\"")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    
+                    Button("Clear Search") {
+                        searchModel.clear()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .padding(.top, 8)
+                }
             }
         }
-        
-        return lines
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.background.opacity(0.8))
     }
 
     // MARK: - Transmission
@@ -1811,9 +1893,7 @@ struct TerminalView: View {
 // MARK: - View Modifiers
 
 struct TerminalViewModifiers: ViewModifier {
-    @Binding var searchText: String
-    @Binding var debouncedSearchText: String
-    @Binding var searchDebounceTask: Task<Void, Never>?
+    @ObservedObject var searchModel: AppToolbarSearchModel
     @Binding var showingTransferSheet: Bool
     @Binding var showingTransferError: Bool
     @Binding var currentIncomingRequest: IncomingTransferRequest?
@@ -1837,17 +1917,6 @@ struct TerminalViewModifiers: ViewModifier {
         content
             .onChange(of: settings.myCallsign) { _, newValue in
                 txViewModel.updateSourceCall(newValue)
-            }
-            .onChange(of: searchText) { _, newValue in
-                // Debounce search to avoid performance issues with large terminal logs
-                searchDebounceTask?.cancel()
-                let task = Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
-                    if !Task.isCancelled {
-                        debouncedSearchText = newValue
-                    }
-                }
-                searchDebounceTask = task
             }
             .onChange(of: client.status) { oldValue, newValue in
                 // HIG: Only show banners for unexpected events (failures, disconnects).
@@ -1920,14 +1989,14 @@ struct TerminalViewModifiers: ViewModifier {
 // MARK: - Preview
 
 #Preview("Terminal View") {
-    @Previewable @State var searchText = ""
     let settings = AppSettingsStore()
     let coordinator = SessionCoordinator()
+    let searchModel = AppToolbarSearchModel()
     TerminalView(
         client: PacketEngine(settings: settings),
         settings: settings,
         sessionCoordinator: coordinator,
-        searchText: $searchText
+        searchModel: searchModel
     )
     .frame(width: 800, height: 600)
 }
