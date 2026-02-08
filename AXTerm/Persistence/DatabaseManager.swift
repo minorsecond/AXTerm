@@ -346,6 +346,20 @@ enum DatabaseManager {
                 SentryManager.shared.breadcrumbDatabaseMigration(version: 4, success: true)
             }
         }
+        migrator.registerMigration("createOutboundMessage") { db in
+            Task { @MainActor in
+                SentryManager.shared.addBreadcrumb(
+                    category: "db.migration",
+                    message: "Running migration v5 (createOutboundMessage)",
+                    level: .info,
+                    data: nil
+                )
+            }
+            try createOutboundMessageTable(db)
+            Task { @MainActor in
+                SentryManager.shared.breadcrumbDatabaseMigration(version: 5, success: true)
+            }
+        }
         return migrator
     }()
 
