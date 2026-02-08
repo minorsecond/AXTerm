@@ -45,6 +45,12 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Cancellables for Combine subscriptions
     private var cancellables = Set<AnyCancellable>()
 
+    /// Session notification toast
+    @Published var sessionNotification: SessionNotification?
+    private var notificationTask: Task<Void, Never>?
+
+    /// Callback for sending response frames (RR, REJ, etc.)
+
     /// Callback for sending response frames (RR, REJ, etc.)
     var onSendResponseFrame: ((OutboundFrame) -> Void)?
 
@@ -140,6 +146,53 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         // to the discarded instance (weak ref -> nil), causing data loss.
         // Call setupSessionCallbacks() from a stable location (like onAppear) instead.
     }
+
+    private func createSessionNotification(for session: AX25Session, oldState: AX25SessionState, newState: AX25SessionState) -> SessionNotification? {
+        switch newState {
+        case .connected:
+            return SessionNotification(
+                type: .connected,
+                peer: session.remoteAddress.display,
+                message: "Session established"
+            )
+        case .disconnected where oldState == .connected || oldState == .disconnecting:
+            return SessionNotification(
+                type: .disconnected,
+                peer: session.remoteAddress.display,
+                message: "Session ended"
+            )
+        case .error:
+            return SessionNotification(
+                type: .error,
+                peer: session.remoteAddress.display,
+                message: "Session error"
+            )
+        default:
+            return nil
+        }
+    }
+
+    func showSessionNotification(_ notification: SessionNotification) {
+        notificationTask?.cancel()
+        withAnimation(.easeOut(duration: 0.2)) {
+            sessionNotification = notification
+        }
+        notificationTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if !Task.isCancelled {
+                withAnimation(.easeIn(duration: 0.2)) {
+                    sessionNotification = nil
+                }
+            }
+        }
+    }
+
+    func dismissSessionNotification() {
+        notificationTask?.cancel()
+        withAnimation(.easeIn(duration: 0.2)) {
+            sessionNotification = nil
+        }
+    }
     
     /// Set up session manager callbacks. Must be called from a stable location
     /// (e.g., TerminalView.onAppear) to ensure callbacks point to the actual
@@ -164,20 +217,22 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             // Then handle our own state updates
             Task { @MainActor in
                 // When a session connects, refresh currentSession to pick up responder sessions
-                // This handles the case where Station B receives an inbound SABM
-                // but currentSession is nil because we didn't initiate the connection
                 if newState == .connected {
                     self?.updateCurrentSession()
                 }
                 
-                // When a session disconnects, clear per-peer state to prevent contamination
-                // of future sessions with the same peer.
+                // When a session disconnects, clear per-peer state
                 if newState == .disconnected {
                     let peerKey = session.remoteAddress.display.uppercased()
-                    // Clear AXDP reassembly flag to prevent stale flags from suppressing future plain-text data
                     self?.peersInAXDPReassembly.remove(peerKey)
-                    // Clear plain text line buffer to prevent contamination of future messages
                     self?.currentLineBuffers.removeValue(forKey: peerKey)
+                }
+                
+                // Show notification for significant state changes
+                if oldState != newState {
+                    if let notification = self?.createSessionNotification(for: session, oldState: oldState, newState: newState) {
+                        self?.showSessionNotification(notification)
+                    }
                 }
                 
                 self?.objectWillChange.send()
@@ -881,6 +936,7 @@ struct TerminalView: View {
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var sessionCoordinator: SessionCoordinator
     @StateObject private var txViewModel: ObservableTerminalTxViewModel
+    @Binding var searchText: String
 
     @State private var selectedTab: TerminalTab = .session
     @State private var showingTransferSheet = false
@@ -893,16 +949,20 @@ struct TerminalView: View {
     // Incoming transfer sheet - using item binding for .sheet(item:)
     @State private var currentIncomingRequest: IncomingTransferRequest?
 
-    // Session notification toast
-    @State private var sessionNotification: SessionNotification?
-    @State private var notificationTask: Task<Void, Never>?
     @State private var showConnectionBanner = false
     @State private var connectionBannerTask: Task<Void, Never>?
+    
+    // Debounced search for performance with large terminal logs
+    @State private var debouncedSearchText = ""
+    @State private var searchDebounceTask: Task<Void, Never>?
 
-    init(client: PacketEngine, settings: AppSettingsStore, sessionCoordinator: SessionCoordinator) {
+    @State private var showAdaptiveSettingsPopover = false
+
+    init(client: PacketEngine, settings: AppSettingsStore, sessionCoordinator: SessionCoordinator, searchText: Binding<String>) {
         self.client = client
         _settings = ObservedObject(wrappedValue: settings)
         _sessionCoordinator = ObservedObject(wrappedValue: sessionCoordinator)
+        _searchText = searchText
         _txViewModel = StateObject(wrappedValue: ObservableTerminalTxViewModel(
             sourceCall: settings.myCallsign,
             sessionManager: sessionCoordinator.sessionManager
@@ -910,6 +970,30 @@ struct TerminalView: View {
     }
 
     var body: some View {
+        mainLayout
+            .modifier(TerminalViewModifiers(
+                searchText: $searchText,
+                debouncedSearchText: $debouncedSearchText,
+                searchDebounceTask: $searchDebounceTask,
+                showingTransferSheet: $showingTransferSheet,
+                showingTransferError: $showingTransferError,
+                currentIncomingRequest: $currentIncomingRequest,
+                selectedFileURL: selectedFileURL,
+                transferError: transferError,
+                client: client,
+                settings: settings,
+                sessionCoordinator: sessionCoordinator,
+                txViewModel: txViewModel,
+                shouldShowConnectionBanner: shouldShowConnectionBanner,
+                showConnectionBannerTemporarily: showConnectionBannerTemporarily,
+                handlePendingIncomingTransfers: handlePendingIncomingTransfers,
+                handleFileDrop: handleFileDrop,
+                startTransfer: startTransfer,
+                wireCallbacks: wireCallbacks
+            ))
+    }
+
+    private var mainLayout: some View {
         VStack(spacing: 0) {
             // Tab picker
             Picker("", selection: $selectedTab) {
@@ -921,40 +1005,7 @@ struct TerminalView: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
 
-            // Adaptive transmission status (updates when coordinator learns)
-            if sessionCoordinator.adaptiveTransmissionEnabled {
-                HStack(spacing: 8) {
-                    Image(systemName: "chart.line.uptrend.xyaxis")
-                        .font(.caption2)
-                        .foregroundStyle(.green)
-                    Text("Adaptive")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text("On")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundStyle(.green)
-                    Text("K:\(sessionCoordinator.globalAdaptiveSettings.windowSize.effectiveValue)")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                    Text("P:\(sessionCoordinator.globalAdaptiveSettings.paclen.effectiveValue)")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-            } else {
-                HStack(spacing: 6) {
-                    Image(systemName: "gearshape")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text("Adaptive Off")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-            }
+            adaptiveStatusIndicator
 
             Divider()
                 .padding(.top, 8)
@@ -967,234 +1018,86 @@ struct TerminalView: View {
                 transfersView
             }
         }
-        .onChange(of: settings.myCallsign) { _, newValue in
-            txViewModel.updateSourceCall(newValue)
-        }
-        .onChange(of: client.status) { oldValue, newValue in
-            if shouldShowConnectionBanner(oldValue: oldValue, newValue: newValue) {
-                showConnectionBannerTemporarily()
-            }
-        }
-        .onAppear {
-            if !showConnectionBanner {
-                if TestModeConfiguration.shared.isTestMode {
-                    showConnectionBannerTemporarily()
-                } else if client.status == .connected {
-                    showConnectionBannerTemporarily()
-                }
-            }
-        }
-        .sheet(isPresented: $showingTransferSheet) {
-            SendFileSheet(
-                isPresented: $showingTransferSheet,
-                selectedFileURL: selectedFileURL,
-                connectedSessions: sessionCoordinator.connectedSessions,
-                onSend: { destination, path, transferProtocol, compressionSettings in
-                    startTransfer(destination: destination, path: path, transferProtocol: transferProtocol, compressionSettings: compressionSettings)
-                },
-                checkCapability: { callsign in
-                    sessionCoordinator.capabilityStatus(for: callsign)
-                },
-                availableProtocols: { callsign in
-                    sessionCoordinator.availableProtocols(for: callsign)
-                }
-            )
-        }
-        .alert("Transfer Error", isPresented: $showingTransferError) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(transferError ?? "Unknown error")
-        }
-        .sheet(item: $currentIncomingRequest) { request in
-            // Using .sheet(item:) guarantees request is non-nil when this closure executes
-            IncomingTransferSheet(
-                isPresented: Binding(
-                    get: { currentIncomingRequest != nil },
-                    set: { if !$0 { currentIncomingRequest = nil } }
-                ),
-                request: request,
-                onAccept: {
-                    sessionCoordinator.acceptIncomingTransfer(request.id)
-                    currentIncomingRequest = nil
-                },
-                onDecline: {
-                    sessionCoordinator.declineIncomingTransfer(request.id)
-                    currentIncomingRequest = nil
-                },
-                onAlwaysAccept: {
-                    settings.allowCallsignForFileTransfer(request.sourceCallsign)
-                    sessionCoordinator.acceptIncomingTransfer(request.id)
-                    currentIncomingRequest = nil
-                },
-                onAlwaysDeny: {
-                    settings.denyCallsignForFileTransfer(request.sourceCallsign)
-                    sessionCoordinator.declineIncomingTransfer(request.id)
-                    currentIncomingRequest = nil
-                }
-            )
-        }
-        .onChange(of: sessionCoordinator.pendingIncomingTransfers) { _, newRequests in
-            handlePendingIncomingTransfers(newRequests)
-        }
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-            handleFileDrop(providers)
-        }
-        .onAppear {
-            // CRITICAL: Set up session callbacks FIRST, before any data can arrive.
-            // This must be done in onAppear (not in ObservableTerminalTxViewModel.init)
-            // to avoid the @StateObject gotcha where init() is called multiple times
-            // but only the first instance is kept. See setupSessionCallbacks() for details.
-            txViewModel.setupSessionCallbacks()
-            
-            // Wire sender progress: I-frames transmitted (incl. from drain) update bytesSent
-            client.onUserFrameTransmitted = { [weak txViewModel] bytes in
-                txViewModel?.updateOutboundBytesSent(additionalBytes: bytes)
-            }
-
-            // Wire AXDP chat received to terminal transcript (regardless of AXDP badge state).
-            // appendAXDPChatToTranscript handles adding to console via appendToSessionTranscript
-            // → onPlainTextChatReceived → appendSessionChatLine. Do NOT call appendSessionChatLine
-            // here directly or the message will appear twice.
-            sessionCoordinator.onAXDPChatReceived = { [weak txViewModel] from, text in
-                txViewModel?.appendAXDPChatToTranscript(from: from, text: text)
-            }
-
-            // Wire plain-text chat (non-AXDP) to console when sender uses plain text.
-            txViewModel.onPlainTextChatReceived = { [weak client] from, text, via in
-                if let client = client {
-                    TxLog.debug(.session, "onPlainTextChatReceived callback executing", [
-                        "from": from.display,
-                        "textLength": text.count,
-                        "preview": String(text.prefix(50)),
-                        "via": via.joined(separator: ",")
-                    ])
-                    client.appendSessionChatLine(from: from.display, text: text, via: via)
-                } else {
-                    TxLog.error(.session, "onPlainTextChatReceived: client is nil!", ["from": from.display])
-                }
-            }
-
-            sessionCoordinator.onPeerAxdpEnabled = { [weak txViewModel] from in
-                Task { @MainActor in
-                    txViewModel?.pendingPeerAxdpNotification = from.display
-                }
-            }
-            sessionCoordinator.onPeerAxdpDisabled = { [weak txViewModel] from in
-                Task { @MainActor in
-                    txViewModel?.pendingPeerAxdpDisabledNotification = from.display
-                    txViewModel?.resetAxdpState(for: from, reason: "peerAxdpDisabled")
-                    sessionCoordinator.clearAllReassemblyBuffers(for: from)
-                }
-            }
-            
-            // Clear AXDP reassembly flag when a complete message is extracted.
-            // This allows subsequent plain text from this peer to be delivered.
-            sessionCoordinator.onAXDPReassemblyComplete = { [weak txViewModel] from in
-                Task { @MainActor in
-                    txViewModel?.clearAXDPReassemblyFlag(for: from)
-                }
-            }
-
-            // Wire up response frame sending (for RR, REJ, etc.)
-            txViewModel.onSendResponseFrame = { [weak client] frame in
-                print("[TerminalView.onAppear] onSendResponseFrame callback invoked for \(frame.destination.display)")
-                client?.send(frame: frame) { result in
-                    Task { @MainActor in
-                        switch result {
-                        case .success:
-                            print("[TerminalView] Response frame sent successfully")
-                            TxLog.outbound(.ax25, "Response frame sent", [
-                                "type": frame.frameType,
-                                "dest": frame.destination.display
-                            ])
-                        case .failure(let error):
-                            print("[TerminalView] Response frame send FAILED: \(error)")
-                            TxLog.error(.ax25, "Response frame send failed", error: error)
-                        }
-                    }
-                }
-            }
-
-            // Wire up session state change notifications for this view's toast display
-            let previousCallback = txViewModel.sessionManager.onSessionStateChanged
-            txViewModel.sessionManager.onSessionStateChanged = { [weak txViewModel] session, oldState, newState in
-                // Call any previous callback first
-                previousCallback?(session, oldState, newState)
-
-                Task { @MainActor in
-                    // CRITICAL: When a session connects (especially responder sessions),
-                    // we need to update currentSession so the UI reflects the connected state.
-                    // This handles the case where Station B receives an inbound connection
-                    // but hasn't set a destination yet - the session exists but currentSession is nil.
-                    if newState == .connected {
-                        txViewModel?.refreshCurrentSession()
-                    }
-
-                    txViewModel?.objectWillChange.send()
-
-                    // Show notification for significant state changes
-                    if oldState != newState {
-                        let notification: SessionNotification?
-
-                        switch newState {
-                        case .connected:
-                            notification = SessionNotification(
-                                type: .connected,
-                                peer: session.remoteAddress.display,
-                                message: "Session established"
-                            )
-                        case .disconnected where oldState == .connected || oldState == .disconnecting:
-                            notification = SessionNotification(
-                                type: .disconnected,
-                                peer: session.remoteAddress.display,
-                                message: "Session ended"
-                            )
-                        case .error:
-                            notification = SessionNotification(
-                                type: .error,
-                                peer: session.remoteAddress.display,
-                                message: "Session error"
-                            )
-                        default:
-                            notification = nil
-                        }
-
-                        if let notification = notification {
-                            showSessionNotification(notification)
-                        }
-                    }
-                }
-            }
-        }
     }
 
-    // MARK: - Session Notifications
-
-    private func showSessionNotification(_ notification: SessionNotification) {
-        // Cancel any existing notification task
-        notificationTask?.cancel()
-
-        // Show the notification
-        withAnimation(.easeOut(duration: 0.2)) {
-            sessionNotification = notification
+    private func wireCallbacks() {
+        // CRITICAL: Set up session callbacks FIRST, before any data can arrive.
+        // This must be done in onAppear (not in ObservableTerminalTxViewModel.init)
+        // to avoid the @StateObject gotcha where init() is called multiple times
+        // but only the first instance is kept. See setupSessionCallbacks() for details.
+        txViewModel.setupSessionCallbacks()
+        
+        // Wire sender progress: I-frames transmitted (incl. from drain) update bytesSent
+        client.onUserFrameTransmitted = { [weak txViewModel] bytes in
+            txViewModel?.updateOutboundBytesSent(additionalBytes: bytes)
         }
 
-        // Auto-dismiss after 4 seconds
-        notificationTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
-            if !Task.isCancelled {
-                withAnimation(.easeIn(duration: 0.2)) {
-                    sessionNotification = nil
+        // Wire AXDP chat received to terminal transcript (regardless of AXDP badge state).
+        // appendAXDPChatToTranscript handles adding to console via appendToSessionTranscript
+        // → onPlainTextChatReceived → appendSessionChatLine. Do NOT call appendSessionChatLine
+        // here directly or the message will appear twice.
+        sessionCoordinator.onAXDPChatReceived = { [weak txViewModel] from, text in
+            txViewModel?.appendAXDPChatToTranscript(from: from, text: text)
+        }
+
+        // Wire plain-text chat (non-AXDP) to console when sender uses plain text.
+        txViewModel.onPlainTextChatReceived = { [weak client] from, text, via in
+            if let client = client {
+                TxLog.debug(.session, "onPlainTextChatReceived callback executing", [
+                    "from": from.display,
+                    "textLength": text.count,
+                    "preview": String(text.prefix(50)),
+                    "via": via.joined(separator: ",")
+                ])
+                client.appendSessionChatLine(from: from.display, text: text, via: via)
+            } else {
+                TxLog.error(.session, "onPlainTextChatReceived: client is nil!", ["from": from.display])
+            }
+        }
+
+        sessionCoordinator.onPeerAxdpEnabled = { [weak txViewModel] from in
+            Task { @MainActor in
+                txViewModel?.pendingPeerAxdpNotification = from.display
+            }
+        }
+        sessionCoordinator.onPeerAxdpDisabled = { [weak txViewModel] from in
+            Task { @MainActor in
+                txViewModel?.pendingPeerAxdpDisabledNotification = from.display
+                txViewModel?.resetAxdpState(for: from, reason: "peerAxdpDisabled")
+                sessionCoordinator.clearAllReassemblyBuffers(for: from)
+            }
+        }
+        
+        // Clear AXDP reassembly flag when a complete message is extracted.
+        // This allows subsequent plain text from this peer to be delivered.
+        sessionCoordinator.onAXDPReassemblyComplete = { [weak txViewModel] from in
+            Task { @MainActor in
+                txViewModel?.clearAXDPReassemblyFlag(for: from)
+            }
+        }
+
+        // Wire up response frame sending (for RR, REJ, etc.)
+        txViewModel.onSendResponseFrame = { [weak client] frame in
+            client?.send(frame: frame) { result in
+                Task { @MainActor in
+                    switch result {
+                    case .success:
+                        TxLog.outbound(.ax25, "Response frame sent", [
+                            "type": frame.frameType,
+                            "dest": frame.destination.display
+                        ])
+                    case .failure(let error):
+                        TxLog.error(.ax25, "Response frame send failed", error: error)
+                    }
                 }
             }
         }
+
+        // onSessionStateChanged is now handled inside txViewModel.setupSessionCallbacks()
     }
 
     private func dismissSessionNotification() {
-        notificationTask?.cancel()
-        withAnimation(.easeIn(duration: 0.2)) {
-            sessionNotification = nil
-        }
+        txViewModel.dismissSessionNotification()
     }
 
     /// Notify all connected peers with confirmed AXDP capability that we enabled AXDP.
@@ -1238,13 +1141,101 @@ struct TerminalView: View {
         )
     }
 
+    /// Determines if connection status change warrants showing a banner.
+    /// HIG: Success toasts should only appear for rare, user-initiated events.
+    /// TNC connection is expected on app launch, so we don't celebrate it.
+    /// We only show banners for unexpected disconnects or failures.
     private func shouldShowConnectionBanner(oldValue: ConnectionStatus, newValue: ConnectionStatus) -> Bool {
         guard oldValue != newValue else { return false }
         switch newValue {
-        case .connected, .disconnected, .failed:
+        case .connected:
+            // TNC connected successfully - NO banner (expected success)
+            return false
+        case .disconnected:
+            // Unexpected disconnect - show banner
+            return oldValue == .connected
+        case .failed:
+            // Connection failed - show banner
             return true
         case .connecting:
             return false
+        }
+    }
+
+    // MARK: - View Components
+    
+    @ViewBuilder
+    private var adaptiveStatusIndicator: some View {
+        Button {
+            showAdaptiveSettingsPopover.toggle()
+        } label: {
+            if settings.adaptiveTransmissionEnabled {
+                HStack(spacing: 6) {
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                        .font(.caption2)
+                        .foregroundStyle(.green)
+                    Text("Adaptive")
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                    Text("K:\(sessionCoordinator.globalAdaptiveSettings.windowSize.effectiveValue)")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    Text("P:\(sessionCoordinator.globalAdaptiveSettings.paclen.effectiveValue)")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.green.opacity(0.1))
+                .clipShape(Capsule())
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: "gearshape")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text("Adaptive Off")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.secondary.opacity(0.1))
+                .clipShape(Capsule())
+            }
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showAdaptiveSettingsPopover) {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("Adaptive Transmission", isOn: $settings.adaptiveTransmissionEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                
+                Divider()
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Protocol Parameters")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    
+                    HStack {
+                        Text("Window (K):")
+                        Spacer()
+                        Text("\(sessionCoordinator.globalAdaptiveSettings.windowSize.effectiveValue)")
+                            .monospaced()
+                    }
+                    .font(.caption)
+                    
+                    HStack {
+                        Text("Packet Size (P):")
+                        Spacer()
+                        Text("\(sessionCoordinator.globalAdaptiveSettings.paclen.effectiveValue)")
+                            .monospaced()
+                    }
+                    .font(.caption)
+                }
+            }
+            .padding()
+            .frame(width: 200)
         }
     }
 
@@ -1346,15 +1337,15 @@ struct TerminalView: View {
             }
 
             // Session notification toast overlay
-            if let notification = sessionNotification {
+            if let notification = txViewModel.sessionNotification {
                 SessionNotificationToast(
                     notification: notification,
-                    onDismiss: dismissSessionNotification,
+                    onDismiss: { txViewModel.dismissSessionNotification() },
                     primaryActionLabel: notification.supportsPrimaryAction ? notification.defaultPrimaryActionLabel : nil,
                     onPrimaryAction: (notification.type == .peerAxdpEnabled) ? {
                         txViewModel.setUseAXDP(true)
                         sendPeerAxdpEnabledToConnectedSessions()
-                        dismissSessionNotification()
+                        txViewModel.dismissSessionNotification()
                     } : nil
                 )
                 .padding(.horizontal, 20)
@@ -1365,7 +1356,7 @@ struct TerminalView: View {
         .onReceive(txViewModel.$pendingPeerAxdpNotification.compactMap { $0 }.removeDuplicates()) { peer in
             txViewModel.pendingPeerAxdpNotification = nil
             let alreadyUsing = txViewModel.viewModel.useAXDP
-            showSessionNotification(SessionNotification(
+            txViewModel.showSessionNotification(SessionNotification(
                 type: alreadyUsing ? .peerAxdpEnabledAlreadyUsing : .peerAxdpEnabled,
                 peer: peer,
                 message: alreadyUsing
@@ -1374,14 +1365,14 @@ struct TerminalView: View {
             ))
         }
         .onReceive(txViewModel.$pendingPeerAxdpDisabledNotification.compactMap { $0 }.removeDuplicates()) { peer in
-            showSessionNotification(SessionNotification(
+            txViewModel.showSessionNotification(SessionNotification(
                 type: .peerAxdpDisabled,
                 peer: peer,
                 message: "has disabled AXDP"
             ))
             txViewModel.pendingPeerAxdpDisabledNotification = nil
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: sessionNotification)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: txViewModel.sessionNotification)
     }
 
     @ViewBuilder
@@ -1471,12 +1462,25 @@ struct TerminalView: View {
         }
     }
 
-    /// Console lines filtered by clear timestamp (for empty state check)
+    /// Console lines filtered by clear timestamp and search text
+    /// Search is debounced to avoid performance issues with large logs
     private var filteredConsoleLines: [ConsoleLine] {
-        guard let cutoff = settings.terminalClearedAt else {
-            return client.consoleLines
+        var lines = client.consoleLines
+        
+        // Filter by clear timestamp
+        if let cutoff = settings.terminalClearedAt {
+            lines = lines.filter { $0.timestamp > cutoff }
         }
-        return client.consoleLines.filter { $0.timestamp > cutoff }
+        
+        // Filter by search text (case-insensitive, debounced)
+        if !debouncedSearchText.isEmpty {
+            let searchLower = debouncedSearchText.lowercased()
+            lines = lines.filter { (line: ConsoleLine) -> Bool in
+                line.text.lowercased().contains(searchLower)
+            }
+        }
+        
+        return lines
     }
 
     // MARK: - Transmission
@@ -1804,15 +1808,126 @@ struct TerminalView: View {
     }
 }
 
+// MARK: - View Modifiers
+
+struct TerminalViewModifiers: ViewModifier {
+    @Binding var searchText: String
+    @Binding var debouncedSearchText: String
+    @Binding var searchDebounceTask: Task<Void, Never>?
+    @Binding var showingTransferSheet: Bool
+    @Binding var showingTransferError: Bool
+    @Binding var currentIncomingRequest: IncomingTransferRequest?
+    
+    let selectedFileURL: URL?
+    let transferError: String?
+    
+    let client: PacketEngine
+    let settings: AppSettingsStore
+    let sessionCoordinator: SessionCoordinator
+    let txViewModel: ObservableTerminalTxViewModel
+    
+    let shouldShowConnectionBanner: (ConnectionStatus, ConnectionStatus) -> Bool
+    let showConnectionBannerTemporarily: () -> Void
+    let handlePendingIncomingTransfers: ([IncomingTransferRequest]) -> Void
+    let handleFileDrop: ([NSItemProvider]) -> Bool
+    let startTransfer: (String, String, TransferProtocolType, TransferCompressionSettings) -> Void
+    let wireCallbacks: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: settings.myCallsign) { _, newValue in
+                txViewModel.updateSourceCall(newValue)
+            }
+            .onChange(of: searchText) { _, newValue in
+                // Debounce search to avoid performance issues with large terminal logs
+                searchDebounceTask?.cancel()
+                let task = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+                    if !Task.isCancelled {
+                        debouncedSearchText = newValue
+                    }
+                }
+                searchDebounceTask = task
+            }
+            .onChange(of: client.status) { oldValue, newValue in
+                // HIG: Only show banners for unexpected events (failures, disconnects).
+                // Don't celebrate expected success (TNC connection on app launch).
+                if shouldShowConnectionBanner(oldValue, newValue) {
+                    showConnectionBannerTemporarily()
+                }
+            }
+            .sheet(isPresented: $showingTransferSheet) {
+                SendFileSheet(
+                    isPresented: $showingTransferSheet,
+                    selectedFileURL: selectedFileURL,
+                    connectedSessions: sessionCoordinator.connectedSessions,
+                    onSend: { destination, path, transferProtocol, compressionSettings in
+                        startTransfer(destination, path, transferProtocol, compressionSettings)
+                    },
+                    checkCapability: { callsign in
+                        sessionCoordinator.capabilityStatus(for: callsign)
+                    },
+                    availableProtocols: { callsign in
+                        sessionCoordinator.availableProtocols(for: callsign)
+                    }
+                )
+            }
+            .alert("Transfer Error", isPresented: $showingTransferError) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(transferError ?? "Unknown error")
+            }
+            .sheet(item: $currentIncomingRequest) { request in
+                IncomingTransferSheet(
+                    isPresented: Binding(
+                        get: { currentIncomingRequest != nil },
+                        set: { if !$0 { currentIncomingRequest = nil } }
+                    ),
+                    request: request,
+                    onAccept: {
+                        sessionCoordinator.acceptIncomingTransfer(request.id)
+                        currentIncomingRequest = nil
+                    },
+                    onDecline: {
+                        sessionCoordinator.declineIncomingTransfer(request.id)
+                        currentIncomingRequest = nil
+                    },
+                    onAlwaysAccept: {
+                        settings.allowCallsignForFileTransfer(request.sourceCallsign)
+                        sessionCoordinator.acceptIncomingTransfer(request.id)
+                        currentIncomingRequest = nil
+                    },
+                    onAlwaysDeny: {
+                        settings.denyCallsignForFileTransfer(request.sourceCallsign)
+                        sessionCoordinator.declineIncomingTransfer(request.id)
+                        currentIncomingRequest = nil
+                    }
+                )
+            }
+            .onChange(of: sessionCoordinator.pendingIncomingTransfers) { _, newRequests in
+                handlePendingIncomingTransfers(newRequests)
+            }
+            .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                handleFileDrop(providers)
+            }
+            .onAppear {
+                wireCallbacks()
+            }
+    }
+}
+
+
 // MARK: - Preview
 
 #Preview("Terminal View") {
+    @Previewable @State var searchText = ""
     let settings = AppSettingsStore()
     let coordinator = SessionCoordinator()
-    return TerminalView(
+    TerminalView(
         client: PacketEngine(settings: settings),
         settings: settings,
-        sessionCoordinator: coordinator
+        sessionCoordinator: coordinator,
+        searchText: $searchText
     )
     .frame(width: 800, height: 600)
 }
