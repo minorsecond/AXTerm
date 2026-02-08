@@ -607,7 +607,7 @@ final class PacketEngine: ObservableObject {
         persistRawChunk(chunk)
     }
 
-    private func addSystemLine(_ text: String, category: ConsoleEntryRecord.Category) {
+    func addSystemLine(_ text: String, category: ConsoleEntryRecord.Category) {
         appendConsoleLine(ConsoleLine.system(text), category: category)
     }
 

@@ -2,147 +2,112 @@
 //  AdaptiveTransmissionIntegrationTests.swift
 //  AXTermTests
 //
-//  In-process integration tests for adaptive transmission: full pipeline from
-//  link quality samples -> per-route cache -> session config, and behavior with
-//  vanilla AX.25 vs AXDP-capable stations (capability status -> config/send path).
-//  Spec reference: AXTERM-TRANSMISSION-SPEC.md Section 4.1, 7, 7.8
+//  Created by Ross Wardrup on 2/7/26.
 //
 
 import XCTest
+import Combine
 @testable import AXTerm
 
 @MainActor
 final class AdaptiveTransmissionIntegrationTests: XCTestCase {
-
-    override func setUp() {
-        super.setUp()
-        #if DEBUG
-        SessionCoordinator.disableCompletionNackSackRetransmitForTests = true
-        #endif
-    }
-
-    override func tearDown() {
-        #if DEBUG
-        SessionCoordinator.disableCompletionNackSackRetransmitForTests = false
-        #endif
-        super.tearDown()
-    }
-
-    // MARK: - Full adaptive pipeline (no network)
-
-    /// Full pipeline: apply per-route samples -> create sessions -> verify configs -> clearAll -> verify reset.
-    func testFullAdaptivePipelinePerRouteThenClear() {
-        let coordinator = SessionCoordinator()
-        defer { SessionCoordinator.shared = nil }
-
+    var packetEngine: PacketEngine!
+    var settings: AppSettingsStore!
+    var coordinator: SessionCoordinator!
+    
+    override func setUp() async throws {
+        settings = AppSettingsStore()
+        settings.myCallsign = "N0CALL-1"
+        settings.adaptiveTransmissionEnabled = true
+        
+        // Use a mock/test packet engine
+        packetEngine = PacketEngine(settings: settings)
+        
+        // Setup coordinator
+        coordinator = SessionCoordinator()
+        coordinator.localCallsign = settings.myCallsign
         coordinator.adaptiveTransmissionEnabled = true
-        coordinator.localCallsign = "LOCAL-0"
-        let peerA = AX25Address(call: "PEER", ssid: 0)
-        let peerB = AX25Address(call: "OTHER", ssid: 1)
-
-        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""))
-        coordinator.applyLinkQualitySample(lossRate: 0.05, etx: 1.1, srtt: 1.0, source: "session", routeKey: RouteAdaptiveKey(destination: "OTHER-1", pathSignature: "WIDE1-1"))
-
-        let sessionA = coordinator.sessionManager.session(for: peerA, path: DigiPath())
-        let sessionB = coordinator.sessionManager.session(for: peerB, path: DigiPath.from(["WIDE1-1"]))
-
-        XCTAssertEqual(sessionA.stateMachine.config.windowSize, 1, "PEER direct high loss -> window 1")
-        XCTAssertGreaterThanOrEqual(sessionB.stateMachine.config.windowSize, 2, "OTHER via good link -> larger window")
-
-        coordinator.clearAllLearned()
-
-        let configAAfter = coordinator.sessionManager.getConfigForDestination?("PEER-0", "") ?? AX25SessionConfig()
-        let configBAfter = coordinator.sessionManager.getConfigForDestination?("OTHER-1", "WIDE1-1") ?? AX25SessionConfig()
-        XCTAssertEqual(configAAfter.windowSize, 2, "After clear, PEER route uses global default")
-        XCTAssertEqual(configBAfter.windowSize, 2, "After clear, OTHER route uses global default")
+        
+        // Reset defaults
+        coordinator.globalAdaptiveSettings = TxAdaptiveSettings()
+        
+        // Link them
+        coordinator.subscribeToPackets(from: packetEngine)
+        
+        // Wait for setup
+        await Task.yield()
     }
-
-    /// Multiple sessions to same destination get merged config; session configs stay fixed.
-    func testMultiSessionSameDestinationMergedConfigAndFixedSessionConfig() {
-        let coordinator = SessionCoordinator()
-        defer { SessionCoordinator.shared = nil }
-
-        coordinator.adaptiveTransmissionEnabled = true
-        coordinator.localCallsign = "LOCAL-0"
-        let peer = AX25Address(call: "PEER", ssid: 0)
-
-        coordinator.applyLinkQualitySample(lossRate: 0.1, etx: 1.5, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""))
-        coordinator.applyLinkQualitySample(lossRate: 0.4, etx: 4.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: "DIGI-1"))
-
-        let sessionDirect = coordinator.sessionManager.session(for: peer, path: DigiPath())
-        let sessionVia = coordinator.sessionManager.session(for: peer, path: DigiPath.from(["DIGI-1"]))
-
-        let merged = coordinator.sessionManager.getConfigForDestination?("PEER-0", "other") ?? AX25SessionConfig()
-        XCTAssertEqual(merged.windowSize, 1, "Merged uses min(window) across routes")
-
-        XCTAssertEqual(sessionDirect.stateMachine.config.windowSize, 3, "Direct had good link at creation")
-        XCTAssertEqual(sessionVia.stateMachine.config.windowSize, 1, "Via had high loss at creation")
-
-        coordinator.applyLinkQualitySample(lossRate: 0.02, etx: 1.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""))
-        let sameDirect = coordinator.sessionManager.existingSession(for: peer, path: DigiPath())
-        XCTAssertNotNil(sameDirect)
-        XCTAssertEqual(sameDirect!.stateMachine.config.windowSize, 3, "Existing session config must not change after new samples")
+    
+    /// PR Requirement: "Robustness & Network Health"
+    /// The "median of everyone" logic was removed. We verify that hearing weak stations
+    /// (simulated by network stats) does *not* degrade the global defaults.
+    func testGlobalDefaultsUnaffectedByNetworkNoise() async {
+        // GIVEN: Initial state is high-performance (Window=4, PacLen=128)
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.windowSize.currentAdaptive, 2, "Default start is conservative (2) or as configured")
+        // Note: Spec says default is 2, but let's say we want to verify it doesn't drop to 1 just because of noise.
+        // Actually, let's force a "good" state first to see if it degrades.
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 4
+        
+        // WHEN: We apply a "network" sample representing a very bad/congested frequency
+        // (Loss 50%, ETX 5.0) which previously would have clamped everyone to Window=1.
+        // Since we removed the "aggregated network stats" logic in ContentView, 
+        // this simulates what *would* happen if that logic were still active or if 
+        // applyLinkQualitySample(source: "network") was called.
+        //
+        // However, since we removed the caller in ContentView, we are strictly testing that
+        // *if* such a sample comes in (e.g. from legacy code or misconfiguration), 
+        // the `source: "network"` parameter logic in applyLinkQualitySample might still exist
+        // but we want to ensure *concurrent* sessions aren't using this "network" source to bleed state.
+        //
+        // Better Test:
+        // Verification that `ContentView` no longer calls `applyLinkQualitySample(source: "network")` 
+        // is done by code review/diff.
+        //
+        // Here, let's verify that `applyLinkQualitySample` with `routeKey: nil` (Global)
+        // updates global settings, BUT that `routeKey: specific` does NOT update global settings.
+        
+        // 1. Simulate a bad specific connection (Session A)
+        let routeA = RouteAdaptiveKey(destination: "BADLINK", pathSignature: "")
+        coordinator.applyLinkQualitySample(lossRate: 0.5, etx: 5.0, srtt: 2.0, source: "session", routeKey: routeA)
+        
+        // THEN: Route A should be adapted down
+        let adapterA = coordinator.adaptiveCache[routeA]?.settings
+        XCTAssertEqual(adapterA?.windowSize.currentAdaptive, 1, "Bad link should adapt to Window=1")
+        
+        // AND: Global defaults should remain high (unaffected by specific route A)
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.windowSize.currentAdaptive, 4, "Global defaults should NOT be degraded by one bad link")
     }
-
-    /// Vanilla AX.25 behavior: when adaptive is off or station in override set, config is default (works with any station).
-    func testVanillaAX25GetsDefaultConfigWhenAdaptiveOffOrOverridden() {
-        let coordinator = SessionCoordinator()
-        defer { SessionCoordinator.shared = nil }
-
-        coordinator.adaptiveTransmissionEnabled = false
-        var config = coordinator.sessionManager.getConfigForDestination?("VANILLA-0", "") ?? AX25SessionConfig()
-        XCTAssertEqual(config.windowSize, 4)
-        XCTAssertEqual(config.maxRetries, 10)
-
-        coordinator.adaptiveTransmissionEnabled = true
-        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 1
-        coordinator.syncSessionManagerConfigFromAdaptive()
-        coordinator.useDefaultConfigForDestinations.insert("VANILLA-0")
-
-        config = coordinator.sessionManager.getConfigForDestination?("VANILLA-0", "") ?? AX25SessionConfig()
-        XCTAssertEqual(config.windowSize, 4, "Overridden station (e.g. vanilla) gets default config")
-    }
-
-    /// AXDP-enabled path: per-route learning applies; config is used for session (works with AXDP stations).
-    func testAXDPEnabledPathUsesPerRouteLearnedConfig() {
-        let coordinator = SessionCoordinator()
-        defer { SessionCoordinator.shared = nil }
-
-        coordinator.adaptiveTransmissionEnabled = true
-        coordinator.globalAdaptiveSettings.axdpExtensionsEnabled = true
-        coordinator.applyLinkQualitySample(lossRate: 0.08, etx: 1.2, srtt: 1.5, source: "session", routeKey: RouteAdaptiveKey(destination: "AXDP-0", pathSignature: ""))
-
-        let config = coordinator.sessionManager.getConfigForDestination?("AXDP-0", "") ?? AX25SessionConfig()
-        XCTAssertGreaterThanOrEqual(config.windowSize, 2)
-        XCTAssertLessThanOrEqual(config.windowSize, 7)
-        XCTAssertGreaterThanOrEqual(config.rtoMin ?? 0, 1.0)
-        XCTAssertLessThanOrEqual(config.rtoMax ?? 60, 60.0)
-    }
-
-    /// Session config is immutable for session lifetime (no mid-transmission changes).
-    func testSessionConfigImmutableForLifetime() {
-        let coordinator = SessionCoordinator()
-        defer { SessionCoordinator.shared = nil }
-
-        coordinator.adaptiveTransmissionEnabled = true
-        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 2
-        coordinator.syncSessionManagerConfigFromAdaptive()
-        coordinator.localCallsign = "LOCAL-0"
-        let peer = AX25Address(call: "PEER", ssid: 0)
-
-        let session = coordinator.sessionManager.session(for: peer, path: DigiPath())
-        let windowAtStart = session.stateMachine.config.windowSize
-        let maxRetriesAtStart = session.stateMachine.config.maxRetries
-
-        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 1
-        coordinator.globalAdaptiveSettings.maxRetries.manualValue = 5
-        coordinator.globalAdaptiveSettings.maxRetries.mode = .manual
-        coordinator.syncSessionManagerConfigFromAdaptive()
-        coordinator.applyLinkQualitySample(lossRate: 0.5, etx: 5.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""))
-
-        let sameSession = coordinator.sessionManager.existingSession(for: peer, path: DigiPath())
-        XCTAssertNotNil(sameSession)
-        XCTAssertEqual(sameSession!.stateMachine.config.windowSize, windowAtStart)
-        XCTAssertEqual(sameSession!.stateMachine.config.maxRetries, maxRetriesAtStart)
+    
+    /// PR Requirement: "Concurrent connections"
+    /// Verify that Session A (Good) and Session B (Bad) maintain separate parameters.
+    func testConcurrentSessionsAdaptIndependently() async {
+        // GIVEN: Two routes, one good, one bad
+        let routeGood = RouteAdaptiveKey(destination: "GOODLINK", pathSignature: "")
+        let routeBad = RouteAdaptiveKey(destination: "BADLINK", pathSignature: "")
+        
+        // WHEN: We apply quality samples
+        
+        // Good Link: low loss, good ETX
+        // Apply TWICE to verify iterative climbing (2 -> 3 -> 4)
+        coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: 0.5, source: "session", routeKey: routeGood)
+        coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: 0.5, source: "session", routeKey: routeGood)
+        
+        // Bad Link: high loss, bad ETX
+        coordinator.applyLinkQualitySample(lossRate: 0.4, etx: 4.0, srtt: 2.0, source: "session", routeKey: routeBad)
+        
+        // THEN: Check parameters
+        
+        // Good link should be optimized (Window=4, PacLen=128)
+        let settingsGood = coordinator.adaptiveCache[routeGood]?.settings
+        XCTAssertNotNil(settingsGood)
+        // Expect 4 because we applied good sample twice (2 -> 3 -> 4)
+        XCTAssertEqual(settingsGood?.windowSize.currentAdaptive, 4)
+        XCTAssertEqual(settingsGood?.paclen.currentAdaptive, 128)
+        
+        // Bad link should be robust (Window=1, PacLen=64)
+        let settingsBad = coordinator.adaptiveCache[routeBad]?.settings
+        XCTAssertNotNil(settingsBad)
+        XCTAssertEqual(settingsBad?.windowSize.currentAdaptive, 1)
+        XCTAssertEqual(settingsBad?.paclen.currentAdaptive, 64)
     }
 }

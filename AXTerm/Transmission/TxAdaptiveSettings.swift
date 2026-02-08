@@ -181,7 +181,13 @@ struct TxAdaptiveSettings: Sendable {
         lossRate: Double,
         etx: Double,
         srtt: Double?
-    ) {
+    ) -> [String] {
+        var changes: [String] = []
+        
+        // Capture old values for diffing
+        let oldPaclen = paclen.currentAdaptive
+        let oldWindow = windowSize.currentAdaptive
+
         // Paclen adaptation (per spec Section 4.2)
         if lossRate >= 0.2 || etx > 2.0 {
             paclen.currentAdaptive = 64
@@ -199,7 +205,9 @@ struct TxAdaptiveSettings: Sendable {
             windowSize.currentAdaptive = 1
             windowSize.adaptiveReason = "High loss - stop-and-wait"
         } else if etx <= 1.5 {
-            windowSize.currentAdaptive = min(4, windowSize.defaultValue + 1)
+            // Climb up to 4, using current or default as base
+            let base = max(windowSize.currentAdaptive, windowSize.defaultValue)
+            windowSize.currentAdaptive = min(4, base + 1)
             windowSize.adaptiveReason = "Good link quality"
         } else {
             windowSize.currentAdaptive = windowSize.defaultValue
@@ -215,7 +223,15 @@ struct TxAdaptiveSettings: Sendable {
             rtoMax.adaptiveReason = "Suggested RTO: \(String(format: "%.1f", clampedRto))s"
             currentRto = clampedRto
         }
-        // If SRTT is nil (e.g. pure loss update), preserve the last calculated currentRTOnull
-
+        
+        // Calculate diffs
+        if paclen.currentAdaptive != oldPaclen {
+            changes.append("PacLen \(oldPaclen)→\(paclen.currentAdaptive)")
+        }
+        if windowSize.currentAdaptive != oldWindow {
+            changes.append("Window \(oldWindow)→\(windowSize.currentAdaptive)")
+        }
+        
+        return changes
     }
 }

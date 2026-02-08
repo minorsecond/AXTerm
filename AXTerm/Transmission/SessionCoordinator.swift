@@ -159,7 +159,7 @@ final class SessionCoordinator: ObservableObject {
 
     /// Per-route learned adaptive params so multiple connections (e.g. same peer direct vs via digi) don't overwrite each other.
     /// Key: (destination, pathSignature); value: learned settings + last update time for TTL invalidation.
-    private var adaptiveCache: [RouteAdaptiveKey: CachedAdaptiveEntry] = [:]
+    var adaptiveCache: [RouteAdaptiveKey: CachedAdaptiveEntry] = [:]
 
     /// TTL for per-route cache: after this many seconds without a sample for that route, we fall back to global.
     private static let adaptiveCacheTTLSeconds: TimeInterval = 30 * 60  // 30 minutes
@@ -219,29 +219,50 @@ final class SessionCoordinator: ObservableObject {
             TxLog.adaptiveSampleIgnored(reason: "adaptive disabled", lossRate: lossRate, etx: etx)
             return
         }
+        
+        var changes: [String] = []
+        let reason: String
+        
         if let key = routeKey {
             // Normalize destination for consistent cache lookups (PEER-0 and PEER map to same key)
             let normalizedKey = RouteAdaptiveKey(destination: canonicalDestination(key.destination), pathSignature: key.pathSignature)
-            var entry = adaptiveCache[normalizedKey]?.settings ?? TxAdaptiveSettings()
-            entry.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt)
-            adaptiveCache[normalizedKey] = CachedAdaptiveEntry(settings: entry, lastUpdated: Date())
-            let a = entry
-            let reason = a.windowSize.adaptiveReason ?? a.paclen.adaptiveReason ?? "updated"
+            
+            // Per-route adaptation
+            var adaptive = adaptiveCache[normalizedKey]?.settings ?? globalAdaptiveSettings
+            // Inherit global defaults if fresh, then adapt
+            if adaptiveCache[normalizedKey] == nil {
+                adaptive = globalAdaptiveSettings
+            }
+            
+            changes = adaptive.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt)
+            reason = adaptive.windowSize.adaptiveReason ?? adaptive.paclen.adaptiveReason ?? "route update"
+            
+            // Update cache
+            adaptiveCache[normalizedKey] = CachedAdaptiveEntry(settings: adaptive, lastUpdated: Date())
+            
             TxLog.adaptiveLearning(
                 source: source,
                 lossRate: lossRate,
                 etx: etx,
                 srtt: srtt,
-                rto: a.currentRto,
-                window: a.windowSize.effectiveValue,
-                paclen: a.paclen.effectiveValue,
-                maxRetries: a.maxRetries.effectiveValue,
+                rto: adaptive.currentRto,
+                window: adaptive.windowSize.effectiveValue,
+                paclen: adaptive.paclen.effectiveValue,
+                maxRetries: adaptive.maxRetries.effectiveValue,
                 reason: reason + " [route \(normalizedKey.destination) \(normalizedKey.pathSignature.isEmpty ? "direct" : normalizedKey.pathSignature)]"
             )
+            
+            if !changes.isEmpty {
+                 let msg = "[ADAPTIVE] \(normalizedKey.destination): \(changes.joined(separator: ", ")) | \(reason)"
+                 packetEngine?.addSystemLine(msg, category: .system)
+            }
+            
         } else {
-            globalAdaptiveSettings.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt)
+            // Global adaptation
+            changes = globalAdaptiveSettings.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt)
             let a = globalAdaptiveSettings
-            let reason = a.windowSize.adaptiveReason ?? a.paclen.adaptiveReason ?? "updated"
+            reason = a.windowSize.adaptiveReason ?? a.paclen.adaptiveReason ?? "updated"
+            
             TxLog.adaptiveLearning(
                 source: source,
                 lossRate: lossRate,
@@ -254,6 +275,11 @@ final class SessionCoordinator: ObservableObject {
                 reason: reason
             )
             syncSessionManagerConfigFromAdaptive()
+            
+            if !changes.isEmpty {
+                 let msg = "[ADAPTIVE] Global: \(changes.joined(separator: ", ")) | \(reason)"
+                 packetEngine?.addSystemLine(msg, category: .system)
+            }
         }
         objectWillChange.send()
     }

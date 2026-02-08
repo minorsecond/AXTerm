@@ -123,19 +123,9 @@ struct ContentView: View {
             // Load console history for the default Terminal view
             client.loadPersistedConsole()
         }
-        .task {
-            // Feed network-wide link quality into adaptive settings periodically (don't overwhelm, don't be too conservative)
-            let intervalSeconds: UInt64 = 30
-            while true {
-                try? await Task.sleep(nanoseconds: intervalSeconds * 1_000_000_000)
-                guard let coordinator = SessionCoordinator.shared,
-                      coordinator.adaptiveTransmissionEnabled,
-                      let integration = client.netRomIntegration else { continue }
-                let stats = integration.exportLinkStats()
-                guard let (lossRate, etx) = Self.aggregateLinkQualityForAdaptive(stats) else { continue }
-                coordinator.applyLinkQualitySample(lossRate: lossRate, etx: etx, srtt: nil, source: "network")
-            }
-        }
+        //
+        // Removed faulty network-wide adaptive logic (PR Ref: Robustness & Network Health)
+        //
         .task(id: selectedNav) {
             switch selectedNav {
             case .terminal:
