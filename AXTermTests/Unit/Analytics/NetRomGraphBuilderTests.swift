@@ -275,4 +275,135 @@ final class NetRomGraphBuilderTests: XCTestCase {
         // Note: buildFromNetRom returns .empty (0 nodes) if no neighbors/routes exist
         XCTAssertTrue(model.nodes.isEmpty, "Graph should be empty after all neighbors expire")
     }
+    
+    func testLocalNodePreservation() {
+        let integration = makeIntegration()
+        let neighbor1 = "W0ABC"
+        let neighbor2 = "W0DEF"
+        let now = Date()
+        
+        // Seed neighbors with high quality
+        integration.importNeighbors([
+            NeighborInfo(call: neighbor1, quality: 200, lastSeen: now, sourceType: "classic"),
+            NeighborInfo(call: neighbor2, quality: 200, lastSeen: now, sourceType: "classic")
+        ])
+        
+        // Max nodes = 1. Logic should prioritize local node + highest weight node?
+        // Actually the code sorts: LocalNode (always top), then others by weight.
+        // If maxNodes=1, we keep top 1. That should be local node.
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: false,
+            minimumEdgeCount: 1,
+            maxNodes: 1,
+            stationIdentityMode: .ssid
+        )
+        
+        let model = NetworkGraphBuilder.buildFromNetRom(
+            netRomIntegration: integration,
+            localCallsign: localCallsign,
+            mode: .hybrid,
+            options: options,
+            now: now
+        )
+        
+        // Should contain at least local node
+        XCTAssertTrue(model.nodes.contains { $0.id == localCallsign }, "Local node must be preserved")
+        XCTAssertEqual(model.nodes.count, 1, "Should strictly respect maxNodes")
+    }
+    
+    func testDuplicateNeighborDeduplication() {
+        let integration = makeIntegration()
+        let neighborSSID1 = "W0ABC-1"
+        let neighborSSID2 = "W0ABC-2"
+        let now = Date()
+        
+        integration.importNeighbors([
+            NeighborInfo(call: neighborSSID1, quality: 100, lastSeen: now, sourceType: "classic"), // Weight 4
+            NeighborInfo(call: neighborSSID2, quality: 200, lastSeen: now, sourceType: "classic")  // Weight 8
+        ])
+        
+        // Station mode -> both should map to W0ABC
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: false,
+            minimumEdgeCount: 1,
+            maxNodes: 10,
+            stationIdentityMode: .station
+        )
+        
+        let model = NetworkGraphBuilder.buildFromNetRom(
+            netRomIntegration: integration,
+            localCallsign: localCallsign,
+            mode: .hybrid,
+            options: options,
+            now: now
+        )
+        
+        let neighborKey = "W0ABC"
+        XCTAssertTrue(model.nodes.contains { $0.id == neighborKey })
+        XCTAssertEqual(model.nodes.count, 2) // Local + W0ABC
+        
+        // Edge weight should correspond to max quality (200 -> 8), not sum (300 -> 12) or duplicate edges
+        let edge = model.edges.first { $0.targetID == neighborKey }
+        XCTAssertNotNil(edge)
+        XCTAssertEqual(edge?.weight, 8, "Should use max quality from duplicates")
+    }
+    
+    func testRouteHopDoubleCounting() {
+        let integration = makeIntegration()
+        let neighbor = "W0ABC"
+        let destination = "W1XYZ"
+        let intermediate = "W2MNO"
+        let now = Date()
+        
+        // Route: Origin -> Intermediate -> Dest
+        // Path string typically includes [Origin, Intermediate, Dest]
+        let path = [neighbor, intermediate, destination]
+        
+        // Seed neighbors/Quality to ensure they aren't filtered out
+        integration.importLinkStats([
+            LinkStatRecord(fromCall: neighbor, toCall: localCallsign, quality: 200, lastUpdated: now)
+        ])
+        integration.importNeighbors([
+            NeighborInfo(call: neighbor, quality: 200, lastSeen: now, sourceType: "classic")
+        ])
+        
+        let route = RouteInfo(
+            destination: destination,
+            origin: neighbor,
+            quality: 200,
+            path: path,
+            lastUpdated: now,
+            sourceType: "broadcast"
+        )
+        integration.importRoutes([route])
+        
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: false,
+            minimumEdgeCount: 1,
+            maxNodes: 10,
+            stationIdentityMode: .ssid
+        )
+        
+        let model = NetworkGraphBuilder.buildFromNetRom(
+            netRomIntegration: integration,
+            localCallsign: localCallsign,
+            mode: .hybrid,
+            options: options,
+            now: now
+        )
+        
+        // Check node weights (route counts)
+        let originNode = model.nodes.first { $0.id == neighbor }
+        let destNode = model.nodes.first { $0.id == destination }
+        let midNode = model.nodes.first { $0.id == intermediate }
+        
+        XCTAssertNotNil(originNode)
+        XCTAssertNotNil(destNode)
+        XCTAssertNotNil(midNode)
+        
+        // Each should have exactly 1 route count. If double counted, origin/dest would have 2.
+        XCTAssertEqual(originNode?.weight, 1, "Origin should be counted once")
+        XCTAssertEqual(destNode?.weight, 1, "Destination should be counted once")
+        XCTAssertEqual(midNode?.weight, 1, "Intermediate should be counted once")
+    }
 }

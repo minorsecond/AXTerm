@@ -106,11 +106,21 @@ struct NetworkGraphBuilder {
         localStats.ssids.insert(localCallsign)
         nodeStats[localKey] = localStats
 
+        // Deduplicate neighbors by identity key (pick highest quality)
+        var bestNeighbors: [String: NeighborInfo] = [:]
         for neighbor in neighbors {
-            // Skip low-quality neighbors
             guard neighbor.quality >= qualityThreshold else { continue }
-            
             let key = identityKey(neighbor.call)
+            if let existing = bestNeighbors[key] {
+                if neighbor.quality > existing.quality {
+                    bestNeighbors[key] = neighbor
+                }
+            } else {
+                bestNeighbors[key] = neighbor
+            }
+        }
+
+        for (key, neighbor) in bestNeighbors {
             var stats = nodeStats[key] ?? (0, 0, 0, 0, 0, [], false)
             stats.ssids.insert(neighbor.call)
             if neighbor.isOfficial {
@@ -141,9 +151,12 @@ struct NetworkGraphBuilder {
             }
             nodeStats[originKey] = originStats
             
-            // Add intermediate nodes in path
+            // Add intermediate nodes in path (exclude origin and destination to avoid double counting)
             for hop in route.path {
                 let hopKey = identityKey(hop)
+                // Skip if hop is same as origin or destination (already counted above)
+                if hopKey == originKey || hopKey == destKey { continue }
+                
                 var hopStats = nodeStats[hopKey] ?? (0, 0, 0, 0, 0, [], false)
                 hopStats.routes += 1
                 hopStats.ssids.insert(hop)
@@ -156,18 +169,12 @@ struct NetworkGraphBuilder {
         var edgeKeys = Set<String>()
         
         // Add neighbor edges (DirectPeer)
-        for neighbor in neighbors {
-            // Skip low-quality neighbors
-            guard neighbor.quality >= qualityThreshold else { continue }
-            
-            // For now, we'll show bidirectional edges to local station
-            // This is a simplification - in reality we'd need to track directionality
+        // Use bestNeighbors to assume we only have one edge per identity key
+        for (_, neighbor) in bestNeighbors {
             let neighborKey = identityKey(neighbor.call)
             let weight = max(1, neighbor.quality / 25) // Map quality 0-255 to weight
             let isStale = now.timeIntervalSince(neighbor.lastSeen) > staleThreshold
             
-            // Create edge between neighbor and local station (would need local callsign)
-            // For now, just mark this as a direct peer edge
             // Create edge between neighbor and local station
             edges.append(ClassifiedEdge(
                 sourceID: localKey,
@@ -211,6 +218,10 @@ struct NetworkGraphBuilder {
             (key: key, weight: stats.routes, stats: stats)
         }
         sortedNodes.sort { lhs, rhs in
+            // Always prioritize local node (so it's never dropped)
+            if lhs.key == localKey { return true }
+            if rhs.key == localKey { return false }
+            
             if lhs.weight != rhs.weight {
                 return lhs.weight > rhs.weight
             }
