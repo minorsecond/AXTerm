@@ -365,14 +365,6 @@ struct ContentView: View {
             Text(statusText)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-            
-            if client.status == .connected {
-                Text("•")
-                    .foregroundStyle(.quaternary)
-                Text(formatBytes(client.bytesReceived))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-            }
         }
         .animation(.easeInOut(duration: 0.2), value: client.status)
     }

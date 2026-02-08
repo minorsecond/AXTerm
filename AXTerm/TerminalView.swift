@@ -1092,8 +1092,6 @@ struct TerminalView: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
 
-            adaptiveStatusIndicator
-
             Divider()
                 .padding(.top, 8)
 
@@ -1251,80 +1249,8 @@ struct TerminalView: View {
 
     // MARK: - View Components
     
-    @ViewBuilder
-    private var adaptiveStatusIndicator: some View {
-        Button {
-            showAdaptiveSettingsPopover.toggle()
-        } label: {
-            if settings.adaptiveTransmissionEnabled {
-                HStack(spacing: 6) {
-                    Image(systemName: "chart.line.uptrend.xyaxis")
-                        .font(.caption2)
-                        .foregroundStyle(.green)
-                    Text("Adaptive")
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                    Text("K:\(sessionCoordinator.globalAdaptiveSettings.windowSize.effectiveValue)")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                    Text("P:\(sessionCoordinator.globalAdaptiveSettings.paclen.effectiveValue)")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.green.opacity(0.1))
-                .clipShape(Capsule())
-            } else {
-                HStack(spacing: 6) {
-                    Image(systemName: "gearshape")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text("Adaptive Off")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.secondary.opacity(0.1))
-                .clipShape(Capsule())
-            }
-        }
-        .buttonStyle(.plain)
-        .popover(isPresented: $showAdaptiveSettingsPopover) {
-            VStack(alignment: .leading, spacing: 12) {
-                Toggle("Adaptive Transmission", isOn: $settings.adaptiveTransmissionEnabled)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                
-                Divider()
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Protocol Parameters")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    
-                    HStack {
-                        Text("Window (K):")
-                        Spacer()
-                        Text("\(sessionCoordinator.globalAdaptiveSettings.windowSize.effectiveValue)")
-                            .monospaced()
-                    }
-                    .font(.caption)
-                    
-                    HStack {
-                        Text("Packet Size (P):")
-                        Spacer()
-                        Text("\(sessionCoordinator.globalAdaptiveSettings.paclen.effectiveValue)")
-                            .monospaced()
-                    }
-                    .font(.caption)
-                }
-            }
-            .padding()
-            .frame(width: 200)
-        }
-    }
+    // Old adaptiveStatusIndicator removed - moved to TerminalComposeView
+
 
     private func showConnectionBannerTemporarily() {
         connectionBannerTask?.cancel()
@@ -1397,6 +1323,8 @@ struct TerminalView: View {
                 composeText: txViewModel.composeText,
                 connectionMode: txViewModel.connectionMode,
                 useAXDP: useAXDPBinding,
+                settings: settings,
+                sessionCoordinator: sessionCoordinator,
                 sourceCall: txViewModel.sourceCall,
                 canSend: txViewModel.canSend,
                 characterCount: txViewModel.characterCount,

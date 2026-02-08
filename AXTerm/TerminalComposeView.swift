@@ -77,7 +77,8 @@ struct SessionStatusBadge: View {
     var capabilityStatus: SessionCoordinator.CapabilityStatus = .unknown
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 0) {
+            // Status Capsule
             HStack(spacing: 6) {
                 // Status indicator dot
                 Circle()
@@ -85,7 +86,7 @@ struct SessionStatusBadge: View {
                     .frame(width: 8, height: 8)
 
                 // Status text
-                Text(stateText)
+                Text(statusLabel)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(stateColor == .green ? .primary : .secondary)
 
@@ -99,124 +100,110 @@ struct SessionStatusBadge: View {
                             .controlSize(.mini)
                             .help(axdpStatusHelp)
                     case .confirmed:
-                        if let peerCapability {
-                            AXDPCapabilityBadge(capability: peerCapability, compact: true)
-                                .help(axdpStatusHelp)
-                        } else {
-                            // Fallback text when we know it's supported but lack details
-                            Text("AXDP")
-                                .font(.system(size: 9, weight: .semibold))
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(Color.accentColor.opacity(0.15))
-                                .clipShape(Capsule())
-                                .help(axdpStatusHelp)
-                        }
-                    case .notSupported:
-                        Image(systemName: "bolt.slash")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.secondary)
+                         // Simple dot to indicate AXDP active (details in Adaptive chip or tooltip)
+                        Circle()
+                            .fill(.blue)
+                            .frame(width: 4, height: 4)
                             .help(axdpStatusHelp)
-                    case .unknown:
+                    case .notSupported, .unknown:
                         EmptyView()
                     }
                 }
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(.thinMaterial, in: Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 0.5)
-            )
-            .fixedSize()
-
-            // Stop button when connecting
-            if state == .connecting {
+            .padding(.vertical, 4)
+            .background(stateBackgroundColor)
+            
+            // Integrated Action Button (Disconnect/Cancel)
+            if shouldShowAction {
+                Divider()
+                    .frame(height: 12)
+                
                 Button {
-                    onForceDisconnect()
-                } label: {
-                    Image(systemName: "stop.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Stop immediately")
-                .keyboardShortcut(.escape, modifiers: [])
-            }
-
-            // Disconnect button when connected
-            if state == .connected {
-                Button {
-                    onDisconnect()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Disconnect from \(destinationCall)")
-                .contextMenu {
-                    Button("Disconnect Immediately", role: .destructive) {
-                        onForceDisconnect()
-                    }
-                }
-                Menu {
-                    Button("Disconnect", role: .cancel) {
+                    if state == .connected {
                         onDisconnect()
-                    }
-                    Button("Disconnect Immediately", role: .destructive) {
+                    } else {
                         onForceDisconnect()
                     }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.system(size: 12))
+                    Image(systemName: actionIcon)
+                        .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(.secondary)
-                }
-                .menuStyle(.borderlessButton)
-                .help("More session actions")
-            }
-
-            if state == .disconnecting {
-                Button {
-                    onForceDisconnect()
-                } label: {
-                    Image(systemName: "stop.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Stop immediately")
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .help(actionHelp)
+                .contextMenu {
+                    if state == .connected {
+                        Button("Disconnect Immediately", role: .destructive) {
+                            onForceDisconnect()
+                        }
+                    }
+                }
             }
         }
+        .background(.thinMaterial, in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 0.5)
+        )
+        .fixedSize()
         .help(stateHelp)
+        .animation(.snappy, value: state)
+    }
+
+    private var stateBackgroundColor: Color {
+        switch state {
+        case .connected: return Color.green.opacity(0.05)
+        case .connecting, .disconnecting: return Color.orange.opacity(0.05)
+        case .error: return Color.red.opacity(0.05)
+        default: return .clear
+        }
     }
 
     private var stateColor: Color {
         switch state {
-        case .disconnected, nil:
-            return .secondary
-        case .connecting, .disconnecting:
-            return .orange
-        case .connected:
-            return .green
-        case .error:
-            return .red
+        case .disconnected, nil: return .secondary
+        case .connecting, .disconnecting: return .orange
+        case .connected: return .green
+        case .error: return .red
         }
     }
-
-    private var stateText: String {
+    
+    private var statusLabel: String {
         switch state {
         case .disconnected, nil:
             return "Not Connected"
         case .connecting:
-            return "Connecting"
+            return "Connecting..."
         case .connected:
-            return "Connected"
+            return destinationCall.isEmpty ? "Connected" : "Connected to \(destinationCall)"
         case .disconnecting:
-            return "Stopping…"
+            return "Disconnecting..."
         case .error:
             return "Error"
+        }
+    }
+    
+    private var shouldShowAction: Bool {
+        state == .connected || state == .connecting || state == .disconnecting
+    }
+    
+    private var actionIcon: String {
+        switch state {
+        case .connected: return "xmark"
+        case .connecting, .disconnecting: return "stop.fill"
+        default: return ""
+        }
+    }
+    
+    private var actionHelp: String {
+        switch state {
+        case .connected: return "Disconnect"
+        case .connecting, .disconnecting: return "Stop immediately"
+        default: return ""
         }
     }
 
@@ -225,11 +212,11 @@ struct SessionStatusBadge: View {
         case .disconnected, nil:
             return "No active session"
         case .connecting:
-            return "Sending SABM, waiting for UA... Stop immediately if needed."
+            return "Sending SABM, waiting for UA..."
         case .connected:
-            return "Session active - click × to disconnect"
+            return "Session active with \(destinationCall)"
         case .disconnecting:
-            return "Sending DISC, waiting for UA... Stop immediately if needed."
+            return "Sending DISC, waiting for UA..."
         case .error:
             return "Session error - try reconnecting"
         }
@@ -243,15 +230,12 @@ struct SessionStatusBadge: View {
             return "Negotiating AXDP capabilities… waiting for PONG reply."
         case .confirmed:
             if let caps = peerCapability {
-                return """
-                AXDP enabled: v\(caps.protoMin)-\(caps.protoMax).
-                Features: \(caps.features.description).
-                """
+                return "AXDP enabled: v\(caps.protoMin)-\(caps.protoMax)."
             } else {
                 return "AXDP enabled for this peer."
             }
         case .notSupported:
-            return "AXDP not supported or no response from this peer. Standard AX.25 will be used."
+            return "AXDP not supported."
         }
     }
 }
@@ -263,6 +247,10 @@ struct TerminalComposeView: View {
     @Binding var composeText: String
     @Binding var connectionMode: TxConnectionMode
     @Binding var useAXDP: Bool
+    
+    // Dependencies needed for AdaptiveStatusChip
+    @ObservedObject var settings: AppSettingsStore
+    @ObservedObject var sessionCoordinator: SessionCoordinator
 
     let sourceCall: String
     let canSend: Bool
@@ -370,56 +358,67 @@ struct TerminalComposeView: View {
                 }
 
                 // Controls row - secondary, more compact
-                HStack(spacing: 16) {
-                    // Editable destination
-                    HStack(spacing: 4) {
-                        Text("To")
-                            .foregroundStyle(.tertiary)
-                            .font(.system(size: 10))
-                        TextField("CALL", text: $destinationCall)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .frame(width: 60)
-                            .textCase(.uppercase)
-                    }
-
-                    // Editable path
-                    HStack(spacing: 4) {
-                        Text("Via")
-                            .foregroundStyle(.tertiary)
-                            .font(.system(size: 10))
-                        TextField("path", text: $digiPath)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 11, design: .monospaced))
-                            .frame(width: 80)
-                            .textCase(.uppercase)
+                HStack(spacing: 12) {
+                    
+                    // Mode toggle and fields container
+                    HStack(spacing: 12) {
+                        ConnectionModeToggle(
+                            mode: $connectionMode,
+                            sessionState: sessionState,
+                            onDisconnect: onDisconnect,
+                            onForceDisconnect: onForceDisconnect
+                        )
+                        
+                        // Vertical divider
+                        Divider().frame(height: 16)
+                        
+                        // Address fields
+                        HStack(spacing: 8) {
+                            HStack(spacing: 4) {
+                                Text("To")
+                                    .foregroundStyle(.tertiary)
+                                    .font(.system(size: 10))
+                                TextField("CALL", text: $destinationCall)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                    .frame(width: 55)
+                                    .textCase(.uppercase)
+                            }
+                            
+                            HStack(spacing: 4) {
+                                Text("Via")
+                                    .foregroundStyle(.tertiary)
+                                    .font(.system(size: 10))
+                                TextField("path", text: $digiPath)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .frame(width: 70)
+                                    .textCase(.uppercase)
+                            }
+                        }
                     }
 
                     Spacer()
-
-                    // Mode toggle
-                    ConnectionModeToggle(
-                        mode: $connectionMode,
-                        sessionState: sessionState,
-                        onDisconnect: onDisconnect,
-                        onForceDisconnect: onForceDisconnect
-                    )
-
-                    // Session status (for connected mode)
-                    if connectionMode == .connected {
-                        SessionStatusBadge(
-                            state: sessionState,
-                            destinationCall: destinationCall,
-                            onDisconnect: onDisconnect,
-                            onForceDisconnect: onForceDisconnect,
-                            peerCapability: destinationCapability,
-                            capabilityStatus: capabilityStatus
-                        )
-                    }
-
-                    // AXDP payload toggle (only when we know the peer speaks AXDP)
-                    if let capability = destinationCapability {
-                        AXDPPayloadToggle(isOn: $useAXDP, capability: capability)
+                    
+                    // Session status indicators group
+                    HStack(spacing: 8) {
+                        // Adaptive Chip (new location)
+                        AdaptiveStatusChip(settings: settings, sessionCoordinator: sessionCoordinator)
+                        
+                        // Session status (for connected mode)
+                        if connectionMode == .connected {
+                            SessionStatusBadge(
+                                state: sessionState,
+                                destinationCall: destinationCall,
+                                onDisconnect: onDisconnect,
+                                onForceDisconnect: onForceDisconnect,
+                                peerCapability: destinationCapability,
+                                capabilityStatus: capabilityStatus
+                            )
+                        } else {
+                             // Placeholder to avoid jump?
+                             // No, in datagram mode we just don't show session status.
+                        }
                     }
 
                     // Queue depth indicator
@@ -661,6 +660,8 @@ struct TxQueueView: View {
         composeText: .constant("Hello World"),
         connectionMode: .constant(.datagram),
         useAXDP: .constant(false),
+        settings: AppSettingsStore(),
+        sessionCoordinator: SessionCoordinator(),
         sourceCall: "MYCALL",
         canSend: true,
         characterCount: 11,
@@ -683,6 +684,8 @@ struct TxQueueView: View {
         composeText: .constant("Hello World"),
         connectionMode: .constant(.connected),
         useAXDP: .constant(false),
+        settings: AppSettingsStore(),
+        sessionCoordinator: SessionCoordinator(),
         sourceCall: "MYCALL",
         canSend: true,
         characterCount: 11,
@@ -705,6 +708,8 @@ struct TxQueueView: View {
         composeText: .constant(""),
         connectionMode: .constant(.connected),
         useAXDP: .constant(false),
+        settings: AppSettingsStore(),
+        sessionCoordinator: SessionCoordinator(),
         sourceCall: "MYCALL",
         canSend: true,
         characterCount: 0,
@@ -749,3 +754,5 @@ struct TxQueueView: View {
     }
     .padding()
 }
+
+
