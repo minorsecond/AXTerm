@@ -75,14 +75,12 @@ struct NetworkGraphBuilder {
     /// - Multi-hop routes → HeardVia edges  
     /// - minimumEdgeCount is reinterpreted as minimum quality threshold (multiplied by 25)
     static func buildFromNetRom(
-        netRomIntegration: NetRomIntegration,
+        neighbors: [NeighborInfo],
+        routes: [RouteInfo],
         localCallsign: String,
-        mode: NetRomRoutingMode,
         options: Options,
         now: Date = Date()
     ) -> ClassifiedGraphModel {
-        let neighbors = netRomIntegration.currentNeighbors(forMode: mode)
-        let routes = netRomIntegration.currentRoutes(forMode: mode)
         
         guard !neighbors.isEmpty || !routes.isEmpty else { return .empty }
         

@@ -56,17 +56,17 @@ final class NetRomGraphBuilderTests: XCTestCase {
         )
         
         let model = NetworkGraphBuilder.buildFromNetRom(
-            netRomIntegration: integration,
+            neighbors: integration.currentNeighbors(forMode: .hybrid),
+            routes: integration.currentRoutes(forMode: .hybrid),
             localCallsign: localCallsign,
-            mode: .hybrid,
             options: options,
             now: now
         )
-        
+
         XCTAssertEqual(model.nodes.count, 2)
         XCTAssertTrue(model.nodes.contains { $0.id == localCallsign })
         XCTAssertTrue(model.nodes.contains { $0.id == neighbor })
-        
+
         XCTAssertEqual(model.edges.count, 1)
         let edge = model.edges.first!
         XCTAssertEqual(edge.sourceID, localCallsign)
@@ -141,13 +141,13 @@ final class NetRomGraphBuilderTests: XCTestCase {
         )
         
         let model = NetworkGraphBuilder.buildFromNetRom(
-            netRomIntegration: integration,
+            neighbors: integration.currentNeighbors(forMode: .hybrid),
+            routes: integration.currentRoutes(forMode: .hybrid),
             localCallsign: localCallsign,
-            mode: .hybrid,
             options: options,
             now: now
         )
-        
+
         XCTAssertEqual(model.edges.count, 1)
         XCTAssertTrue(model.edges.first?.isStale ?? false)
     }
@@ -178,13 +178,13 @@ final class NetRomGraphBuilderTests: XCTestCase {
         )
         
         let model = NetworkGraphBuilder.buildFromNetRom(
-            netRomIntegration: integration,
+            neighbors: integration.currentNeighbors(forMode: .hybrid),
+            routes: integration.currentRoutes(forMode: .hybrid),
             localCallsign: localCallsign,
-            mode: .hybrid,
             options: options,
             now: now
         )
-        
+
         // neighbor2 (50) should be filtered out
         XCTAssertEqual(model.edges.count, 1)
         XCTAssertEqual(model.edges.first?.targetID, neighbor1)
@@ -210,15 +210,15 @@ final class NetRomGraphBuilderTests: XCTestCase {
         )
         
         let model = NetworkGraphBuilder.buildFromNetRom(
-            netRomIntegration: integration,
+            neighbors: integration.currentNeighbors(forMode: .hybrid),
+            routes: integration.currentRoutes(forMode: .hybrid),
             localCallsign: localCallsign,
-            mode: .hybrid,
             options: options,
             now: now
         )
-        
+
         XCTAssertEqual(model.nodes.count, 3)
-        
+
         let officialNode = model.nodes.first { $0.id == officialNeighbor }
         let regularNode = model.nodes.first { $0.id == regularNeighbor }
         
@@ -248,25 +248,25 @@ final class NetRomGraphBuilderTests: XCTestCase {
         )
         
         var model = NetworkGraphBuilder.buildFromNetRom(
-            netRomIntegration: integration,
+            neighbors: integration.currentNeighbors(forMode: .hybrid),
+            routes: integration.currentRoutes(forMode: .hybrid),
             localCallsign: localCallsign,
-            mode: .hybrid,
             options: options,
             now: now
         )
         XCTAssertTrue(model.nodes.contains { $0.id == neighbor }, "Neighbor should be in the graph initially")
-        
+
         // 3. Simulate 31 minutes passing (TTL is 30 mins)
         let thirtyOneMinutesLater = now.addingTimeInterval(31 * 60)
-        
+
         // 4. Purge stale data
         integration.purgeStaleData(currentDate: thirtyOneMinutesLater)
-        
+
         // 5. Build graph again at the new time
         model = NetworkGraphBuilder.buildFromNetRom(
-            netRomIntegration: integration,
+            neighbors: integration.currentNeighbors(forMode: .hybrid),
+            routes: integration.currentRoutes(forMode: .hybrid),
             localCallsign: localCallsign,
-            mode: .hybrid,
             options: options,
             now: thirtyOneMinutesLater
         )
@@ -299,13 +299,13 @@ final class NetRomGraphBuilderTests: XCTestCase {
         )
         
         let model = NetworkGraphBuilder.buildFromNetRom(
-            netRomIntegration: integration,
+            neighbors: integration.currentNeighbors(forMode: .hybrid),
+            routes: integration.currentRoutes(forMode: .hybrid),
             localCallsign: localCallsign,
-            mode: .hybrid,
             options: options,
             now: now
         )
-        
+
         // Should contain at least local node
         XCTAssertTrue(model.nodes.contains { $0.id == localCallsign }, "Local node must be preserved")
         XCTAssertEqual(model.nodes.count, 1, "Should strictly respect maxNodes")
@@ -331,13 +331,13 @@ final class NetRomGraphBuilderTests: XCTestCase {
         )
         
         let model = NetworkGraphBuilder.buildFromNetRom(
-            netRomIntegration: integration,
+            neighbors: integration.currentNeighbors(forMode: .hybrid),
+            routes: integration.currentRoutes(forMode: .hybrid),
             localCallsign: localCallsign,
-            mode: .hybrid,
             options: options,
             now: now
         )
-        
+
         let neighborKey = "W0ABC"
         XCTAssertTrue(model.nodes.contains { $0.id == neighborKey })
         XCTAssertEqual(model.nodes.count, 2) // Local + W0ABC
@@ -385,13 +385,13 @@ final class NetRomGraphBuilderTests: XCTestCase {
         )
         
         let model = NetworkGraphBuilder.buildFromNetRom(
-            netRomIntegration: integration,
+            neighbors: integration.currentNeighbors(forMode: .hybrid),
+            routes: integration.currentRoutes(forMode: .hybrid),
             localCallsign: localCallsign,
-            mode: .hybrid,
             options: options,
             now: now
         )
-        
+
         // Check node weights (route counts)
         let originNode = model.nodes.first { $0.id == neighbor }
         let destNode = model.nodes.first { $0.id == destination }
