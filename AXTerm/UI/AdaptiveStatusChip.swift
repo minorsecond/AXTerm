@@ -131,27 +131,43 @@ struct AdaptiveStatusChip: View {
             }
             
             if #available(macOS 14.0, *) {
-                SettingsLink {
-                    Text("Configure...")
-                }
-                .buttonStyle(.link)
-                .simultaneousGesture(TapGesture().onEnded {
-                    SettingsNavigation.shared.selectedTab = .transmission
-                    showSettingsPopover = false
-                })
-                .font(.caption)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+                AdaptiveConfigureButton14(showPopover: $showSettingsPopover)
             } else {
-                Button("Configure...") {
+                Button("Configure…") {
                     showSettingsPopover = false
-                    SettingsNavigation.shared.openSettings(tab: .transmission)
+                    SettingsNavigation.shared.openSettings(
+                        tab: .transmission,
+                        section: .adaptiveTransmission
+                    )
                 }
-                .buttonStyle(.link)
-                .font(.caption)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
         .padding()
         .frame(width: 260)
+    }
+}
+
+@available(macOS 14.0, *)
+fileprivate struct AdaptiveConfigureButton14: View {
+    @Environment(\.openSettings) private var openSettings
+    @Binding var showPopover: Bool
+    
+    var body: some View {
+        Button("Configure…") {
+            showPopover = false
+            SettingsNavigation.shared.selectedTab = .transmission
+            SettingsNavigation.shared.targetSection = .adaptiveTransmission
+            
+            // Programmatically open settings using the environment action
+            Task {
+                try? await openSettings()
+            }
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 }
