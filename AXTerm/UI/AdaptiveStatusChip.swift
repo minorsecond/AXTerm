@@ -135,10 +135,7 @@ struct AdaptiveStatusChip: View {
             } else {
                 Button("Configure…") {
                     showSettingsPopover = false
-                    SettingsNavigation.shared.openSettings(
-                        tab: .transmission,
-                        section: .adaptiveTransmission
-                    )
+                    SettingsRouter.shared.navigate(to: .transmission, section: .adaptiveTransmission)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -158,8 +155,9 @@ fileprivate struct AdaptiveConfigureButton14: View {
     var body: some View {
         Button("Configure…") {
             showPopover = false
-            SettingsNavigation.shared.selectedTab = .transmission
-            SettingsNavigation.shared.targetSection = .adaptiveTransmission
+            // Use router to set state before opening
+            SettingsRouter.shared.selectedTab = .transmission
+            SettingsRouter.shared.highlightSection = .adaptiveTransmission
             
             // Programmatically open settings using the environment action
             Task {

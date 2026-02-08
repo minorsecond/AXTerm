@@ -514,7 +514,7 @@ struct ContentView: View {
 
     private var connectionHostPort: String {
         let hostValue = client.connectedHost ?? settings.host
-        let portValue = client.connectedPort.map(String.init) ?? settings.port
+        let portValue = client.connectedPort.map(String.init) ?? String(settings.port)
         return "\(hostValue):\(portValue)"
     }
 
