@@ -184,6 +184,17 @@ struct Packet: Identifiable, Hashable, Sendable {
             return (repeatedByKey[key] ?? false) ? "\(display)*" : display
         }
     }
+
+    /// Returns true if the given StationID matches the from, to, or via fields of this packet.
+    /// If stationID is nil, returns true (non-regression for global search).
+    func matchesStation(_ stationID: StationID?) -> Bool {
+        guard let stationID = stationID else { return true }
+        
+        if let from = from, from.asStationID == stationID { return true }
+        if let to = to, to.asStationID == stationID { return true }
+        
+        return via.contains { $0.asStationID == stationID }
+    }
 }
 
 struct KISSEndpoint: Hashable, Sendable {

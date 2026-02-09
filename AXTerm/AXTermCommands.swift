@@ -23,6 +23,14 @@ struct SelectNavigationAction {
     let action: (NavigationItem) -> Void
 }
 
+struct ClearSearchAction {
+    let action: () -> Void
+}
+
+struct ClearStationScopeAction {
+    let action: () -> Void
+}
+
 extension FocusedValues {
     var searchFocus: SearchFocusAction? {
         get { self[SearchFocusActionKey.self] ?? nil }
@@ -42,6 +50,16 @@ extension FocusedValues {
     var selectNavigation: SelectNavigationAction? {
         get { self[SelectNavigationActionKey.self] ?? nil }
         set { self[SelectNavigationActionKey.self] = newValue }
+    }
+
+    var clearSearch: ClearSearchAction? {
+        get { self[ClearSearchActionKey.self] ?? nil }
+        set { self[ClearSearchActionKey.self] = newValue }
+    }
+
+    var clearStationScope: ClearStationScopeAction? {
+        get { self[ClearStationScopeActionKey.self] ?? nil }
+        set { self[ClearStationScopeActionKey.self] = newValue }
     }
 }
 
@@ -65,11 +83,23 @@ private struct SelectNavigationActionKey: FocusedValueKey {
     static let defaultValue: SelectNavigationAction? = nil
 }
 
+private struct ClearSearchActionKey: FocusedValueKey {
+    typealias Value = ClearSearchAction?
+    static let defaultValue: ClearSearchAction? = nil
+}
+
+private struct ClearStationScopeActionKey: FocusedValueKey {
+    typealias Value = ClearStationScopeAction?
+    static let defaultValue: ClearStationScopeAction? = nil
+}
+
 struct AXTermCommands: Commands {
     @FocusedValue(\.searchFocus) private var searchFocus
     @FocusedValue(\.toggleConnection) private var toggleConnection
     @FocusedValue(\.inspectPacket) private var inspectPacket
     @FocusedValue(\.selectNavigation) private var selectNavigation
+    @FocusedValue(\.clearSearch) private var clearSearch
+    @FocusedValue(\.clearStationScope) private var clearStationScope
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
@@ -78,6 +108,21 @@ struct AXTermCommands: Commands {
                 searchFocus?.action()
             }
             .keyboardShortcut("f", modifiers: [.command])
+            
+            Button("Focus Search") {
+                searchFocus?.action()
+            }
+            .keyboardShortcut("l", modifiers: [.command])
+            
+            Button("Clear Search") {
+                clearSearch?.action()
+            }
+            .keyboardShortcut(.escape, modifiers: [])
+
+            Button("Clear Station Scope") {
+                clearStationScope?.action()
+            }
+            .keyboardShortcut("l", modifiers: [.command, .shift])
             
             Button("Inspect Packet") {
                 inspectPacket?.action()

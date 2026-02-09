@@ -164,6 +164,23 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         
         setupSearchDebounce()
         setupConsoleSubscription(client: client)
+        setupFilterContextSubscription()
+    }
+
+    private func setupFilterContextSubscription() {
+        AppFilterContext.shared.$selectedStation
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.applyFiltering()
+            }
+            .store(in: &cancellables)
+            
+        AppFilterContext.shared.$terminalFilterMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.applyFiltering()
+            }
+            .store(in: &cancellables)
     }
 
     private func createSessionNotification(for session: AX25Session, oldState: AX25SessionState, newState: AX25SessionState) -> SessionNotification? {
@@ -321,19 +338,13 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
     /// Primary filtering pipeline implementation
     func applyFiltering() {
-        // 1. apply performance window (visibleLines)
-        let totalCount = allLines.count
-        visibleLines = Array(allLines.suffix(maxVisibleLines))
-        
-        // 2. apply global view filters and search query
-        var result = visibleLines
-        
-        // Filter by clear timestamp
+        // 1. apply clear cutoff
+        var result = allLines
         if let cutoff = settings.terminalClearedAt {
             result = result.filter { $0.timestamp > cutoff }
         }
         
-        // HIG: Terminal filters in-memory output (case-insensitive substring match on rendered text)
+        // 2. apply global view filters and search query
         if !debouncedQuery.isEmpty {
             let searchLower = debouncedQuery.lowercased()
             result = result.filter { line in
@@ -343,10 +354,25 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             }
         }
         
-        filteredLines = result
+        // 3. Apply Station Scope (if in filter mode)
+        // Note: In .dim mode, we don't filter here; ConsoleView handles the dimming.
+        //if filterContext.terminalFilterMode == .filter, let stationID = filterContext.selectedStation {
+        //    result = result.filter { line in
+        //        line.matchesStation(stationID)
+        //    }
+        //}
+        
+        if AppFilterContext.shared.terminalFilterMode == .filter,
+           let stationID = AppFilterContext.shared.selectedStation {
+            result = result.filter { $0.matchesStation(stationID) }
+        }
+        
+        // 4. Apply performance window (visibleLines / filteredLines)
+        filteredLines = Array(result.suffix(maxVisibleLines))
+        visibleLines = filteredLines
         
         #if DEBUG
-        print("[TerminalSearch] query=\"\(debouncedQuery)\" all=\(totalCount) visible=\(visibleLines.count) filtered=\(filteredLines.count)")
+        print("[TerminalSearch] query=\"\(debouncedQuery)\" all=\(allLines.count) filtered=\(filteredLines.count)")
         #endif
         
         // Ensure UI updates reliably
@@ -1036,6 +1062,7 @@ struct TerminalView: View {
     @State private var showConnectionBanner = false
     @State private var connectionBannerTask: Task<Void, Never>?
     
+    @ObservedObject private var filterContext = AppFilterContext.shared
     @State private var showAdaptiveSettingsPopover = false
 
     init(client: PacketEngine, settings: AppSettingsStore, sessionCoordinator: SessionCoordinator, searchModel: AppToolbarSearchModel) {
@@ -1449,7 +1476,9 @@ struct TerminalView: View {
             ConsoleView(
                 lines: txViewModel.filteredLines,
                 showDaySeparators: settings.showConsoleDaySeparators,
-                clearedAt: $settings.terminalClearedAt
+                clearedAt: $settings.terminalClearedAt,
+                stationID: filterContext.selectedStation,
+                filterMode: filterContext.terminalFilterMode
             )
             .opacity(txViewModel.filteredLines.isEmpty ? 0 : 1)
             

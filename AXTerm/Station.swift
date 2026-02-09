@@ -15,15 +15,16 @@ struct Station: Identifiable, Hashable {
         return formatter
     }()
 
-    let call: String
+    let stationID: StationID
     var lastHeard: Date?
     var heardCount: Int
     var lastVia: [String]
 
-    var id: String { call }
+    var id: StationID { stationID }
+    var call: String { stationID.call }
 
-    init(call: String, lastHeard: Date? = nil, heardCount: Int = 0, lastVia: [String] = []) {
-        self.call = call
+    init(stationID: StationID, lastHeard: Date? = nil, heardCount: Int = 0, lastVia: [String] = []) {
+        self.stationID = stationID
         self.lastHeard = lastHeard
         self.heardCount = heardCount
         self.lastVia = lastVia

@@ -9,13 +9,13 @@ import Foundation
 
 struct StationTracker {
     private(set) var stations: [Station] = []
-    private var stationIndex: [String: Int] = [:]
+    private var stationIndex: [StationID: Int] = [:]
 
     mutating func update(with packet: Packet) {
         guard let from = packet.from else { return }
-        let call = from.display
+        let stationID = from.asStationID
 
-        if let index = stationIndex[call] {
+        if let index = stationIndex[stationID] {
             stations[index].lastHeard = packet.timestamp
             stations[index].heardCount += 1
             if !packet.via.isEmpty {
@@ -23,13 +23,13 @@ struct StationTracker {
             }
         } else {
             let station = Station(
-                call: call,
+                stationID: stationID,
                 lastHeard: packet.timestamp,
                 heardCount: 1,
                 lastVia: packet.via.map { $0.display }
             )
             stations.append(station)
-            stationIndex[call] = stations.count - 1
+            stationIndex[stationID] = stations.count - 1
         }
 
         sortStations()
@@ -50,12 +50,12 @@ struct StationTracker {
             var lastVia: [String] = []
         }
 
-        var aggregates: [String: Aggregation] = [:]
+        var aggregates: [StationID: Aggregation] = [:]
 
         for packet in packets {
             guard let from = packet.from else { continue }
-            let call = from.display
-            var aggregate = aggregates[call, default: Aggregation()]
+            let stationID = from.asStationID
+            var aggregate = aggregates[stationID, default: Aggregation()]
             aggregate.heardCount += 1
             if let currentLastHeard = aggregate.lastHeard {
                 if packet.timestamp >= currentLastHeard {
@@ -68,12 +68,12 @@ struct StationTracker {
                 aggregate.lastHeard = packet.timestamp
                 aggregate.lastVia = packet.via.map { $0.display }
             }
-            aggregates[call] = aggregate
+            aggregates[stationID] = aggregate
         }
 
-        stations = aggregates.map { call, aggregate in
+        stations = aggregates.map { stationID, aggregate in
             Station(
-                call: call,
+                stationID: stationID,
                 lastHeard: aggregate.lastHeard,
                 heardCount: aggregate.heardCount,
                 lastVia: aggregate.lastVia
@@ -82,8 +82,8 @@ struct StationTracker {
         sortStations()
     }
 
-    func heardCount(for call: String) -> Int? {
-        guard let index = stationIndex[call] else { return nil }
+    func heardCount(for stationID: StationID) -> Int? {
+        guard let index = stationIndex[stationID] else { return nil }
         return stations[index].heardCount
     }
 
@@ -98,7 +98,7 @@ struct StationTracker {
         }
         stationIndex.removeAll()
         for (index, station) in stations.enumerated() {
-            stationIndex[station.call] = index
+            stationIndex[station.stationID] = index
         }
     }
 }

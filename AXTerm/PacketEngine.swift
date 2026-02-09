@@ -167,7 +167,7 @@ final class PacketEngine: ObservableObject {
     @Published private(set) var rawChunks: [RawChunk] = []
     @Published private(set) var stations: [Station] = []
 
-    @Published var selectedStationCall: String?
+    @Published var selectedStation: StationID?
     @Published private(set) var pinnedPacketIDs: Set<Packet.ID> = []
 
     /// Publisher for incoming packets - subscribe to receive all decoded packets
@@ -571,7 +571,8 @@ final class PacketEngine: ObservableObject {
         guard let stationCall = packet.from?.display else { return }
         stationTracker.update(with: packet)
         stations = stationTracker.stations
-        if let heardCount = stationTracker.heardCount(for: stationCall) {
+        if let stationCall = packet.from?.display,
+           let heardCount = stationTracker.heardCount(for: packet.from!.asStationID) {
             SentryManager.shared.addBreadcrumb(
                 category: "stations.update.on_packet_insert",
                 message: "Stations updated from packet insert",
@@ -714,12 +715,12 @@ final class PacketEngine: ObservableObject {
 
     // MARK: - Filtering
 
-    func filteredPackets(search: String, filters: PacketFilters, stationCall: String?) -> [Packet] {
+    func filteredPackets(search: String, filters: PacketFilters, stationID: StationID?) -> [Packet] {
         PacketFilter.filter(
             packets: packets,
             search: search,
             filters: filters,
-            stationCall: stationCall,
+            stationID: stationID,
             pinnedIDs: pinnedPacketIDs
         )
     }
@@ -773,7 +774,7 @@ final class PacketEngine: ObservableObject {
     func clearStations() {
         stations.removeAll()
         stationTracker.reset()
-        selectedStationCall = nil
+        selectedStation = nil
     }
 
     // MARK: - Persistence Integration

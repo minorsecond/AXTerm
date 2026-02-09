@@ -134,7 +134,18 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
     }
 
+    @Published var searchText: String = "" {
+        didSet {
+            guard searchText != oldValue else { return }
+            // Re-apply aggregation results with new filter without full recompute if possible
+            if let lastResult = lastAggregationResult {
+                applyAggregationResult(lastResult)
+            }
+        }
+    }
+
     @Published private(set) var viewState: AnalyticsViewState = .empty
+    private var lastAggregationResult: AnalyticsAggregationResult?
 
     // MARK: - Focus Mode State
 
@@ -235,6 +246,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         bindPackets(packetScheduler: packetScheduler)
         bindNetRomUpdates()
         bindFocusState()
+        bindSearchQuery()
     }
 
     // MARK: - Settings Persistence Helpers
@@ -470,6 +482,15 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             .store(in: &cancellables)
     }
 
+    private func bindSearchQuery() {
+        AppFilterContext.shared.$searchQueries
+            .receive(on: RunLoop.main)
+            .sink { [weak self] queries in
+                self?.searchText = queries[.analytics] ?? ""
+            }
+            .store(in: &cancellables)
+    }
+
     private func trackFilterChange(reason: String) {
         Telemetry.breadcrumb(
             category: "analytics.filter.changed",
@@ -612,13 +633,22 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     private func applyAggregationResult(_ result: AnalyticsAggregationResult) {
+        lastAggregationResult = result
         viewState.summary = result.summary
         viewState.series = result.series
         viewState.heatmap = result.heatmap
         viewState.histogram = result.histogram
-        viewState.topTalkers = result.topTalkers
-        viewState.topDestinations = result.topDestinations
-        viewState.topDigipeaters = result.topDigipeaters
+        
+        let query = searchText.uppercased()
+        if query.isEmpty {
+            viewState.topTalkers = result.topTalkers
+            viewState.topDestinations = result.topDestinations
+            viewState.topDigipeaters = result.topDigipeaters
+        } else {
+            viewState.topTalkers = result.topTalkers.filter { $0.label.uppercased().contains(query) }
+            viewState.topDestinations = result.topDestinations.filter { $0.label.uppercased().contains(query) }
+            viewState.topDigipeaters = result.topDigipeaters.filter { $0.label.uppercased().contains(query) }
+        }
     }
 
     private func updateResolvedBucket(reason: String) {

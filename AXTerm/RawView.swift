@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AppKit
+import Combine
 
 struct RawView: View {
     let chunks: [RawChunk]
@@ -21,10 +22,21 @@ struct RawView: View {
     @State private var previousClearedAt: Date?
     @State private var scrollToBottomToken = 0
 
-    /// Chunks filtered by clear timestamp
+    /// Chunks filtered by clear timestamp and search query
     private var filteredChunks: [RawChunk] {
-        guard let cutoff = clearedAt else { return chunks }
-        return chunks.filter { $0.timestamp > cutoff }
+        let context = AppFilterContext.shared
+        let query = context.query(for: .raw).lowercased()
+        
+        let timeFiltered = chunks.filter { chunk in
+            guard let cutoff = clearedAt else { return true }
+            return chunk.timestamp > cutoff
+        }
+        
+        if query.isEmpty {
+            return timeFiltered
+        } else {
+            return timeFiltered.filter { $0.hex.lowercased().contains(query) }
+        }
     }
 
     var body: some View {

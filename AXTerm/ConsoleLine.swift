@@ -238,4 +238,23 @@ struct ConsoleLine: Identifiable, Hashable, Sendable {
             return (repeatedByKey[key] ?? false) ? "\(display)*" : display
         }
     }
+
+    /// Returns true if the given StationID matches the from, to, or via fields of this line.
+    /// If stationID is nil, returns true.
+    func matchesStation(_ stationID: StationID?) -> Bool {
+        guard let stationID = stationID else { return true }
+        
+        let targetCall = stationID.call.uppercased()
+        let targetSSID = stationID.ssid
+        
+        func matches(_ callsignWithSSID: String) -> Bool {
+            let (call, ssid) = CallsignNormalizer.parse(callsignWithSSID)
+            return call.uppercased() == targetCall && ssid == targetSSID
+        }
+
+        if let from = from, matches(from) { return true }
+        if let to = to, matches(to) { return true }
+        
+        return via.contains { matches($0) }
+    }
 }

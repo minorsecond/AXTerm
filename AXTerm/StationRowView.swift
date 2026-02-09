@@ -18,7 +18,7 @@ struct StationRowView: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(station.call)
+                    Text(station.stationID.display)
                         .font(.system(.body, design: .monospaced))
                         .fontWeight(isSelected ? .semibold : .regular)
                         .help("Station callsign")
@@ -60,19 +60,19 @@ struct StationRowView: View {
 #Preview {
     VStack(spacing: 8) {
         StationRowView(
-            station: Station(call: "N0CALL", lastHeard: Date(), heardCount: 15, lastVia: ["WIDE1-1"]),
+            station: Station(stationID: StationID("N0CALL"), lastHeard: Date(), heardCount: 15, lastVia: ["WIDE1-1"]),
             isSelected: false,
             capability: .defaultLocal()
         )
 
         StationRowView(
-            station: Station(call: "K0ABC-5", lastHeard: Date(), heardCount: 3, lastVia: []),
+            station: Station(stationID: StationID("K0ABC-5"), lastHeard: Date(), heardCount: 3, lastVia: []),
             isSelected: true,
             capability: nil
         )
 
         StationRowView(
-            station: Station(call: "W0XYZ", lastHeard: Date(), heardCount: 42, lastVia: ["RELAY", "DIGI"]),
+            station: Station(stationID: StationID("W0XYZ"), lastHeard: Date(), heardCount: 42, lastVia: ["RELAY", "DIGI"]),
             isSelected: false,
             capability: AXDPCapability(
                 protoMin: 1, protoMax: 1,

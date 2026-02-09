@@ -79,10 +79,6 @@ struct NetRomRoutesView: View {
                 .toggleStyle(.checkbox)
                 .help("When enabled, hides entries with 0% freshness (older than TTL)")
 
-            // Search field
-            TextField("Search...", text: $viewModel.searchText)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 180)
 
             // Refresh button
             Button {

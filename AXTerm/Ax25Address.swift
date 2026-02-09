@@ -126,8 +126,11 @@ struct AX25Address: Hashable, Codable, Identifiable, Sendable {
             }
         }
         
-        data.append(ssidByte)
-
         return data
+    }
+
+    /// Returns a StationID representing this address.
+    var asStationID: StationID {
+        StationID(call: call, ssid: ssid)
     }
 }

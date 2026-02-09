@@ -41,7 +41,7 @@ final class MHeardTests: XCTestCase {
 
     func testStationHeardCountIncrements() {
         // Test that Station struct tracks heardCount correctly
-        var testStation = Station(call: "N0CALL-1", heardCount: 0)
+        var testStation = Station(stationID: StationID("N0CALL-1"), heardCount: 0)
 
         // Simulate first packet
         testStation.heardCount += 1
@@ -60,7 +60,7 @@ final class MHeardTests: XCTestCase {
 
     func testStationLastHeardUpdates() {
         let initialTime = Date(timeIntervalSince1970: 1000)
-        var station = Station(call: "N0CALL", lastHeard: initialTime, heardCount: 1)
+        var station = Station(stationID: StationID("N0CALL"), lastHeard: initialTime, heardCount: 1)
 
         let laterTime = Date(timeIntervalSince1970: 2000)
         station.lastHeard = laterTime
@@ -70,7 +70,7 @@ final class MHeardTests: XCTestCase {
     }
 
     func testStationLastViaUpdated() {
-        var station = Station(call: "N0CALL", lastVia: [])
+        var station = Station(stationID: StationID("N0CALL"), lastVia: [])
 
         // First packet via WIDE1-1
         station.lastVia = ["WIDE1-1"]
@@ -82,8 +82,8 @@ final class MHeardTests: XCTestCase {
     }
 
     func testStationIdentity() {
-        let station1 = Station(call: "N0CALL-1", heardCount: 1)
-        let station2 = Station(call: "N0CALL-1", heardCount: 5) // Same call, different count
+        let station1 = Station(stationID: StationID("N0CALL-1"), heardCount: 1)
+        let station2 = Station(stationID: StationID("N0CALL-1"), heardCount: 5) // Same call, different count
 
         XCTAssertEqual(station1.id, station2.id)
         XCTAssertEqual(station1.call, station2.call)
@@ -95,9 +95,9 @@ final class MHeardTests: XCTestCase {
         let earliest = now.addingTimeInterval(-200)
 
         var stations = [
-            Station(call: "FIRST", lastHeard: earliest, heardCount: 1),
-            Station(call: "THIRD", lastHeard: now, heardCount: 1),
-            Station(call: "SECOND", lastHeard: earlier, heardCount: 1)
+            Station(stationID: StationID("FIRST"), lastHeard: earliest, heardCount: 1),
+            Station(stationID: StationID("THIRD"), lastHeard: now, heardCount: 1),
+            Station(stationID: StationID("SECOND"), lastHeard: earlier, heardCount: 1)
         ]
 
         // Sort by lastHeard descending
@@ -110,7 +110,7 @@ final class MHeardTests: XCTestCase {
 
     func testStationSubtitle() {
         let now = Date()
-        let station = Station(call: "N0CALL", lastHeard: now, heardCount: 5)
+        let station = Station(stationID: StationID("N0CALL"), lastHeard: now, heardCount: 5)
 
         // Should contain packet count
         XCTAssertTrue(station.subtitle.contains("5 pkts"))
@@ -118,7 +118,7 @@ final class MHeardTests: XCTestCase {
 
     func testStationSubtitleSingular() {
         let now = Date()
-        let station = Station(call: "N0CALL", lastHeard: now, heardCount: 1)
+        let station = Station(stationID: StationID("N0CALL"), lastHeard: now, heardCount: 1)
 
         // Should use singular "pkt"
         XCTAssertTrue(station.subtitle.contains("1 pkt"))

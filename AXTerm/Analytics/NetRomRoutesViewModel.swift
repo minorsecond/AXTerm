@@ -403,6 +403,9 @@ final class NetRomRoutesViewModel: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var lastRefresh: Date?
 
+    @Published var selectedStation: StationID?
+    private var cancellables = Set<AnyCancellable>()
+
     #if DEBUG
     @Published private(set) var isRebuilding = false
     @Published private(set) var rebuildProgress: Double = 0
@@ -511,7 +514,25 @@ final class NetRomRoutesViewModel: ObservableObject {
         self.packetEngine = packetEngine
         self.settings = settings
         self.clock = clock
+        
+        setupFilterSubscriptions()
         startAutoRefresh()
+    }
+
+    private func setupFilterSubscriptions() {
+        AppFilterContext.shared.$searchQueries
+            .receive(on: RunLoop.main)
+            .sink { [weak self] queries in
+                self?.searchText = queries[.routes] ?? ""
+            }
+            .store(in: &cancellables)
+
+        AppFilterContext.shared.$selectedStation
+            .receive(on: RunLoop.main)
+            .sink { [weak self] station in
+                self?.selectedStation = station
+            }
+            .store(in: &cancellables)
     }
 
     deinit {
@@ -529,6 +550,12 @@ final class NetRomRoutesViewModel: ObservableObject {
         }
 
         // Filter by search text
+        // Filter by station scope
+        if let station = selectedStation {
+            result = result.filter { $0.callsign.uppercased() == station.call.uppercased() }
+        }
+
+        // Filter by search text
         if !searchText.isEmpty {
             let query = searchText.uppercased()
             result = result.filter { $0.callsign.uppercased().contains(query) }
@@ -543,6 +570,17 @@ final class NetRomRoutesViewModel: ObservableObject {
         // Filter by expiration if enabled
         if shouldHideExpired {
             result = result.filter { $0.freshness > 0 }
+        }
+
+        // Filter by search text
+        // Filter by station scope
+        if let station = selectedStation {
+            let call = station.call.uppercased()
+            result = result.filter {
+                $0.destination.uppercased() == call ||
+                $0.nextHop.uppercased() == call ||
+                $0.path.contains { $0.uppercased() == call }
+            }
         }
 
         // Filter by search text
@@ -564,6 +602,16 @@ final class NetRomRoutesViewModel: ObservableObject {
         // Filter by expiration if enabled
         if shouldHideExpired {
             result = result.filter { $0.freshness > 0 }
+        }
+
+        // Filter by search text
+        // Filter by station scope
+        if let station = selectedStation {
+            let call = station.call.uppercased()
+            result = result.filter {
+                $0.fromCall.uppercased() == call ||
+                $0.toCall.uppercased() == call
+            }
         }
 
         // Filter by search text

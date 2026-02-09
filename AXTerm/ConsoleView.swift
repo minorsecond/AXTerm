@@ -11,6 +11,9 @@ struct ConsoleView: View {
     let lines: [ConsoleLine]
     let showDaySeparators: Bool
     @Binding var clearedAt: Date?
+    
+    var stationID: StationID? = nil
+    var filterMode: TerminalFilterMode = .dim
 
     @State private var autoScroll = true
     @State private var isUserNearBottom = true
@@ -35,9 +38,15 @@ struct ConsoleView: View {
         return lines.filter { $0.timestamp > cutoff }
     }
 
-    /// Lines filtered by message type preferences
+    /// Lines filtered by message type preferences AND station scope if in .filter mode
     private var typeFilteredLines: [ConsoleLine] {
         filteredLines.filter { line in
+            // 1. Station Scope (if in filter mode)
+            if filterMode == .filter && stationID != nil {
+                guard line.matchesStation(stationID) else { return false }
+            }
+            
+            // 2. Type filters
             switch line.kind {
             case .system, .error:
                 return showSystem
@@ -108,8 +117,11 @@ struct ConsoleView: View {
                                 }
                             } else {
                                 ForEach(groupedLines) { group in
-                                    ConsoleLineGroupView(group: group)
-                                        .id(group.id)
+                                    ConsoleLineGroupView(
+                                        group: group,
+                                        isDimmed: filterMode == .dim && stationID != nil && !group.primary.matchesStation(stationID)
+                                    )
+                                    .id(group.id)
                                 }
                             }
                             Color.clear
@@ -341,6 +353,7 @@ struct ConsoleLineGroup: Identifiable {
 /// View for a grouped console line (primary + collapsed duplicates)
 struct ConsoleLineGroupView: View {
     let group: ConsoleLineGroup
+    var isDimmed: Bool = false
     @State private var isExpanded = false
 
     var body: some View {
@@ -348,7 +361,8 @@ struct ConsoleLineGroupView: View {
             ConsoleLineView(
                 line: group.primary,
                 duplicateCount: group.duplicateCount,
-                allViaPaths: group.allViaPaths
+                allViaPaths: group.allViaPaths,
+                isDimmed: isDimmed
             )
 
             // Expanded duplicates (if any and expanded)
@@ -418,6 +432,7 @@ struct ConsoleLineView: View {
     let line: ConsoleLine
     var duplicateCount: Int = 0
     var allViaPaths: [[String]] = []
+    var isDimmed: Bool = false
 
     private let callsignSaturation: Double = 0.35
     private let callsignBrightness: Double = 0.75
@@ -475,6 +490,7 @@ struct ConsoleLineView: View {
         .padding(.horizontal, 4)
         .background(rowBackground)
         .cornerRadius(4)
+        .opacity(isDimmed ? 0.35 : 1.0)
     }
 
     /// Left border color based on message category (matches filter buttons)

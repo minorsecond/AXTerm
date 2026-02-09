@@ -12,14 +12,14 @@ enum PacketFilter {
         packets: [Packet],
         search: String,
         filters: PacketFilters,
-        stationCall: String?,
+        stationID: StationID?,
         pinnedIDs: Set<Packet.ID> = []
     ) -> [Packet] {
         packets.filter { packet in
-            if let call = stationCall {
-                guard packet.fromDisplay == call else { return false }
-            }
+            // 1. Station Scope (WHO)
+            guard packet.matchesStation(stationID) else { return false }
 
+            // 2. Packet Type Filters
             if filters.payloadOnly {
                 switch packet.frameType {
                 case .i:
@@ -38,6 +38,7 @@ enum PacketFilter {
                 return false
             }
 
+            // 3. Search Refine (WHAT)
             if !search.isEmpty {
                 let searchLower = search.lowercased()
                 let matches = packet.fromDisplay.lowercased().contains(searchLower) ||

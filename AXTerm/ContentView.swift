@@ -5,6 +5,7 @@
 //  Created by Ross Wardrup on 1/28/26.
 //
 
+import Combine
 import SwiftUI
 
 enum NavigationItem: String, Hashable, CaseIterable {
@@ -38,6 +39,7 @@ struct ContentView: View {
     @State private var didLoadRawHistory = false
     @State private var selectionMutationScheduler = SelectionMutationScheduler()
     @StateObject private var analyticsViewModel: AnalyticsDashboardViewModel
+    @StateObject private var filterContext = AppFilterContext.shared
 
     init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter) {
         _client = StateObject(wrappedValue: client)
@@ -83,6 +85,9 @@ struct ContentView: View {
         }
         .accessibilityIdentifier("mainWindowRoot")
         .searchable(text: $searchModel.query, prompt: searchPlaceholder)
+        .onChange(of: searchModel.query) { _, newValue in
+            filterContext.setQuery(newValue, for: ViewKey.from(selectedNav))
+        }
         .searchFocused($isSearchFocused)
         .toolbar {
             toolbarContent
@@ -105,7 +110,7 @@ struct ContentView: View {
                     isPinned: client.isPinned(packet.id),
                     onTogglePin: { client.togglePin(for: packet.id) },
                     onFilterStation: { call in
-                        client.selectedStationCall = call
+                        filterContext.selectedStation = StationID(call)
                     },
                     onClose: {
                         SentryManager.shared.addBreadcrumb(category: "ui.inspector", message: "Inspector closed", level: .info, data: ["packetID": selection.id.uuidString])
@@ -173,16 +178,32 @@ struct ContentView: View {
         .focusedValue(\.selectNavigation, SelectNavigationAction { item in
             selectedNav = item
         })
+        .focusedValue(\.clearSearch, ClearSearchAction {
+            filterContext.setQuery("", for: ViewKey.from(selectedNav))
+            searchModel.query = ""
+        })
+        .focusedValue(\.clearStationScope, ClearStationScopeAction {
+            filterContext.selectedStation = nil
+        })
         .onChange(of: settings.myCallsign) { _, newValue in
             sessionCoordinator.localCallsign = newValue
         }
-        .onChange(of: selectedNav) { _, newValue in
-            syncSearchScope(for: newValue)
+        .onChange(of: selectedNav) { oldVal, newVal in
+            syncSearchScope(from: oldVal, to: newVal)
+        }
+        .onChange(of: filterContext.selectedStation) { _, newValue in
+            client.selectedStation = newValue
         }
     }
 
-    private func syncSearchScope(for item: NavigationItem) {
-        switch item {
+    private func syncSearchScope(from: NavigationItem, to: NavigationItem) {
+        // Save current search to the old view's key
+        filterContext.setQuery(searchModel.query, for: ViewKey.from(from))
+        
+        // Update search model with next view's query
+        searchModel.query = filterContext.query(for: ViewKey.from(to))
+        
+        switch to {
         case .terminal: searchModel.scope = .terminal
         case .packets: searchModel.scope = .packets
         case .routes: searchModel.scope = .routes
@@ -217,14 +238,14 @@ struct ContentView: View {
                 HStack {
                     Text("All Packets")
                     Spacer()
-                    if client.selectedStationCall == nil {
+                    if filterContext.selectedStation == nil {
                         Image(systemName: "checkmark")
                             .foregroundStyle(.secondary)
                     }
                 }
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    client.selectedStationCall = nil
+                    filterContext.selectedStation = nil
                 }
 
                 if client.stations.isEmpty {
@@ -235,15 +256,15 @@ struct ContentView: View {
                     ForEach(client.stations) { station in
                         StationRowView(
                             station: station,
-                            isSelected: client.selectedStationCall == station.call,
+                            isSelected: filterContext.selectedStation == station.stationID,
                             capability: client.capabilityStore.capabilities(for: station.call)
                         )
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            if client.selectedStationCall == station.call {
-                                client.selectedStationCall = nil
+                            if filterContext.selectedStation == station.stationID {
+                                filterContext.selectedStation = nil
                             } else {
-                                client.selectedStationCall = station.call
+                                filterContext.selectedStation = station.stationID
                             }
                         }
                     }
@@ -282,6 +303,12 @@ struct ContentView: View {
                 .background(.red.opacity(0.1))
             }
 
+            FilterHeaderView(
+                filterContext: filterContext, 
+                viewKey: ViewKey.from(selectedNav),
+                supportsStationScope: selectedNav != .raw
+            )
+            
             switch selectedNav {
             case .terminal:
                 TerminalView(client: client, settings: settings, sessionCoordinator: sessionCoordinator, searchModel: searchModel)
@@ -324,9 +351,12 @@ struct ContentView: View {
                 inspectorSelection = nil
             }
         }
-        .onChange(of: searchModel.query) { _, _ in scheduleSelectionSync(with: rows) }
+        .onChange(of: searchModel.query) { _, newValue in
+            filterContext.setQuery(newValue, for: ViewKey.from(selectedNav))
+            scheduleSelectionSync(with: rows)
+        }
         .onChange(of: filters) { _, _ in scheduleSelectionSync(with: rows) }
-        .onChange(of: client.selectedStationCall) { _, _ in scheduleSelectionSync(with: rows) }
+        .onChange(of: filterContext.selectedStation) { _, _ in scheduleSelectionSync(with: rows) }
         .onChange(of: client.packets) { _, _ in scheduleSelectionSync(with: rows) }
     }
 
@@ -550,7 +580,7 @@ struct ContentView: View {
         client.filteredPackets(
             search: searchModel.query,
             filters: filters,
-            stationCall: client.selectedStationCall
+            stationID: filterContext.selectedStation
         )
     }
 

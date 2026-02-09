@@ -7,6 +7,7 @@
 
 import AppKit
 import Charts
+import Combine
 import SwiftUI
 
 struct AnalyticsDashboardView: View {
@@ -97,7 +98,22 @@ struct AnalyticsDashboardView: View {
             viewModel.updatePackets(packets)
         }
         .onChange(of: viewModel.viewState.selectedNodeID) { _, newValue in
-            packetEngine.selectedStationCall = newValue
+            if let newValue = newValue {
+                AppFilterContext.shared.selectedStation = StationID(newValue)
+            } else {
+                AppFilterContext.shared.selectedStation = nil
+            }
+        }
+        .onChange(of: AppFilterContext.shared.selectedStation) { _, newValue in
+            if let newValue = newValue {
+                // If the selected node in the graph is different from the global selected station,
+                // update the graph selection.
+                if viewModel.viewState.selectedNodeID != newValue.call {
+                    viewModel.handleNodeClick(newValue.call, isShift: false)
+                }
+            } else if viewModel.viewState.selectedNodeID != nil {
+                viewModel.handleBackgroundClick()
+            }
         }
     }
 
