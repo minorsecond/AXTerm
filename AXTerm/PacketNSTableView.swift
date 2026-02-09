@@ -27,9 +27,9 @@ struct PacketNSTableView: NSViewRepresentable {
 
     let packets: [Packet]
     @Binding var selection: Set<Packet.ID>
-    @Binding var isAtTop: Bool
+    @Binding var isAtBottom: Bool
     @Binding var followNewest: Bool
-    let scrollToTopToken: Int
+    let scrollToBottomToken: Int
     let onInspectSelection: () -> Void
     let onCopyInfo: (Packet) -> Void
     let onCopyRawHex: (Packet) -> Void
@@ -37,7 +37,7 @@ struct PacketNSTableView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             selection: $selection,
-            isAtTop: $isAtTop,
+            isAtBottom: $isAtBottom,
             followNewest: $followNewest,
             onInspectSelection: onInspectSelection,
             onCopyInfo: onCopyInfo,
@@ -81,6 +81,16 @@ struct PacketNSTableView: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.autoresizingMask = [.width, .height]
         context.coordinator.attach(scrollView: scrollView)
+        
+        // Initial scroll to bottom if needed
+        if context.coordinator.isAtBottom.wrappedValue {
+             DispatchQueue.main.async {
+                 if tableView.numberOfRows > 0 {
+                     tableView.scrollRowToVisible(tableView.numberOfRows - 1)
+                 }
+             }
+        }
+        
         return scrollView
     }
 
@@ -88,7 +98,7 @@ struct PacketNSTableView: NSViewRepresentable {
         context.coordinator.enqueueUpdate(
             packets: packets,
             selection: selection,
-            scrollToTopToken: scrollToTopToken
+            scrollToBottomToken: scrollToBottomToken
         )
     }
 
@@ -187,7 +197,7 @@ extension PacketNSTableView {
         private struct PendingUpdate {
             let packets: [Packet]
             let selection: Set<Packet.ID>
-            let scrollToTopToken: Int
+            let scrollToBottomToken: Int
         }
 
         private enum RowUpdate {
@@ -199,7 +209,7 @@ extension PacketNSTableView {
 
         private let logger = Logger(subsystem: "AXTerm", category: "PacketTable")
         private let selection: Binding<Set<Packet.ID>>
-        private let isAtTop: Binding<Bool>
+        let isAtBottom: Binding<Bool> // Made internal to be accessible by makeNSView
         private let followNewest: Binding<Bool>
         private let onInspectSelection: () -> Void
         private let onCopyInfo: (Packet) -> Void
@@ -209,13 +219,13 @@ extension PacketNSTableView {
         private(set) var packets: [Packet] = []
         private var isApplyingSelection = false
         private var lastContextRow: Int?
-        private var lastScrollToTopToken = 0
+        private var lastScrollToBottomToken = 0
         private var scrollObserver: NSObjectProtocol?
         private var pendingUpdate: PendingUpdate?
         private var isProgrammaticUpdate = false
         private var scrollStateWorkItem: DispatchWorkItem?
-        private var pendingIsAtTop: Bool?
-        private var lastPublishedIsAtTop: Bool?
+        private var pendingIsAtBottom: Bool?
+        private var lastPublishedIsAtBottom: Bool?
         private let rowUpdateScheduler = CoalescingScheduler(delay: .milliseconds(80))
         private let columnSizingScheduler = CoalescingScheduler(delay: .milliseconds(500))
 
@@ -224,14 +234,14 @@ extension PacketNSTableView {
 
         init(
             selection: Binding<Set<Packet.ID>>,
-            isAtTop: Binding<Bool>,
+            isAtBottom: Binding<Bool>,
             followNewest: Binding<Bool>,
             onInspectSelection: @escaping () -> Void,
             onCopyInfo: @escaping (Packet) -> Void,
             onCopyRawHex: @escaping (Packet) -> Void
         ) {
             self.selection = selection
-            self.isAtTop = isAtTop
+            self.isAtBottom = isAtBottom
             self.followNewest = followNewest
             self.onInspectSelection = onInspectSelection
             self.onCopyInfo = onCopyInfo
@@ -241,15 +251,15 @@ extension PacketNSTableView {
         func enqueueUpdate(
             packets: [Packet],
             selection: Set<Packet.ID>,
-            scrollToTopToken: Int
+            scrollToBottomToken: Int
         ) {
             #if DEBUG
-            logger.debug("Packet table enqueue update (count: \(packets.count), token: \(scrollToTopToken))")
+            logger.debug("Packet table enqueue update (count: \(packets.count), token: \(scrollToBottomToken))")
             #endif
             pendingUpdate = PendingUpdate(
                 packets: packets,
                 selection: selection,
-                scrollToTopToken: scrollToTopToken
+                scrollToBottomToken: scrollToBottomToken
             )
             rowUpdateScheduler.schedule { [weak self] in
                 await MainActor.run {
@@ -271,7 +281,7 @@ extension PacketNSTableView {
                 queue: .main
             ) { [weak self] _ in
                 guard let self, let tableView = self.tableView else { return }
-                self.updateIsAtTop(in: tableView)
+                self.updateIsAtBottom(in: tableView)
             }
         }
 
@@ -388,37 +398,36 @@ extension PacketNSTableView {
         private func updateScrollPosition(
             in tableView: NSTableView,
             anchorID: Packet.ID?,
-            shouldScrollToTop: Bool
+            shouldScrollToBottom: Bool
         ) {
-            let isUserNearTop = isUserAtTop(in: tableView)
+            let userIsAtBottom = isUserAtBottom(in: tableView)
             let shouldAutoScroll = AutoScrollDecision.shouldAutoScroll(
-                isUserAtTop: isUserNearTop,
+                isUserAtTarget: userIsAtBottom,
                 followNewest: followNewest.wrappedValue,
-                didRequestScrollToTop: shouldScrollToTop
+                didRequestScrollToTarget: shouldScrollToBottom
             )
+
             if shouldAutoScroll {
-                if rows.indices.contains(0) {
-                    let visibleRows = tableView.rows(in: tableView.visibleRect)
-                    if !visibleRows.contains(0) {
-                        tableView.scrollRowToVisible(0)
-                    }
+                let count = tableView.numberOfRows
+                if count > 0 {
+                    tableView.scrollRowToVisible(count - 1)
                 }
                 return
             }
 
             guard let anchorID,
                   let anchorIndex = rows.firstIndex(where: { $0.id == anchorID }) else {
-                return
+                    return
             }
             let visibleRows = tableView.rows(in: tableView.visibleRect)
             guard !visibleRows.contains(anchorIndex) else { return }
             tableView.scrollRowToVisible(anchorIndex)
         }
 
-        private func updateIsAtTop(in tableView: NSTableView) {
+        private func updateIsAtBottom(in tableView: NSTableView) {
             guard !isProgrammaticUpdate else { return }
-            let atTop = isUserAtTop(in: tableView)
-            scheduleScrollStateUpdate(isAtTop: atTop)
+            let atBottom = isUserAtBottom(in: tableView)
+            scheduleScrollStateUpdate(isAtBottom: atBottom)
         }
 
         deinit {
@@ -511,8 +520,8 @@ extension PacketNSTableView {
 
             isProgrammaticUpdate = true
             let visibleAnchorID = firstVisiblePacketID(in: tableView)
-            let shouldScrollToTop = pendingUpdate.scrollToTopToken != lastScrollToTopToken
-            lastScrollToTopToken = pendingUpdate.scrollToTopToken
+            let shouldScrollToBottom = pendingUpdate.scrollToBottomToken != lastScrollToBottomToken
+            lastScrollToBottomToken = pendingUpdate.scrollToBottomToken
             let updateAction = updateRows(
                 packets: pendingUpdate.packets,
                 in: tableView
@@ -521,13 +530,13 @@ extension PacketNSTableView {
             updateScrollPosition(
                 in: tableView,
                 anchorID: visibleAnchorID,
-                shouldScrollToTop: shouldScrollToTop
+                shouldScrollToBottom: shouldScrollToBottom
             )
             scheduleColumnSizing(for: tableView)
             DispatchQueue.main.async { [weak self, weak tableView] in
                 guard let self, let tableView else { return }
                 self.isProgrammaticUpdate = false
-                self.updateIsAtTop(in: tableView)
+                self.updateIsAtBottom(in: tableView)
             }
 
             #if DEBUG
@@ -560,12 +569,13 @@ extension PacketNSTableView {
 
             if newIDs.count >= oldIDs.count {
                 let delta = newIDs.count - oldIDs.count
-                if delta > 0, Array(newIDs.dropFirst(delta)) == oldIDs {
-                    let newRows = packets.prefix(delta).map { PacketRowViewModel.fromPacket($0) }
-                    rows.insert(contentsOf: newRows, at: 0)
+                if delta > 0, Array(newIDs.prefix(oldIDs.count)) == oldIDs {
+                    let newRows = packets.suffix(delta).map { PacketRowViewModel.fromPacket($0) }
+                    let startRow = rows.count
+                    rows.append(contentsOf: newRows)
                     self.packets = packets
                     tableView.beginUpdates()
-                    tableView.insertRows(at: IndexSet(integersIn: 0..<delta), withAnimation: [])
+                    tableView.insertRows(at: IndexSet(integersIn: startRow..<(startRow + delta)), withAnimation: [])
                     tableView.endUpdates()
                     return .insert(count: delta)
                 }
@@ -590,23 +600,13 @@ extension PacketNSTableView {
             return .reload
         }
 
-        private func scheduleScrollStateUpdate(isAtTop: Bool) {
-            guard lastPublishedIsAtTop != isAtTop else { return }
-            pendingIsAtTop = isAtTop
-            scrollStateWorkItem?.cancel()
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self, let pendingIsAtTop = self.pendingIsAtTop else { return }
-                guard self.lastPublishedIsAtTop != pendingIsAtTop else { return }
-                #if DEBUG
-                self.logger.debug("Packet table scroll state update (isAtTop: \(pendingIsAtTop))")
-                #endif
-                self.lastPublishedIsAtTop = pendingIsAtTop
-                DispatchQueue.main.async { [weak self] in
-                    self?.isAtTop.wrappedValue = pendingIsAtTop
-                }
+        private func scheduleScrollStateUpdate(isAtBottom: Bool) {
+            guard lastPublishedIsAtBottom != isAtBottom else { return }
+            lastPublishedIsAtBottom = isAtBottom
+            
+            DispatchQueue.main.async { [weak self] in
+                self?.isAtBottom.wrappedValue = isAtBottom
             }
-            scrollStateWorkItem = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
         }
 
         private func scheduleColumnSizing(for tableView: NSTableView) {
@@ -619,9 +619,11 @@ extension PacketNSTableView {
             }
         }
 
-        private func isUserAtTop(in tableView: NSTableView) -> Bool {
-            let visibleRect = tableView.visibleRect
-            return visibleRect.minY <= 2
+        private func isUserAtBottom(in tableView: NSTableView) -> Bool {
+            let numberOfRows = tableView.numberOfRows
+            guard numberOfRows > 0 else { return true }
+            let visibleRowRange = tableView.rows(in: tableView.visibleRect)
+            return visibleRowRange.contains(numberOfRows - 1)
         }
     }
 }

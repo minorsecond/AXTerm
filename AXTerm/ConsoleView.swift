@@ -18,6 +18,7 @@ struct ConsoleView: View {
     @State private var showUndoClear = false
     @State private var undoClearTask: Task<Void, Never>?
     @State private var previousClearedAt: Date?
+    @State private var scrollToBottomToken = 0
 
     // Message type filters
     @State private var showID = true
@@ -112,41 +113,30 @@ struct ConsoleView: View {
                                 }
                             }
                             Color.clear
-                                .frame(height: 1)
+                                .frame(height: 10)
                                 .id("bottom")
-                                .background(
-                                    GeometryReader { geometry in
-                                        Color.clear
-                                            .preference(
-                                                key: ConsoleScrollBottomPreferenceKey.self,
-                                                value: geometry.frame(in: .named("consoleScroll")).maxY
-                                            )
-                                    }
-                                )
+                                .onAppear { isUserNearBottom = true }
+                                .onDisappear { isUserNearBottom = false }
                         }
                         .padding()
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .coordinateSpace(name: "consoleScroll")
-                    .background(
-                        GeometryReader { geometry in
-                            Color.clear
-                                .onAppear { scrollViewHeight = geometry.size.height }
-                                .onChange(of: geometry.size.height) { _, newValue in
-                                    scrollViewHeight = newValue
-                                }
-                        }
-                    )
-                    .onPreferenceChange(ConsoleScrollBottomPreferenceKey.self) { bottomY in
-                        let distanceFromBottom = bottomY - scrollViewHeight
-                        isUserNearBottom = distanceFromBottom <= 24
-                    }
+                    .defaultScrollAnchor(.bottom)
                     .onChange(of: groupedLines.count) { _, _ in
                         guard autoScroll, isUserNearBottom else { return }
                         Task { @MainActor in
                             await Task.yield()
                             proxy.scrollTo("bottom", anchor: .bottom)
                         }
+                    }
+                    .onChange(of: scrollToBottomToken) { _, _ in
+                        Task { @MainActor in
+                            await Task.yield()
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    }
+                    .onAppear {
+                        scrollToBottomToken += 1
                     }
                 }
                 .background(.background)
@@ -158,8 +148,34 @@ struct ConsoleView: View {
                     .padding(12)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
+
+            // Jump to Bottom Button
+            if !isUserNearBottom {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Button {
+                            isUserNearBottom = true // Optimistic update
+                            autoScroll = true
+                            scrollToBottomToken += 1
+                        } label: {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .resizable()
+                                .frame(width: 32, height: 32)
+                                .foregroundStyle(.secondary, .regularMaterial)
+                                .background(Circle().fill(.background))
+                                .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
+                        }
+                        .buttonStyle(.plain)
+                        .padding([.bottom, .trailing], 20)
+                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                    }
+                }
+            }
         }
         .animation(.easeInOut(duration: 0.2), value: showUndoClear)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isUserNearBottom)
     }
 
     // MARK: - Filter Toggles
