@@ -59,6 +59,9 @@ final class SessionCoordinator: ObservableObject {
     /// Reference to PacketEngine for sending frames
     weak var packetEngine: PacketEngine?
 
+    /// Reference to app settings for capability gating
+    weak var appSettings: AppSettingsStore?
+
     /// Cancellables for subscriptions
     private var cancellables = Set<AnyCancellable>()
     /// Dedicated subscription for packet processing — kept separate from `cancellables`
@@ -186,6 +189,13 @@ final class SessionCoordinator: ObservableObject {
     /// Sync AX.25 session config from global adaptive settings so both messaging and file transfer use the same window size, RTO bounds, and retries.
     /// Call after setting globalAdaptiveSettings (e.g. on launch or when user changes TX adaptive settings).
     func syncSessionManagerConfigFromAdaptive() {
+        // When TNC manages the link layer, always use protocol defaults
+        if let caps = appSettings?.tncCapabilities, !caps.supportsLinkTuning {
+            sessionManager.defaultConfig = AX25SessionConfig()
+            TxLog.adaptiveConfigSynced(window: 4, paclen: 128, rtoMin: 1, rtoMax: 30, maxRetries: 10, initialRto: 4.0)
+            return
+        }
+
         guard adaptiveTransmissionEnabled else {
             sessionManager.defaultConfig = AX25SessionConfig()
             TxLog.adaptiveConfigSynced(window: 4, paclen: 128, rtoMin: 1, rtoMax: 30, maxRetries: 10, initialRto: 4.0)

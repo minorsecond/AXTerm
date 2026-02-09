@@ -53,6 +53,7 @@ struct ContentView: View {
             coordinator = SessionCoordinator()
         }
         coordinator.localCallsign = settings.myCallsign
+        coordinator.appSettings = settings
         // Seed AXDP / transmission adaptive settings from persisted settings
         var adaptive = TxAdaptiveSettings()
         adaptive.axdpExtensionsEnabled = settings.axdpExtensionsEnabled
