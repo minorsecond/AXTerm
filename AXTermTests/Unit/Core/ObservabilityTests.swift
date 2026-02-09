@@ -269,11 +269,11 @@ final class ObservabilityTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
         let store = AppSettingsStore(defaults: defaults)
 
-        store.port = "999999"
-        XCTAssertEqual(store.port, "999999") // deferred
+        store.port = 999999
+        XCTAssertEqual(store.port, 999999) // deferred
 
         await Task.yield()
-        XCTAssertEqual(store.port, "65535")
+        XCTAssertEqual(store.port, 65535)
 
         store.host = "   "
         XCTAssertEqual(store.host, "   ") // deferred
