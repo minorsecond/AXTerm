@@ -45,32 +45,35 @@ struct ContentView: View {
         _inspectionRouter = ObservedObject(wrappedValue: inspectionRouter)
         // Initialize analytics view model with settings store for persistence
         _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(settingsStore: settings, netRomIntegration: client.netRomIntegration))
-        // Get or create the shared session coordinator so Settings can update the same instance
+        // Get or create the shared session coordinator so Settings can update the same instance.
+        // Only seed @Published properties on a new coordinator — re-seeding an existing shared
+        // instance during view init triggers "Publishing changes from within view updates".
         let coordinator: SessionCoordinator
         if let existing = SessionCoordinator.shared {
             coordinator = existing
         } else {
             coordinator = SessionCoordinator()
+            // Seed AXDP / transmission adaptive settings from persisted settings
+            var adaptive = TxAdaptiveSettings()
+            adaptive.axdpExtensionsEnabled = settings.axdpExtensionsEnabled
+            adaptive.autoNegotiateCapabilities = settings.axdpAutoNegotiateCapabilities
+            adaptive.compressionEnabled = settings.axdpCompressionEnabled
+            if let algo = AXDPCompression.Algorithm(rawValue: settings.axdpCompressionAlgorithmRaw) {
+                adaptive.compressionAlgorithm = algo
+            }
+            adaptive.maxDecompressedPayload = UInt32(settings.axdpMaxDecompressedPayload)
+            adaptive.showAXDPDecodeDetails = settings.axdpShowDecodeDetails
+            coordinator.globalAdaptiveSettings = adaptive
+            coordinator.adaptiveTransmissionEnabled = settings.adaptiveTransmissionEnabled
+            coordinator.syncSessionManagerConfigFromAdaptive()
+            if settings.adaptiveTransmissionEnabled {
+                TxLog.adaptiveEnabled()
+            } else {
+                TxLog.adaptiveDisabled()
+            }
         }
         coordinator.localCallsign = settings.myCallsign
-        // Seed AXDP / transmission adaptive settings from persisted settings
-        var adaptive = TxAdaptiveSettings()
-        adaptive.axdpExtensionsEnabled = settings.axdpExtensionsEnabled
-        adaptive.autoNegotiateCapabilities = settings.axdpAutoNegotiateCapabilities
-        adaptive.compressionEnabled = settings.axdpCompressionEnabled
-        if let algo = AXDPCompression.Algorithm(rawValue: settings.axdpCompressionAlgorithmRaw) {
-            adaptive.compressionAlgorithm = algo
-        }
-        adaptive.maxDecompressedPayload = UInt32(settings.axdpMaxDecompressedPayload)
-        adaptive.showAXDPDecodeDetails = settings.axdpShowDecodeDetails
-        coordinator.globalAdaptiveSettings = adaptive
-        coordinator.adaptiveTransmissionEnabled = settings.adaptiveTransmissionEnabled
-        coordinator.syncSessionManagerConfigFromAdaptive()
-        if settings.adaptiveTransmissionEnabled {
-            TxLog.adaptiveEnabled()
-        } else {
-            TxLog.adaptiveDisabled()
-        }
+        coordinator.appSettings = settings
         coordinator.subscribeToPackets(from: client)
         _sessionCoordinator = StateObject(wrappedValue: coordinator)
     }
@@ -125,15 +128,18 @@ struct ContentView: View {
             client.loadPersistedConsole()
         }
         .task {
-            // Feed network-wide link quality into adaptive settings periodically (don't overwhelm, don't be too conservative)
+            // Feed network-wide link quality into adaptive settings periodically (don't overwhelm, don't be too conservative).
+            // Skip when active sessions exist — the session learner provides direct ground truth
+            // (actual ACK/retry tracking) which is far more accurate than inferred routing table metrics.
             let intervalSeconds: UInt64 = 30
             while true {
                 try? await Task.sleep(nanoseconds: intervalSeconds * 1_000_000_000)
                 guard let coordinator = SessionCoordinator.shared,
                       coordinator.adaptiveTransmissionEnabled,
+                      !coordinator.hasActiveSessions,
                       let integration = client.netRomIntegration else { continue }
                 let stats = integration.exportLinkStats()
-                guard let (lossRate, etx) = Self.aggregateLinkQualityForAdaptive(stats) else { continue }
+                guard let (lossRate, etx) = Self.aggregateLinkQualityForAdaptive(stats, localCallsign: coordinator.localCallsign) else { continue }
                 coordinator.applyLinkQualitySample(lossRate: lossRate, etx: etx, srtt: nil, source: "network")
             }
         }
@@ -599,9 +605,24 @@ struct ContentView: View {
     }
 
     /// Aggregate link stats into (lossRate, etx) for adaptive settings. Uses only links with enough observations.
-    private static func aggregateLinkQualityForAdaptive(_ records: [LinkStatRecord]) -> (lossRate: Double, etx: Double)? {
+    /// When `localCallsign` is provided, only links involving the local station are considered,
+    /// preventing other stations' poor links from dragging adaptive settings to overly conservative values.
+    static func aggregateLinkQualityForAdaptive(_ records: [LinkStatRecord], localCallsign: String? = nil) -> (lossRate: Double, etx: Double)? {
         let minObs = 5
-        let valid = records.filter { r in
+
+        // Filter to local station links when a callsign is provided
+        let filtered: [LinkStatRecord]
+        if let local = localCallsign, !local.isEmpty {
+            let normalizedLocal = CallsignValidator.normalize(local)
+            filtered = records.filter { r in
+                CallsignValidator.normalize(r.fromCall) == normalizedLocal
+                    || CallsignValidator.normalize(r.toCall) == normalizedLocal
+            }
+        } else {
+            filtered = records
+        }
+
+        let valid = filtered.filter { r in
             r.observationCount >= minObs
                 && (r.dfEstimate ?? 0) > 0.05
                 && (r.drEstimate ?? 0) > 0.05

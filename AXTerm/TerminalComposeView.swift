@@ -403,7 +403,12 @@ struct TerminalComposeView: View {
                     // Session status indicators group
                     HStack(spacing: 8) {
                         // Adaptive Chip (new location)
-                        AdaptiveStatusChip(settings: settings, sessionCoordinator: sessionCoordinator)
+                        AdaptiveStatusChip(
+                            settings: settings,
+                            sessionCoordinator: sessionCoordinator,
+                            activeDestination: connectionMode == .connected ? destinationCall : nil,
+                            activePath: connectionMode == .connected ? digiPath : nil
+                        )
                         
                         // Session status (for connected mode)
                         if connectionMode == .connected {
