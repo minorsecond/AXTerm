@@ -241,10 +241,12 @@ final class NetRomRoutingTests: XCTestCase {
             timestamp: now.addingTimeInterval(1)
         )
 
-        // Use TTL + 2 to ensure route is past the cutoff (not exactly at boundary)
+        // purgeStaleRoutes is now a no-op — expired routes are kept for display.
+        // bestRouteTo() guards against using them for routing decisions.
         let later = now.addingTimeInterval(NetRomConfig.default.routeTTLSeconds + 2)
         router.purgeStaleRoutes(currentDate: later)
-        XCTAssertTrue(router.currentRoutes().isEmpty, "Routes must be removed after the TTL window.")
+        XCTAssertFalse(router.currentRoutes().isEmpty, "Expired routes should be kept for display")
+        XCTAssertNil(router.bestRouteTo("W3EEE"), "bestRouteTo must not return expired routes")
     }
 
     func testDeterministicRouteOrdering() {

@@ -145,7 +145,10 @@ final class NetRomPassiveInferenceTests: XCTestCase {
 
         let later = start.addingTimeInterval(inference.config.inferredRouteHalfLifeSeconds * 3)
         inference.purgeStaleEvidence(currentDate: later)
-        XCTAssertTrue(router.currentRoutes().filter { $0.destination == source }.isEmpty)
+        // Expired inferred routes are kept in the router for display purposes.
+        // The evidence is purged, but the route entry remains so the UI can show it as expired.
+        XCTAssertFalse(router.currentRoutes().filter { $0.destination == source }.isEmpty,
+                       "Expired inferred routes should be kept for display")
     }
 
     func testDirectionalitySanity() {

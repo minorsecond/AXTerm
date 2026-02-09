@@ -200,12 +200,12 @@ final class NetRomStaleSnapshotTests: XCTestCase {
 
         guard let state = result else { return }
 
-        // Stale neighbor should be dropped or have quality decayed to near zero
+        // Stale neighbor should be kept but with quality decayed to near zero
         let staleNeighbor = state.neighbors.first(where: { $0.call == "W0STALE" })
+        XCTAssertNotNil(staleNeighbor, "Stale neighbor should be kept for display")
         if let stale = staleNeighbor {
             XCTAssertLessThan(stale.quality, 50, "Stale neighbor quality should be heavily decayed")
         }
-        // It's also acceptable to drop the neighbor entirely
 
         // Fresh neighbor should remain with reasonable quality
         let freshNeighbor = state.neighbors.first(where: { $0.call == "W1FRESH" })
@@ -242,11 +242,10 @@ final class NetRomStaleSnapshotTests: XCTestCase {
         let muchLater = now.addingTimeInterval(600)  // 10 minutes later
         let result = try testPersistence.load(now: muchLater, expectedConfigHash: "route_decay")
 
-        // With 10-minute elapsed time and 5-minute route TTL, routes should be stale
-        // Either nil (full reject because all routes stale) or empty routes list
+        // With 10-minute elapsed time and 5-minute route TTL, routes are expired
+        // but still kept for display purposes (the UI toggle filters them).
         if let state = result {
-            XCTAssertTrue(state.routes.isEmpty || state.routes.allSatisfy { $0.quality < 50 },
-                          "Stale routes should be dropped or heavily decayed")
+            XCTAssertFalse(state.routes.isEmpty, "Expired routes should be kept for display")
         }
         // Nil result is also acceptable (snapshot fully invalidated due to staleness)
     }
@@ -285,9 +284,9 @@ final class NetRomStaleSnapshotTests: XCTestCase {
 
         guard let state = result else { return }
 
-        // Stale link stat should be dropped
+        // Stale link stat should be kept for display
         let staleLink = state.linkStats.first(where: { $0.fromCall == "W0STALE" })
-        XCTAssertNil(staleLink, "Stale link stat should be dropped")
+        XCTAssertNotNil(staleLink, "Stale link stat should be kept for display")
 
         // Fresh link stat should be retained
         let freshLink = state.linkStats.first(where: { $0.fromCall == "W1FRESH" })
@@ -415,9 +414,10 @@ final class NetRomStaleSnapshotTests: XCTestCase {
 
         guard let state = result else { return }
 
-        // Old neighbor (beyond TTL) should be dropped or heavily decayed
+        // Old neighbor (beyond TTL) should be kept but with quality decayed to 0
         let oldNeighbor = state.neighbors.first(where: { $0.call == "W0OLD" })
-        XCTAssertNil(oldNeighbor, "Neighbor beyond 1.5x TTL should be dropped due to decay below threshold")
+        XCTAssertNotNil(oldNeighbor, "Neighbor beyond TTL should be kept for display")
+        XCTAssertEqual(oldNeighbor?.quality, 0, "Neighbor beyond 1.5x TTL should have quality decayed to 0")
 
         // Recent neighbor (within TTL) should retain full quality
         let recentNeighbor = state.neighbors.first(where: { $0.call == "W0RECENT" })

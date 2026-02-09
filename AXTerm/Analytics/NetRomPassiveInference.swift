@@ -114,29 +114,17 @@ final class NetRomPassiveInference {
 
     func purgeStaleEvidence(currentDate: Date) {
         var refreshedEvidence: [String: [NetRomRouteEvidence]] = [:]
-        var removals: [(origin: String, destination: String)] = []
 
         for (destination, bucket) in evidenceByDestination {
             let filtered = bucket.filter { currentDate.timeIntervalSince($0.lastObserved) < config.inferredRouteHalfLifeSeconds }
-            guard !filtered.isEmpty else {
-                bucket.forEach { evidence in
-                    removals.append((origin: evidence.origin, destination: destination))
-                }
-                continue
-            }
-            let filteredOrigins = Set(filtered.map(\.origin))
-            for evidence in bucket where !filteredOrigins.contains(evidence.origin) {
-                removals.append((origin: evidence.origin, destination: destination))
-            }
+            guard !filtered.isEmpty else { continue }
             refreshedEvidence[destination] = filtered
         }
 
         evidenceByDestination = refreshedEvidence
-        for removal in removals {
-            router.removeRoute(origin: removal.origin, destination: removal.destination)
-        }
-
-        router.purgeStaleRoutes(currentDate: currentDate)
+        // Expired inferred routes are kept in the router for display purposes.
+        // The view model's "Hide expired" toggle filters them in the UI,
+        // and bestRouteTo() guards against using them for routing.
     }
 
     // MARK: - Helpers
