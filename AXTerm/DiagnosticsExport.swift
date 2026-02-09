@@ -17,7 +17,7 @@ struct DiagnosticsReport: Encodable {
 
     struct SettingsSnapshot: Encodable {
         let host: String
-        let port: String
+        let port: Int
         let persistHistory: Bool
         let packetRetention: Int
         let consoleRetention: Int

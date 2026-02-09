@@ -59,6 +59,9 @@ final class SessionCoordinator: ObservableObject {
     /// Reference to PacketEngine for sending frames
     weak var packetEngine: PacketEngine?
 
+    /// Reference to app settings for capability gating
+    weak var appSettings: AppSettingsStore?
+
     /// Cancellables for subscriptions
     private var cancellables = Set<AnyCancellable>()
     /// Dedicated subscription for packet processing — kept separate from `cancellables`
@@ -183,9 +186,45 @@ final class SessionCoordinator: ObservableObject {
         setupCallbacks()
     }
 
+    /// True if any session is in an active state (connecting, connected, or disconnecting).
+    var hasActiveSessions: Bool {
+        sessionManager.sessions.values.contains { s in
+            s.state == .connecting || s.state == .connected || s.state == .disconnecting
+        }
+    }
+
+    /// Returns the effective adaptive settings for a given destination and path,
+    /// resolving per-route cache, per-station overrides, and global fallback.
+    /// Used by the UI (AdaptiveStatusChip) to show what parameters are actually in effect.
+    func effectiveAdaptiveSettings(destination: String? = nil, path: String? = nil) -> TxAdaptiveSettings {
+        guard let dest = destination, !dest.isEmpty, adaptiveTransmissionEnabled else {
+            return globalAdaptiveSettings
+        }
+        let canon = canonicalDestination(dest)
+        if useDefaultConfigForDestinations.contains(where: { canonicalDestination($0) == canon }) {
+            return TxAdaptiveSettings()
+        }
+        // Normalize path to uppercase to match session learner cache keys
+        // (session learner uses session.path.display which is uppercased,
+        //  but compose view passes raw user input which may be lowercase)
+        let pathSig = (path ?? "").uppercased()
+        let key = RouteAdaptiveKey(destination: canon, pathSignature: pathSig)
+        if let cached = adaptiveCache[key], !isAdaptiveCacheEntryExpired(cached) {
+            return cached.settings
+        }
+        return globalAdaptiveSettings
+    }
+
     /// Sync AX.25 session config from global adaptive settings so both messaging and file transfer use the same window size, RTO bounds, and retries.
     /// Call after setting globalAdaptiveSettings (e.g. on launch or when user changes TX adaptive settings).
     func syncSessionManagerConfigFromAdaptive() {
+        // When TNC manages the link layer, always use protocol defaults
+        if let caps = appSettings?.tncCapabilities, !caps.supportsLinkTuning {
+            sessionManager.defaultConfig = AX25SessionConfig()
+            TxLog.adaptiveConfigSynced(window: 4, paclen: 128, rtoMin: 1, rtoMax: 30, maxRetries: 10, initialRto: 4.0)
+            return
+        }
+
         guard adaptiveTransmissionEnabled else {
             sessionManager.defaultConfig = AX25SessionConfig()
             TxLog.adaptiveConfigSynced(window: 4, paclen: 128, rtoMin: 1, rtoMax: 30, maxRetries: 10, initialRto: 4.0)
@@ -212,6 +251,54 @@ final class SessionCoordinator: ObservableObject {
         )
     }
 
+    // MARK: - Adaptive Change Detection
+
+    /// Snapshot of adaptive values for change detection.
+    private struct AdaptiveSnapshot {
+        let k: Int
+        let p: Int
+        let n2: Int
+        let rto: Double?
+
+        init(from s: TxAdaptiveSettings) {
+            self.k = s.windowSize.currentAdaptive
+            self.p = s.paclen.currentAdaptive
+            self.n2 = s.maxRetries.currentAdaptive
+            self.rto = s.currentRto
+        }
+    }
+
+    /// Build a user-facing message describing what changed between snapshots.
+    /// Returns nil if nothing changed.
+    private func adaptiveChangeMessage(
+        old: AdaptiveSnapshot, new: TxAdaptiveSettings,
+        source: String, routeKey: RouteAdaptiveKey?
+    ) -> String? {
+        var parts: [String] = []
+        let newSnap = AdaptiveSnapshot(from: new)
+
+        if old.k != newSnap.k { parts.append("K \(old.k)→\(newSnap.k)") }
+        if old.p != newSnap.p { parts.append("P \(old.p)→\(newSnap.p)") }
+        if old.n2 != newSnap.n2 { parts.append("N2 \(old.n2)→\(newSnap.n2)") }
+        if let oldRto = old.rto, let newRto = newSnap.rto, abs(oldRto - newRto) >= 0.1 {
+            parts.append("RTO \(String(format: "%.1f", oldRto))→\(String(format: "%.1f", newRto))s")
+        } else if old.rto == nil && newSnap.rto != nil {
+            parts.append("RTO →\(String(format: "%.1f", newSnap.rto!))s")
+        }
+
+        guard !parts.isEmpty else { return nil }
+
+        let reason = new.windowSize.adaptiveReason ?? new.paclen.adaptiveReason ?? "updated"
+        let ctx: String
+        if let key = routeKey {
+            let path = key.pathSignature.isEmpty ? "direct" : "via \(key.pathSignature)"
+            ctx = "[\(source): \(key.destination) \(path)]"
+        } else {
+            ctx = "[\(source)]"
+        }
+        return "Adaptive: \(parts.joined(separator: ", ")) (\(reason)) \(ctx)"
+    }
+
     /// Apply a link quality sample to adaptive settings (per-route when session, global when network).
     /// Session samples update the per-route cache so multiple connections (e.g. same peer direct vs via digi) don't overwrite each other.
     func applyLinkQualitySample(lossRate: Double, etx: Double, srtt: Double?, source: String = "session", routeKey: RouteAdaptiveKey? = nil) {
@@ -223,6 +310,7 @@ final class SessionCoordinator: ObservableObject {
             // Normalize destination for consistent cache lookups (PEER-0 and PEER map to same key)
             let normalizedKey = RouteAdaptiveKey(destination: canonicalDestination(key.destination), pathSignature: key.pathSignature)
             var entry = adaptiveCache[normalizedKey]?.settings ?? TxAdaptiveSettings()
+            let before = AdaptiveSnapshot(from: entry)
             entry.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt)
             adaptiveCache[normalizedKey] = CachedAdaptiveEntry(settings: entry, lastUpdated: Date())
             let a = entry
@@ -238,7 +326,11 @@ final class SessionCoordinator: ObservableObject {
                 maxRetries: a.maxRetries.effectiveValue,
                 reason: reason + " [route \(normalizedKey.destination) \(normalizedKey.pathSignature.isEmpty ? "direct" : normalizedKey.pathSignature)]"
             )
+            if let msg = adaptiveChangeMessage(old: before, new: entry, source: source, routeKey: normalizedKey) {
+                packetEngine?.appendSystemNotification(msg)
+            }
         } else {
+            let before = AdaptiveSnapshot(from: globalAdaptiveSettings)
             globalAdaptiveSettings.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt)
             let a = globalAdaptiveSettings
             let reason = a.windowSize.adaptiveReason ?? a.paclen.adaptiveReason ?? "updated"
@@ -253,6 +345,9 @@ final class SessionCoordinator: ObservableObject {
                 maxRetries: a.maxRetries.effectiveValue,
                 reason: reason
             )
+            if let msg = adaptiveChangeMessage(old: before, new: globalAdaptiveSettings, source: source, routeKey: nil) {
+                packetEngine?.appendSystemNotification(msg)
+            }
             syncSessionManagerConfigFromAdaptive()
         }
         objectWillChange.send()
@@ -373,11 +468,6 @@ final class SessionCoordinator: ObservableObject {
             self?.sendFrame(frame)
         }
 
-        // Wire up frame sending for timer-based retransmissions
-        sessionManager.onRetransmitFrame = { [weak self] frame in
-            self?.sendFrame(frame)
-        }
-        
         // Wire up AXDP reassembly - must use in-order delivered data only.
         // Out-of-window or buffered frames are discarded/buffered by AX.25; appending them
         // would corrupt reassembly (chunks arrive out of order over KISS relay).
@@ -462,11 +552,61 @@ final class SessionCoordinator: ObservableObject {
             // and prevents stale partial AXDP messages from corrupting future communications.
             if (oldState == .connected || oldState == .disconnecting) && (newState == .disconnected || newState == .error) {
                 self.invalidateCapability(for: session.remoteAddress.display)
-                
+
                 // Clear reassembly buffer for this peer to prevent stale data corruption.
                 // This is critical for multi-fragment AXDP messages - if partial data remains
                 // and the peer reconnects, the old fragments could corrupt the new message.
                 self.clearAllReassemblyBuffers(for: session.remoteAddress)
+
+                // Evict per-route adaptive cache for the disconnected session and
+                // notify. This prevents stale session-learned values from silently
+                // carrying over to the next connection.
+                let dest = session.remoteAddress.display.uppercased()
+                let pathSig = session.path.display
+                let routeKey = RouteAdaptiveKey(
+                    destination: canonicalDestination(dest),
+                    pathSignature: pathSig
+                )
+                if let cached = self.adaptiveCache.removeValue(forKey: routeKey) {
+                    let cachedSnap = AdaptiveSnapshot(from: cached.settings)
+                    let defaults = TxAdaptiveSettings()
+                    let defaultSnap = AdaptiveSnapshot(from: defaults)
+                    let pathDesc = pathSig.isEmpty ? "direct" : "via \(pathSig)"
+                    if cachedSnap.k != defaultSnap.k || cachedSnap.p != defaultSnap.p
+                        || cachedSnap.n2 != defaultSnap.n2
+                        || (cachedSnap.rto != nil && cachedSnap.rto != defaultSnap.rto)
+                    {
+                        self.packetEngine?.appendSystemNotification(
+                            "Adaptive: Reset to defaults (session disconnected: \(dest) \(pathDesc))"
+                        )
+                    } else {
+                        self.packetEngine?.appendSystemNotification(
+                            "Adaptive: Session ended, parameters unchanged (\(dest) \(pathDesc))"
+                        )
+                    }
+                } else {
+                    let pathDesc = pathSig.isEmpty ? "direct" : "via \(pathSig)"
+                    self.packetEngine?.appendSystemNotification(
+                        "Adaptive: Session ended (\(dest) \(pathDesc))"
+                    )
+                }
+
+                // When all sessions are disconnected, also reset global adaptive to defaults
+                // so stale network-learned values (e.g. "High loss - stop-and-wait") don't persist.
+                if !self.hasActiveSessions {
+                    let before = AdaptiveSnapshot(from: self.globalAdaptiveSettings)
+                    self.globalAdaptiveSettings.resetAdaptiveToDefaults()
+                    self.syncSessionManagerConfigFromAdaptive()
+                    let after = AdaptiveSnapshot(from: self.globalAdaptiveSettings)
+                    if before.k != after.k || before.p != after.p || before.n2 != after.n2
+                        || (before.rto != nil && before.rto != after.rto)
+                    {
+                        self.packetEngine?.appendSystemNotification(
+                            "Adaptive: Network parameters reset to defaults"
+                        )
+                    }
+                }
+                self.objectWillChange.send()
             }
         }
     }

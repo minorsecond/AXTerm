@@ -81,6 +81,10 @@ final class AX25Session: @unchecked Sendable {
     /// Whether we initiated this session (vs responding to incoming SABM)
     let isInitiator: Bool
 
+    /// Via path from the most recently received inbound I-frame (for display only).
+    /// Updated each time handleInboundIFrame delivers data.
+    var lastReceivedVia: [String] = []
+
     init(
         localAddress: AX25Address,
         remoteAddress: AX25Address,
@@ -301,9 +305,6 @@ final class AX25SessionManager: ObservableObject {
 
     /// Callback when session state changes
     var onSessionStateChanged: ((AX25Session, AX25SessionState, AX25SessionState) -> Void)?
-
-    /// Callback when frames need to be sent from timer retransmission
-    var onRetransmitFrame: ((OutboundFrame) -> Void)?
 
     /// Callback when we have a link quality sample (e.g. after RR with RTT) for adaptive tuning. Parameters: session, lossRate, etx, srtt.
     var onLinkQualitySample: ((AX25Session, Double, Double, Double?) -> Void)?
@@ -1239,6 +1240,9 @@ final class AX25SessionManager: ObservableObject {
         session.statistics.recordReceived(bytes: payload.count)
         session.touch()
 
+        // Record the actual inbound via path so callbacks can thread it to the UI.
+        session.lastReceivedVia = path.digis.map { $0.display }
+
         onOutboundAckReceived?(session, session.va)
 
         // Deep debug snapshot whenever we successfully process an inbound I-frame.
@@ -1512,8 +1516,10 @@ final class AX25SessionManager: ObservableObject {
 
     /// Start T1 (retransmit) timer for a session
     func startT1Timer(for session: AX25Session) {
-        // Cancel any existing T1 timer
+        // Cancel any existing T1 timer and pending grace-period retransmit
         session.t1TimerTask?.cancel()
+        session.t1PendingRetransmitTask?.cancel()
+        session.t1PendingRetransmitTask = nil
 
         let rto = session.timers.rto
         let sessionId = session.id
@@ -1558,7 +1564,7 @@ final class AX25SessionManager: ObservableObject {
                                 session.t1PendingRetransmitTask = nil
                                 let frames = self.handleT1Timeout(session: session)
                                 for frame in frames {
-                                    self.onRetransmitFrame?(frame)
+                                    self.onSendFrame?(frame)
                                 }
                             }
                         } catch {
@@ -1612,7 +1618,7 @@ final class AX25SessionManager: ObservableObject {
 
                     let frames = self.handleT3Timeout(session: session)
                     for frame in frames {
-                        self.onRetransmitFrame?(frame)
+                        self.onSendFrame?(frame)
                     }
                 }
             } catch {

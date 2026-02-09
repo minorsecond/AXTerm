@@ -590,6 +590,7 @@ struct AX25StateMachine: Sendable {
 
 
         // Process N(R) - acknowledge our sent frames
+        let vaBeforeIFrameAck = sequenceState.va
         if sequenceState.outstandingCount > 0 {
             sequenceState.ackUpTo(nr: nr)
         }
@@ -621,6 +622,11 @@ struct AX25StateMachine: Sendable {
             // Always send RR to re-ack current V(R). This helps peers recover when
             // our previous RR was lost and they retransmit a duplicate.
             actions.append(.sendRR(nr: sequenceState.vr, pf: pf))
+        }
+
+        // If piggybacked ack advanced V(A) and frames remain, restart T1 per §6.4.6
+        if sequenceState.va != vaBeforeIFrameAck && sequenceState.outstandingCount > 0 {
+            actions.append(.startT1)
         }
 
         return actions
@@ -727,6 +733,9 @@ struct AX25StateMachine: Sendable {
             // All frames acked
             actions.append(.stopT1)
             actions.append(.startT3)
+        } else if sequenceState.va != vaBeforeAck {
+            // Progress made but frames still outstanding: restart T1 per §6.4.6
+            actions.append(.startT1)
         }
 
         return actions

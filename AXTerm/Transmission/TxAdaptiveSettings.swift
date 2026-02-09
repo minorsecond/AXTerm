@@ -218,4 +218,26 @@ struct TxAdaptiveSettings: Sendable {
         // If SRTT is nil (e.g. pure loss update), preserve the last calculated currentRTOnull
 
     }
+
+    /// Resets only `currentAdaptive` and `adaptiveReason` on all adaptive parameters back to defaults.
+    /// Preserves manual mode selections, manual values, AXDP settings, and debug settings.
+    /// Called when all sessions disconnect so stale network-learned values don't persist.
+    mutating func resetAdaptiveToDefaults() {
+        paclen.currentAdaptive = paclen.defaultValue
+        paclen.adaptiveReason = nil
+
+        windowSize.currentAdaptive = windowSize.defaultValue
+        windowSize.adaptiveReason = nil
+
+        maxRetries.currentAdaptive = maxRetries.defaultValue
+        maxRetries.adaptiveReason = nil
+
+        rtoMin.currentAdaptive = rtoMin.defaultValue
+        rtoMin.adaptiveReason = nil
+
+        rtoMax.currentAdaptive = rtoMax.defaultValue
+        rtoMax.adaptiveReason = nil
+
+        currentRto = nil
+    }
 }

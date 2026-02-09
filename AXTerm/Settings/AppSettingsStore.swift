@@ -16,6 +16,7 @@ final class AppSettingsStore: ObservableObject {
     static let consoleRetentionKey = "consoleRetentionLimit"
     static let rawRetentionKey = "rawRetentionLimit"
     static let eventRetentionKey = "eventRetentionLimit"
+    static let retentionDurationKey = "retentionDuration"
     static let persistKey = "persistHistory"
     static let consoleSeparatorsKey = "consoleDaySeparators"
     static let rawSeparatorsKey = "rawDaySeparators"
@@ -53,6 +54,7 @@ final class AppSettingsStore: ObservableObject {
     static let axdpMaxDecompressedPayloadKey = "axdpMaxDecompressedPayload"
     static let axdpShowDecodeDetailsKey = "axdpShowAXDPDecodeDetails"
     static let adaptiveTransmissionEnabledKey = "adaptiveTransmissionEnabled"
+    static let tncCapabilitiesKey = "tncCapabilities"
 
     // NET/ROM route settings keys
     static let hideExpiredRoutesKey = "hideExpiredRoutes"
@@ -67,12 +69,65 @@ final class AppSettingsStore: ObservableObject {
     static let defaultPort = 8001
     static let defaultRetention = 50_000
     static let minRetention = 1_000
-    static let maxRetention = 500_000
+
+    static let maxRetention = 10_000_000 // 10M packets (~3 years of heavy usage)
+    
+    // Size estimation constants
+    static let estimatedBytesPerPacket = 400
+    static let estimatedBytesPerConsoleLine = 200
+    static let estimatedBytesPerRawChunk = 100
+    
+    // Default ingestion rates for time-based mapping
+    // Assuming heavy usage: ~10k packets/day
+    static let estimatedPacketsPerDay = 10_000
+    static let estimatedConsoleLinesPerDay = 2_000 
+    static let estimatedRawChunksPerDay = 2_000
+
+    enum HistoryRetentionDuration: String, CaseIterable, Identifiable {
+        case oneDay = "1 Day"
+        case sevenDays = "7 Days"
+        case thirtyDays = "30 Days"
+        case ninetyDays = "90 Days"
+        case oneYear = "1 Year"
+        case forever = "Forever"
+        case custom = "Custom"
+        
+        var id: String { rawValue }
+        
+        // Maps duration to Packet retention limit
+        var packetLimit: Int {
+            switch self {
+            case .oneDay: return AppSettingsStore.estimatedPacketsPerDay
+            case .sevenDays: return AppSettingsStore.estimatedPacketsPerDay * 7
+            case .thirtyDays: return AppSettingsStore.estimatedPacketsPerDay * 30
+            case .ninetyDays: return AppSettingsStore.estimatedPacketsPerDay * 90
+            case .oneYear: return AppSettingsStore.estimatedPacketsPerDay * 365
+            case .forever: return Int.max
+            case .custom: return AppSettingsStore.defaultRetention // Fallback, usually ignored
+            }
+        }
+        
+        // Maps duration to Console/Raw/Event retention limit (using same scale for simplicity, or adjusted)
+        var logLimit: Int {
+            switch self {
+            case .oneDay: return AppSettingsStore.estimatedConsoleLinesPerDay
+            case .sevenDays: return AppSettingsStore.estimatedConsoleLinesPerDay * 7
+            case .thirtyDays: return AppSettingsStore.estimatedConsoleLinesPerDay * 30
+            case .ninetyDays: return AppSettingsStore.estimatedConsoleLinesPerDay * 90
+            case .oneYear: return AppSettingsStore.estimatedConsoleLinesPerDay * 365
+            case .forever: return Int.max
+            case .custom: return AppSettingsStore.defaultConsoleRetention
+            }
+        }
+    }
+    
+    static let defaultRetentionDuration: HistoryRetentionDuration = .sevenDays
+
     static let defaultConsoleRetention = 10_000
     static let defaultRawRetention = 10_000
     static let defaultEventRetention = 10_000
     static let minLogRetention = 1_000
-    static let maxLogRetention = 200_000
+    static let maxLogRetention = 2_000_000
     static let defaultConsoleSeparators = true
     static let defaultRawSeparators = false
     static let defaultRunInMenuBar = false
@@ -144,7 +199,7 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
-    @Published var port: String {
+    @Published var port: Int {
         didSet {
             let sanitized = Self.sanitizePort(port)
             guard sanitized == port else {
@@ -166,6 +221,9 @@ final class AppSettingsStore: ObservableObject {
                 }
                 return
             }
+            if retentionDuration != .custom && retentionDuration.packetLimit != retentionLimit {
+                retentionDuration = .custom
+            }
             persistRetention()
         }
     }
@@ -179,6 +237,9 @@ final class AppSettingsStore: ObservableObject {
                 }
                 return
             }
+            if retentionDuration != .custom && retentionDuration.logLimit != consoleRetentionLimit {
+                retentionDuration = .custom
+            }
             persistConsoleRetention()
         }
     }
@@ -191,6 +252,9 @@ final class AppSettingsStore: ObservableObject {
                     self?.rawRetentionLimit = sanitized
                 }
                 return
+            }
+            if retentionDuration != .custom && retentionDuration.logLimit != rawRetentionLimit {
+                retentionDuration = .custom
             }
             persistRawRetention()
         }
@@ -206,6 +270,22 @@ final class AppSettingsStore: ObservableObject {
                 return
             }
             persistEventRetention()
+        }
+    }
+
+    @Published var retentionDuration: HistoryRetentionDuration {
+        didSet {
+            if retentionDuration != .custom {
+                // Apply presets
+                let newPacketLimit = retentionDuration.packetLimit
+                let newLogLimit = retentionDuration.logLimit
+                
+                if retentionLimit != newPacketLimit { retentionLimit = newPacketLimit }
+                if consoleRetentionLimit != newLogLimit { consoleRetentionLimit = newLogLimit }
+                if rawRetentionLimit != newLogLimit { rawRetentionLimit = newLogLimit }
+                // Event retention is managed separately
+            }
+            persistRetentionDuration()
         }
     }
 
@@ -319,6 +399,11 @@ final class AppSettingsStore: ObservableObject {
     /// Whether adaptive transmission (learning from session and network) is enabled.
     @Published var adaptiveTransmissionEnabled: Bool {
         didSet { persistAdaptiveTransmissionEnabled() }
+    }
+
+    /// TNC capability model — gates which link-layer settings AXTerm can control.
+    @Published var tncCapabilities: TNCCapabilities {
+        didSet { persistTNCCapabilities() }
     }
 
     // MARK: - File Transfer Settings
@@ -525,11 +610,29 @@ final class AppSettingsStore: ObservableObject {
         self.defaults = defaults
         Self.registerDefaultsIfNeeded(on: defaults)
         let storedHost = defaults.string(forKey: Self.hostKey) ?? Self.defaultHost
-        let storedPort = defaults.string(forKey: Self.portKey) ?? String(Self.defaultPort)
+        let storedPort = defaults.object(forKey: Self.portKey) as? Int ?? Self.defaultPort
         let storedRetention = defaults.object(forKey: Self.retentionKey) as? Int ?? Self.defaultRetention
         let storedConsoleRetention = defaults.object(forKey: Self.consoleRetentionKey) as? Int ?? Self.defaultConsoleRetention
         let storedRawRetention = defaults.object(forKey: Self.rawRetentionKey) as? Int ?? Self.defaultRawRetention
+
         let storedEventRetention = defaults.object(forKey: Self.eventRetentionKey) as? Int ?? Self.defaultEventRetention
+        
+        let storedDurationRaw = defaults.string(forKey: Self.retentionDurationKey)
+        let storedRetentionDuration: HistoryRetentionDuration
+        if let raw = storedDurationRaw, let duration = HistoryRetentionDuration(rawValue: raw) {
+             storedRetentionDuration = duration
+        } else {
+            // Only infer if no duration is stored (first run after update)
+            // Check if current limits match a preset exactly or reasonably close?
+            // For now, strict match to avoid accidental flipping.
+            if storedRetention == HistoryRetentionDuration.sevenDays.packetLimit {
+                storedRetentionDuration = .sevenDays
+            } else {
+                // Default to custom so we don't change user's existing limits
+                storedRetentionDuration = .custom
+            }
+        }
+        
         let storedPersist = defaults.object(forKey: Self.persistKey) as? Bool ?? true
         let storedConsoleSeparators = defaults.object(forKey: Self.consoleSeparatorsKey) as? Bool ?? Self.defaultConsoleSeparators
         let storedRawSeparators = defaults.object(forKey: Self.rawSeparatorsKey) as? Bool ?? Self.defaultRawSeparators
@@ -575,6 +678,15 @@ final class AppSettingsStore: ObservableObject {
         let storedAXDPShowDecodeDetails = defaults.object(forKey: Self.axdpShowDecodeDetailsKey) as? Bool ?? Self.defaultAXDPShowDecodeDetails
         let storedAdaptiveTransmissionEnabled = defaults.object(forKey: Self.adaptiveTransmissionEnabledKey) as? Bool ?? Self.defaultAdaptiveTransmissionEnabled
 
+        // TNC capabilities (JSON-encoded)
+        let storedTNCCapabilities: TNCCapabilities
+        if let data = defaults.data(forKey: Self.tncCapabilitiesKey),
+           let decoded = try? JSONDecoder().decode(TNCCapabilities.self, from: data) {
+            storedTNCCapabilities = decoded
+        } else {
+            storedTNCCapabilities = TNCCapabilities()
+        }
+
         // Clear timestamps (stored as TimeInterval)
         let storedTerminalClearedAt: Date?
         if let timeInterval = defaults.object(forKey: Self.terminalClearedAtKey) as? TimeInterval {
@@ -603,6 +715,7 @@ final class AppSettingsStore: ObservableObject {
         self.consoleRetentionLimit = Self.sanitizeLogRetention(storedConsoleRetention)
         self.rawRetentionLimit = Self.sanitizeLogRetention(storedRawRetention)
         self.eventRetentionLimit = Self.sanitizeLogRetention(storedEventRetention)
+        self.retentionDuration = storedRetentionDuration // Initialize duration last to avoid triggering didSet logic prematurely if we were setting other props
         self.persistHistory = storedPersist
         self.showConsoleDaySeparators = storedConsoleSeparators
         self.showRawDaySeparators = storedRawSeparators
@@ -647,6 +760,7 @@ final class AppSettingsStore: ObservableObject {
         self.axdpMaxDecompressedPayload = storedAXDPMaxDecompressedPayload
         self.axdpShowDecodeDetails = storedAXDPShowDecodeDetails
         self.adaptiveTransmissionEnabled = storedAdaptiveTransmissionEnabled
+        self.tncCapabilities = storedTNCCapabilities
 
         // Clear timestamps
         self.terminalClearedAt = storedTerminalClearedAt
@@ -659,7 +773,7 @@ final class AppSettingsStore: ObservableObject {
     }
 
     var portValue: UInt16 {
-        UInt16(Self.sanitizePort(port)) ?? UInt16(Self.defaultPort)
+        UInt16(port)
     }
 
     private func deferUpdate(_ update: @MainActor @escaping () -> Void) {
@@ -673,19 +787,19 @@ final class AppSettingsStore: ObservableObject {
         return trimmed.isEmpty ? defaultHost : trimmed
     }
 
-    static func sanitizePort(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let portValue = Int(trimmed) else { return String(defaultPort) }
-        let clamped = min(max(portValue, 1), 65_535)
-        return String(clamped)
+    static func sanitizePort(_ value: Int) -> Int {
+        return min(max(value, 1), 65_535)
     }
 
     static func sanitizeRetention(_ value: Int) -> Int {
-        min(max(value, minRetention), maxRetention)
+        // Allow Int.max for "Forever"
+        if value == Int.max { return value }
+        return min(max(value, minRetention), maxRetention)
     }
 
     static func sanitizeLogRetention(_ value: Int) -> Int {
-        min(max(value, minLogRetention), maxLogRetention)
+        if value == Int.max { return value }
+        return min(max(value, minLogRetention), maxLogRetention)
     }
 
     static func sanitizeWatchList(_ values: [String], normalize: (String) -> String) -> [String] {
@@ -721,6 +835,10 @@ final class AppSettingsStore: ObservableObject {
 
     private func persistEventRetention() {
         defaults.set(eventRetentionLimit, forKey: Self.eventRetentionKey)
+    }
+
+    private func persistRetentionDuration() {
+        defaults.set(retentionDuration.rawValue, forKey: Self.retentionDurationKey)
     }
 
     private func persistPersistHistory() {
@@ -810,6 +928,12 @@ final class AppSettingsStore: ObservableObject {
 
     private func persistAdaptiveTransmissionEnabled() {
         defaults.set(adaptiveTransmissionEnabled, forKey: Self.adaptiveTransmissionEnabledKey)
+    }
+
+    private func persistTNCCapabilities() {
+        if let data = try? JSONEncoder().encode(tncCapabilities) {
+            defaults.set(data, forKey: Self.tncCapabilitiesKey)
+        }
     }
 
     private func persistAllowedFileTransferCallsigns() {

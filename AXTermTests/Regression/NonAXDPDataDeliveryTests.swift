@@ -105,7 +105,10 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
@@ -122,13 +125,16 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -155,13 +161,16 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -194,13 +203,16 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
 
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()
 
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
 
@@ -237,13 +249,16 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -292,7 +307,10 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
@@ -323,7 +341,10 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
@@ -372,12 +393,15 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
         }
         
         let viewModel = await MainActor.run {
-            let vm = ObservableTerminalTxViewModel(
+            let settings = AppSettingsStore()
+            let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
-            vm.setupSessionCallbacks()  // Must be called for callbacks to work
-            return vm
+            viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
+            return viewModel
         }
         
         let (session, peerKey) = await MainActor.run {
@@ -421,13 +445,16 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -480,13 +507,16 @@ final class ProtocolSwitchingTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -524,13 +554,16 @@ final class ProtocolSwitchingTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -568,13 +601,16 @@ final class ProtocolSwitchingTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -641,13 +677,16 @@ final class ProtocolSwitchingTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -713,7 +752,10 @@ final class ProtocolSwitchingTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
@@ -769,13 +811,16 @@ final class ProtocolSwitchingTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { address, text in
+            viewModel.onPlainTextChatReceived = { address, text, _ in
                 if address.call.uppercased() == "PEERA" {
                     receivedFromPeerA.append(text)
                 } else if address.call.uppercased() == "PEERB" {
@@ -832,13 +877,16 @@ final class ProtocolSwitchingTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { address, text in
+            viewModel.onPlainTextChatReceived = { address, text, _ in
                 switch address.call.uppercased() {
                 case "PEER1": receivedFromPeer1.append(text)
                 case "PEER2": receivedFromPeer2.append(text)
@@ -894,13 +942,16 @@ final class ProtocolSwitchingTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { address, text in
+            viewModel.onPlainTextChatReceived = { address, text, _ in
                 if address.call.uppercased() == "PEERA" {
                     receivedFromPeerA.append(text)
                 } else if address.call.uppercased() == "PEERB" {
@@ -960,13 +1011,16 @@ final class ProtocolSwitchingTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -1004,13 +1058,16 @@ final class NonAXDPDeliveryIntegrationTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -1044,13 +1101,16 @@ final class NonAXDPDeliveryIntegrationTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "USER", ssid: 0)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "USER",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -1090,13 +1150,16 @@ final class SessionAutoSwitchTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -1130,13 +1193,16 @@ final class SessionAutoSwitchTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -1178,13 +1244,16 @@ final class SessionAutoSwitchTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { _, text in
+            viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)
             }
             
@@ -1220,13 +1289,16 @@ final class SessionAutoSwitchTests: XCTestCase {
             let sessionManager = AX25SessionManager()
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
+            let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
+                client: PacketEngine(settings: settings),
+                settings: settings,
                 sourceCall: "TEST-1",
                 sessionManager: sessionManager
             )
             viewModel.setupSessionCallbacks()  // Must be called for callbacks to work
             
-            viewModel.onPlainTextChatReceived = { address, text in
+            viewModel.onPlainTextChatReceived = { address, text, _ in
                 if address.call.uppercased() == "PEER1" {
                     receivedFromPeer1.append(text)
                 } else if address.call.uppercased() == "PEER2" {

@@ -23,7 +23,7 @@ struct NetRomInferenceConfig {
 
     static let `default` = NetRomInferenceConfig(
         evidenceWindowSeconds: 5,
-        inferredRouteHalfLifeSeconds: 30,
+        inferredRouteHalfLifeSeconds: FreshnessCalculator.defaultTTL,
         inferredBaseQuality: 60,
         reinforcementIncrement: 20,
         inferredMinimumQuality: 25,

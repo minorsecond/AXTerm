@@ -12,11 +12,24 @@ import SwiftUI
 
 final class TerminalViewTests: XCTestCase {
 
+    @MainActor
+    private func createViewModel(sourceCall: String = "N0CALL") -> ObservableTerminalTxViewModel {
+        let settings = AppSettingsStore()
+        let client = PacketEngine(settings: settings)
+        let sessionManager = AX25SessionManager()
+        return ObservableTerminalTxViewModel(
+            client: client,
+            settings: settings,
+            sourceCall: sourceCall,
+            sessionManager: sessionManager
+        )
+    }
+
     // MARK: - Observable ViewModel Tests
 
     func testObservableViewModelInitialization() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
 
             XCTAssertEqual(viewModel.sourceCall, "N0CALL")
             XCTAssertTrue(viewModel.composeText.wrappedValue.isEmpty)
@@ -26,7 +39,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelComposeBinding() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
 
             viewModel.composeText.wrappedValue = "Hello World"
 
@@ -37,7 +50,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelDestinationBinding() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
 
             viewModel.destinationCall.wrappedValue = "K0ABC"
 
@@ -47,7 +60,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelDigiPathBinding() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
 
             viewModel.digiPath.wrappedValue = "WIDE1-1"
 
@@ -57,7 +70,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelCanSendRequiresText() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
 
             // Initially cannot send (no text)
             XCTAssertFalse(viewModel.canSend)
@@ -74,7 +87,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelUpdateSourceCall() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
 
             viewModel.updateSourceCall("K0NEW")
 
@@ -84,7 +97,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelClearCompose() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
             viewModel.composeText.wrappedValue = "Some text"
 
             viewModel.clearCompose()
@@ -95,7 +108,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelQueueDepthInitiallyZero() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
 
             XCTAssertEqual(viewModel.queueDepth, 0)
             XCTAssertTrue(viewModel.queueEntries.isEmpty)
@@ -104,7 +117,7 @@ final class TerminalViewTests: XCTestCase {
 
     func testObservableViewModelEnqueueMessage() async {
         await MainActor.run {
-            let viewModel = ObservableTerminalTxViewModel(sourceCall: "N0CALL")
+            let viewModel = createViewModel(sourceCall: "N0CALL")
             viewModel.composeText.wrappedValue = "Test message"
             viewModel.destinationCall.wrappedValue = "K0ABC"
 

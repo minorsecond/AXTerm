@@ -84,7 +84,34 @@ enum DatabaseManager {
             do {
                 let queue = try DatabaseQueue(path: urlPath)
                 breadcrumbOpenSuccess()
+                
+                // Run migrations first
                 try migrator.migrate(queue)
+                
+                // Enable incremental vacuum mode for automatic space reclamation
+                // Check if we need to enable it
+                let needsVacuum = try queue.read { db in
+                    let autoVacuum = try Int.fetchOne(db, sql: "PRAGMA auto_vacuum") ?? 0
+                    return autoVacuum != 2
+                }
+                
+                if needsVacuum {
+                    // Set the pragma in a write transaction
+                    try queue.write { db in
+                        try db.execute(sql: "PRAGMA auto_vacuum = INCREMENTAL")
+                    }
+                    // VACUUM must run OUTSIDE of a transaction
+                    try queue.vacuum()
+                    Task { @MainActor in
+                        SentryManager.shared.addBreadcrumb(
+                            category: "db.lifecycle",
+                            message: "Enabled incremental vacuum mode",
+                            level: .info,
+                            data: ["path": urlPath]
+                        )
+                    }
+                }
+                
                 return queue
             } catch {
                 breadcrumbOpenFailure(error)

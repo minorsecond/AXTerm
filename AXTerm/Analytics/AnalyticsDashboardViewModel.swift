@@ -648,6 +648,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         let minEdgeSnapshot = minEdgeCount
         let maxNodesSnapshot = maxNodes
         let identityModeSnapshot = stationIdentityMode
+        let hideStaleSnapshot = settingsStore?.hideExpiredRoutes ?? AppSettingsStore.defaultHideExpiredRoutes
+        let neighborStaleTTLSnapshot = TimeInterval((settingsStore?.neighborStaleTTLHours ?? AppSettingsStore.defaultNeighborStaleTTLHours) * 3600)
+        let routeStaleTTLSnapshot = TimeInterval((settingsStore?.globalStaleTTLHours ?? AppSettingsStore.defaultGlobalStaleTTLHours) * 3600)
         let key = GraphCacheKey(
             timeframe: timeframe,
             includeVia: includeViaSnapshot,
@@ -690,24 +693,40 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         )
 
         let routingModeSnapshot = graphViewMode.netRomRoutingMode
-        let netRomIntegrationSnapshot = netRomIntegration
-        
+        // Snapshot NET/ROM data on the main actor before detaching,
+        // since NetRomIntegration is @MainActor-isolated.
+        let neighborsSnapshot: [NeighborInfo]?
+        let routesSnapshot: [RouteInfo]?
+        let netRomLocalCallsign: String?
+        if let mode = routingModeSnapshot, let integration = netRomIntegration {
+            neighborsSnapshot = integration.currentNeighbors(forMode: mode)
+            routesSnapshot = integration.currentRoutes(forMode: mode)
+            netRomLocalCallsign = integration.localCallsign
+        } else {
+            neighborsSnapshot = nil
+            routesSnapshot = nil
+            netRomLocalCallsign = nil
+        }
+
         graphTask?.cancel()
         graphTask = Task.detached(priority: .userInitiated) {
             let start = Date()
-            
+
             let classifiedModel: ClassifiedGraphModel
-            if let mode = routingModeSnapshot, let integration = netRomIntegrationSnapshot {
-                // NEW: Build from NET/ROM routing tables
+            if let neighbors = neighborsSnapshot, let routes = routesSnapshot, let localCall = netRomLocalCallsign {
+                // Build from pre-snapshotted NET/ROM routing tables
                 classifiedModel = NetworkGraphBuilder.buildFromNetRom(
-                    netRomIntegration: integration,
-                    localCallsign: integration.localCallsign,
-                    mode: mode,
+                    neighbors: neighbors,
+                    routes: routes,
+                    localCallsign: localCall,
                     options: NetworkGraphBuilder.Options(
                         includeViaDigipeaters: includeViaSnapshot,
                         minimumEdgeCount: minEdgeSnapshot,
                         maxNodes: maxNodesSnapshot,
-                        stationIdentityMode: identityModeSnapshot
+                        stationIdentityMode: identityModeSnapshot,
+                        hideStaleEntries: hideStaleSnapshot,
+                        neighborStaleTTL: neighborStaleTTLSnapshot,
+                        routeStaleTTL: routeStaleTTLSnapshot
                     ),
                     now: now
                 )
