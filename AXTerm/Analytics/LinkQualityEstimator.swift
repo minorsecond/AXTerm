@@ -342,6 +342,13 @@ struct LinkQualityEstimator {
                 guard parts.count == 2 else { return nil }
                 let linkStats = s.toLinkStats(using: config)
 
+                // Skip entries with no evidence — these were touched by a packet
+                // but never accumulated qualifying observations (e.g., only S-frames
+                // or all observations expired from the sliding window).
+                guard linkStats.observationCount > 0 || linkStats.dfEstimate != nil else {
+                    return nil
+                }
+
                 // Never export Date.distantPast - use current time as fallback
                 let timestamp = linkStats.lastUpdate ?? now
                 let sanitizedTimestamp = Self.sanitizeTimestamp(timestamp, fallback: now)
