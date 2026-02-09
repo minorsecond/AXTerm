@@ -151,7 +151,7 @@ struct AdaptiveStatusChip: View {
             Text("Adaptive Transmission")
                 .font(.headline)
 
-            Text("Optimizes window size (K), packet length (P), and retries (N2) based on link quality.")
+            Text("Optimizes window size (K), packet length (P), retries (N2), and retransmit timeout (RTO) based on link quality.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 220, alignment: .leading)
@@ -195,6 +195,20 @@ struct AdaptiveStatusChip: View {
                             Spacer()
                             Text("\(displaySettings.maxRetries.effectiveValue)")
                                 .monospaced()
+                        }
+                        .font(.caption)
+
+                        HStack {
+                            Text("Retransmit Timeout:")
+                            Spacer()
+                            if let rto = displaySettings.currentRto {
+                                Text(String(format: "%.1fs", rto))
+                                    .monospaced()
+                            } else {
+                                Text("—")
+                                    .monospaced()
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
                         .font(.caption)
                     }
