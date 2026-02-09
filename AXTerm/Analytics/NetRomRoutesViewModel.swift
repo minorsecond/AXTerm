@@ -9,13 +9,14 @@ import Combine
 import Foundation
 import SwiftUI
 
-/// Tab selection for the Routes page.
-enum NetRomRoutesTab: String, CaseIterable, Identifiable {
+/// Scope selection for the Routes page.
+enum RoutesScope: String, CaseIterable, Identifiable {
     case neighbors = "Neighbors"
     case routes = "Routes"
     case linkQuality = "Link Quality"
 
     var id: String { rawValue }
+    var title: String { rawValue }
 
     var icon: String {
         switch self {
@@ -391,7 +392,7 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
 /// ViewModel for the NET/ROM Routes page.
 @MainActor
 final class NetRomRoutesViewModel: ObservableObject {
-    @Published var selectedTab: NetRomRoutesTab = .neighbors
+    @Published var selectedTab: RoutesScope = .neighbors
     @Published var searchText: String = ""
     @Published var routingMode: NetRomRoutingMode = .hybrid
 
