@@ -222,6 +222,54 @@ final class SessionCoordinator: ObservableObject {
         )
     }
 
+    // MARK: - Adaptive Change Detection
+
+    /// Snapshot of adaptive values for change detection.
+    private struct AdaptiveSnapshot {
+        let k: Int
+        let p: Int
+        let n2: Int
+        let rto: Double?
+
+        init(from s: TxAdaptiveSettings) {
+            self.k = s.windowSize.currentAdaptive
+            self.p = s.paclen.currentAdaptive
+            self.n2 = s.maxRetries.currentAdaptive
+            self.rto = s.currentRto
+        }
+    }
+
+    /// Build a user-facing message describing what changed between snapshots.
+    /// Returns nil if nothing changed.
+    private func adaptiveChangeMessage(
+        old: AdaptiveSnapshot, new: TxAdaptiveSettings,
+        source: String, routeKey: RouteAdaptiveKey?
+    ) -> String? {
+        var parts: [String] = []
+        let newSnap = AdaptiveSnapshot(from: new)
+
+        if old.k != newSnap.k { parts.append("K \(old.k)→\(newSnap.k)") }
+        if old.p != newSnap.p { parts.append("P \(old.p)→\(newSnap.p)") }
+        if old.n2 != newSnap.n2 { parts.append("N2 \(old.n2)→\(newSnap.n2)") }
+        if let oldRto = old.rto, let newRto = newSnap.rto, abs(oldRto - newRto) >= 0.1 {
+            parts.append("RTO \(String(format: "%.1f", oldRto))→\(String(format: "%.1f", newRto))s")
+        } else if old.rto == nil && newSnap.rto != nil {
+            parts.append("RTO →\(String(format: "%.1f", newSnap.rto!))s")
+        }
+
+        guard !parts.isEmpty else { return nil }
+
+        let reason = new.windowSize.adaptiveReason ?? new.paclen.adaptiveReason ?? "updated"
+        let ctx: String
+        if let key = routeKey {
+            let path = key.pathSignature.isEmpty ? "direct" : "via \(key.pathSignature)"
+            ctx = "[\(source): \(key.destination) \(path)]"
+        } else {
+            ctx = "[\(source)]"
+        }
+        return "Adaptive: \(parts.joined(separator: ", ")) (\(reason)) \(ctx)"
+    }
+
     /// Apply a link quality sample to adaptive settings (per-route when session, global when network).
     /// Session samples update the per-route cache so multiple connections (e.g. same peer direct vs via digi) don't overwrite each other.
     func applyLinkQualitySample(lossRate: Double, etx: Double, srtt: Double?, source: String = "session", routeKey: RouteAdaptiveKey? = nil) {
@@ -233,6 +281,7 @@ final class SessionCoordinator: ObservableObject {
             // Normalize destination for consistent cache lookups (PEER-0 and PEER map to same key)
             let normalizedKey = RouteAdaptiveKey(destination: canonicalDestination(key.destination), pathSignature: key.pathSignature)
             var entry = adaptiveCache[normalizedKey]?.settings ?? TxAdaptiveSettings()
+            let before = AdaptiveSnapshot(from: entry)
             entry.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt)
             adaptiveCache[normalizedKey] = CachedAdaptiveEntry(settings: entry, lastUpdated: Date())
             let a = entry
@@ -248,7 +297,11 @@ final class SessionCoordinator: ObservableObject {
                 maxRetries: a.maxRetries.effectiveValue,
                 reason: reason + " [route \(normalizedKey.destination) \(normalizedKey.pathSignature.isEmpty ? "direct" : normalizedKey.pathSignature)]"
             )
+            if let msg = adaptiveChangeMessage(old: before, new: entry, source: source, routeKey: normalizedKey) {
+                packetEngine?.appendSystemNotification(msg)
+            }
         } else {
+            let before = AdaptiveSnapshot(from: globalAdaptiveSettings)
             globalAdaptiveSettings.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt)
             let a = globalAdaptiveSettings
             let reason = a.windowSize.adaptiveReason ?? a.paclen.adaptiveReason ?? "updated"
@@ -263,6 +316,9 @@ final class SessionCoordinator: ObservableObject {
                 maxRetries: a.maxRetries.effectiveValue,
                 reason: reason
             )
+            if let msg = adaptiveChangeMessage(old: before, new: globalAdaptiveSettings, source: source, routeKey: nil) {
+                packetEngine?.appendSystemNotification(msg)
+            }
             syncSessionManagerConfigFromAdaptive()
         }
         objectWillChange.send()
