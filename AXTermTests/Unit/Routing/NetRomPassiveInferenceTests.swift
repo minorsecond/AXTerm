@@ -182,4 +182,30 @@ final class NetRomPassiveInferenceTests: XCTestCase {
         let secondRoutes = driveEvents(router: makeRouter())
         XCTAssertEqual(firstRoutes, secondRoutes)
     }
+
+    func testPassiveRouteInferenceFromMultiHopViaPatterns() {
+        let router = makeRouter()
+        let inference = makeInference(router: router)
+        let source = "K1AAA"
+        let viaChain = ["K2BBB", "K3CCC"] // Packet came FROM A VIA B, C
+        let start = Date(timeIntervalSince1970: 1_700_001_400)
+
+        for offset in 0..<5 {
+            let packet = makePacket(
+                from: source,
+                to: localCallsign,
+                via: viaChain,
+                infoText: "DATA",
+                timestamp: start.addingTimeInterval(Double(offset))
+            )
+            inference.observePacket(packet, timestamp: packet.timestamp, classification: PacketClassifier.classify(packet: packet), duplicateStatus: .unique)
+        }
+
+        let inferredRoutes = router.currentRoutes().filter { $0.destination == source }
+        XCTAssertEqual(inferredRoutes.count, 1)
+        let route = inferredRoutes.first!
+        
+        // The path to reach source A is through the digipeaters in reverse order: [C, B, A]
+        XCTAssertEqual(route.path, ["K3CCC", "K2BBB", "K1AAA"])
+    }
 }
