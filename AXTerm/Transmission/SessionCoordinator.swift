@@ -11,6 +11,7 @@ import Foundation
 import Combine
 import SwiftUI
 import CommonCrypto
+import OSLog
 
 // MARK: - Per-route adaptive cache
 
@@ -591,20 +592,23 @@ final class SessionCoordinator: ObservableObject {
         awaitingCapabilityExchange.insert(peerCallsign)
         scheduleCapabilityTimeout(for: peerCallsign)
 
-        // Send as UI frame — outside the connected-mode data flow
-        let frame = OutboundFrame(
-            destination: session.remoteAddress,
-            source: sessionManager.localCallsign,
+        // Send as I-frame (connected mode data) — safe for all nodes
+        // UI frames in connected mode cause disconnects on some BPQ/ARPBBS nodes.
+        let frames = sessionManager.sendData(
+            probeData,
+            to: session.remoteAddress,
             path: session.path,
-            payload: probeData,
-            frameType: "ui",
+            channel: session.channel,
             pid: 0xF0,
             displayInfo: "AXDP probe"
         )
-        sendFrame(frame)
+        
+        for frame in frames {
+            sendFrame(frame)
+        }
 
-        debugAXDP("Sent text probe (UI frame)", ["peer": session.remoteAddress.display])
-        TxLog.outbound(.capability, "Sent AXDP text probe via UI frame", [
+        debugAXDP("Sent text probe (I-frame)", ["peer": session.remoteAddress.display])
+        TxLog.outbound(.capability, "Sent AXDP text probe via I-frame", [
             "dest": session.remoteAddress.display
         ])
 
@@ -899,6 +903,8 @@ final class SessionCoordinator: ObservableObject {
     // MARK: - Packet Handling
 
     private func handleIncomingPacket(_ packet: Packet) {
+        let state = PerformanceLog.packetProcessing.beginInterval("HandlePacket")
+        defer { PerformanceLog.packetProcessing.endInterval("HandlePacket", state) }
         guard let from = packet.from, let to = packet.to else {
             return
         }
@@ -2220,7 +2226,7 @@ final class SessionCoordinator: ObservableObject {
                 sendFrame(response)
             }
         case .REJ:
-            let retransmits = sessionManager.handleInboundREJ(from: from, path: path, channel: channel, nr: nr)
+            let retransmits = sessionManager.handleInboundREJ(from: from, path: path, channel: channel, nr: nr, isPoll: isPoll)
             for frame in retransmits {
                 sendFrame(frame)
             }

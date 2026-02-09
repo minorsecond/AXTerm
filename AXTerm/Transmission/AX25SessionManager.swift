@@ -392,12 +392,45 @@ final class AX25SessionManager: ObservableObject {
 
         let pathSignature = path.display
         let config = getConfigForDestination?(destination.display, pathSignature) ?? defaultConfig
+        
+        // Dynamically adjust initial RTO for multi-hop paths if not explicitly overridden by config
+        // Default 4s is too short for 3-node routes (2 digis). Use heuristic: 3s + (2s * hops).
+        // 0 digis = 3s (clamped to min later)
+        // 1 digi  = 5s
+        // 2 digis = 7s
+        var effectiveConfig = config
+        
+        let hopCount = path.digis.count
+        let scaledMinRto = 3.0 + (2.0 * Double(hopCount))
+        let currentInitialRto = config.initialRto ?? 4.0 // 4.0 is default in AX25SessionTimers
+        
+        if currentInitialRto < scaledMinRto {
+             TxLog.debug(.session, "Scaling initial RTO for path", [
+                "hops": hopCount,
+                "original": currentInitialRto,
+                "scaled": scaledMinRto
+            ])
+            
+            // We must create a new config with this value. 
+            // Since AX25SessionConfig is immutable, we reconstruct it.
+            effectiveConfig = AX25SessionConfig(
+                windowSize: config.windowSize,
+                paclen: config.paclen,
+                maxReceiveBufferSize: config.maxReceiveBufferSize,
+                maxRetries: config.maxRetries,
+                extended: config.extended,
+                rtoMin: config.rtoMin,
+                rtoMax: config.rtoMax,
+                initialRto: scaledMinRto
+            )
+        }
+
         let session = AX25Session(
             localAddress: localCallsign,
             remoteAddress: destination,
             path: path,
             channel: channel,
-            config: config,
+            config: effectiveConfig, // Use adapted config
             isInitiator: true
         )
         sessions[key] = session
@@ -405,7 +438,8 @@ final class AX25SessionManager: ObservableObject {
         TxLog.debug(.session, "Session created", [
             "session": String(session.id.uuidString.prefix(8)),
             "peer": destination.display,
-            "path": path.display.isEmpty ? "(direct)" : path.display
+            "path": path.display.isEmpty ? "(direct)" : path.display,
+            "initialRto": String(format: "%.1fs", effectiveConfig.initialRto ?? 4.0)
         ])
 
         return session
@@ -1305,7 +1339,7 @@ final class AX25SessionManager: ObservableObject {
         let vaBefore = session.va
 
         let oldState = session.state
-        let actions = session.stateMachine.handle(event: .receivedRR(nr: nr))
+        let actions = session.stateMachine.handle(event: .receivedRR(nr: nr, pf: isPoll))
 
         if oldState != session.state {
             debugTrace("state change (RR)", [
@@ -1387,13 +1421,15 @@ final class AX25SessionManager: ObservableObject {
         from source: AX25Address,
         path: DigiPath,
         channel: UInt8,
-        nr: Int
+        nr: Int,
+        isPoll: Bool = false
     ) -> [OutboundFrame] {
         debugTrace("REJ received", [
             "from": source.display,
             "path": path.display.isEmpty ? "(empty)" : path.display,
             "nr": nr,
-            "channel": channel
+            "channel": channel,
+            "pf": isPoll
         ])
         var session = existingSession(for: source, path: path, channel: channel)
         if session == nil {
@@ -1417,7 +1453,7 @@ final class AX25SessionManager: ObservableObject {
         }
 
         let oldState = session.state
-        let actions = session.stateMachine.handle(event: .receivedREJ(nr: nr))
+        let actions = session.stateMachine.handle(event: .receivedREJ(nr: nr, pf: isPoll))
 
         if oldState != session.state {
             debugTrace("state change (REJ)", [

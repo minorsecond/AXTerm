@@ -240,11 +240,10 @@ final class FlagClearingRaceConditionTests: XCTestCase {
 
             let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
-                client: PacketEngine(settings: settings),
-                settings: settings,
                 sourceCall: "TEST-2",
                 sessionManager: sessionManager
             )
+            viewModel.configure(client: PacketEngine(settings: settings), settings: settings)
             viewModel.setupSessionCallbacks()
 
             let peer = AX25Address(call: "TEST", ssid: 1)
@@ -286,11 +285,10 @@ final class FlagClearingRaceConditionTests: XCTestCase {
 
             let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
-                client: PacketEngine(settings: settings),
-                settings: settings,
                 sourceCall: "TEST-2",
                 sessionManager: sessionManager
             )
+            viewModel.configure(client: PacketEngine(settings: settings), settings: settings)
             viewModel.setupSessionCallbacks()
 
             viewModel.onPlainTextChatReceived = { _, text, _ in
@@ -336,11 +334,10 @@ final class FlagClearingRaceConditionTests: XCTestCase {
             
             let settings = AppSettingsStore()
             let viewModel = ObservableTerminalTxViewModel(
-                client: PacketEngine(settings: settings),
-                settings: settings,
                 sourceCall: "TEST-2",
                 sessionManager: sessionManager
             )
+            viewModel.configure(client: PacketEngine(settings: settings), settings: settings)
             
             viewModel.onPlainTextChatReceived = { _, text, _ in
                 receivedLines.append(text)

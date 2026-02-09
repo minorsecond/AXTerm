@@ -268,9 +268,9 @@ enum AX25SessionEvent: Sendable {
     case receivedFRMR
 
     // Received S-frames
-    case receivedRR(nr: Int)
-    case receivedRNR(nr: Int)
-    case receivedREJ(nr: Int)
+    case receivedRR(nr: Int, pf: Bool)
+    case receivedRNR(nr: Int, pf: Bool)
+    case receivedREJ(nr: Int, pf: Bool)
 
     // Received I-frame
     case receivedIFrame(ns: Int, nr: Int, pf: Bool, payload: Data)
@@ -472,15 +472,16 @@ struct AX25StateMachine: Sendable {
             TxLog.inbound(.ax25, "I-frame received", ["ns": ns, "nr": nr, "pf": pf, "size": payload.count])
             return handleIFrame(ns: ns, nr: nr, pf: pf, payload: payload)
 
-        case (.connected, .receivedRR(let nr)):
-            return handleRR(nr: nr)
+        case (.connected, .receivedRR(let nr, let pf)):
+            return handleRR(nr: nr, pf: pf)
 
-        case (.connected, .receivedRNR(let nr)):
+        case (.connected, .receivedRNR(let nr, _)):
             // Remote is busy - ack frames but don't send more
+            // TODO: Handle P/F bit if needed for RNR polls?
             sequenceState.ackUpTo(nr: nr)
             return [.stopT1]
 
-        case (.connected, .receivedREJ(let nr)):
+        case (.connected, .receivedREJ(let nr, _)):
             // Remote requests retransmit from nr
             sequenceState.ackUpTo(nr: nr)
             // Note: actual retransmit logic would be handled by session manager
@@ -532,7 +533,10 @@ struct AX25StateMachine: Sendable {
 
         case (.connected, .t3Timeout):
             // Send RR as poll to check link
-            return [.sendRR(nr: sequenceState.vr), .startT1]
+            // Fix: Send P=1 (Poll) so the peer is required to respond.
+            // Previously sending P=0 meant the peer could ignore it, causing us to
+            // fall through to T1 timeout and waste a retries cycle.
+            return [.sendRR(nr: sequenceState.vr, pf: true), .startT1]
 
         case (.connected, _):
             return []
@@ -593,6 +597,11 @@ struct AX25StateMachine: Sendable {
         let vaBeforeIFrameAck = sequenceState.va
         if sequenceState.outstandingCount > 0 {
             sequenceState.ackUpTo(nr: nr)
+        }
+        
+        // Fix: Reset retryCount if V(A) advances via piggybacked ACK.
+        if sequenceState.va != vaBeforeIFrameAck {
+            retryCount = 0
         }
 
         // Check if this is the expected sequence number
@@ -716,7 +725,7 @@ struct AX25StateMachine: Sendable {
 
     // MARK: - RR Handling
 
-    private mutating func handleRR(nr: Int) -> [AX25SessionAction] {
+    private mutating func handleRR(nr: Int, pf: Bool) -> [AX25SessionAction] {
         var actions: [AX25SessionAction] = []
 
         // Reset retryCount when RR advances V(A) (peer acknowledged new frames).
@@ -725,7 +734,9 @@ struct AX25StateMachine: Sendable {
         // link failures in the KB5YZB-7 scenario.
         let vaBeforeAck = sequenceState.va
         sequenceState.ackUpTo(nr: nr)
-        if sequenceState.va != vaBeforeAck {
+
+        // Fix: Reset retryCount if V(A) advanced OR if this was a response to our poll (Final bit set).
+        if sequenceState.va != vaBeforeAck || pf {
             retryCount = 0
         }
 

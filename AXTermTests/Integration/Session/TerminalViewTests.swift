@@ -17,12 +17,12 @@ final class TerminalViewTests: XCTestCase {
         let settings = AppSettingsStore()
         let client = PacketEngine(settings: settings)
         let sessionManager = AX25SessionManager()
-        return ObservableTerminalTxViewModel(
-            client: client,
-            settings: settings,
+        let vm = ObservableTerminalTxViewModel(
             sourceCall: sourceCall,
             sessionManager: sessionManager
         )
+        vm.configure(client: client, settings: settings)
+        return vm
     }
 
     // MARK: - Observable ViewModel Tests

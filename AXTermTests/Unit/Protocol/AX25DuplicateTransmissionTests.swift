@@ -80,7 +80,7 @@ final class AX25DuplicateTransmissionTests: XCTestCase {
 
         // During grace period, REJ arrives from peer requesting retransmit from nr=0
         // This should also produce .startT1 (which in manager cancels the pending task)
-        let rejActions = sm.handle(event: .receivedREJ(nr: 0))
+        let rejActions = sm.handle(event: .receivedREJ(nr: 0, pf: false))
         XCTAssertTrue(rejActions.contains(.startT1),
                       "REJ should produce .startT1 action to restart timer")
     }
@@ -99,7 +99,7 @@ final class AX25DuplicateTransmissionTests: XCTestCase {
         XCTAssertEqual(sm.sequenceState.outstandingCount, 3)
 
         // Receive RR(nr=1) — partial ack: acknowledges ns=0, leaves ns=1,2 outstanding
-        let actions = sm.handle(event: .receivedRR(nr: 1))
+        let actions = sm.handle(event: .receivedRR(nr: 1, pf: false))
 
         XCTAssertEqual(sm.sequenceState.va, 1, "V(A) should advance to 1")
         XCTAssertEqual(sm.sequenceState.outstandingCount, 2,
@@ -118,7 +118,7 @@ final class AX25DuplicateTransmissionTests: XCTestCase {
         sm.sequenceState.incrementVS() // ns=1
 
         // Receive RR(nr=0) — no progress (V(A) already at 0)
-        let actions = sm.handle(event: .receivedRR(nr: 0))
+        let actions = sm.handle(event: .receivedRR(nr: 0, pf: false))
 
         XCTAssertEqual(sm.sequenceState.va, 0, "V(A) should not change")
         XCTAssertFalse(actions.contains(.startT1),
@@ -137,7 +137,7 @@ final class AX25DuplicateTransmissionTests: XCTestCase {
         XCTAssertEqual(sm.sequenceState.outstandingCount, 1)
 
         // Receive RR(nr=1) — full ack
-        let actions = sm.handle(event: .receivedRR(nr: 1))
+        let actions = sm.handle(event: .receivedRR(nr: 1, pf: false))
 
         XCTAssertEqual(sm.sequenceState.va, 1)
         XCTAssertEqual(sm.sequenceState.outstandingCount, 0)
