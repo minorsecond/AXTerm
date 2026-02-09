@@ -53,13 +53,12 @@ struct NetRomRoutesView: View {
     private var routesToolbar: some View {
         HStack(spacing: 12) {
             // Tab picker
-            Picker("View", selection: $viewModel.selectedTab) {
-                ForEach(NetRomRoutesTab.allCases) { tab in
-                    Label(tab.rawValue, systemImage: tab.icon)
-                        .tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
+            AnalyticsSegmentedPicker(
+                selection: $viewModel.selectedTab,
+                items: NetRomRoutesTab.allCases,
+                label: { $0.rawValue },
+                tooltip: { $0.tooltip }
+            )
             .frame(width: 340)
 
             Spacer()

@@ -24,6 +24,17 @@ enum NetRomRoutesTab: String, CaseIterable, Identifiable {
         case .linkQuality: return "chart.bar"
         }
     }
+
+    var tooltip: String {
+        switch self {
+        case .neighbors:
+            return "Stations heard directly on the frequency. These are your immediate peers and represent the first hop for any network route."
+        case .routes:
+            return "The NET/ROM routing table. Shows distant nodes discovered via broadcasts and the best neighbor to use as a gateway to reach them."
+        case .linkQuality:
+            return "Estimated reliability of neighboring stations. Uses packet observation to track delivery success; lower ETX values indicate more stable links."
+        }
+    }
 }
 
 /// Display model for a neighbor row.
