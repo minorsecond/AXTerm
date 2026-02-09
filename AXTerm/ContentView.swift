@@ -126,12 +126,15 @@ struct ContentView: View {
             client.loadPersistedConsole()
         }
         .task {
-            // Feed network-wide link quality into adaptive settings periodically (don't overwhelm, don't be too conservative)
+            // Feed network-wide link quality into adaptive settings periodically (don't overwhelm, don't be too conservative).
+            // Skip when active sessions exist — the session learner provides direct ground truth
+            // (actual ACK/retry tracking) which is far more accurate than inferred routing table metrics.
             let intervalSeconds: UInt64 = 30
             while true {
                 try? await Task.sleep(nanoseconds: intervalSeconds * 1_000_000_000)
                 guard let coordinator = SessionCoordinator.shared,
                       coordinator.adaptiveTransmissionEnabled,
+                      !coordinator.hasActiveSessions,
                       let integration = client.netRomIntegration else { continue }
                 let stats = integration.exportLinkStats()
                 guard let (lossRate, etx) = Self.aggregateLinkQualityForAdaptive(stats, localCallsign: coordinator.localCallsign) else { continue }

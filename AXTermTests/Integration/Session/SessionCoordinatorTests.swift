@@ -1360,6 +1360,23 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(effective.windowSize.currentAdaptive, 1, "Per-route cache entry should be returned when available")
     }
 
+    func testEffectiveSettingsMatchesCaseInsensitivePath() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 2
+
+        // Session learner caches with uppercase path (from session.path.display)
+        let routeKey = RouteAdaptiveKey(destination: "KB5YZB-7", pathSignature: "DRL")
+        coordinator.applyLinkQualitySample(lossRate: 0.05, etx: 1.1, srtt: nil, source: "session", routeKey: routeKey)
+
+        // UI passes lowercase path (raw user input from compose field)
+        let effective = coordinator.effectiveAdaptiveSettings(destination: "kb5yzb-7", path: "drl")
+        XCTAssertEqual(effective.windowSize.currentAdaptive, 3,
+            "Lowercase path from compose view must match uppercase cache key from session learner")
+    }
+
     func testEffectiveSettingsFallsBackToGlobalWhenNoCacheEntry() {
         let coordinator = SessionCoordinator()
         defer { SessionCoordinator.shared = nil }

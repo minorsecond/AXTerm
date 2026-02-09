@@ -204,7 +204,10 @@ final class SessionCoordinator: ObservableObject {
         if useDefaultConfigForDestinations.contains(where: { canonicalDestination($0) == canon }) {
             return TxAdaptiveSettings()
         }
-        let pathSig = path ?? ""
+        // Normalize path to uppercase to match session learner cache keys
+        // (session learner uses session.path.display which is uppercased,
+        //  but compose view passes raw user input which may be lowercase)
+        let pathSig = (path ?? "").uppercased()
         let key = RouteAdaptiveKey(destination: canon, pathSignature: pathSig)
         if let cached = adaptiveCache[key], !isAdaptiveCacheEntryExpired(cached) {
             return cached.settings
