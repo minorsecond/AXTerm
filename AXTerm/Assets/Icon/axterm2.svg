@@ -4,36 +4,35 @@
   viewBox="0 0 1024 1024"
   xmlns="http://www.w3.org/2000/svg"
 >
-  <!-- Background squircle -->
+  <!-- PRO PLATE: inset 832x832 (13/16 of 1024), centered with 96px margins -->
+  <!-- Corner radius: 22% of 832 = 183.04 -->
   <rect
-    x="0"
-    y="0"
-    width="1024"
-    height="1024"
-    rx="220"
+    x="96"
+    y="96"
+    width="832"
+    height="832"
+    rx="183.04"
     fill="#1F2124"
   />
 
-  <!-- Subtle highlight (optional, safe SVG) -->
+  <!-- Highlight built for the inset plate (subtle top sheen) -->
   <path
-    d="M0 220C0 98.4974 98.4974 0 220 0H804C925.503 0 1024 98.4974 1024 220V230C1024 108.497 925.503 10 804 10H220C98.4974 10 0 108.497 0 230V220Z"
+    d="M96 279.04C96 164.52 188.52 96 303.04 96H720.96C835.48 96 928 164.52 928 279.04V287.04C928 172.52 835.48 104 720.96 104H303.04C188.52 104 96 172.52 96 287.04V279.04Z"
     fill="white"
     opacity="0.05"
   />
 
-  <!-- Main glyph -->
-  <g transform="translate(192 192) scale(0.625)" shape-rendering="crispEdges" fill="#EA8C10">
-  <path d="M0 0 H640 V160 H160 V480 H0 V0 Z"/>
-  <path d="
-  M384 864
-  V1024
-  H1024
-  V544
-  H864
-  V864
-  Z
-"/>
-  <rect x="192" y="640" width="160" height="160"/>
-  <rect x="672" y="224" width="160" height="160"/>
-</g>
+  <!-- Main glyph: keep original geometry, but center it in the full 1024 canvas -->
+  <!-- Scale stays 0.625; translate recomputed so the 1024x1024 glyph is centered:
+       t = (1024 - 1024*0.625)/2 = 192 -->
+  <g
+    transform="translate(192 192) scale(0.625)"
+    shape-rendering="crispEdges"
+    fill="#EA8C10"
+  >
+    <path d="M0 0 H640 V160 H160 V480 H0 Z"/>
+    <path d="M384 864 V1024 H1024 V544 H864 V864 Z"/>
+    <rect x="192" y="640" width="160" height="160"/>
+    <rect x="672" y="224" width="160" height="160"/>
+  </g>
 </svg>
