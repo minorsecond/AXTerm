@@ -526,7 +526,7 @@ final class NetRomPersistence {
         let allNeighbors = try loadNeighbors()
         let cutoff = now.addingTimeInterval(-config.neighborTTLSeconds)
 
-        return allNeighbors.compactMap { neighbor -> NeighborInfo? in
+        return allNeighbors.map { neighbor -> NeighborInfo in
             let age = now.timeIntervalSince(neighbor.lastSeen)
 
             // If within TTL, keep as-is
@@ -534,15 +534,10 @@ final class NetRomPersistence {
                 return neighbor
             }
 
-            // If beyond TTL, apply linear decay
+            // If beyond TTL, apply linear decay but keep the entry for display
             // decayFactor = 1 - (age / TTL), clamped to [0, 1]
             let decayFactor = max(0, 1 - (age / config.neighborTTLSeconds))
             let decayedQuality = Int(Double(neighbor.quality) * decayFactor)
-
-            // Drop if quality decays to near zero
-            if decayedQuality < 10 {
-                return nil
-            }
 
             return NeighborInfo(
                 call: neighbor.call,
@@ -554,21 +549,14 @@ final class NetRomPersistence {
         }
     }
 
-    /// Load routes with per-entry filtering based on lastUpdate.
+    /// Load all routes (no TTL filtering — expired entries are kept for display).
     private func loadRoutesWithDecay(now: Date) throws -> [RouteInfo] {
-        let allRoutes = try loadRoutes()
-
-        let cutoff = now.addingTimeInterval(-config.routeTTLSeconds)
-
-        return allRoutes.filter { $0.lastUpdated >= cutoff }
+        return try loadRoutes()
     }
 
-    /// Load link stats with per-entry filtering based on lastUpdated timestamp.
+    /// Load all link stats (no TTL filtering — expired entries are kept for display).
     private func loadLinkStatsWithDecay(now: Date) throws -> [LinkStatRecord] {
-        let allStats = try loadLinkStats(now: now)
-        let cutoff = now.addingTimeInterval(-config.linkStatTTLSeconds)
-
-        return allStats.filter { $0.lastUpdated >= cutoff }
+        return try loadLinkStats(now: now)
     }
 
     // MARK: - Clear

@@ -271,9 +271,9 @@ final class NetRomGraphBuilderTests: XCTestCase {
             now: thirtyOneMinutesLater
         )
         
-        // 6. Verify neighbor is gone
-        // Note: buildFromNetRom returns .empty (0 nodes) if no neighbors/routes exist
-        XCTAssertTrue(model.nodes.isEmpty, "Graph should be empty after all neighbors expire")
+        // 6. Expired neighbors are kept for display (purgeStaleRoutes is now a no-op).
+        // The graph still shows expired entries; the UI "Hide expired" toggle controls visibility.
+        XCTAssertFalse(model.nodes.isEmpty, "Expired neighbors should be kept in graph for display")
     }
     
     func testLocalNodePreservation() {

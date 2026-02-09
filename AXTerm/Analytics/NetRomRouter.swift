@@ -295,7 +295,8 @@ final class NetRomRouter {
 
     func bestRouteTo(_ destination: String) -> RouteInfo? {
         guard let normalized = normalize(destination) else { return nil }
-        return currentRoutes().first { $0.destination == normalized }
+        let cutoff = Date().addingTimeInterval(-config.routeTTLSeconds)
+        return currentRoutes().first { $0.destination == normalized && $0.lastUpdated >= cutoff }
     }
 
     /// Refresh lastUpdated for routes from a specific origin, constrained by source types.
@@ -376,18 +377,10 @@ final class NetRomRouter {
     }
 
     func purgeStaleRoutes(currentDate: Date) {
-        let routeCutoff = currentDate.addingTimeInterval(-config.routeTTLSeconds)
-        let neighborCutoff = currentDate.addingTimeInterval(-config.neighborTTLSeconds)
-
-        routesByDestination = routesByDestination.compactMapValues { routeList in
-            let filtered = routeList.filter { $0.lastHeard >= routeCutoff }
-            return filtered.isEmpty ? nil : filtered.sorted(by: routeSort)
-        }
-
-        neighbors = neighbors.compactMapValues { neighbor in
-            guard neighbor.lastUpdate >= neighborCutoff else { return nil }
-            return neighbor
-        }
+        // No-op: expired entries are kept in-memory so the view model can
+        // display them with computed freshness. The "Hide expired" toggle
+        // in the UI filters them out when enabled. bestRouteTo() guards
+        // against using expired routes for actual routing decisions.
     }
 
     // MARK: - Private helpers

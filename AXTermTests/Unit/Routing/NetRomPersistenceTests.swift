@@ -726,8 +726,9 @@ final class NetRomPersistenceTests: XCTestCase {
 
         guard let state = result else { return }
 
-        // Stale neighbor should be dropped or heavily decayed
+        // Stale neighbor should be kept but with heavily decayed quality
         let staleNeighbor = state.neighbors.first(where: { $0.call == "W0STALE" })
+        XCTAssertNotNil(staleNeighbor, "Stale neighbor should be kept for display")
         if let stale = staleNeighbor {
             XCTAssertLessThan(stale.quality, 50, "Stale neighbor should be heavily decayed")
         }
@@ -738,10 +739,10 @@ final class NetRomPersistenceTests: XCTestCase {
         XCTAssertGreaterThan(freshNeighbor?.quality ?? 0, 100, "Fresh neighbor should retain quality")
     }
 
-    func testRouteDecayOnLoad_ExpiredRoutesRemoved() throws {
+    func testRouteDecayOnLoad_ExpiredRoutesKeptForDisplay() throws {
         // Save snapshot with routes that have `lastUpdate` beyond route TTL.
         // Load snapshot.
-        // ASSERT expired routes are removed.
+        // ASSERT expired routes are kept (for display purposes).
 
         let config = NetRomPersistenceConfig(
             maxSnapshotAgeSeconds: 3600,
@@ -769,18 +770,17 @@ final class NetRomPersistenceTests: XCTestCase {
 
         let result = try testPersistence.load(now: muchLater, expectedConfigHash: "decay_route")
 
-        // Either result is nil (all data stale) or routes are filtered out
+        // Expired routes are now kept for display — the view model's
+        // "Hide expired" toggle handles filtering in the UI.
         if let state = result {
-            // Routes should be empty or heavily decayed
-            XCTAssertTrue(state.routes.isEmpty || state.routes.allSatisfy { $0.quality < 50 },
-                          "Stale routes should be dropped or decayed")
+            XCTAssertFalse(state.routes.isEmpty, "Expired routes should be kept for display")
         }
     }
 
-    func testLinkStatsDecayOnLoad_OldLinkStatsFiltered() throws {
+    func testLinkStatsDecayOnLoad_OldLinkStatsKeptForDisplay() throws {
         // Save linkStats with old timestamps.
         // Load snapshot with current time advanced.
-        // ASSERT linkStats with old timestamps are dropped/ignored.
+        // ASSERT linkStats with old timestamps are kept for display.
 
         let config = NetRomPersistenceConfig(
             maxSnapshotAgeSeconds: 3600,
@@ -811,9 +811,9 @@ final class NetRomPersistenceTests: XCTestCase {
 
         guard let state = result else { return }
 
-        // Stale link should be filtered
-        XCTAssertNil(state.linkStats.first(where: { $0.fromCall == "W0STALE" }),
-                     "Stale link stat should be filtered")
+        // Stale link stat should be kept for display
+        XCTAssertNotNil(state.linkStats.first(where: { $0.fromCall == "W0STALE" }),
+                        "Stale link stat should be kept for display")
 
         // Fresh link should remain
         XCTAssertNotNil(state.linkStats.first(where: { $0.fromCall == "W1FRESH" }),

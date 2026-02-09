@@ -321,22 +321,15 @@ struct LinkQualityEstimator {
     mutating func purgeStaleData(currentDate: Date) {
         let cutoff = currentDate.addingTimeInterval(-config.slidingWindowSeconds)
 
-        var keysToRemove: [String] = []
         for (key, var s) in stats {
             s.pruneOld(cutoff: cutoff)
-            if s.observations.count == 0 {
-                if s.hasEvidence && s.lastUpdated >= cutoff {
-                    stats[key] = s
-                } else {
-                    keysToRemove.append(key)
-                }
-            } else {
-                stats[key] = s
+            // When all observations are gone and no restored evidence,
+            // clear EWMA estimates so quality returns 0 for expired entries.
+            if !s.hasEvidence {
+                s.forwardEstimate = nil
+                s.reverseEstimate = nil
             }
-        }
-
-        for key in keysToRemove {
-            stats.removeValue(forKey: key)
+            stats[key] = s
         }
     }
 
