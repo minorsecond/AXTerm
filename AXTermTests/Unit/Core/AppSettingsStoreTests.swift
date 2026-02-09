@@ -32,10 +32,9 @@ final class AppSettingsStoreTests: XCTestCase {
     }
 
     func testPortValidationClampsToRange() {
-        XCTAssertEqual(AppSettingsStore.sanitizePort("0"), "1")
-        XCTAssertEqual(AppSettingsStore.sanitizePort("99999"), "65535")
-        XCTAssertEqual(AppSettingsStore.sanitizePort("8001"), "8001")
-        XCTAssertEqual(AppSettingsStore.sanitizePort("abc"), "\(AppSettingsStore.defaultPort)")
+        XCTAssertEqual(AppSettingsStore.sanitizePort(0), 1)
+        XCTAssertEqual(AppSettingsStore.sanitizePort(99999), 65535)
+        XCTAssertEqual(AppSettingsStore.sanitizePort(8001), 8001)
     }
 
     func testRetentionValidationClamps() {
