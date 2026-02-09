@@ -398,11 +398,11 @@ extension PacketNSTableView {
         private func updateScrollPosition(
             in tableView: NSTableView,
             anchorID: Packet.ID?,
+            wasAtBottom: Bool,
             shouldScrollToBottom: Bool
         ) {
-            let userIsAtBottom = isUserAtBottom(in: tableView)
             let shouldAutoScroll = AutoScrollDecision.shouldAutoScroll(
-                isUserAtTarget: userIsAtBottom,
+                isUserAtTarget: wasAtBottom,
                 followNewest: followNewest.wrappedValue,
                 didRequestScrollToTarget: shouldScrollToBottom
             )
@@ -410,7 +410,17 @@ extension PacketNSTableView {
             if shouldAutoScroll {
                 let count = tableView.numberOfRows
                 if count > 0 {
-                    tableView.scrollRowToVisible(count - 1)
+                    if shouldScrollToBottom {
+                        // Explicit jump (button/tab switch): animate
+                        NSAnimationContext.runAnimationGroup { context in
+                            context.duration = 0.2
+                            context.allowsImplicitAnimation = true
+                            tableView.scrollRowToVisible(count - 1)
+                        }
+                    } else {
+                        // Auto-follow: instant, stays in sync with row insert
+                        tableView.scrollRowToVisible(count - 1)
+                    }
                 }
                 return
             }
@@ -519,6 +529,8 @@ extension PacketNSTableView {
             #endif
 
             isProgrammaticUpdate = true
+            // Capture scroll state BEFORE row mutation so we know user intent
+            let wasAtBottom = isUserAtBottom(in: tableView)
             let visibleAnchorID = firstVisiblePacketID(in: tableView)
             let shouldScrollToBottom = pendingUpdate.scrollToBottomToken != lastScrollToBottomToken
             lastScrollToBottomToken = pendingUpdate.scrollToBottomToken
@@ -530,6 +542,7 @@ extension PacketNSTableView {
             updateScrollPosition(
                 in: tableView,
                 anchorID: visibleAnchorID,
+                wasAtBottom: wasAtBottom,
                 shouldScrollToBottom: shouldScrollToBottom
             )
             scheduleColumnSizing(for: tableView)

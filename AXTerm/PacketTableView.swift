@@ -59,11 +59,6 @@ struct PacketTableView: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
         }
-        .onChange(of: packets) { _, _ in
-            if isAtBottom {
-                scrollToBottomToken += 1
-            }
-        }
         .onAppear {
             // Initial scroll to bottom on load
             scrollToBottomToken += 1
