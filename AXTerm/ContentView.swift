@@ -12,7 +12,7 @@ enum NavigationItem: String, Hashable, CaseIterable {
     case packets = "Packets"
     case routes = "Routes"
     case analytics = "Analytics"
-    case raw = "Raw"
+    //case raw = "Raw"
 }
 
 struct ContentView: View {
@@ -157,11 +157,11 @@ struct ContentView: View {
                 didLoadPacketsHistory = true
                 await Task.yield()
                 client.loadPersistedPackets()
-            case .raw:
-                guard !didLoadRawHistory else { return }
-                didLoadRawHistory = true
-                await Task.yield()
-                client.loadPersistedRaw()
+            //case .raw:
+            //    guard !didLoadRawHistory else { return }
+            //    didLoadRawHistory = true
+            //    await Task.yield()
+            //    client.loadPersistedRaw()
             case .analytics:
                 return
             case .routes:
@@ -193,7 +193,7 @@ struct ContentView: View {
         case .packets: searchModel.scope = .packets
         case .routes: searchModel.scope = .routes
         case .analytics: searchModel.scope = .analytics
-        case .raw: searchModel.scope = .terminal // Fallback or new scope if needed
+        //case .raw: searchModel.scope = .terminal // Fallback or new scope if needed
         }
     }
 
@@ -266,7 +266,7 @@ struct ContentView: View {
         case .packets: return "list.bullet.rectangle"
         case .routes: return "arrow.triangle.branch"
         case .analytics: return "chart.bar"
-        case .raw: return "doc.text"
+        //case .raw: return "doc.text"
         }
     }
 
@@ -297,12 +297,12 @@ struct ContentView: View {
                 NetRomRoutesView(integration: client.netRomIntegration, packetEngine: client, settings: settings)
             case .analytics:
                 AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel)
-            case .raw:
-                RawView(
-                    chunks: client.rawChunks,
-                    showDaySeparators: settings.showRawDaySeparators,
-                    clearedAt: $settings.rawClearedAt
-                )
+            //case .raw:
+            //    RawView(
+            //        chunks: client.rawChunks,
+            //        showDaySeparators: settings.showRawDaySeparators,
+            //        clearedAt: $settings.rawClearedAt
+            //    )
             }
         }
     }
