@@ -1332,6 +1332,145 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertNil(receivedData, "Frame from K0EPI-7 (our own callsign) should be filtered as echo")
     }
     
+    // MARK: - effectiveAdaptiveSettings
+
+    func testEffectiveSettingsReturnsGlobalWhenNoDestination() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 3
+
+        let effective = coordinator.effectiveAdaptiveSettings(destination: nil, path: nil)
+        XCTAssertEqual(effective.windowSize.currentAdaptive, 3, "Nil destination should return global settings")
+    }
+
+    func testEffectiveSettingsReturnsPerRouteWhenCached() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 2
+
+        // Populate per-route cache via sample
+        let routeKey = RouteAdaptiveKey(destination: "PEER-1", pathSignature: "DIGI-1")
+        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.0, srtt: nil, source: "session", routeKey: routeKey)
+
+        let effective = coordinator.effectiveAdaptiveSettings(destination: "PEER-1", path: "DIGI-1")
+        XCTAssertEqual(effective.windowSize.currentAdaptive, 1, "Per-route cache entry should be returned when available")
+    }
+
+    func testEffectiveSettingsMatchesCaseInsensitivePath() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 2
+
+        // Session learner caches with uppercase path (from session.path.display)
+        let routeKey = RouteAdaptiveKey(destination: "KB5YZB-7", pathSignature: "DRL")
+        coordinator.applyLinkQualitySample(lossRate: 0.05, etx: 1.1, srtt: nil, source: "session", routeKey: routeKey)
+
+        // UI passes lowercase path (raw user input from compose field)
+        let effective = coordinator.effectiveAdaptiveSettings(destination: "kb5yzb-7", path: "drl")
+        XCTAssertEqual(effective.windowSize.currentAdaptive, 3,
+            "Lowercase path from compose view must match uppercase cache key from session learner")
+    }
+
+    func testEffectiveSettingsFallsBackToGlobalWhenNoCacheEntry() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 3
+
+        let effective = coordinator.effectiveAdaptiveSettings(destination: "UNKNOWN-1", path: "")
+        XCTAssertEqual(effective.windowSize.currentAdaptive, 3, "Unknown destination should fall back to global")
+    }
+
+    // MARK: - Global reset on disconnect
+
+    func testGlobalResetsWhenAllSessionsDisconnect() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.localCallsign = "LOCAL-0"
+
+        // Learn high-loss settings
+        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.0, srtt: nil, source: "network")
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.windowSize.currentAdaptive, 1)
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.paclen.currentAdaptive, 64)
+
+        // Create and connect a session
+        let peer = AX25Address(call: "PEER", ssid: 1)
+        let session = coordinator.sessionManager.session(for: peer)
+        session.stateMachine.handle(event: .connectRequest)
+        session.stateMachine.handle(event: .receivedUA)
+        XCTAssertEqual(session.state, .connected)
+        coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
+
+        // Drive actual state machine to disconnected so hasActiveSessions reflects reality
+        session.stateMachine.handle(event: .receivedDISC)
+        XCTAssertEqual(session.state, .disconnected)
+        coordinator.sessionManager.onSessionStateChanged?(session, .connected, .disconnected)
+
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.windowSize.currentAdaptive, 2,
+            "Global window should reset to default (2) after last session disconnects")
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.paclen.currentAdaptive, 128,
+            "Global paclen should reset to default (128) after last session disconnects")
+    }
+
+    func testGlobalDoesNotResetWhenOtherSessionsStillActive() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.adaptiveTransmissionEnabled = true
+        coordinator.localCallsign = "LOCAL-0"
+
+        // Learn high-loss settings
+        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.0, srtt: nil, source: "network")
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.windowSize.currentAdaptive, 1)
+
+        // Create two sessions
+        let peer1 = AX25Address(call: "PEER", ssid: 1)
+        let peer2 = AX25Address(call: "PEER", ssid: 2)
+        let session1 = coordinator.sessionManager.session(for: peer1)
+        let session2 = coordinator.sessionManager.session(for: peer2)
+        session1.stateMachine.handle(event: .connectRequest)
+        session1.stateMachine.handle(event: .receivedUA)
+        session2.stateMachine.handle(event: .connectRequest)
+        session2.stateMachine.handle(event: .receivedUA)
+        coordinator.sessionManager.onSessionStateChanged?(session1, .connecting, .connected)
+        coordinator.sessionManager.onSessionStateChanged?(session2, .connecting, .connected)
+
+        // Drive session1 state machine to disconnected, but session2 stays connected
+        session1.stateMachine.handle(event: .receivedDISC)
+        XCTAssertEqual(session1.state, .disconnected)
+        XCTAssertEqual(session2.state, .connected)
+        coordinator.sessionManager.onSessionStateChanged?(session1, .connected, .disconnected)
+
+        XCTAssertEqual(coordinator.globalAdaptiveSettings.windowSize.currentAdaptive, 1,
+            "Global should NOT reset while another session is still active")
+    }
+
+    // MARK: - hasActiveSessions
+
+    func testHasActiveSessionsReflectsSessionState() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        XCTAssertFalse(coordinator.hasActiveSessions, "No sessions initially")
+
+        let peer = AX25Address(call: "PEER", ssid: 1)
+        let session = coordinator.sessionManager.session(for: peer)
+        session.stateMachine.handle(event: .connectRequest)
+        XCTAssertTrue(coordinator.hasActiveSessions, "Connecting session should count as active")
+
+        session.stateMachine.handle(event: .receivedUA)
+        XCTAssertTrue(coordinator.hasActiveSessions, "Connected session should count as active")
+    }
+
     /// Test that frames from different base callsign are NOT filtered (Bug Fix P2 - verify we didn't break this)
     func testEchoFilterAllowsDifferentCallsign() async throws {
         let coordinator = SessionCoordinator()

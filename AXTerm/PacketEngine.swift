@@ -612,6 +612,11 @@ final class PacketEngine: ObservableObject {
         appendConsoleLine(ConsoleLine.system(text), category: category)
     }
 
+    /// Public wrapper for addSystemLine so SessionCoordinator can post adaptive-change notifications.
+    func appendSystemNotification(_ text: String) {
+        addSystemLine(text, category: .transmission)
+    }
+
     private func addErrorLine(_ text: String, category: ConsoleEntryRecord.Category) {
         appendConsoleLine(ConsoleLine.error(text), category: category)
     }

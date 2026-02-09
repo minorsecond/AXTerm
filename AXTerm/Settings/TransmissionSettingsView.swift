@@ -20,6 +20,15 @@ struct TransmissionSettingsView: View {
 
     var body: some View {
         Form {
+            // Link Layer Section (Deep Link Target from Adaptive Chip)
+            PreferencesSection("Link Layer (AX.25 Connected Mode)", id: .linkLayer) {
+                LinkLayerSettingsView(
+                    settings: settings,
+                    txAdaptiveSettings: $txAdaptiveSettings,
+                    syncToCoordinator: syncAdaptiveSettingsToSessionCoordinator
+                )
+            }
+
             // Adaptive Transmission Section (Deep Link Target)
             PreferencesSection("Adaptive Transmission", id: .adaptiveTransmission) {
                 Toggle("Enable Adaptive Transmission", isOn: Binding(

@@ -68,8 +68,8 @@ enum SettingsTab: Hashable {
 
 /// Identifiers for specific sections within tabs (for deep linking).
 enum SettingsSection: Hashable {
+    case linkLayer
     case adaptiveTransmission
     case axdpProtocol
     case fileTransfer
-    // Add more as needed
 }

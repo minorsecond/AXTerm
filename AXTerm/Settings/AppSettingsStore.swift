@@ -54,6 +54,7 @@ final class AppSettingsStore: ObservableObject {
     static let axdpMaxDecompressedPayloadKey = "axdpMaxDecompressedPayload"
     static let axdpShowDecodeDetailsKey = "axdpShowAXDPDecodeDetails"
     static let adaptiveTransmissionEnabledKey = "adaptiveTransmissionEnabled"
+    static let tncCapabilitiesKey = "tncCapabilities"
 
     // NET/ROM route settings keys
     static let hideExpiredRoutesKey = "hideExpiredRoutes"
@@ -400,6 +401,11 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistAdaptiveTransmissionEnabled() }
     }
 
+    /// TNC capability model — gates which link-layer settings AXTerm can control.
+    @Published var tncCapabilities: TNCCapabilities {
+        didSet { persistTNCCapabilities() }
+    }
+
     // MARK: - File Transfer Settings
 
     /// Callsigns that are always allowed to send files without prompting
@@ -672,6 +678,15 @@ final class AppSettingsStore: ObservableObject {
         let storedAXDPShowDecodeDetails = defaults.object(forKey: Self.axdpShowDecodeDetailsKey) as? Bool ?? Self.defaultAXDPShowDecodeDetails
         let storedAdaptiveTransmissionEnabled = defaults.object(forKey: Self.adaptiveTransmissionEnabledKey) as? Bool ?? Self.defaultAdaptiveTransmissionEnabled
 
+        // TNC capabilities (JSON-encoded)
+        let storedTNCCapabilities: TNCCapabilities
+        if let data = defaults.data(forKey: Self.tncCapabilitiesKey),
+           let decoded = try? JSONDecoder().decode(TNCCapabilities.self, from: data) {
+            storedTNCCapabilities = decoded
+        } else {
+            storedTNCCapabilities = TNCCapabilities()
+        }
+
         // Clear timestamps (stored as TimeInterval)
         let storedTerminalClearedAt: Date?
         if let timeInterval = defaults.object(forKey: Self.terminalClearedAtKey) as? TimeInterval {
@@ -745,6 +760,7 @@ final class AppSettingsStore: ObservableObject {
         self.axdpMaxDecompressedPayload = storedAXDPMaxDecompressedPayload
         self.axdpShowDecodeDetails = storedAXDPShowDecodeDetails
         self.adaptiveTransmissionEnabled = storedAdaptiveTransmissionEnabled
+        self.tncCapabilities = storedTNCCapabilities
 
         // Clear timestamps
         self.terminalClearedAt = storedTerminalClearedAt
@@ -912,6 +928,12 @@ final class AppSettingsStore: ObservableObject {
 
     private func persistAdaptiveTransmissionEnabled() {
         defaults.set(adaptiveTransmissionEnabled, forKey: Self.adaptiveTransmissionEnabledKey)
+    }
+
+    private func persistTNCCapabilities() {
+        if let data = try? JSONEncoder().encode(tncCapabilities) {
+            defaults.set(data, forKey: Self.tncCapabilitiesKey)
+        }
     }
 
     private func persistAllowedFileTransferCallsigns() {

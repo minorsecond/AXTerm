@@ -295,4 +295,64 @@ final class AdaptiveSettingsTests: XCTestCase {
         settings.updateFromLinkQuality(lossRate: 0.02, etx: 1.05, srtt: 1.0)
         XCTAssertGreaterThanOrEqual(settings.windowSize.currentAdaptive, 2)
     }
+
+    // MARK: - resetAdaptiveToDefaults
+
+    func testResetAdaptiveToDefaultsResetsCurrentAdaptive() {
+        var settings = TxAdaptiveSettings()
+        // Simulate high-loss learning
+        settings.updateFromLinkQuality(lossRate: 0.3, etx: 2.5, srtt: 2.0)
+        XCTAssertEqual(settings.windowSize.currentAdaptive, 1)
+        XCTAssertEqual(settings.paclen.currentAdaptive, 64)
+        XCTAssertNotNil(settings.currentRto)
+
+        settings.resetAdaptiveToDefaults()
+
+        XCTAssertEqual(settings.windowSize.currentAdaptive, settings.windowSize.defaultValue)
+        XCTAssertEqual(settings.paclen.currentAdaptive, settings.paclen.defaultValue)
+        XCTAssertEqual(settings.maxRetries.currentAdaptive, settings.maxRetries.defaultValue)
+        XCTAssertEqual(settings.rtoMin.currentAdaptive, settings.rtoMin.defaultValue, accuracy: 0.001)
+        XCTAssertEqual(settings.rtoMax.currentAdaptive, settings.rtoMax.defaultValue, accuracy: 0.001)
+        XCTAssertNil(settings.currentRto)
+        XCTAssertNil(settings.windowSize.adaptiveReason)
+        XCTAssertNil(settings.paclen.adaptiveReason)
+    }
+
+    func testResetAdaptivePreservesManualOverrides() {
+        var settings = TxAdaptiveSettings()
+        settings.windowSize.mode = .manual
+        settings.windowSize.manualValue = 4
+        settings.paclen.mode = .manual
+        settings.paclen.manualValue = 64
+
+        // Simulate learning then reset
+        settings.updateFromLinkQuality(lossRate: 0.3, etx: 2.5, srtt: nil)
+        settings.resetAdaptiveToDefaults()
+
+        // Manual mode and values must survive
+        XCTAssertEqual(settings.windowSize.mode, .manual)
+        XCTAssertEqual(settings.windowSize.manualValue, 4)
+        XCTAssertEqual(settings.paclen.mode, .manual)
+        XCTAssertEqual(settings.paclen.manualValue, 64)
+
+        // But currentAdaptive should be reset to defaults
+        XCTAssertEqual(settings.windowSize.currentAdaptive, settings.windowSize.defaultValue)
+        XCTAssertEqual(settings.paclen.currentAdaptive, settings.paclen.defaultValue)
+    }
+
+    func testResetAdaptivePreservesAXDPSettings() {
+        var settings = TxAdaptiveSettings()
+        settings.compressionEnabled = false
+        settings.axdpExtensionsEnabled = false
+        settings.compressionAlgorithm = .deflate
+        settings.maxDecompressedPayload = 8192
+
+        settings.updateFromLinkQuality(lossRate: 0.3, etx: 2.5, srtt: nil)
+        settings.resetAdaptiveToDefaults()
+
+        XCTAssertFalse(settings.compressionEnabled)
+        XCTAssertFalse(settings.axdpExtensionsEnabled)
+        XCTAssertEqual(settings.compressionAlgorithm, .deflate)
+        XCTAssertEqual(settings.maxDecompressedPayload, 8192)
+    }
 }
