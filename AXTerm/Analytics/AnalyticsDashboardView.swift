@@ -246,7 +246,7 @@ struct AnalyticsDashboardView: View {
     }
 
     private var graphSection: some View {
-        AnalyticsCardWithControls(title: "Network graph") {
+        AnalyticsCardWithControls(title: "Network Graph") {
             // Right-aligned controls in header
             networkGraphHeaderControls
         } content: {
