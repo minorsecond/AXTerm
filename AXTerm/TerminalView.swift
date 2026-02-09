@@ -9,7 +9,6 @@
 import SwiftUI
 import Combine
 import UniformTypeIdentifiers
-import OSLog
 
 // MARK: - Observable View Model Wrapper
 
@@ -62,8 +61,8 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Debounced search query
     @Published private(set) var debouncedQuery: String = ""
     
-    /// Shared settings for type filtering (ID, BCN, etc) - optional as it's set in configure
-    private var settings: AppSettingsStore?
+    /// Shared settings for type filtering (ID, BCN, etc)
+    private let settings: AppSettingsStore
     
     /// Max lines for the performance window
     private let maxVisibleLines = 1000
@@ -77,9 +76,9 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Callback for sending response frames (RR, REJ, etc.)
     var onSendResponseFrame: ((OutboundFrame) -> Void)?
 
+    /// Callback when plain-text (non-AXDP) data is received from connected session.
+    /// Used to add to console when sender uses plain text instead of AXDP.
     var onPlainTextChatReceived: ((AX25Address, String, [String]) -> Void)?
-
-
 
     /// Tracks peers that are currently mid-AXDP reassembly.
     /// When data with AXDP magic is received, the peer is added here.
@@ -150,35 +149,21 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// callbacks with weak refs to deallocated objects.
     private var callbacksConfigured = false
     
-    init(sourceCall: String, sessionManager: AX25SessionManager) {
+    init(client: PacketEngine, settings: AppSettingsStore, sourceCall: String, sessionManager: AX25SessionManager) {
         var vm = TerminalTxViewModel()
         vm.sourceCall = sourceCall
         self.viewModel = vm
+        self.settings = settings
         self.sessionManager = sessionManager
-        // setupConsoleSubscription and localCallsign setup moved to configure()
-    }
-    
-    /// Configure the view model with dependencies.
-    /// This must be called from onAppear or similar stable lifecycle event
-    /// to avoid side effects during view initialization.
-    func configure(client: PacketEngine, settings: AppSettingsStore) {
-        guard !callbacksConfigured else { return }
-        
-        // 1. Set settings reference
-        // Note: We don't store settings in init anymore to allow this delayed configuration
-        
-        // 2. Set up local callsign
-        let (baseCall, ssid) = CallsignNormalizer.parse(viewModel.sourceCall.isEmpty ? "NOCALL" : viewModel.sourceCall)
+
+        // Set up local callsign
+        let (baseCall, ssid) = CallsignNormalizer.parse(sourceCall.isEmpty ? "NOCALL" : sourceCall)
         self.sessionManager.localCallsign = AX25Address(call: baseCall.isEmpty ? "NOCALL" : baseCall, ssid: ssid)
         
-        print("[ObservableTerminalTxViewModel] Configured with localCallsign: call='\(baseCall)', ssid=\(ssid)")
+        print("[ObservableTerminalTxViewModel.init] Set localCallsign: call='\(baseCall)', ssid=\(ssid)")
         
-        // 3. Setup subscriptions
         setupSearchDebounce()
-        setupConsoleSubscription(client: client, settings: settings)
-        
-        // 4. Setup callbacks
-        setupSessionCallbacks()
+        setupConsoleSubscription(client: client)
     }
 
     private func createSessionNotification(for session: AX25Session, oldState: AX25SessionState, newState: AX25SessionState) -> SessionNotification? {
@@ -315,20 +300,16 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             .store(in: &cancellables)
     }
 
-    private func setupConsoleSubscription(client: PacketEngine, settings: AppSettingsStore) {
-        // Subscribe to console lines from PacketEngine
+    private func setupConsoleSubscription(client: PacketEngine) {
         client.$consoleLines
-            .receive(on: RunLoop.main)
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] lines in
-                self?.allLines = lines
-                self?.applyFiltering()
+                guard let self = self else { return }
+                self.allLines = lines
+                self.applyFiltering()
             }
             .store(in: &cancellables)
-            
-        // Store settings reference for filtering
-        self.settings = settings
     }
-
 
     /// Update the current search query (to be called when the shared search model changes)
     func updateSearchQuery(_ query: String) {
@@ -340,8 +321,6 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
     /// Primary filtering pipeline implementation
     func applyFiltering() {
-        let state = PerformanceLog.viewUpdate.beginInterval("TerminalFilter")
-        defer { PerformanceLog.viewUpdate.endInterval("TerminalFilter", state) }
         // 1. apply performance window (visibleLines)
         let totalCount = allLines.count
         visibleLines = Array(allLines.suffix(maxVisibleLines))
@@ -350,7 +329,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         var result = visibleLines
         
         // Filter by clear timestamp
-        if let cutoff = settings?.terminalClearedAt {
+        if let cutoff = settings.terminalClearedAt {
             result = result.filter { $0.timestamp > cutoff }
         }
         
@@ -653,7 +632,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             }
         case .REJ:
             // REJ returns frames that need to be retransmitted
-            let retransmitFrames = sessionManager.handleInboundREJ(from: from, path: path, channel: channel, nr: nr, isPoll: isPoll)
+            let retransmitFrames = sessionManager.handleInboundREJ(from: from, path: path, channel: channel, nr: nr)
             for frame in retransmitFrames {
                 sendResponseFrame(frame)
             }
@@ -1066,6 +1045,8 @@ struct TerminalView: View {
         self.searchModel = searchModel
         
         _txViewModel = StateObject(wrappedValue: ObservableTerminalTxViewModel(
+            client: client,
+            settings: settings,
             sourceCall: settings.myCallsign,
             sessionManager: sessionCoordinator.sessionManager
         ))
@@ -1125,8 +1106,11 @@ struct TerminalView: View {
     }
 
     private func wireCallbacks() {
-        // Configure the ViewModel with dependencies and set up callbacks
-        txViewModel.configure(client: client, settings: settings)
+        // CRITICAL: Set up session callbacks FIRST, before any data can arrive.
+        // This must be done in onAppear (not in ObservableTerminalTxViewModel.init)
+        // to avoid the @StateObject gotcha where init() is called multiple times
+        // but only the first instance is kept. See setupSessionCallbacks() for details.
+        txViewModel.setupSessionCallbacks()
         
         // Wire sender progress: I-frames transmitted (incl. from drain) update bytesSent
         client.onUserFrameTransmitted = { [weak txViewModel] bytes in

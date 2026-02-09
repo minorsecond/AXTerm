@@ -160,7 +160,7 @@ final class AX25RetryTests: XCTestCase {
         
         // Peer sends RNR (Receive Not Ready)
         _ = manager.handleInboundRR(from: destination, path: path, channel: 0, nr: 0, isPoll: false)
-        let actions = session.stateMachine.handle(event: .receivedRNR(nr: 0, pf: false))
+        let actions = session.stateMachine.handle(event: .receivedRNR(nr: 0))
         
         // Although this doesn't block sendData() at the manager level immediately (as it just queues),
         // we check if T1 stops to prevent retransmissions while peer is busy

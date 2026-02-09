@@ -568,7 +568,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         sm.sequenceState.incrementVS()  // vs=1
         sm.sequenceState.incrementVS()  // vs=2
 
-        _ = sm.handle(event: .receivedRR(nr: 2, pf: false))
+        _ = sm.handle(event: .receivedRR(nr: 2))
 
         XCTAssertEqual(sm.sequenceState.va, 2)
         XCTAssertEqual(sm.sequenceState.outstandingCount, 0)
@@ -579,7 +579,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         var sm = makeConnectedStateMachine()
         sm.sequenceState.incrementVS()
 
-        let actions = sm.handle(event: .receivedRR(nr: 1, pf: false))
+        let actions = sm.handle(event: .receivedRR(nr: 1))
 
         XCTAssertTrue(actions.contains(.stopT1))
         XCTAssertTrue(actions.contains(.startT3))
@@ -592,7 +592,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         sm.sequenceState.incrementVS()  // vs=2
 
         // Partial ack: ack only frame 0
-        let actions = sm.handle(event: .receivedRR(nr: 1, pf: false))
+        let actions = sm.handle(event: .receivedRR(nr: 1))
 
         XCTAssertFalse(actions.contains(.stopT1), "T1 should not stop with frames still outstanding")
         XCTAssertEqual(sm.sequenceState.outstandingCount, 1)
@@ -607,7 +607,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         _ = sm.handle(event: .t1Timeout)
         XCTAssertEqual(sm.retryCount, 2)
 
-        _ = sm.handle(event: .receivedRR(nr: 1, pf: false))
+        _ = sm.handle(event: .receivedRR(nr: 1))
 
         XCTAssertEqual(sm.retryCount, 0, "retryCount must reset when V(A) advances")
     }
@@ -621,7 +621,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         XCTAssertEqual(sm.retryCount, 1)
 
         // RR with nr=0 doesn't advance V(A) (still 0)
-        _ = sm.handle(event: .receivedRR(nr: 0, pf: false))
+        _ = sm.handle(event: .receivedRR(nr: 0))
 
         XCTAssertEqual(sm.retryCount, 1, "retryCount should not reset on stale RR")
     }
@@ -635,7 +635,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         sm.sequenceState.vs = 2
         XCTAssertEqual(sm.sequenceState.outstandingCount, 4)
 
-        _ = sm.handle(event: .receivedRR(nr: 2, pf: false))
+        _ = sm.handle(event: .receivedRR(nr: 2))
 
         XCTAssertEqual(sm.sequenceState.va, 2)
         XCTAssertEqual(sm.sequenceState.outstandingCount, 0)
@@ -648,15 +648,15 @@ final class AX25SpecComplianceTests: XCTestCase {
         sm.sequenceState.incrementVS()  // vs=2
         sm.sequenceState.incrementVS()  // vs=3
 
-        _ = sm.handle(event: .receivedRR(nr: 1, pf: false))
+        _ = sm.handle(event: .receivedRR(nr: 1))
         XCTAssertEqual(sm.sequenceState.va, 1)
         XCTAssertEqual(sm.sequenceState.outstandingCount, 2)
 
-        _ = sm.handle(event: .receivedRR(nr: 2, pf: false))
+        _ = sm.handle(event: .receivedRR(nr: 2))
         XCTAssertEqual(sm.sequenceState.va, 2)
         XCTAssertEqual(sm.sequenceState.outstandingCount, 1)
 
-        _ = sm.handle(event: .receivedRR(nr: 3, pf: false))
+        _ = sm.handle(event: .receivedRR(nr: 3))
         XCTAssertEqual(sm.sequenceState.va, 3)
         XCTAssertEqual(sm.sequenceState.outstandingCount, 0)
     }
@@ -669,7 +669,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         sm.sequenceState.incrementVS()  // vs=1
         sm.sequenceState.incrementVS()  // vs=2
 
-        _ = sm.handle(event: .receivedRNR(nr: 1, pf: false))
+        _ = sm.handle(event: .receivedRNR(nr: 1))
 
         XCTAssertEqual(sm.sequenceState.va, 1, "RNR should advance V(A)")
     }
@@ -679,7 +679,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         var sm = makeConnectedStateMachine()
         sm.sequenceState.incrementVS()
 
-        let actions = sm.handle(event: .receivedRNR(nr: 1, pf: false))
+        let actions = sm.handle(event: .receivedRNR(nr: 1))
 
         XCTAssertTrue(actions.contains(.stopT1))
     }
@@ -689,7 +689,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         var sm = makeConnectedStateMachine()
         sm.sequenceState.incrementVS()
 
-        let actions = sm.handle(event: .receivedRNR(nr: 1, pf: false))
+        let actions = sm.handle(event: .receivedRNR(nr: 1))
 
         XCTAssertFalse(actions.contains(.startT3),
             "RNR should not start T3 — peer is busy, not idle")
@@ -702,11 +702,11 @@ final class AX25SpecComplianceTests: XCTestCase {
         sm.sequenceState.incrementVS()  // vs=2
 
         // RNR acks first frame
-        _ = sm.handle(event: .receivedRNR(nr: 1, pf: false))
+        _ = sm.handle(event: .receivedRNR(nr: 1))
         XCTAssertEqual(sm.sequenceState.va, 1)
 
         // RR acks remaining frame — resumes normal
-        let actions = sm.handle(event: .receivedRR(nr: 2, pf: false))
+        let actions = sm.handle(event: .receivedRR(nr: 2))
 
         XCTAssertEqual(sm.sequenceState.va, 2)
         XCTAssertTrue(actions.contains(.stopT1))
@@ -718,10 +718,10 @@ final class AX25SpecComplianceTests: XCTestCase {
         var sm = makeConnectedStateMachine()
         sm.sequenceState.incrementVS()
 
-        _ = sm.handle(event: .receivedRNR(nr: 1, pf: false))
+        _ = sm.handle(event: .receivedRNR(nr: 1))
         let va1 = sm.sequenceState.va
 
-        _ = sm.handle(event: .receivedRNR(nr: 1, pf: false))
+        _ = sm.handle(event: .receivedRNR(nr: 1))
         XCTAssertEqual(sm.sequenceState.va, va1, "Repeated RNR(same nr) should be idempotent")
     }
 
@@ -733,7 +733,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         sm.sequenceState.incrementVS()  // vs=1
         sm.sequenceState.incrementVS()  // vs=2
 
-        _ = sm.handle(event: .receivedREJ(nr: 1, pf: false))
+        _ = sm.handle(event: .receivedREJ(nr: 1))
 
         XCTAssertEqual(sm.sequenceState.va, 1, "REJ should advance V(A) to N(R)")
     }
@@ -743,7 +743,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         var sm = makeConnectedStateMachine()
         sm.sequenceState.incrementVS()
 
-        let actions = sm.handle(event: .receivedREJ(nr: 0, pf: false))
+        let actions = sm.handle(event: .receivedREJ(nr: 0))
 
         XCTAssertTrue(actions.contains(.startT1))
     }
@@ -1154,7 +1154,7 @@ final class AX25SpecComplianceTests: XCTestCase {
     /// Disconnected state ignores RR
     func testDisconnectedIgnoresRR() {
         var sm = AX25StateMachine(config: AX25SessionConfig())
-        let actions = sm.handle(event: .receivedRR(nr: 1, pf: false))
+        let actions = sm.handle(event: .receivedRR(nr: 1))
         XCTAssertTrue(actions.isEmpty)
         XCTAssertEqual(sm.state, .disconnected)
     }
@@ -1162,7 +1162,7 @@ final class AX25SpecComplianceTests: XCTestCase {
     /// Disconnected state ignores RNR
     func testDisconnectedIgnoresRNR() {
         var sm = AX25StateMachine(config: AX25SessionConfig())
-        let actions = sm.handle(event: .receivedRNR(nr: 1, pf: false))
+        let actions = sm.handle(event: .receivedRNR(nr: 1))
         XCTAssertTrue(actions.isEmpty)
         XCTAssertEqual(sm.state, .disconnected)
     }
@@ -1170,7 +1170,7 @@ final class AX25SpecComplianceTests: XCTestCase {
     /// Disconnected state ignores REJ
     func testDisconnectedIgnoresREJ() {
         var sm = AX25StateMachine(config: AX25SessionConfig())
-        let actions = sm.handle(event: .receivedREJ(nr: 1, pf: false))
+        let actions = sm.handle(event: .receivedREJ(nr: 1))
         XCTAssertTrue(actions.isEmpty)
         XCTAssertEqual(sm.state, .disconnected)
     }
@@ -1220,7 +1220,7 @@ final class AX25SpecComplianceTests: XCTestCase {
     func testConnectingIgnoresRR() {
         var sm = AX25StateMachine(config: AX25SessionConfig())
         _ = sm.handle(event: .connectRequest)
-        let actions = sm.handle(event: .receivedRR(nr: 0, pf: false))
+        let actions = sm.handle(event: .receivedRR(nr: 0))
         XCTAssertTrue(actions.isEmpty)
         XCTAssertEqual(sm.state, .connecting)
     }
@@ -1229,7 +1229,7 @@ final class AX25SpecComplianceTests: XCTestCase {
     func testConnectingIgnoresRNR() {
         var sm = AX25StateMachine(config: AX25SessionConfig())
         _ = sm.handle(event: .connectRequest)
-        let actions = sm.handle(event: .receivedRNR(nr: 0, pf: false))
+        let actions = sm.handle(event: .receivedRNR(nr: 0))
         XCTAssertTrue(actions.isEmpty)
         XCTAssertEqual(sm.state, .connecting)
     }
@@ -1238,7 +1238,7 @@ final class AX25SpecComplianceTests: XCTestCase {
     func testConnectingIgnoresREJ() {
         var sm = AX25StateMachine(config: AX25SessionConfig())
         _ = sm.handle(event: .connectRequest)
-        let actions = sm.handle(event: .receivedREJ(nr: 0, pf: false))
+        let actions = sm.handle(event: .receivedREJ(nr: 0))
         XCTAssertTrue(actions.isEmpty)
         XCTAssertEqual(sm.state, .connecting)
     }
@@ -1265,7 +1265,7 @@ final class AX25SpecComplianceTests: XCTestCase {
     func testDisconnectingIgnoresRR() {
         var sm = makeConnectedStateMachine()
         _ = sm.handle(event: .disconnectRequest)
-        let actions = sm.handle(event: .receivedRR(nr: 0, pf: false))
+        let actions = sm.handle(event: .receivedRR(nr: 0))
         XCTAssertTrue(actions.isEmpty)
         XCTAssertEqual(sm.state, .disconnecting)
     }
@@ -1293,7 +1293,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         var sm = makeConnectedStateMachine()
         _ = sm.handle(event: .receivedFRMR)
         XCTAssertEqual(sm.state, .error)
-        let actions = sm.handle(event: .receivedRR(nr: 0, pf: false))
+        let actions = sm.handle(event: .receivedRR(nr: 0))
         XCTAssertTrue(actions.isEmpty)
         XCTAssertEqual(sm.state, .error)
     }
@@ -1386,7 +1386,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         XCTAssertTrue(self.actions(t1Actions, containRRPoll: true))
 
         // Peer responds to poll with RR(F=1) acking our frame
-        let rrActions = sm.handle(event: .receivedRR(nr: 1, pf: false))
+        let rrActions = sm.handle(event: .receivedRR(nr: 1))
         XCTAssertEqual(sm.retryCount, 0, "retryCount reset on successful ack")
         XCTAssertTrue(rrActions.contains(.stopT1))
     }
@@ -1403,7 +1403,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         XCTAssertFalse(sm.sequenceState.canSend(windowSize: 2))
 
         // RR acks both
-        _ = sm.handle(event: .receivedRR(nr: 2, pf: false))
+        _ = sm.handle(event: .receivedRR(nr: 2))
         XCTAssertTrue(sm.sequenceState.canSend(windowSize: 2))
         XCTAssertEqual(sm.sequenceState.outstandingCount, 0)
     }
@@ -1422,7 +1422,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         XCTAssertEqual(sm.retryCount, 1)
 
         // Partial ack
-        _ = sm.handle(event: .receivedRR(nr: 1, pf: false))
+        _ = sm.handle(event: .receivedRR(nr: 1))
         XCTAssertEqual(sm.retryCount, 0)  // reset
         XCTAssertEqual(sm.sequenceState.outstandingCount, 1)
 
@@ -1431,7 +1431,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         XCTAssertEqual(sm.retryCount, 1)
 
         // Full ack
-        _ = sm.handle(event: .receivedRR(nr: 2, pf: false))
+        _ = sm.handle(event: .receivedRR(nr: 2))
         XCTAssertEqual(sm.retryCount, 0)
         XCTAssertEqual(sm.sequenceState.outstandingCount, 0)
     }
@@ -1501,7 +1501,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         sm.sequenceState.incrementVS()
         XCTAssertEqual(sm.sequenceState.va, 0)
 
-        _ = sm.handle(event: .receivedRR(nr: 0, pf: false))
+        _ = sm.handle(event: .receivedRR(nr: 0))
 
         XCTAssertEqual(sm.sequenceState.va, 0, "RR with nr==va should not change anything")
         XCTAssertEqual(sm.sequenceState.outstandingCount, 1, "Outstanding count unchanged")
@@ -1555,7 +1555,7 @@ final class AX25SpecComplianceTests: XCTestCase {
 
         // RR(5) when vs=1 — N(R) beyond what we've sent
         // Should not crash; behavior is implementation-defined
-        let actions = sm.handle(event: .receivedRR(nr: 5, pf: false))
+        let actions = sm.handle(event: .receivedRR(nr: 5))
 
         // Main assertion: no crash, state still connected
         XCTAssertEqual(sm.state, .connected)

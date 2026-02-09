@@ -68,9 +68,8 @@ final class TNCCapabilityGatingTests: XCTestCase {
     // MARK: - AppSettingsStore Persistence
 
     func testSettingsStoreDefaultTNCCapabilities() {
-        let suiteName = "TNCCapabilityGatingTests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let defaults = UserDefaults(suiteName: "TNCCapabilityGatingTests-\(UUID().uuidString)")!
+        defer { defaults.removePersistentDomain(forName: defaults.suiteName) }
 
         let store = AppSettingsStore(defaults: defaults)
         XCTAssertEqual(store.tncCapabilities.mode, .kiss)

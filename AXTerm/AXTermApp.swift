@@ -66,9 +66,6 @@ struct AXTermApp: App {
         SentryManager.shared.startIfEnabled(settings: settingsStore)
         SentryManager.shared.addBreadcrumb(category: "app.lifecycle", message: "App init", level: .info, data: nil)
 
-        // Start main thread watchdog
-        MainThreadWatchdog.shared.start()
-
         // Use ephemeral database in test mode to avoid polluting the real database
         let queue: DatabaseQueue?
         let useEphemeralDatabase = (testConfig.isTestMode && testConfig.ephemeralDatabase) || isUnitTests || testConfig.isTestMode

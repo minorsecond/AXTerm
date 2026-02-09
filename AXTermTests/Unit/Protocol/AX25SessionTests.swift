@@ -570,9 +570,9 @@ final class AX25SessionTests: XCTestCase {
             .receivedSABM,
             .receivedDISC,
             .receivedFRMR,
-            .receivedRR(nr: 0, pf: false),
-            .receivedRNR(nr: 0, pf: false),
-            .receivedREJ(nr: 0, pf: false),
+            .receivedRR(nr: 0),
+            .receivedRNR(nr: 0),
+            .receivedREJ(nr: 0),
             .receivedIFrame(ns: 0, nr: 0, pf: false, payload: Data()),
             .t1Timeout,
             .t3Timeout
@@ -815,7 +815,7 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(sm.sequenceState.outstandingCount, 2)
 
         // Receive RR with nr=2 (acks frames 0,1)
-        let actions = sm.handle(event: .receivedRR(nr: 2, pf: false))
+        let actions = sm.handle(event: .receivedRR(nr: 2))
 
         XCTAssertEqual(sm.sequenceState.va, 2)
         XCTAssertEqual(sm.sequenceState.outstandingCount, 0)
@@ -985,7 +985,7 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(sm.retryCount, 2)
 
         // RR received, acknowledging our frame
-        let actions = sm.handle(event: .receivedRR(nr: 1, pf: false))
+        let actions = sm.handle(event: .receivedRR(nr: 1))
         XCTAssertEqual(sm.sequenceState.va, 1)
         XCTAssertEqual(sm.sequenceState.outstandingCount, 0)
 
@@ -1010,7 +1010,7 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(sm.retryCount, 1)
 
         // RR with nr=0 doesn't advance V(A) (duplicate/stale RR)
-        _ = sm.handle(event: .receivedRR(nr: 0, pf: false))
+        _ = sm.handle(event: .receivedRR(nr: 0))
         XCTAssertEqual(sm.sequenceState.va, 0)
 
         // retryCount should remain since no progress was made
