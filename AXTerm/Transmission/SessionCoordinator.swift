@@ -558,20 +558,55 @@ final class SessionCoordinator: ObservableObject {
                 // and the peer reconnects, the old fragments could corrupt the new message.
                 self.clearAllReassemblyBuffers(for: session.remoteAddress)
 
-                // When all sessions are disconnected, reset global adaptive to defaults
+                // Evict per-route adaptive cache for the disconnected session and
+                // notify. This prevents stale session-learned values from silently
+                // carrying over to the next connection.
+                let dest = session.remoteAddress.display.uppercased()
+                let pathSig = session.path.display
+                let routeKey = RouteAdaptiveKey(
+                    destination: canonicalDestination(dest),
+                    pathSignature: pathSig
+                )
+                if let cached = self.adaptiveCache.removeValue(forKey: routeKey) {
+                    let cachedSnap = AdaptiveSnapshot(from: cached.settings)
+                    let defaults = TxAdaptiveSettings()
+                    let defaultSnap = AdaptiveSnapshot(from: defaults)
+                    let pathDesc = pathSig.isEmpty ? "direct" : "via \(pathSig)"
+                    if cachedSnap.k != defaultSnap.k || cachedSnap.p != defaultSnap.p
+                        || cachedSnap.n2 != defaultSnap.n2
+                        || (cachedSnap.rto != nil && cachedSnap.rto != defaultSnap.rto)
+                    {
+                        self.packetEngine?.appendSystemNotification(
+                            "Adaptive: Reset to defaults (session disconnected: \(dest) \(pathDesc))"
+                        )
+                    } else {
+                        self.packetEngine?.appendSystemNotification(
+                            "Adaptive: Session ended, parameters unchanged (\(dest) \(pathDesc))"
+                        )
+                    }
+                } else {
+                    let pathDesc = pathSig.isEmpty ? "direct" : "via \(pathSig)"
+                    self.packetEngine?.appendSystemNotification(
+                        "Adaptive: Session ended (\(dest) \(pathDesc))"
+                    )
+                }
+
+                // When all sessions are disconnected, also reset global adaptive to defaults
                 // so stale network-learned values (e.g. "High loss - stop-and-wait") don't persist.
                 if !self.hasActiveSessions {
                     let before = AdaptiveSnapshot(from: self.globalAdaptiveSettings)
                     self.globalAdaptiveSettings.resetAdaptiveToDefaults()
                     self.syncSessionManagerConfigFromAdaptive()
                     let after = AdaptiveSnapshot(from: self.globalAdaptiveSettings)
-                    if before.k != after.k || before.p != after.p || before.n2 != after.n2 {
+                    if before.k != after.k || before.p != after.p || before.n2 != after.n2
+                        || (before.rto != nil && before.rto != after.rto)
+                    {
                         self.packetEngine?.appendSystemNotification(
-                            "Adaptive: Reset to defaults (all sessions disconnected)"
+                            "Adaptive: Network parameters reset to defaults"
                         )
                     }
-                    self.objectWillChange.send()
                 }
+                self.objectWillChange.send()
             }
         }
     }

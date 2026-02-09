@@ -45,33 +45,35 @@ struct ContentView: View {
         _inspectionRouter = ObservedObject(wrappedValue: inspectionRouter)
         // Initialize analytics view model with settings store for persistence
         _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(settingsStore: settings, netRomIntegration: client.netRomIntegration))
-        // Get or create the shared session coordinator so Settings can update the same instance
+        // Get or create the shared session coordinator so Settings can update the same instance.
+        // Only seed @Published properties on a new coordinator — re-seeding an existing shared
+        // instance during view init triggers "Publishing changes from within view updates".
         let coordinator: SessionCoordinator
         if let existing = SessionCoordinator.shared {
             coordinator = existing
         } else {
             coordinator = SessionCoordinator()
+            // Seed AXDP / transmission adaptive settings from persisted settings
+            var adaptive = TxAdaptiveSettings()
+            adaptive.axdpExtensionsEnabled = settings.axdpExtensionsEnabled
+            adaptive.autoNegotiateCapabilities = settings.axdpAutoNegotiateCapabilities
+            adaptive.compressionEnabled = settings.axdpCompressionEnabled
+            if let algo = AXDPCompression.Algorithm(rawValue: settings.axdpCompressionAlgorithmRaw) {
+                adaptive.compressionAlgorithm = algo
+            }
+            adaptive.maxDecompressedPayload = UInt32(settings.axdpMaxDecompressedPayload)
+            adaptive.showAXDPDecodeDetails = settings.axdpShowDecodeDetails
+            coordinator.globalAdaptiveSettings = adaptive
+            coordinator.adaptiveTransmissionEnabled = settings.adaptiveTransmissionEnabled
+            coordinator.syncSessionManagerConfigFromAdaptive()
+            if settings.adaptiveTransmissionEnabled {
+                TxLog.adaptiveEnabled()
+            } else {
+                TxLog.adaptiveDisabled()
+            }
         }
         coordinator.localCallsign = settings.myCallsign
         coordinator.appSettings = settings
-        // Seed AXDP / transmission adaptive settings from persisted settings
-        var adaptive = TxAdaptiveSettings()
-        adaptive.axdpExtensionsEnabled = settings.axdpExtensionsEnabled
-        adaptive.autoNegotiateCapabilities = settings.axdpAutoNegotiateCapabilities
-        adaptive.compressionEnabled = settings.axdpCompressionEnabled
-        if let algo = AXDPCompression.Algorithm(rawValue: settings.axdpCompressionAlgorithmRaw) {
-            adaptive.compressionAlgorithm = algo
-        }
-        adaptive.maxDecompressedPayload = UInt32(settings.axdpMaxDecompressedPayload)
-        adaptive.showAXDPDecodeDetails = settings.axdpShowDecodeDetails
-        coordinator.globalAdaptiveSettings = adaptive
-        coordinator.adaptiveTransmissionEnabled = settings.adaptiveTransmissionEnabled
-        coordinator.syncSessionManagerConfigFromAdaptive()
-        if settings.adaptiveTransmissionEnabled {
-            TxLog.adaptiveEnabled()
-        } else {
-            TxLog.adaptiveDisabled()
-        }
         coordinator.subscribeToPackets(from: client)
         _sessionCoordinator = StateObject(wrappedValue: coordinator)
     }
