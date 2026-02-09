@@ -105,8 +105,11 @@ final class NetRomPassiveInference {
         // Create inferred neighbor from the digipeater
         simulateNeighborObservationInferred(nextHop: nextHop, timestamp: timestamp)
 
-        // Record route evidence: route to the packet source via the last digipeater
-        recordEvidence(destination: normalizedFrom, origin: nextHop, path: [nextHop, normalizedFrom], timestamp: timestamp, classification: classification, isRetry: isRetry)
+        // Record route evidence: route to the packet source via the full digipeater path
+        // The path we follow to reach the destination is the reverse of the path the packet took to reach us.
+        // If we hear FROM A VIA B, C, then the path to A is [C, B, A].
+        let fullPath = viaNormalized.reversed() + [normalizedFrom]
+        recordEvidence(destination: normalizedFrom, origin: nextHop, path: fullPath, timestamp: timestamp, classification: classification, isRetry: isRetry)
     }
 
     func purgeStaleEvidence(currentDate: Date) {
