@@ -12,7 +12,20 @@ struct AdaptiveStatusChip: View {
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var sessionCoordinator: SessionCoordinator
 
+    /// Active session destination (nil when not connected) — used to resolve per-route settings.
+    var activeDestination: String? = nil
+    /// Active session digi path (nil when not connected).
+    var activePath: String? = nil
+
     @State private var showSettingsPopover = false
+
+    /// Effective settings for display, resolving per-route cache when connected.
+    private var displaySettings: TxAdaptiveSettings {
+        sessionCoordinator.effectiveAdaptiveSettings(
+            destination: activeDestination,
+            path: activePath
+        )
+    }
 
     var body: some View {
         Button {
@@ -28,7 +41,7 @@ struct AdaptiveStatusChip: View {
     }
 
     private var hasManualOverrides: Bool {
-        let a = sessionCoordinator.globalAdaptiveSettings
+        let a = displaySettings
         return a.windowSize.mode == .manual
             || a.paclen.mode == .manual
             || a.maxRetries.mode == .manual
@@ -122,15 +135,15 @@ struct AdaptiveStatusChip: View {
     }
 
     private var kValueString: String {
-        "K\(sessionCoordinator.globalAdaptiveSettings.windowSize.effectiveValue)"
+        "K\(displaySettings.windowSize.effectiveValue)"
     }
 
     private var pValueString: String {
-        "P\(sessionCoordinator.globalAdaptiveSettings.paclen.effectiveValue)"
+        "P\(displaySettings.paclen.effectiveValue)"
     }
 
     private var n2ValueString: String {
-        "N2 \(sessionCoordinator.globalAdaptiveSettings.maxRetries.effectiveValue)"
+        "N2 \(displaySettings.maxRetries.effectiveValue)"
     }
 
     private var popoverContent: some View {
@@ -164,7 +177,7 @@ struct AdaptiveStatusChip: View {
                         HStack {
                             Text("Window (K):")
                             Spacer()
-                            Text("\(sessionCoordinator.globalAdaptiveSettings.windowSize.effectiveValue)")
+                            Text("\(displaySettings.windowSize.effectiveValue)")
                                 .monospaced()
                         }
                         .font(.caption)
@@ -172,7 +185,7 @@ struct AdaptiveStatusChip: View {
                         HStack {
                             Text("Packet Size (P):")
                             Spacer()
-                            Text("\(sessionCoordinator.globalAdaptiveSettings.paclen.effectiveValue)")
+                            Text("\(displaySettings.paclen.effectiveValue)")
                                 .monospaced()
                         }
                         .font(.caption)
@@ -180,7 +193,7 @@ struct AdaptiveStatusChip: View {
                         HStack {
                             Text("Max Retries (N2):")
                             Spacer()
-                            Text("\(sessionCoordinator.globalAdaptiveSettings.maxRetries.effectiveValue)")
+                            Text("\(displaySettings.maxRetries.effectiveValue)")
                                 .monospaced()
                         }
                         .font(.caption)

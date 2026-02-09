@@ -134,7 +134,7 @@ struct ContentView: View {
                       coordinator.adaptiveTransmissionEnabled,
                       let integration = client.netRomIntegration else { continue }
                 let stats = integration.exportLinkStats()
-                guard let (lossRate, etx) = Self.aggregateLinkQualityForAdaptive(stats) else { continue }
+                guard let (lossRate, etx) = Self.aggregateLinkQualityForAdaptive(stats, localCallsign: coordinator.localCallsign) else { continue }
                 coordinator.applyLinkQualitySample(lossRate: lossRate, etx: etx, srtt: nil, source: "network")
             }
         }
@@ -600,9 +600,24 @@ struct ContentView: View {
     }
 
     /// Aggregate link stats into (lossRate, etx) for adaptive settings. Uses only links with enough observations.
-    private static func aggregateLinkQualityForAdaptive(_ records: [LinkStatRecord]) -> (lossRate: Double, etx: Double)? {
+    /// When `localCallsign` is provided, only links involving the local station are considered,
+    /// preventing other stations' poor links from dragging adaptive settings to overly conservative values.
+    static func aggregateLinkQualityForAdaptive(_ records: [LinkStatRecord], localCallsign: String? = nil) -> (lossRate: Double, etx: Double)? {
         let minObs = 5
-        let valid = records.filter { r in
+
+        // Filter to local station links when a callsign is provided
+        let filtered: [LinkStatRecord]
+        if let local = localCallsign, !local.isEmpty {
+            let normalizedLocal = CallsignValidator.normalize(local)
+            filtered = records.filter { r in
+                CallsignValidator.normalize(r.fromCall) == normalizedLocal
+                    || CallsignValidator.normalize(r.toCall) == normalizedLocal
+            }
+        } else {
+            filtered = records
+        }
+
+        let valid = filtered.filter { r in
             r.observationCount >= minObs
                 && (r.dfEstimate ?? 0) > 0.05
                 && (r.drEstimate ?? 0) > 0.05
