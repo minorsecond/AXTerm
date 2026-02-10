@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct GraphSelectionState: Equatable {
+nonisolated struct GraphSelectionState: Equatable {
     var selectedIDs: Set<String> = []
     var primarySelectionID: String?
 
@@ -19,19 +19,19 @@ struct GraphSelectionState: Equatable {
     }
 }
 
-enum GraphSelectionAction: Equatable {
+nonisolated enum GraphSelectionAction: Equatable {
     case clickNode(id: String, isShift: Bool)
     case selectMany(ids: Set<String>, isShift: Bool)
     case clickBackground
     case doubleClickNode(id: String, isShift: Bool)
 }
 
-enum GraphSelectionEffect: Equatable {
+nonisolated enum GraphSelectionEffect: Equatable {
     case none
     case inspect(String)
 }
 
-enum GraphSelectionReducer {
+nonisolated enum GraphSelectionReducer {
     static func reduce(state: inout GraphSelectionState, action: GraphSelectionAction) -> GraphSelectionEffect {
         switch action {
         case let .clickNode(id, isShift):

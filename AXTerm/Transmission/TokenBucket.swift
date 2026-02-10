@@ -21,7 +21,7 @@ import Foundation
 ///     // OK to send
 /// }
 /// ```
-struct TokenBucket {
+nonisolated struct TokenBucket {
     private var tokens: Double
     private let ratePerSec: Double
     private let capacity: Double
@@ -96,7 +96,7 @@ struct TokenBucket {
 // MARK: - Per-Destination Bucket Manager
 
 /// Manages token buckets per destination for fair scheduling.
-final class TokenBucketManager {
+nonisolated final class TokenBucketManager {
     private var buckets: [String: TokenBucket] = [:]
     private let defaultRate: Double
     private let defaultCapacity: Double

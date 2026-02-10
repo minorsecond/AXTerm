@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum WireDebugSettings {
+nonisolated enum WireDebugSettings {
     static let envKey = "AXTERM_WIRE_DEBUG"
     static let defaultsKey = "AXTermWireDebug"
 

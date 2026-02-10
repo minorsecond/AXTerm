@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum AnalyticsInputNormalizer {
+nonisolated enum AnalyticsInputNormalizer {
     static func minEdgeCount(_ value: Int) -> Int {
         max(1, min(value, 20))
     }

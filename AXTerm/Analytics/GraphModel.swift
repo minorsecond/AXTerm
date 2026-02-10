@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct NetworkGraphNode: Hashable, Sendable, Identifiable {
+nonisolated struct NetworkGraphNode: Hashable, Sendable, Identifiable {
     let id: String
     let callsign: String
     let weight: Int
@@ -59,7 +59,7 @@ struct NetworkGraphNode: Hashable, Sendable, Identifiable {
     }
 }
 
-struct NetworkGraphEdge: Hashable, Sendable {
+nonisolated struct NetworkGraphEdge: Hashable, Sendable {
     let sourceID: String
     let targetID: String
     let weight: Int
@@ -67,14 +67,14 @@ struct NetworkGraphEdge: Hashable, Sendable {
     let isStale: Bool
 }
 
-struct GraphNeighborStat: Hashable, Sendable {
+nonisolated struct GraphNeighborStat: Hashable, Sendable {
     let id: String
     let weight: Int
     let bytes: Int
     let isStale: Bool
 }
 
-struct GraphModel: Hashable, Sendable {
+nonisolated struct GraphModel: Hashable, Sendable {
     let nodes: [NetworkGraphNode]
     let edges: [NetworkGraphEdge]
     let adjacency: [String: [GraphNeighborStat]]

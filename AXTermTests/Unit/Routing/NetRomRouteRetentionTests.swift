@@ -9,6 +9,7 @@ import XCTest
 @testable import AXTerm
 import GRDB
 
+@MainActor
 final class NetRomRouteRetentionTests: XCTestCase {
 
     // MARK: - Settings Tests

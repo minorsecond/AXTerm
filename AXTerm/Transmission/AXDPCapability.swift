@@ -16,7 +16,7 @@ import Foundation
 // MARK: - Capability Structure
 
 /// AXDP peer capabilities for negotiation
-struct AXDPCapability: Sendable, Equatable {
+nonisolated struct AXDPCapability: Sendable, Equatable {
 
     /// Sub-TLV types within capabilities TLV (0x20)
     enum SubTLVType: UInt8 {
@@ -227,7 +227,7 @@ struct AXDPCapability: Sendable, Equatable {
 // MARK: - Peer Key
 
 /// Key for identifying a peer in capability cache
-struct AXDPPeerKey: Hashable, Sendable {
+nonisolated struct AXDPPeerKey: Hashable, Sendable {
     let callsign: String
     let ssid: Int
 
@@ -240,7 +240,7 @@ struct AXDPPeerKey: Hashable, Sendable {
 // MARK: - Capability Cache
 
 /// Cache for peer capabilities with expiry
-struct AXDPCapabilityCache: Sendable {
+nonisolated struct AXDPCapabilityCache: Sendable {
 
     /// Cache entry with timestamp
     private struct Entry: Sendable {
@@ -403,7 +403,7 @@ extension AXDPCapability.Features: CustomStringConvertible {
 // MARK: - Compression
 
 /// AXDP compression support
-enum AXDPCompression {
+nonisolated enum AXDPCompression {
 
     /// Supported compression algorithms
     enum Algorithm: UInt8, Sendable, Equatable, Hashable, CaseIterable {
@@ -549,7 +549,7 @@ enum AXDPCompression {
 // MARK: - File Metadata
 
 /// AXDP file metadata structure (Section 9.2)
-struct AXDPFileMeta: Sendable, Equatable {
+nonisolated struct AXDPFileMeta: Sendable, Equatable {
 
     /// Sub-TLV types for file metadata
     enum SubTLVType: UInt8 {

@@ -11,7 +11,7 @@ import Foundation
 // MARK: - AX.25 Constants
 
 /// Common AX.25 protocol constants
-enum AX25Constants {
+nonisolated enum AX25Constants {
     /// Default packet length (paclen) in bytes
     static let defaultPacketLength: Int = 128
     
@@ -28,7 +28,7 @@ enum AX25Constants {
 // MARK: - Session State
 
 /// State of an AX.25 connected-mode session
-enum AX25SessionState: String, Equatable, Sendable {
+nonisolated enum AX25SessionState: String, Equatable, Sendable {
     case disconnected
     case connecting      // Sent SABM, waiting UA
     case connected
@@ -39,7 +39,7 @@ enum AX25SessionState: String, Equatable, Sendable {
 // MARK: - Session Configuration
 
 /// Configuration for AX.25 session parameters
-struct AX25SessionConfig: Sendable {
+nonisolated struct AX25SessionConfig: Sendable {
     /// Window size K (max outstanding I-frames)
     let windowSize: Int
 
@@ -95,7 +95,7 @@ struct AX25SessionConfig: Sendable {
 // MARK: - Sequence Numbers
 
 /// AX.25 sequence number state (V(S), V(R), V(A))
-struct AX25SequenceState: Sendable {
+nonisolated struct AX25SequenceState: Sendable {
     /// Modulo for sequence numbers (8 or 128)
     let modulo: Int
 
@@ -153,7 +153,7 @@ struct AX25SequenceState: Sendable {
 // MARK: - Session Timers
 
 /// Timer management for AX.25 session
-struct AX25SessionTimers: Sendable {
+nonisolated struct AX25SessionTimers: Sendable {
     /// Smoothed RTT estimate
     var srtt: Double? = nil
 
@@ -220,7 +220,7 @@ struct AX25SessionTimers: Sendable {
 // MARK: - Session Statistics
 
 /// Statistics for an AX.25 session
-struct AX25SessionStatistics: Sendable {
+nonisolated struct AX25SessionStatistics: Sendable {
     var framesSent: Int = 0
     var framesReceived: Int = 0
     var retransmissions: Int = 0
@@ -253,7 +253,7 @@ struct AX25SessionStatistics: Sendable {
 // MARK: - Session Events
 
 /// Events that can trigger state transitions
-enum AX25SessionEvent: Sendable {
+nonisolated enum AX25SessionEvent: Sendable {
     // Local requests
     case connectRequest
     case disconnectRequest
@@ -283,7 +283,7 @@ enum AX25SessionEvent: Sendable {
 // MARK: - Session Actions
 
 /// Actions to take in response to events
-enum AX25SessionAction: Sendable, Equatable {
+nonisolated enum AX25SessionAction: Sendable, Equatable {
     case sendSABM
     case sendUA
     case sendDM
@@ -305,7 +305,7 @@ enum AX25SessionAction: Sendable, Equatable {
 // MARK: - State Machine
 
 /// Buffered I-frame waiting for delivery
-struct BufferedIFrame: Sendable {
+nonisolated struct BufferedIFrame: Sendable {
     let ns: Int
     let nr: Int
     let payload: Data
@@ -313,7 +313,7 @@ struct BufferedIFrame: Sendable {
 
 /// AX.25 connected-mode state machine
 /// Handles state transitions and generates actions in response to events
-struct AX25StateMachine: Sendable {
+nonisolated struct AX25StateMachine: Sendable {
     /// Current session state
     private(set) var state: AX25SessionState = .disconnected
 

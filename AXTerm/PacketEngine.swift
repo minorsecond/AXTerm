@@ -12,7 +12,7 @@ import GRDB
 import Network
 
 /// Connection status for the KISS TCP client
-enum ConnectionStatus: String {
+nonisolated enum ConnectionStatus: String {
     case disconnected = "Disconnected"
     case connecting = "Connecting"
     case connected = "Connected"
@@ -20,7 +20,7 @@ enum ConnectionStatus: String {
 }
 
 /// Filter settings for packet display
-struct PacketFilters: Equatable {
+nonisolated struct PacketFilters: Equatable {
     var showUI: Bool = true
     var showI: Bool = true
     var showS: Bool = true
@@ -40,7 +40,7 @@ struct PacketFilters: Equatable {
 }
 
 /// Raw data chunk for the Raw view
-struct RawChunk: Identifiable, Hashable, Sendable {
+nonisolated struct RawChunk: Identifiable, Hashable, Sendable {
     let id: UUID
     let timestamp: Date
     let data: Data

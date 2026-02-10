@@ -281,7 +281,7 @@ struct ConsoleView: View {
 
 // MARK: - Console Line Grouping
 
-enum ConsoleLineGrouper {
+nonisolated enum ConsoleLineGrouper {
     static func group(_ lines: [ConsoleLine]) -> [ConsoleLineGroup] {
         var groups: [ConsoleLineGroup] = []
         var signatureToIndex: [String: Int] = [:]
@@ -308,7 +308,7 @@ enum ConsoleLineGrouper {
 // MARK: - Console Line Group
 
 /// Groups a primary console line with its duplicates (received via different paths)
-struct ConsoleLineGroup: Identifiable {
+nonisolated struct ConsoleLineGroup: Identifiable {
     let id: UUID
     let primary: ConsoleLine
     var duplicates: [ConsoleLine]
@@ -615,7 +615,7 @@ struct FilterToggle: View {
     }
 }
 
-private struct ConsoleScrollBottomPreferenceKey: PreferenceKey {
+nonisolated private struct ConsoleScrollBottomPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {

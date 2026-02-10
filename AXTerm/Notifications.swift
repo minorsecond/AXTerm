@@ -10,7 +10,7 @@ import UserNotifications
 import AppKit
 import Combine
 
-enum NotificationAction {
+nonisolated enum NotificationAction {
     static let watchCategory = "WATCH_HIT"
     static let openPacket = "OPEN_PACKET"
     static let openApp = "OPEN_AXTERM"
@@ -21,7 +21,7 @@ protocol AppStateProviding {
     var isFrontmost: Bool { get }
 }
 
-struct DefaultAppStateProvider: AppStateProviding {
+nonisolated struct DefaultAppStateProvider: AppStateProviding {
     var isFrontmost: Bool {
         NSApp.isActive
     }

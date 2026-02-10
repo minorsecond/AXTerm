@@ -7,7 +7,7 @@
 
 import Foundation
 
-protocol EventLogStore: Sendable {
+nonisolated protocol EventLogStore: Sendable {
     func append(_ entry: AppEventRecord) throws
     func loadRecent(limit: Int) throws -> [AppEventRecord]
     func deleteAll() throws

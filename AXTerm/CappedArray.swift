@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum CappedArray {
+nonisolated enum CappedArray {
     static func append<Element>(_ element: Element, to array: inout [Element], max: Int) {
         array.append(element)
         guard array.count > max else { return }

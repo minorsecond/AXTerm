@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct AnalyticsAggregator {
+nonisolated struct AnalyticsAggregator {
     struct Options: Hashable, Sendable {
         let includeViaDigipeaters: Bool
         let histogramBinCount: Int

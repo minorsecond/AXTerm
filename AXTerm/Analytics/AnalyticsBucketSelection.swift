@@ -8,7 +8,7 @@
 import CoreGraphics
 import Foundation
 
-enum AnalyticsBucketSelection: String, CaseIterable, Hashable, Sendable {
+nonisolated enum AnalyticsBucketSelection: String, CaseIterable, Hashable, Sendable {
     case auto
     case tenSeconds
     case minute

@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct AnalyticsSummaryMetrics: Hashable, Sendable {
+nonisolated struct AnalyticsSummaryMetrics: Hashable, Sendable {
     let totalPackets: Int
     let uniqueStations: Int
     let totalPayloadBytes: Int
@@ -16,14 +16,14 @@ struct AnalyticsSummaryMetrics: Hashable, Sendable {
     let infoTextRatio: Double
 }
 
-struct RankRow: Hashable, Sendable, Identifiable {
+nonisolated struct RankRow: Hashable, Sendable, Identifiable {
     let label: String
     let count: Int
 
     var id: String { label }
 }
 
-struct HeatmapData: Hashable, Sendable {
+nonisolated struct HeatmapData: Hashable, Sendable {
     let matrix: [[Int]]
     let xLabels: [String]
     let yLabels: [String]
@@ -31,7 +31,7 @@ struct HeatmapData: Hashable, Sendable {
     static let empty = HeatmapData(matrix: [], xLabels: [], yLabels: [])
 }
 
-struct HistogramBin: Hashable, Sendable {
+nonisolated struct HistogramBin: Hashable, Sendable {
     let lowerBound: Int
     let upperBound: Int
     let count: Int
@@ -41,14 +41,14 @@ struct HistogramBin: Hashable, Sendable {
     }
 }
 
-struct HistogramData: Hashable, Sendable {
+nonisolated struct HistogramData: Hashable, Sendable {
     let bins: [HistogramBin]
     let maxValue: Int
 
     static let empty = HistogramData(bins: [], maxValue: 0)
 }
 
-struct AnalyticsAggregationResult: Hashable, Sendable {
+nonisolated struct AnalyticsAggregationResult: Hashable, Sendable {
     let summary: AnalyticsSummaryMetrics
     let series: AnalyticsSeries
     let heatmap: HeatmapData

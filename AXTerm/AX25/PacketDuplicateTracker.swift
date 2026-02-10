@@ -8,7 +8,7 @@
 import Foundation
 
 /// Duplicate classification for packet evidence handling.
-enum PacketDuplicateStatus: Equatable {
+nonisolated enum PacketDuplicateStatus: Equatable {
     case unique
     /// Duplicate within ingestion de-dup window (KISS artifacts). Ignore entirely.
     case ingestionDedup
@@ -17,7 +17,7 @@ enum PacketDuplicateStatus: Equatable {
 }
 
 /// Signature used for duplicate detection.
-private struct PacketSignature: Hashable {
+nonisolated private struct PacketSignature: Hashable {
     let from: String
     let to: String
     let pid: UInt8?
@@ -26,7 +26,7 @@ private struct PacketSignature: Hashable {
 }
 
 /// Tracks recent packet signatures to detect duplicates and retries deterministically.
-struct PacketDuplicateTracker {
+nonisolated struct PacketDuplicateTracker {
     let source: CaptureSourceType
     let ingestionDedupWindow: TimeInterval
     let retryDuplicateWindow: TimeInterval

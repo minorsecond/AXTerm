@@ -8,6 +8,7 @@
 import XCTest
 @testable import AXTerm
 
+@MainActor
 final class StationInspectorViewModelTests: XCTestCase {
     func testCountsCorrect() {
         let timestamp = Date(timeIntervalSince1970: 0)

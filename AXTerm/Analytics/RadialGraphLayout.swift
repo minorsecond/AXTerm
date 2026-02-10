@@ -9,7 +9,7 @@
 import Foundation
 
 /// Key from graph topology only; used to cache layout so positions only change when nodes/edges change.
-struct GraphLayoutKey: Hashable {
+nonisolated struct GraphLayoutKey: Hashable {
     let nodeIDsChecksum: Int
     let edgeCount: Int
     let edgesChecksum: Int
@@ -36,7 +36,7 @@ struct GraphLayoutKey: Hashable {
     }
 }
 
-enum RadialGraphLayout {
+nonisolated enum RadialGraphLayout {
     /// Produces stable normalized positions [0,1] for all nodes: radial rings by BFS hop distance from center.
     /// Center = node matching myCallsign (base callsign) if present; otherwise highest-degree node.
     /// Within each ring, nodes ordered by descending edge weight then degree.

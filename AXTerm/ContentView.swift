@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-enum NavigationItem: String, Hashable, CaseIterable {
+nonisolated enum NavigationItem: String, Hashable, CaseIterable {
     case terminal = "Terminal"
     case packets = "Packets"
     case routes = "Routes"
@@ -607,7 +607,7 @@ struct ContentView: View {
     /// Aggregate link stats into (lossRate, etx) for adaptive settings. Uses only links with enough observations.
     /// When `localCallsign` is provided, only links involving the local station are considered,
     /// preventing other stations' poor links from dragging adaptive settings to overly conservative values.
-    static func aggregateLinkQualityForAdaptive(_ records: [LinkStatRecord], localCallsign: String? = nil) -> (lossRate: Double, etx: Double)? {
+    nonisolated static func aggregateLinkQualityForAdaptive(_ records: [LinkStatRecord], localCallsign: String? = nil) -> (lossRate: Double, etx: Double)? {
         let minObs = 5
 
         // Filter to local station links when a callsign is provided

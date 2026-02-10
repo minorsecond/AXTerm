@@ -25,7 +25,7 @@ import Foundation
 ///
 /// Reference: Composite health scoring inspired by network monitoring approaches (e.g., Optigo Networks).
 /// See Docs/NetworkHealth.md for full documentation.
-struct NetworkHealth: Hashable, Sendable {
+nonisolated struct NetworkHealth: Hashable, Sendable {
     /// Overall health score from 0-100
     let score: Int
     /// Qualitative rating derived from score
@@ -63,7 +63,7 @@ struct NetworkHealth: Hashable, Sendable {
 ///
 /// This ensures view filters (Min Edge slider, Max Node count) do NOT affect the health score.
 /// Only timeframe, includeVia toggle, and time passing affect the score.
-struct HealthScoreBreakdown: Hashable, Sendable {
+nonisolated struct HealthScoreBreakdown: Hashable, Sendable {
     // Topology metrics (timeframe-dependent, canonical graph) - 60% of final score
     let c1MainClusterPct: Double       // % of nodes in largest connected component
     let c2ConnectivityPct: Double      // % of possible edges that exist (capped at 100)
@@ -118,7 +118,7 @@ struct HealthScoreBreakdown: Hashable, Sendable {
     )
 }
 
-enum HealthRating: String, Hashable, Sendable {
+nonisolated enum HealthRating: String, Hashable, Sendable {
     case excellent = "Excellent"
     case good = "Good"
     case fair = "Fair"
@@ -142,7 +142,7 @@ enum HealthRating: String, Hashable, Sendable {
 /// - **Topology metrics** (canonical graph, timeframe-dependent): Computed from a graph with
 ///   canonicalMinEdge=2 and no max-node limit, ignoring view-only filters
 /// - **Activity metrics** (fixed 10-minute window): activeStations, packetRate, freshness
-struct NetworkHealthMetrics: Hashable, Sendable {
+nonisolated struct NetworkHealthMetrics: Hashable, Sendable {
     // MARK: - Topology Metrics (canonical graph, depends on selected timeframe)
 
     /// Total unique stations in the canonical graph
@@ -186,7 +186,7 @@ struct NetworkHealthMetrics: Hashable, Sendable {
     )
 }
 
-struct NetworkWarning: Hashable, Identifiable, Sendable {
+nonisolated struct NetworkWarning: Hashable, Identifiable, Sendable {
     let id: String
     let severity: WarningSeverity
     let title: String
@@ -230,7 +230,7 @@ struct NetworkWarning: Hashable, Identifiable, Sendable {
 /// - A2 = Packet Rate Score (normalized to ideal rate of 1.0 pkt/min, capped at 100)
 ///
 /// Reference: Composite health scoring approach inspired by network monitoring (e.g., Optigo Networks).
-enum NetworkHealthCalculator {
+nonisolated enum NetworkHealthCalculator {
     /// Canonical minimum edge count for health topology graph.
     /// This value is used regardless of the view's Min Edge slider setting.
     static let canonicalMinEdge: Int = 2

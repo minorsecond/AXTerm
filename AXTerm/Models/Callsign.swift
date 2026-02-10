@@ -8,7 +8,7 @@
 import Foundation
 
 /// A validated, normalized AX.25 callsign with optional SSID.
-struct Callsign: Equatable, Hashable, Codable, CustomStringConvertible, Sendable {
+nonisolated struct Callsign: Equatable, Hashable, Codable, CustomStringConvertible, Sendable {
     /// The base callsign (e.g., "K0EPI")
     let base: String
     

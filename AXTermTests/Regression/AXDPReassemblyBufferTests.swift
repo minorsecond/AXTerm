@@ -29,6 +29,7 @@ import XCTest
 // MARK: - Reassembly Buffer Lifecycle Tests
 
 /// Tests verifying reassembly buffer is properly cleared on session lifecycle events
+@MainActor
 final class ReassemblyBufferLifecycleTests: XCTestCase {
     
     /// Test that reassembly buffer is cleared when session disconnects
@@ -230,6 +231,7 @@ final class ReassemblyBufferLifecycleTests: XCTestCase {
 // MARK: - Flag Clearing Race Condition Tests
 
 /// Tests verifying the peersInAXDPReassembly flag is handled correctly
+@MainActor
 final class FlagClearingRaceConditionTests: XCTestCase {
     
     /// Test that flag is cleared properly when AXDP chat is delivered
@@ -371,6 +373,7 @@ final class FlagClearingRaceConditionTests: XCTestCase {
 // MARK: - Multi-Fragment Message Integrity Tests
 
 /// Tests verifying multi-fragment AXDP messages are fully delivered
+@MainActor
 final class MultiFragmentMessageIntegrityTests: XCTestCase {
     
     /// Test that a large multi-fragment AXDP message is fully delivered
@@ -532,6 +535,7 @@ final class MultiFragmentMessageIntegrityTests: XCTestCase {
 // MARK: - SessionCoordinator Buffer Clearing Tests
 
 /// Tests verifying SessionCoordinator properly clears buffers
+@MainActor
 final class SessionCoordinatorBufferClearingTests: XCTestCase {
     
     /// Test that buffer is cleared for disconnected session's peer
@@ -621,6 +625,7 @@ final class SessionCoordinatorBufferClearingTests: XCTestCase {
 
 // MARK: - Reassembly Resync Tests
 
+@MainActor
 final class ReassemblyResyncTests: XCTestCase {
     
     /// Test that a corrupted buffer (leading garbage before AXDP magic)

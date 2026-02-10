@@ -7,15 +7,15 @@
 
 import Foundation
 
-struct DiagnosticsReport: Encodable {
-    struct AppInfo: Encodable {
+nonisolated struct DiagnosticsReport: Encodable {
+    nonisolated struct AppInfo: Encodable {
         let name: String
         let version: String
         let build: String
         let macOSVersion: String
     }
 
-    struct SettingsSnapshot: Encodable {
+    nonisolated struct SettingsSnapshot: Encodable {
         let host: String
         let port: Int
         let persistHistory: Bool
@@ -25,7 +25,7 @@ struct DiagnosticsReport: Encodable {
         let eventRetention: Int
     }
 
-    struct EventSnapshot: Encodable {
+    nonisolated struct EventSnapshot: Encodable {
         let id: UUID
         let createdAt: Date
         let level: String
@@ -39,7 +39,7 @@ struct DiagnosticsReport: Encodable {
     let events: [EventSnapshot]
 }
 
-enum DiagnosticsExporter {
+nonisolated enum DiagnosticsExporter {
     static func makeReport(settings: AppSettingsStore, events: [AppEventRecord]) -> DiagnosticsReport {
         let bundle = Bundle.main
         let name = bundle.object(forInfoDictionaryKey: "CFBundleName") as? String

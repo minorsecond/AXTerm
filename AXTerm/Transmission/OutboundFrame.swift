@@ -10,7 +10,7 @@ import Foundation
 
 /// Priority levels for TX queue ordering
 /// Higher values = higher priority (processed first)
-enum TxPriority: Int, Codable, Comparable {
+nonisolated enum TxPriority: Int, Codable, Comparable {
     case bulk = 10          // File transfers, bulk sync
     case normal = 50        // Standard messages
     case interactive = 100  // Chat, session control
@@ -21,7 +21,7 @@ enum TxPriority: Int, Codable, Comparable {
 }
 
 /// Digipeater path for routing
-struct DigiPath: Codable, Hashable, Sendable {
+nonisolated struct DigiPath: Codable, Hashable, Sendable {
     let digis: [AX25Address]
 
     init(_ digis: [AX25Address] = []) {
@@ -66,7 +66,7 @@ struct DigiPath: Codable, Hashable, Sendable {
 }
 
 /// Status of an outbound frame in the TX queue
-enum TxFrameStatus: String, Codable {
+nonisolated enum TxFrameStatus: String, Codable {
     case queued         // Waiting to be sent
     case sending        // Currently being transmitted
     case sent           // Sent to TNC (no ack expected or received)
@@ -78,7 +78,7 @@ enum TxFrameStatus: String, Codable {
 
 /// An outbound frame queued for transmission
 /// Immutable once created; status tracked separately
-struct OutboundFrame: Identifiable, Codable, Sendable {
+nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
     let id: UUID
     let channel: UInt8
     let destination: AX25Address
@@ -362,7 +362,7 @@ struct OutboundFrame: Identifiable, Codable, Sendable {
 }
 
 /// Tracks the transmission state of an OutboundFrame
-struct TxFrameState: Identifiable, Codable {
+nonisolated struct TxFrameState: Identifiable, Codable {
     let frameId: UUID
     var status: TxFrameStatus
     var attempts: Int
@@ -422,7 +422,7 @@ struct TxFrameState: Identifiable, Codable {
 // MARK: - TX Queue Entry (combines frame + state)
 
 /// Complete entry in the TX queue for display and processing
-struct TxQueueEntry: Identifiable {
+nonisolated struct TxQueueEntry: Identifiable {
     let frame: OutboundFrame
     var state: TxFrameState
 

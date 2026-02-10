@@ -30,7 +30,7 @@
 import Foundation
 
 /// Configuration for link quality estimation.
-struct LinkQualityConfig: Equatable, Sendable {
+nonisolated struct LinkQualityConfig: Equatable, Sendable {
     /// Capture source type for ingestion semantics.
     let source: CaptureSourceType
 
@@ -126,7 +126,7 @@ struct LinkQualityConfig: Equatable, Sendable {
 }
 
 /// Statistics for a directional link, exposed for testing and persistence.
-struct LinkStats: Equatable {
+nonisolated struct LinkStats: Equatable {
     /// Total observations within the sliding window.
     let observationCount: Int
 
@@ -157,7 +157,7 @@ struct LinkStats: Equatable {
 }
 
 /// Record for persisting link statistics.
-struct LinkStatRecord: Equatable {
+nonisolated struct LinkStatRecord: Equatable {
     let fromCall: String
     let toCall: String
     let quality: Int
@@ -194,7 +194,7 @@ struct LinkStatRecord: Equatable {
 /// - Bounded memory: Ring buffer limits per-link observation storage
 /// - Determinism: Same inputs always produce same outputs (injectable clock)
 /// - EWMA smoothing: Prevents quality spikes from transient conditions
-struct LinkQualityEstimator {
+nonisolated struct LinkQualityEstimator {
     let config: LinkQualityConfig
 
     /// Injectable clock for deterministic testing.
@@ -479,7 +479,7 @@ struct LinkQualityEstimator {
 // MARK: - Internal Types
 
 /// Ring buffer for bounded observation storage.
-private struct RingBuffer<T> {
+nonisolated private struct RingBuffer<T> {
     private var storage: [T] = []
     private var writeIndex: Int = 0
     let capacity: Int
@@ -510,19 +510,19 @@ private struct RingBuffer<T> {
     }
 }
 
-private enum EvidenceChannel {
+nonisolated private enum EvidenceChannel {
     case forward
     case reverse
 }
 
-private struct Observation {
+nonisolated private struct Observation {
     let timestamp: Date
     let channel: EvidenceChannel
     let isDuplicate: Bool
 }
 
 /// Statistics for a single directional link (A→B).
-private struct DirectionalLinkStats {
+nonisolated private struct DirectionalLinkStats {
     /// EWMA-smoothed forward delivery ratio (0.0...1.0).
     var forwardEstimate: Double?
 

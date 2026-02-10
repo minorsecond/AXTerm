@@ -14,7 +14,7 @@
 import Foundation
 
 /// Classification of an AX.25 packet based on its control field semantics.
-enum PacketClassification: String, Codable, Hashable, Sendable {
+nonisolated enum PacketClassification: String, Codable, Hashable, Sendable {
     /// I-frame carrying new data or routing information.
     /// High-value evidence for routing freshness and link quality.
     case dataProgress
@@ -133,7 +133,7 @@ enum PacketClassification: String, Codable, Hashable, Sendable {
 }
 
 /// Pure function classifier for AX.25 packets based on decoded control fields.
-enum PacketClassifier {
+nonisolated enum PacketClassifier {
 
     /// Classify a packet based on its control field semantics.
     ///

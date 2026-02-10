@@ -58,7 +58,7 @@ class SettingsRouter: ObservableObject {
 }
 
 /// Identifiers for top-level tabs in the Settings window.
-enum SettingsTab: Hashable {
+nonisolated enum SettingsTab: Hashable {
     case general
     case notifications
     case network
@@ -67,7 +67,7 @@ enum SettingsTab: Hashable {
 }
 
 /// Identifiers for specific sections within tabs (for deep linking).
-enum SettingsSection: Hashable {
+nonisolated enum SettingsSection: Hashable {
     case linkLayer
     case adaptiveTransmission
     case axdpProtocol

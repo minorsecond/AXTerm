@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum PacketFilter {
+nonisolated enum PacketFilter {
     static func filter(
         packets: [Packet],
         search: String,

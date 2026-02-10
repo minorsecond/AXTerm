@@ -8,6 +8,7 @@
 import XCTest
 @testable import AXTerm
 
+@MainActor
 final class TNCCapabilityGatingTests: XCTestCase {
 
     // MARK: - TNCMode Tests

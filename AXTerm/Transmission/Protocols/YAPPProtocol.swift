@@ -15,7 +15,7 @@ import Foundation
 // MARK: - YAPP Constants
 
 /// YAPP protocol control characters
-enum YAPPControlChar: UInt8 {
+nonisolated enum YAPPControlChar: UInt8 {
     case soh = 0x01  // Start of Header
     case stx = 0x02  // Start of Text (data block)
     case etx = 0x03  // End of Text (end of file)
@@ -26,7 +26,7 @@ enum YAPPControlChar: UInt8 {
 }
 
 /// YAPP frame types
-enum YAPPFrameType: Equatable {
+nonisolated enum YAPPFrameType: Equatable {
     case sendInit           // SI: [SOH, 0x01] - Request to start transfer
     case receiveInit        // RI: [SOH, 0x02] - Ready to receive
     case header             // HD: [SOH, len, filename\0, size\0, timestamp\0]
@@ -40,7 +40,7 @@ enum YAPPFrameType: Equatable {
 }
 
 /// YAPP sender state machine
-enum YAPPSenderState: Equatable, Sendable {
+nonisolated enum YAPPSenderState: Equatable, Sendable {
     case idle
     case waitingForReceiveInit   // Sent SI, waiting for RI
     case waitingForHeaderAck     // Sent HD, waiting for ACK
@@ -53,7 +53,7 @@ enum YAPPSenderState: Equatable, Sendable {
 }
 
 /// YAPP receiver state machine
-enum YAPPReceiverState: Equatable, Sendable {
+nonisolated enum YAPPReceiverState: Equatable, Sendable {
     case idle
     case waitingForHeader        // Received SI, sent RI, waiting for HD
     case waitingForUserAccept    // Received HD, waiting for user to accept
@@ -66,7 +66,7 @@ enum YAPPReceiverState: Equatable, Sendable {
 // MARK: - YAPP Protocol Implementation
 
 /// YAPP file transfer protocol implementation
-final class YAPPProtocol: FileTransferProtocol {
+nonisolated final class YAPPProtocol: FileTransferProtocol {
     let protocolType: TransferProtocolType = .yapp
 
     weak var delegate: FileTransferProtocolDelegate?

@@ -21,7 +21,7 @@ import Foundation
 import GRDB
 
 /// Configuration for NET/ROM persistence.
-struct NetRomPersistenceConfig {
+nonisolated struct NetRomPersistenceConfig {
     let maxSnapshotAgeSeconds: TimeInterval
 
     /// TTL for individual neighbor entries (seconds). Neighbors older than this are decayed on load.
@@ -60,7 +60,7 @@ struct NetRomPersistenceConfig {
 
 /// Persisted state returned by load(now:).
 /// Contains neighbors, routes, and link stats with stale entries filtered/decayed.
-struct PersistedState {
+nonisolated struct PersistedState {
     let neighbors: [NeighborInfo]
     let routes: [RouteInfo]
     let linkStats: [LinkStatRecord]
@@ -68,14 +68,14 @@ struct PersistedState {
 }
 
 /// Metadata about a persisted snapshot.
-struct SnapshotMeta: Equatable {
+nonisolated struct SnapshotMeta: Equatable {
     let lastPacketID: Int64
     let configHash: String?
     let snapshotTimestamp: Date
 }
 
 /// GRDB record for neighbors table.
-private struct NeighborRecord: Codable, FetchableRecord, PersistableRecord {
+nonisolated private struct NeighborRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "netrom_neighbors"
 
     let call: String
@@ -86,7 +86,7 @@ private struct NeighborRecord: Codable, FetchableRecord, PersistableRecord {
 }
 
 /// GRDB record for routes table.
-private struct RouteRecord: Codable, FetchableRecord, PersistableRecord {
+nonisolated private struct RouteRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "netrom_routes"
 
     let destination: String
@@ -98,7 +98,7 @@ private struct RouteRecord: Codable, FetchableRecord, PersistableRecord {
 }
 
 /// GRDB record for link stats table.
-private struct LinkStatDBRecord: Codable, FetchableRecord, PersistableRecord {
+nonisolated private struct LinkStatDBRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "link_stats"
 
     let fromCall: String
@@ -113,7 +113,7 @@ private struct LinkStatDBRecord: Codable, FetchableRecord, PersistableRecord {
 }
 
 /// GRDB record for snapshot metadata.
-private struct SnapshotMetaRecord: Codable, FetchableRecord, PersistableRecord {
+nonisolated private struct SnapshotMetaRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "netrom_snapshot_meta"
 
     var id: Int = 1  // Single row
@@ -124,7 +124,7 @@ private struct SnapshotMetaRecord: Codable, FetchableRecord, PersistableRecord {
 
 /// GRDB record for tracking per-origin broadcast intervals.
 /// Used for adaptive stale threshold calculation.
-private struct OriginIntervalRecord: Codable, FetchableRecord, PersistableRecord {
+nonisolated private struct OriginIntervalRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "netrom_origin_intervals"
 
     let origin: String  // Primary key
@@ -135,7 +135,7 @@ private struct OriginIntervalRecord: Codable, FetchableRecord, PersistableRecord
 }
 
 /// Public struct for origin interval data.
-struct OriginIntervalInfo {
+nonisolated struct OriginIntervalInfo {
     let origin: String
     let estimatedIntervalSeconds: TimeInterval
     let lastBroadcast: Date
@@ -144,7 +144,7 @@ struct OriginIntervalInfo {
 
 /// Persistence layer for NET/ROM routing state.
 /// Thread-safe: all database access is serialized by GRDB's `DatabaseWriter`.
-final class NetRomPersistence: @unchecked Sendable {
+nonisolated final class NetRomPersistence: @unchecked Sendable {
     private let database: DatabaseWriter
     private let config: NetRomPersistenceConfig
     #if DEBUG

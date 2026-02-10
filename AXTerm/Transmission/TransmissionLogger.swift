@@ -17,7 +17,7 @@ import OSLog
 // MARK: - Log Category
 
 /// Categories for transmission logging
-enum TxLogCategory: String {
+nonisolated enum TxLogCategory: String {
     case kiss = "KISS"
     case ax25 = "AX25"
     case fx25 = "FX25"
@@ -58,7 +58,7 @@ enum TxLogCategory: String {
 // MARK: - Log Direction
 
 /// Direction indicator for message flow
-enum TxLogDirection: String {
+nonisolated enum TxLogDirection: String {
     case outbound = "TX"
     case inbound = "RX"
     case internal_ = "──"
@@ -114,7 +114,7 @@ final class TxLog {
 
     private init() {}
 
-    static func configure(wireDebugEnabled: Bool) {
+    nonisolated static func configure(wireDebugEnabled: Bool) {
         Task { @MainActor in
             shared.verboseConsole = wireDebugEnabled
             shared.captureWireEvents = wireDebugEnabled
@@ -125,42 +125,42 @@ final class TxLog {
     // MARK: - Public API
 
     /// Log an outbound (TX) message
-    static func outbound(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
+    nonisolated static func outbound(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
         Task { @MainActor in
             shared.log(direction: .outbound, category: category, message: message, data: data, level: .info)
         }
     }
 
     /// Log an inbound (RX) message
-    static func inbound(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
+    nonisolated static func inbound(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
         Task { @MainActor in
             shared.log(direction: .inbound, category: category, message: message, data: data, level: .info)
         }
     }
 
     /// Log an internal operation
-    static func debug(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
+    nonisolated static func debug(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
         Task { @MainActor in
             shared.log(direction: .internal_, category: category, message: message, data: data, level: .debug)
         }
     }
 
     /// Log a warning
-    static func warning(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
+    nonisolated static func warning(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
         Task { @MainActor in
             shared.log(direction: .internal_, category: category, message: message, data: data, level: .warning)
         }
     }
 
     /// Log an error (always captured by Sentry)
-    static func error(_ category: TxLogCategory, _ message: String, error: Error? = nil, _ data: [String: Any]? = nil) {
+    nonisolated static func error(_ category: TxLogCategory, _ message: String, error: Error? = nil, _ data: [String: Any]? = nil) {
         Task { @MainActor in
             shared.logError(category: category, message: message, error: error, data: data)
         }
     }
 
     /// Log frame hex dump (DEBUG only, truncated)
-    static func hexDump(_ category: TxLogCategory, _ label: String, data: Data, maxBytes: Int = 64) {
+    nonisolated static func hexDump(_ category: TxLogCategory, _ label: String, data: Data, maxBytes: Int = 64) {
         #if DEBUG
         Task { @MainActor in
             shared.logHexDump(category: category, label: label, data: data, maxBytes: maxBytes)
@@ -170,41 +170,41 @@ final class TxLog {
 
     // MARK: - KISS-specific logging
 
-    static func kissConnect(host: String, port: UInt16) {
+    nonisolated static func kissConnect(host: String, port: UInt16) {
         outbound(.kiss, "Connecting", ["host": host, "port": port])
-        SentryManager.shared.addBreadcrumb(
+        Task { @MainActor in SentryManager.shared.addBreadcrumb(
             category: "tx.kiss",
             message: "KISS connect",
             level: .info,
             data: ["host": host, "port": port]
-        )
+        ) }
     }
 
-    static func kissConnected(host: String, port: UInt16) {
+    nonisolated static func kissConnected(host: String, port: UInt16) {
         inbound(.kiss, "Connected", ["host": host, "port": port])
-        SentryManager.shared.addBreadcrumb(
+        Task { @MainActor in SentryManager.shared.addBreadcrumb(
             category: "tx.kiss",
             message: "KISS connected",
             level: .info,
             data: ["host": host, "port": port]
-        )
+        ) }
     }
 
-    static func kissDisconnected(reason: String? = nil) {
+    nonisolated static func kissDisconnected(reason: String? = nil) {
         debug(.kiss, "Disconnected", reason.map { ["reason": $0] })
-        SentryManager.shared.addBreadcrumb(
+        Task { @MainActor in SentryManager.shared.addBreadcrumb(
             category: "tx.kiss",
             message: "KISS disconnected",
             level: .info,
             data: reason.map { ["reason": $0] }
-        )
+        ) }
     }
 
-    static func kissSend(frameId: UUID, size: Int) {
+    nonisolated static func kissSend(frameId: UUID, size: Int) {
         outbound(.kiss, "Send frame", ["frameId": frameId.uuidString.prefix(8), "size": size])
     }
 
-    static func kissSendComplete(frameId: UUID, success: Bool, error: Error? = nil) {
+    nonisolated static func kissSendComplete(frameId: UUID, success: Bool, error: Error? = nil) {
         if success {
             debug(.kiss, "Send complete", ["frameId": String(frameId.uuidString.prefix(8))])
         } else {
@@ -212,32 +212,32 @@ final class TxLog {
         }
     }
 
-    static func kissReceive(size: Int) {
+    nonisolated static func kissReceive(size: Int) {
         inbound(.kiss, "Received", ["size": size])
     }
 
     // MARK: - AX.25-specific logging
 
-    static func ax25Encode(dest: String, src: String, type: String, size: Int) {
+    nonisolated static func ax25Encode(dest: String, src: String, type: String, size: Int) {
         outbound(.ax25, "Encode \(type)", ["dest": dest, "src": src, "size": size])
     }
 
-    static func ax25Decode(dest: String, src: String, type: String, size: Int) {
+    nonisolated static func ax25Decode(dest: String, src: String, type: String, size: Int) {
         inbound(.ax25, "Decode \(type)", ["dest": dest, "src": src, "size": size])
     }
 
-    static func ax25DecodeError(reason: String, size: Int) {
+    nonisolated static func ax25DecodeError(reason: String, size: Int) {
         error(.ax25, "Decode failed: \(reason)", error: nil, ["size": size])
-        SentryManager.shared.captureMessage(
+        Task { @MainActor in SentryManager.shared.captureMessage(
             "AX.25 decode failed: \(reason)",
             level: .warning,
             extra: ["size": size]
-        )
+        ) }
     }
 
     // MARK: - AXDP-specific logging
 
-    static func axdpEncode(type: String, sessionId: UInt16, messageId: UInt32, payloadSize: Int) {
+    nonisolated static func axdpEncode(type: String, sessionId: UInt16, messageId: UInt32, payloadSize: Int) {
         outbound(.axdp, "Encode \(type)", [
             "session": sessionId,
             "msgId": messageId,
@@ -245,7 +245,7 @@ final class TxLog {
         ])
     }
 
-    static func axdpDecode(type: String, sessionId: UInt16, messageId: UInt32, payloadSize: Int) {
+    nonisolated static func axdpDecode(type: String, sessionId: UInt16, messageId: UInt32, payloadSize: Int) {
         inbound(.axdp, "Decode \(type)", [
             "session": sessionId,
             "msgId": messageId,
@@ -253,30 +253,30 @@ final class TxLog {
         ])
     }
 
-    static func axdpDecodeError(reason: String, data: Data) {
+    nonisolated static func axdpDecodeError(reason: String, data: Data) {
         error(.axdp, "Decode failed: \(reason)", error: nil, ["size": data.count])
-        SentryManager.shared.captureMessage(
+        Task { @MainActor in SentryManager.shared.captureMessage(
             "AXDP decode failed: \(reason)",
             level: .warning,
             extra: ["size": data.count]
-        )
+        ) }
     }
 
-    static func axdpPing(peer: String) {
+    nonisolated static func axdpPing(peer: String) {
         outbound(.axdp, "PING", ["peer": peer])
     }
 
-    static func axdpPong(peer: String, rtt: Double?) {
+    nonisolated static func axdpPong(peer: String, rtt: Double?) {
         inbound(.axdp, "PONG", ["peer": peer, "rtt": rtt.map { String(format: "%.1fms", $0 * 1000) } ?? "n/a"])
     }
 
-    static func axdpCapability(peer: String, caps: [String]) {
+    nonisolated static func axdpCapability(peer: String, caps: [String]) {
         inbound(.capability, "Capabilities", ["peer": peer, "caps": caps.joined(separator: ", ")])
     }
 
     // MARK: - Compression logging
 
-    static func compressionEncode(algorithm: String, originalSize: Int, compressedSize: Int) {
+    nonisolated static func compressionEncode(algorithm: String, originalSize: Int, compressedSize: Int) {
         let ratio = originalSize > 0 ? Double(compressedSize) / Double(originalSize) : 1.0
         outbound(.compression, "Compress (\(algorithm))", [
             "original": originalSize,
@@ -285,25 +285,25 @@ final class TxLog {
         ])
     }
 
-    static func compressionDecode(algorithm: String, compressedSize: Int, decompressedSize: Int) {
+    nonisolated static func compressionDecode(algorithm: String, compressedSize: Int, decompressedSize: Int) {
         inbound(.compression, "Decompress (\(algorithm))", [
             "compressed": compressedSize,
             "decompressed": decompressedSize
         ])
     }
 
-    static func compressionError(operation: String, reason: String) {
+    nonisolated static func compressionError(operation: String, reason: String) {
         error(.compression, "\(operation) failed: \(reason)")
-        SentryManager.shared.captureMessage(
+        Task { @MainActor in SentryManager.shared.captureMessage(
             "Compression \(operation) failed: \(reason)",
             level: .warning,
             extra: nil
-        )
+        ) }
     }
 
     // MARK: - Queue logging
 
-    static func queueEnqueue(frameId: UUID, dest: String, priority: String, queueDepth: Int) {
+    nonisolated static func queueEnqueue(frameId: UUID, dest: String, priority: String, queueDepth: Int) {
         debug(.queue, "Enqueue", [
             "frameId": String(frameId.uuidString.prefix(8)),
             "dest": dest,
@@ -312,14 +312,14 @@ final class TxLog {
         ])
     }
 
-    static func queueDequeue(frameId: UUID, dest: String) {
+    nonisolated static func queueDequeue(frameId: UUID, dest: String) {
         debug(.queue, "Dequeue", [
             "frameId": String(frameId.uuidString.prefix(8)),
             "dest": dest
         ])
     }
 
-    static func queueCancel(frameId: UUID, reason: String) {
+    nonisolated static func queueCancel(frameId: UUID, reason: String) {
         debug(.queue, "Cancel", [
             "frameId": String(frameId.uuidString.prefix(8)),
             "reason": reason
@@ -328,35 +328,35 @@ final class TxLog {
 
     // MARK: - Session logging
 
-    static func sessionOpen(sessionId: UUID, peer: String, mode: String) {
+    nonisolated static func sessionOpen(sessionId: UUID, peer: String, mode: String) {
         outbound(.session, "Open", [
             "session": String(sessionId.uuidString.prefix(8)),
             "peer": peer,
             "mode": mode
         ])
-        SentryManager.shared.addBreadcrumb(
+        Task { @MainActor in SentryManager.shared.addBreadcrumb(
             category: "tx.session",
             message: "Session open",
             level: .info,
             data: ["peer": peer, "mode": mode]
-        )
+        ) }
     }
 
-    static func sessionClose(sessionId: UUID, peer: String, reason: String) {
+    nonisolated static func sessionClose(sessionId: UUID, peer: String, reason: String) {
         debug(.session, "Close", [
             "session": String(sessionId.uuidString.prefix(8)),
             "peer": peer,
             "reason": reason
         ])
-        SentryManager.shared.addBreadcrumb(
+        Task { @MainActor in SentryManager.shared.addBreadcrumb(
             category: "tx.session",
             message: "Session close",
             level: .info,
             data: ["peer": peer, "reason": reason]
-        )
+        ) }
     }
 
-    static func sessionStateChange(sessionId: UUID, from: String, to: String) {
+    nonisolated static func sessionStateChange(sessionId: UUID, from: String, to: String) {
         debug(.session, "State: \(from) → \(to)", [
             "session": String(sessionId.uuidString.prefix(8))
         ])
@@ -364,7 +364,7 @@ final class TxLog {
 
     // MARK: - RTT/Congestion logging
 
-    static func rttUpdate(peer: String, srtt: Double, rttvar: Double, rto: Double) {
+    nonisolated static func rttUpdate(peer: String, srtt: Double, rttvar: Double, rto: Double) {
         debug(.rtt, "Update", [
             "peer": peer,
             "srtt": String(format: "%.1fms", srtt * 1000),
@@ -373,7 +373,7 @@ final class TxLog {
         ])
     }
 
-    static func congestionWindowChange(peer: String, cwnd: Int, reason: String) {
+    nonisolated static func congestionWindowChange(peer: String, cwnd: Int, reason: String) {
         debug(.congestion, reason, [
             "peer": peer,
             "cwnd": cwnd
@@ -382,7 +382,7 @@ final class TxLog {
 
     // MARK: - Path logging
 
-    static func pathSuggestion(dest: String, path: String, score: Double, reason: String) {
+    nonisolated static func pathSuggestion(dest: String, path: String, score: Double, reason: String) {
         debug(.path, "Suggestion", [
             "dest": dest,
             "path": path.isEmpty ? "(direct)" : path,
@@ -393,7 +393,7 @@ final class TxLog {
 
     // MARK: - Adaptive transmission logging (always to console in DEBUG so user can verify it's working)
 
-    static func adaptiveLearning(source: String, lossRate: Double, etx: Double, srtt: Double?, rto: Double?, window: Int, paclen: Int, maxRetries: Int, reason: String) {
+    nonisolated static func adaptiveLearning(source: String, lossRate: Double, etx: Double, srtt: Double?, rto: Double?, window: Int, paclen: Int, maxRetries: Int, reason: String) {
         var data: [String: Any] = [
             "source": source,
             "loss": String(format: "%.2f", lossRate),
@@ -411,7 +411,7 @@ final class TxLog {
         debug(.adaptive, "Learning", data)
     }
 
-    static func adaptiveConfigSynced(window: Int, paclen: Int, rtoMin: Double, rtoMax: Double, maxRetries: Int, initialRto: Double) {
+    nonisolated static func adaptiveConfigSynced(window: Int, paclen: Int, rtoMin: Double, rtoMax: Double, maxRetries: Int, initialRto: Double) {
         let data: [String: Any] = [
             "window": window,
             "paclen": paclen,
@@ -426,35 +426,35 @@ final class TxLog {
         debug(.adaptive, "Config synced", data)
     }
 
-    static func adaptiveCleared(reason: String) {
+    nonisolated static func adaptiveCleared(reason: String) {
         #if DEBUG
         print("[ADAPTIVE] 📊 Cleared | \(reason)")
         #endif
         debug(.adaptive, "Cleared", ["reason": reason])
     }
 
-    static func adaptiveDisabled() {
+    nonisolated static func adaptiveDisabled() {
         #if DEBUG
         print("[ADAPTIVE] 📊 Disabled – using fixed defaults")
         #endif
         debug(.adaptive, "Disabled", nil)
     }
 
-    static func adaptiveEnabled() {
+    nonisolated static func adaptiveEnabled() {
         #if DEBUG
         print("[ADAPTIVE] 📊 Enabled – learning from session and network")
         #endif
         debug(.adaptive, "Enabled", nil)
     }
 
-    static func adaptiveStationReset(callsign: String) {
+    nonisolated static func adaptiveStationReset(callsign: String) {
         #if DEBUG
         print("[ADAPTIVE] 📊 Station reset to default | \(callsign)")
         #endif
         debug(.adaptive, "Station reset", ["callsign": callsign])
     }
 
-    static func adaptiveSampleIgnored(reason: String, lossRate: Double? = nil, etx: Double? = nil) {
+    nonisolated static func adaptiveSampleIgnored(reason: String, lossRate: Double? = nil, etx: Double? = nil) {
         var data: [String: Any] = ["reason": reason]
         if let l = lossRate { data["loss"] = String(format: "%.2f", l) }
         if let e = etx { data["etx"] = String(format: "%.2f", e) }
@@ -512,12 +512,12 @@ final class TxLog {
 
         // Sentry breadcrumb (all builds, sampling for high-volume)
         let sentryCategory = "tx.\(category.rawValue.lowercased())"
-        SentryManager.shared.addBreadcrumb(
+        Task { @MainActor in SentryManager.shared.addBreadcrumb(
             category: sentryCategory,
             message: "\(direction.rawValue): \(message)",
             level: mapToSentryLevel(level),
             data: data
-        )
+        ) }
     }
 
     private func logError(category: TxLogCategory, message: String, error: Error?, data: [String: Any]?) {
@@ -539,18 +539,18 @@ final class TxLog {
         var extra = data ?? [:]
         extra["category"] = category.rawValue
         if let error = error {
-            SentryManager.shared.capture(
+            Task { @MainActor in SentryManager.shared.capture(
                 error: error,
                 context: "TX[\(category.rawValue)]: \(message)",
                 level: .error,
                 extra: extra
-            )
+            ) }
         } else {
-            SentryManager.shared.captureMessage(
+            Task { @MainActor in SentryManager.shared.captureMessage(
                 "TX[\(category.rawValue)]: \(message)",
                 level: .error,
                 extra: extra
-            )
+            ) }
         }
     }
 

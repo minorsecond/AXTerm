@@ -11,7 +11,7 @@ import Foundation
 ///
 /// Values are loaded from Info.plist (populated from xcconfig) and user settings.
 /// The xcconfig files define build-specific values (Debug vs Release).
-struct SentryConfiguration: Equatable, Sendable {
+nonisolated struct SentryConfiguration: Equatable, Sendable {
     // MARK: - Info.plist Keys
 
     static let infoPlistDSNKey = "SENTRY_DSN"
@@ -204,14 +204,14 @@ struct SentryConfiguration: Equatable, Sendable {
 // MARK: - Info.plist Reading Protocol
 
 /// Protocol for reading Info.plist values, enabling dependency injection for tests.
-protocol InfoPlistReading: Sendable {
+nonisolated protocol InfoPlistReading: Sendable {
     func string(forKey key: String) -> String?
     func bool(forKey key: String) -> Bool
     func double(forKey key: String) -> Double?
 }
 
 /// Default implementation that reads from a Bundle's Info.plist.
-struct InfoPlistReader: InfoPlistReading {
+nonisolated struct InfoPlistReader: InfoPlistReading {
     let bundle: Bundle
 
     init(bundle: Bundle = .main) {
@@ -250,7 +250,7 @@ struct InfoPlistReader: InfoPlistReading {
 }
 
 /// Mock Info.plist reader for testing.
-struct MockInfoPlistReader: InfoPlistReading {
+nonisolated struct MockInfoPlistReader: InfoPlistReading {
     var values: [String: Any]
 
     init(_ values: [String: Any] = [:]) {

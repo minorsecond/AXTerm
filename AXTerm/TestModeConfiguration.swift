@@ -14,7 +14,7 @@ import Foundation
 
 /// Parses command-line arguments for test mode configuration.
 /// When running in test mode, these settings override UserDefaults.
-struct TestModeConfiguration {
+nonisolated struct TestModeConfiguration {
     /// Whether the app is running in test mode
     let isTestMode: Bool
 

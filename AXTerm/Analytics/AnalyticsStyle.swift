@@ -8,7 +8,7 @@
 import AppKit
 import SwiftUI
 
-enum AnalyticsStyle {
+nonisolated enum AnalyticsStyle {
     enum Layout {
         static let pagePadding: CGFloat = 20
         static let sectionSpacing: CGFloat = 18

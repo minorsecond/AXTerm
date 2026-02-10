@@ -17,7 +17,7 @@ import Foundation
 /// - **HeardDirect**: One-way direct RF decode evidence (A heard B directly; may not be mutual)
 /// - **HeardVia**: Observed via digipeater paths (not proof of direct RF)
 /// - **Infrastructure**: BEACON/ID/BBS/etc. traffic (subdued)
-enum LinkType: String, Hashable, Sendable, CaseIterable {
+nonisolated enum LinkType: String, Hashable, Sendable, CaseIterable {
     /// Confirmed endpoint-to-endpoint packet exchange (bidirectional, no digipeaters).
     case directPeer = "Direct Peer"
 
@@ -65,7 +65,7 @@ enum LinkType: String, Hashable, Sendable, CaseIterable {
 }
 
 /// Graph view mode for filtering which link types are displayed.
-enum GraphViewMode: String, Hashable, Sendable, CaseIterable, Identifiable {
+nonisolated enum GraphViewMode: String, Hashable, Sendable, CaseIterable, Identifiable {
     /// Show direct connectivity evidence.
     /// Best for "who can I probably work directly?"
     case connectivity = "Connectivity"
@@ -200,7 +200,7 @@ enum GraphViewMode: String, Hashable, Sendable, CaseIterable, Identifiable {
 // MARK: - Extended Edge Data
 
 /// Extended edge information including relationship type.
-struct ClassifiedEdge: Hashable, Sendable {
+nonisolated struct ClassifiedEdge: Hashable, Sendable {
     let sourceID: String
     let targetID: String
     let linkType: LinkType
@@ -232,7 +232,7 @@ struct ClassifiedEdge: Hashable, Sendable {
 }
 
 /// Station relationship data for inspector display.
-struct StationRelationship: Hashable, Sendable, Identifiable {
+nonisolated struct StationRelationship: Hashable, Sendable, Identifiable {
     let id: String            // Station callsign
     let linkType: LinkType
     let packetCount: Int
@@ -245,7 +245,7 @@ struct StationRelationship: Hashable, Sendable, Identifiable {
 
 /// Parameters for HeardDirect eligibility scoring.
 /// Tunable thresholds documented in Docs/NetworkGraphSemantics.md.
-enum HeardDirectScoring {
+nonisolated enum HeardDirectScoring {
     /// Minimum distinct minutes where station was heard direct
     static let minDirectMinutes: Int = 2
 
@@ -312,7 +312,7 @@ enum HeardDirectScoring {
 // MARK: - Classified Graph Model
 
 /// Graph model with classified edges by relationship type.
-struct ClassifiedGraphModel: Hashable, Sendable {
+nonisolated struct ClassifiedGraphModel: Hashable, Sendable {
     let nodes: [NetworkGraphNode]
     let edges: [ClassifiedEdge]
     let adjacency: [String: [StationRelationship]]

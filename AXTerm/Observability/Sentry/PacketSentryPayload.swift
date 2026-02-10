@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct PacketSentryPayload: Equatable {
+nonisolated struct PacketSentryPayload: Equatable {
     var frameType: String
     var byteCount: Int
     var from: String

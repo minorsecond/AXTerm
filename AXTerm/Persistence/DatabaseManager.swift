@@ -8,7 +8,7 @@
 import Foundation
 import GRDB
 
-enum DatabaseManager {
+nonisolated enum DatabaseManager {
     static let folderName = "AXTerm"
     static let databaseName = "axterm.sqlite"
 
@@ -61,7 +61,6 @@ enum DatabaseManager {
         }
     }
 
-    @MainActor
     static func makeDatabaseQueue() throws -> DatabaseQueue {
         let url = try databaseURL()
         let urlPath = url.path
@@ -415,6 +414,6 @@ enum DatabaseManager {
     }
 }
 
-enum DatabaseManagerError: Error {
+nonisolated enum DatabaseManagerError: Error {
     case schemaMismatch
 }

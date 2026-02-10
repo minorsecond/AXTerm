@@ -8,7 +8,7 @@
 import Foundation
 import GRDB
 
-final class SQLiteEventLogStore: EventLogStore, @unchecked Sendable {
+nonisolated final class SQLiteEventLogStore: EventLogStore, @unchecked Sendable {
     private let dbQueue: DatabaseQueue
 
     init(dbQueue: DatabaseQueue) {

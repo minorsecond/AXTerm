@@ -11,7 +11,7 @@ import Foundation
 
 /// Centralized callsign parsing and matching. Use this everywhere to avoid
 /// SSID/callsign inconsistencies (e.g. "TEST-1" vs "TEST1", "TEST" vs "TEST-0").
-enum CallsignNormalizer {
+nonisolated enum CallsignNormalizer {
     /// Parse "CALL-SSID" or "CALL" into (baseCall, ssid). SSID 0 if omitted.
     /// - "TEST-1" -> ("TEST", 1)
     /// - "TEST" -> ("TEST", 0)
@@ -51,7 +51,7 @@ enum CallsignNormalizer {
 // MARK: - AX25Address
 
 /// Represents an AX.25 address (callsign + SSID)
-struct AX25Address: Hashable, Codable, Identifiable, Sendable {
+nonisolated struct AX25Address: Hashable, Codable, Identifiable, Sendable {
     let call: String
     let ssid: Int
     let repeated: Bool

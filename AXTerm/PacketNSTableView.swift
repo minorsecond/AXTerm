@@ -675,7 +675,7 @@ private final class TypePillView: NSView {
     }
 }
 
-private struct PacketTableColumnSizer {
+nonisolated private struct PacketTableColumnSizer {
     let rows: [PacketRowViewModel]
 
     func width(for column: PacketNSTableView.ColumnIdentifier) -> CGFloat {

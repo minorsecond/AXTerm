@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum Telemetry {
+nonisolated enum Telemetry {
     static var isEnabled: Bool {
         backend.isEnabled
     }
@@ -80,7 +80,7 @@ enum Telemetry {
     private static var backend: TelemetryBackend = TelemetryBackendFactory.makeDefault()
 }
 
-enum TelemetryContext {
+nonisolated enum TelemetryContext {
     static let packetCount = "packetCount"
     static let uniqueStations = "uniqueStations"
     static let activeBucket = "activeBucket"

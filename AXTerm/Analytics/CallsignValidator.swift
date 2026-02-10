@@ -9,7 +9,7 @@ import Foundation
 
 /// Validates and parses amateur radio callsigns.
 /// Filters out non-callsign entities like BEACON, ID, WIDE1-1, etc.
-enum CallsignValidator {
+nonisolated enum CallsignValidator {
 
     // MARK: - Basic Validation (used by Settings)
 

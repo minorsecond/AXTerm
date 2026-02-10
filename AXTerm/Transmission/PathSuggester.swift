@@ -14,7 +14,7 @@ import Foundation
 // MARK: - Path Score
 
 /// Quality metrics for a path to a destination
-struct PathScore: Sendable {
+nonisolated struct PathScore: Sendable {
     /// Expected Transmissions (1.0 = perfect, higher = worse)
     let etx: Double
 
@@ -41,7 +41,7 @@ struct PathScore: Sendable {
 // MARK: - Path Suggestion
 
 /// Suggested path with scoring and explanation
-struct PathSuggestion: Sendable {
+nonisolated struct PathSuggestion: Sendable {
     /// The suggested digipeater path
     let path: DigiPath
 
@@ -82,7 +82,7 @@ struct PathSuggestion: Sendable {
 // MARK: - Path Mode
 
 /// Path selection mode per destination
-enum PathMode: String, Sendable, CaseIterable {
+nonisolated enum PathMode: String, Sendable, CaseIterable {
     /// User can edit but path is prefilled from best suggestion
     case suggested
 
@@ -96,7 +96,7 @@ enum PathMode: String, Sendable, CaseIterable {
 // MARK: - Destination Path Settings
 
 /// Per-destination path configuration
-struct DestinationPathSettings: Sendable {
+nonisolated struct DestinationPathSettings: Sendable {
     let destination: String
     var mode: PathMode = .suggested
     var lockedPath: DigiPath?
@@ -109,7 +109,7 @@ struct DestinationPathSettings: Sendable {
 // MARK: - Path Statistics
 
 /// Statistics for a specific path to a destination
-private struct PathStats: Sendable {
+nonisolated private struct PathStats: Sendable {
     var successCount: Int = 0
     var failureCount: Int = 0
     var totalRtt: Double = 0
@@ -149,7 +149,7 @@ private struct PathStats: Sendable {
 // MARK: - Path Key
 
 /// Key for path lookup (destination + path signature)
-private struct PathKey: Hashable, Sendable {
+nonisolated private struct PathKey: Hashable, Sendable {
     let destination: String
     let pathSignature: String
 
@@ -162,7 +162,7 @@ private struct PathKey: Hashable, Sendable {
 // MARK: - Path Suggester
 
 /// Suggests optimal paths based on historical performance
-struct PathSuggester: Sendable {
+nonisolated struct PathSuggester: Sendable {
 
     /// Statistics per path
     private var stats: [PathKey: PathStats] = [:]

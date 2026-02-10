@@ -10,6 +10,7 @@ import XCTest
 import SwiftUI
 @testable import AXTerm
 
+@MainActor
 final class TerminalViewTests: XCTestCase {
 
     @MainActor

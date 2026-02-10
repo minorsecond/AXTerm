@@ -15,7 +15,7 @@ import CommonCrypto
 // MARK: - Per-route adaptive cache
 
 /// Key for per-route adaptive cache (destination + path so direct vs via digi are separate).
-struct RouteAdaptiveKey: Hashable, Sendable {
+nonisolated struct RouteAdaptiveKey: Hashable, Sendable {
     let destination: String
     let pathSignature: String
 }
@@ -28,7 +28,7 @@ private func canonicalDestination(_ destination: String) -> String {
 }
 
 /// Cached learned params for one route with TTL for invalidation.
-struct CachedAdaptiveEntry: Sendable {
+nonisolated struct CachedAdaptiveEntry: Sendable {
     var settings: TxAdaptiveSettings
     var lastUpdated: Date
 }
@@ -3121,7 +3121,7 @@ final class SessionCoordinator: ObservableObject {
 // MARK: - Incoming Transfer Request
 
 /// Represents an incoming file transfer request waiting for user approval
-struct IncomingTransferRequest: Identifiable, Equatable {
+nonisolated struct IncomingTransferRequest: Identifiable, Equatable {
     let id: UUID
     let sourceCallsign: String
     let fileName: String
@@ -3149,7 +3149,7 @@ struct IncomingTransferRequest: Identifiable, Equatable {
 // MARK: - Inbound Transfer State
 
 /// State for tracking an inbound file transfer
-struct InboundTransferState {
+nonisolated struct InboundTransferState {
     let axdpSessionId: UInt32
     let sourceCallsign: String
     let fileName: String
@@ -3300,7 +3300,7 @@ struct InboundTransferState {
 // MARK: - Transfer Metrics
 
 /// Metrics for a completed transfer
-struct TransferMetrics {
+nonisolated struct TransferMetrics {
     let totalBytes: Int
     let durationSeconds: TimeInterval
     let originalSize: Int?
@@ -3341,7 +3341,7 @@ extension Data {
 // MARK: - Capability Debug Events
 
 /// Event type for capability discovery debugging
-enum CapabilityDebugEventType: Equatable {
+nonisolated enum CapabilityDebugEventType: Equatable {
     case pingSent
     case pongReceived
     case pingReceived
@@ -3350,7 +3350,7 @@ enum CapabilityDebugEventType: Equatable {
 }
 
 /// Debug event for capability discovery (for debug mode display)
-struct CapabilityDebugEvent {
+nonisolated struct CapabilityDebugEvent {
     let type: CapabilityDebugEventType
     let peer: String
     let timestamp: Date

@@ -12,7 +12,7 @@ import SwiftUI
 
 /// Notification model for session state changes and peer actions.
 /// Add new cases in NotificationType when introducing new toast variants.
-struct SessionNotification: Identifiable, Equatable {
+nonisolated struct SessionNotification: Identifiable, Equatable {
     let id = UUID()
     let type: NotificationType
     let peer: String

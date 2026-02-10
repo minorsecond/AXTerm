@@ -8,7 +8,7 @@
 import Foundation
 import GRDB
 
-final class SQLitePacketStore: PacketStore, @unchecked Sendable {
+nonisolated final class SQLitePacketStore: PacketStore, @unchecked Sendable {
     private let dbQueue: DatabaseQueue
 
     init(dbQueue: DatabaseQueue) {
@@ -95,6 +95,6 @@ final class SQLitePacketStore: PacketStore, @unchecked Sendable {
     }
 }
 
-enum PacketStoreError: Error {
+nonisolated enum PacketStoreError: Error {
     case missingKISSEndpoint
 }

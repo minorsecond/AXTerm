@@ -13,7 +13,7 @@ import OSLog
 // MARK: - Transport State
 
 /// Connection state for KISS transport
-enum KISSTransportState: String, Equatable, Sendable {
+nonisolated enum KISSTransportState: String, Equatable, Sendable {
     case disconnected
     case connecting
     case connected
@@ -23,7 +23,7 @@ enum KISSTransportState: String, Equatable, Sendable {
 // MARK: - Transport Delegate
 
 /// Delegate for receiving transport events
-protocol KISSTransportDelegate: AnyObject {
+nonisolated protocol KISSTransportDelegate: AnyObject {
     /// Called when a frame send completes (success or failure)
     func transportDidSend(frameId: UUID, result: Result<Void, Error>)
 
@@ -34,7 +34,7 @@ protocol KISSTransportDelegate: AnyObject {
 // MARK: - Transport Errors
 
 /// Errors from KISS transport
-enum KISSTransportError: Error, LocalizedError {
+nonisolated enum KISSTransportError: Error, LocalizedError {
     case notConnected
     case connectionFailed(String)
     case sendFailed(String)
@@ -54,7 +54,7 @@ enum KISSTransportError: Error, LocalizedError {
 // MARK: - Pending Frame Entry
 
 /// A frame queued for transmission
-struct PendingFrame: Sendable {
+nonisolated struct PendingFrame: Sendable {
     let id: UUID
     let kissData: Data
     let queuedAt: Date
@@ -75,7 +75,7 @@ struct PendingFrame: Sendable {
 /// - Tracks frames by UUID for correlation
 /// - Handles reconnection
 /// - Thread-safe queue management
-final class KISSTransport: @unchecked Sendable {
+nonisolated final class KISSTransport: @unchecked Sendable {
 
     // MARK: - Configuration
 

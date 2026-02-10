@@ -15,7 +15,7 @@ import Foundation
 import Combine
 
 /// View model for TxAdaptiveSettings UI
-struct TxAdaptiveSettingsViewModel: Sendable {
+nonisolated struct TxAdaptiveSettingsViewModel: Sendable {
 
     /// The settings being edited
     var settings: TxAdaptiveSettings

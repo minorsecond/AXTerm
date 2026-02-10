@@ -8,7 +8,7 @@
 import Foundation
 import GRDB
 
-final class SQLiteConsoleStore: ConsoleStore, @unchecked Sendable {
+nonisolated final class SQLiteConsoleStore: ConsoleStore, @unchecked Sendable {
     private let dbQueue: DatabaseQueue
 
     init(dbQueue: DatabaseQueue) {

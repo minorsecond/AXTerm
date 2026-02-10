@@ -8,7 +8,7 @@
 import Foundation
 
 /// AX.25 frame class (I, S, U, or unknown)
-enum AX25FrameClass: String, Codable, Hashable, Sendable {
+nonisolated enum AX25FrameClass: String, Codable, Hashable, Sendable {
     case I = "I"
     case S = "S"
     case U = "U"
@@ -16,7 +16,7 @@ enum AX25FrameClass: String, Codable, Hashable, Sendable {
 }
 
 /// AX.25 S-frame (Supervisory) subtypes
-enum AX25SType: String, Codable, Hashable, Sendable {
+nonisolated enum AX25SType: String, Codable, Hashable, Sendable {
     case RR = "RR"       // Receive Ready
     case RNR = "RNR"     // Receive Not Ready
     case REJ = "REJ"     // Reject
@@ -24,7 +24,7 @@ enum AX25SType: String, Codable, Hashable, Sendable {
 }
 
 /// AX.25 U-frame (Unnumbered) subtypes
-enum AX25UType: String, Codable, Hashable, Sendable {
+nonisolated enum AX25UType: String, Codable, Hashable, Sendable {
     case UI = "UI"       // Unnumbered Information
     case SABM = "SABM"   // Set Asynchronous Balanced Mode
     case SABME = "SABME" // Set Asynchronous Balanced Mode Extended
@@ -36,7 +36,7 @@ enum AX25UType: String, Codable, Hashable, Sendable {
 }
 
 /// Decoded AX.25 control field information
-struct AX25ControlFieldDecoded: Codable, Hashable, Sendable {
+nonisolated struct AX25ControlFieldDecoded: Codable, Hashable, Sendable {
     /// Frame class (I, S, U, or unknown)
     let frameClass: AX25FrameClass
 

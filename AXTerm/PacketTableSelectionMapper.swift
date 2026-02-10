@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct PacketRowViewModel: Identifiable, Hashable {
+nonisolated struct PacketRowViewModel: Identifiable, Hashable {
     let id: Packet.ID
     let timeText: String
     let fromText: String
@@ -38,7 +38,7 @@ struct PacketRowViewModel: Identifiable, Hashable {
     }
 }
 
-struct PacketTableSelectionMapper {
+nonisolated struct PacketTableSelectionMapper {
     let rows: [PacketRowViewModel]
 
     func indexes(for selection: Set<Packet.ID>) -> IndexSet {

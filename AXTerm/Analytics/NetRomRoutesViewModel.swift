@@ -10,7 +10,7 @@ import Foundation
 import SwiftUI
 
 /// Scope selection for the Routes page.
-enum RoutesScope: String, CaseIterable, Identifiable {
+nonisolated enum RoutesScope: String, CaseIterable, Identifiable {
     case neighbors = "Neighbors"
     case routes = "Routes"
     case linkQuality = "Link Quality"
@@ -39,7 +39,7 @@ enum RoutesScope: String, CaseIterable, Identifiable {
 }
 
 /// Display model for a neighbor row.
-struct NeighborDisplayInfo: Identifiable, Hashable {
+nonisolated struct NeighborDisplayInfo: Identifiable, Hashable {
     let id: String
     let callsign: String
     let quality: Int

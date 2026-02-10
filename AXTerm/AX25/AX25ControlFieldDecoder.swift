@@ -8,7 +8,7 @@
 import Foundation
 
 /// Decoder for AX.25 control field bytes
-enum AX25ControlFieldDecoder {
+nonisolated enum AX25ControlFieldDecoder {
 
     // MARK: - U-Frame Control Byte Patterns (with P/F bit masked out)
 

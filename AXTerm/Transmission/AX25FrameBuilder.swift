@@ -11,7 +11,7 @@ import Foundation
 // MARK: - Control Byte Constants
 
 /// AX.25 control byte constants for frame building
-enum AX25Control {
+nonisolated enum AX25Control {
     // U-frame control bytes (unnumbered)
     static let ui: UInt8       = 0x03    // UI (Unnumbered Information)
     static let sabm: UInt8     = 0x2F    // SABM (Set Asynchronous Balanced Mode)
@@ -74,7 +74,7 @@ enum AX25Control {
 // MARK: - Frame Builder
 
 /// Builds AX.25 frames for transmission
-struct AX25FrameBuilder {
+nonisolated struct AX25FrameBuilder {
 
     // MARK: - U-Frame Builders
 

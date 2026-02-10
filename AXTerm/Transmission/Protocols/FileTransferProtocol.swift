@@ -15,7 +15,7 @@ import Foundation
 // MARK: - Transfer Protocol Type
 
 /// Supported file transfer protocols
-enum TransferProtocolType: String, CaseIterable, Sendable, Identifiable {
+nonisolated enum TransferProtocolType: String, CaseIterable, Sendable, Identifiable {
     /// Modern AXTerm Datagram Protocol (default, preferred)
     case axdp = "AXDP"
 
@@ -92,7 +92,7 @@ enum TransferProtocolType: String, CaseIterable, Sendable, Identifiable {
 // MARK: - Transfer Protocol State
 
 /// Common state representation for all transfer protocols
-enum TransferProtocolState: Equatable, Sendable {
+nonisolated enum TransferProtocolState: Equatable, Sendable {
     /// Protocol is idle, no active transfer
     case idle
 
@@ -141,7 +141,7 @@ enum TransferProtocolState: Equatable, Sendable {
 // MARK: - File Metadata
 
 /// Metadata about a file being transferred
-struct TransferFileMetadata: Sendable, Equatable {
+nonisolated struct TransferFileMetadata: Sendable, Equatable {
     /// File name (sanitized, no path components)
     let fileName: String
 
@@ -181,7 +181,7 @@ struct TransferFileMetadata: Sendable, Equatable {
 // MARK: - Protocol Delegate
 
 /// Delegate protocol for receiving transfer protocol events
-protocol FileTransferProtocolDelegate: AnyObject {
+nonisolated protocol FileTransferProtocolDelegate: AnyObject {
     /// Protocol needs to send data to the peer
     func transferProtocol(_ protocol: FileTransferProtocol, needsToSend data: Data)
 
@@ -204,7 +204,7 @@ protocol FileTransferProtocolDelegate: AnyObject {
 // MARK: - File Transfer Protocol
 
 /// Common interface for all file transfer protocol implementations
-protocol FileTransferProtocol: AnyObject {
+nonisolated protocol FileTransferProtocol: AnyObject {
     /// The type of this protocol
     var protocolType: TransferProtocolType { get }
 
@@ -285,7 +285,7 @@ extension FileTransferProtocol {
 // MARK: - Protocol Errors
 
 /// Errors that can occur during file transfer
-enum FileTransferError: Error, LocalizedError, Sendable {
+nonisolated enum FileTransferError: Error, LocalizedError, Sendable {
     case notConnected
     case protocolNotSupported
     case invalidState(expected: String, actual: String)

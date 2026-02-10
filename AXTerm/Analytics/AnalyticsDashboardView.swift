@@ -1117,7 +1117,7 @@ private struct ChartWidthReader: View {
 // MARK: - Flow Layout for Responsive Controls
 
 /// A layout that wraps content to the next row when it doesn't fit.
-private struct FlowLayout: Layout {
+nonisolated private struct FlowLayout: Layout {
     var spacing: CGFloat = 8
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
@@ -1168,7 +1168,7 @@ private struct FlowLayout: Layout {
 // MARK: - Floating Control Bar
 
 /// Preference key for tracking scroll offset
-private struct ScrollOffsetPreferenceKey: PreferenceKey {
+nonisolated private struct ScrollOffsetPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()

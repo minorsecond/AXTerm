@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum AutoScrollDecision {
+nonisolated enum AutoScrollDecision {
     static func shouldAutoScroll(
         isUserAtTarget: Bool,
         followNewest: Bool,

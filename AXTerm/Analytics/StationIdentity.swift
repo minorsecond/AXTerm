@@ -12,7 +12,7 @@ import Foundation
 ///
 /// - **station**: Group all SSIDs under a single base callsign (e.g., ANH, ANH-1, ANH-15 => "ANH")
 /// - **ssid**: Show each SSID as a separate node (e.g., ANH and ANH-15 are distinct)
-enum StationIdentityMode: String, CaseIterable, Codable, Sendable, Identifiable {
+nonisolated enum StationIdentityMode: String, CaseIterable, Codable, Sendable, Identifiable {
     case station = "station"    // Group by base callsign (default)
     case ssid = "ssid"          // Split by full callsign with SSID
 
@@ -46,7 +46,7 @@ enum StationIdentityMode: String, CaseIterable, Codable, Sendable, Identifiable 
 }
 
 /// Parsed callsign components.
-struct ParsedCallsign: Hashable, Sendable {
+nonisolated struct ParsedCallsign: Hashable, Sendable {
     /// Base callsign (uppercase, no SSID suffix)
     let base: String
 
@@ -75,7 +75,7 @@ struct ParsedCallsign: Hashable, Sendable {
 /// The key's string representation depends on the identity mode:
 /// - `.station`: Uses base callsign only (e.g., "ANH")
 /// - `.ssid`: Uses full callsign with SSID (e.g., "ANH-15")
-struct StationKey: Hashable, Sendable {
+nonisolated struct StationKey: Hashable, Sendable {
     /// Base callsign (uppercase)
     let base: String
 
@@ -130,7 +130,7 @@ struct StationKey: Hashable, Sendable {
 }
 
 /// Utilities for parsing callsigns and extracting SSID components.
-enum CallsignParser {
+nonisolated enum CallsignParser {
     /// Parse a callsign string into base and SSID components.
     ///
     /// Examples:
@@ -177,7 +177,7 @@ enum CallsignParser {
 // MARK: - Grouped Station Info
 
 /// Information about a grouped station node.
-struct GroupedStationInfo: Hashable, Sendable {
+nonisolated struct GroupedStationInfo: Hashable, Sendable {
     /// The identity key (base callsign in station mode, full callsign in ssid mode)
     let identityKey: String
 
@@ -211,7 +211,7 @@ struct GroupedStationInfo: Hashable, Sendable {
 }
 
 /// Member of a grouped station (individual SSID).
-struct SSIDMember: Hashable, Sendable, Identifiable {
+nonisolated struct SSIDMember: Hashable, Sendable, Identifiable {
     var id: String { fullCallsign }
 
     /// Base callsign
@@ -238,7 +238,7 @@ struct SSIDMember: Hashable, Sendable, Identifiable {
 // MARK: - Station Aggregator
 
 /// Aggregates packet data by station identity.
-struct StationAggregator {
+nonisolated struct StationAggregator {
     private var memberData: [String: [String: SSIDMemberAggregate]] = [:] // identityKey -> fullCallsign -> data
 
     /// Record a callsign sighting.
@@ -280,7 +280,7 @@ struct StationAggregator {
     }
 }
 
-private struct SSIDMemberAggregate {
+nonisolated private struct SSIDMemberAggregate {
     let base: String
     let ssid: Int?
     var packetCount: Int = 0

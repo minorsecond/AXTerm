@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct NetworkGraphBuilder {
+nonisolated struct NetworkGraphBuilder {
     struct Options: Hashable, Sendable {
         let includeViaDigipeaters: Bool
         let minimumEdgeCount: Int
@@ -1088,12 +1088,12 @@ struct NetworkGraphBuilder {
 
 // MARK: - Keys and Aggregates
 
-private struct DirectedKey: Hashable {
+nonisolated private struct DirectedKey: Hashable {
     let source: String
     let target: String
 }
 
-private struct UndirectedKey: Hashable {
+nonisolated private struct UndirectedKey: Hashable {
     let source: String
     let target: String
 
@@ -1108,44 +1108,44 @@ private struct UndirectedKey: Hashable {
     }
 }
 
-private struct EdgeAggregate {
+nonisolated private struct EdgeAggregate {
     var count: Int = 0
     var bytes: Int = 0
 }
 
-private struct NodeAggregate {
+nonisolated private struct NodeAggregate {
     var inCount: Int = 0
     var outCount: Int = 0
     var inBytes: Int = 0
     var outBytes: Int = 0
 }
 
-private struct ClassifiedEdgeAggregate {
+nonisolated private struct ClassifiedEdgeAggregate {
     var count: Int = 0
     var bytes: Int = 0
     var lastHeard: Date?
     var hasViaPath: Bool = false
 }
 
-private struct HeardDirectAggregate {
+nonisolated private struct HeardDirectAggregate {
     var count: Int = 0
     var lastHeard: Date?
     var distinctBuckets: Set<Int> = []
 }
 
-private struct HeardViaAggregate {
+nonisolated private struct HeardViaAggregate {
     var count: Int = 0
     var lastHeard: Date?
     var viaDigipeaters: [String: Int] = [:]
 }
 
-private struct DirectionalTrafficAggregate {
+nonisolated private struct DirectionalTrafficAggregate {
     var count: Int = 0
     var bytes: Int = 0
     var lastHeard: Date?
 }
 
-private struct BidirectionalTrafficAggregate {
+nonisolated private struct BidirectionalTrafficAggregate {
     var forwardCount: Int = 0
     var forwardBytes: Int = 0
     var reverseCount: Int = 0
@@ -1153,13 +1153,13 @@ private struct BidirectionalTrafficAggregate {
     var lastHeard: Date?
 }
 
-private struct HeardDirectEdgeAggregate {
+nonisolated private struct HeardDirectEdgeAggregate {
     var count: Int = 0
     var lastHeard: Date?
     var score: Double = 0
 }
 
-private struct SeenViaEdgeAggregate {
+nonisolated private struct SeenViaEdgeAggregate {
     var count: Int = 0
     var lastHeard: Date?
     var viaDigipeaters: [String: Int] = [:]

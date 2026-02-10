@@ -8,6 +8,7 @@
 import XCTest
 @testable import AXTerm
 
+@MainActor
 final class AdaptiveNetworkPollFilterTests: XCTestCase {
 
     // MARK: - Helpers

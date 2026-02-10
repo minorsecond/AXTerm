@@ -14,7 +14,7 @@ import Combine
 
 /// Unique key for identifying a session
 /// Sessions are identified by destination callsign+SSID, path signature, and channel
-struct SessionKey: Hashable, Sendable {
+nonisolated struct SessionKey: Hashable, Sendable {
     let destination: String      // "N0CALL-5"
     let pathSignature: String    // "WIDE1-1,WIDE2-1" or "" for direct
     let channel: UInt8
@@ -29,7 +29,7 @@ struct SessionKey: Hashable, Sendable {
 // MARK: - Session
 
 /// Represents an AX.25 connected-mode session
-final class AX25Session: @unchecked Sendable {
+nonisolated final class AX25Session: @unchecked Sendable {
     let id: UUID
     let key: SessionKey
     let localAddress: AX25Address

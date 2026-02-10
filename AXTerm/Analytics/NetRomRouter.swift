@@ -9,7 +9,7 @@ import Foundation
 
 /// NET/ROM routing configuration constants.
 /// Quality math follows section 10 of https://packet-radio.net/wp-content/uploads/2017/04/netrom1.pdf
-struct RoutingFreshnessPolicy: Equatable {
+nonisolated struct RoutingFreshnessPolicy: Equatable {
     /// Whether UI beacons should refresh neighbor lastSeen (weak evidence).
     let uiBeaconRefreshesNeighbor: Bool
     /// Whether UI beacons should refresh routes (disabled by default).
@@ -24,7 +24,7 @@ struct RoutingFreshnessPolicy: Equatable {
     )
 }
 
-struct NetRomConfig {
+nonisolated struct NetRomConfig {
     let neighborBaseQuality: Int
     let neighborIncrement: Int
     let minimumRouteQuality: Int
@@ -79,12 +79,12 @@ struct NetRomConfig {
 }
 
 /// Packet direction used when observing quality events.
-enum PacketDirection {
+nonisolated enum PacketDirection {
     case incoming, outgoing
 }
 
 /// Public representation of a NET/ROM neighbor for tests/UI.
-struct NeighborInfo: Equatable {
+nonisolated struct NeighborInfo: Equatable {
     let call: String
     let quality: Int
     let lastSeen: Date
@@ -103,7 +103,7 @@ struct NeighborInfo: Equatable {
 }
 
 /// Public route snapshot exposed to router tests / graph queries.
-struct RouteInfo: Equatable {
+nonisolated struct RouteInfo: Equatable {
     let destination: String
     let origin: String
     let quality: Int
@@ -122,12 +122,12 @@ struct RouteInfo: Equatable {
 }
 
 /// Path summary for best path lookups.
-struct NetRomPath: Equatable, Hashable {
+nonisolated struct NetRomPath: Equatable, Hashable {
     let nodes: [String]
     let quality: Int
 }
 
-private struct NeighborRecord {
+nonisolated private struct NeighborRecord {
     let call: String
     var pathQuality: Int
     var lastUpdate: Date
@@ -145,7 +145,7 @@ private struct NeighborRecord {
     }
 }
 
-private struct RouteRecord {
+nonisolated private struct RouteRecord {
     let destination: String
     let origin: String
     var quality: Int
@@ -155,7 +155,7 @@ private struct RouteRecord {
     var sourceType: String  // "classic", "broadcast", or "inferred"
 }
 
-final class NetRomRouter {
+nonisolated final class NetRomRouter {
     let localCallsign: String
     let config: NetRomConfig
     #if DEBUG

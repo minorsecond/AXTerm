@@ -8,7 +8,7 @@
 import Foundation
 import GRDB
 
-struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Hashable {
+nonisolated struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Hashable {
     static let databaseTableName = "packets"
 
     var id: UUID
@@ -138,7 +138,7 @@ struct PacketRecord: Codable, FetchableRecord, PersistableRecord, Hashable {
     }
 }
 
-enum PacketRecordError: Error {
+nonisolated enum PacketRecordError: Error {
     case invalidHost
     case invalidPort(Int)
 }

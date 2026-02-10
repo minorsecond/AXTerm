@@ -186,7 +186,7 @@ struct RawView: View {
     }
 }
 
-private struct RawScrollBottomPreferenceKey: PreferenceKey {
+nonisolated private struct RawScrollBottomPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {

@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct GraphNode: Hashable, Sendable {
+nonisolated struct GraphNode: Hashable, Sendable {
     let id: String
     let degree: Int
     let count: Int

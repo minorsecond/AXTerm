@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum AnalyticsEngine {
+nonisolated enum AnalyticsEngine {
     static func normalizePackets(_ packets: [Packet]) -> [PacketEvent] {
         packets.map { PacketEvent(packet: $0) }
     }

@@ -17,12 +17,12 @@ import CommonCrypto
 
 /// 7plus encoding character set (custom, not standard Base64)
 /// Uses characters that are safe for 7-bit ASCII transmission
-private let sevenPlusCharset: [Character] = Array(
+nonisolated private let sevenPlusCharset: [Character] = Array(
     "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz@#"
 )
 
 /// Lines per block for checksumming
-private let linesPerBlock: Int = 32
+nonisolated private let linesPerBlock: Int = 32
 
 /// Maximum encoded line length
 private let maxLineLength: Int = 64
@@ -30,7 +30,7 @@ private let maxLineLength: Int = 64
 // MARK: - 7plus State
 
 /// 7plus protocol state
-enum SevenPlusState: Equatable, Sendable {
+nonisolated enum SevenPlusState: Equatable, Sendable {
     case idle
     case sendingHeader
     case sendingData
@@ -45,7 +45,7 @@ enum SevenPlusState: Equatable, Sendable {
 // MARK: - 7plus Protocol Implementation
 
 /// 7plus ASCII encoding file transfer protocol
-final class SevenPlusProtocol: FileTransferProtocol {
+nonisolated final class SevenPlusProtocol: FileTransferProtocol {
     let protocolType: TransferProtocolType = .sevenPlus
 
     weak var delegate: FileTransferProtocolDelegate?

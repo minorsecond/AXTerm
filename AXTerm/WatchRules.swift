@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct WatchMatch: Equatable {
+nonisolated struct WatchMatch: Equatable {
     let matchedCallsigns: [String]
     let matchedKeywords: [String]
 

@@ -12,7 +12,7 @@
 import Foundation
 
 /// AXTerm Datagram Protocol - application-layer reliability over AX.25 UI/I frames.
-enum AXDP {
+nonisolated enum AXDP {
 
     // MARK: - Protocol Constants
 
@@ -641,7 +641,7 @@ enum AXDP {
 // MARK: - SACK Bitmap
 
 /// Selective ACK bitmap for tracking received chunks
-struct AXDPSACKBitmap: Sendable {
+nonisolated struct AXDPSACKBitmap: Sendable {
     /// Base chunk index (lowest chunk in window)
     let baseChunk: UInt32
 
@@ -736,7 +736,7 @@ struct AXDPSACKBitmap: Sendable {
 // MARK: - Message ID Tracker
 
 /// Tracks message IDs for deduplication
-struct AXDPMessageIdTracker: Sendable {
+nonisolated struct AXDPMessageIdTracker: Sendable {
     /// Key for session+messageId pair
     private struct MessageKey: Hashable {
         let sessionId: UInt32
@@ -788,7 +788,7 @@ struct AXDPMessageIdTracker: Sendable {
 // MARK: - Retry Policy
 
 /// Configures retry behavior for AXDP reliability
-struct AXDPRetryPolicy: Sendable {
+nonisolated struct AXDPRetryPolicy: Sendable {
     /// Maximum number of retry attempts
     let maxRetries: Int
 
@@ -837,7 +837,7 @@ struct AXDPRetryPolicy: Sendable {
 // MARK: - Transfer State
 
 /// Tracks state for an AXDP file transfer session
-struct AXDPTransferState: Sendable {
+nonisolated struct AXDPTransferState: Sendable {
     /// Session ID
     let sessionId: UInt32
 

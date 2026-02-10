@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum StationNormalizer {
+nonisolated enum StationNormalizer {
     static func normalize(_ station: String?) -> String? {
         guard let station else { return nil }
         let trimmed = station.trimmingCharacters(in: .whitespacesAndNewlines)

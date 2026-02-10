@@ -10,7 +10,7 @@ import Foundation
 import SwiftUI
 
 /// Tracks progress of an outbound message for UI highlighting
-struct OutboundMessageProgress: Identifiable, Equatable {
+nonisolated struct OutboundMessageProgress: Identifiable, Equatable {
     let id: UUID
     let text: String
     let totalBytes: Int

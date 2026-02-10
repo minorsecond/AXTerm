@@ -10,7 +10,7 @@ import Foundation
 // MARK: - KISS Protocol
 
 /// KISS protocol constants and utilities
-enum KISS {
+nonisolated enum KISS {
     // KISS framing bytes
     static let FEND: UInt8 = 0xC0
     static let FESC: UInt8 = 0xDB
@@ -102,7 +102,7 @@ enum KISS {
 
 /// Stateful parser for extracting KISS frames from a TCP byte stream.
 /// Handles arbitrary chunk boundaries and frame splitting.
-struct KISSFrameParser {
+nonisolated struct KISSFrameParser {
     private var buffer = Data()
     private var inFrame = false
 
@@ -165,7 +165,7 @@ struct KISSFrameParser {
 // MARK: - AX.25 Decoding
 
 /// AX.25 frame encoding/decoding utilities (pure functions)
-enum AX25 {
+nonisolated enum AX25 {
 
     // MARK: - TX Frame Types for Control Field Encoding
 

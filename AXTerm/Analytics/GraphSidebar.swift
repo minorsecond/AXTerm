@@ -18,7 +18,7 @@ private typealias Copy = GraphCopy
 
 // MARK: - Sidebar Tab
 
-enum GraphSidebarTab: String, CaseIterable, Identifiable {
+nonisolated enum GraphSidebarTab: String, CaseIterable, Identifiable {
     case overview = "Overview"
     case inspector = "Inspector"
 

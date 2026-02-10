@@ -8,13 +8,13 @@
 import Foundation
 import SwiftUI
 
-struct DayGroupedSection<Item: Identifiable>: Identifiable {
+nonisolated struct DayGroupedSection<Item: Identifiable>: Identifiable {
     let id: String
     let date: Date
     let items: [Item]
 }
 
-enum DayGrouping {
+nonisolated enum DayGrouping {
     static func group<Item: Identifiable>(
         items: [Item],
         date: (Item) -> Date,

@@ -8,7 +8,7 @@
 import Foundation
 import GRDB
 
-struct AppEventRecord: Codable, FetchableRecord, PersistableRecord, Hashable, Identifiable {
+nonisolated struct AppEventRecord: Codable, FetchableRecord, PersistableRecord, Hashable, Identifiable {
     static let databaseTableName = "app_events"
 
     enum Level: String, Codable {

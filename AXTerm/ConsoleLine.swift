@@ -8,7 +8,7 @@
 import Foundation
 
 /// Represents a line in the console view
-struct ConsoleLine: Identifiable, Hashable, Sendable {
+nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
     enum Kind: String, Hashable, Sendable {
         case system
         case error

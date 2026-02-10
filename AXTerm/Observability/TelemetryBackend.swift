@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum TelemetryLevel: String, Sendable {
+nonisolated enum TelemetryLevel: String, Sendable {
     case debug
     case info
     case warning
@@ -15,14 +15,14 @@ enum TelemetryLevel: String, Sendable {
     case fatal
 }
 
-enum TelemetrySpanStatus: Sendable {
+nonisolated enum TelemetrySpanStatus: Sendable {
     case ok
     case error
 }
 
 typealias TelemetrySpanToken = AnyObject
 
-protocol TelemetryBackend {
+nonisolated protocol TelemetryBackend {
     var isEnabled: Bool { get }
 
     func addBreadcrumb(category: String, message: String, data: [String: Any]?, level: TelemetryLevel)
@@ -33,7 +33,7 @@ protocol TelemetryBackend {
     func capture(message: String, data: [String: Any]?)
 }
 
-struct NoOpTelemetryBackend: TelemetryBackend {
+nonisolated struct NoOpTelemetryBackend: TelemetryBackend {
     var isEnabled: Bool { false }
 
     func addBreadcrumb(category: String, message: String, data: [String: Any]?, level: TelemetryLevel) {}
@@ -44,7 +44,7 @@ struct NoOpTelemetryBackend: TelemetryBackend {
     func capture(message: String, data: [String: Any]?) {}
 }
 
-struct TelemetryBackendFactory {
+nonisolated struct TelemetryBackendFactory {
     static func makeDefault() -> TelemetryBackend {
         #if canImport(Sentry)
         return SentryTelemetryBackend()
@@ -57,7 +57,7 @@ struct TelemetryBackendFactory {
 #if canImport(Sentry)
 import Sentry
 
-final class SentryTelemetryBackend: TelemetryBackend {
+nonisolated final class SentryTelemetryBackend: TelemetryBackend {
     var isEnabled: Bool {
         SentrySDK.isEnabled
     }

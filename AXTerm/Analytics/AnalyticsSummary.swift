@@ -7,12 +7,12 @@
 
 import Foundation
 
-struct StationCount: Hashable, Sendable {
+nonisolated struct StationCount: Hashable, Sendable {
     let station: String
     let count: Int
 }
 
-struct AnalyticsSummary: Hashable, Sendable {
+nonisolated struct AnalyticsSummary: Hashable, Sendable {
     let packetCount: Int
     let uniqueStationsCount: Int
     let topTalkersByFrom: [StationCount]

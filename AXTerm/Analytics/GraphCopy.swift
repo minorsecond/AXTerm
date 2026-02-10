@@ -10,7 +10,7 @@ import Foundation
 
 // MARK: - Graph View Controls
 
-enum GraphCopy {
+nonisolated enum GraphCopy {
 
     // MARK: Toolbar Actions
 

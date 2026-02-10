@@ -7,7 +7,7 @@
 
 import Foundation
 
-enum PacketSelectionResolver {
+nonisolated enum PacketSelectionResolver {
     static func resolve(selection: Set<Packet.ID>, in packets: [Packet]) -> Packet? {
         guard !selection.isEmpty else { return nil }
         return packets.first { selection.contains($0.id) }

@@ -226,7 +226,7 @@ extension PacketTableCoordinator: NSTableViewDelegate {
     }
 }
 
-enum PacketTableColumnIdentifier: String {
+nonisolated enum PacketTableColumnIdentifier: String {
     case time
     case from
     case to
@@ -235,7 +235,7 @@ enum PacketTableColumnIdentifier: String {
     case info
 }
 
-final class PacketTableNativeTableView: NSTableView {
+nonisolated final class PacketTableNativeTableView: NSTableView {
     var onRightClickRow: ((Int) -> Void)?
 
     override func rightMouseDown(with event: NSEvent) {

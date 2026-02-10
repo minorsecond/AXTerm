@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct PacketEvent: Hashable, Sendable {
+nonisolated struct PacketEvent: Hashable, Sendable {
     let timestamp: Date
     let from: String?
     let to: String?

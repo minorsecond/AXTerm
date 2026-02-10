@@ -854,7 +854,7 @@ private struct PathChip: View {
     }
 }
 
-private enum PayloadSearchHighlighter {
+nonisolated private enum PayloadSearchHighlighter {
     static func highlight(text: String, query: String) -> AttributedString {
         guard !query.isEmpty else { return AttributedString(text) }
 

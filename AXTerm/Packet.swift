@@ -8,7 +8,7 @@
 import Foundation
 
 /// Represents a decoded AX.25 packet
-struct Packet: Identifiable, Hashable, Sendable {
+nonisolated struct Packet: Identifiable, Hashable, Sendable {
     static let infoPreviewLimit: Int = 60
 
     let id: UUID
@@ -186,7 +186,7 @@ struct Packet: Identifiable, Hashable, Sendable {
     }
 }
 
-struct KISSEndpoint: Hashable, Sendable {
+nonisolated struct KISSEndpoint: Hashable, Sendable {
     let host: String
     let port: UInt16
 

@@ -11,7 +11,7 @@ import Foundation
 // MARK: - Transfer Status
 
 /// Status of a bulk file transfer.
-enum BulkTransferStatus: Equatable, Sendable {
+nonisolated enum BulkTransferStatus: Equatable, Sendable {
     case pending
     case awaitingAcceptance  // Waiting for receiver to accept (ACK) or decline (NACK)
     case sending
@@ -25,7 +25,7 @@ enum BulkTransferStatus: Equatable, Sendable {
 // MARK: - Transfer Direction
 
 /// Direction of file transfer
-enum TransferDirection: String, Sendable {
+nonisolated enum TransferDirection: String, Sendable {
     case outbound = "Sending"
     case inbound = "Receiving"
 }
@@ -33,7 +33,7 @@ enum TransferDirection: String, Sendable {
 // MARK: - Compression Override
 
 /// Per-transfer compression settings that can override global defaults
-struct TransferCompressionSettings: Sendable, Equatable {
+nonisolated struct TransferCompressionSettings: Sendable, Equatable {
     /// Override compression enabled state (nil = use global)
     var enabledOverride: Bool?
 
@@ -60,7 +60,7 @@ struct TransferCompressionSettings: Sendable, Equatable {
 // MARK: - Compression Metrics
 
 /// Compression statistics for a transfer
-struct TransferCompressionMetrics: Sendable, Equatable {
+nonisolated struct TransferCompressionMetrics: Sendable, Equatable {
     /// Algorithm used (nil if no compression)
     let algorithm: AXDPCompression.Algorithm?
 
@@ -108,7 +108,7 @@ struct TransferCompressionMetrics: Sendable, Equatable {
 // MARK: - Compressibility Analysis
 
 /// Result of analyzing data compressibility
-struct CompressibilityAnalysis: Sendable {
+nonisolated struct CompressibilityAnalysis: Sendable {
     /// Estimated compression ratio if compressed
     let estimatedRatio: Double
 
@@ -143,7 +143,7 @@ struct CompressibilityAnalysis: Sendable {
 }
 
 /// Analyzes data to determine if compression would be beneficial
-enum CompressionAnalyzer {
+nonisolated enum CompressionAnalyzer {
 
     /// File extensions that are already compressed
     private static let compressedExtensions: Set<String> = [
@@ -343,7 +343,7 @@ extension AXDPCompression.Algorithm {
 // MARK: - Bulk Transfer Model
 
 /// Represents a file transfer in progress or completed.
-struct BulkTransfer: Identifiable, Sendable {
+nonisolated struct BulkTransfer: Identifiable, Sendable {
     let id: UUID
     let fileName: String
     let fileSize: Int  // Original uncompressed file size (for display)
@@ -734,7 +734,7 @@ struct BulkTransfer: Identifiable, Sendable {
 // MARK: - Bulk Transfer Manager
 
 /// Manages multiple file transfers.
-struct BulkTransferManager: Sendable {
+nonisolated struct BulkTransferManager: Sendable {
     /// All transfers (active and completed)
     private(set) var transfers: [BulkTransfer] = []
 

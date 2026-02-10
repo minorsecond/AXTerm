@@ -16,7 +16,7 @@ import Foundation
 // MARK: - Adaptive Mode
 
 /// Mode for an adaptive parameter
-enum AdaptiveMode: String, Sendable, CaseIterable {
+nonisolated enum AdaptiveMode: String, Sendable, CaseIterable {
     case auto
     case manual
 }
@@ -24,7 +24,7 @@ enum AdaptiveMode: String, Sendable, CaseIterable {
 // MARK: - Adaptive Setting
 
 /// Generic adaptive setting with Auto/Manual mode
-struct AdaptiveSetting<T: Comparable & Sendable>: Sendable {
+nonisolated struct AdaptiveSetting<T: Comparable & Sendable>: Sendable {
     /// Internal name for persistence
     let name: String
 
@@ -84,7 +84,7 @@ struct AdaptiveSetting<T: Comparable & Sendable>: Sendable {
 // MARK: - TX Adaptive Settings
 
 /// All adaptive parameters for transmission
-struct TxAdaptiveSettings: Sendable {
+nonisolated struct TxAdaptiveSettings: Sendable {
 
     // MARK: - Traffic Shaping Parameters (Section 4)
 

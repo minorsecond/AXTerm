@@ -11,7 +11,7 @@ import Foundation
 /// The operating mode of the connected TNC.
 /// In KISS mode, AXTerm owns the AX.25 link layer.
 /// In host mode, the TNC manages it internally.
-enum TNCMode: String, Codable, Equatable, CaseIterable {
+nonisolated enum TNCMode: String, Codable, Equatable, CaseIterable {
     case kiss
     case host
     case unknown
@@ -19,7 +19,7 @@ enum TNCMode: String, Codable, Equatable, CaseIterable {
 
 /// Describes what link-layer tuning capabilities are available
 /// for the current TNC connection mode.
-struct TNCCapabilities: Codable, Equatable {
+nonisolated struct TNCCapabilities: Codable, Equatable {
     var mode: TNCMode = .kiss
     var supportsLinkTuning: Bool = true
     var supportsModemTuning: Bool = false

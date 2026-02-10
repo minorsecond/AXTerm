@@ -7,19 +7,19 @@
 
 import SwiftUI
 
-struct SearchFocusAction {
+nonisolated struct SearchFocusAction {
     let action: () -> Void
 }
 
-struct ToggleConnectionAction {
+nonisolated struct ToggleConnectionAction {
     let action: () -> Void
 }
 
-struct InspectPacketAction {
+nonisolated struct InspectPacketAction {
     let action: () -> Void
 }
 
-struct SelectNavigationAction {
+nonisolated struct SelectNavigationAction {
     let action: (NavigationItem) -> Void
 }
 
@@ -45,22 +45,22 @@ extension FocusedValues {
     }
 }
 
-private struct SearchFocusActionKey: FocusedValueKey {
+nonisolated private struct SearchFocusActionKey: FocusedValueKey {
     typealias Value = SearchFocusAction?
     static let defaultValue: SearchFocusAction? = nil
 }
 
-private struct ToggleConnectionActionKey: FocusedValueKey {
+nonisolated private struct ToggleConnectionActionKey: FocusedValueKey {
     typealias Value = ToggleConnectionAction?
     static let defaultValue: ToggleConnectionAction? = nil
 }
 
-private struct InspectPacketActionKey: FocusedValueKey {
+nonisolated private struct InspectPacketActionKey: FocusedValueKey {
     typealias Value = InspectPacketAction?
     static let defaultValue: InspectPacketAction? = nil
 }
 
-private struct SelectNavigationActionKey: FocusedValueKey {
+nonisolated private struct SelectNavigationActionKey: FocusedValueKey {
     typealias Value = SelectNavigationAction?
     static let defaultValue: SelectNavigationAction? = nil
 }

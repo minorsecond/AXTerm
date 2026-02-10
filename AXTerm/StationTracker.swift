@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct StationTracker {
+nonisolated struct StationTracker {
     private(set) var stations: [Station] = []
     private var stationIndex: [String: Int] = [:]
 

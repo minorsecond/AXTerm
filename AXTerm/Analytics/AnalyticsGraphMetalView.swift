@@ -225,7 +225,7 @@ struct AnalyticsGraphView: View {
 }
 
 /// Lightweight state for camera position used by label overlay.
-struct CameraState: Equatable {
+nonisolated struct CameraState: Equatable {
     var scale: CGFloat
     var offset: CGSize
 }
@@ -491,7 +491,7 @@ private struct GraphTooltipView: View {
     }
 }
 
-private final class GraphMetalView: MTKView {
+nonisolated private final class GraphMetalView: MTKView {
     weak var interactionDelegate: GraphMetalInteractionDelegate?
 
     private var trackingArea: NSTrackingArea?
@@ -605,7 +605,7 @@ private final class GraphMetalView: MTKView {
     }
 }
 
-private protocol GraphMetalInteractionDelegate: AnyObject {
+nonisolated private protocol GraphMetalInteractionDelegate: AnyObject {
     func handleMouseMoved(location: CGPoint)
     func handleMouseExited()
     func handleMouseDown(location: CGPoint, modifiers: NSEvent.ModifierFlags)
@@ -1342,7 +1342,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
 }
 
 /// Lightweight key to avoid hashing full GraphModel / [NodePosition] on every update.
-private struct GraphRenderKey: Hashable {
+nonisolated private struct GraphRenderKey: Hashable {
     let nodeCount: Int
     let edgeCount: Int
     let myCallsign: String
@@ -1378,12 +1378,12 @@ private struct GraphRenderKey: Hashable {
     }
 }
 
-private struct GraphHighlightKey: Hashable {
+nonisolated private struct GraphHighlightKey: Hashable {
     let selectedNodeIDs: Set<String>
     let hoveredNodeID: String?
 }
 
-private struct GraphNodeInfo: Hashable {
+nonisolated private struct GraphNodeInfo: Hashable {
     let id: String
     let callsign: String
     let position: SIMD2<Float>
@@ -1392,14 +1392,14 @@ private struct GraphNodeInfo: Hashable {
     let isOfficial: Bool
 }
 
-private struct GraphEdgeInfo: Hashable {
+nonisolated private struct GraphEdgeInfo: Hashable {
     let source: GraphNodeInfo
     let target: GraphNodeInfo
     let weight: Int
     let isStale: Bool
 }
 
-private struct GraphMetrics {
+nonisolated private struct GraphMetrics {
     let minNodeWeight: Int
     let maxNodeWeight: Int
     let maxEdgeWeight: Int
@@ -1427,7 +1427,7 @@ private struct GraphMetrics {
     }
 }
 
-private struct GraphCamera {
+nonisolated private struct GraphCamera {
     var scale: CGFloat = 1
     var offset: CGSize = .zero
     private var targetScale: CGFloat = 1
@@ -1587,7 +1587,7 @@ private struct GraphCamera {
 }
 
 /// Canonical normalized [0,1] -> drawable pixel mapping; must match Metal toPixel exactly.
-private enum GraphCoordinateMapper {
+nonisolated private enum GraphCoordinateMapper {
     /// Converts normalized (x,y in [0,1]) to pixel coordinates in drawable space.
     /// Uses same formula as shader: base = inset + normalized * (size - inset*2); pixel = (base - center)*scale + center + offset.
     static func normalizedToPixel(
@@ -1611,7 +1611,7 @@ private enum GraphCoordinateMapper {
     }
 }
 
-private enum CallsignMatcher {
+nonisolated private enum CallsignMatcher {
     static func normalize(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
     }
@@ -1627,7 +1627,7 @@ private enum CallsignMatcher {
     }
 }
 
-private struct GraphUniforms {
+nonisolated private struct GraphUniforms {
     var viewSize: SIMD2<Float>
     var inset: SIMD2<Float>
     var offset: SIMD2<Float>
@@ -1635,17 +1635,17 @@ private struct GraphUniforms {
     var padding: Float = 0
 }
 
-private struct CircleVertex {
+nonisolated private struct CircleVertex {
     var position: SIMD2<Float>
 }
 
-private struct NodeInstance {
+nonisolated private struct NodeInstance {
     var center: SIMD2<Float>
     var radius: Float
     var color: SIMD4<Float>
 }
 
-private struct EdgeInstance {
+nonisolated private struct EdgeInstance {
     var start: SIMD2<Float>
     var end: SIMD2<Float>
     var thickness: Float
