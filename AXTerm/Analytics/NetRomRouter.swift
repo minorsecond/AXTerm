@@ -36,6 +36,33 @@ struct NetRomConfig {
     /// Routing freshness policy for classification-driven refresh.
     let routingPolicy: RoutingFreshnessPolicy
 
+    /// Hysteresis margin (0.0-1.0). New route must exceed current by this fraction to trigger switch.
+    let hysteresisMargin: Double
+    /// Minimum hold time (seconds) before allowing route switch.
+    let hysteresisHoldSeconds: TimeInterval
+
+    init(
+        neighborBaseQuality: Int,
+        neighborIncrement: Int,
+        minimumRouteQuality: Int,
+        maxRoutesPerDestination: Int,
+        neighborTTLSeconds: TimeInterval,
+        routeTTLSeconds: TimeInterval,
+        routingPolicy: RoutingFreshnessPolicy,
+        hysteresisMargin: Double = 0.12,
+        hysteresisHoldSeconds: TimeInterval = 120.0
+    ) {
+        self.neighborBaseQuality = neighborBaseQuality
+        self.neighborIncrement = neighborIncrement
+        self.minimumRouteQuality = minimumRouteQuality
+        self.maxRoutesPerDestination = maxRoutesPerDestination
+        self.neighborTTLSeconds = neighborTTLSeconds
+        self.routeTTLSeconds = routeTTLSeconds
+        self.routingPolicy = routingPolicy
+        self.hysteresisMargin = hysteresisMargin
+        self.hysteresisHoldSeconds = hysteresisHoldSeconds
+    }
+
     static let `default` = NetRomConfig(
         neighborBaseQuality: 80,
         neighborIncrement: 40,
@@ -43,7 +70,9 @@ struct NetRomConfig {
         maxRoutesPerDestination: 3,
         neighborTTLSeconds: FreshnessCalculator.defaultTTL,
         routeTTLSeconds: FreshnessCalculator.defaultTTL,
-        routingPolicy: .default
+        routingPolicy: .default,
+        hysteresisMargin: 0.12,
+        hysteresisHoldSeconds: 120.0
     )
 
     static let maximumRouteQuality = 255
@@ -135,6 +164,13 @@ final class NetRomRouter {
 
     private var neighbors: [String: NeighborRecord] = [:]
     private var routesByDestination: [String: [RouteRecord]] = [:]
+
+    /// Tracks the currently preferred route per destination for hysteresis.
+    private struct PreferredRoute {
+        let origin: String
+        let selectedAt: Date
+    }
+    private var preferredRoutes: [String: PreferredRoute] = [:]
 
     init(localCallsign: String, config: NetRomConfig = .default) {
         self.localCallsign = CallsignValidator.normalize(localCallsign)
@@ -293,10 +329,44 @@ final class NetRomRouter {
         return currentNeighbors().filter { $0.call == normalized }
     }
 
-    func bestRouteTo(_ destination: String) -> RouteInfo? {
+    func bestRouteTo(_ destination: String, currentDate: Date = Date()) -> RouteInfo? {
         guard let normalized = normalize(destination) else { return nil }
-        let cutoff = Date().addingTimeInterval(-config.routeTTLSeconds)
-        return currentRoutes().first { $0.destination == normalized && $0.lastUpdated >= cutoff }
+        let cutoff = currentDate.addingTimeInterval(-config.routeTTLSeconds)
+
+        // Get all non-expired candidates for this destination, sorted by quality (descending)
+        let candidates = currentRoutes()
+            .filter { $0.destination == normalized && $0.lastUpdated >= cutoff }
+
+        guard let absoluteBest = candidates.first else {
+            preferredRoutes.removeValue(forKey: normalized)
+            return nil
+        }
+
+        // If no hysteresis (margin=0), always return absolute best
+        guard config.hysteresisMargin > 0 else {
+            return absoluteBest
+        }
+
+        // Check if we have a preferred route for this destination
+        if let preferred = preferredRoutes[normalized],
+           let preferredRoute = candidates.first(where: { $0.origin == preferred.origin }) {
+            // Preferred route is still valid — check if the best candidate is significantly better
+            let marginThreshold = Double(preferredRoute.quality) * (1.0 + config.hysteresisMargin)
+            let holdTimeElapsed = currentDate.timeIntervalSince(preferred.selectedAt) >= config.hysteresisHoldSeconds
+
+            if Double(absoluteBest.quality) > marginThreshold && holdTimeElapsed {
+                // Switch to the new best route
+                preferredRoutes[normalized] = PreferredRoute(origin: absoluteBest.origin, selectedAt: currentDate)
+                return absoluteBest
+            }
+
+            // Stay with preferred route
+            return preferredRoute
+        }
+
+        // No preferred route exists (or it expired) — select the best
+        preferredRoutes[normalized] = PreferredRoute(origin: absoluteBest.origin, selectedAt: currentDate)
+        return absoluteBest
     }
 
     /// Refresh lastUpdated for routes from a specific origin, constrained by source types.
@@ -377,10 +447,22 @@ final class NetRomRouter {
     }
 
     func purgeStaleRoutes(currentDate: Date) {
-        // No-op: expired entries are kept in-memory so the view model can
-        // display them with computed freshness. The "Hide expired" toggle
-        // in the UI filters them out when enabled. bestRouteTo() guards
-        // against using expired routes for actual routing decisions.
+        // Routes themselves are kept in-memory for display (view model shows
+        // computed freshness, "Hide expired" toggle filters them in UI).
+        // bestRouteTo() guards against using expired routes for routing.
+        //
+        // Clean up preferredRoutes entries whose destination no longer has any valid routes.
+        let cutoff = currentDate.addingTimeInterval(-config.routeTTLSeconds)
+        var stalePreferred: [String] = []
+        for (destination, _) in preferredRoutes {
+            let hasValidRoutes = routesByDestination[destination]?.contains { $0.lastHeard >= cutoff } ?? false
+            if !hasValidRoutes {
+                stalePreferred.append(destination)
+            }
+        }
+        for destination in stalePreferred {
+            preferredRoutes.removeValue(forKey: destination)
+        }
     }
 
     // MARK: - Private helpers

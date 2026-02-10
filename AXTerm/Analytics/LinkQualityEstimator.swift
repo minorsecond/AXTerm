@@ -62,6 +62,12 @@ struct LinkQualityConfig: Equatable {
     /// Default is true - service destinations are not valid callsigns for routing purposes.
     let excludeServiceDestinations: Bool
 
+    /// Multiplier for inter-arrival time → adaptive TTL (e.g. 6.0 means 6× avg inter-arrival).
+    let adaptiveTTLMultiplier: Double
+
+    /// Maximum adaptive TTL in seconds (cap for sparse links).
+    let maxAdaptiveTTLSeconds: TimeInterval
+
     /// Ingestion de-duplication window (seconds).
     var ingestionDedupWindow: TimeInterval {
         source == .kiss ? 0.25 : 0.0
@@ -80,7 +86,9 @@ struct LinkQualityConfig: Equatable {
         maxETX: Double,
         ackProgressWeight: Double,
         maxObservationsPerLink: Int,
-        excludeServiceDestinations: Bool = true
+        excludeServiceDestinations: Bool = true,
+        adaptiveTTLMultiplier: Double = 6.0,
+        maxAdaptiveTTLSeconds: TimeInterval = 7200.0
     ) {
         self.source = source
         self.slidingWindowSeconds = slidingWindowSeconds
@@ -92,6 +100,8 @@ struct LinkQualityConfig: Equatable {
         self.ackProgressWeight = ackProgressWeight
         self.maxObservationsPerLink = maxObservationsPerLink
         self.excludeServiceDestinations = excludeServiceDestinations
+        self.adaptiveTTLMultiplier = adaptiveTTLMultiplier
+        self.maxAdaptiveTTLSeconds = maxAdaptiveTTLSeconds
     }
 
     static let `default` = LinkQualityConfig(
@@ -104,12 +114,14 @@ struct LinkQualityConfig: Equatable {
         maxETX: 20.0,
         ackProgressWeight: 0.6,
         maxObservationsPerLink: 200,
-        excludeServiceDestinations: true
+        excludeServiceDestinations: true,
+        adaptiveTTLMultiplier: 6.0,
+        maxAdaptiveTTLSeconds: 7200.0
     )
 
     /// Generate a hash for config invalidation purposes.
     func configHash() -> String {
-        "link_v3_\(source)_\(slidingWindowSeconds)_\(forwardHalfLifeSeconds)_\(reverseHalfLifeSeconds)_\(initialDeliveryRatio)_\(minDeliveryRatio)_\(maxETX)_\(ackProgressWeight)_\(maxObservationsPerLink)_\(excludeServiceDestinations)"
+        "link_v4_\(source)_\(slidingWindowSeconds)_\(forwardHalfLifeSeconds)_\(reverseHalfLifeSeconds)_\(initialDeliveryRatio)_\(minDeliveryRatio)_\(maxETX)_\(ackProgressWeight)_\(maxObservationsPerLink)_\(excludeServiceDestinations)_\(adaptiveTTLMultiplier)_\(maxAdaptiveTTLSeconds)"
     }
 }
 
@@ -317,19 +329,49 @@ struct LinkQualityEstimator {
         return min(255, max(0, Int(symmetric.rounded())))
     }
 
-    /// Purge observations older than the sliding window.
+    /// Compute the effective TTL for a directional link based on its inter-arrival pattern.
+    func effectiveTTL(from: String, to: String) -> TimeInterval {
+        let key = "\(CallsignValidator.normalize(from))→\(CallsignValidator.normalize(to))"
+        guard let s = stats[key] else { return config.slidingWindowSeconds }
+        return s.effectiveTTL(using: config)
+    }
+
+    /// Purge observations older than the per-link effective TTL.
+    /// Uses two-phase tombstone expiry: entries without evidence are tombstoned first,
+    /// then removed after the tombstone window elapses.
     mutating func purgeStaleData(currentDate: Date) {
-        let cutoff = currentDate.addingTimeInterval(-config.slidingWindowSeconds)
+        var keysToRemove: [String] = []
 
         for (key, var s) in stats {
+            let linkTTL = s.effectiveTTL(using: config)
+            let cutoff = currentDate.addingTimeInterval(-linkTTL)
             s.pruneOld(cutoff: cutoff)
-            // When all observations are gone and no restored evidence,
-            // clear EWMA estimates so quality returns 0 for expired entries.
+
             if !s.hasEvidence {
-                s.forwardEstimate = nil
-                s.reverseEstimate = nil
+                if s.tombstonedAt == nil {
+                    // Phase 1: Enter tombstone state
+                    s.tombstonedAt = currentDate
+                    s.forwardEstimate = nil
+                    s.reverseEstimate = nil
+                    stats[key] = s
+                } else {
+                    // Phase 2: Check if tombstone window has elapsed
+                    let tombstoneAge = currentDate.timeIntervalSince(s.tombstonedAt!)
+                    if tombstoneAge >= linkTTL {
+                        keysToRemove.append(key)
+                    } else {
+                        stats[key] = s
+                    }
+                }
+            } else {
+                // Has evidence — ensure not tombstoned
+                s.tombstonedAt = nil
+                stats[key] = s
             }
-            stats[key] = s
+        }
+
+        for key in keysToRemove {
+            stats.removeValue(forKey: key)
         }
     }
 
@@ -509,6 +551,15 @@ private struct DirectionalLinkStats {
     var restoredDuplicateCount: Int
     var restoredQuality: Int?
 
+    /// Average inter-arrival time for forward observations (EWMA-smoothed, seconds).
+    var avgInterArrivalSeconds: Double?
+
+    /// Count of forward arrivals used for adaptive TTL (need ≥3 for reliable estimate).
+    var arrivalCount: Int = 0
+
+    /// When set, this link is in tombstone state (no evidence but retained for potential revival).
+    var tombstonedAt: Date?
+
     init(
         lastUpdated: Date,
         observations: RingBuffer<Observation>,
@@ -547,6 +598,9 @@ private struct DirectionalLinkStats {
         observations.append(Observation(timestamp: timestamp, channel: channel, isDuplicate: isDuplicate))
         lastUpdated = timestamp
 
+        // Revive from tombstone if new evidence arrives
+        tombstonedAt = nil
+
         // Clear restored values once we have real observations
         restoredForwardEstimate = nil
         restoredReverseEstimate = nil
@@ -557,6 +611,21 @@ private struct DirectionalLinkStats {
         switch channel {
         case .forward:
             let previous = lastForwardUpdate
+
+            // Track inter-arrival time for adaptive TTL
+            if let previous, !isDuplicate {
+                let gap = timestamp.timeIntervalSince(previous)
+                if gap > 0.5 { // Ignore sub-second dupes
+                    let alpha = 0.3
+                    if let current = avgInterArrivalSeconds {
+                        avgInterArrivalSeconds = (1.0 - alpha) * current + alpha * gap
+                    } else {
+                        avgInterArrivalSeconds = gap
+                    }
+                }
+            }
+            arrivalCount += 1
+
             if previous == nil {
                 forwardEstimate = clamp01(value)
             } else {
@@ -591,6 +660,15 @@ private struct DirectionalLinkStats {
         defer { lastNr = nr }
         guard let lastNr else { return false }
         return nr != lastNr
+    }
+
+    /// Compute the effective TTL for this link based on inter-arrival pattern.
+    func effectiveTTL(using config: LinkQualityConfig) -> TimeInterval {
+        guard arrivalCount >= 3, let avg = avgInterArrivalSeconds else {
+            return config.slidingWindowSeconds
+        }
+        let adaptiveTTL = config.adaptiveTTLMultiplier * avg
+        return min(config.maxAdaptiveTTLSeconds, max(config.slidingWindowSeconds, adaptiveTTL))
     }
 
     /// Remove observations older than cutoff.

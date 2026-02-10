@@ -113,18 +113,37 @@ final class NetRomPassiveInference {
     }
 
     func purgeStaleEvidence(currentDate: Date) {
+        let tombstoneWindow = config.inferredRouteHalfLifeSeconds * config.tombstoneWindowMultiplier
         var refreshedEvidence: [String: [NetRomRouteEvidence]] = [:]
 
         for (destination, bucket) in evidenceByDestination {
-            let filtered = bucket.filter { currentDate.timeIntervalSince($0.lastObserved) < config.inferredRouteHalfLifeSeconds }
-            guard !filtered.isEmpty else { continue }
-            refreshedEvidence[destination] = filtered
+            var kept: [NetRomRouteEvidence] = []
+            for var evidence in bucket {
+                let age = currentDate.timeIntervalSince(evidence.lastObserved)
+
+                if age < config.inferredRouteHalfLifeSeconds {
+                    // Still live — clear any tombstone
+                    evidence.tombstonedAt = nil
+                    kept.append(evidence)
+                } else if evidence.tombstonedAt == nil {
+                    // Phase 1: Enter tombstone state
+                    evidence.tombstonedAt = currentDate
+                    kept.append(evidence)
+                } else {
+                    // Phase 2: Check if tombstone window has elapsed
+                    let tombstoneAge = currentDate.timeIntervalSince(evidence.tombstonedAt!)
+                    if tombstoneAge < tombstoneWindow {
+                        kept.append(evidence)
+                    }
+                    // else: fully expired, drop it
+                }
+            }
+            if !kept.isEmpty {
+                refreshedEvidence[destination] = kept
+            }
         }
 
         evidenceByDestination = refreshedEvidence
-        // Expired inferred routes are kept in the router for display purposes.
-        // The view model's "Hide expired" toggle filters them in the UI,
-        // and bestRouteTo() guards against using them for routing.
     }
 
     // MARK: - Helpers
