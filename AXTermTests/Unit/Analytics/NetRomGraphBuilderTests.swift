@@ -49,7 +49,7 @@ final class NetRomGraphBuilderTests: XCTestCase {
         ])
         
         let options = NetworkGraphBuilder.Options(
-            includeViaDigipeaters: false,
+            includeViaDigipeaters: true,
             minimumEdgeCount: 1,
             maxNodes: 10,
             stationIdentityMode: .ssid
@@ -134,7 +134,7 @@ final class NetRomGraphBuilderTests: XCTestCase {
         ])
         
         let options = NetworkGraphBuilder.Options(
-            includeViaDigipeaters: false,
+            includeViaDigipeaters: true,
             minimumEdgeCount: 1,
             maxNodes: 10,
             stationIdentityMode: .ssid
@@ -349,44 +349,32 @@ final class NetRomGraphBuilderTests: XCTestCase {
     }
     
     func testRouteHopDoubleCounting() {
-        let integration = makeIntegration()
         let neighbor = "W0ABC"
         let destination = "W1XYZ"
         let intermediate = "W2MNO"
         let now = Date()
-        
-        // Route: Origin -> Intermediate -> Dest
-        // Path string typically includes [Origin, Intermediate, Dest]
-        let path = [neighbor, intermediate, destination]
-        
-        // Seed neighbors/Quality to ensure they aren't filtered out
-        integration.importLinkStats([
-            LinkStatRecord(fromCall: neighbor, toCall: localCallsign, quality: 200, lastUpdated: now)
-        ])
-        integration.importNeighbors([
-            NeighborInfo(call: neighbor, quality: 200, lastSeen: now, sourceType: "classic")
-        ])
-        
+
+        // Route: Origin -> Intermediate -> Destination.
+        // Pass it directly to the builder to isolate hop counting behavior.
         let route = RouteInfo(
             destination: destination,
             origin: neighbor,
             quality: 200,
-            path: path,
+            path: [neighbor, intermediate, destination],
             lastUpdated: now,
             sourceType: "broadcast"
         )
-        integration.importRoutes([route])
-        
+
         let options = NetworkGraphBuilder.Options(
-            includeViaDigipeaters: false,
+            includeViaDigipeaters: true,
             minimumEdgeCount: 1,
             maxNodes: 10,
             stationIdentityMode: .ssid
         )
-        
+
         let model = NetworkGraphBuilder.buildFromNetRom(
-            neighbors: integration.currentNeighbors(forMode: .hybrid),
-            routes: integration.currentRoutes(forMode: .hybrid),
+            neighbors: [],
+            routes: [route],
             localCallsign: localCallsign,
             options: options,
             now: now
@@ -405,5 +393,75 @@ final class NetRomGraphBuilderTests: XCTestCase {
         XCTAssertEqual(originNode?.weight, 1, "Origin should be counted once")
         XCTAssertEqual(destNode?.weight, 1, "Destination should be counted once")
         XCTAssertEqual(midNode?.weight, 1, "Intermediate should be counted once")
+    }
+
+    func testIncludeViaOffDoesNotPromoteIntermediateRouteHops() {
+        let now = Date()
+        let route = RouteInfo(
+            destination: "AA0QC",
+            origin: "KE0GB-7",
+            quality: 200,
+            path: ["KE0GB-7", "WOARP-7", "WOTX-7", "AA0QC"],
+            lastUpdated: now,
+            sourceType: "inferred"
+        )
+
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: false,
+            minimumEdgeCount: 1,
+            maxNodes: 50,
+            stationIdentityMode: .ssid
+        )
+
+        let model = NetworkGraphBuilder.buildFromNetRom(
+            neighbors: [],
+            routes: [route],
+            localCallsign: localCallsign,
+            options: options,
+            now: now
+        )
+
+        XCTAssertFalse(model.nodes.contains { $0.id == "WOARP-7" }, "Intermediate path hop should be hidden when include-via is OFF")
+        XCTAssertFalse(model.nodes.contains { $0.id == "WOTX-7" }, "Intermediate path hop should be hidden when include-via is OFF")
+        XCTAssertTrue(model.nodes.contains { $0.id == "KE0GB-7" }, "Origin should still be shown")
+        XCTAssertTrue(model.nodes.contains { $0.id == "AA0QC" }, "Destination should still be shown")
+    }
+
+    func testIncludeViaOnBuildsHopByHopRouteEdges() {
+        let now = Date()
+        let route = RouteInfo(
+            destination: "AA0QC",
+            origin: "KE0GB-7",
+            quality: 200,
+            path: ["KE0GB-7", "WOARP-7", "WOTX-7", "AA0QC"],
+            lastUpdated: now,
+            sourceType: "inferred"
+        )
+
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: true,
+            minimumEdgeCount: 1,
+            maxNodes: 50,
+            stationIdentityMode: .ssid
+        )
+
+        let model = NetworkGraphBuilder.buildFromNetRom(
+            neighbors: [],
+            routes: [route],
+            localCallsign: localCallsign,
+            options: options,
+            now: now
+        )
+
+        XCTAssertTrue(model.nodes.contains { $0.id == "WOARP-7" }, "Intermediate hops should be shown when include-via is ON")
+        XCTAssertTrue(model.nodes.contains { $0.id == "WOTX-7" }, "Intermediate hops should be shown when include-via is ON")
+
+        let undirectedEdges = Set(model.edges.map { Set([$0.sourceID, $0.targetID]) })
+        XCTAssertTrue(undirectedEdges.contains(Set(["KE0GB-7", "WOARP-7"])))
+        XCTAssertTrue(undirectedEdges.contains(Set(["WOARP-7", "WOTX-7"])))
+        XCTAssertTrue(undirectedEdges.contains(Set(["WOTX-7", "AA0QC"])))
+        XCTAssertFalse(undirectedEdges.contains(Set(["KE0GB-7", "AA0QC"])), "When include-via is ON, multi-hop route should render hop-by-hop rather than summary origin-destination edge")
+
+        XCTAssertTrue(model.edges.allSatisfy { $0.linkType == .heardVia }, "Hop-by-hop route edges should be typed as Heard Via")
     }
 }

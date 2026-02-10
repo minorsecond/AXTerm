@@ -163,16 +163,18 @@ nonisolated struct NetworkGraphBuilder {
             }
             nodeStats[originKey] = originStats
             
-            // Add intermediate nodes in path (exclude origin and destination to avoid double counting)
-            for hop in route.path {
-                let hopKey = identityKey(hop)
-                // Skip if hop is same as origin or destination (already counted above)
-                if hopKey == originKey || hopKey == destKey { continue }
-                
-                var hopStats = nodeStats[hopKey] ?? (0, 0, 0, 0, 0, [], false)
-                hopStats.routes += 1
-                hopStats.ssids.insert(hop)
-                nodeStats[hopKey] = hopStats
+            // Only promote intermediate path hops when includeViaDigipeaters is ON.
+            if options.includeViaDigipeaters {
+                for hop in route.path {
+                    let hopKey = identityKey(hop)
+                    // Skip if hop is same as origin or destination (already counted above)
+                    if hopKey == originKey || hopKey == destKey { continue }
+
+                    var hopStats = nodeStats[hopKey] ?? (0, 0, 0, 0, 0, [], false)
+                    hopStats.routes += 1
+                    hopStats.ssids.insert(hop)
+                    nodeStats[hopKey] = hopStats
+                }
             }
         }
         
@@ -198,7 +200,9 @@ nonisolated struct NetworkGraphBuilder {
             ))
         }
         
-        // Add route edges (HeardVia for multi-hop, DirectPeer for single-hop)
+        // Add route edges:
+        // - includeViaDigipeaters OFF: summary edge origin<->destination
+        // - includeViaDigipeaters ON: hop-by-hop edges across the route path
         for route in routes {
             guard route.quality >= qualityThreshold else { continue }
             if options.hideStaleEntries && now.timeIntervalSince(route.lastUpdated) > options.routeStaleTTL {
@@ -210,22 +214,55 @@ nonisolated struct NetworkGraphBuilder {
             let weight = max(1, route.quality / 25)
             let isStale = now.timeIntervalSince(route.lastUpdated) > options.routeStaleTTL
             
-            // Determine link type based on path length
-            let linkType: LinkType = route.path.isEmpty || route.path.count <= 1 ? .directPeer : .heardVia
-            
-            // Create unique edge key
-            let edgeKey = "\(min(destKey, originKey))-\(max(destKey, originKey))"
-            guard !edgeKeys.contains(edgeKey) else { continue }
-            edgeKeys.insert(edgeKey)
-            
-            edges.append(ClassifiedEdge(
-                sourceID: destKey,
-                targetID: originKey,
-                linkType: linkType,
-                weight: weight,
-                bytes: Int64(route.quality),
-                isStale: isStale
-            ))
+            // Build canonical path of identity keys.
+            // route.path may or may not contain origin/destination; normalize it either way.
+            var pathKeys: [String] = []
+            pathKeys.append(originKey)
+            for hop in route.path.map(identityKey) {
+                if pathKeys.last != hop {
+                    pathKeys.append(hop)
+                }
+            }
+            if pathKeys.last != destKey {
+                pathKeys.append(destKey)
+            }
+
+            if options.includeViaDigipeaters && pathKeys.count > 2 {
+                // Hop-by-hop via edges for multi-hop routes.
+                for index in 0..<(pathKeys.count - 1) {
+                    let source = pathKeys[index]
+                    let target = pathKeys[index + 1]
+                    guard source != target else { continue }
+
+                    let edgeKey = "\(min(source, target))-\(max(source, target))"
+                    guard !edgeKeys.contains(edgeKey) else { continue }
+                    edgeKeys.insert(edgeKey)
+
+                    edges.append(ClassifiedEdge(
+                        sourceID: source,
+                        targetID: target,
+                        linkType: .heardVia,
+                        weight: weight,
+                        bytes: Int64(route.quality),
+                        isStale: isStale
+                    ))
+                }
+            } else {
+                // Summary edge between origin and destination.
+                let linkType: LinkType = pathKeys.count <= 2 ? .directPeer : .heardVia
+                let edgeKey = "\(min(destKey, originKey))-\(max(destKey, originKey))"
+                guard !edgeKeys.contains(edgeKey) else { continue }
+                edgeKeys.insert(edgeKey)
+
+                edges.append(ClassifiedEdge(
+                    sourceID: destKey,
+                    targetID: originKey,
+                    linkType: linkType,
+                    weight: weight,
+                    bytes: Int64(route.quality),
+                    isStale: isStale
+                ))
+            }
         }
         
         // Phase 3: Apply maxNodes cap

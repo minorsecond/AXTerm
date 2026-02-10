@@ -950,6 +950,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                     targetID: edge.targetID,
                     weight: edge.weight,
                     bytes: Int(edge.bytes),
+                    linkType: edge.linkType,
                     isStale: edge.isStale
                 )
             }

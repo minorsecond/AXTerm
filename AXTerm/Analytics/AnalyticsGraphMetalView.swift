@@ -1091,6 +1091,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             let info = GraphEdgeInfo(
                 source: source,
                 target: target,
+                linkType: edge.linkType,
                 weight: edge.weight,
                 isStale: edge.isStale
             )
@@ -1113,10 +1114,14 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         guard let device = view?.device else { return }
         let instances: [EdgeInstance] = edgeCache.map { edge in
             var alpha = Float(metrics.edgeAlpha(for: edge.weight))
+            if edge.linkType == .heardVia {
+                alpha *= 0.55
+            }
             if edge.isStale {
                 alpha *= 0.3 // Dim stale routes
             }
-            let baseColor = colorVector(.secondaryLabelColor, alpha: alpha)
+            let edgeColor: NSColor = edge.linkType == .heardVia ? .tertiaryLabelColor : .secondaryLabelColor
+            let baseColor = colorVector(edgeColor, alpha: alpha)
             let thickness = metrics.edgeThickness(for: edge.weight)
             return EdgeInstance(
                 start: edge.source.position,
@@ -1372,11 +1377,13 @@ nonisolated private struct GraphRenderKey: Hashable {
         for edge in model.edges.sorted(by: {
             if $0.sourceID != $1.sourceID { return $0.sourceID < $1.sourceID }
             if $0.targetID != $1.targetID { return $0.targetID < $1.targetID }
+            if $0.linkType != $1.linkType { return $0.linkType.renderPriority < $1.linkType.renderPriority }
             if $0.weight != $1.weight { return $0.weight < $1.weight }
             return ($0.isStale ? 1 : 0) < ($1.isStale ? 1 : 0)
         }) {
             edge.sourceID.hash(into: &modelHasher)
             edge.targetID.hash(into: &modelHasher)
+            edge.linkType.hash(into: &modelHasher)
             edge.weight.hash(into: &modelHasher)
             edge.isStale.hash(into: &modelHasher)
         }
@@ -1421,6 +1428,7 @@ nonisolated private struct GraphNodeInfo: Hashable {
 nonisolated private struct GraphEdgeInfo: Hashable {
     let source: GraphNodeInfo
     let target: GraphNodeInfo
+    let linkType: LinkType
     let weight: Int
     let isStale: Bool
 }

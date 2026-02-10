@@ -64,7 +64,24 @@ nonisolated struct NetworkGraphEdge: Hashable, Sendable {
     let targetID: String
     let weight: Int
     let bytes: Int
+    let linkType: LinkType
     let isStale: Bool
+
+    init(
+        sourceID: String,
+        targetID: String,
+        weight: Int,
+        bytes: Int,
+        linkType: LinkType = .directPeer,
+        isStale: Bool
+    ) {
+        self.sourceID = sourceID
+        self.targetID = targetID
+        self.weight = weight
+        self.bytes = bytes
+        self.linkType = linkType
+        self.isStale = isStale
+    }
 }
 
 nonisolated struct GraphNeighborStat: Hashable, Sendable {
