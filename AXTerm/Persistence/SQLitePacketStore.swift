@@ -381,6 +381,7 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
     private static func rankRows(from counts: [String: Int], limit: Int) -> [RankRow] {
         guard limit > 0 else { return [] }
         return counts
+            .filter { CallsignValidator.isValidCallsign($0.key) }
             .map { RankRow(label: $0.key, count: $0.value) }
             .sorted { lhs, rhs in
                 if lhs.count == rhs.count {

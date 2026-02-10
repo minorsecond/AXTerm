@@ -759,19 +759,55 @@ private struct TimeSeriesChart: View {
                 }
             }
             .chartYScale(domain: .automatic(includesZero: true))
+            .chartYScale(range: .plotDimension(startPadding: 8, endPadding: 8))
+            .chartXScale(range: .plotDimension(startPadding: 6, endPadding: 6))
             .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: 5)) { value in
-                    AxisGridLine()
-                        .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
-                    AxisValueLabel(format: xAxisFormat(for: bucket), centered: false)
+                if shortRangeSpansBoundary {
+                    AxisMarks(values: .stride(by: .hour, count: 6)) { value in
+                        AxisGridLine()
+                            .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                        AxisTick()
+                            .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                        AxisValueLabel(centered: true) {
+                            if let date = value.as(Date.self) {
+                                Text(shortRangeBoundaryLabel(for: date))
+                            }
+                        }
                         .font(.caption2)
                         .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                    }
+                } else if spansMultipleDays {
+                    AxisMarks(values: .stride(by: .day)) { _ in
+                        AxisGridLine()
+                            .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                        AxisTick()
+                            .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                        AxisValueLabel(format: multiDayXAxisFormat, centered: true)
+                            .font(.caption2)
+                            .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                    }
+                } else {
+                    AxisMarks(values: .automatic(desiredCount: 5)) { value in
+                        AxisGridLine()
+                            .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                        AxisTick()
+                            .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                        AxisValueLabel(centered: false) {
+                            if let date = value.as(Date.self) {
+                                Text(xAxisLabel(for: date))
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                    }
                 }
             }
             .chartYAxis {
-                AxisMarks(values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount)) { _ in
+                AxisMarks(position: .trailing, values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount)) { _ in
                     AxisGridLine()
                         .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                    AxisTick()
+                        .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
                     AxisValueLabel()
                         .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
                 }
@@ -824,17 +860,49 @@ private struct TimeSeriesChart: View {
     }
 
     /// Returns a compact time format for x-axis labels based on bucket size
-    private func xAxisFormat(for bucket: TimeBucket) -> Date.FormatStyle {
+    private var spansMultipleDays: Bool {
+        guard let first = points.first?.bucket, let last = points.last?.bucket else { return false }
+        return !Calendar.current.isDate(first, inSameDayAs: last)
+    }
+
+    private var shortRangeSpansBoundary: Bool {
+        guard spansMultipleDays,
+              let first = points.first?.bucket,
+              let last = points.last?.bucket else { return false }
+        return last.timeIntervalSince(first) <= 36 * 3600
+    }
+
+    private var multiDaySpanDays: Int {
+        guard let first = points.first?.bucket, let last = points.last?.bucket else { return 0 }
+        let start = Calendar.current.startOfDay(for: first)
+        let end = Calendar.current.startOfDay(for: last)
+        return max(0, Calendar.current.dateComponents([.day], from: start, to: end).day ?? 0)
+    }
+
+    private var multiDayXAxisFormat: Date.FormatStyle {
+        // HIG-aligned: concise labels for broad ranges.
+        if multiDaySpanDays >= 6 {
+            return .dateTime.weekday(.abbreviated)
+        }
+        return .dateTime.month(.abbreviated).day()
+    }
+
+    private func shortRangeBoundaryLabel(for date: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.component(.hour, from: date) == 0 {
+            return date.formatted(.dateTime.month(.abbreviated).day())
+        }
+        return date.formatted(.dateTime.hour(.defaultDigits(amPM: .abbreviated)))
+    }
+
+    private func xAxisLabel(for date: Date) -> String {
         switch bucket {
         case .tenSeconds, .minute, .fiveMinutes, .fifteenMinutes:
-            // Short time format: "2:30 PM" or "14:30"
-            return .dateTime.hour(.defaultDigits(amPM: .abbreviated)).minute(.twoDigits)
+            return Self.timeFormatter.string(from: date)
         case .hour:
-            // Hour only: "2 PM" or "14:00"
-            return .dateTime.hour(.defaultDigits(amPM: .abbreviated))
+            return Self.timeFormatter.string(from: date)
         case .day:
-            // Date only: "Jan 15"
-            return .dateTime.month(.abbreviated).day()
+            return Self.dateTimeFormatter.string(from: date)
         }
     }
 }
@@ -905,18 +973,24 @@ private struct HistogramChart: View {
                     .opacity(selectedBin == nil || selectedBin?.label == bin.label ? 1 : 0.5)
                 }
             }
+            .chartYScale(range: .plotDimension(startPadding: 8, endPadding: 8))
+            .chartXScale(range: .plotDimension(startPadding: 6, endPadding: 6))
             .chartXAxis {
                 AxisMarks(values: .automatic(desiredCount: AnalyticsStyle.Histogram.maxLabelCount)) { _ in
                     AxisGridLine()
                         .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                    AxisTick()
+                        .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
                     AxisValueLabel()
                         .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
                 }
             }
             .chartYAxis {
-                AxisMarks(values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount)) { _ in
+                AxisMarks(position: .trailing, values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount)) { _ in
                     AxisGridLine()
                         .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                    AxisTick()
+                        .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
                     AxisValueLabel()
                         .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
                 }

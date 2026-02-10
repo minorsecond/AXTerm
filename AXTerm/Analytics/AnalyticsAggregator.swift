@@ -276,6 +276,7 @@ nonisolated struct AnalyticsAggregator {
         guard limit > 0 else { return [] }
         var counts: [String: Int] = [:]
         for station in stations {
+            guard CallsignValidator.isValidCallsign(station) else { continue }
             counts[station, default: 0] += 1
         }
 

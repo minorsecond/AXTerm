@@ -150,6 +150,29 @@ final class AnalyticsAggregatorTests: XCTestCase {
         XCTAssertEqual(result.heatmap.matrix.flatMap { $0 }.reduce(0, +), 2)
     }
 
+    func testTopListsExcludeNonCallsignIdentifiers() {
+        let base = Date(timeIntervalSince1970: 1_700_060_000)
+        let packets = [
+            makePacket(timestamp: base, from: "K9ALP", to: "BEACON", via: ["WIDE1"]),
+            makePacket(timestamp: base.addingTimeInterval(60), from: "ID", to: "W5BRV", via: ["RELAY"]),
+            makePacket(timestamp: base.addingTimeInterval(120), from: "N3CHR", to: "W5BRV", via: ["K8DIG"])
+        ]
+
+        let result = AnalyticsAggregator.aggregate(
+            packets: packets,
+            bucket: .minute,
+            calendar: calendar,
+            options: AnalyticsAggregator.Options(includeViaDigipeaters: true, histogramBinCount: 4, topLimit: 10)
+        )
+
+        XCTAssertFalse(result.topTalkers.map(\.label).contains("BEACON"))
+        XCTAssertFalse(result.topTalkers.map(\.label).contains("ID"))
+        XCTAssertFalse(result.topDestinations.map(\.label).contains("BEACON"))
+        XCTAssertFalse(result.topDigipeaters.map(\.label).contains("WIDE1"))
+        XCTAssertFalse(result.topDigipeaters.map(\.label).contains("RELAY"))
+        XCTAssertTrue(result.topDigipeaters.map(\.label).contains("K8DIG"))
+    }
+
     private func makePacket(
         timestamp: Date,
         from: String,
