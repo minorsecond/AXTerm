@@ -116,7 +116,7 @@ private struct LinkStatDBRecord: Codable, FetchableRecord, PersistableRecord {
 private struct SnapshotMetaRecord: Codable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "netrom_snapshot_meta"
 
-    let id: Int = 1  // Single row
+    var id: Int = 1  // Single row
     let lastPacketID: Int64
     let configHash: String?
     let snapshotTimestamp: Double  // TimeInterval since 1970
