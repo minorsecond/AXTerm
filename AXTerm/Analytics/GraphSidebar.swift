@@ -1055,38 +1055,52 @@ private struct AllSelectedStationsSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List(filteredNodes) { node in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(node.callsign)
-                            .font(.body)
-                        Text("In \(node.inCount.formatted()) • Out \(node.outCount.formatted())")
-                            .font(.caption)
-                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        VStack(spacing: 12) {
+            HStack {
+                Text("Selected Stations")
+                    .font(.headline)
+                Spacer()
+                Text("\(filteredNodes.count)/\(nodes.count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            }
+
+            TextField("Filter callsigns", text: $searchText)
+                .textFieldStyle(.roundedBorder)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(filteredNodes) { node in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(node.callsign)
+                                    .font(.body)
+                                Text("In \(node.inCount.formatted()) • Out \(node.outCount.formatted())")
+                                    .font(.caption)
+                                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            }
+                            Spacer()
+                            Text("Degree \(node.degree)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        }
+                        .padding(.vertical, 4)
                     }
-                    Spacer()
-                    Text("Degree \(node.degree)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 }
             }
-            .navigationTitle("Selected Stations")
-            .listStyle(.inset)
-            .searchable(text: $searchText, prompt: "Filter callsigns")
-            .toolbar {
-                ToolbarItem(placement: .automatic) {
-                    Text("\(filteredNodes.count)/\(nodes.count)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                }
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                        .keyboardShortcut(.cancelAction)
-                }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
             }
         }
-        .frame(minWidth: 460, minHeight: 560)
+        .padding(16)
+        .frame(minWidth: 520, idealWidth: 620, maxWidth: 700, minHeight: 520, idealHeight: 640, maxHeight: 740)
         .onExitCommand { dismiss() }
     }
 }
