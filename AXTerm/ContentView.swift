@@ -144,6 +144,13 @@ struct ContentView: View {
             client.loadPersistedConsole()
         }
         .task {
+            // Warm analytics caches in the background so first tab-open is fast.
+            analyticsViewModel.prewarmIfNeeded(with: client.packets)
+        }
+        .onReceive(client.$packets) { packets in
+            analyticsViewModel.prewarmIfNeeded(with: packets)
+        }
+        .task {
             // Feed network-wide link quality into adaptive settings periodically (don't overwhelm, don't be too conservative).
             // Skip when active sessions exist — the session learner provides direct ground truth
             // (actual ACK/retry tracking) which is far more accurate than inferred routing table metrics.

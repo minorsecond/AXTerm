@@ -87,8 +87,10 @@ struct AnalyticsDashboardView: View {
         }
         .onAppear {
             viewModel.trackDashboardOpened()
-            viewModel.setActive(true)
             viewModel.updatePackets(packetEngine.packets)
+            Task { @MainActor in
+                viewModel.setActive(true)
+            }
         }
         .onDisappear {
             viewModel.setActive(false)
@@ -187,7 +189,7 @@ struct AnalyticsDashboardView: View {
 
     private var summarySection: some View {
         AnalyticsCard(title: "Summary") {
-            if let summary = viewModel.viewState.summary {
+            if let summary = viewModel.viewState.summary, viewModel.hasLoadedAggregation {
                 LazyVGrid(columns: metricColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
                     SummaryMetricCard(title: "Total packets", value: summary.totalPackets.formatted())
                     SummaryMetricCard(title: "Unique stations", value: summary.uniqueStations.formatted())
@@ -197,49 +199,87 @@ struct AnalyticsDashboardView: View {
                     SummaryMetricCard(title: "Info-text ratio", value: String(format: "%.0f%%", summary.infoTextRatio * 100))
                 }
             } else {
-                Text("No packets yet")
-                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                    .padding(.vertical, 6)
+                LazyVGrid(columns: metricColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
+                    ForEach(0..<6, id: \.self) { _ in
+                        SummaryMetricPlaceholderCard()
+                    }
+                }
             }
         }
     }
 
     private var chartsSection: some View {
         AnalyticsCard(title: "Charts") {
+            if viewModel.isAggregationLoading {
+                AnalyticsLoadingRow(label: "Updating charts")
+                    .padding(.bottom, 4)
+            }
             LazyVGrid(columns: chartColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
                 ChartCard(title: "Packets over time") {
-                    TimeSeriesChart(points: viewModel.viewState.series.packetsPerBucket, valueLabel: "Packets", bucket: viewModel.resolvedBucket)
-                        .background(ChartWidthReader { width in
-                            viewModel.updateChartWidth(width)
-                        })
+                    if viewModel.hasLoadedAggregation {
+                        TimeSeriesChart(points: viewModel.viewState.series.packetsPerBucket, valueLabel: "Packets", bucket: viewModel.resolvedBucket)
+                            .background(ChartWidthReader { width in
+                                viewModel.updateChartWidth(width)
+                            })
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading packets")
+                    }
                 }
 
                 ChartCard(title: "Bytes over time") {
-                    TimeSeriesChart(points: viewModel.viewState.series.bytesPerBucket, valueLabel: "Bytes", bucket: viewModel.resolvedBucket)
+                    if viewModel.hasLoadedAggregation {
+                        TimeSeriesChart(points: viewModel.viewState.series.bytesPerBucket, valueLabel: "Bytes", bucket: viewModel.resolvedBucket)
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading bytes")
+                    }
                 }
 
                 ChartCard(title: "Unique stations over time") {
-                    TimeSeriesChart(points: viewModel.viewState.series.uniqueStationsPerBucket, valueLabel: "Stations", bucket: viewModel.resolvedBucket)
+                    if viewModel.hasLoadedAggregation {
+                        TimeSeriesChart(points: viewModel.viewState.series.uniqueStationsPerBucket, valueLabel: "Stations", bucket: viewModel.resolvedBucket)
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading stations")
+                    }
                 }
 
                 ChartCard(title: "Traffic intensity (hour vs day)", height: AnalyticsStyle.Layout.heatmapHeight) {
-                    HeatmapView(data: viewModel.viewState.heatmap)
+                    if viewModel.hasLoadedAggregation {
+                        HeatmapView(data: viewModel.viewState.heatmap)
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading heatmap")
+                    }
                 }
 
                 ChartCard(title: "Payload size distribution") {
-                    HistogramChart(data: viewModel.viewState.histogram)
+                    if viewModel.hasLoadedAggregation {
+                        HistogramChart(data: viewModel.viewState.histogram)
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading distribution")
+                    }
                 }
 
                 ChartCard(title: "Top talkers") {
-                    TopListView(rows: viewModel.viewState.topTalkers)
+                    if viewModel.hasLoadedAggregation {
+                        TopListView(rows: viewModel.viewState.topTalkers)
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading top talkers")
+                    }
                 }
 
                 ChartCard(title: "Top destinations") {
-                    TopListView(rows: viewModel.viewState.topDestinations)
+                    if viewModel.hasLoadedAggregation {
+                        TopListView(rows: viewModel.viewState.topDestinations)
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading destinations")
+                    }
                 }
 
                 ChartCard(title: "Top digipeaters") {
-                    TopListView(rows: viewModel.viewState.topDigipeaters)
+                    if viewModel.hasLoadedAggregation {
+                        TopListView(rows: viewModel.viewState.topDigipeaters)
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading digipeaters")
+                    }
                 }
             }
         }
@@ -297,37 +337,42 @@ struct AnalyticsDashboardView: View {
 
                 // Graph and sidebar
                 HStack(alignment: .top, spacing: AnalyticsStyle.Layout.cardSpacing) {
-                    AnalyticsGraphView(
-                        graphModel: viewModel.viewState.graphModel,
-                        nodePositions: viewModel.viewState.nodePositions,
-                        selectedNodeIDs: viewModel.viewState.selectedNodeIDs,
-                        hoveredNodeID: viewModel.viewState.hoveredNodeID,
-                        myCallsign: settings.myCallsign,
-                        resetToken: graphResetToken,
-                        focusNodeID: focusNodeID,
-                        fitToSelectionRequest: viewModel.fitToSelectionRequest,
-                        resetCameraRequest: viewModel.resetCameraRequest,
-                        visibleNodeIDs: viewModel.filteredGraph.visibleNodeIDs,
-                        onSelect: { nodeID, isShift in
-                            viewModel.handleNodeClick(nodeID, isShift: isShift)
-                            // Switch to Inspector tab when a node is selected
-                            if !isShift {
-                                sidebarTab = .inspector
+                    ZStack {
+                        AnalyticsGraphView(
+                            graphModel: viewModel.viewState.graphModel,
+                            nodePositions: viewModel.viewState.nodePositions,
+                            selectedNodeIDs: viewModel.viewState.selectedNodeIDs,
+                            hoveredNodeID: viewModel.viewState.hoveredNodeID,
+                            myCallsign: settings.myCallsign,
+                            resetToken: graphResetToken,
+                            focusNodeID: focusNodeID,
+                            fitToSelectionRequest: viewModel.fitToSelectionRequest,
+                            resetCameraRequest: viewModel.resetCameraRequest,
+                            visibleNodeIDs: viewModel.filteredGraph.visibleNodeIDs,
+                            onSelect: { nodeID, isShift in
+                                viewModel.handleNodeClick(nodeID, isShift: isShift)
+                                // Switch to Inspector tab when a node is selected
+                                if !isShift {
+                                    sidebarTab = .inspector
+                                }
+                            },
+                            onSelectMany: { nodeIDs, isShift in
+                                viewModel.handleSelectionRect(nodeIDs, isShift: isShift)
+                            },
+                            onClearSelection: {
+                                viewModel.handleBackgroundClick()
+                            },
+                            onHover: { nodeID in
+                                viewModel.updateHover(for: nodeID)
+                            },
+                            onFocusHandled: {
+                                focusNodeID = nil
                             }
-                        },
-                        onSelectMany: { nodeIDs, isShift in
-                            viewModel.handleSelectionRect(nodeIDs, isShift: isShift)
-                        },
-                        onClearSelection: {
-                            viewModel.handleBackgroundClick()
-                        },
-                        onHover: { nodeID in
-                            viewModel.updateHover(for: nodeID)
-                        },
-                        onFocusHandled: {
-                            focusNodeID = nil
+                        )
+                        if (!viewModel.hasLoadedGraph || viewModel.isGraphLoading) && viewModel.viewState.graphModel.nodes.isEmpty {
+                            AnalyticsLoadingOverlay(label: "Building network graph")
                         }
-                    )
+                    }
                     .frame(minHeight: AnalyticsStyle.Layout.graphHeight)
                     .onAppear {
                         viewModel.setMyCallsignForLayout(settings.myCallsign)
@@ -520,6 +565,57 @@ private struct AnalyticsCardWithControls<Content: View, Controls: View>: View {
     }
 }
 
+private struct AnalyticsLoadingRow: View {
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            Spacer()
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct AnalyticsLoadingOverlay: View {
+    let label: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct ChartLoadingPlaceholder: View {
+    let label: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(AnalyticsStyle.Colors.neutralFill)
+        .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
+    }
+}
+
 private struct SummaryMetricCard: View {
     let title: String
     let value: String
@@ -537,6 +633,24 @@ private struct SummaryMetricCard: View {
         .padding(12)
         .background(AnalyticsStyle.Colors.neutralFill)
         .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
+    }
+}
+
+private struct SummaryMetricPlaceholderCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(AnalyticsStyle.Colors.cardStroke)
+                .frame(width: 90, height: 10)
+            RoundedRectangle(cornerRadius: 4)
+                .fill(AnalyticsStyle.Colors.cardStroke)
+                .frame(width: 50, height: 18)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(AnalyticsStyle.Colors.neutralFill)
+        .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
+        .redacted(reason: .placeholder)
     }
 }
 

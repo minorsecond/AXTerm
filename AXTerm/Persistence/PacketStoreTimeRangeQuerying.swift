@@ -8,5 +8,5 @@
 import Foundation
 
 nonisolated protocol PacketStoreTimeRangeQuerying: Sendable {
-    func loadPackets(in timeframe: DateInterval) throws -> [PacketRecord]
+    func loadPackets(in timeframe: DateInterval) throws -> [Packet]
 }

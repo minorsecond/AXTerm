@@ -145,6 +145,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     @Published private(set) var viewState: AnalyticsViewState = .empty
+    @Published private(set) var isAggregationLoading = false
+    @Published private(set) var isGraphLoading = false
+    @Published private(set) var hasLoadedAggregation = false
+    @Published private(set) var hasLoadedGraph = false
 
     // MARK: - Focus Mode State
 
@@ -187,6 +191,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private var loopDetection = RecomputeLoopDetector()
     private var isActive = false
     private var latestTimeframePackets: [Packet] = []
+    private var hasPrewarmed = false
 
     /// Creates the view model, optionally loading persisted settings.
     ///
@@ -311,11 +316,25 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         packetSubject.send(packets)
     }
 
+    /// Precomputes analytics caches while the dashboard is not visible, so first open is fast.
+    /// Safe to call repeatedly; only the first invocation performs work.
+    func prewarmIfNeeded(with packets: [Packet]) {
+        self.packets = packets
+        guard !isActive, !hasPrewarmed else { return }
+        hasPrewarmed = true
+        Task(priority: .utility) { [weak self] in
+            await self?.recomputeAggregation(reason: "prewarm", applyToViewState: false, showLoadingState: false)
+        }
+        Task(priority: .utility) { [weak self] in
+            await self?.rebuildGraph(reason: "prewarm", applyToViewState: false, showLoadingState: false)
+        }
+    }
+
     func updateChartWidth(_ width: CGFloat) {
         guard width > 0, abs(width - chartWidth) > 4 else { return }
         chartWidth = width
-        updateResolvedBucket(reason: "chartWidth")
-        if bucketSelection == .auto {
+        let bucketChanged = updateResolvedBucket(reason: "chartWidth")
+        if bucketSelection == .auto, bucketChanged {
             scheduleAggregation(reason: "chartWidth")
         }
     }
@@ -406,8 +425,18 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         isActive = active
         if active {
             logger.debug("Analytics dashboard activated")
-            scheduleAggregation(reason: "activate")
-            scheduleGraphBuild(reason: "activate")
+            if !hasLoadedAggregation {
+                isAggregationLoading = true
+            }
+            if !hasLoadedGraph {
+                isGraphLoading = true
+            }
+            Task { [weak self] in
+                await self?.recomputeAggregation(reason: "activate", applyToViewState: true, showLoadingState: true)
+            }
+            Task { [weak self] in
+                await self?.rebuildGraph(reason: "activate", applyToViewState: true, showLoadingState: true)
+            }
         } else {
             logger.debug("Analytics dashboard deactivated")
             cancelWork()
@@ -515,7 +544,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
     }
 
-    private func recomputeAggregation(reason: String) async {
+    private func recomputeAggregation(reason: String, applyToViewState: Bool = true, showLoadingState: Bool = true) async {
         let now = Date()
         let packetSnapshot = filteredPackets(now: now)
         let timeframeInterval = currentDateRange(now: now)
@@ -561,7 +590,13 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         )
 
         if let cached = aggregationCache[key] {
-            applyAggregationResult(cached)
+            if applyToViewState {
+                applyAggregationResult(cached)
+                hasLoadedAggregation = true
+            }
+            if showLoadingState {
+                isAggregationLoading = false
+            }
             return
         }
 
@@ -580,6 +615,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         let histogramBinCount = AnalyticsStyle.Histogram.binCount
         let topLimit = AnalyticsStyle.Tables.topLimit
         let provider = databaseAggregationProvider
+        if showLoadingState {
+            isAggregationLoading = true
+        }
 
         aggregationTask?.cancel()
         aggregationTask = Task.detached(priority: .userInitiated) { [calendar] in
@@ -613,7 +651,13 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                 guard let self else { return }
                 guard !Task.isCancelled else { return }
                 self.aggregationCache[key] = result
-                self.applyAggregationResult(result)
+                if applyToViewState {
+                    self.applyAggregationResult(result)
+                    self.hasLoadedAggregation = true
+                }
+                if showLoadingState {
+                    self.isAggregationLoading = false
+                }
                 self.telemetryLimiter.breadcrumb(
                     category: "analytics.recompute.finished",
                     message: "Analytics recompute finished",
@@ -649,15 +693,17 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.topDigipeaters = result.topDigipeaters
     }
 
-    private func updateResolvedBucket(reason: String) {
+    @discardableResult
+    private func updateResolvedBucket(reason: String) -> Bool {
         let range = currentDateRange(now: Date())
         let nextBucket = bucketSelection.resolvedBucket(
             for: timeframe,
             chartWidth: chartWidth,
             customRange: range
         )
-        guard nextBucket != resolvedBucket else { return }
+        guard nextBucket != resolvedBucket else { return false }
         resolvedBucket = nextBucket
+        return true
     }
 
     private func currentDateRange(now: Date) -> DateInterval {
@@ -677,7 +723,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         return filteredPackets(now: now)
     }
 
-    private func rebuildGraph(reason: String) async {
+    private func rebuildGraph(reason: String, applyToViewState: Bool = true, showLoadingState: Bool = true) async {
         let now = Date()
         let packetSnapshot = await timeframePacketSnapshot(now: now)
         latestTimeframePackets = packetSnapshot
@@ -704,16 +750,31 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
         // Check cache for classified graph
         if let cachedClassified = classifiedGraphCache[key] {
-            applyClassifiedGraphModel(cachedClassified)
-            prepareLayout(reason: "graphCache")
+            if applyToViewState {
+                applyClassifiedGraphModel(cachedClassified)
+                prepareLayout(reason: "graphCache")
+                hasLoadedGraph = true
+            }
+            if showLoadingState {
+                isGraphLoading = false
+            }
             return
         }
 
         // Fallback to legacy cache for backwards compatibility
         if let cached = graphCache[key] {
-            applyGraphModel(cached)
-            prepareLayout(reason: "graphCache")
+            if applyToViewState {
+                applyGraphModel(cached)
+                prepareLayout(reason: "graphCache")
+                hasLoadedGraph = true
+            }
+            if showLoadingState {
+                isGraphLoading = false
+            }
             return
+        }
+        if showLoadingState {
+            isGraphLoading = true
         }
 
         telemetryLimiter.breadcrumb(
@@ -787,7 +848,13 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                 guard let self else { return }
                 guard !Task.isCancelled else { return }
                 self.classifiedGraphCache[key] = classifiedModel
-                self.applyClassifiedGraphModel(classifiedModel)
+                if applyToViewState {
+                    self.applyClassifiedGraphModel(classifiedModel)
+                    self.hasLoadedGraph = true
+                }
+                if showLoadingState {
+                    self.isGraphLoading = false
+                }
                 self.telemetryLimiter.breadcrumb(
                     category: "graph.build.finished",
                     message: "Graph build finished",
@@ -809,7 +876,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                     )
                 }
 
-                self.prepareLayout(reason: "graphBuild")
+                if applyToViewState {
+                    self.prepareLayout(reason: "graphBuild")
+                }
             }
         }
     }
@@ -1238,6 +1307,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         layoutTask?.cancel()
         aggregationScheduler.cancel()
         graphScheduler.cancel()
+        isAggregationLoading = false
+        isGraphLoading = false
         loopDetection.reset()
     }
 }

@@ -245,6 +245,120 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         XCTAssertGreaterThan(viewModel.viewState.networkHealth.metrics.totalPackets, 0)
     }
 
+    func testPrewarmDoesNotMutateViewStateWhileInactive() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsIncludeVia = false
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+
+        viewModel.prewarmIfNeeded(with: [makePacket(timestamp: timestamp, from: "SRC", to: "DST")])
+        try? await Task.sleep(for: .milliseconds(150))
+
+        XCTAssertNil(viewModel.viewState.summary)
+        XCTAssertTrue(viewModel.viewState.graphModel.nodes.isEmpty)
+
+        viewModel.setActive(true)
+        await waitFor { viewModel.viewState.summary?.totalPackets == 1 }
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 1)
+    }
+
+    func testAggregationLoadingFlagClearsAfterActivate() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsIncludeVia = false
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let expected = AnalyticsAggregationResult(
+            summary: AnalyticsSummaryMetrics(
+                totalPackets: 10,
+                uniqueStations: 2,
+                totalPayloadBytes: 50,
+                uiFrames: 10,
+                iFrames: 0,
+                infoTextRatio: 1.0
+            ),
+            series: AnalyticsSeries(
+                packetsPerBucket: [AnalyticsSeriesPoint(bucket: timestamp, value: 10)],
+                bytesPerBucket: [AnalyticsSeriesPoint(bucket: timestamp, value: 50)],
+                uniqueStationsPerBucket: [AnalyticsSeriesPoint(bucket: timestamp, value: 2)]
+            ),
+            heatmap: HeatmapData(matrix: [[10]], xLabels: ["00"], yLabels: ["Feb 18"]),
+            histogram: HistogramData(bins: [HistogramBin(lowerBound: 0, upperBound: 127, count: 10)], maxValue: 127),
+            topTalkers: [RankRow(label: "SRC", count: 10)],
+            topDestinations: [RankRow(label: "DST", count: 10)],
+            topDigipeaters: []
+        )
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            databaseAggregationProvider: { _, _, _, _, _, _ in
+                try? await Task.sleep(for: .milliseconds(80))
+                return expected
+            },
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+
+        viewModel.setActive(true)
+        viewModel.updatePackets([makePacket(timestamp: timestamp, from: "SRC", to: "DST")])
+
+        await waitFor { viewModel.viewState.summary?.totalPackets == 10 }
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 10)
+        XCTAssertFalse(viewModel.isAggregationLoading)
+    }
+
+    func testHasLoadedFlagsTransitionAfterActivate() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsIncludeVia = false
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.graphViewMode = .all
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+        viewModel.updatePackets([makePacket(timestamp: timestamp, from: "SRC", to: "DST")])
+
+        XCTAssertFalse(viewModel.hasLoadedAggregation)
+        XCTAssertFalse(viewModel.hasLoadedGraph)
+
+        viewModel.setActive(true)
+        await waitFor { viewModel.hasLoadedAggregation }
+        await waitFor { viewModel.hasLoadedGraph }
+
+        XCTAssertTrue(viewModel.hasLoadedAggregation)
+        XCTAssertTrue(viewModel.hasLoadedGraph)
+    }
+
     private func makeSettings() -> AppSettingsStore {
         let suiteName = "AXTermTests-AnalyticsDashboard-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard

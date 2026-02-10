@@ -42,8 +42,7 @@ actor PersistenceWorker {
 
     func loadPackets(in timeframe: DateInterval) throws -> [Packet]? {
         guard let store = packetStore as? (any PacketStoreTimeRangeQuerying) else { return nil }
-        let records = try store.loadPackets(in: timeframe)
-        return records.map { $0.toPacket() }
+        return try store.loadPackets(in: timeframe)
     }
 
     func loadConsole(limit: Int) throws -> [ConsoleLine] {

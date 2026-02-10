@@ -38,12 +38,42 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
         }
     }
 
-    func loadPackets(in timeframe: DateInterval) throws -> [PacketRecord] {
+    func loadPackets(in timeframe: DateInterval) throws -> [Packet] {
         try dbQueue.read { db in
-            try PacketRecord
-                .filter(Column("receivedAt") >= timeframe.start && Column("receivedAt") < timeframe.end)
-                .order(Column("receivedAt").asc)
-                .fetchAll(db)
+            let sql = """
+                SELECT id, receivedAt, fromCall, fromSSID, toCall, toSSID, viaPath, frameType, controlHex, pid
+                FROM \(PacketRecord.databaseTableName)
+                WHERE receivedAt >= ? AND receivedAt < ?
+                ORDER BY receivedAt ASC
+            """
+            let rows = try Row.fetchAll(db, sql: sql, arguments: [timeframe.start, timeframe.end])
+            return rows.map { row in
+                let id: UUID = row["id"]
+                let timestamp: Date = row["receivedAt"]
+                let fromCall: String = row["fromCall"]
+                let fromSSID: Int = row["fromSSID"]
+                let toCall: String = row["toCall"]
+                let toSSID: Int = row["toSSID"]
+                let viaPath: String = row["viaPath"]
+                let frameTypeRaw: String = row["frameType"]
+                let controlHex: String = row["controlHex"]
+                let pidValue: Int? = row["pid"]
+
+                return Packet(
+                    id: id,
+                    timestamp: timestamp,
+                    from: AX25Address(call: fromCall, ssid: fromSSID),
+                    to: AX25Address(call: toCall, ssid: toSSID),
+                    via: PacketEncoding.decodeViaPath(viaPath),
+                    frameType: FrameType(rawValue: frameTypeRaw) ?? .unknown,
+                    control: PacketEncoding.decodeControl(controlHex),
+                    pid: pidValue.map { UInt8(clamping: $0) },
+                    info: Data(),
+                    rawAx25: Data(),
+                    kissEndpoint: nil,
+                    infoText: nil
+                )
+            }
         }
     }
 
