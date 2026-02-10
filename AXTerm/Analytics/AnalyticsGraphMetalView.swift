@@ -1345,6 +1345,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
 nonisolated private struct GraphRenderKey: Hashable {
     let nodeCount: Int
     let edgeCount: Int
+    let modelChecksum: Int
     let myCallsign: String
     let positionsChecksum: Int
     let visibleNodeCount: Int
@@ -1356,6 +1357,30 @@ nonisolated private struct GraphRenderKey: Hashable {
         myCallsign: String,
         visibleNodeIDs: Set<String> = []
     ) -> GraphRenderKey {
+        // Include graph topology/content so renderer buffers are rebuilt whenever
+        // logical graph data changes even if counts stay the same.
+        var modelHasher = Hasher()
+        for node in model.nodes.sorted(by: { $0.id < $1.id }) {
+            node.id.hash(into: &modelHasher)
+            node.callsign.hash(into: &modelHasher)
+            node.weight.hash(into: &modelHasher)
+            node.degree.hash(into: &modelHasher)
+            node.isNetRomOfficial.hash(into: &modelHasher)
+            node.inBytes.hash(into: &modelHasher)
+            node.outBytes.hash(into: &modelHasher)
+        }
+        for edge in model.edges.sorted(by: {
+            if $0.sourceID != $1.sourceID { return $0.sourceID < $1.sourceID }
+            if $0.targetID != $1.targetID { return $0.targetID < $1.targetID }
+            if $0.weight != $1.weight { return $0.weight < $1.weight }
+            return ($0.isStale ? 1 : 0) < ($1.isStale ? 1 : 0)
+        }) {
+            edge.sourceID.hash(into: &modelHasher)
+            edge.targetID.hash(into: &modelHasher)
+            edge.weight.hash(into: &modelHasher)
+            edge.isStale.hash(into: &modelHasher)
+        }
+
         var hasher = Hasher()
         for p in positions.sorted(by: { $0.id < $1.id }) {
             p.id.hash(into: &hasher)
@@ -1370,6 +1395,7 @@ nonisolated private struct GraphRenderKey: Hashable {
         return GraphRenderKey(
             nodeCount: model.nodes.count,
             edgeCount: model.edges.count,
+            modelChecksum: modelHasher.finalize(),
             myCallsign: myCallsign,
             positionsChecksum: hasher.finalize(),
             visibleNodeCount: visibleNodeIDs.count,
