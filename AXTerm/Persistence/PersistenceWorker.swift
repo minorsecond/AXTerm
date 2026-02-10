@@ -30,6 +30,22 @@ actor PersistenceWorker {
         return (packets, pinnedIDs)
     }
 
+    func aggregateAnalytics(
+        in timeframe: DateInterval,
+        bucket: TimeBucket,
+        calendar: Calendar,
+        options: AnalyticsAggregator.Options
+    ) throws -> AnalyticsAggregationResult? {
+        guard let store = packetStore as? (any PacketStoreAnalyticsQuerying) else { return nil }
+        return try store.aggregateAnalytics(in: timeframe, bucket: bucket, calendar: calendar, options: options)
+    }
+
+    func loadPackets(in timeframe: DateInterval) throws -> [Packet]? {
+        guard let store = packetStore as? (any PacketStoreTimeRangeQuerying) else { return nil }
+        let records = try store.loadPackets(in: timeframe)
+        return records.map { $0.toPacket() }
+    }
+
     func loadConsole(limit: Int) throws -> [ConsoleLine] {
         guard let consoleStore else { return [] }
         let records = try consoleStore.loadRecent(limit: limit)
@@ -90,4 +106,3 @@ actor PersistenceWorker {
         try rawStore.deleteAll()
     }
 }
-

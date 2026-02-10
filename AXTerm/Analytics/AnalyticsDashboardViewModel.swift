@@ -12,6 +12,16 @@ import os
 
 @MainActor
 final class AnalyticsDashboardViewModel: ObservableObject {
+    typealias DatabaseAggregationProvider = @Sendable (
+        DateInterval,
+        TimeBucket,
+        Calendar,
+        Bool,
+        Int,
+        Int
+    ) async -> AnalyticsAggregationResult?
+    typealias TimeframePacketsProvider = @Sendable (DateInterval) async -> [Packet]?
+
     private let logger = Logger(subsystem: "AXTerm", category: "Analytics")
 
     /// Reference to settings store for persistence (optional for backward compat)
@@ -151,6 +161,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     @Published var resetCameraRequest: UUID?
 
     private let calendar: Calendar
+    nonisolated private let databaseAggregationProvider: DatabaseAggregationProvider?
+    nonisolated private let timeframePacketsProvider: TimeframePacketsProvider?
     private let packetSubject = CurrentValueSubject<[Packet], Never>([])
     private var cancellables: Set<AnyCancellable> = []
     private var packets: [Packet] = []
@@ -174,6 +186,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private let telemetryLimiter = TelemetryRateLimiter(minimumInterval: 1.0)
     private var loopDetection = RecomputeLoopDetector()
     private var isActive = false
+    private var latestTimeframePackets: [Packet] = []
 
     /// Creates the view model, optionally loading persisted settings.
     ///
@@ -186,6 +199,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     init(
         settingsStore: AppSettingsStore? = nil,
         netRomIntegration: NetRomIntegration? = nil,
+        databaseAggregationProvider: DatabaseAggregationProvider? = nil,
+        timeframePacketsProvider: TimeframePacketsProvider? = nil,
         calendar: Calendar = .current,
         packetDebounce: TimeInterval = 0.25,
         graphDebounce: TimeInterval = 0.4,
@@ -193,6 +208,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     ) {
         self.settingsStore = settingsStore
         self.netRomIntegration = netRomIntegration
+        self.databaseAggregationProvider = databaseAggregationProvider
+        self.timeframePacketsProvider = timeframePacketsProvider
         self.calendar = calendar
 
         // Load from settings store or use defaults
@@ -501,6 +518,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private func recomputeAggregation(reason: String) async {
         let now = Date()
         let packetSnapshot = filteredPackets(now: now)
+        let timeframeInterval = currentDateRange(now: now)
         let bucketSnapshot = resolvedBucket
         let includeViaSnapshot = includeViaDigipeaters
         let key = AggregationCacheKey(
@@ -559,19 +577,36 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             ]
         )
 
+        let histogramBinCount = AnalyticsStyle.Histogram.binCount
+        let topLimit = AnalyticsStyle.Tables.topLimit
+        let provider = databaseAggregationProvider
+
         aggregationTask?.cancel()
         aggregationTask = Task.detached(priority: .userInitiated) { [calendar] in
             let start = Date()
-            let result = AnalyticsAggregator.aggregate(
-                packets: packetSnapshot,
-                bucket: bucketSnapshot,
-                calendar: calendar,
-                options: AnalyticsAggregator.Options(
-                    includeViaDigipeaters: includeViaSnapshot,
-                    histogramBinCount: AnalyticsStyle.Histogram.binCount,
-                    topLimit: AnalyticsStyle.Tables.topLimit
+            let result: AnalyticsAggregationResult
+            if let providerResult = await provider?(
+                timeframeInterval,
+                bucketSnapshot,
+                calendar,
+                includeViaSnapshot,
+                histogramBinCount,
+                topLimit
+            ) {
+                result = providerResult
+            } else {
+                result = AnalyticsAggregator.aggregate(
+                    packets: packetSnapshot,
+                    bucket: bucketSnapshot,
+                    calendar: calendar,
+                    options: AnalyticsAggregator.Options(
+                        includeViaDigipeaters: includeViaSnapshot,
+                        histogramBinCount: histogramBinCount,
+                        topLimit: topLimit
+                    ),
+                    timeframeInterval: timeframeInterval
                 )
-            )
+            }
             let duration = Date().timeIntervalSince(start) * 1000
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
@@ -634,9 +669,18 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         return packets.filter { range.contains($0.timestamp) }
     }
 
+    private func timeframePacketSnapshot(now: Date) async -> [Packet] {
+        let range = currentDateRange(now: now)
+        if let providerPackets = await timeframePacketsProvider?(range) {
+            return providerPackets
+        }
+        return filteredPackets(now: now)
+    }
+
     private func rebuildGraph(reason: String) async {
         let now = Date()
-        let packetSnapshot = filteredPackets(now: now)
+        let packetSnapshot = await timeframePacketSnapshot(now: now)
+        latestTimeframePackets = packetSnapshot
         let includeViaSnapshot = includeViaDigipeaters
         let minEdgeSnapshot = minEdgeCount
         let maxNodesSnapshot = maxNodes
@@ -869,7 +913,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func updateNetworkHealth() {
         let now = Date()
-        let timeframePackets = filteredPackets(now: now)
+        let timeframePackets = latestTimeframePackets
 
         // Network Health uses a CANONICAL graph (minEdge=2, no max nodes) that ignores view filters.
         // This ensures the health score is stable under Min Edge slider and Max Node count changes.

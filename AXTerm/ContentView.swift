@@ -44,7 +44,23 @@ struct ContentView: View {
         _settings = ObservedObject(wrappedValue: settings)
         _inspectionRouter = ObservedObject(wrappedValue: inspectionRouter)
         // Initialize analytics view model with settings store for persistence
-        _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(settingsStore: settings, netRomIntegration: client.netRomIntegration))
+        _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            netRomIntegration: client.netRomIntegration,
+            databaseAggregationProvider: { interval, bucket, calendar, includeVia, histogramBinCount, topLimit in
+                await client.aggregateAnalytics(
+                    in: interval,
+                    bucket: bucket,
+                    calendar: calendar,
+                    includeViaDigipeaters: includeVia,
+                    histogramBinCount: histogramBinCount,
+                    topLimit: topLimit
+                )
+            },
+            timeframePacketsProvider: { interval in
+                await client.loadPackets(in: interval)
+            }
+        ))
         // Get or create the shared session coordinator so Settings can update the same instance.
         // Only seed @Published properties on a new coordinator — re-seeding an existing shared
         // instance during view init triggers "Publishing changes from within view updates".

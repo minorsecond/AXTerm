@@ -126,6 +126,30 @@ final class AnalyticsAggregatorTests: XCTestCase {
         XCTAssertEqual(result.topTalkers.map { $0.label }, ["K9ALP", "W5BRV"])
     }
 
+    func testTimeframeIntervalPadsSeriesAndHeatmap() {
+        let now = Date(timeIntervalSince1970: 1_700_100_000) // 2023-11-15T02:00:00Z
+        let interval = DateInterval(
+            start: now.addingTimeInterval(-(2 * 24 * 60 * 60)),
+            end: now
+        )
+        let packets = [
+            makePacket(timestamp: interval.start.addingTimeInterval(5 * 3600), from: "K9ALP", to: "W5BRV"),
+            makePacket(timestamp: interval.end.addingTimeInterval(-2 * 3600), from: "N3CHR", to: "W4DEL")
+        ]
+
+        let result = AnalyticsAggregator.aggregate(
+            packets: packets,
+            bucket: .hour,
+            calendar: calendar,
+            options: AnalyticsAggregator.Options(includeViaDigipeaters: false, histogramBinCount: 4, topLimit: 3),
+            timeframeInterval: interval
+        )
+
+        XCTAssertEqual(result.series.packetsPerBucket.count, 48)
+        XCTAssertEqual(result.heatmap.yLabels.count, 3)
+        XCTAssertEqual(result.heatmap.matrix.flatMap { $0 }.reduce(0, +), 2)
+    }
+
     private func makePacket(
         timestamp: Date,
         from: String,

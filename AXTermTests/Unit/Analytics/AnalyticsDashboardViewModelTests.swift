@@ -42,8 +42,8 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         viewModel.customRangeEnd = date2.addingTimeInterval(60)
 
         viewModel.updatePackets(packets)
-        await waitFor { viewModel.viewState.series.packetsPerBucket.count == 2 }
-        XCTAssertEqual(viewModel.viewState.series.packetsPerBucket.count, 2)
+        await waitFor { viewModel.viewState.series.packetsPerBucket.count == 3 }
+        XCTAssertEqual(viewModel.viewState.series.packetsPerBucket.count, 3)
 
         // Change to a larger bucket (fifteenMinutes won't collapse them, but fiveMinutes should give us more buckets)
         // Actually for this test - if they're 65 minutes apart with hour bucket = 2 buckets.
@@ -148,6 +148,101 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
 
         viewModel.handleBackgroundClick()
         XCTAssertNil(viewModel.viewState.selectedNodeID)
+    }
+
+    func testUsesDatabaseAggregationProviderWhenAvailable() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsIncludeVia = true
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let expected = AnalyticsAggregationResult(
+            summary: AnalyticsSummaryMetrics(
+                totalPackets: 6200,
+                uniqueStations: 8,
+                totalPayloadBytes: 12400,
+                uiFrames: 4000,
+                iFrames: 1200,
+                infoTextRatio: 0.5
+            ),
+            series: AnalyticsSeries(
+                packetsPerBucket: [AnalyticsSeriesPoint(bucket: timestamp, value: 6200)],
+                bytesPerBucket: [AnalyticsSeriesPoint(bucket: timestamp, value: 12400)],
+                uniqueStationsPerBucket: [AnalyticsSeriesPoint(bucket: timestamp, value: 8)]
+            ),
+            heatmap: HeatmapData(matrix: [[6200]], xLabels: ["00"], yLabels: ["Feb 18"]),
+            histogram: HistogramData(bins: [HistogramBin(lowerBound: 0, upperBound: 127, count: 6200)], maxValue: 127),
+            topTalkers: [RankRow(label: "SRC", count: 6200)],
+            topDestinations: [RankRow(label: "DST", count: 6200)],
+            topDigipeaters: [RankRow(label: "DIGI", count: 900)]
+        )
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            databaseAggregationProvider: { _, _, _, _, _, _ in expected },
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.setActive(true)
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+
+        // Intentionally keep in-memory packets sparse; provider should still drive results.
+        viewModel.updatePackets([makePacket(timestamp: timestamp, from: "ONE", to: "TWO")])
+
+        await waitFor { viewModel.viewState.summary?.totalPackets == 6200 }
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 6200)
+        XCTAssertEqual(viewModel.viewState.series.packetsPerBucket.first?.value, 6200)
+        XCTAssertEqual(viewModel.viewState.topTalkers.first?.label, "SRC")
+    }
+
+    func testGraphBuildUsesTimeframePacketsProviderWhenAvailable() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsIncludeVia = false
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let providerPacket = makePacket(
+            timestamp: timestamp,
+            from: "DBSRC",
+            to: "DBDST"
+        )
+        final class ProviderProbe: @unchecked Sendable {
+            var called = false
+        }
+        let probe = ProviderProbe()
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            timeframePacketsProvider: { _ in
+                probe.called = true
+                return [providerPacket]
+            },
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.graphViewMode = .all
+        viewModel.setActive(true)
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+
+        // In-memory packets are empty; graph should still build from provider data.
+        viewModel.updatePackets([])
+
+        await waitFor { probe.called }
+        XCTAssertTrue(probe.called)
+        await waitFor { viewModel.viewState.networkHealth.metrics.totalPackets > 0 }
+        XCTAssertGreaterThan(viewModel.viewState.networkHealth.metrics.totalPackets, 0)
     }
 
     private func makeSettings() -> AppSettingsStore {

@@ -18,13 +18,20 @@ nonisolated struct AnalyticsAggregator {
         packets: [Packet],
         bucket: TimeBucket,
         calendar: Calendar,
-        options: Options
+        options: Options,
+        timeframeInterval: DateInterval? = nil
     ) -> AnalyticsAggregationResult {
         let events = packets.map { PacketEvent(packet: $0) }
 
         let summary = computeSummary(events: events, includeVia: options.includeViaDigipeaters)
-        let series = computeSeries(events: events, bucket: bucket, calendar: calendar, includeVia: options.includeViaDigipeaters)
-        let heatmap = computeHeatmap(events: events, calendar: calendar)
+        let series = computeSeries(
+            events: events,
+            bucket: bucket,
+            calendar: calendar,
+            includeVia: options.includeViaDigipeaters,
+            timeframeInterval: timeframeInterval
+        )
+        let heatmap = computeHeatmap(events: events, calendar: calendar, timeframeInterval: timeframeInterval)
         let histogram = computeHistogram(events: events, binCount: options.histogramBinCount)
 
         let topTalkers = rankTop(
@@ -89,7 +96,8 @@ nonisolated struct AnalyticsAggregator {
         events: [PacketEvent],
         bucket: TimeBucket,
         calendar: Calendar,
-        includeVia: Bool
+        includeVia: Bool,
+        timeframeInterval: DateInterval?
     ) -> AnalyticsSeries {
         guard !events.isEmpty else { return .empty }
 
@@ -112,7 +120,12 @@ nonisolated struct AnalyticsAggregator {
             }
         }
 
-        let buckets = sortedBucketKeys(from: events, bucket: bucket, calendar: calendar)
+        let buckets = sortedBucketKeys(
+            from: events,
+            bucket: bucket,
+            calendar: calendar,
+            timeframeInterval: timeframeInterval
+        )
 
         let packets = buckets.map { bucketKey in
             AnalyticsSeriesPoint(bucket: bucketKey.date, value: packetCounts[bucketKey, default: 0])
@@ -131,7 +144,20 @@ nonisolated struct AnalyticsAggregator {
         )
     }
 
-    private static func sortedBucketKeys(from events: [PacketEvent], bucket: TimeBucket, calendar: Calendar) -> [BucketKey] {
+    private static func sortedBucketKeys(
+        from events: [PacketEvent],
+        bucket: TimeBucket,
+        calendar: Calendar,
+        timeframeInterval: DateInterval?
+    ) -> [BucketKey] {
+        if let timeframeInterval {
+            let clampedEnd = max(timeframeInterval.start, timeframeInterval.end.addingTimeInterval(-0.001))
+            let start = bucket.normalizedStart(for: timeframeInterval.start, calendar: calendar)
+            let end = bucket.normalizedStart(for: clampedEnd, calendar: calendar)
+            guard start <= end else { return [] }
+            return generateBucketKeys(start: start, end: end, bucket: bucket, calendar: calendar)
+        }
+
         guard let minDate = events.map({ $0.timestamp }).min(),
               let maxDate = events.map({ $0.timestamp }).max() else {
             return []
@@ -139,7 +165,15 @@ nonisolated struct AnalyticsAggregator {
 
         let start = bucket.normalizedStart(for: minDate, calendar: calendar)
         let end = bucket.normalizedStart(for: maxDate, calendar: calendar)
+        return generateBucketKeys(start: start, end: end, bucket: bucket, calendar: calendar)
+    }
 
+    private static func generateBucketKeys(
+        start: Date,
+        end: Date,
+        bucket: TimeBucket,
+        calendar: Calendar
+    ) -> [BucketKey] {
         var current = start
         var keys: [BucketKey] = []
         while current <= end {
@@ -166,15 +200,28 @@ nonisolated struct AnalyticsAggregator {
         }
     }
 
-    private static func computeHeatmap(events: [PacketEvent], calendar: Calendar) -> HeatmapData {
+    private static func computeHeatmap(
+        events: [PacketEvent],
+        calendar: Calendar,
+        timeframeInterval: DateInterval?
+    ) -> HeatmapData {
         guard !events.isEmpty else { return .empty }
 
-        let dayStarts = events
-            .map { calendar.startOfDay(for: $0.timestamp) }
-            .sorted()
-
-        guard let firstDay = dayStarts.first, let lastDay = dayStarts.last else {
-            return .empty
+        let firstDay: Date
+        let lastDay: Date
+        if let timeframeInterval {
+            let clampedEnd = max(timeframeInterval.start, timeframeInterval.end.addingTimeInterval(-0.001))
+            firstDay = calendar.startOfDay(for: timeframeInterval.start)
+            lastDay = calendar.startOfDay(for: clampedEnd)
+        } else {
+            let dayStarts = events
+                .map { calendar.startOfDay(for: $0.timestamp) }
+                .sorted()
+            guard let eventFirstDay = dayStarts.first, let eventLastDay = dayStarts.last else {
+                return .empty
+            }
+            firstDay = eventFirstDay
+            lastDay = eventLastDay
         }
 
         var days: [Date] = []

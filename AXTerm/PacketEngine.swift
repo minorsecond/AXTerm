@@ -919,6 +919,43 @@ final class PacketEngine: ObservableObject {
         loadPersistedPackets(reason: "manual")
     }
 
+    func aggregateAnalytics(
+        in timeframe: DateInterval,
+        bucket: TimeBucket,
+        calendar: Calendar,
+        includeViaDigipeaters: Bool,
+        histogramBinCount: Int,
+        topLimit: Int
+    ) async -> AnalyticsAggregationResult? {
+        guard settings.persistHistory, let persistenceWorker else { return nil }
+        let options = AnalyticsAggregator.Options(
+            includeViaDigipeaters: includeViaDigipeaters,
+            histogramBinCount: histogramBinCount,
+            topLimit: topLimit
+        )
+        do {
+            return try await persistenceWorker.aggregateAnalytics(
+                in: timeframe,
+                bucket: bucket,
+                calendar: calendar,
+                options: options
+            )
+        } catch {
+            SentryManager.shared.capturePersistenceFailure("aggregate analytics", errorDescription: error.localizedDescription)
+            return nil
+        }
+    }
+
+    func loadPackets(in timeframe: DateInterval) async -> [Packet]? {
+        guard settings.persistHistory, let persistenceWorker else { return nil }
+        do {
+            return try await persistenceWorker.loadPackets(in: timeframe)
+        } catch {
+            SentryManager.shared.capturePersistenceFailure("load packets in timeframe", errorDescription: error.localizedDescription)
+            return nil
+        }
+    }
+
     private func loadPersistedPackets(reason: String) {
         guard settings.persistHistory, let persistenceWorker else { return }
         if !packets.isEmpty {
