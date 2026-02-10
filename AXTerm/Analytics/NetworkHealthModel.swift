@@ -387,14 +387,12 @@ nonisolated enum NetworkHealthCalculator {
         let activityCutoff = now.addingTimeInterval(-Double(activityWindowMinutes * 60))
         let recentPackets = allRecentPackets.filter { $0.timestamp >= activityCutoff }
 
-        // A1: Active Nodes % = stations heard in last 10m / total nodes × 100
-        var activeCallsigns: Set<String> = []
-        for packet in recentPackets {
-            if let from = packet.from?.call { activeCallsigns.insert(from) }
-            if let to = packet.to?.call { activeCallsigns.insert(to) }
-        }
-        let activeStations = activeCallsigns.count
-        let a1ActiveNodesPct = totalNodes > 0 ? Double(activeStations) / Double(totalNodes) * 100 : 0
+        // A1 source count uses the same station-identity normalization as totalNodes.
+        // This keeps percentages stable when SSIDs are grouped into station identities.
+        let activeStations = calculateTotalStations(
+            packets: recentPackets,
+            includeViaDigipeaters: includeViaDigipeaters
+        )
 
         // Calculate raw packet rate
         let rawPacketRate = Double(recentPackets.count) / Double(activityWindowMinutes)
@@ -408,7 +406,7 @@ nonisolated enum NetworkHealthCalculator {
         }
         previousPacketRateEMA = smoothedRate
 
-        // Freshness = active / total
+        // Freshness = active / total (same identity model for numerator + denominator)
         let freshness = totalNodes > 0 ? Double(activeStations) / Double(totalNodes) : 0
 
         return NetworkHealthMetrics(

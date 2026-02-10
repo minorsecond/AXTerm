@@ -54,8 +54,10 @@ struct GraphSidebar: View {
 
     // Hub metric for Primary Hub action
     @Binding var hubMetric: HubMetric
-
+    var fixedHeight: CGFloat? = nil
     var body: some View {
+        // Stable sidebar height (matches develop visuals) and shared by Overview/Inspector.
+        let resolvedHeight = max(fixedHeight ?? 0, AnalyticsStyle.Layout.graphHeight + 320)
         VStack(spacing: 0) {
             // Tab picker
             tabPicker
@@ -69,6 +71,7 @@ struct GraphSidebar: View {
             tabContent
         }
         .frame(width: AnalyticsStyle.Layout.inspectorWidth)
+        .frame(height: resolvedHeight, alignment: .top)
         .background(AnalyticsStyle.Colors.neutralFill)
         .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
     }
@@ -89,29 +92,25 @@ struct GraphSidebar: View {
     // MARK: - Tab Content
 
     private var tabContent: some View {
-        // Use ZStack to prevent layout shifts - both views are always rendered
-        ZStack {
-            // Overview tab
-            SidebarOverviewContent(
-                health: networkHealth,
-                hubMetric: $hubMetric,
-                onFocusPrimaryHub: onFocusPrimaryHub,
-                onShowActiveNodes: onShowActiveNodes,
-                onExportSummary: onExportSummary
-            )
-            .opacity(selectedTab == .overview ? 1 : 0)
-            .allowsHitTesting(selectedTab == .overview)
-
-            // Inspector tab
-            SidebarInspectorContent(
-                details: selectedNodeDetails,
-                multiDetails: selectedMultiNodeDetails,
-                onSetAsAnchor: onSetAsAnchor,
-                onClearSelection: onClearSelection
-            )
-            .opacity(selectedTab == .inspector ? 1 : 0)
-            .allowsHitTesting(selectedTab == .inspector)
+        Group {
+            if selectedTab == .overview {
+                SidebarOverviewContent(
+                    health: networkHealth,
+                    hubMetric: $hubMetric,
+                    onFocusPrimaryHub: onFocusPrimaryHub,
+                    onShowActiveNodes: onShowActiveNodes,
+                    onExportSummary: onExportSummary
+                )
+            } else {
+                SidebarInspectorContent(
+                    details: selectedNodeDetails,
+                    multiDetails: selectedMultiNodeDetails,
+                    onSetAsAnchor: onSetAsAnchor,
+                    onClearSelection: onClearSelection
+                )
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
@@ -129,47 +128,45 @@ private struct SidebarOverviewContent: View {
     @State private var showingHubMetricPicker = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                // Header
-                headerSection
+        VStack(alignment: .leading, spacing: 12) {
+            // Header
+            headerSection
 
-                Divider()
+            Divider()
 
-                // Health score
-                healthScoreSection
+            // Health score
+            healthScoreSection
 
-                // Reasons
-                if !health.reasons.isEmpty {
-                    reasonsSection
-                }
-
-                Divider()
-
-                // Metrics grid
-                metricsSection
-
-                // Warnings
-                if !health.warnings.isEmpty {
-                    Divider()
-                    warningsSection
-                }
-
-                // Activity trend
-                if !health.activityTrend.isEmpty {
-                    Divider()
-                    trendSection
-                }
-
-                Divider()
-
-                // Quick actions
-                actionsSection
-
-                Spacer(minLength: 0)
+            // Reasons
+            if !health.reasons.isEmpty {
+                reasonsSection
             }
-            .padding(12)
+
+            Divider()
+
+            // Metrics grid
+            metricsSection
+
+            // Warnings
+            if !health.warnings.isEmpty {
+                Divider()
+                warningsSection
+            }
+
+            // Activity trend
+            if !health.activityTrend.isEmpty {
+                Divider()
+                trendSection
+            }
+
+            Divider()
+
+            // Quick actions
+            actionsSection
+
         }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     // MARK: - Sections
@@ -225,6 +222,7 @@ private struct SidebarOverviewContent: View {
                         .font(.caption)
                         .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 }
+                .help(reason)
             }
         }
     }
@@ -320,6 +318,7 @@ private struct SidebarOverviewContent: View {
                               ? Color(nsColor: .systemOrange).opacity(0.1)
                               : Color(nsColor: .systemBlue).opacity(0.1))
                 )
+                .help("\(warning.title): \(warning.detail)")
             }
         }
     }
@@ -443,21 +442,34 @@ private struct SidebarInspectorContent: View {
     let multiDetails: GraphMultiInspectorDetails?
     let onSetAsAnchor: () -> Void
     let onClearSelection: () -> Void
+    @State private var showAllSelectedStationsSheet = false
 
     var body: some View {
-        if let multiDetails {
-            multiNodeDetailsView(multiDetails)
-        } else if let details {
-            nodeDetailsView(details)
-        } else {
-            emptyStateView
+        Group {
+            if let multiDetails {
+                multiNodeDetailsView(multiDetails)
+            } else if let details {
+                nodeDetailsView(details)
+            } else {
+                emptyStateView
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     // MARK: - Node Details
 
     private func multiNodeDetailsView(_ details: GraphMultiInspectorDetails) -> some View {
-        ScrollView {
+        let maxSelectedRows = 10
+        let maxInlineNames = 10
+        let displayedSelectedRows = Array(details.selectedNodes.prefix(maxSelectedRows))
+        let displayedNames = details.selectedNodes.prefix(maxInlineNames).map(\.callsign)
+        let remainingNames = max(0, details.selectedNodes.count - displayedNames.count)
+        let namesSummary = remainingNames > 0
+            ? "\(displayedNames.joined(separator: ", ")) +\(remainingNames) more"
+            : displayedNames.joined(separator: ", ")
+
+        return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 Text(Copy.Inspector.tabLabel)
                     .font(.headline)
@@ -470,7 +482,7 @@ private struct SidebarInspectorContent: View {
                         .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 }
 
-                Text(details.selectedNodes.map(\.callsign).joined(separator: ", "))
+                Text(namesSummary)
                     .font(.caption.monospaced())
                     .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                     .lineLimit(3)
@@ -479,7 +491,24 @@ private struct SidebarInspectorContent: View {
                     .padding(.vertical, 2)
                     .background(Color.clear)
                     .contentShape(Rectangle())
-                    .modifier(NativeTooltip(text: Copy.Inspector.multiSelectionListTooltip))
+                    .help(Copy.Inspector.multiSelectionListTooltip)
+
+                if details.selectedNodes.count > maxSelectedRows {
+                    Button {
+                        showAllSelectedStationsSheet = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "rectangle.expand.vertical")
+                                .font(.caption2)
+                            Text("View All (\(details.selectedNodes.count))")
+                            Spacer()
+                        }
+                        .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    .help("Open a full list of all selected stations in a dedicated view.")
+                }
 
                 Divider()
 
@@ -557,8 +586,14 @@ private struct SidebarInspectorContent: View {
                     systemImage: "dot.circle.and.hand.point.up.left.fill",
                     tooltip: Copy.Inspector.selectedStationsTooltip
                 )
-                ForEach(details.selectedNodes) { node in
+                ForEach(displayedSelectedRows) { node in
                     selectedStationRow(node)
+                }
+                if details.selectedNodes.count > displayedSelectedRows.count {
+                    Text("+ \(details.selectedNodes.count - displayedSelectedRows.count) more selected stations")
+                        .font(.caption2)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        .help("Inspector stays compact. Use View All to inspect every selected station.")
                 }
 
                 Divider()
@@ -588,6 +623,13 @@ private struct SidebarInspectorContent: View {
                 }
             }
             .padding(12)
+        }
+        .id("multi-\(details.selectionCount)-\(details.selectedNodes.map(\.id).joined(separator: ","))")
+        .onChange(of: details.selectionCount) { _, _ in
+            showAllSelectedStationsSheet = false
+        }
+        .sheet(isPresented: $showAllSelectedStationsSheet) {
+            AllSelectedStationsSheet(nodes: details.selectedNodes)
         }
     }
 
@@ -737,7 +779,7 @@ private struct SidebarInspectorContent: View {
         .padding(.vertical, 2)
         .background(Color.clear)
         .contentShape(Rectangle())
-        .modifier(NativeTooltip(text: tooltip))
+        .help(tooltip)
     }
 
     private func internalLinkRow(_ link: GraphMultiInspectorDetails.InternalLink) -> some View {
@@ -754,7 +796,7 @@ private struct SidebarInspectorContent: View {
         .padding(.vertical, 2)
         .background(Color.clear)
         .contentShape(Rectangle())
-        .modifier(NativeTooltip(text: String(format: Copy.Inspector.internalLinkRowTooltipTemplate, link.packetCount, link.bytes)))
+        .help(String(format: Copy.Inspector.internalLinkRowTooltipTemplate, link.packetCount, link.bytes))
     }
 
     private func sharedConnectionRow(_ connection: GraphMultiInspectorDetails.SharedExternalConnection) -> some View {
@@ -773,13 +815,11 @@ private struct SidebarInspectorContent: View {
         .padding(.vertical, 2)
         .background(Color.clear)
         .contentShape(Rectangle())
-        .modifier(
-            NativeTooltip(
-                text: String(
-                    format: Copy.Inspector.sharedConnectionRowTooltipTemplate,
-                    connection.connectedSelectedIDs.count,
-                    connection.totalPackets
-                )
+        .help(
+            String(
+                format: Copy.Inspector.sharedConnectionRowTooltipTemplate,
+                connection.connectedSelectedIDs.count,
+                connection.totalPackets
             )
         )
     }
@@ -802,7 +842,7 @@ private struct SidebarInspectorContent: View {
         .padding(.vertical, 2)
         .background(Color.clear)
         .contentShape(Rectangle())
-        .modifier(NativeTooltip(text: String(format: Copy.Inspector.selectedStationRowTooltipTemplate, node.inCount, node.outCount, node.degree)))
+        .help(String(format: Copy.Inspector.selectedStationRowTooltipTemplate, node.inCount, node.outCount, node.degree))
     }
 
     // MARK: - Relationship Sections
@@ -996,7 +1036,58 @@ private struct InspectorMetricRow: View {
                 .monospacedDigit()
         }
         .font(.caption)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
         .help(tooltip)
+    }
+}
+
+private struct AllSelectedStationsSheet: View {
+    let nodes: [NetworkGraphNode]
+    @State private var searchText = ""
+    @Environment(\.dismiss) private var dismiss
+
+    private var filteredNodes: [NetworkGraphNode] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return nodes }
+        return nodes.filter { $0.callsign.localizedCaseInsensitiveContains(query) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List(filteredNodes) { node in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(node.callsign)
+                            .font(.body)
+                        Text("In \(node.inCount.formatted()) • Out \(node.outCount.formatted())")
+                            .font(.caption)
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    }
+                    Spacer()
+                    Text("Degree \(node.degree)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                }
+            }
+            .navigationTitle("Selected Stations")
+            .listStyle(.inset)
+            .searchable(text: $searchText, prompt: "Filter callsigns")
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    Text("\(filteredNodes.count)/\(nodes.count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                }
+            }
+        }
+        .frame(minWidth: 460, minHeight: 560)
+        .onExitCommand { dismiss() }
     }
 }
 
@@ -1018,30 +1109,7 @@ private struct InspectorMetricStringRow: View {
         .padding(.vertical, 2)
         .background(Color.clear)
         .contentShape(Rectangle())
-        .modifier(NativeTooltip(text: tooltip))
-    }
-}
-
-private struct NativeTooltip: ViewModifier {
-    let text: String
-
-    func body(content: Content) -> some View {
-        content
-            .background(AppKitTooltipHost(text: text))
-    }
-}
-
-private struct AppKitTooltipHost: NSViewRepresentable {
-    let text: String
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        view.toolTip = text
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        nsView.toolTip = text
+        .help(tooltip)
     }
 }
 
@@ -1060,6 +1128,8 @@ private struct MetricCell: View {
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
         .help(tooltip)
     }
 }

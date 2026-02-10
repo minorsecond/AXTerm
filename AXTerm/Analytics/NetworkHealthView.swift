@@ -525,9 +525,11 @@ struct ScoreExplainerView: View {
                     Label("40% Activity (10m)", systemImage: "bolt.fill")
                         .font(.caption2)
                         .foregroundStyle(Color(nsColor: .systemBlue))
+                        .help(GraphCopy.ScoreBreakdown.activityTooltip)
                     Label(topologyLabel, systemImage: "network")
                         .font(.caption2)
                         .foregroundStyle(Color(nsColor: .systemGreen))
+                        .help(GraphCopy.ScoreBreakdown.topologyTooltip)
                 }
             }
 
@@ -547,10 +549,11 @@ struct ScoreExplainerView: View {
                         ProgressView(value: component.score / 100)
                             .progressViewStyle(.linear)
                             .frame(width: 50)
-                        Text("\(Int(component.score))")
+                        Text(formattedComponentScore(component.score))
                             .font(.caption.monospacedDigit())
-                            .frame(width: 25, alignment: .trailing)
+                            .frame(width: 28, alignment: .trailing)
                     }
+                    .help(tooltip(for: component.name))
                 }
             }
 
@@ -564,6 +567,7 @@ struct ScoreExplainerView: View {
                     .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                     .lineLimit(3)
                     .minimumScaleFactor(0.8)
+                    .help(GraphCopy.ScoreBreakdown.headerTooltip)
             }
 
             HStack {
@@ -587,6 +591,35 @@ struct ScoreExplainerView: View {
     private var topologyLabel: String {
         let tf = timeframeDisplayName.isEmpty ? "timeframe" : timeframeDisplayName
         return "60% Topology (\(tf))"
+    }
+
+    private func tooltip(for componentName: String) -> String {
+        switch componentName {
+        case "Main Cluster (TF)":
+            return GraphCopy.ScoreBreakdown.c1MainClusterTooltip
+        case "Connectivity (TF)":
+            return GraphCopy.ScoreBreakdown.c2ConnectivityTooltip
+        case "Isolation Reduction (TF)":
+            return GraphCopy.ScoreBreakdown.c3IsolationTooltip
+        case "Active Nodes (10m)":
+            return GraphCopy.ScoreBreakdown.a1ActiveNodesTooltip
+        case "Packet Rate (10m)":
+            return GraphCopy.ScoreBreakdown.a2PacketRateTooltip
+        default:
+            return GraphCopy.ScoreBreakdown.headerTooltip
+        }
+    }
+
+    private func formattedComponentScore(_ value: Double) -> String {
+        if value >= 10 {
+            return "\(Int(value.rounded()))"
+        } else if value >= 1 {
+            return String(format: "%.1f", value)
+        } else if value > 0 {
+            return String(format: "%.2f", value)
+        } else {
+            return "0"
+        }
     }
 }
 

@@ -18,6 +18,7 @@ struct AnalyticsDashboardView: View {
     @State private var sidebarTab: GraphSidebarTab = .overview
     @State private var showExportToast = false
     @State private var showCustomRangePopover = false
+    @State private var graphViewportHeight: CGFloat = AnalyticsStyle.Layout.graphHeight
 
     init(packetEngine: PacketEngine, settings: AppSettingsStore, viewModel: AnalyticsDashboardViewModel) {
         self.packetEngine = packetEngine
@@ -454,6 +455,14 @@ struct AnalyticsDashboardView: View {
                         }
                     }
                     .frame(minHeight: AnalyticsStyle.Layout.graphHeight)
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: GraphViewportHeightPreferenceKey.self,
+                                value: proxy.size.height
+                            )
+                        }
+                    )
                     .onAppear {
                         viewModel.setMyCallsignForLayout(settings.myCallsign)
                     }
@@ -501,8 +510,15 @@ struct AnalyticsDashboardView: View {
                             // Clear selection AND fit to nodes (per UX spec)
                             viewModel.clearSelectionAndFit()
                         },
-                        hubMetric: $viewModel.focusState.hubMetric
+                        hubMetric: $viewModel.focusState.hubMetric,
+                        fixedHeight: graphViewportHeight
                     )
+                }
+                .onPreferenceChange(GraphViewportHeightPreferenceKey.self) { newHeight in
+                    guard newHeight > 0 else { return }
+                    if abs(graphViewportHeight - newHeight) > 1 {
+                        graphViewportHeight = newHeight
+                    }
                 }
             }
 
@@ -790,6 +806,13 @@ private struct LegendItem: View {
                 .font(.caption2)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
         }
+    }
+}
+
+private struct GraphViewportHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
