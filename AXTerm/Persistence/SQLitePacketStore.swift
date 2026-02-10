@@ -41,7 +41,7 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
     func loadPackets(in timeframe: DateInterval) throws -> [Packet] {
         try dbQueue.read { db in
             let sql = """
-                SELECT id, receivedAt, fromCall, fromSSID, toCall, toSSID, viaPath, frameType, controlHex, pid
+                SELECT id, receivedAt, fromCall, fromSSID, toCall, toSSID, viaPath, frameType, controlHex, pid, infoText, infoLen
                 FROM \(PacketRecord.databaseTableName)
                 WHERE receivedAt >= ? AND receivedAt < ?
                 ORDER BY receivedAt ASC
@@ -58,6 +58,9 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
                 let frameTypeRaw: String = row["frameType"]
                 let controlHex: String = row["controlHex"]
                 let pidValue: Int? = row["pid"]
+                let infoText: String? = row["infoText"]
+                let infoLen: Int = row["infoLen"]
+                let payload = infoLen > 0 ? Data(count: infoLen) : Data()
 
                 return Packet(
                     id: id,
@@ -68,10 +71,10 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
                     frameType: FrameType(rawValue: frameTypeRaw) ?? .unknown,
                     control: PacketEncoding.decodeControl(controlHex),
                     pid: pidValue.map { UInt8(clamping: $0) },
-                    info: Data(),
+                    info: payload,
                     rawAx25: Data(),
                     kissEndpoint: nil,
-                    infoText: nil
+                    infoText: infoText
                 )
             }
         }
