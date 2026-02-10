@@ -908,7 +908,9 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         _ = modifiers
         guard let selectionStart else { return }
         let previous = lastDragLocation ?? selectionStart
-        let delta = CGSize(width: location.x - previous.x, height: location.y - previous.y)
+        // AppKit mouse coordinates are Y-up, but the graph camera/shader pipeline uses screen-space Y-down.
+        // Flip the drag delta on Y so vertical pan direction matches expected scrolling behavior.
+        let delta = CGSize(width: location.x - previous.x, height: previous.y - location.y)
         accumulatedDrag.width += delta.width
         accumulatedDrag.height += delta.height
         lastDragLocation = location
