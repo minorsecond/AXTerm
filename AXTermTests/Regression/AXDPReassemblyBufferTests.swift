@@ -249,8 +249,8 @@ final class FlagClearingRaceConditionTests: XCTestCase {
 
             let peer = AX25Address(call: "TEST", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             viewModel.setCurrentSession(session)
             
             // Send AXDP data to set the flag
@@ -299,8 +299,8 @@ final class FlagClearingRaceConditionTests: XCTestCase {
             
             let peer = AX25Address(call: "TEST", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             viewModel.setCurrentSession(session)
             
             // Step 1: Send AXDP data (sets flag)
@@ -348,8 +348,8 @@ final class FlagClearingRaceConditionTests: XCTestCase {
             
             let peer = AX25Address(call: "TEST", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             viewModel.setCurrentSession(session)
             
             // Send AXDP data (sets flag)
@@ -387,8 +387,8 @@ final class MultiFragmentMessageIntegrityTests: XCTestCase {
             
             let peer = AX25Address(call: "TEST", ssid: 1)
             let session = sessionManager.session(for: peer)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Create a large message (like Lorem Ipsum from the bug report)
             let longText = """
@@ -440,8 +440,8 @@ final class MultiFragmentMessageIntegrityTests: XCTestCase {
             
             // Connect all sessions
             for session in sessions {
-                session.stateMachine.handle(event: .connectRequest)
-                session.stateMachine.handle(event: .receivedUA)
+                _ = session.stateMachine.handle(event: .connectRequest)
+                _ = session.stateMachine.handle(event: .receivedUA)
             }
             
             // Each station sends a complete message
@@ -478,8 +478,8 @@ final class MultiFragmentMessageIntegrityTests: XCTestCase {
             // Station sends AXDP, then plain text, then AXDP again
             let station = AX25Address(call: "PEER", ssid: 1)
             let session = sessionManager.session(for: station)
-            session.stateMachine.handle(event: .connectRequest)
-            session.stateMachine.handle(event: .receivedUA)
+            _ = session.stateMachine.handle(event: .connectRequest)
+            _ = session.stateMachine.handle(event: .receivedUA)
             
             // Round 1: AXDP message
             let axdpMessage1 = createAXDPChatMessage(text: "AXDP Message 1")

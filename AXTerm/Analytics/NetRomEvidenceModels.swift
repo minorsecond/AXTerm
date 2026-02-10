@@ -8,7 +8,7 @@
 import Foundation
 
 /// Configuration for passive NET/ROM inference.
-struct NetRomInferenceConfig {
+struct NetRomInferenceConfig: Sendable {
     let evidenceWindowSeconds: TimeInterval
     let inferredRouteHalfLifeSeconds: TimeInterval
     let inferredBaseQuality: Int

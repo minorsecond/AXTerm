@@ -167,8 +167,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private var aggregationCache: [AggregationCacheKey: AnalyticsAggregationResult] = [:]
     private var graphCache: [GraphCacheKey: GraphModel] = [:]
     private var classifiedGraphCache: [GraphCacheKey: ClassifiedGraphModel] = [:]
-    private let aggregationScheduler: CoalescingScheduler
-    private let graphScheduler: CoalescingScheduler
+    nonisolated private let aggregationScheduler: CoalescingScheduler
+    nonisolated private let graphScheduler: CoalescingScheduler
     private var aggregationTask: Task<Void, Never>?
     private var graphTask: Task<Void, Never>?
     private let telemetryLimiter = TelemetryRateLimiter(minimumInterval: 1.0)
@@ -811,7 +811,6 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
 
         // Recalculate degrees based on filtered edges
-        let nodeIDs = Set(classifiedModel.nodes.map { $0.id })
         let updatedNodes = classifiedModel.nodes.map { node in
             let neighbors = adjacency[node.id] ?? []
             return NetworkGraphNode(

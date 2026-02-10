@@ -78,7 +78,7 @@ final class NetRomHistoricalReplayTests: XCTestCase {
         // Invoke `integration.replayHistorical(after: timestamp)` or equivalent.
         // ASSERT that only packets within the recent time window are replayed.
 
-        let integration = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
+        let integration = NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
         let now = Date(timeIntervalSince1970: 1_700_200_000)
 
         // Simulate packet store with old and new packets
@@ -102,11 +102,11 @@ final class NetRomHistoricalReplayTests: XCTestCase {
         let packetsToReplay = (oldPackets + recentPackets).filter { $0.timestamp >= timeWindowStart }
 
         for packet in packetsToReplay {
-            await integration.observePacket(packet, timestamp: packet.timestamp)
+            integration.observePacket(packet, timestamp: packet.timestamp)
         }
 
         // Verify only recent packets contributed to state
-        let neighbors = await integration.currentNeighbors()
+        let neighbors = integration.currentNeighbors()
 
         XCTAssertTrue(neighbors.contains { $0.call == "W0RECENT" }, "Recent packets should contribute to neighbors")
         XCTAssertFalse(neighbors.contains { $0.call == "W0OLD" }, "Old packets outside time window should not contribute")
@@ -118,7 +118,7 @@ final class NetRomHistoricalReplayTests: XCTestCase {
         // ASSERT that replay only consumes up to maxPackets and that no state
         // depends on truncated older packets.
 
-        let integration = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
+        let integration = NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
         let now = Date(timeIntervalSince1970: 1_700_210_000)
 
         // Generate many packets (use smaller number for test performance)
@@ -137,11 +137,11 @@ final class NetRomHistoricalReplayTests: XCTestCase {
         let limitedPackets = Array(packets.suffix(maxPackets))
 
         for packet in limitedPackets {
-            await integration.observePacket(packet, timestamp: packet.timestamp)
+            integration.observePacket(packet, timestamp: packet.timestamp)
         }
 
         // Export link stats to count how many links were established
-        let linkStats = await integration.exportLinkStats()
+        let linkStats = integration.exportLinkStats()
 
         // Should have at most maxPackets unique links (one per packet in this test)
         XCTAssertLessThanOrEqual(linkStats.count, maxPackets, "Should not exceed maxPackets links")
@@ -159,23 +159,23 @@ final class NetRomHistoricalReplayTests: XCTestCase {
         // Load snapshot.
         // ASSERT integration state after load is equal to original pre-save state.
 
-        let integration = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
+        let integration = NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
         let now = Date(timeIntervalSince1970: 1_700_220_000)
 
         // Feed packets 1..50
         for i in 1...50 {
             let packet = makePacket(id: Int64(i), from: "W0ABC", to: "N0CALL", timestamp: now.addingTimeInterval(Double(i)))
-            await integration.observePacket(packet, timestamp: packet.timestamp)
+            integration.observePacket(packet, timestamp: packet.timestamp)
         }
 
         // Capture pre-save state
-        let preSaveNeighbors = await integration.currentNeighbors()
-        let preSaveLinkQuality = await integration.linkQuality(from: "W0ABC", to: "N0CALL")
+        let preSaveNeighbors = integration.currentNeighbors()
+        let preSaveLinkQuality = integration.linkQuality(from: "W0ABC", to: "N0CALL")
 
         // Export for persistence
-        let neighbors = await integration.currentNeighbors()
-        let routes = await integration.currentRoutes()
-        let linkStats = await integration.exportLinkStats()
+        let neighbors = integration.currentNeighbors()
+        let routes = integration.currentRoutes()
+        let linkStats = integration.exportLinkStats()
 
         // Save snapshot with high-water mark = 50
         try persistence.saveSnapshot(
@@ -192,16 +192,16 @@ final class NetRomHistoricalReplayTests: XCTestCase {
         XCTAssertEqual(meta?.lastPacketID, 50, "High-water mark should be 50")
 
         // Create new integration and load snapshot
-        let newIntegration = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
+        let newIntegration = NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
 
         // Load and restore state
         let loadedNeighbors = try persistence.loadNeighbors()
         let loadedLinkStats = try persistence.loadLinkStats()
 
-        await newIntegration.importLinkStats(loadedLinkStats)
+        newIntegration.importLinkStats(loadedLinkStats)
 
         // Verify post-load state matches pre-save
-        let postLoadLinkQuality = await newIntegration.linkQuality(from: "W0ABC", to: "N0CALL")
+        let postLoadLinkQuality = newIntegration.linkQuality(from: "W0ABC", to: "N0CALL")
 
         XCTAssertEqual(preSaveLinkQuality, postLoadLinkQuality, "Link quality should match after load")
     }
@@ -219,39 +219,39 @@ final class NetRomHistoricalReplayTests: XCTestCase {
         }
 
         // === Path A: Full recompute from scratch ===
-        let fullIntegration = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
+        let fullIntegration = NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
 
         for packet in allPackets {
-            await fullIntegration.observePacket(packet, timestamp: packet.timestamp)
+            fullIntegration.observePacket(packet, timestamp: packet.timestamp)
         }
 
-        let fullNeighbors = await fullIntegration.currentNeighbors()
-        let fullLinkQuality = await fullIntegration.linkQuality(from: "W0ABC", to: "N0CALL")
-        let fullLinkStats = await fullIntegration.exportLinkStats()
+        let fullNeighbors = fullIntegration.currentNeighbors()
+        let fullLinkQuality = fullIntegration.linkQuality(from: "W0ABC", to: "N0CALL")
+        let fullLinkStats = fullIntegration.exportLinkStats()
 
         // === Path B: Load snapshot at N=50, then replay 51..100 ===
-        let snapshotIntegration = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
+        let snapshotIntegration = NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
 
         // First feed packets 1..50
         for packet in allPackets.prefix(50) {
-            await snapshotIntegration.observePacket(packet, timestamp: packet.timestamp)
+            snapshotIntegration.observePacket(packet, timestamp: packet.timestamp)
         }
 
         // Export and save snapshot at packet 50
-        let snapshotLinkStats = await snapshotIntegration.exportLinkStats()
+        let snapshotLinkStats = snapshotIntegration.exportLinkStats()
 
         // Create new integration and import snapshot
-        let incrementalIntegration = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
-        await incrementalIntegration.importLinkStats(snapshotLinkStats)
+        let incrementalIntegration = NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
+        incrementalIntegration.importLinkStats(snapshotLinkStats)
 
         // Replay packets 51..100
         for packet in allPackets.suffix(50) {
-            await incrementalIntegration.observePacket(packet, timestamp: packet.timestamp)
+            incrementalIntegration.observePacket(packet, timestamp: packet.timestamp)
         }
 
-        let incrementalNeighbors = await incrementalIntegration.currentNeighbors()
-        let incrementalLinkQuality = await incrementalIntegration.linkQuality(from: "W0ABC", to: "N0CALL")
-        let incrementalLinkStats = await incrementalIntegration.exportLinkStats()
+        let incrementalNeighbors = incrementalIntegration.currentNeighbors()
+        let incrementalLinkQuality = incrementalIntegration.linkQuality(from: "W0ABC", to: "N0CALL")
+        let incrementalLinkStats = incrementalIntegration.exportLinkStats()
 
         // === Compare ===
         XCTAssertEqual(fullNeighbors.count, incrementalNeighbors.count, "Neighbor count should match")
@@ -288,7 +288,7 @@ final class NetRomHistoricalReplayTests: XCTestCase {
         XCTAssertFalse(isValid, "Stale snapshot should be invalid")
 
         // Since snapshot is invalid, start fresh and replay recent history
-        let integration = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
+        let integration = NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
 
         // Simulate "historical replay" of recent packets (last 30 minutes)
         let historicalStart = now.addingTimeInterval(-1800)
@@ -297,7 +297,7 @@ final class NetRomHistoricalReplayTests: XCTestCase {
         }
 
         for packet in historicalPackets {
-            await integration.observePacket(packet, timestamp: packet.timestamp)
+            integration.observePacket(packet, timestamp: packet.timestamp)
         }
 
         // Simulate "live" packets
@@ -306,27 +306,27 @@ final class NetRomHistoricalReplayTests: XCTestCase {
         }
 
         for packet in livePackets {
-            await integration.observePacket(packet, timestamp: packet.timestamp)
+            integration.observePacket(packet, timestamp: packet.timestamp)
         }
 
         // Verify final state
-        let neighbors = await integration.currentNeighbors()
+        let neighbors = integration.currentNeighbors()
 
         XCTAssertTrue(neighbors.contains { $0.call == "W0HISTORY" }, "Historical packets should contribute to state")
         XCTAssertTrue(neighbors.contains { $0.call == "W0LIVE" }, "Live packets should contribute to state")
         XCTAssertFalse(neighbors.contains { $0.call == "W0STALE" }, "Stale snapshot data should not be present")
 
         // Verify determinism by running again
-        let integration2 = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
+        let integration2 = NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
 
         for packet in historicalPackets {
-            await integration2.observePacket(packet, timestamp: packet.timestamp)
+            integration2.observePacket(packet, timestamp: packet.timestamp)
         }
         for packet in livePackets {
-            await integration2.observePacket(packet, timestamp: packet.timestamp)
+            integration2.observePacket(packet, timestamp: packet.timestamp)
         }
 
-        let neighbors2 = await integration2.currentNeighbors()
+        let neighbors2 = integration2.currentNeighbors()
 
         XCTAssertEqual(neighbors.map { $0.call }.sorted(), neighbors2.map { $0.call }.sorted(), "Results should be deterministic")
     }
@@ -336,7 +336,7 @@ final class NetRomHistoricalReplayTests: XCTestCase {
     func testReplayHistoricalAfterTimestamp_API() async throws {
         // Test the replayHistorical(after:) pattern works correctly
 
-        let integration = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
+        let integration = NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
         let now = Date(timeIntervalSince1970: 1_700_250_000)
 
         // Create a mock packet store with packets spanning a time range
@@ -356,16 +356,16 @@ final class NetRomHistoricalReplayTests: XCTestCase {
         XCTAssertGreaterThan(filteredPackets.count, 0, "Should have some packets after cutoff")
 
         for packet in filteredPackets {
-            await integration.observePacket(packet, timestamp: packet.timestamp)
+            integration.observePacket(packet, timestamp: packet.timestamp)
         }
 
-        let linkStats = await integration.exportLinkStats()
+        let linkStats = integration.exportLinkStats()
 
         // Should have processed the filtered packets
         XCTAssertGreaterThan(linkStats.count, 0, "Filtered packets should be processed")
 
         // Verify the link quality reflects the processed packets
-        let quality = await integration.linkQuality(from: "W0ABC", to: "N0CALL")
+        let quality = integration.linkQuality(from: "W0ABC", to: "N0CALL")
         XCTAssertGreaterThan(quality, 0, "Link quality should be established")
     }
 
@@ -400,11 +400,11 @@ final class NetRomHistoricalReplayTests: XCTestCase {
             let linkStats = try persistence.loadLinkStats()
 
             // Create integration and import
-            let integration = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
-            await integration.importLinkStats(linkStats)
+            let integration = NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
+            integration.importLinkStats(linkStats)
 
             // Verify imported state
-            let importedQuality = await integration.linkQuality(from: "W0SNAP", to: "N0CALL")
+            let importedQuality = integration.linkQuality(from: "W0SNAP", to: "N0CALL")
             XCTAssertEqual(importedQuality, 220, "Imported link quality should match snapshot")
 
             // Simulate replaying packets after lastPacketID
@@ -413,11 +413,11 @@ final class NetRomHistoricalReplayTests: XCTestCase {
             }
 
             for packet in newPackets {
-                await integration.observePacket(packet, timestamp: packet.timestamp)
+                integration.observePacket(packet, timestamp: packet.timestamp)
             }
 
             // Verify new packets were processed
-            let newQuality = await integration.linkQuality(from: "W0NEW", to: "N0CALL")
+            let newQuality = integration.linkQuality(from: "W0NEW", to: "N0CALL")
             XCTAssertGreaterThan(newQuality, 0, "New packets should be processed after snapshot load")
         }
     }
@@ -425,12 +425,12 @@ final class NetRomHistoricalReplayTests: XCTestCase {
     // MARK: - Edge Cases
 
     func testReplayEmptyPacketStore_ProducesEmptyState() async throws {
-        let integration = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
+        let integration = NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
 
         // No packets to replay
-        let neighbors = await integration.currentNeighbors()
-        let routes = await integration.currentRoutes()
-        let linkStats = await integration.exportLinkStats()
+        let neighbors = integration.currentNeighbors()
+        let routes = integration.currentRoutes()
+        let linkStats = integration.exportLinkStats()
 
         XCTAssertTrue(neighbors.isEmpty)
         XCTAssertTrue(routes.isEmpty)
@@ -438,7 +438,7 @@ final class NetRomHistoricalReplayTests: XCTestCase {
     }
 
     func testReplayWithAllPacketsOlderThanWindow_ProducesEmptyState() async throws {
-        let integration = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
+        let integration = NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
         let now = Date(timeIntervalSince1970: 1_700_270_000)
 
         // All packets are old
@@ -455,10 +455,10 @@ final class NetRomHistoricalReplayTests: XCTestCase {
         XCTAssertTrue(recentPackets.isEmpty, "All packets should be filtered out")
 
         for packet in recentPackets {
-            await integration.observePacket(packet, timestamp: packet.timestamp)
+            integration.observePacket(packet, timestamp: packet.timestamp)
         }
 
-        let neighbors = await integration.currentNeighbors()
+        let neighbors = integration.currentNeighbors()
         XCTAssertTrue(neighbors.isEmpty, "No recent packets should mean empty state")
     }
 
@@ -475,18 +475,18 @@ final class NetRomHistoricalReplayTests: XCTestCase {
         }
 
         // Run 1: Process in order
-        let integration1 = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
+        let integration1 = NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
         for packet in packets {
-            await integration1.observePacket(packet, timestamp: packet.timestamp)
+            integration1.observePacket(packet, timestamp: packet.timestamp)
         }
-        let quality1 = await integration1.linkQuality(from: "W0ABC", to: "N0CALL")
+        let quality1 = integration1.linkQuality(from: "W0ABC", to: "N0CALL")
 
         // Run 2: Process same packets in order (simulate replay)
-        let integration2 = await NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
+        let integration2 = NetRomIntegration(localCallsign: "N0CALL", mode: .hybrid)
         for packet in packets {
-            await integration2.observePacket(packet, timestamp: packet.timestamp)
+            integration2.observePacket(packet, timestamp: packet.timestamp)
         }
-        let quality2 = await integration2.linkQuality(from: "W0ABC", to: "N0CALL")
+        let quality2 = integration2.linkQuality(from: "W0ABC", to: "N0CALL")
 
         XCTAssertEqual(quality1, quality2, "Same packets in same order should produce identical quality")
     }

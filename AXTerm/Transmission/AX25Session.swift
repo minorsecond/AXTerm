@@ -583,11 +583,6 @@ struct AX25StateMachine: Sendable {
 
     private mutating func handleIFrame(ns: Int, nr: Int, pf: Bool, payload: Data) -> [AX25SessionAction] {
         var actions: [AX25SessionAction] = []
-        let vr = sequenceState.vr
-        let modulo = config.modulo
-        let windowHigh = (vr + config.windowSize - 1) % modulo
-
-
 
         // Process N(R) - acknowledge our sent frames
         let vaBeforeIFrameAck = sequenceState.va
@@ -645,14 +640,12 @@ struct AX25StateMachine: Sendable {
         rejSent = false
 
         // Deliver the current frame
-        let oldVR = sequenceState.vr
         sequenceState.incrementVR()
 
         actions.append(.deliverData(payload))
 
         // Check for consecutive buffered frames and deliver them
         while let buffered = receiveBuffer.removeValue(forKey: sequenceState.vr) {
-            let bufferedOldVR = sequenceState.vr
             sequenceState.incrementVR()
 
             actions.append(.deliverData(buffered.payload))

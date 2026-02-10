@@ -11,6 +11,6 @@ protocol ClockProviding {
     var now: Date { get }
 }
 
-struct SystemClock: ClockProviding {
+struct SystemClock: ClockProviding, Sendable {
     var now: Date { Date() }
 }

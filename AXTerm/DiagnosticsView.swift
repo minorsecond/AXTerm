@@ -48,7 +48,7 @@ final class DiagnosticsViewModel: ObservableObject {
     }
 
     func exportDiagnostics() {
-        makeReportJSON(limit: exportLimit) { [weak self] json in
+        makeReportJSON(limit: exportLimit) { json in
             guard let json else { return }
             let panel = NSSavePanel()
             panel.allowedContentTypes = [.json]

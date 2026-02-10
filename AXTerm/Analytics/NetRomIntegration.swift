@@ -437,12 +437,8 @@ final class NetRomIntegration {
     func reset(localCallsign: String? = nil) {
         let callsign = localCallsign ?? self.localCallsign
 
-        // Create fresh router
-        let newRouter = NetRomRouter(localCallsign: callsign, config: routerConfig)
-
-        // Replace the router reference - this requires making router a var
-        // Since router is let, we need a different approach
-        // We'll clear the existing data by importing empty arrays
+        // Clear existing router data by importing empty arrays
+        // (router is `let`, so we reset in-place rather than replacing)
         router.importNeighbors([])
         router.importRoutes([])
 

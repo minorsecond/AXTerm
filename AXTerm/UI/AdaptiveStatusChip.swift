@@ -247,9 +247,7 @@ fileprivate struct AdaptiveConfigureButton14: View {
             SettingsRouter.shared.selectedTab = .transmission
             SettingsRouter.shared.highlightSection = .linkLayer
 
-            Task {
-                try? await openSettings()
-            }
+            openSettings()
         }
         .buttonStyle(.bordered)
         .controlSize(.small)

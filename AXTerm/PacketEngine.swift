@@ -808,7 +808,7 @@ final class PacketEngine: ObservableObject {
             TxLog.debug(.axdp, "I-frame received at wire", [
                 "from": packet.fromDisplay,
                 "to": packet.toDisplay,
-                "pid": packet.pid,
+                "pid": packet.pid as Any,
                 "infoLen": packet.info.count,
                 "hasMagic": AXDP.hasMagic(packet.info),
                 "prefixHex": packet.info.prefix(8).map { String(format: "%02X", $0) }.joined()

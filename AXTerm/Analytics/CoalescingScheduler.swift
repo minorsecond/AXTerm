@@ -14,7 +14,7 @@ import Foundation
 /// the next, and clears the reference so teardown never races with an executing task.
 /// Scheduling and cancellation are thread-safe and do not capture `self` strongly,
 /// so the scheduler can be dropped as soon as work is enqueued.
-final class CoalescingScheduler {
+final class CoalescingScheduler: @unchecked Sendable {
     private let delay: Duration
     private var task: Task<Void, Never>?
     private let lock = NSLock()

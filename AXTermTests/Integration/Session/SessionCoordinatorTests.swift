@@ -68,8 +68,8 @@ final class SessionCoordinatorTests: XCTestCase {
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
         // Force session to connected state
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         XCTAssertEqual(session.state, .connected)
 
@@ -899,8 +899,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
         XCTAssertEqual(session.state, .connected)
 
         // Connect — no probe sent yet
@@ -927,8 +927,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
 
@@ -975,8 +975,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         // Connect and trigger text probe via first inbound I-frame
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
@@ -1021,8 +1021,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .unknown)
@@ -1045,8 +1045,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .unknown)
@@ -1071,8 +1071,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "LEGACY", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         // First connection: probe sent, times out → marked not-supported
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
@@ -1094,8 +1094,8 @@ final class SessionCoordinatorTests: XCTestCase {
         // unknown peers get a text probe (already tested above).
         // This test mainly verifies the code path doesn't crash.
         let session2 = coordinator2.sessionManager.session(for: peer)
-        session2.stateMachine.handle(event: .connectRequest)
-        session2.stateMachine.handle(event: .receivedUA)
+        _ = session2.stateMachine.handle(event: .connectRequest)
+        _ = session2.stateMachine.handle(event: .receivedUA)
         coordinator2.sessionManager.onSessionStateChanged?(session2, .connecting, .connected)
 
         // Unknown peer on fresh coordinator → should schedule text probe
@@ -1114,8 +1114,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .unknown)
@@ -1136,8 +1136,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
 
@@ -1176,8 +1176,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         // Establish capabilities via text probe → PONG
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
@@ -1214,8 +1214,8 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
 
         // Establish capabilities
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
@@ -1254,7 +1254,7 @@ final class SessionCoordinatorTests: XCTestCase {
         
         // Connect a session from K0EPI-1
         let session = coordinator.sessionManager.session(for: from)
-        session.stateMachine.handle(event: .receivedSABM)
+        _ = session.stateMachine.handle(event: .receivedSABM)
         XCTAssertEqual(session.state, .connected)
         
         var receivedData: Data?
@@ -1405,13 +1405,13 @@ final class SessionCoordinatorTests: XCTestCase {
         // Create and connect a session
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .receivedUA)
         XCTAssertEqual(session.state, .connected)
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
 
         // Drive actual state machine to disconnected so hasActiveSessions reflects reality
-        session.stateMachine.handle(event: .receivedDISC)
+        _ = session.stateMachine.handle(event: .receivedDISC)
         XCTAssertEqual(session.state, .disconnected)
         coordinator.sessionManager.onSessionStateChanged?(session, .connected, .disconnected)
 
@@ -1437,15 +1437,15 @@ final class SessionCoordinatorTests: XCTestCase {
         let peer2 = AX25Address(call: "PEER", ssid: 2)
         let session1 = coordinator.sessionManager.session(for: peer1)
         let session2 = coordinator.sessionManager.session(for: peer2)
-        session1.stateMachine.handle(event: .connectRequest)
-        session1.stateMachine.handle(event: .receivedUA)
-        session2.stateMachine.handle(event: .connectRequest)
-        session2.stateMachine.handle(event: .receivedUA)
+        _ = session1.stateMachine.handle(event: .connectRequest)
+        _ = session1.stateMachine.handle(event: .receivedUA)
+        _ = session2.stateMachine.handle(event: .connectRequest)
+        _ = session2.stateMachine.handle(event: .receivedUA)
         coordinator.sessionManager.onSessionStateChanged?(session1, .connecting, .connected)
         coordinator.sessionManager.onSessionStateChanged?(session2, .connecting, .connected)
 
         // Drive session1 state machine to disconnected, but session2 stays connected
-        session1.stateMachine.handle(event: .receivedDISC)
+        _ = session1.stateMachine.handle(event: .receivedDISC)
         XCTAssertEqual(session1.state, .disconnected)
         XCTAssertEqual(session2.state, .connected)
         coordinator.sessionManager.onSessionStateChanged?(session1, .connected, .disconnected)
@@ -1464,10 +1464,10 @@ final class SessionCoordinatorTests: XCTestCase {
 
         let peer = AX25Address(call: "PEER", ssid: 1)
         let session = coordinator.sessionManager.session(for: peer)
-        session.stateMachine.handle(event: .connectRequest)
+        _ = session.stateMachine.handle(event: .connectRequest)
         XCTAssertTrue(coordinator.hasActiveSessions, "Connecting session should count as active")
 
-        session.stateMachine.handle(event: .receivedUA)
+        _ = session.stateMachine.handle(event: .receivedUA)
         XCTAssertTrue(coordinator.hasActiveSessions, "Connected session should count as active")
     }
 
@@ -1492,7 +1492,7 @@ final class SessionCoordinatorTests: XCTestCase {
         
         // Connect a session
         let session = coordinator.sessionManager.session(for: from)
-        session.stateMachine.handle(event: .receivedSABM)
+        _ = session.stateMachine.handle(event: .receivedSABM)
         XCTAssertEqual(session.state, .connected)
         
         var receivedData: Data?

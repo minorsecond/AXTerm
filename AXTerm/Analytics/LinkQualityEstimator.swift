@@ -30,7 +30,7 @@
 import Foundation
 
 /// Configuration for link quality estimation.
-struct LinkQualityConfig: Equatable {
+struct LinkQualityConfig: Equatable, Sendable {
     /// Capture source type for ingestion semantics.
     let source: CaptureSourceType
 
