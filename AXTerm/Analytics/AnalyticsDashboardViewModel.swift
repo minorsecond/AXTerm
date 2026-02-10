@@ -510,9 +510,6 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func bindPackets(packetScheduler: RunLoop) {
         packetSubject
-            .removeDuplicates(by: { lhs, rhs in
-                lhs.count == rhs.count && lhs.last?.id == rhs.last?.id
-            })
             .sink { [weak self] packets in
                 self?.packets = packets
                 guard self?.autoUpdateEnabled == true else { return }
