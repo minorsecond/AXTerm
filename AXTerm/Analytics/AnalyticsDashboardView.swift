@@ -108,6 +108,9 @@ struct AnalyticsDashboardView: View {
         }
         .onChange(of: viewModel.viewState.selectedNodeID) { _, newValue in
             packetEngine.selectedStationCall = newValue
+            if newValue == nil {
+                sidebarTab = .overview
+            }
         }
         .onPreferenceChange(FloatingControlBarHeightPreferenceKey.self) { value in
             // Keep height stable and avoid tiny oscillations from fractional layout updates.
