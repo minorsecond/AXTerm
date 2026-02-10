@@ -877,8 +877,9 @@ final class NetRomRoutesViewModel: ObservableObject {
     private func startAutoRefresh() {
         refresh()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
             Task { @MainActor in
-                self?.refresh()
+                self.refresh()
             }
         }
     }

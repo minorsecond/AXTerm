@@ -304,9 +304,9 @@ final class PacketEngine: ObservableObject {
         let hostCopy = host
         let portCopy = port
         connection?.stateUpdateHandler = { [weak self] state in
-            guard let self = self else { return }
-            Task { @MainActor [weak self] in
-                self?.handleConnectionState(state, host: hostCopy, port: portCopy)
+            guard let self else { return }
+            Task { @MainActor in
+                self.handleConnectionState(state, host: hostCopy, port: portCopy)
             }
         }
 
@@ -393,11 +393,12 @@ final class PacketEngine: ObservableObject {
 
         // Send via connection
         conn.send(content: kissData, completion: .contentProcessed { [weak self] error in
+            guard let self else { return }
             Task { @MainActor in
                 if let error = error {
                     TxLog.kissSendComplete(frameId: frame.id, success: false, error: error)
-                    self?.addErrorLine("Send failed: \(error.localizedDescription)", category: .transmission)
-                    self?.eventLogger?.log(
+                    self.addErrorLine("Send failed: \(error.localizedDescription)", category: .transmission)
+                    self.eventLogger?.log(
                         level: .error,
                         category: .transmission,
                         message: "Send failed: \(error.localizedDescription)",
@@ -411,10 +412,10 @@ final class PacketEngine: ObservableObject {
                         "dest": frame.destination.display,
                         "size": kissData.count
                     ])
-                    self?.addSystemLine("Frame sent successfully", category: .transmission)
+                    self.addSystemLine("Frame sent successfully", category: .transmission)
                     // Notify for sender progress highlighting (I-frames with AXDP PID)
                     if frame.frameType.lowercased() == "i", frame.pid == 0xF0 {
-                        self?.onUserFrameTransmitted?(frame.payload.count)
+                        self.onUserFrameTransmitted?(frame.payload.count)
                     }
                     completion?(.success(()))
                 }
@@ -456,9 +457,8 @@ final class PacketEngine: ObservableObject {
 
     private func startReceiving() {
         connection?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] content, _, isComplete, error in
-            guard let self = self else { return }
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
+            guard let self else { return }
+            Task { @MainActor in
 
                 if let data = content, !data.isEmpty {
                     self.handleIncomingData(data)
@@ -1382,12 +1382,13 @@ final class PacketEngine: ObservableObject {
             withTimeInterval: NetRomSnapshotConfig.saveIntervalSeconds,
             repeats: true
         ) { [weak self] _ in
+            guard let self else { return }
             Task { @MainActor in
-                self?.saveNetRomSnapshot()
+                self.saveNetRomSnapshot()
                 // Prune old entries from persistence
-                self?.pruneOldNetRomEntries()
+                self.pruneOldNetRomEntries()
                 // Purge stale routes and neighbors from in-memory integration
-                self?.netRomIntegration?.purgeStaleData(currentDate: Date())
+                self.netRomIntegration?.purgeStaleData(currentDate: Date())
                 #if DEBUG
                 print("[NETROM:ENGINE] Purged stale data at \(Date())")
                 #endif

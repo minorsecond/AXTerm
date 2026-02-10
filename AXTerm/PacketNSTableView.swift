@@ -262,8 +262,9 @@ extension PacketNSTableView {
                 scrollToBottomToken: scrollToBottomToken
             )
             rowUpdateScheduler.schedule { [weak self] in
+                guard let self else { return }
                 await MainActor.run {
-                    self?.applyPendingUpdate()
+                    self.applyPendingUpdate()
                 }
             }
         }
@@ -624,8 +625,8 @@ extension PacketNSTableView {
 
         private func scheduleColumnSizing(for tableView: NSTableView) {
             columnSizingScheduler.schedule { [weak self, weak tableView] in
+                guard let self, let tableView else { return }
                 await MainActor.run {
-                    guard let self, let tableView else { return }
                     PacketNSTableView.sizeColumnsToFitContent(in: tableView, rows: self.rows)
                     PacketNSTableView.expandInfoColumnToFill(in: tableView)
                 }
