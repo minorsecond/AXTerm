@@ -317,9 +317,15 @@ struct AnalyticsDashboardView: View {
 
                 // Legend
                 HStack(spacing: 16) {
-                    LegendItem(color: .systemPurple, label: "My Node")
-                    LegendItem(color: .systemOrange, label: "Routing Node")
-                    LegendItem(color: .secondaryLabelColor, label: "Station")
+                    if showsMyNodeLegend {
+                        LegendItem(color: .systemPurple, label: "My Node")
+                    }
+                    if showsRoutingNodeLegend {
+                        LegendItem(color: .systemOrange, label: "Routing Node")
+                    }
+                    if showsStationLegend {
+                        LegendItem(color: .secondaryLabelColor, label: "Station")
+                    }
                     
                     Spacer()
                     
@@ -495,6 +501,45 @@ extension AnalyticsDashboardView {
 
     private var chartColumns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: AnalyticsStyle.Layout.cardSpacing), count: AnalyticsStyle.Layout.chartColumns)
+    }
+
+    private var visibleGraphNodesForLegend: [NetworkGraphNode] {
+        let nodes = viewModel.viewState.graphModel.nodes
+        let visibleNodeIDs = viewModel.filteredGraph.visibleNodeIDs
+        guard !visibleNodeIDs.isEmpty else { return nodes }
+        return nodes.filter { visibleNodeIDs.contains($0.id) }
+    }
+
+    private var normalizedMyCallsignForLegend: String {
+        CallsignValidator.normalize(settings.myCallsign)
+    }
+
+    private var showsMyNodeLegend: Bool {
+        guard !normalizedMyCallsignForLegend.isEmpty else { return false }
+        return visibleGraphNodesForLegend.contains { node in
+            nodeMatchesMyCallsign(node.callsign)
+        }
+    }
+
+    private var showsRoutingNodeLegend: Bool {
+        visibleGraphNodesForLegend.contains { $0.isNetRomOfficial }
+    }
+
+    private var showsStationLegend: Bool {
+        visibleGraphNodesForLegend.contains { node in
+            let isMyNode = !normalizedMyCallsignForLegend.isEmpty && nodeMatchesMyCallsign(node.callsign)
+            return !isMyNode && !node.isNetRomOfficial
+        }
+    }
+
+    private func nodeMatchesMyCallsign(_ nodeCallsign: String) -> Bool {
+        let node = CallsignValidator.normalize(nodeCallsign)
+        let mine = normalizedMyCallsignForLegend
+        guard !mine.isEmpty else { return false }
+        if node == mine { return true }
+        if node.hasPrefix("\(mine)-") { return true }
+        if mine.hasPrefix("\(node)-") { return true }
+        return false
     }
 }
 
