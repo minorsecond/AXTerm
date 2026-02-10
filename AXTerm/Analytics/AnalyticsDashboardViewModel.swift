@@ -443,6 +443,14 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.hoveredNodeID = nodeID
     }
 
+    func manualRefresh() {
+        guard isActive else { return }
+        isAggregationLoading = true
+        isGraphLoading = true
+        scheduleAggregation(reason: "manualRefresh")
+        scheduleGraphBuild(reason: "manualRefresh")
+    }
+
     func handleEscape() {
         handleBackgroundClick()
     }

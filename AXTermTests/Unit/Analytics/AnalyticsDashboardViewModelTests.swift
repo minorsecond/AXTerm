@@ -304,9 +304,27 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         try? await Task.sleep(for: .milliseconds(120))
         XCTAssertEqual(viewModel.viewState.summary?.totalPackets ?? 0, 0)
 
-        viewModel.autoUpdateEnabled = true
+        viewModel.manualRefresh()
         await waitFor { viewModel.viewState.summary?.totalPackets == 1 }
         XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 1)
+
+        // Reset to validate that enabling auto-update still resumes live updates.
+        viewModel.autoUpdateEnabled = true
+        let packet1 = makePacket(timestamp: timestamp, from: "SRC1", to: "DST1")
+        let packet2 = makePacket(timestamp: timestamp.addingTimeInterval(1), from: "SRC2", to: "DST2")
+        viewModel.updatePackets([packet1, packet2])
+        await waitFor { (viewModel.viewState.summary?.totalPackets ?? 0) == 2 }
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 2)
+
+        // Keep this explicit transition check as regression coverage.
+        viewModel.autoUpdateEnabled = false
+        let packet3 = makePacket(timestamp: timestamp.addingTimeInterval(2), from: "SRC3", to: "DST3")
+        viewModel.updatePackets([packet1, packet2, packet3])
+        try? await Task.sleep(for: .milliseconds(120))
+        let frozenCount = viewModel.viewState.summary?.totalPackets ?? 0
+        viewModel.autoUpdateEnabled = true
+        await waitFor { (viewModel.viewState.summary?.totalPackets ?? 0) > frozenCount }
+
     }
 
     func testAggregationLoadingFlagClearsAfterActivate() async {

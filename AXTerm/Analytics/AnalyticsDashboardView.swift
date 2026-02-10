@@ -17,6 +17,7 @@ struct AnalyticsDashboardView: View {
     @State private var focusNodeID: String?
     @State private var sidebarTab: GraphSidebarTab = .overview
     @State private var showExportToast = false
+    @State private var showCustomRangePopover = false
 
     init(packetEngine: PacketEngine, settings: AppSettingsStore, viewModel: AnalyticsDashboardViewModel) {
         self.packetEngine = packetEngine
@@ -25,6 +26,7 @@ struct AnalyticsDashboardView: View {
     }
 
     @State private var scrollOffset: CGFloat = 0
+    @State private var controlBarHeight: CGFloat = 56
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
@@ -34,7 +36,7 @@ struct AnalyticsDashboardView: View {
                 VStack(alignment: .leading, spacing: AnalyticsStyle.Layout.sectionSpacing) {
                     // Spacer for the floating header
                     Color.clear
-                        .frame(height: filterSectionHeight)
+                        .frame(height: controlBarHeight + 8)
 
                     summarySection
                     chartsSection
@@ -64,6 +66,12 @@ struct AnalyticsDashboardView: View {
             ) {
                 filterSection
             }
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .preference(key: FloatingControlBarHeightPreferenceKey.self, value: geo.size.height)
+                }
+            )
 
             // Export toast notification
             if showExportToast {
@@ -101,17 +109,18 @@ struct AnalyticsDashboardView: View {
         .onChange(of: viewModel.viewState.selectedNodeID) { _, newValue in
             packetEngine.selectedStationCall = newValue
         }
-    }
-
-    /// Estimated height of the filter section for the spacer
-    private var filterSectionHeight: CGFloat {
-        viewModel.timeframe == .custom ? 100 : 60
+        .onPreferenceChange(FloatingControlBarHeightPreferenceKey.self) { value in
+            // Keep height stable and avoid tiny oscillations from fractional layout updates.
+            let rounded = ceil(value)
+            if abs(controlBarHeight - rounded) > 1 {
+                controlBarHeight = rounded
+            }
+        }
     }
 
     private var filterSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Main controls row - wraps on narrow windows
-            FlowLayout(spacing: 12) {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .bottom, spacing: 12) {
                 FilterControlGroup(title: "Timeframe") {
                     Picker("Timeframe", selection: $viewModel.timeframe) {
                         ForEach(AnalyticsTimeframe.allCases, id: \.self) { timeframe in
@@ -123,6 +132,29 @@ struct AnalyticsDashboardView: View {
                     .pickerStyle(.segmented)
                     .fixedSize()
                     .controlSize(.small)
+                }
+
+                if viewModel.timeframe == .custom {
+                    Button {
+                        showCustomRangePopover.toggle()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "calendar")
+                            Text("Range")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .popover(isPresented: $showCustomRangePopover, arrowEdge: .bottom) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            DatePicker("Start", selection: $viewModel.customRangeStart, displayedComponents: [.date, .hourAndMinute])
+                                .datePickerStyle(.compact)
+                            DatePicker("End", selection: $viewModel.customRangeEnd, displayedComponents: [.date, .hourAndMinute])
+                                .datePickerStyle(.compact)
+                        }
+                        .padding(12)
+                        .frame(width: 320)
+                    }
                 }
 
                 FilterControlGroup(title: "Bucket") {
@@ -165,12 +197,19 @@ struct AnalyticsDashboardView: View {
                 }
                 .fixedSize()
 
-                Spacer(minLength: 0)
-
                 Toggle("Auto-update", isOn: $viewModel.autoUpdateEnabled)
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .help("Automatically refresh analytics as new packets arrive")
+
+                Button {
+                    viewModel.manualRefresh()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Refresh analytics now")
 
                 Button("Reset") {
                     graphResetToken = UUID()
@@ -178,16 +217,6 @@ struct AnalyticsDashboardView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-            }
-
-            if viewModel.timeframe == .custom {
-                HStack(spacing: 12) {
-                    DatePicker("Start", selection: $viewModel.customRangeStart, displayedComponents: [.date, .hourAndMinute])
-                        .datePickerStyle(.compact)
-                    DatePicker("End", selection: $viewModel.customRangeEnd, displayedComponents: [.date, .hourAndMinute])
-                        .datePickerStyle(.compact)
-                }
-                .font(.caption)
             }
         }
     }
@@ -215,10 +244,6 @@ struct AnalyticsDashboardView: View {
 
     private var chartsSection: some View {
         AnalyticsCard(title: "Charts") {
-            if viewModel.isAggregationLoading {
-                AnalyticsLoadingRow(label: "Updating charts")
-                    .padding(.bottom, 4)
-            }
             LazyVGrid(columns: chartColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
                 ChartCard(title: "Packets over time") {
                     if viewModel.hasLoadedAggregation {
@@ -285,6 +310,24 @@ struct AnalyticsDashboardView: View {
                     } else {
                         ChartLoadingPlaceholder(label: "Loading digipeaters")
                     }
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if viewModel.isAggregationLoading && viewModel.hasLoadedAggregation {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Updating charts")
+                            .font(.caption)
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .padding(.top, 4)
+                    .padding(.leading, 4)
+                    .allowsHitTesting(false)
                 }
             }
         }
@@ -385,23 +428,22 @@ struct AnalyticsDashboardView: View {
                         }
 
                         if viewModel.isGraphLoading && !viewModel.viewState.graphModel.nodes.isEmpty {
-                            VStack {
-                                HStack(spacing: 6) {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                    Text("Updating graph…")
-                                        .font(.caption2)
-                                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                                    Spacer()
+                            Color.clear
+                                .overlay(alignment: .topLeading) {
+                                    HStack(spacing: 6) {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                        Text("Updating graph…")
+                                            .font(.caption2)
+                                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .padding(8)
+                                    .allowsHitTesting(false)
                                 }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(.ultraThinMaterial)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                Spacer()
-                            }
-                            .padding(8)
-                            .allowsHitTesting(false)
                         }
                     }
                     .frame(minHeight: AnalyticsStyle.Layout.graphHeight)
@@ -1428,6 +1470,13 @@ nonisolated private struct FlowLayout: Layout {
 /// Preference key for tracking scroll offset
 nonisolated private struct ScrollOffsetPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+nonisolated private struct FloatingControlBarHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 56
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }
