@@ -22,6 +22,7 @@ import GRDB
 
 @testable import AXTerm
 
+@MainActor
 final class NetRomHistoricalReplayTests: XCTestCase {
     private var dbQueue: DatabaseQueue!
     private var persistence: NetRomPersistence!

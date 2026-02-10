@@ -21,7 +21,9 @@ final class NetRomLinkQualityPersistenceRehydrationTests: XCTestCase {
 
     private var dbQueue: DatabaseQueue!
     private var persistence: NetRomPersistence!
-    private var testClock: Date = Date(timeIntervalSince1970: 1_700_100_000)
+    // nonisolated(unsafe) allows the clock closure passed to LinkQualityEstimator
+    // (which is not @MainActor) to read this property. Safe because tests run sequentially.
+    nonisolated(unsafe) private var testClock: Date = Date(timeIntervalSince1970: 1_700_100_000)
 
     override func setUpWithError() throws {
         try super.setUpWithError()

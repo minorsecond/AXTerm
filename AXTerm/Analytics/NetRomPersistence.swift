@@ -143,7 +143,8 @@ struct OriginIntervalInfo {
 }
 
 /// Persistence layer for NET/ROM routing state.
-final class NetRomPersistence {
+/// Thread-safe: all database access is serialized by GRDB's `DatabaseWriter`.
+final class NetRomPersistence: @unchecked Sendable {
     private let database: DatabaseWriter
     private let config: NetRomPersistenceConfig
     #if DEBUG

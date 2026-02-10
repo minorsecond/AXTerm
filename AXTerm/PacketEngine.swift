@@ -1327,29 +1327,22 @@ final class PacketEngine: ObservableObject {
             return
         }
 
-        Task.detached(priority: .utility) { [weak self] in
-            guard let self else { return }
+        // Gather state on MainActor before moving to background
+        let neighbors = integration.currentNeighbors()
+        let routes = integration.currentRoutes()
+        let linkStats = integration.exportLinkStats()
+        let lastPacketID = Int64(self.packets.count)
 
+        #if DEBUG
+        print("[NETROM:SAVE] Saving snapshot:")
+        print("[NETROM:SAVE]   - Neighbors: \(neighbors.count)")
+        print("[NETROM:SAVE]   - Routes: \(routes.count)")
+        print("[NETROM:SAVE]   - LinkStats: \(linkStats.count)")
+        print("[NETROM:SAVE]   - lastPacketID: \(lastPacketID)")
+        #endif
+
+        Task.detached(priority: .utility) {
             do {
-                // Get current state from integration (on main actor)
-                let neighbors = await MainActor.run { integration.currentNeighbors() }
-                let routes = await MainActor.run { integration.currentRoutes() }
-                let linkStats = await MainActor.run { integration.exportLinkStats() }
-
-                // Generate a stable packet ID for high-water mark
-                let lastPacketID = await MainActor.run { Int64(self.packets.count) }
-
-                #if DEBUG
-                await MainActor.run {
-                    print("[NETROM:SAVE] Saving snapshot:")
-                    print("[NETROM:SAVE]   - Neighbors: \(neighbors.count)")
-                    print("[NETROM:SAVE]   - Routes: \(routes.count)")
-                    print("[NETROM:SAVE]   - LinkStats: \(linkStats.count)")
-                    print("[NETROM:SAVE]   - lastPacketID: \(lastPacketID)")
-                }
-                #endif
-
-                // Save atomically
                 try persistence.saveSnapshot(
                     neighbors: neighbors,
                     routes: routes,
@@ -1359,15 +1352,13 @@ final class PacketEngine: ObservableObject {
                 )
 
                 #if DEBUG
-                await MainActor.run {
-                    print("[NETROM:SAVE] ✓ Snapshot saved successfully")
-                }
+                print("[NETROM:SAVE] ✓ Snapshot saved successfully")
                 #endif
             } catch {
+                #if DEBUG
+                print("[NETROM:SAVE] ❌ Error saving snapshot: \(error)")
+                #endif
                 await MainActor.run {
-                    #if DEBUG
-                    print("[NETROM:SAVE] ❌ Error saving snapshot: \(error)")
-                    #endif
                     SentryManager.shared.capturePersistenceFailure("save netrom snapshot", errorDescription: error.localizedDescription)
                 }
             }
