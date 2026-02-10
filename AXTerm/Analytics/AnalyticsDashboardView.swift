@@ -404,17 +404,21 @@ struct AnalyticsDashboardView: View {
                             resetToken: graphResetToken,
                             focusNodeID: focusNodeID,
                             fitToSelectionRequest: viewModel.fitToSelectionRequest,
+                            fitTargetNodeIDs: viewModel.fitTargetNodeIDs,
                             resetCameraRequest: viewModel.resetCameraRequest,
                             visibleNodeIDs: viewModel.filteredGraph.visibleNodeIDs,
                             onSelect: { nodeID, isShift in
                                 viewModel.handleNodeClick(nodeID, isShift: isShift)
-                                // Switch to Inspector tab when a node is selected
-                                if !isShift {
+                                // Switch to Inspector tab whenever a selection exists (single or multi).
+                                if !viewModel.viewState.selectedNodeIDs.isEmpty {
                                     sidebarTab = .inspector
                                 }
                             },
                             onSelectMany: { nodeIDs, isShift in
                                 viewModel.handleSelectionRect(nodeIDs, isShift: isShift)
+                                if !viewModel.viewState.selectedNodeIDs.isEmpty {
+                                    sidebarTab = .inspector
+                                }
                             },
                             onClearSelection: {
                                 viewModel.handleBackgroundClick()
@@ -468,6 +472,9 @@ struct AnalyticsDashboardView: View {
                         onShowActiveNodes: {
                             let activeIDs = viewModel.activeNodeIDs()
                             viewModel.handleSelectionRect(activeIDs, isShift: false)
+                            if !viewModel.viewState.selectedNodeIDs.isEmpty {
+                                sidebarTab = .inspector
+                            }
                         },
                         onExportSummary: {
                             let summary = viewModel.exportNetworkSummary()
@@ -486,6 +493,7 @@ struct AnalyticsDashboardView: View {
                             }
                         },
                         selectedNodeDetails: viewModel.selectedNodeDetails(),
+                        selectedMultiNodeDetails: viewModel.selectedMultiNodeDetails(),
                         onSetAsAnchor: {
                             viewModel.setSelectedAsAnchor()
                         },

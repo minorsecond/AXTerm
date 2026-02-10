@@ -18,6 +18,7 @@ struct AnalyticsGraphView: View {
     let resetToken: UUID
     let focusNodeID: String?
     let fitToSelectionRequest: UUID?
+    let fitTargetNodeIDs: Set<String>
     let resetCameraRequest: UUID?
     /// When focus mode is enabled, only render nodes in this set. Empty = show all.
     let visibleNodeIDs: Set<String>
@@ -44,22 +45,29 @@ struct AnalyticsGraphView: View {
                     resetToken: resetToken,
                     focusNodeID: focusNodeID,
                     fitToSelectionRequest: fitToSelectionRequest,
+                    fitTargetNodeIDs: fitTargetNodeIDs,
                     resetCameraRequest: resetCameraRequest,
                     visibleNodeIDs: visibleNodeIDs,
                     onSelect: onSelect,
                     onSelectMany: onSelectMany,
                     onClearSelection: onClearSelection,
                     onHover: { nodeID, position in
-                        hoverNodeID = nodeID
-                        hoverPoint = position
+                        DispatchQueue.main.async {
+                            hoverNodeID = nodeID
+                            hoverPoint = position
+                        }
                         onHover(nodeID)
                     },
                     onSelectionRect: { rect in
-                        selectionRect = rect
+                        DispatchQueue.main.async {
+                            selectionRect = rect
+                        }
                     },
                     onFocusHandled: onFocusHandled,
                     onCameraUpdate: { newState in
-                        cameraState = newState
+                        DispatchQueue.main.async {
+                            cameraState = newState
+                        }
                     }
                 )
 
@@ -395,6 +403,7 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
     let resetToken: UUID
     let focusNodeID: String?
     let fitToSelectionRequest: UUID?
+    let fitTargetNodeIDs: Set<String>
     let resetCameraRequest: UUID?
     let visibleNodeIDs: Set<String>
     let onSelect: (String, Bool) -> Void
@@ -438,6 +447,7 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
         context.coordinator.handle(focusNodeID: focusNodeID)
         context.coordinator.handle(
             fitToSelectionRequest: fitToSelectionRequest,
+            fitTargetNodeIDs: fitTargetNodeIDs,
             visibleNodeIDs: visibleNodeIDs,
             nodePositions: nodePositions
         )
@@ -746,6 +756,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     /// Always fits to all visible nodes (respecting focus filter), NOT to selection.
     func handle(
         fitToSelectionRequest: UUID?,
+        fitTargetNodeIDs: Set<String>,
         visibleNodeIDs: Set<String>,
         nodePositions: [NodePosition]
     ) {
@@ -753,11 +764,18 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         lastFitToSelectionRequest = fitToSelectionRequest
         guard fitToSelectionRequest != nil, let view else { return }
 
-        // Fit to all visible nodes (respecting focus filter)
-        // If visibleNodeIDs is empty, fall back to all nodes
-        let targetNodeIDs = visibleNodeIDs.isEmpty
-            ? Set(nodePositions.map { $0.id })
-            : visibleNodeIDs
+        // Priority:
+        // 1) Explicit fit targets (e.g., multi-selection extents).
+        // 2) Visible nodes (focus-filtered).
+        // 3) All nodes.
+        let targetNodeIDs: Set<String>
+        if !fitTargetNodeIDs.isEmpty {
+            targetNodeIDs = fitTargetNodeIDs
+        } else if !visibleNodeIDs.isEmpty {
+            targetNodeIDs = visibleNodeIDs
+        } else {
+            targetNodeIDs = Set(nodePositions.map { $0.id })
+        }
 
         guard let bounds = GraphAlgorithms.boundingBox(
             visibleNodeIDs: targetNodeIDs,

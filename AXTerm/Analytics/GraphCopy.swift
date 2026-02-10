@@ -45,6 +45,9 @@ nonisolated enum GraphCopy {
         static let setAsAnchorLabel = "Focus Around This Node"
         static let setAsAnchorTooltip = "Filter the graph to show only nodes within the specified hop distance of this station. Enables focus mode if not already active."
         static let setAsAnchorAccessibility = "Set this node as focus anchor"
+        static let focusSelectionLabel = "Focus Around Selection"
+        static let focusSelectionTooltip = "Keep the current selection and zoom to the selected stations' extents."
+        static let focusSelectionAccessibility = "Focus around selected stations"
 
         static let hopCountLabel = "Hop Distance"
         static let hopCountTooltip = "Number of connection steps from the anchor node to include. Higher values show more of the network."
@@ -338,6 +341,41 @@ nonisolated enum GraphCopy {
 
         static let viaDigipeaterTemplate = "via %@"
         static let lastHeardTemplate = "Last: %@"
+
+        // Multi-selection inspector
+        static let multiSelectionTitle = "Stations Selected"
+        static let multiSelectionListTooltip = "Stations currently included in this selection."
+
+        static let internalLinksLabel = "Links Within Selection"
+        static let internalLinksTooltip = "Observed links between selected stations. Format: observed links / possible links."
+
+        static let selectionDensityLabel = "Selection Density"
+        static let selectionDensityTooltip = "How tightly connected the selected stations are."
+
+        static let packetsWithinSelectionLabel = "Packets Within Selection"
+        static let packetsWithinSelectionTooltip = "Total packets exchanged where both endpoints are selected stations."
+
+        static let bytesWithinSelectionLabel = "Bytes Within Selection"
+        static let bytesWithinSelectionTooltip = "Total payload bytes exchanged where both endpoints are selected stations."
+
+        static let sharedExternalRelaysLabel = "Shared External Relays"
+        static let sharedExternalRelaysTooltip = "Stations outside the selection that connect to two or more selected stations."
+
+        static let interactionTypesHeader = "Interaction Types"
+        static let interactionTypesTooltip = "Breakdown of within-selection links by relationship type."
+
+        static let withinSelectionHeader = "Within Selection"
+        static let withinSelectionTooltip = "Links where both endpoints are selected stations."
+
+        static let sharedConnectionsHeader = "Shared Connections"
+        static let sharedConnectionsTooltip = "Outside stations that connect to multiple selected stations."
+
+        static let selectedStationsHeader = "Selected Stations"
+        static let selectedStationsTooltip = "Per-station summary for each selected station."
+
+        static let selectedStationRowTooltipTemplate = "Packets in: %d, packets out: %d, unique connections: %d."
+        static let sharedConnectionRowTooltipTemplate = "Connected to %d selected stations with %d packets."
+        static let internalLinkRowTooltipTemplate = "Packets: %d, bytes: %d."
     }
 
     // MARK: Station Identity Mode

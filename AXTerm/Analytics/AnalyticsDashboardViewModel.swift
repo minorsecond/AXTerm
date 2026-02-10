@@ -182,6 +182,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     /// Request for camera to fit to selection (consumed by view)
     @Published var fitToSelectionRequest: UUID?
 
+    /// Optional explicit node IDs to fit when a fit request is issued.
+    /// Empty set means "fit to current visible graph" behavior.
+    @Published var fitTargetNodeIDs: Set<String> = []
+
     /// Request for camera to reset (consumed by view)
     @Published var resetCameraRequest: UUID?
 
@@ -213,6 +217,15 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private var isActive = false
     private var latestTimeframePackets: [Packet] = []
     private var hasPrewarmed = false
+    private var lastPinnedRefitTimestamp: Date = .distantPast
+    private var lastPinnedRefitNodeIDs: Set<String> = []
+    private var lastPinnedRefitBounds: RefitBounds?
+
+    /// Gate constants for automatic viewport maintenance.
+    /// Tuned to avoid jarring camera movement while still correcting meaningful drift.
+    private let pinnedRefitCooldown: TimeInterval = 0.45
+    private let pinnedRefitCenterThreshold: Double = 0.02
+    private let pinnedRefitSpanThreshold: Double = 0.03
 
     /// Creates the view model, optionally loading persisted settings.
     ///
@@ -431,6 +444,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         _ = GraphSelectionReducer.reduce(state: &selectionState, action: .clickBackground)
         updateSelectionState()
         // Fit to visible nodes after clearing
+        fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
 
         Telemetry.breadcrumb(
@@ -497,6 +511,88 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             directPeers: directPeers,
             heardDirect: heardDirect,
             seenVia: seenVia
+        )
+    }
+
+    func selectedMultiNodeDetails() -> GraphMultiInspectorDetails? {
+        let selectedIDs = viewState.selectedNodeIDs
+        guard selectedIDs.count >= 2 else { return nil }
+
+        let nodeByID = Dictionary(uniqueKeysWithValues: viewState.graphModel.nodes.map { ($0.id, $0) })
+        let selectedNodes = selectedIDs.compactMap { nodeByID[$0] }.sorted { $0.callsign < $1.callsign }
+        guard selectedNodes.count >= 2 else { return nil }
+
+        let selectedIDSet = Set(selectedNodes.map(\.id))
+        let selectedCount = selectedNodes.count
+        let possibleInternalLinks = selectedCount * (selectedCount - 1) / 2
+
+        let internalLinks = viewState.graphModel.edges
+            .filter { selectedIDSet.contains($0.sourceID) && selectedIDSet.contains($0.targetID) }
+            .map { edge in
+                GraphMultiInspectorDetails.InternalLink(
+                    sourceID: edge.sourceID,
+                    sourceCallsign: nodeByID[edge.sourceID]?.callsign ?? edge.sourceID,
+                    targetID: edge.targetID,
+                    targetCallsign: nodeByID[edge.targetID]?.callsign ?? edge.targetID,
+                    packetCount: edge.weight,
+                    bytes: edge.bytes
+                )
+            }
+            .sorted {
+                if $0.packetCount != $1.packetCount { return $0.packetCount > $1.packetCount }
+                return $0.sortKey < $1.sortKey
+            }
+
+        let internalPacketCount = internalLinks.reduce(0) { $0 + $1.packetCount }
+        let internalByteCount = internalLinks.reduce(0) { $0 + $1.bytes }
+
+        var externalAggregate: [String: GraphMultiInspectorDetails.SharedExternalConnection] = [:]
+        for selectedID in selectedIDSet {
+            guard let relationships = viewState.graphModel.adjacency[selectedID] else { continue }
+            for rel in relationships where !selectedIDSet.contains(rel.id) {
+                let callsign = nodeByID[rel.id]?.callsign ?? rel.id
+                var entry = externalAggregate[rel.id] ?? GraphMultiInspectorDetails.SharedExternalConnection(
+                    id: rel.id,
+                    callsign: callsign,
+                    connectedSelectedIDs: [],
+                    totalPackets: 0
+                )
+                entry.connectedSelectedIDs.insert(selectedID)
+                entry.totalPackets += rel.weight
+                externalAggregate[rel.id] = entry
+            }
+        }
+
+        let sharedExternalConnections = externalAggregate.values
+            .filter { $0.connectedSelectedIDs.count >= 2 }
+            .sorted {
+                if $0.connectedSelectedIDs.count != $1.connectedSelectedIDs.count {
+                    return $0.connectedSelectedIDs.count > $1.connectedSelectedIDs.count
+                }
+                if $0.totalPackets != $1.totalPackets {
+                    return $0.totalPackets > $1.totalPackets
+                }
+                return $0.callsign < $1.callsign
+            }
+
+        // Relationship breakdown uses classified edges so the inspector can explain interaction type.
+        let relationshipBreakdown = Dictionary(
+            grouping: viewState.classifiedGraphModel.edges.filter {
+                selectedIDSet.contains($0.sourceID) && selectedIDSet.contains($0.targetID)
+            },
+            by: \.linkType
+        ).mapValues { edges in
+            edges.reduce(0) { $0 + $1.weight }
+        }
+
+        return GraphMultiInspectorDetails(
+            selectedNodes: selectedNodes,
+            internalLinks: internalLinks,
+            sharedExternalConnections: sharedExternalConnections,
+            relationshipBreakdown: relationshipBreakdown,
+            possibleInternalLinks: possibleInternalLinks,
+            internalPacketCount: internalPacketCount,
+            internalByteCount: internalByteCount
         )
     }
 
@@ -932,6 +1028,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.graphModel = viewModel
         viewState.graphNote = classifiedModel.droppedNodesCount > 0 ? "Showing top \(maxNodes) nodes" : nil
         updateNetworkHealth()
+        // Keep explicit fit targets valid as the graph content changes.
+        fitTargetNodeIDs.formIntersection(Set(viewModel.nodes.map(\.id)))
         // Recompute filtered graph when underlying model changes
         recomputeFilteredGraph()
     }
@@ -1009,6 +1107,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         guard !viewState.classifiedGraphModel.nodes.isEmpty else { return }
         let viewModel = deriveViewGraph(from: viewState.classifiedGraphModel)
         viewState.graphModel = viewModel
+        // Keep explicit fit targets valid as the graph content changes.
+        fitTargetNodeIDs.formIntersection(Set(viewModel.nodes.map(\.id)))
         recomputeFilteredGraph()
     }
 
@@ -1102,6 +1202,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
         // Request a single fit
         focusState.didAutoFitForCurrentAnchor = true
+        fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
 
         Telemetry.breadcrumb(
@@ -1116,16 +1217,35 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         )
     }
 
-    /// Sets the currently selected node as the focus anchor.
-    /// Only works if exactly one node is selected.
+    /// Single selection: sets selected node as focus anchor and fits focused graph.
+    /// Multi-selection: keeps current focus state and fits camera to selected node extents.
     func setSelectedAsAnchor() {
-        guard let selectedID = viewState.selectedNodeID,
+        let selectedIDs = viewState.selectedNodeIDs
+        guard !selectedIDs.isEmpty else { return }
+
+        if selectedIDs.count > 1 {
+            // Multi-select action is view-centric: zoom to selected extents.
+            fitTargetNodeIDs = selectedIDs
+            fitToSelectionRequest = UUID()
+
+            Telemetry.breadcrumb(
+                category: "graph.focusSelection",
+                message: "Focused selected node extents",
+                data: [
+                    "selectedCount": selectedIDs.count
+                ]
+            )
+            return
+        }
+
+        guard let selectedID = selectedIDs.first,
               let selectedNode = viewState.graphModel.nodes.first(where: { $0.id == selectedID }) else { return }
 
         focusState.setAnchor(nodeID: selectedID, displayName: selectedNode.callsign)
         recomputeFilteredGraph()
 
-        // Fit to the new focus area
+        // Fit to the new focus area.
+        fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
         focusState.didAutoFitForCurrentAnchor = true
 
@@ -1145,6 +1265,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         recomputeFilteredGraph()
 
         // Fit to show all nodes
+        fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
 
         Telemetry.breadcrumb(
@@ -1162,6 +1283,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                   let selectedNode = viewState.graphModel.nodes.first(where: { $0.id == selectedID }) {
             focusState.setAnchor(nodeID: selectedID, displayName: selectedNode.callsign)
             recomputeFilteredGraph()
+            fitTargetNodeIDs = []
             fitToSelectionRequest = UUID()
         }
     }
@@ -1184,6 +1306,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     /// Explicit fit-to-view camera action.
     /// Computes bounding box of visible nodes and fits camera.
     func requestFitToView() {
+        fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
     }
 
@@ -1271,6 +1394,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             viewState.nodePositions = cached
             viewState.layoutEnergy = 0
             reconcileSelectionAfterLayout()
+            maintainPinnedSelectionViewportIfNeeded()
             return
         }
 
@@ -1281,6 +1405,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.nodePositions = positions
         viewState.layoutEnergy = 0
         reconcileSelectionAfterLayout()
+        maintainPinnedSelectionViewportIfNeeded()
     }
 
     private func updateSelectionState() {
@@ -1289,12 +1414,72 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.selectedNodeID = selectionState.primarySelectionID
         captureMissingSelectionIfNeeded()
 
+        // If an explicit fit target is active (selection-focus mode), keep it aligned to selection changes.
+        if !fitTargetNodeIDs.isEmpty {
+            fitTargetNodeIDs.formIntersection(viewState.selectedNodeIDs)
+        }
+
         // Reset auto-fit flag when selection changes (unless via selectPrimaryHub)
         // This ensures explicit selection changes don't trigger unwanted auto-fits
         focusState.didAutoFitForCurrentAnchor = false
 
         // Recompute filtered graph when selection changes
         recomputeFilteredGraph()
+    }
+
+    /// When explicit selection-fit mode is active, keep selected nodes in frame across graph/layout updates.
+    private func maintainPinnedSelectionViewportIfNeeded() {
+        if !fitTargetNodeIDs.isEmpty {
+            let positionedIDs = Set(viewState.nodePositions.map(\.id))
+            let validTargets = fitTargetNodeIDs.intersection(positionedIDs)
+            guard !validTargets.isEmpty else { return }
+            requestPinnedRefitIfNeeded(targetNodeIDs: validTargets)
+            return
+        }
+
+        // Anchor-focused mode should also remain framed when graph/layout updates move nodes.
+        if focusState.isFocusEnabled, focusState.anchorNodeID != nil {
+            let targetIDs = filteredGraph.visibleNodeIDs.isEmpty
+                ? Set(viewState.graphModel.nodes.map(\.id))
+                : filteredGraph.visibleNodeIDs
+            requestPinnedRefitIfNeeded(targetNodeIDs: targetIDs)
+        }
+    }
+
+    private func requestPinnedRefitIfNeeded(targetNodeIDs: Set<String>) {
+        guard !targetNodeIDs.isEmpty else { return }
+        guard let bounds = GraphAlgorithms.boundingBox(
+            visibleNodeIDs: targetNodeIDs,
+            positions: viewState.nodePositions
+        ) else { return }
+
+        let now = Date()
+        let cooldownElapsed = now.timeIntervalSince(lastPinnedRefitTimestamp) >= pinnedRefitCooldown
+        let nodeSetChanged = targetNodeIDs != lastPinnedRefitNodeIDs
+        let driftedEnough = shouldRefitForBoundsChange(bounds)
+
+        // Only auto-refit when either:
+        // 1) target set changed, or
+        // 2) bounds drifted meaningfully and cooldown elapsed.
+        if !nodeSetChanged && !(cooldownElapsed && driftedEnough) {
+            return
+        }
+
+        fitTargetNodeIDs = targetNodeIDs
+        fitToSelectionRequest = UUID()
+        lastPinnedRefitTimestamp = now
+        lastPinnedRefitNodeIDs = targetNodeIDs
+        lastPinnedRefitBounds = RefitBounds(bounds)
+    }
+
+    private func shouldRefitForBoundsChange(
+        _ bounds: (minX: Double, minY: Double, maxX: Double, maxY: Double)
+    ) -> Bool {
+        guard let previous = lastPinnedRefitBounds else { return true }
+        let current = RefitBounds(bounds)
+        let centerDelta = hypot(current.centerX - previous.centerX, current.centerY - previous.centerY)
+        let spanDelta = abs(current.maxSpan - previous.maxSpan)
+        return centerDelta >= pinnedRefitCenterThreshold || spanDelta >= pinnedRefitSpanThreshold
     }
 
     private func captureMissingSelectionIfNeeded() {
@@ -1353,6 +1538,18 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 }
 
+private struct RefitBounds {
+    let centerX: Double
+    let centerY: Double
+    let maxSpan: Double
+
+    init(_ bounds: (minX: Double, minY: Double, maxX: Double, maxY: Double)) {
+        centerX = (bounds.minX + bounds.maxX) * 0.5
+        centerY = (bounds.minY + bounds.maxY) * 0.5
+        maxSpan = max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY)
+    }
+}
+
 private struct AggregationCacheKey: Hashable {
     let timeframe: AnalyticsTimeframe
     let bucket: TimeBucket
@@ -1401,6 +1598,43 @@ struct GraphInspectorDetails: Hashable, Sendable {
         self.heardDirect = heardDirect
         self.seenVia = seenVia
     }
+}
+
+struct GraphMultiInspectorDetails: Hashable, Sendable {
+    nonisolated struct InternalLink: Hashable, Sendable, Identifiable {
+        let sourceID: String
+        let sourceCallsign: String
+        let targetID: String
+        let targetCallsign: String
+        let packetCount: Int
+        let bytes: Int
+
+        var id: String { "\(sourceID)->\(targetID)" }
+        var sortKey: String { "\(sourceCallsign)|\(targetCallsign)" }
+    }
+
+    nonisolated struct SharedExternalConnection: Hashable, Sendable, Identifiable {
+        let id: String
+        let callsign: String
+        var connectedSelectedIDs: Set<String>
+        var totalPackets: Int
+    }
+
+    let selectedNodes: [NetworkGraphNode]
+    let internalLinks: [InternalLink]
+    let sharedExternalConnections: [SharedExternalConnection]
+    let relationshipBreakdown: [LinkType: Int]
+    let possibleInternalLinks: Int
+    let internalPacketCount: Int
+    let internalByteCount: Int
+
+    var selectionCount: Int { selectedNodes.count }
+    var internalLinkCount: Int { internalLinks.count }
+    var density: Double {
+        guard possibleInternalLinks > 0 else { return 0 }
+        return Double(internalLinkCount) / Double(possibleInternalLinks)
+    }
+    var externalReachCount: Int { sharedExternalConnections.count }
 }
 
 private enum AnalyticsInputHasher {

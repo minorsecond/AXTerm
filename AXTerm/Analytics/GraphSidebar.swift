@@ -12,6 +12,7 @@
 //  - All copy centralized in GraphCopy.swift
 //
 
+import AppKit
 import SwiftUI
 
 private typealias Copy = GraphCopy
@@ -47,6 +48,7 @@ struct GraphSidebar: View {
 
     // Inspector tab data
     let selectedNodeDetails: GraphInspectorDetails?
+    let selectedMultiNodeDetails: GraphMultiInspectorDetails?
     let onSetAsAnchor: () -> Void
     let onClearSelection: () -> Void
 
@@ -98,14 +100,17 @@ struct GraphSidebar: View {
                 onExportSummary: onExportSummary
             )
             .opacity(selectedTab == .overview ? 1 : 0)
+            .allowsHitTesting(selectedTab == .overview)
 
             // Inspector tab
             SidebarInspectorContent(
                 details: selectedNodeDetails,
+                multiDetails: selectedMultiNodeDetails,
                 onSetAsAnchor: onSetAsAnchor,
                 onClearSelection: onClearSelection
             )
             .opacity(selectedTab == .inspector ? 1 : 0)
+            .allowsHitTesting(selectedTab == .inspector)
         }
     }
 }
@@ -435,11 +440,14 @@ private struct SidebarOverviewContent: View {
 /// Content for the Inspector tab (Node Details)
 private struct SidebarInspectorContent: View {
     let details: GraphInspectorDetails?
+    let multiDetails: GraphMultiInspectorDetails?
     let onSetAsAnchor: () -> Void
     let onClearSelection: () -> Void
 
     var body: some View {
-        if let details {
+        if let multiDetails {
+            multiNodeDetailsView(multiDetails)
+        } else if let details {
             nodeDetailsView(details)
         } else {
             emptyStateView
@@ -447,6 +455,141 @@ private struct SidebarInspectorContent: View {
     }
 
     // MARK: - Node Details
+
+    private func multiNodeDetailsView(_ details: GraphMultiInspectorDetails) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(Copy.Inspector.tabLabel)
+                    .font(.headline)
+
+                HStack(alignment: .firstTextBaseline) {
+                    Text("\(details.selectionCount)")
+                        .font(.title2.weight(.semibold).monospacedDigit())
+                    Text(Copy.Inspector.multiSelectionTitle)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                }
+
+                Text(details.selectedNodes.map(\.callsign).joined(separator: ", "))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 2)
+                    .background(Color.clear)
+                    .contentShape(Rectangle())
+                    .modifier(NativeTooltip(text: Copy.Inspector.multiSelectionListTooltip))
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    InspectorMetricStringRow(
+                        title: Copy.Inspector.internalLinksLabel,
+                        value: "\(details.internalLinkCount)/\(details.possibleInternalLinks)",
+                        tooltip: Copy.Inspector.internalLinksTooltip
+                    )
+                    InspectorMetricStringRow(
+                        title: Copy.Inspector.selectionDensityLabel,
+                        value: String(format: "%.0f%%", details.density * 100),
+                        tooltip: Copy.Inspector.selectionDensityTooltip
+                    )
+                    InspectorMetricStringRow(
+                        title: Copy.Inspector.packetsWithinSelectionLabel,
+                        value: details.internalPacketCount.formatted(),
+                        tooltip: Copy.Inspector.packetsWithinSelectionTooltip
+                    )
+                    InspectorMetricStringRow(
+                        title: Copy.Inspector.bytesWithinSelectionLabel,
+                        value: ByteCountFormatter.string(fromByteCount: Int64(details.internalByteCount), countStyle: .file),
+                        tooltip: Copy.Inspector.bytesWithinSelectionTooltip
+                    )
+                    InspectorMetricStringRow(
+                        title: Copy.Inspector.sharedExternalRelaysLabel,
+                        value: details.externalReachCount.formatted(),
+                        tooltip: Copy.Inspector.sharedExternalRelaysTooltip
+                    )
+                }
+
+                Divider()
+
+                if !details.relationshipBreakdown.isEmpty {
+                    relationshipBreakdownSection(details.relationshipBreakdown)
+                    Divider()
+                }
+
+                if !details.internalLinks.isEmpty {
+                    groupedSectionHeader(
+                        Copy.Inspector.withinSelectionHeader,
+                        systemImage: "link",
+                        tooltip: Copy.Inspector.withinSelectionTooltip
+                    )
+                    ForEach(details.internalLinks.prefix(8)) { link in
+                        internalLinkRow(link)
+                    }
+                    if details.internalLinks.count > 8 {
+                        Text("+ \(details.internalLinks.count - 8) more links")
+                            .font(.caption2)
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    }
+                    Divider()
+                }
+
+                if !details.sharedExternalConnections.isEmpty {
+                    groupedSectionHeader(
+                        Copy.Inspector.sharedConnectionsHeader,
+                        systemImage: "point.3.connected.trianglepath.dotted",
+                        tooltip: Copy.Inspector.sharedConnectionsTooltip
+                    )
+                    ForEach(details.sharedExternalConnections.prefix(6)) { connection in
+                        sharedConnectionRow(connection)
+                    }
+                    if details.sharedExternalConnections.count > 6 {
+                        Text("+ \(details.sharedExternalConnections.count - 6) more shared connections")
+                            .font(.caption2)
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    }
+                    Divider()
+                }
+
+                groupedSectionHeader(
+                    Copy.Inspector.selectedStationsHeader,
+                    systemImage: "dot.circle.and.hand.point.up.left.fill",
+                    tooltip: Copy.Inspector.selectedStationsTooltip
+                )
+                ForEach(details.selectedNodes) { node in
+                    selectedStationRow(node)
+                }
+
+                Divider()
+
+                VStack(spacing: 8) {
+                    Button(action: onSetAsAnchor) {
+                        HStack {
+                            Image(systemName: "scope")
+                            Text(Copy.Focus.focusSelectionLabel)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .help(Copy.Focus.focusSelectionTooltip)
+                    .accessibilityLabel(Copy.Focus.focusSelectionAccessibility)
+
+                    Button(action: onClearSelection) {
+                        HStack {
+                            Image(systemName: "xmark")
+                            Text(Copy.Toolbar.clearSelectionLabel + " Selection")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .help(Copy.Selection.nodeChipClearTooltip)
+                    .accessibilityLabel(Copy.Selection.clearButtonAccessibility)
+                }
+            }
+            .padding(12)
+        }
+    }
 
     private func nodeDetailsView(_ details: GraphInspectorDetails) -> some View {
         ScrollView {
@@ -547,6 +690,119 @@ private struct SidebarInspectorContent: View {
             }
             .padding(12)
         }
+    }
+
+    private func relationshipBreakdownSection(_ breakdown: [LinkType: Int]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            groupedSectionHeader(
+                Copy.Inspector.interactionTypesHeader,
+                systemImage: "arrow.triangle.branch",
+                tooltip: Copy.Inspector.interactionTypesTooltip
+            )
+
+            if let direct = breakdown[.directPeer] {
+                InspectorMetricStringRow(
+                    title: Copy.Inspector.directPeersSection,
+                    value: direct.formatted(),
+                    tooltip: Copy.Inspector.directPeersSectionTooltip
+                )
+            }
+            if let heardDirect = breakdown[.heardDirect] {
+                InspectorMetricStringRow(
+                    title: Copy.Inspector.heardDirectSection,
+                    value: heardDirect.formatted(),
+                    tooltip: Copy.Inspector.heardDirectSectionTooltip
+                )
+            }
+            if let heardVia = breakdown[.heardVia] {
+                InspectorMetricStringRow(
+                    title: Copy.Inspector.heardViaSection,
+                    value: heardVia.formatted(),
+                    tooltip: Copy.Inspector.heardViaSectionTooltip
+                )
+            }
+        }
+    }
+
+    private func groupedSectionHeader(_ title: String, systemImage: String, tooltip: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .font(.caption)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+        .background(Color.clear)
+        .contentShape(Rectangle())
+        .modifier(NativeTooltip(text: tooltip))
+    }
+
+    private func internalLinkRow(_ link: GraphMultiInspectorDetails.InternalLink) -> some View {
+        HStack(spacing: 8) {
+            Text("\(link.sourceCallsign)  \u{2194}  \(link.targetCallsign)")
+                .font(.caption)
+                .lineLimit(1)
+            Spacer(minLength: 6)
+            Text(link.packetCount.formatted())
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+        .background(Color.clear)
+        .contentShape(Rectangle())
+        .modifier(NativeTooltip(text: String(format: Copy.Inspector.internalLinkRowTooltipTemplate, link.packetCount, link.bytes)))
+    }
+
+    private func sharedConnectionRow(_ connection: GraphMultiInspectorDetails.SharedExternalConnection) -> some View {
+        HStack(spacing: 8) {
+            Text(connection.callsign)
+                .font(.caption)
+            Spacer(minLength: 6)
+            Text("\(connection.connectedSelectedIDs.count)x")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            Text(connection.totalPackets.formatted())
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+        .background(Color.clear)
+        .contentShape(Rectangle())
+        .modifier(
+            NativeTooltip(
+                text: String(
+                    format: Copy.Inspector.sharedConnectionRowTooltipTemplate,
+                    connection.connectedSelectedIDs.count,
+                    connection.totalPackets
+                )
+            )
+        )
+    }
+
+    private func selectedStationRow(_ node: NetworkGraphNode) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(node.callsign)
+                    .font(.caption)
+                Spacer()
+                Text("\(node.degree)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            }
+            Text("In \(node.inCount.formatted()) • Out \(node.outCount.formatted())")
+                .font(.caption2)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+        .background(Color.clear)
+        .contentShape(Rectangle())
+        .modifier(NativeTooltip(text: String(format: Copy.Inspector.selectedStationRowTooltipTemplate, node.inCount, node.outCount, node.degree)))
     }
 
     // MARK: - Relationship Sections
@@ -744,6 +1000,51 @@ private struct InspectorMetricRow: View {
     }
 }
 
+private struct InspectorMetricStringRow: View {
+    let title: String
+    let value: String
+    let tooltip: String
+
+    var body: some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                .monospacedDigit()
+        }
+        .font(.caption)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
+        .background(Color.clear)
+        .contentShape(Rectangle())
+        .modifier(NativeTooltip(text: tooltip))
+    }
+}
+
+private struct NativeTooltip: ViewModifier {
+    let text: String
+
+    func body(content: Content) -> some View {
+        content
+            .background(AppKitTooltipHost(text: text))
+    }
+}
+
+private struct AppKitTooltipHost: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.toolTip = text
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        nsView.toolTip = text
+    }
+}
+
 private struct MetricCell: View {
     let label: String
     let value: String
@@ -850,6 +1151,7 @@ struct GraphSidebar_Previews: PreviewProvider {
                 onShowActiveNodes: {},
                 onExportSummary: {},
                 selectedNodeDetails: nil,
+                selectedMultiNodeDetails: nil,
                 onSetAsAnchor: {},
                 onClearSelection: {},
                 hubMetric: .constant(.degree)
@@ -863,6 +1165,7 @@ struct GraphSidebar_Previews: PreviewProvider {
                 onShowActiveNodes: {},
                 onExportSummary: {},
                 selectedNodeDetails: previewDetails,
+                selectedMultiNodeDetails: nil,
                 onSetAsAnchor: {},
                 onClearSelection: {},
                 hubMetric: .constant(.degree)
@@ -876,6 +1179,7 @@ struct GraphSidebar_Previews: PreviewProvider {
                 onShowActiveNodes: {},
                 onExportSummary: {},
                 selectedNodeDetails: nil,
+                selectedMultiNodeDetails: nil,
                 onSetAsAnchor: {},
                 onClearSelection: {},
                 hubMetric: .constant(.degree)
