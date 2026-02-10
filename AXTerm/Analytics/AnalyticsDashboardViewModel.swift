@@ -122,23 +122,44 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
     }
 
+    @Published var autoUpdateEnabled: Bool {
+        didSet {
+            guard autoUpdateEnabled != oldValue else { return }
+            persistAutoUpdateEnabled()
+            if autoUpdateEnabled && isActive {
+                scheduleAggregation(reason: "autoUpdateEnabled")
+                scheduleGraphBuild(reason: "autoUpdateEnabled")
+            }
+        }
+    }
+
     /// Graph view mode controls which edge types are visible.
     /// - `.connectivity`: Shows DirectPeer and HeardDirect edges (who can you reach directly?)
     /// - `.routing`: Shows DirectPeer and SeenVia edges (how do packets flow?)
     /// - `.all`: Shows all edge types
     @Published var graphViewMode: GraphViewMode = .connectivity {
         didSet {
+            guard graphViewMode != oldValue else { return }
             trackFilterChange(reason: "graphViewMode")
-            
+
+            let oldNetRomMode = oldValue.netRomRoutingMode
+            let newNetRomMode = graphViewMode.netRomRoutingMode
+
+            if oldNetRomMode == newNetRomMode {
+                // Same data source: only edge-type filtering changed.
+                // Avoid expensive full graph rebuild.
+                applyViewModeFilter()
+                return
+            }
+
             if graphViewMode.isNetRomMode {
-                // For NET/ROM modes, we need a full rebuild from the routing table
-                scheduleGraphBuild(reason: "graphViewMode (NET/ROM)")
+                // Entering NET/ROM mode or switching NET/ROM routing source
+                scheduleGraphBuild(reason: "graphViewMode (NET/ROM source)")
             } else if oldValue.isNetRomMode {
-                // If switching BACK from NET/ROM to standard, we also need a rebuild
+                // Returning from NET/ROM to packet-derived graph
                 scheduleGraphBuild(reason: "graphViewMode (Return to Packet)")
             } else {
-                // Standard view mode only affects edge filtering, not the underlying classified graph.
-                // Recompute the filtered view graph from the cached classified model.
+                // Packet mode to packet mode: filter only
                 applyViewModeFilter()
             }
         }
@@ -225,6 +246,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         let loadedMaxNodes = settingsStore?.analyticsMaxNodes ?? AppSettingsStore.defaultAnalyticsMaxNodes
         let loadedHubMetric = Self.loadHubMetric(from: settingsStore)
         let loadedStationIdentityMode = Self.loadStationIdentityMode(from: settingsStore)
+        let loadedAutoUpdateEnabled = settingsStore?.analyticsAutoUpdateEnabled ?? AppSettingsStore.defaultAnalyticsAutoUpdateEnabled
 
         // Compute default range for bucket resolution
         let defaultRange = loadedTimeframe.dateInterval(
@@ -241,6 +263,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         self.minEdgeCount = AnalyticsInputNormalizer.minEdgeCount(loadedMinEdgeCount)
         self.maxNodes = AnalyticsInputNormalizer.maxNodes(loadedMaxNodes)
         self.stationIdentityMode = loadedStationIdentityMode
+        self.autoUpdateEnabled = loadedAutoUpdateEnabled
         self.customRangeStart = defaultRange.start
         self.customRangeEnd = defaultRange.end
         self.resolvedBucket = loadedBucket.resolvedBucket(
@@ -304,6 +327,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func persistStationIdentityMode() {
         settingsStore?.analyticsStationIdentityMode = stationIdentityMode.rawValue
+    }
+
+    private func persistAutoUpdateEnabled() {
+        settingsStore?.analyticsAutoUpdateEnabled = autoUpdateEnabled
     }
 
     private func persistHubMetric() {
@@ -480,8 +507,13 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             })
             .sink { [weak self] packets in
                 self?.packets = packets
+                guard self?.autoUpdateEnabled == true else { return }
                 self?.scheduleAggregation(reason: "packets")
-                self?.scheduleGraphBuild(reason: "packets")
+                // NET/ROM graph modes are built from routing snapshots, not packet edge classification.
+                // Skip packet-driven graph rebuilds in those modes to reduce churn and UI heaviness.
+                if self?.graphViewMode.isNetRomMode == false {
+                    self?.scheduleGraphBuild(reason: "packets")
+                }
             }
             .store(in: &cancellables)
     }
@@ -492,6 +524,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         netRomIntegration.didUpdate
             .receive(on: RunLoop.main)
             .sink { [weak self] in
+                guard self?.autoUpdateEnabled == true else { return }
                 self?.netRomUpdateCount += 1
                 self?.scheduleGraphBuild(reason: "NET/ROM update")
             }
@@ -536,6 +569,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func scheduleGraphBuild(reason: String) {
         guard isActive else { return }
+        isGraphLoading = true
         #if DEBUG
         debugLog("Scheduling graph build: \(reason)")
         #endif

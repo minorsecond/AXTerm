@@ -167,6 +167,11 @@ struct AnalyticsDashboardView: View {
 
                 Spacer(minLength: 0)
 
+                Toggle("Auto-update", isOn: $viewModel.autoUpdateEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .help("Automatically refresh analytics as new packets arrive")
+
                 Button("Reset") {
                     graphResetToken = UUID()
                     viewModel.resetGraphView()
@@ -328,16 +333,16 @@ struct AnalyticsDashboardView: View {
                     }
                     
                     Spacer()
-                    
-                    if viewModel.graphViewMode.isNetRomMode {
-                        Text("Size = Route Centrality • Edge = Link Quality")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(AnalyticsStyle.Colors.neutralFill)
-                            .cornerRadius(4)
-                    }
+
+                    Text("Size = Route Centrality • Edge = Link Quality")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(AnalyticsStyle.Colors.neutralFill)
+                        .cornerRadius(4)
+                        .opacity(viewModel.graphViewMode.isNetRomMode ? 1 : 0)
+                        .accessibilityHidden(!viewModel.graphViewMode.isNetRomMode)
                 }
                 .padding(.horizontal, 4)
 
@@ -377,6 +382,26 @@ struct AnalyticsDashboardView: View {
                         )
                         if (!viewModel.hasLoadedGraph || viewModel.isGraphLoading) && viewModel.viewState.graphModel.nodes.isEmpty {
                             AnalyticsLoadingOverlay(label: "Building network graph")
+                        }
+
+                        if viewModel.isGraphLoading && !viewModel.viewState.graphModel.nodes.isEmpty {
+                            VStack {
+                                HStack(spacing: 6) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("Updating graph…")
+                                        .font(.caption2)
+                                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(.ultraThinMaterial)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                Spacer()
+                            }
+                            .padding(8)
+                            .allowsHitTesting(false)
                         }
                     }
                     .frame(minHeight: AnalyticsStyle.Layout.graphHeight)

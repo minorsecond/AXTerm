@@ -45,6 +45,7 @@ final class AppSettingsStore: ObservableObject {
     static let analyticsMaxNodesKey = "analyticsMaxNodes"
     static let analyticsHubMetricKey = "analyticsHubMetric"
     static let analyticsStationIdentityModeKey = "analyticsStationIdentityMode"
+    static let analyticsAutoUpdateEnabledKey = "analyticsAutoUpdateEnabled"
 
     // AXDP / transmission extension settings keys
     static let axdpExtensionsEnabledKey = "axdpExtensionsEnabled"
@@ -148,6 +149,7 @@ final class AppSettingsStore: ObservableObject {
     static let defaultAnalyticsMaxNodes = 150
     static let defaultAnalyticsHubMetric = "Degree"  // Matches HubMetric.degree.rawValue
     static let defaultAnalyticsStationIdentityMode = "station"  // Group SSIDs by default
+    static let defaultAnalyticsAutoUpdateEnabled = true
 
     // AXDP defaults (match TxAdaptiveSettings defaults)
     static let defaultAXDPExtensionsEnabled = true
@@ -510,6 +512,10 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistAnalyticsStationIdentityMode() }
     }
 
+    @Published var analyticsAutoUpdateEnabled: Bool {
+        didSet { persistAnalyticsAutoUpdateEnabled() }
+    }
+
     // MARK: - NET/ROM Route Settings
 
     @Published var hideExpiredRoutes: Bool {
@@ -659,6 +665,7 @@ final class AppSettingsStore: ObservableObject {
         let storedAnalyticsMaxNodes = defaults.object(forKey: Self.analyticsMaxNodesKey) as? Int ?? Self.defaultAnalyticsMaxNodes
         let storedAnalyticsHubMetric = defaults.string(forKey: Self.analyticsHubMetricKey) ?? Self.defaultAnalyticsHubMetric
         let storedAnalyticsStationIdentityMode = defaults.string(forKey: Self.analyticsStationIdentityModeKey) ?? Self.defaultAnalyticsStationIdentityMode
+        let storedAnalyticsAutoUpdateEnabled = defaults.object(forKey: Self.analyticsAutoUpdateEnabledKey) as? Bool ?? Self.defaultAnalyticsAutoUpdateEnabled
 
         // NET/ROM route settings
         let storedHideExpiredRoutes = defaults.object(forKey: Self.hideExpiredRoutesKey) as? Bool ?? Self.defaultHideExpiredRoutes
@@ -742,6 +749,7 @@ final class AppSettingsStore: ObservableObject {
         self.analyticsMaxNodes = max(10, min(500, storedAnalyticsMaxNodes))
         self.analyticsHubMetric = storedAnalyticsHubMetric
         self.analyticsStationIdentityMode = storedAnalyticsStationIdentityMode
+        self.analyticsAutoUpdateEnabled = storedAnalyticsAutoUpdateEnabled
 
         // NET/ROM route settings
         self.hideExpiredRoutes = storedHideExpiredRoutes
@@ -974,6 +982,10 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(analyticsStationIdentityMode, forKey: Self.analyticsStationIdentityModeKey)
     }
 
+    private func persistAnalyticsAutoUpdateEnabled() {
+        defaults.set(analyticsAutoUpdateEnabled, forKey: Self.analyticsAutoUpdateEnabledKey)
+    }
+
     // MARK: - NET/ROM Route Settings Persistence
 
     private func persistHideExpiredRoutes() {
@@ -1060,6 +1072,7 @@ final class AppSettingsStore: ObservableObject {
             Self.analyticsMaxNodesKey: Self.defaultAnalyticsMaxNodes,
             Self.analyticsHubMetricKey: Self.defaultAnalyticsHubMetric,
             Self.analyticsStationIdentityModeKey: Self.defaultAnalyticsStationIdentityMode,
+            Self.analyticsAutoUpdateEnabledKey: Self.defaultAnalyticsAutoUpdateEnabled,
             Self.hideExpiredRoutesKey: Self.defaultHideExpiredRoutes,
             Self.routeRetentionDaysKey: Self.defaultRouteRetentionDays,
             Self.stalePolicyModeKey: Self.defaultStalePolicyMode,

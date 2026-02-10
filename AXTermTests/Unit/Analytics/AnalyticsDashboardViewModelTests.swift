@@ -275,6 +275,40 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 1)
     }
 
+    func testAutoUpdateDisabledSkipsPacketDrivenAnalyticsRefresh() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsIncludeVia = false
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+        settings.analyticsAutoUpdateEnabled = false
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.graphViewMode = .all
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+        viewModel.setActive(true)
+
+        await waitFor { viewModel.hasLoadedAggregation && viewModel.hasLoadedGraph }
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets ?? 0, 0)
+
+        viewModel.updatePackets([makePacket(timestamp: timestamp, from: "SRC1", to: "DST1")])
+        try? await Task.sleep(for: .milliseconds(120))
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets ?? 0, 0)
+
+        viewModel.autoUpdateEnabled = true
+        await waitFor { viewModel.viewState.summary?.totalPackets == 1 }
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 1)
+    }
+
     func testAggregationLoadingFlagClearsAfterActivate() async {
         let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
         let settings = makeSettings()
