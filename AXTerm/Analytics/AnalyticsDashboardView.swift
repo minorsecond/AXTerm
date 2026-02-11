@@ -671,6 +671,9 @@ extension AnalyticsDashboardView {
             },
             set: { newMode in
                 guard [.connectivity, .routing, .all].contains(newMode) else { return }
+                if newMode == .routing, !viewModel.includeViaDigipeaters {
+                    viewModel.includeViaDigipeaters = true
+                }
                 viewModel.graphViewMode = newMode
             }
         )
@@ -694,9 +697,7 @@ extension AnalyticsDashboardView {
         case .connectivity:
             return "Packet source. Direct shows direct peer traffic and direct-heard RF evidence."
         case .routing:
-            return viewModel.includeViaDigipeaters
-                ? "Packet source. Routed emphasizes digipeater-mediated paths plus direct peers."
-                : "Packet source. Routed currently shows direct peers only (digipeater paths are off)."
+            return "Packet source. Routed shows digipeater-mediated paths plus direct peers."
         case .all:
             return viewModel.includeViaDigipeaters
                 ? "Packet source. Combined includes all packet-derived relationship evidence."
@@ -862,12 +863,15 @@ extension AnalyticsDashboardView {
     }
 
     private var canConfigureDigipeaterPaths: Bool {
-        !viewModel.graphViewMode.isNetRomMode && viewModel.graphViewMode != .connectivity
+        !viewModel.graphViewMode.isNetRomMode && viewModel.graphViewMode == .all
     }
 
     private var digipeaterPathStatusLabel: String {
         if viewModel.graphViewMode.isNetRomMode {
             return "Digipeater Paths: Packet source only"
+        }
+        if viewModel.graphViewMode == .routing {
+            return "Digipeater Paths: Required in Routed lens"
         }
         return "Digipeater Paths: Not used in Direct lens"
     }
@@ -876,7 +880,10 @@ extension AnalyticsDashboardView {
         if viewModel.graphViewMode.isNetRomMode {
             return GraphCopy.GraphControls.includeViaUnavailableTooltip
         }
-        return "Direct lens excludes digipeater-mediated paths by definition. Switch to Routed or Combined to configure this."
+        if viewModel.graphViewMode == .routing {
+            return "Routed lens always includes digipeater-mediated paths. Use Combined to toggle this."
+        }
+        return "Direct lens excludes digipeater-mediated paths by definition. Switch to Combined to configure this."
     }
 
     private var metricColumns: [GridItem] {

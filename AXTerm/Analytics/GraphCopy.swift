@@ -269,7 +269,7 @@ nonisolated enum GraphCopy {
 
         static let routingLabel = "Routed"
         static let routingDescription = "Direct peer + digipeater-mediated paths"
-        static let routingTooltip = "Packet source: emphasize routed packet flow, including digipeater-mediated edges."
+        static let routingTooltip = "Packet source: shows digipeater-mediated packet paths alongside direct peer edges."
 
         static let allLabel = "Combined"
         static let allDescription = "All packet-derived relationship evidence"
@@ -416,8 +416,8 @@ nonisolated enum GraphCopy {
 
     enum GraphControls {
         static let includeViaLabel = "Include Digipeater Paths"
-        static let includeViaTooltip = "Include digipeater-mediated packet paths when using Packet source."
-        static let includeViaUnavailableTooltip = "Digipeater-path toggle is available for Packet source only."
+        static let includeViaTooltip = "Combined lens only: include digipeater-mediated packet paths and intermediate digipeater hops."
+        static let includeViaUnavailableTooltip = "Digipeater-path toggle is available only in Packet source Combined lens."
 
         static let minEdgeCountLabel = "Min edge"
         static let minEdgeCountTooltip = "Minimum packets required to display a connection in the graph (view only)."

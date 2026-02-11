@@ -142,6 +142,12 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             guard graphViewMode != oldValue else { return }
             trackFilterChange(reason: "graphViewMode")
 
+            // Routed lens is defined to include digipeater-mediated evidence.
+            // Ensure routed mode always has via-path inclusion enabled.
+            if graphViewMode == .routing && !includeViaDigipeaters {
+                includeViaDigipeaters = true
+            }
+
             let oldNetRomMode = oldValue.netRomRoutingMode
             let newNetRomMode = graphViewMode.netRomRoutingMode
 
