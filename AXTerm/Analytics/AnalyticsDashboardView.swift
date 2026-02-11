@@ -567,16 +567,12 @@ struct AnalyticsDashboardView: View {
                     Text(GraphCopy.ViewMode.sourceLabel)
                         .font(.caption)
                         .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                    Picker(GraphCopy.ViewMode.sourceLabel, selection: graphSourceBinding) {
-                        Text(GraphCopy.ViewMode.packetSourceLabel)
-                            .tag(GraphSourceChoice.packets)
-                        Text(GraphCopy.ViewMode.netRomSourceLabel)
-                            .tag(GraphSourceChoice.netrom)
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .controlSize(.small)
-                    .help(GraphCopy.ViewMode.sourceTooltip)
+                    AnalyticsSegmentedPicker(
+                        selection: graphSourceBinding,
+                        items: GraphSourceChoice.allCases,
+                        label: { $0.label },
+                        tooltip: { $0.tooltip }
+                    )
                 }
 
                 HStack(spacing: 6) {
@@ -585,25 +581,19 @@ struct AnalyticsDashboardView: View {
                         .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
 
                     if viewModel.graphViewMode.isNetRomMode {
-                        Picker(GraphCopy.ViewMode.pickerLabel, selection: netRomModeBinding) {
-                            Text(GraphCopy.ViewMode.netromClassicLabel).tag(GraphViewMode.netromClassic)
-                            Text(GraphCopy.ViewMode.netromInferredLabel).tag(GraphViewMode.netromInferred)
-                            Text(GraphCopy.ViewMode.netromHybridLabel).tag(GraphViewMode.netromHybrid)
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .controlSize(.small)
-                        .help(viewModel.graphViewMode.tooltip)
+                        AnalyticsSegmentedPicker(
+                            selection: netRomModeBinding,
+                            items: [GraphViewMode.netromClassic, GraphViewMode.netromInferred, GraphViewMode.netromHybrid],
+                            label: { labelForGraphMode($0) },
+                            tooltip: { $0.tooltip }
+                        )
                     } else {
-                        Picker(GraphCopy.ViewMode.pickerLabel, selection: packetModeBinding) {
-                            Text(GraphCopy.ViewMode.connectivityLabel).tag(GraphViewMode.connectivity)
-                            Text(GraphCopy.ViewMode.routingLabel).tag(GraphViewMode.routing)
-                            Text(GraphCopy.ViewMode.allLabel).tag(GraphViewMode.all)
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .controlSize(.small)
-                        .help(viewModel.graphViewMode.tooltip)
+                        AnalyticsSegmentedPicker(
+                            selection: packetModeBinding,
+                            items: [GraphViewMode.connectivity, GraphViewMode.routing, GraphViewMode.all],
+                            label: { labelForGraphMode($0) },
+                            tooltip: { $0.tooltip }
+                        )
                     }
                 }
 
@@ -709,6 +699,23 @@ extension AnalyticsDashboardView {
         }
     }
 
+    private func labelForGraphMode(_ mode: GraphViewMode) -> String {
+        switch mode {
+        case .connectivity:
+            return GraphCopy.ViewMode.connectivityLabel
+        case .routing:
+            return GraphCopy.ViewMode.routingLabel
+        case .all:
+            return GraphCopy.ViewMode.allLabel
+        case .netromClassic:
+            return GraphCopy.ViewMode.netromClassicLabel
+        case .netromInferred:
+            return GraphCopy.ViewMode.netromInferredLabel
+        case .netromHybrid:
+            return GraphCopy.ViewMode.netromHybridLabel
+        }
+    }
+
     private func syncPreferredGraphModes(with mode: GraphViewMode) {
         if mode.isNetRomMode {
             preferredNetRomViewMode = mode
@@ -770,6 +777,24 @@ private enum GraphSourceChoice: String, CaseIterable, Identifiable {
     case netrom
 
     var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .packets:
+            return GraphCopy.ViewMode.packetSourceLabel
+        case .netrom:
+            return GraphCopy.ViewMode.netRomSourceLabel
+        }
+    }
+
+    var tooltip: String {
+        switch self {
+        case .packets:
+            return GraphCopy.ViewMode.packetSourceTooltip
+        case .netrom:
+            return GraphCopy.ViewMode.netRomSourceTooltip
+        }
+    }
 }
 
 private struct AnalyticsCard<Content: View>: View {
