@@ -18,6 +18,56 @@ struct AutoPathSuggestionItem: Identifiable, Hashable {
     let sourceLabel: String
 }
 
+// MARK: - TNC Status Indicator
+
+/// Compact LED showing TNC hardware connection status
+private struct TNCStatusIndicator: View {
+    let status: ConnectionStatus
+    let endpoint: String?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(ledColor)
+                .frame(width: 8, height: 8)
+            Text("TNC")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .help(tooltipText)
+        .accessibilityLabel(accessibilityText)
+    }
+
+    private var ledColor: Color {
+        switch status {
+        case .connected: return .green
+        case .connecting: return .yellow
+        case .failed: return .red
+        case .disconnected: return .gray
+        }
+    }
+
+    private var tooltipText: String {
+        switch status {
+        case .connected:
+            if let endpoint {
+                return "TNC: Connected (KISS TCP @ \(endpoint))"
+            }
+            return "TNC: Connected"
+        case .connecting:
+            return "TNC: Connecting..."
+        case .failed:
+            return "TNC: Connection failed"
+        case .disconnected:
+            return "TNC: Disconnected"
+        }
+    }
+
+    private var accessibilityText: String {
+        tooltipText
+    }
+}
+
 // MARK: - Connection Mode Toggle
 
 /// A Mac-native toggle for switching between datagram and connected modes
@@ -306,6 +356,8 @@ private struct AdaptiveTelemetryChip: View {
 private struct RoutingCapsuleButton: View {
     @ObservedObject var viewModel: ConnectBarViewModel
     let onAutoConnect: () -> Void
+    var isLocked: Bool = false
+    var onRequestChange: (() -> Void)?
     @State private var isPopoverPresented = false
 
     var body: some View {
@@ -333,7 +385,14 @@ private struct RoutingCapsuleButton: View {
         .popover(isPresented: $isPopoverPresented, arrowEdge: .top) {
             RoutingPopoverContent(
                 viewModel: viewModel,
-                onAutoConnect: onAutoConnect
+                onAutoConnect: onAutoConnect,
+                isLocked: isLocked,
+                onRequestChange: onRequestChange.map { action in
+                    {
+                        isPopoverPresented = false
+                        action()
+                    }
+                }
             )
         }
     }
@@ -357,9 +416,17 @@ private struct RoutingCapsuleButton: View {
     }
 }
 
+private enum DigiInputMode {
+    case auto
+    case manual
+}
+
 private struct RoutingPopoverContent: View {
     @ObservedObject var viewModel: ConnectBarViewModel
     let onAutoConnect: () -> Void
+    var isLocked: Bool = false
+    var onRequestChange: (() -> Void)?
+    @State private var digiInputMode: DigiInputMode = .auto
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -374,6 +441,7 @@ private struct RoutingPopoverContent: View {
                 }
                 .pickerStyle(.radioGroup)
                 .labelsHidden()
+                .disabled(isLocked)
             }
 
             switch viewModel.mode {
@@ -383,8 +451,7 @@ private struct RoutingPopoverContent: View {
                     .foregroundStyle(.secondary)
 
             case .ax25ViaDigi:
-                viaEditorSection
-                recommendedDigiSection
+                viaDigiProgressiveSection
 
             case .netrom:
                 netRomSection
@@ -395,9 +462,87 @@ private struct RoutingPopoverContent: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
+
+            if isLocked, let onRequestChange {
+                Divider()
+                Button("Change\u{2026}") {
+                    onRequestChange()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
         }
         .padding(14)
         .frame(width: 480)
+        .onAppear {
+            digiInputMode = viewModel.viaDigipeaters.isEmpty ? .auto : .manual
+        }
+    }
+
+    @ViewBuilder
+    private var viaDigiProgressiveSection: some View {
+        if isLocked {
+            // Read-only summary when connected
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Digi path")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                if viewModel.viaDigipeaters.isEmpty {
+                    Text("Direct (no digipeaters)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(viewModel.viaDigipeaters.joined(separator: " \u{2192} "))
+                        .font(.system(size: 11, design: .monospaced))
+                }
+            }
+        } else {
+            // Auto/Manual toggle
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Path mode", selection: $digiInputMode) {
+                    Text("Auto (recommended)").tag(DigiInputMode.auto)
+                    Text("Manual").tag(DigiInputMode.manual)
+                }
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+
+                if digiInputMode == .auto {
+                    Text("AXTerm will select the best path automatically.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+
+                    // Show compact preset chips if available
+                    if !viewModel.recommendedDigiPaths.isEmpty {
+                        HStack(spacing: 6) {
+                            ForEach(Array(viewModel.recommendedDigiPaths.prefix(3).enumerated()), id: \.offset) { idx, candidate in
+                                Button(pathLabel(for: candidate.digis, allowEllipsis: false)) {
+                                    viewModel.applyPathPreset(candidate.digis)
+                                    digiInputMode = .manual
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .accessibilityIdentifier("connectBar.autoPresetChip.\(idx)")
+                            }
+
+                            Button("Auto") {
+                                onAutoConnect()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        }
+                    } else {
+                        Button("Auto Connect") {
+                            onAutoConnect()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+                } else {
+                    viaEditorSection
+                    recommendedDigiSection
+                }
+            }
+        }
     }
 
     private var modeBinding: Binding<ConnectBarMode> {
@@ -1113,7 +1258,7 @@ struct TerminalComposeView: View {
     @Binding var connectionMode: TxConnectionMode
     @Binding var useAXDP: Bool
     
-    // Dependencies needed for AdaptiveStatusChip
+    // Dependencies needed for adaptive telemetry display
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var sessionCoordinator: SessionCoordinator
 
@@ -1122,6 +1267,10 @@ struct TerminalComposeView: View {
     let characterCount: Int
     let queueDepth: Int
     let isConnected: Bool
+    /// TNC hardware connection status
+    let tncStatus: ConnectionStatus
+    /// Formatted TNC endpoint (e.g. "localhost:8001")
+    let tncEndpoint: String?
     /// Session state for connected mode (nil if not in connected mode)
     let sessionState: AX25SessionState?
     /// AXDP capability for the destination station (if known)
@@ -1141,8 +1290,10 @@ struct TerminalComposeView: View {
     let onStopAutoConnect: () -> Void
     let onDisconnect: () -> Void
     let onForceDisconnect: () -> Void
+    var onReconnectWithNewRouting: (() -> Void)?
 
     @FocusState private var isTextFieldFocused: Bool
+    @State private var showRoutingChangeConfirmation = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1150,6 +1301,8 @@ struct TerminalComposeView: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
+                    TNCStatusIndicator(status: tncStatus, endpoint: tncEndpoint)
+
                     ConnectionModeToggle(
                         mode: $connectionMode,
                         sessionState: sessionState,
@@ -1168,7 +1321,11 @@ struct TerminalComposeView: View {
                     if connectionMode == .connected {
                         RoutingCapsuleButton(
                             viewModel: connectBarViewModel,
-                            onAutoConnect: onAutoConnect
+                            onAutoConnect: onAutoConnect,
+                            isLocked: sessionState == .connected,
+                            onRequestChange: sessionState == .connected ? {
+                                showRoutingChangeConfirmation = true
+                            } : nil
                         )
                     }
                 }
@@ -1183,11 +1340,12 @@ struct TerminalComposeView: View {
                             Text(connectBarViewModel.toCall)
                                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                             Spacer()
-                            Button("Change") {
+                            Button("Disconnect") {
                                 onDisconnect()
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
+                            .help("Disconnect from \(connectBarViewModel.toCall)")
                         }
                         .accessibilityIdentifier("connectBar.lockedDestination")
                     } else {
@@ -1270,6 +1428,14 @@ struct TerminalComposeView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .background(Color(nsColor: .windowBackgroundColor))
+            .alert("Change Routing?", isPresented: $showRoutingChangeConfirmation) {
+                Button("Reconnect with New Routing") {
+                    onReconnectWithNewRouting?()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Changing routing will disconnect the current session and reconnect with new settings.")
+            }
         }
     }
 
@@ -1552,6 +1718,8 @@ struct TxQueueView: View {
         characterCount: 11,
         queueDepth: 2,
         isConnected: true,
+        tncStatus: .connected,
+        tncEndpoint: "localhost:8001",
         sessionState: nil,
         connectBarViewModel: ConnectBarViewModel(),
         connectContext: .terminal,
@@ -1583,6 +1751,8 @@ struct TxQueueView: View {
         characterCount: 11,
         queueDepth: 0,
         isConnected: true,
+        tncStatus: .connected,
+        tncEndpoint: "localhost:8001",
         sessionState: .connected,
         connectBarViewModel: ConnectBarViewModel(),
         connectContext: .terminal,
@@ -1614,6 +1784,8 @@ struct TxQueueView: View {
         characterCount: 0,
         queueDepth: 0,
         isConnected: true,
+        tncStatus: .connecting,
+        tncEndpoint: nil,
         sessionState: .connecting,
         connectBarViewModel: ConnectBarViewModel(),
         connectContext: .terminal,

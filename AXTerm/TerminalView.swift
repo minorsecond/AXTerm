@@ -1069,6 +1069,7 @@ struct TerminalView: View {
     @State private var sessionRecords: [SessionRecord] = []
     @State private var activeSessionRecordID: String?
     @State private var autoAttemptTask: Task<Void, Never>?
+    @State private var pendingRoutingReconnect = false
 
     init(
         client: PacketEngine,
@@ -1168,6 +1169,12 @@ struct TerminalView: View {
                 case .disconnected:
                     connectBarViewModel.markDisconnected()
                     updateActiveSessionRecordState("Disconnected")
+                    if pendingRoutingReconnect {
+                        pendingRoutingReconnect = false
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            connectWithActiveIntent(sourceContext: connectCoordinator.activeContext)
+                        }
+                    }
                 case .error:
                     connectBarViewModel.markFailed(reason: .unknown, detail: "Session state entered error")
                     updateActiveSessionRecordState("Failed")
@@ -1666,6 +1673,8 @@ struct TerminalView: View {
                 characterCount: txViewModel.characterCount,
                 queueDepth: txViewModel.queueDepth,
                 isConnected: client.status == .connected,
+                tncStatus: client.status,
+                tncEndpoint: tncEndpointLabel,
                 sessionState: txViewModel.sessionState,
                 destinationCapability: client.capabilityStore.capabilities(for: txViewModel.viewModel.destinationCall),
                 capabilityStatus: sessionCoordinator.capabilityStatus(for: txViewModel.viewModel.destinationCall),
@@ -1708,6 +1717,10 @@ struct TerminalView: View {
                 },
                 onForceDisconnect: {
                     forceDisconnectFromDestination()
+                },
+                onReconnectWithNewRouting: {
+                    pendingRoutingReconnect = true
+                    disconnectFromDestination()
                 }
             )
             }
@@ -1770,6 +1783,17 @@ struct TerminalView: View {
             }
 
             Spacer()
+
+            Button("Clear Closed") {
+                sessionRecords.removeAll { $0.statusText == "Disconnected" || $0.statusText == "Failed" }
+                if let activeID = activeSessionRecordID,
+                   !sessionRecords.contains(where: { $0.id == activeID }) {
+                    activeSessionRecordID = sessionRecords.first?.id
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+            .disabled(sessionRecords.allSatisfy { $0.statusText != "Disconnected" && $0.statusText != "Failed" })
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -1800,6 +1824,11 @@ struct TerminalView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(connectionColor.opacity(0.1))
+    }
+
+    private var tncEndpointLabel: String? {
+        guard let host = client.connectedHost, let port = client.connectedPort else { return nil }
+        return "\(host):\(port)"
     }
 
     private var connectionIcon: String {

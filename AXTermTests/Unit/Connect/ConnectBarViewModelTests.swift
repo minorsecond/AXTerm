@@ -173,4 +173,52 @@ final class ConnectBarViewModelTests: XCTestCase {
         XCTAssertEqual(vm.adaptiveTelemetry?.compactLabel, "K1 P64 N2 4")
     }
 
+    func testDestinationSelectionPersistsAfterValidation() {
+        let vm = makeViewModel()
+        vm.applySuggestedTo("KB5YZB-7")
+        vm.validate()
+        XCTAssertEqual(vm.toCall, "KB5YZB-7", "Destination should persist after validation")
+    }
+
+    func testSessionLifecycleStateTransitions() {
+        let vm = makeViewModel()
+        vm.applySuggestedTo("N0CALL")
+        vm.enterConnectDraftMode()
+
+        // disconnectedDraft → connecting
+        vm.markConnecting()
+        if case .connecting = vm.barState {} else {
+            XCTFail("Expected .connecting but got \(vm.barState)")
+        }
+
+        // connecting → connected
+        vm.markConnected(sourceCall: "MYCALL", destination: "N0CALL", via: [], transportMode: .ax25, forcedNextHop: nil)
+        if case .connectedSession = vm.barState {} else {
+            XCTFail("Expected .connectedSession but got \(vm.barState)")
+        }
+
+        // connected → disconnecting
+        vm.markDisconnecting()
+        if case .disconnecting = vm.barState {} else {
+            XCTFail("Expected .disconnecting but got \(vm.barState)")
+        }
+
+        // disconnecting → disconnected
+        vm.markDisconnected()
+        if case .disconnectedDraft = vm.barState {} else {
+            XCTFail("Expected .disconnectedDraft but got \(vm.barState)")
+        }
+    }
+
+    func testCallsignWithSSIDPreservedOnSelection() {
+        let vm = makeViewModel()
+
+        // Test various SSIDs
+        for ssid in 0...15 {
+            let call = "N0CALL-\(ssid)"
+            vm.applySuggestedTo(call)
+            XCTAssertEqual(vm.toCall, call, "SSID -\(ssid) should be preserved")
+        }
+    }
+
 }
