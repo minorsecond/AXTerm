@@ -7,6 +7,7 @@
 
 import XCTest
 @testable import AXTerm
+import GRDB
 
 @MainActor
 final class PacketHandlingTests: XCTestCase {
@@ -175,6 +176,52 @@ final class PacketHandlingTests: XCTestCase {
         XCTAssertEqual(packets.count, 2)
         XCTAssertEqual(packets.map(\.id), [p2.id, p3.id], "Capped in-memory packets should keep the newest packets")
     }
+
+    #if DEBUG
+    func testDebugRebuildUsesLivePacketsWhenPacketDatabaseIsEmpty() async throws {
+        let settings = makeSettings(persistHistory: false)
+        settings.myCallsign = "K0EPI-7"
+
+        let queue = try DatabaseQueue(path: ":memory:")
+        try DatabaseManager.migrator.migrate(queue)
+
+        let packetStore = SQLitePacketStore(dbQueue: queue)
+        let engine = PacketEngine(
+            maxPackets: 100,
+            maxConsoleLines: 100,
+            maxRawChunks: 100,
+            settings: settings,
+            packetStore: packetStore,
+            consoleStore: nil,
+            rawStore: nil,
+            eventLogger: nil,
+            databaseWriter: queue
+        )
+
+        let livePacket = Packet(
+            timestamp: Date(),
+            from: AX25Address(call: "K6NVS"),
+            to: AX25Address(call: "K0EPI", ssid: 7),
+            frameType: .ui,
+            control: 0x03,
+            pid: 0xF0,
+            info: Data("TEST".utf8),
+            rawAx25: Data([0x01])
+        )
+        engine.handleIncomingPacket(livePacket)
+
+        let beforeStats = engine.netRomIntegration?.exportLinkStats().count ?? 0
+        XCTAssertGreaterThan(beforeStats, 0, "Expected live NET/ROM/link-estimator state before rebuild.")
+
+        let rebuild = await engine.debugRebuildNetRomFromPackets()
+        XCTAssertTrue(rebuild.success, "Rebuild should succeed by replaying live in-memory packets when DB is empty.")
+        XCTAssertGreaterThan(rebuild.packetsProcessed, 0, "Expected in-memory packets to be replayed.")
+
+        let afterStats = engine.netRomIntegration?.exportLinkStats().count ?? 0
+        XCTAssertGreaterThan(afterStats, 0, "Live NET/ROM state should remain populated after rebuild.")
+        XCTAssertGreaterThanOrEqual(afterStats, beforeStats, "Rebuild from live packets should not regress to empty link stats.")
+    }
+    #endif
 
     @MainActor
     func testConsoleLineViaDedupesRepeatedDigis() throws {

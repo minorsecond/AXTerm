@@ -1551,8 +1551,8 @@ final class PacketEngine: ObservableObject {
 
     #if DEBUG
     /// Rebuild all NET/ROM routing data from scratch by replaying all packets.
-    /// This clears existing neighbors, routes, and link stats, then replays every
-    /// packet in the database through the NET/ROM integration.
+    /// This replays every packet in the database through the NET/ROM integration.
+    /// The operation is guarded to avoid destructive wipes when no packets are available.
     ///
     /// - Parameter progress: Optional callback for progress updates (0.0-1.0)
     /// - Returns: A summary of the rebuild results
@@ -1572,26 +1572,9 @@ final class PacketEngine: ObservableObject {
 
         print("[DEBUG:REBUILD] Starting full NET/ROM rebuild from packets...")
 
-        // Step 1: Clear persistence
-        do {
-            try persistence.clearAll()
-            print("[DEBUG:REBUILD] ✓ Cleared persistence tables")
-        } catch {
-            return DebugRebuildResult(
-                success: false,
-                packetsProcessed: 0,
-                neighborsFound: 0,
-                routesFound: 0,
-                linkStatsFound: 0,
-                errorMessage: "Failed to clear persistence: \(error.localizedDescription)"
-            )
-        }
-
-        // Step 2: Reset integration state
-        integration.reset()
-        print("[DEBUG:REBUILD] ✓ Reset integration state")
-
-        // Step 3: Load all packets from database
+        // Step 1: Build replay set BEFORE mutating in-memory/persisted NET/ROM state.
+        // Prefer persisted packets, but include current in-memory packets that may not yet
+        // have been flushed to disk (or use in-memory entirely when persistence is empty).
         let packetRecords: [PacketRecord]
         do {
             packetRecords = try packetStore.loadAllChronological()
@@ -1607,13 +1590,64 @@ final class PacketEngine: ObservableObject {
             )
         }
 
-        // Step 4: Replay all packets through integration
-        let total = packetRecords.count
-        var processed = 0
+        let livePacketsSnapshot = packets
+        var replayPackets = packetRecords.map { $0.toPacket() }
 
-        for record in packetRecords {
-            let packet = record.toPacket()
+        if replayPackets.isEmpty {
+            replayPackets = livePacketsSnapshot.sorted(by: PacketOrdering.shouldPrecede)
+            print("[DEBUG:REBUILD] Using \(replayPackets.count) in-memory packets for rebuild")
+        } else {
+            let persistedIDs = Set(replayPackets.map(\.id))
+            let unsavedLive = livePacketsSnapshot.filter { !persistedIDs.contains($0.id) }
+            if !unsavedLive.isEmpty {
+                replayPackets.append(contentsOf: unsavedLive)
+                replayPackets.sort(by: PacketOrdering.shouldPrecede)
+                print("[DEBUG:REBUILD] Added \(unsavedLive.count) live packets not yet in persistence")
+            }
+        }
+
+        guard !replayPackets.isEmpty else {
+            return DebugRebuildResult(
+                success: false,
+                packetsProcessed: 0,
+                neighborsFound: integration.currentNeighbors().count,
+                routesFound: integration.currentRoutes().count,
+                linkStatsFound: integration.exportLinkStats().count,
+                errorMessage: "No packets available for replay (database and live memory are empty). Existing NET/ROM state was not modified."
+            )
+        }
+
+        let previousNeighbors = integration.currentNeighbors()
+        let previousRoutes = integration.currentRoutes()
+        let previousLinkStats = integration.exportLinkStats()
+
+        // Step 2: Clear persistence
+        do {
+            try persistence.clearAll()
+            print("[DEBUG:REBUILD] ✓ Cleared persistence tables")
+        } catch {
+            return DebugRebuildResult(
+                success: false,
+                packetsProcessed: 0,
+                neighborsFound: previousNeighbors.count,
+                routesFound: previousRoutes.count,
+                linkStatsFound: previousLinkStats.count,
+                errorMessage: "Failed to clear persistence: \(error.localizedDescription)"
+            )
+        }
+
+        // Step 3: Reset integration state
+        integration.reset()
+        print("[DEBUG:REBUILD] ✓ Reset integration state")
+
+        // Step 4: Replay all packets through integration
+        let total = replayPackets.count
+        var processed = 0
+        var latestPacketTimestamp = replayPackets[0].timestamp
+
+        for packet in replayPackets {
             integration.observePacket(packet, timestamp: packet.timestamp, isDuplicate: false)
+            latestPacketTimestamp = packet.timestamp
 
             processed += 1
             if processed % 100 == 0 || processed == total {
@@ -1628,9 +1662,10 @@ final class PacketEngine: ObservableObject {
 
         print("[DEBUG:REBUILD] ✓ Replayed \(processed) packets")
 
-        // Step 5: Purge stale entries that resulted from replaying old packets
-        integration.purgeStaleData(currentDate: Date())
-        print("[DEBUG:REBUILD] ✓ Purged stale entries")
+        // Step 5: Purge stale entries relative to the replay horizon instead of wall-clock now.
+        // This preserves snapshot semantics when replaying older captures.
+        integration.purgeStaleData(currentDate: latestPacketTimestamp)
+        print("[DEBUG:REBUILD] ✓ Purged stale entries (anchor=\(latestPacketTimestamp))")
 
         // Step 6: Get results
         let neighbors = integration.currentNeighbors()
@@ -1641,6 +1676,33 @@ final class PacketEngine: ObservableObject {
         print("[DEBUG:REBUILD]   - Neighbors: \(neighbors.count)")
         print("[DEBUG:REBUILD]   - Routes: \(routes.count)")
         print("[DEBUG:REBUILD]   - Link Stats: \(linkStats.count)")
+
+        let previousTotal = previousNeighbors.count + previousRoutes.count + previousLinkStats.count
+        let rebuiltTotal = neighbors.count + routes.count + linkStats.count
+        if previousTotal > 0 && rebuiltTotal == 0 {
+            integration.importNeighbors(previousNeighbors)
+            integration.importRoutes(previousRoutes)
+            integration.importLinkStats(previousLinkStats)
+            do {
+                try persistence.saveSnapshot(
+                    neighbors: previousNeighbors,
+                    routes: previousRoutes,
+                    linkStats: previousLinkStats,
+                    lastPacketID: Int64(total),
+                    configHash: nil
+                )
+            } catch {
+                print("[DEBUG:REBUILD] ⚠️ Rollback snapshot save failed: \(error)")
+            }
+            return DebugRebuildResult(
+                success: false,
+                packetsProcessed: processed,
+                neighborsFound: previousNeighbors.count,
+                routesFound: previousRoutes.count,
+                linkStatsFound: previousLinkStats.count,
+                errorMessage: "Rebuild produced empty routing data; previous state was restored."
+            )
+        }
 
         // Step 7: Save to persistence
         do {
