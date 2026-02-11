@@ -154,9 +154,11 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
             if graphViewMode.isNetRomMode {
                 // Entering NET/ROM mode or switching NET/ROM routing source
+                queueViewportFitToVisibleNodes()
                 scheduleGraphBuild(reason: "graphViewMode (NET/ROM source)")
             } else if oldValue.isNetRomMode {
                 // Returning from NET/ROM to packet-derived graph
+                queueViewportFitToVisibleNodes()
                 scheduleGraphBuild(reason: "graphViewMode (Return to Packet)")
             } else {
                 // Packet mode to packet mode: filter only
@@ -220,6 +222,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private var lastPinnedRefitTimestamp: Date = .distantPast
     private var lastPinnedRefitNodeIDs: Set<String> = []
     private var lastPinnedRefitBounds: RefitBounds?
+    private var pendingViewportFitToVisibleNodes = false
 
     /// Gate constants for automatic viewport maintenance.
     /// Tuned to avoid jarring camera movement while still correcting meaningful drift.
@@ -479,6 +482,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             }
             if !hasLoadedGraph {
                 isGraphLoading = true
+                // Initial open should frame current graph extents.
+                queueViewportFitToVisibleNodes()
             }
             Task { [weak self] in
                 await self?.recomputeAggregation(reason: "activate", applyToViewState: true, showLoadingState: true)
@@ -1398,6 +1403,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             viewState.layoutEnergy = 0
             reconcileSelectionAfterLayout()
             maintainPinnedSelectionViewportIfNeeded()
+            consumeQueuedViewportFitIfNeeded()
             return
         }
 
@@ -1409,6 +1415,23 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.layoutEnergy = 0
         reconcileSelectionAfterLayout()
         maintainPinnedSelectionViewportIfNeeded()
+        consumeQueuedViewportFitIfNeeded()
+    }
+
+    private func queueViewportFitToVisibleNodes() {
+        pendingViewportFitToVisibleNodes = true
+    }
+
+    private func consumeQueuedViewportFitIfNeeded() {
+        guard pendingViewportFitToVisibleNodes else { return }
+        pendingViewportFitToVisibleNodes = false
+
+        // Preserve explicit focus and selection-fit behavior.
+        if !fitTargetNodeIDs.isEmpty { return }
+        if focusState.isFocusEnabled, focusState.anchorNodeID != nil { return }
+
+        fitTargetNodeIDs = []
+        fitToSelectionRequest = UUID()
     }
 
     private func updateSelectionState() {
