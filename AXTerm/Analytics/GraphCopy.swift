@@ -330,6 +330,8 @@ nonisolated enum GraphCopy {
 
         static let degreeLabel = "Connections"
         static let degreeTooltip = "Number of unique stations this node has communicated with."
+        static let trafficContextLabel = "Traffic from packet observations. Connections reflect the current source and lens."
+        static let trafficContextTooltip = "Traffic metrics stay consistent across Packet and NET/ROM sources for the selected timeframe. Relationship and connection sections follow the current source/lens."
 
         static let neighborsLabel = "Top Neighbors"
         static let neighborsTooltip = "Stations most frequently in contact with this node."

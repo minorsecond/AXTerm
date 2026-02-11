@@ -706,6 +706,12 @@ private struct SidebarInspectorContent: View {
                     )
                 }
 
+                Text(Copy.Inspector.trafficContextLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(Copy.Inspector.trafficContextTooltip)
+
                 Divider()
 
                 // Classified relationship sections

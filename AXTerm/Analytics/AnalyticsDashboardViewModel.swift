@@ -1072,17 +1072,20 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             )
         }
 
+        let trafficByNodeID = packetTrafficByNodeID()
+
         // Recalculate degrees based on filtered edges
         let updatedNodes = classifiedModel.nodes.map { node in
             let neighbors = adjacency[node.id] ?? []
+            let traffic = trafficByNodeID[node.id]
             return NetworkGraphNode(
                 id: node.id,
                 callsign: node.callsign,
                 weight: node.weight,
-                inCount: node.inCount,
-                outCount: node.outCount,
-                inBytes: node.inBytes,
-                outBytes: node.outBytes,
+                inCount: traffic?.inCount ?? 0,
+                outCount: traffic?.outCount ?? 0,
+                inBytes: traffic?.inBytes ?? 0,
+                outBytes: traffic?.outBytes ?? 0,
                 degree: neighbors.count,
                 groupedSSIDs: node.groupedSSIDs,
                 isNetRomOfficial: node.isNetRomOfficial
@@ -1565,6 +1568,38 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         isGraphLoading = false
         loopDetection.reset()
     }
+
+    private func packetTrafficByNodeID() -> [String: NodeTrafficAggregate] {
+        var aggregates: [String: NodeTrafficAggregate] = [:]
+
+        for event in latestTimeframePackets.map({ PacketEvent(packet: $0) }) {
+            guard
+                let rawFrom = event.from,
+                let rawTo = event.to,
+                let from = StationNormalizer.normalize(rawFrom),
+                let to = StationNormalizer.normalize(rawTo)
+            else {
+                continue
+            }
+
+            let fromKey = CallsignParser.identityKey(for: from, mode: stationIdentityMode)
+            let toKey = CallsignParser.identityKey(for: to, mode: stationIdentityMode)
+
+            guard fromKey != toKey else { continue }
+
+            var fromAggregate = aggregates[fromKey, default: NodeTrafficAggregate()]
+            fromAggregate.outCount += 1
+            fromAggregate.outBytes += event.payloadBytes
+            aggregates[fromKey] = fromAggregate
+
+            var toAggregate = aggregates[toKey, default: NodeTrafficAggregate()]
+            toAggregate.inCount += 1
+            toAggregate.inBytes += event.payloadBytes
+            aggregates[toKey] = toAggregate
+        }
+
+        return aggregates
+    }
 }
 
 private struct RefitBounds {
@@ -1601,6 +1636,13 @@ private struct GraphCacheKey: Hashable {
     let netRomUpdateCount: Int
     let customStart: Date
     let customEnd: Date
+}
+
+private struct NodeTrafficAggregate {
+    var inCount: Int = 0
+    var outCount: Int = 0
+    var inBytes: Int = 0
+    var outBytes: Int = 0
 }
 
 struct GraphInspectorDetails: Hashable, Sendable {
