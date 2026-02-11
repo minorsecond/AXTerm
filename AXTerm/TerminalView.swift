@@ -1032,7 +1032,9 @@ struct TerminalView: View {
     @ObservedObject var client: PacketEngine
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var sessionCoordinator: SessionCoordinator
+    @ObservedObject var connectCoordinator: ConnectCoordinator
     @StateObject private var txViewModel: ObservableTerminalTxViewModel
+    @StateObject private var connectBarViewModel: ConnectBarViewModel
     @ObservedObject var searchModel: AppToolbarSearchModel
 
     @State private var selectedTab: TerminalTab = .session
@@ -1053,10 +1055,17 @@ struct TerminalView: View {
     @State private var lastAutoFilledPath: String = ""
     @State private var lastObservedDestination: String = ""
 
-    init(client: PacketEngine, settings: AppSettingsStore, sessionCoordinator: SessionCoordinator, searchModel: AppToolbarSearchModel) {
+    init(
+        client: PacketEngine,
+        settings: AppSettingsStore,
+        sessionCoordinator: SessionCoordinator,
+        connectCoordinator: ConnectCoordinator,
+        searchModel: AppToolbarSearchModel
+    ) {
         self.client = client
         _settings = ObservedObject(wrappedValue: settings)
         _sessionCoordinator = ObservedObject(wrappedValue: sessionCoordinator)
+        _connectCoordinator = ObservedObject(wrappedValue: connectCoordinator)
         self.searchModel = searchModel
         
         _txViewModel = StateObject(wrappedValue: ObservableTerminalTxViewModel(
@@ -1065,6 +1074,7 @@ struct TerminalView: View {
             sourceCall: settings.myCallsign,
             sessionManager: sessionCoordinator.sessionManager
         ))
+        _connectBarViewModel = StateObject(wrappedValue: ConnectBarViewModel())
     }
 
     var body: some View {
@@ -1075,10 +1085,35 @@ struct TerminalView: View {
             .onAppear {
                 txViewModel.updateSearchQuery(searchModel.query)
                 lastObservedDestination = txViewModel.viewModel.destinationCall
+                connectBarViewModel.toCall = txViewModel.viewModel.destinationCall
+                connectBarViewModel.viaDigipeaters = txViewModel.viewModel.digiPath
+                    .split(separator: ",")
+                    .map { CallsignValidator.normalize(String($0)) }
+                    .filter { !$0.isEmpty }
+                refreshConnectBarData()
+                connectBarViewModel.applyContext(connectCoordinator.activeContext)
+            }
+            .onReceive(client.$stations) { _ in
+                refreshConnectBarData()
+            }
+            .onReceive(client.$packets) { _ in
+                refreshConnectBarData()
+            }
+            .onReceive(connectCoordinator.$pendingRequest.compactMap { $0 }) { request in
+                handleConnectRequest(request)
+            }
+            .onChange(of: connectCoordinator.activeContext) { _, context in
+                connectBarViewModel.applyContext(context)
             }
             .onChange(of: txViewModel.viewModel.destinationCall) { _, newValue in
                 applyAutoPathSuggestionIfNeeded(previousDestination: lastObservedDestination, newDestination: newValue)
                 lastObservedDestination = newValue
+            }
+            .onChange(of: connectBarViewModel.toCall) { _, _ in
+                syncLegacyFieldsFromConnectBar()
+            }
+            .onChange(of: connectBarViewModel.viaDigipeaters) { _, _ in
+                syncLegacyFieldsFromConnectBar()
             }
             .onChange(of: txViewModel.viewModel.digiPath) { _, newValue in
                 if newValue != lastAutoFilledPath {
@@ -1208,6 +1243,51 @@ struct TerminalView: View {
 
     private var autoPathSuggestions: [TerminalAutoPathCandidate] {
         buildAutoPathCandidates(for: txViewModel.viewModel.destinationCall)
+    }
+
+    private func refreshConnectBarData() {
+        let neighbors = client.netRomIntegration?.currentNeighbors(forMode: .hybrid) ?? []
+        let routes = client.netRomIntegration?.currentRoutes(forMode: .hybrid) ?? []
+        connectBarViewModel.updateRuntimeData(
+            stations: client.stations,
+            neighbors: neighbors,
+            routes: routes,
+            packets: client.packets,
+            favorites: settings.watchCallsigns
+        )
+    }
+
+    private func handleConnectRequest(_ request: ConnectRequest) {
+        connectBarViewModel.setMode(request.mode, for: request.intent.sourceContext)
+        connectBarViewModel.toCall = request.intent.to
+        if case let .ax25ViaDigis(digis) = request.intent.kind {
+            connectBarViewModel.viaDigipeaters = digis.map(\.stringValue)
+        } else {
+            connectBarViewModel.viaDigipeaters = []
+        }
+        if case let .netrom(nextHopOverride) = request.intent.kind {
+            connectBarViewModel.nextHopSelection = nextHopOverride?.stringValue ?? ConnectBarViewModel.autoNextHopID
+        } else {
+            connectBarViewModel.nextHopSelection = ConnectBarViewModel.autoNextHopID
+        }
+        connectBarViewModel.applyInlineNote(request.intent.note)
+        connectBarViewModel.validate()
+        syncLegacyFieldsFromConnectBar()
+
+        if request.executeImmediately {
+            connectWithActiveIntent(sourceContext: request.intent.sourceContext)
+        }
+
+        connectCoordinator.consumeRequest(id: request.id)
+    }
+
+    private func syncLegacyFieldsFromConnectBar() {
+        txViewModel.destinationCall.wrappedValue = connectBarViewModel.toCall
+        if connectBarViewModel.mode == .ax25ViaDigi {
+            txViewModel.digiPath.wrappedValue = connectBarViewModel.viaDigipeaters.joined(separator: ",")
+        } else {
+            txViewModel.digiPath.wrappedValue = ""
+        }
     }
 
     private func applyAutoPathSuggestionIfNeeded(previousDestination: String, newDestination: String) {
@@ -1442,6 +1522,8 @@ struct TerminalView: View {
                 sessionState: txViewModel.sessionState,
                 destinationCapability: client.capabilityStore.capabilities(for: txViewModel.viewModel.destinationCall),
                 capabilityStatus: sessionCoordinator.capabilityStatus(for: txViewModel.viewModel.destinationCall),
+                connectBarViewModel: connectBarViewModel,
+                connectContext: connectCoordinator.activeContext,
                 autoPathSuggestions: autoPathSuggestions.map { suggestion in
                     AutoPathSuggestionItem(
                         id: suggestion.id,
@@ -1464,6 +1546,9 @@ struct TerminalView: View {
                 },
                 onConnect: {
                     connectToDestination()
+                },
+                onConnectBarConnect: {
+                    connectWithActiveIntent(sourceContext: connectCoordinator.activeContext)
                 },
                 onDisconnect: {
                     disconnectFromDestination()
@@ -1800,9 +1885,26 @@ struct TerminalView: View {
 
     /// Establish connection to current destination
     private func connectToDestination() {
-        guard let frame = txViewModel.connect() else { return }
+        connectWithActiveIntent(sourceContext: connectCoordinator.activeContext)
+    }
 
-        // Send SABM
+    private func connectWithActiveIntent(sourceContext: ConnectSourceContext) {
+        syncLegacyFieldsFromConnectBar()
+        let intent = connectBarViewModel.buildIntent(sourceContext: sourceContext)
+        guard intent.validationErrors.isEmpty else { return }
+
+        switch intent.kind {
+        case .ax25Direct:
+            connectAX25AndRecord(intent: intent)
+        case .ax25ViaDigis:
+            connectAX25AndRecord(intent: intent)
+        case let .netrom(nextHopOverride):
+            connectNETROM(intent: intent, override: nextHopOverride)
+        }
+    }
+
+    private func connectAX25AndRecord(intent: ConnectIntent) {
+        guard let frame = txViewModel.connect() else { return }
         client.send(frame: frame) { result in
             Task { @MainActor in
                 switch result {
@@ -1810,8 +1912,37 @@ struct TerminalView: View {
                     TxLog.outbound(.session, "SABM sent", [
                         "dest": frame.destination.display
                     ])
+                    connectBarViewModel.recordAttempt(intent: intent, result: .success)
                 case .failure(let error):
                     TxLog.error(.session, "SABM send failed", error: error)
+                    connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+                }
+            }
+        }
+    }
+
+    private func connectNETROM(intent: ConnectIntent, override: CallsignSSID?) {
+        // Native NET/ROM L3 connect is not yet implemented in this stack.
+        // Fallback: open an AX.25 connected session to the selected next-hop neighbor
+        // when available, otherwise attempt direct destination connect.
+        let destination = intent.normalizedTo
+        let fallbackHop = override?.stringValue ?? intent.routeHint?.nextHop ?? destination
+        connectBarViewModel.toCall = fallbackHop
+        connectBarViewModel.viaDigipeaters = []
+        syncLegacyFieldsFromConnectBar()
+
+        if let frame = txViewModel.connect() {
+            client.appendSystemNotification(
+                "NET/ROM connect requested to \(destination). Native NET/ROM connect is unavailable; opened AX.25 session to \(fallbackHop)."
+            )
+            client.send(frame: frame) { result in
+                Task { @MainActor in
+                    switch result {
+                    case .success:
+                        connectBarViewModel.recordAttempt(intent: intent, result: .success)
+                    case .failure:
+                        connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+                    }
                 }
             }
         }
@@ -2042,11 +2173,13 @@ struct TerminalViewModifiers: ViewModifier {
 #Preview("Terminal View") {
     let settings = AppSettingsStore()
     let coordinator = SessionCoordinator()
+    let connectCoordinator = ConnectCoordinator()
     let searchModel = AppToolbarSearchModel()
     TerminalView(
         client: PacketEngine(settings: settings),
         settings: settings,
         sessionCoordinator: coordinator,
+        connectCoordinator: connectCoordinator,
         searchModel: searchModel
     )
     .frame(width: 800, height: 600)

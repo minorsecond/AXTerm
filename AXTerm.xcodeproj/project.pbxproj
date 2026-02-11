@@ -344,9 +344,9 @@
 				"$(TARGET_BUILD_DIR)/$(EXECUTABLE_PATH)",
 			);
 			name = "Upload Sentry dSYMs";
-				outputPaths = (
-					"$(DERIVED_FILE_DIR)/sentry_dsym_upload.stamp",
-				);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/sentry_dsym_upload.stamp",
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"${SRCROOT}/Scripts/upload-sentry-dsyms.sh\"";

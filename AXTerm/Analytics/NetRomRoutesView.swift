@@ -13,14 +13,21 @@ import SwiftUI
 struct NetRomRoutesView: View {
     @StateObject private var viewModel: NetRomRoutesViewModel
     @ObservedObject var settings: AppSettingsStore
+    @ObservedObject var connectCoordinator: ConnectCoordinator
     private weak var packetEngine: PacketEngine?
 
     @State private var showingClearConfirmation = false
     @State private var clearFeedback: String?
 
-    init(integration: NetRomIntegration?, packetEngine: PacketEngine? = nil, settings: AppSettingsStore) {
+    init(
+        integration: NetRomIntegration?,
+        packetEngine: PacketEngine? = nil,
+        settings: AppSettingsStore,
+        connectCoordinator: ConnectCoordinator
+    ) {
         self.settings = settings
         self.packetEngine = packetEngine
+        self.connectCoordinator = connectCoordinator
         _viewModel = StateObject(wrappedValue: NetRomRoutesViewModel(integration: integration, packetEngine: packetEngine, settings: settings))
     }
 
@@ -180,6 +187,14 @@ struct NetRomRoutesView: View {
                     TableColumn("Callsign") { neighbor in
                         Text(neighbor.callsign)
                             .fontWeight(.medium)
+                            .onTapGesture(count: 2) {
+                                requestNeighborConnect(neighbor)
+                            }
+                            .contextMenu {
+                                Button("Connect (AX.25)") {
+                                    requestNeighborConnect(neighbor)
+                                }
+                            }
                     }
                     .width(min: 80, ideal: 100)
 
@@ -227,6 +242,20 @@ struct NetRomRoutesView: View {
                     TableColumn("Destination") { route in
                         Text(route.destination)
                             .fontWeight(.medium)
+                            .onTapGesture(count: 2) {
+                                requestRouteConnect(route, action: .netrom)
+                            }
+                            .contextMenu {
+                                Button("Connect (NET/ROM)") {
+                                    requestRouteConnect(route, action: .netrom)
+                                }
+                                Button("Connect Direct (AX.25)") {
+                                    requestRouteConnect(route, action: .ax25Direct)
+                                }
+                                Button("Connect via Digi (AX.25)") {
+                                    requestRouteConnect(route, action: .ax25ViaDigi)
+                                }
+                            }
                     }
                     .width(min: 80, ideal: 100)
 
@@ -409,6 +438,78 @@ struct NetRomRoutesView: View {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
+    private func requestNeighborConnect(_ neighbor: NeighborDisplayInfo) {
+        connectCoordinator.activeContext = .neighbors
+        let intent = ConnectIntent(
+            kind: .ax25Direct,
+            to: neighbor.callsign,
+            sourceContext: .neighbors,
+            suggestedRoutePreview: nil,
+            validationErrors: [],
+            routeHint: nil,
+            note: nil
+        )
+        connectCoordinator.requestConnect(
+            ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true)
+        )
+    }
+
+    private func requestRouteConnect(_ route: RouteDisplayInfo, action: RouteConnectAction) {
+        connectCoordinator.activeContext = .routes
+        switch action {
+        case .netrom:
+            let hint = NetRomRouteHint(
+                nextHop: route.nextHop,
+                heardAs: route.heardPath.first,
+                path: route.path,
+                hops: route.hopCount
+            )
+            let intent = ConnectIntent(
+                kind: .netrom(nextHopOverride: nil),
+                to: route.destination,
+                sourceContext: .routes,
+                suggestedRoutePreview: "\(route.pathSummary) (\(route.hopCount) hops)",
+                validationErrors: [],
+                routeHint: hint,
+                note: nil
+            )
+            connectCoordinator.requestConnect(
+                ConnectRequest(intent: intent, mode: .netrom, executeImmediately: true)
+            )
+        case .ax25Direct:
+            let target = ConnectPrefillLogic.ax25DirectTarget(
+                destination: route.destination,
+                heardAs: route.heardPath.first
+            )
+            let intent = ConnectIntent(
+                kind: .ax25Direct,
+                to: target.to,
+                sourceContext: .routes,
+                suggestedRoutePreview: nil,
+                validationErrors: [],
+                routeHint: nil,
+                note: target.note
+            )
+            connectCoordinator.requestConnect(
+                ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true)
+            )
+        case .ax25ViaDigi:
+            let digis = route.heardPath.compactMap { Callsign($0) }
+            let intent = ConnectIntent(
+                kind: .ax25ViaDigis(digis),
+                to: route.destination,
+                sourceContext: .routes,
+                suggestedRoutePreview: nil,
+                validationErrors: [],
+                routeHint: nil,
+                note: nil
+            )
+            connectCoordinator.requestConnect(
+                ConnectRequest(intent: intent, mode: .ax25ViaDigi, executeImmediately: true)
+            )
+        }
+    }
+
     // MARK: - Debug Rebuild
 
     #if DEBUG
@@ -541,6 +642,11 @@ struct SourceTypeBadge: View {
 // MARK: - Preview
 
 #Preview {
-    NetRomRoutesView(integration: nil, packetEngine: nil, settings: AppSettingsStore())
+    NetRomRoutesView(
+        integration: nil,
+        packetEngine: nil,
+        settings: AppSettingsStore(),
+        connectCoordinator: ConnectCoordinator()
+    )
         .frame(width: 900, height: 500)
 }

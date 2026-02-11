@@ -273,12 +273,15 @@ struct TerminalComposeView: View {
     var destinationCapability: AXDPCapability?
     /// AXDP capability negotiation status for the destination (if known)
     var capabilityStatus: SessionCoordinator.CapabilityStatus = .unknown
+    @ObservedObject var connectBarViewModel: ConnectBarViewModel
+    let connectContext: ConnectSourceContext
     let autoPathSuggestions: [AutoPathSuggestionItem]
     let onApplyAutoPath: (String) -> Void
 
     let onSend: () -> Void
     let onClear: () -> Void
     let onConnect: () -> Void
+    let onConnectBarConnect: () -> Void
     let onDisconnect: () -> Void
     let onForceDisconnect: () -> Void
 
@@ -344,7 +347,7 @@ struct TerminalComposeView: View {
                                 .help("Stopping…")
                         case .disconnected, .error, .none:
                             Button {
-                                onConnect()
+                                onConnectBarConnect()
                             } label: {
                                 Image(systemName: "link.circle.fill")
                                     .font(.system(size: 20))
@@ -371,8 +374,7 @@ struct TerminalComposeView: View {
 
                 // Controls row - secondary, more compact
                 HStack(spacing: 12) {
-                    
-                    // Mode toggle and fields container
+                    // Mode toggle container
                     HStack(spacing: 12) {
                         ConnectionModeToggle(
                             mode: $connectionMode,
@@ -380,34 +382,6 @@ struct TerminalComposeView: View {
                             onDisconnect: onDisconnect,
                             onForceDisconnect: onForceDisconnect
                         )
-                        
-                        // Vertical divider
-                        Divider().frame(height: 16)
-                        
-                        // Address fields
-                        HStack(spacing: 8) {
-                            HStack(spacing: 4) {
-                                Text("To")
-                                    .foregroundStyle(.tertiary)
-                                    .font(.system(size: 10))
-                                TextField("CALL", text: $destinationCall)
-                                    .textFieldStyle(.plain)
-                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                    .frame(width: 55)
-                                    .textCase(.uppercase)
-                            }
-                            
-                            HStack(spacing: 4) {
-                                Text("Via")
-                                    .foregroundStyle(.tertiary)
-                                    .font(.system(size: 10))
-                                TextField("path", text: $digiPath)
-                                    .textFieldStyle(.plain)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .frame(width: 70)
-                                    .textCase(.uppercase)
-                            }
-                        }
                     }
 
                     Spacer()
@@ -451,6 +425,12 @@ struct TerminalComposeView: View {
                         .help("Frames queued")
                     }
                 }
+
+                ConnectBarView(
+                    viewModel: connectBarViewModel,
+                    context: connectContext,
+                    onConnect: onConnectBarConnect
+                )
 
                 if connectionMode == .connected && !destinationCall.isEmpty && !autoPathSuggestions.isEmpty {
                     HStack(spacing: 6) {
@@ -728,11 +708,14 @@ struct TxQueueView: View {
         queueDepth: 2,
         isConnected: true,
         sessionState: nil,
+        connectBarViewModel: ConnectBarViewModel(),
+        connectContext: .terminal,
         autoPathSuggestions: [],
         onApplyAutoPath: { _ in },
         onSend: {},
         onClear: {},
         onConnect: {},
+        onConnectBarConnect: {},
         onDisconnect: {},
         onForceDisconnect: {}
     )
@@ -754,11 +737,14 @@ struct TxQueueView: View {
         queueDepth: 0,
         isConnected: true,
         sessionState: .connected,
+        connectBarViewModel: ConnectBarViewModel(),
+        connectContext: .terminal,
         autoPathSuggestions: [],
         onApplyAutoPath: { _ in },
         onSend: {},
         onClear: {},
         onConnect: {},
+        onConnectBarConnect: {},
         onDisconnect: {},
         onForceDisconnect: {}
     )
@@ -780,11 +766,14 @@ struct TxQueueView: View {
         queueDepth: 0,
         isConnected: true,
         sessionState: .connecting,
+        connectBarViewModel: ConnectBarViewModel(),
+        connectContext: .terminal,
         autoPathSuggestions: [],
         onApplyAutoPath: { _ in },
         onSend: {},
         onClear: {},
         onConnect: {},
+        onConnectBarConnect: {},
         onDisconnect: {},
         onForceDisconnect: {}
     )

@@ -24,6 +24,7 @@ struct ContentView: View {
     /// Session coordinator for connected-mode sessions - survives tab switches
     /// Uses SessionCoordinator.shared so Settings can update the same instance
     @StateObject private var sessionCoordinator: SessionCoordinator
+    @StateObject private var connectCoordinator = ConnectCoordinator()
 
     @State private var selectedNav: NavigationItem = .terminal
     @StateObject private var searchModel = AppToolbarSearchModel()
@@ -207,6 +208,14 @@ struct ContentView: View {
         }
         .onChange(of: selectedNav) { _, newValue in
             syncSearchScope(for: newValue)
+            syncConnectContext(for: newValue)
+        }
+        .onAppear {
+            connectCoordinator.navigateToTerminal = {
+                selectedNav = .terminal
+                connectCoordinator.activeContext = .terminal
+            }
+            syncConnectContext(for: selectedNav)
         }
     }
 
@@ -217,6 +226,17 @@ struct ContentView: View {
         case .routes: searchModel.scope = .routes
         case .analytics: searchModel.scope = .analytics
         //case .raw: searchModel.scope = .terminal // Fallback or new scope if needed
+        }
+    }
+
+    private func syncConnectContext(for item: NavigationItem) {
+        switch item {
+        case .terminal:
+            connectCoordinator.activeContext = .terminal
+        case .routes:
+            connectCoordinator.activeContext = .routes
+        case .packets, .analytics:
+            connectCoordinator.activeContext = .unknown
         }
     }
 
@@ -268,6 +288,38 @@ struct ContentView: View {
                             capability: client.capabilityStore.capabilities(for: station.call)
                         )
                         .contentShape(Rectangle())
+                        .contextMenu {
+                            Button("Connect (AX.25)") {
+                                connectCoordinator.activeContext = .stations
+                                let intent = ConnectIntent(
+                                    kind: .ax25Direct,
+                                    to: station.call,
+                                    sourceContext: .stations,
+                                    suggestedRoutePreview: nil,
+                                    validationErrors: [],
+                                    routeHint: nil,
+                                    note: nil
+                                )
+                                connectCoordinator.requestConnect(
+                                    ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true)
+                                )
+                            }
+                        }
+                        .onTapGesture(count: 2) {
+                            connectCoordinator.activeContext = .stations
+                            let intent = ConnectIntent(
+                                kind: .ax25Direct,
+                                to: station.call,
+                                sourceContext: .stations,
+                                suggestedRoutePreview: nil,
+                                validationErrors: [],
+                                routeHint: nil,
+                                note: nil
+                            )
+                            connectCoordinator.requestConnect(
+                                ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true)
+                            )
+                        }
                         .onTapGesture {
                             if client.selectedStationCall == station.call {
                                 client.selectedStationCall = nil
@@ -313,11 +365,22 @@ struct ContentView: View {
 
             switch selectedNav {
             case .terminal:
-                TerminalView(client: client, settings: settings, sessionCoordinator: sessionCoordinator, searchModel: searchModel)
+                TerminalView(
+                    client: client,
+                    settings: settings,
+                    sessionCoordinator: sessionCoordinator,
+                    connectCoordinator: connectCoordinator,
+                    searchModel: searchModel
+                )
             case .packets:
                 packetsView
             case .routes:
-                NetRomRoutesView(integration: client.netRomIntegration, packetEngine: client, settings: settings)
+                NetRomRoutesView(
+                    integration: client.netRomIntegration,
+                    packetEngine: client,
+                    settings: settings,
+                    connectCoordinator: connectCoordinator
+                )
             case .analytics:
                 AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel)
             //case .raw:
