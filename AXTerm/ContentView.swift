@@ -29,7 +29,6 @@ struct ContentView: View {
     @State private var selectedNav: NavigationItem = .terminal
     @StateObject private var searchModel = AppToolbarSearchModel()
     @State private var filters = PacketFilters()
-    @State private var showFilterPopover = false
 
     @State private var selection = Set<Packet.ID>()
     @State private var inspectorSelection: PacketInspectorSelection?
@@ -519,148 +518,67 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        // Left: Connection status
-        ToolbarItem(placement: .navigation) {
-            connectionStatusIndicator
-        }
-        
-        ToolbarItemGroup(placement: .principal) {
-            if activeFilterCount > 0 {
-                filterSummary
-            }
-        }
-        
-        // Right: Actions
         ToolbarItemGroup(placement: .primaryAction) {
-            connectionActionButton
-            filterButton
+            connectionStatusCapsule
         }
     }
-
-    // MARK: - Toolbar Components
     
-    /// Left zone: Connection status indicator
+    
+    /// Right zone: Connection status capsule with actions
     @ViewBuilder
-    private var connectionStatusIndicator: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
-            
-            Text(statusText)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-        }
-        .animation(.easeInOut(duration: 0.2), value: client.status)
-    }
-    
-    
-    /// Center zone: Filter summary badge
-    @ViewBuilder
-    private var filterSummary: some View {
-        Text("\(activeFilterCount) filter\(activeFilterCount == 1 ? "" : "s")")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-    }
-    
-    /// Right zone: Connection action button (state-aware)
-    @ViewBuilder
-    private var connectionActionButton: some View {
-        switch client.status {
-        case .disconnected, .failed:
-            Menu {
-                Button("Connect…") {
-                    client.connect(host: settings.host, port: settings.portValue)
-                }
-            } label: {
-                Text("Connect…")
-            } primaryAction: {
-                client.connect(host: settings.host, port: settings.portValue)
-            }
-            .buttonStyle(.borderedProminent)
-            .help("Connect to TNC at \(settings.host):\(settings.port)")
-            
-        case .connecting:
-            Button("Cancel") {
-                client.disconnect()
-            }
-            .buttonStyle(.bordered)
-            .help("Cancel connection attempt")
-            
-        case .connected:
-            Menu {
-                Button("Disconnect") {
+    private var connectionStatusCapsule: some View {
+        Menu {
+            switch client.status {
+            case .connected:
+                Button("Disconnect", role: .destructive) {
                     client.disconnect()
                 }
                 Button("Reconnect") {
+                    reconnectToTNC()
+                }
+            case .connecting:
+                Button("Cancel") {
                     client.disconnect()
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 500_000_000)
-                        client.connect(host: settings.host, port: settings.portValue)
-                    }
                 }
-                Divider()
-                Button("Copy Address") {
-                    let address = "\(settings.host):\(settings.port)"
-                    ClipboardWriter.copy(address)
+                Button("Reconnect") {
+                    reconnectToTNC()
                 }
-            } label: {
-                Text("Disconnect")
-            } primaryAction: {
-                client.disconnect()
+            case .disconnected, .failed:
+                Button("Reconnect") {
+                    reconnectToTNC()
+                }
             }
-            .buttonStyle(.bordered)
-            .help("Disconnect from TNC")
-        }
-    }
-    
-    /// Right zone: Filter button with popover
-    @ViewBuilder
-    private var filterButton: some View {
-        Button {
-            showFilterPopover.toggle()
+
+            Divider()
+
+            Section("Connection details") {
+                Text(connectionHostPort)
+            }
         } label: {
-            Label("Filters", systemImage: "line.3.horizontal.decrease.circle")
-                .labelStyle(.iconOnly)
-        }
-        .buttonStyle(.bordered)
-        .help("Packet filters")
-        .popover(isPresented: $showFilterPopover) {
-            FilterPopoverView(
-                filters: $filters,
-                hasPackets: !client.packets.isEmpty,
-                hasPinnedPackets: !client.pinnedPacketIDs.isEmpty,
-                onReset: {
-                    filters = PacketFilters()
-                    showFilterPopover = false
-                }
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(client.status == .connected ? .green : Color(nsColor: .tertiaryLabelColor))
+                    .frame(width: 8, height: 8)
+
+                Text(connectionCapsuleLabel)
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(.thinMaterial, in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
             )
         }
-        .overlay(alignment: .topTrailing) {
-            if activeFilterCount > 0 {
-                Circle()
-                    .fill(.blue)
-                    .frame(width: 8, height: 8)
-                    .offset(x: 4, y: -4)
-            }
-        }
+        .menuStyle(.borderlessButton)
+        .help("Connection actions")
     }
 
     // MARK: - Computed Properties
 
-    private var statusText: String {
-        switch client.status {
-        case .connected:
-            return "TNC: \(connectionHostPort)"
-        case .connecting:
-            return "Connecting..."
-        case .disconnected:
-            return "Disconnected"
-        case .failed:
-            return "Connection Failed"
-        }
-    }
-    
     private var searchPlaceholder: String {
         switch selectedNav {
         case .terminal:
@@ -672,28 +590,18 @@ struct ContentView: View {
         }
     }
     
-    private var activeFilterCount: Int {
-        var count = 0
-        let defaultFilters = PacketFilters()
-        if filters.showUI != defaultFilters.showUI { count += 1 }
-        if filters.showI != defaultFilters.showI { count += 1 }
-        if filters.showS != defaultFilters.showS { count += 1 }
-        if filters.showU != defaultFilters.showU { count += 1 }
-        if filters.payloadOnly != defaultFilters.payloadOnly { count += 1 }
-        if filters.onlyPinned != defaultFilters.onlyPinned { count += 1 }
-        return count
-    }
-
-    private var statusDetail: String {
-        "\(formatBytes(client.bytesReceived)) • \(client.packets.count) pkts"
-    }
-
-    private var statusColor: Color {
+    private var connectionCapsuleLabel: String {
         switch client.status {
-        case .connected: return .green
-        case .connecting: return .orange
-        case .disconnected: return Color(nsColor: .tertiaryLabelColor)
-        case .failed: return .red
+        case .connected:
+            if sessionCoordinator.adaptiveTransmissionEnabled {
+                let adaptive = sessionCoordinator.globalAdaptiveSettings
+                return "Connected • Adaptive K\(adaptive.windowSize.effectiveValue) P\(adaptive.paclen.effectiveValue) N2 \(adaptive.maxRetries.effectiveValue)"
+            }
+            return "Connected"
+        case .connecting:
+            return "Connecting…"
+        case .disconnected, .failed:
+            return "Not Connected"
         }
     }
 
@@ -703,17 +611,19 @@ struct ContentView: View {
         return "\(hostValue):\(portValue)"
     }
 
-    private func formatBytes(_ bytes: Int) -> String {
-        if bytes < 1024 { return "\(bytes) B" }
-        if bytes < 1024 * 1024 { return String(format: "%.1f KB", Double(bytes) / 1024) }
-        return String(format: "%.1f MB", Double(bytes) / (1024 * 1024))
-    }
-
     private func toggleConnection() {
         switch client.status {
         case .connected, .connecting:
             client.disconnect()
         case .disconnected, .failed:
+            client.connect(host: settings.host, port: settings.portValue)
+        }
+    }
+
+    private func reconnectToTNC() {
+        client.disconnect()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
             client.connect(host: settings.host, port: settings.portValue)
         }
     }
