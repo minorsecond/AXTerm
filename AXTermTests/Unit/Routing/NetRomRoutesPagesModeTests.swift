@@ -38,7 +38,7 @@ final class NetRomRoutesPagesModeTests: XCTestCase {
             timestamp: timestamp,
             from: AX25Address(call: from),
             to: AX25Address(call: to),
-            via: via.map { AX25Address(call: $0) },
+            via: via.map { AX25Address(call: $0, repeated: true) },
             frameType: .ui,
             control: 0,
             pid: nil,
