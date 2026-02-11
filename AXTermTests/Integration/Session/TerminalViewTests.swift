@@ -12,6 +12,8 @@ import SwiftUI
 
 @MainActor
 final class TerminalViewTests: XCTestCase {
+    private static var retainedCoordinators: [ConnectCoordinator] = []
+    private static var retainedConnectBarViewModels: [ConnectBarViewModel] = []
 
     @MainActor
     private func createViewModel(sourceCall: String = "N0CALL") -> ObservableTerminalTxViewModel {
@@ -164,5 +166,40 @@ final class TerminalViewTests: XCTestCase {
         // Terminal should be first in the list (the default view)
         XCTAssertEqual(allCases[0], .terminal)
         XCTAssertEqual(allCases[1], .packets)
+    }
+
+    func testStationDefaultConnectModeIsAX25() {
+        XCTAssertEqual(ContentView.stationDefaultConnectMode(), .ax25)
+    }
+
+    func testConnectCoordinatorImmediateRequestTriggersNavigationCallback() {
+        let coordinator = ConnectCoordinator()
+        Self.retainedCoordinators.append(coordinator)
+        var didNavigate = false
+        coordinator.navigateToTerminal = { didNavigate = true }
+        let intent = ConnectIntent(
+            kind: .ax25Direct,
+            to: "N0CALL",
+            sourceContext: .stations,
+            suggestedRoutePreview: nil,
+            validationErrors: [],
+            routeHint: nil,
+            note: nil
+        )
+        coordinator.requestConnect(ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true))
+        XCTAssertTrue(didNavigate)
+    }
+
+    func testFailedStateRemainsVisibleInConnectBarModel() {
+        let vm = ConnectBarViewModel()
+        Self.retainedConnectBarViewModels.append(vm)
+        vm.applySuggestedTo("N0CALL")
+        vm.markConnecting()
+        vm.markFailed(reason: .timeout, detail: "Timed out waiting for UA")
+        if case .failed = vm.barState {
+            XCTAssertTrue(true)
+        } else {
+            XCTFail("Expected failed state to remain visible")
+        }
     }
 }

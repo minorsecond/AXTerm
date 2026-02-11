@@ -101,7 +101,13 @@ final class ConnectBarViewModel: ObservableObject {
     }
 
     var recentPathPresets: [[String]] {
-        recentDigiPaths.map(\.path)
+        let scoped = recentDigiPaths.filter { item in
+            item.mode == mode && (item.context == nil || item.context == activeDraftContext)
+        }
+        if !scoped.isEmpty {
+            return scoped.map(\.path)
+        }
+        return recentDigiPaths.filter { $0.mode == mode }.map(\.path)
     }
 
     func applyContext(_ context: ConnectSourceContext) {
@@ -296,6 +302,28 @@ final class ConnectBarViewModel: ObservableObject {
         syncStateFromDraftIfEditable()
     }
 
+    func applyNetRomPrefill(
+        destination: String,
+        routeHint: NetRomRouteHint?,
+        suggestedPreview: String?,
+        nextHopOverride: String?
+    ) {
+        mode = .netrom
+        toCall = CallsignValidator.normalize(destination)
+        if let routeHint {
+            routeHintsByDestination[toCall] = routeHint
+            if let hop = routeHint.nextHop, !hop.isEmpty {
+                routeHintsByDestinationAndNextHop[toCall, default: [:]][hop] = routeHint
+            }
+        }
+        if let suggestedPreview, !suggestedPreview.isEmpty {
+            routePreview = suggestedPreview
+        }
+        nextHopSelection = nextHopOverride ?? Self.autoNextHopID
+        validate()
+        syncStateFromDraftIfEditable()
+    }
+
     func applyNeighborPrefill(_ neighbor: NeighborDisplayInfo) {
         mode = .ax25
         toCall = CallsignValidator.normalize(neighbor.callsign)
@@ -460,8 +488,11 @@ final class ConnectBarViewModel: ObservableObject {
 
         if case let .ax25ViaDigis(digis) = intent.kind, !digis.isEmpty {
             let values = digis.map(\.stringValue)
-            recentDigiPaths.removeAll { $0.path == values }
-            recentDigiPaths.insert(RecentDigiPath(path: values, timestamp: Date()), at: 0)
+            recentDigiPaths.removeAll { $0.path == values && $0.mode == .ax25ViaDigi && $0.context == activeDraftContext }
+            recentDigiPaths.insert(
+                RecentDigiPath(path: values, mode: .ax25ViaDigi, context: activeDraftContext, timestamp: Date()),
+                at: 0
+            )
             recentDigiPaths = Array(recentDigiPaths.prefix(20))
             persistRecentDigiPaths()
         }

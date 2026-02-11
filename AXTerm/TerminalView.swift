@@ -1025,6 +1025,18 @@ private struct TerminalAutoPathCandidate: Identifiable, Hashable {
     }
 }
 
+private struct SessionRecord: Identifiable, Hashable {
+    let id: String
+    let destination: String
+    let mode: ConnectBarMode
+    let via: [String]
+    var statusText: String
+
+    var label: String {
+        "\(destination) • \(statusText)"
+    }
+}
+
 // MARK: - Terminal View
 
 /// Main terminal view with session output and transmission controls
@@ -1054,6 +1066,8 @@ struct TerminalView: View {
     @State private var showAdaptiveSettingsPopover = false
     @State private var lastAutoFilledPath: String = ""
     @State private var lastObservedDestination: String = ""
+    @State private var sessionRecords: [SessionRecord] = []
+    @State private var activeSessionRecordID: String?
 
     init(
         client: PacketEngine,
@@ -1135,6 +1149,7 @@ struct TerminalView: View {
                 switch newState {
                 case .connecting:
                     connectBarViewModel.markConnecting()
+                    updateActiveSessionRecordState("Connecting")
                 case .connected:
                     connectBarViewModel.markConnected(
                         sourceCall: txViewModel.viewModel.sourceCall,
@@ -1145,12 +1160,16 @@ struct TerminalView: View {
                             ? nil
                             : connectBarViewModel.nextHopSelection
                     )
+                    updateActiveSessionRecordState("Connected")
                 case .disconnecting:
                     connectBarViewModel.markDisconnecting()
+                    updateActiveSessionRecordState("Disconnecting")
                 case .disconnected:
                     connectBarViewModel.markDisconnected()
+                    updateActiveSessionRecordState("Disconnected")
                 case .error:
                     connectBarViewModel.markFailed(reason: .unknown, detail: "Session state entered error")
+                    updateActiveSessionRecordState("Failed")
                 case .none:
                     break
                 }
@@ -1324,20 +1343,25 @@ struct TerminalView: View {
                 action: request.executeImmediately ? .connect : .prefill
             )
         } else {
-            connectBarViewModel.setMode(request.mode, for: request.intent.sourceContext)
-            connectBarViewModel.toCall = request.intent.to
-            if case let .ax25ViaDigis(digis) = request.intent.kind {
-                connectBarViewModel.viaDigipeaters = digis.map(\.stringValue)
-            } else {
-                connectBarViewModel.viaDigipeaters = []
-            }
             if case let .netrom(nextHopOverride) = request.intent.kind {
-                connectBarViewModel.nextHopSelection = nextHopOverride?.stringValue ?? ConnectBarViewModel.autoNextHopID
+                connectBarViewModel.applyNetRomPrefill(
+                    destination: request.intent.to,
+                    routeHint: request.intent.routeHint,
+                    suggestedPreview: request.intent.suggestedRoutePreview,
+                    nextHopOverride: nextHopOverride?.stringValue
+                )
             } else {
+                connectBarViewModel.setMode(request.mode, for: request.intent.sourceContext)
+                connectBarViewModel.toCall = request.intent.to
+                if case let .ax25ViaDigis(digis) = request.intent.kind {
+                    connectBarViewModel.viaDigipeaters = digis.map(\.stringValue)
+                } else {
+                    connectBarViewModel.viaDigipeaters = []
+                }
                 connectBarViewModel.nextHopSelection = ConnectBarViewModel.autoNextHopID
+                connectBarViewModel.validate()
             }
             connectBarViewModel.applyInlineNote(request.intent.note)
-            connectBarViewModel.validate()
         }
 
         syncLegacyFieldsFromConnectBar()
@@ -1562,6 +1586,10 @@ struct TerminalView: View {
                 }
 
                 // Session output (reuse console view for now, filtered by session)
+                if !sessionRecords.isEmpty {
+                    sessionSelectorView
+                }
+
                 sessionOutputView
 
                 // Outbound progress (sender: pending → sent → acked highlighting)
@@ -1679,6 +1707,31 @@ struct TerminalView: View {
             txViewModel.pendingPeerAxdpDisabledNotification = nil
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: txViewModel.sessionNotification)
+    }
+
+    private var sessionSelectorView: some View {
+        HStack(spacing: 8) {
+            Label("Sessions", systemImage: "rectangle.stack")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Picker("Sessions", selection: $activeSessionRecordID) {
+                ForEach(sessionRecords) { record in
+                    Text(record.label).tag(Optional(record.id))
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: 360, alignment: .leading)
+            .onChange(of: activeSessionRecordID) { _, newValue in
+                guard let newValue else { return }
+                focusSessionRecord(id: newValue)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
     }
 
     @ViewBuilder
@@ -1976,9 +2029,11 @@ struct TerminalView: View {
         let intent = connectBarViewModel.buildIntent(sourceContext: sourceContext)
         guard intent.validationErrors.isEmpty else {
             connectBarViewModel.markFailed(reason: .invalidDraft, detail: intent.validationErrors.joined(separator: "; "))
+            updateActiveSessionRecordState("Failed")
             return
         }
 
+        upsertSessionRecord(intent: intent, statusText: "Connecting")
         connectBarViewModel.markConnecting()
 
         switch intent.kind {
@@ -1994,6 +2049,7 @@ struct TerminalView: View {
     private func connectAX25AndRecord(intent: ConnectIntent) {
         guard let frame = txViewModel.connect() else {
             connectBarViewModel.markFailed(reason: .unknown, detail: "Unable to build SABM frame")
+            updateActiveSessionRecordState("Failed")
             return
         }
         client.send(frame: frame) { result in
@@ -2004,60 +2060,40 @@ struct TerminalView: View {
                         "dest": frame.destination.display
                     ])
                     connectBarViewModel.recordAttempt(intent: intent, result: .success)
+                    updateActiveSessionRecordState("Connecting")
                 case .failure(let error):
                     TxLog.error(.session, "SABM send failed", error: error)
                     connectBarViewModel.recordAttempt(intent: intent, result: .failed)
                     connectBarViewModel.markFailed(reason: .connectRejected, detail: error.localizedDescription)
+                    updateActiveSessionRecordState("Failed")
                 }
             }
         }
     }
 
     private func connectNETROM(intent: ConnectIntent, override: CallsignSSID?) {
-        // Native NET/ROM L3 connect is not yet implemented in this stack.
-        // Fallback: attempt AX.25 connected mode to destination using best known digi path.
         let destination = intent.normalizedTo
-        let selection = connectBarViewModel.nextFallbackDigipeaterSelection(
-            for: destination,
-            nextHopOverride: override
+        let forced = override?.stringValue ?? "Auto"
+        connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+        connectBarViewModel.markFailed(
+            reason: .unknown,
+            detail: "Native NET/ROM connected transport is not available in this build (next hop: \(forced))."
         )
-        let chosenDigis = selection.path
-        // Make fallback explicit in UI and ensure legacy binding propagates digi path.
-        // Do not persist this as a context default; this is per-attempt fallback behavior.
-        connectBarViewModel.setMode(.ax25ViaDigi, for: nil)
-        connectBarViewModel.toCall = destination
-        connectBarViewModel.viaDigipeaters = chosenDigis
-        syncLegacyFieldsFromConnectBar()
-
-        if let frame = txViewModel.connect() {
-            let viaText = chosenDigis.isEmpty ? "direct" : chosenDigis.joined(separator: ",")
-            let alternateCount = selection.alternateCount
-            client.appendSystemNotification(
-                "NET/ROM connect requested to \(destination). Native NET/ROM connect is unavailable; opened AX.25 via Digi session to \(destination) via \(viaText). \(alternateCount > 0 ? "\(alternateCount) alternate path(s) known." : "")"
-            )
-            client.send(frame: frame) { result in
-                Task { @MainActor in
-                    switch result {
-                    case .success:
-                        connectBarViewModel.recordAttempt(intent: intent, result: .success)
-                    case .failure:
-                        connectBarViewModel.recordAttempt(intent: intent, result: .failed)
-                        connectBarViewModel.markFailed(reason: .connectRejected, detail: "Fallback AX.25 connect send failed")
-                    }
-                }
-            }
-        } else {
-            connectBarViewModel.markFailed(reason: .noRoute, detail: "No fallback AX.25 connect frame could be built")
-        }
+        updateActiveSessionRecordState("Failed")
+        client.appendSystemNotification(
+            "NET/ROM connect requested to \(destination) (next hop: \(forced)). Native NET/ROM connected transport is unavailable; session not opened."
+        )
     }
 
     /// Disconnect from current session
     private func disconnectFromDestination() {
         guard let frame = txViewModel.disconnect() else {
             connectBarViewModel.markFailed(reason: .unknown, detail: "Unable to build DISC frame")
+            updateActiveSessionRecordState("Failed")
             return
         }
         connectBarViewModel.markDisconnecting()
+        updateActiveSessionRecordState("Disconnecting")
 
         // Send DISC
         client.send(frame: frame) { result in
@@ -2070,6 +2106,7 @@ struct TerminalView: View {
                 case .failure(let error):
                     TxLog.error(.session, "DISC send failed", error: error)
                     connectBarViewModel.markFailed(reason: .unknown, detail: error.localizedDescription)
+                    updateActiveSessionRecordState("Failed")
                 }
             }
         }
@@ -2079,6 +2116,67 @@ struct TerminalView: View {
     private func forceDisconnectFromDestination() {
         txViewModel.forceDisconnect()
         connectBarViewModel.markDisconnected()
+        updateActiveSessionRecordState("Disconnected")
+    }
+
+    private func sessionKey(for intent: ConnectIntent) -> String {
+        switch intent.kind {
+        case .ax25Direct:
+            return "ax25|\(intent.normalizedTo)"
+        case let .ax25ViaDigis(digis):
+            let via = digis.map(\.stringValue).joined(separator: ",")
+            return "ax25digi|\(intent.normalizedTo)|\(via)"
+        case let .netrom(nextHop):
+            return "netrom|\(intent.normalizedTo)|\(nextHop?.stringValue ?? "auto")"
+        }
+    }
+
+    private func upsertSessionRecord(intent: ConnectIntent, statusText: String) {
+        let key = sessionKey(for: intent)
+        let mode: ConnectBarMode
+        let via: [String]
+        switch intent.kind {
+        case .ax25Direct:
+            mode = .ax25
+            via = []
+        case let .ax25ViaDigis(digis):
+            mode = .ax25ViaDigi
+            via = digis.map(\.stringValue)
+        case .netrom:
+            mode = .netrom
+            via = []
+        }
+
+        if let idx = sessionRecords.firstIndex(where: { $0.id == key }) {
+            sessionRecords[idx].statusText = statusText
+        } else {
+            sessionRecords.insert(
+                SessionRecord(
+                    id: key,
+                    destination: intent.normalizedTo,
+                    mode: mode,
+                    via: via,
+                    statusText: statusText
+                ),
+                at: 0
+            )
+            sessionRecords = Array(sessionRecords.prefix(20))
+        }
+        activeSessionRecordID = key
+    }
+
+    private func updateActiveSessionRecordState(_ state: String) {
+        guard let activeSessionRecordID,
+              let idx = sessionRecords.firstIndex(where: { $0.id == activeSessionRecordID }) else { return }
+        sessionRecords[idx].statusText = state
+    }
+
+    private func focusSessionRecord(id: String) {
+        guard let record = sessionRecords.first(where: { $0.id == id }) else { return }
+        connectBarViewModel.setMode(record.mode, for: connectCoordinator.activeContext)
+        connectBarViewModel.applySuggestedTo(record.destination)
+        connectBarViewModel.viaDigipeaters = record.via
+        syncLegacyFieldsFromConnectBar()
     }
 
     // MARK: - Transfers View

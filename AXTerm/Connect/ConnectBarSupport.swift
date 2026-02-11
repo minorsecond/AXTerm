@@ -46,7 +46,31 @@ nonisolated struct ConnectAttemptRecord: Codable, Equatable {
 
 nonisolated struct RecentDigiPath: Codable, Hashable {
     let path: [String]
+    let mode: ConnectBarMode
+    let context: ConnectSourceContext?
     let timestamp: Date
+
+    init(path: [String], mode: ConnectBarMode, context: ConnectSourceContext?, timestamp: Date) {
+        self.path = path
+        self.mode = mode
+        self.context = context
+        self.timestamp = timestamp
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case mode
+        case context
+        case timestamp
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        path = try container.decode([String].self, forKey: .path)
+        mode = try container.decodeIfPresent(ConnectBarMode.self, forKey: .mode) ?? .ax25ViaDigi
+        context = try container.decodeIfPresent(ConnectSourceContext.self, forKey: .context)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+    }
 }
 
 nonisolated struct ConnectModeContextDefaults: Codable {

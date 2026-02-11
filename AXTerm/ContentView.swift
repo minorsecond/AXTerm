@@ -40,6 +40,10 @@ struct ContentView: View {
     @State private var selectionMutationScheduler = SelectionMutationScheduler()
     @StateObject private var analyticsViewModel: AnalyticsDashboardViewModel
 
+    nonisolated static func stationDefaultConnectMode() -> ConnectBarMode {
+        .ax25
+    }
+
     init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter) {
         _client = StateObject(wrappedValue: client)
         _settings = ObservedObject(wrappedValue: settings)
@@ -287,6 +291,7 @@ struct ContentView: View {
                             for: station.call,
                             hasNetRomRoute: stationHasNetRomRoute
                         )
+                        let defaultStationMode = Self.stationDefaultConnectMode()
                         let isConnectedStation = sessionCoordinator.connectedSessions.contains {
                             CallsignValidator.normalize($0.remoteAddress.display) == CallsignValidator.normalize(station.call)
                         }
@@ -302,7 +307,7 @@ struct ContentView: View {
                             Button("Connect") {
                                 issueStationConnectRequest(
                                     stationCall: station.call,
-                                    mode: preferredMode,
+                                    mode: defaultStationMode,
                                     executeImmediately: true
                                 )
                             }
@@ -354,7 +359,7 @@ struct ContentView: View {
                         .onTapGesture(count: 2) {
                             issueStationConnectRequest(
                                 stationCall: station.call,
-                                mode: preferredMode,
+                                mode: defaultStationMode,
                                 executeImmediately: true
                             )
                         }
@@ -366,7 +371,7 @@ struct ContentView: View {
                             }
                             issueStationConnectRequest(
                                 stationCall: station.call,
-                                mode: preferredMode,
+                                mode: defaultStationMode,
                                 executeImmediately: false
                             )
                         }

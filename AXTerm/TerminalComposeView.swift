@@ -370,6 +370,14 @@ private struct InlineConnectBar: View {
                 .controlSize(.small)
             }
 
+            if viewModel.mode == .ax25ViaDigi {
+                viaEditor
+            }
+
+            if viewModel.mode == .netrom {
+                netRomEditor
+            }
+
             HStack(spacing: 8) {
                 Menu {
                     if viewModel.mode == .ax25ViaDigi {
@@ -416,6 +424,13 @@ private struct InlineConnectBar: View {
                 .font(.system(size: 11))
                 .controlSize(.small)
                 .disabled(viewModel.mode == .ax25 && viewModel.toCall.isEmpty)
+
+                if let warning = viewModel.routeOverrideWarning, viewModel.mode == .netrom {
+                    Text(warning)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                }
 
                 if let note = viewModel.inlineNote {
                     Text(note)
@@ -473,6 +488,133 @@ private struct InlineConnectBar: View {
                 return "NET/ROM auto route"
             }
             return "NET/ROM via \(viewModel.nextHopSelection) (forced)"
+        }
+    }
+
+    private var viaEditor: some View {
+        HStack(spacing: 8) {
+            Label("Via", systemImage: "arrow.triangle.branch")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    if viewModel.viaDigipeaters.isEmpty {
+                        Text("Direct")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(
+                                Capsule().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.08))
+                            )
+                    }
+
+                    ForEach(Array(viewModel.viaDigipeaters.enumerated()), id: \.offset) { idx, token in
+                        HStack(spacing: 4) {
+                            Text(token)
+                                .font(.system(size: 10, design: .monospaced))
+
+                            Button {
+                                viewModel.moveDigiLeft(at: idx)
+                            } label: {
+                                Image(systemName: "arrow.left")
+                                    .font(.system(size: 9))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(idx == 0)
+
+                            Button {
+                                viewModel.moveDigiRight(at: idx)
+                            } label: {
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 9))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(idx >= viewModel.viaDigipeaters.count - 1)
+
+                            Button {
+                                viewModel.removeDigi(at: idx)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color(nsColor: .windowBackgroundColor)))
+                        .overlay(
+                            Capsule()
+                                .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
+                        )
+                    }
+                }
+            }
+            .frame(maxWidth: 340)
+
+            TextField("Add digis (comma or space separated)", text: $viewModel.pendingViaTokenInput)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11, design: .monospaced))
+                .frame(width: 220)
+                .onSubmit {
+                    viewModel.ingestViaInput()
+                }
+
+            Button("Add") {
+                viewModel.ingestViaInput()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+
+            Text("\(viewModel.viaHopCount) hops")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(viewModel.viaHopCount > 2 ? .orange : .secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color(nsColor: .windowBackgroundColor)))
+                .overlay(
+                    Capsule()
+                        .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
+                )
+
+            if viewModel.viaHopCount > 2 {
+                Text("More than 2 digipeaters may reduce reliability")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+        }
+    }
+
+    private var netRomEditor: some View {
+        HStack(spacing: 8) {
+            Label("Route", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            Text(viewModel.routePreview)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(maxWidth: 360, alignment: .leading)
+
+            Picker("Next hop", selection: $viewModel.nextHopSelection) {
+                Text("Auto").tag(ConnectBarViewModel.autoNextHopID)
+                ForEach(viewModel.nextHopOptions.filter { $0 != ConnectBarViewModel.autoNextHopID }, id: \.self) { hop in
+                    Text(hop).tag(hop)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 170)
+            .onChange(of: viewModel.nextHopSelection) { _, _ in
+                viewModel.refreshRoutePreview()
+            }
+
+            Spacer()
         }
     }
 }
