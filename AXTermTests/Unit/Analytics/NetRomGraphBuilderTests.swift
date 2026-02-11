@@ -24,8 +24,8 @@ final class NetRomGraphBuilderTests: XCTestCase {
         let infoData = "HELLO".data(using: .ascii) ?? Data()
         return Packet(
             timestamp: timestamp,
-            from: AX25Address(call: from),
-            to: AX25Address(call: to),
+            from: CallsignNormalizer.toAddress(from),
+            to: CallsignNormalizer.toAddress(to),
             frameType: .ui,
             info: infoData,
             rawAx25: infoData,
@@ -72,6 +72,100 @@ final class NetRomGraphBuilderTests: XCTestCase {
         XCTAssertEqual(edge.sourceID, localCallsign)
         XCTAssertEqual(edge.targetID, neighbor)
         XCTAssertEqual(edge.weight, 200 / 25)
+    }
+
+    func testBuildFromNetRomUsesPacketEvidenceForBytesAndDirectionalCounts() {
+        let now = Date()
+        let neighbor = "W0ABC"
+        let packets = [
+            makePacket(from: neighbor, to: localCallsign, timestamp: now),
+            makePacket(from: localCallsign, to: neighbor, timestamp: now.addingTimeInterval(1))
+        ]
+
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: false,
+            minimumEdgeCount: 1,
+            maxNodes: 10,
+            stationIdentityMode: .ssid
+        )
+
+        let model = NetworkGraphBuilder.buildFromNetRom(
+            neighbors: [NeighborInfo(call: neighbor, quality: 200, lastSeen: now, sourceType: "classic")],
+            routes: [],
+            localCallsign: localCallsign,
+            options: options,
+            packets: packets,
+            now: now
+        )
+
+        let localNode = model.nodes.first { $0.id == localCallsign }
+        let neighborNode = model.nodes.first { $0.id == neighbor }
+        let edge = model.edges.first { Set([$0.sourceID, $0.targetID]) == Set([localCallsign, neighbor]) }
+
+        XCTAssertNotNil(localNode)
+        XCTAssertNotNil(neighborNode)
+        XCTAssertNotNil(edge)
+
+        // Each synthetic packet in this test has 5 payload bytes.
+        XCTAssertEqual(localNode?.inCount, 1)
+        XCTAssertEqual(localNode?.outCount, 1)
+        XCTAssertEqual(localNode?.inBytes, 5)
+        XCTAssertEqual(localNode?.outBytes, 5)
+
+        XCTAssertEqual(neighborNode?.inCount, 1)
+        XCTAssertEqual(neighborNode?.outCount, 1)
+        XCTAssertEqual(neighborNode?.inBytes, 5)
+        XCTAssertEqual(neighborNode?.outBytes, 5)
+
+        XCTAssertEqual(edge?.bytes, 10)
+    }
+
+    func testBuildFromNetRomAggregatesPacketBytesAcrossGroupedSSIDs() {
+        let now = Date()
+        let s1 = "KOEPI-6"
+        let s2 = "KOEPI-7"
+        let packets = [
+            makePacket(from: s1, to: localCallsign, timestamp: now),
+            makePacket(from: s2, to: localCallsign, timestamp: now.addingTimeInterval(1)),
+            makePacket(from: localCallsign, to: s1, timestamp: now.addingTimeInterval(2))
+        ]
+
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: false,
+            minimumEdgeCount: 1,
+            maxNodes: 10,
+            stationIdentityMode: .station
+        )
+
+        let model = NetworkGraphBuilder.buildFromNetRom(
+            neighbors: [
+                NeighborInfo(call: s1, quality: 180, lastSeen: now, sourceType: "classic"),
+                NeighborInfo(call: s2, quality: 200, lastSeen: now, sourceType: "classic")
+            ],
+            routes: [],
+            localCallsign: localCallsign,
+            options: options,
+            packets: packets,
+            now: now
+        )
+
+        let grouped = model.nodes.first {
+            Set($0.groupedSSIDs).isSuperset(of: [s1, s2])
+        }
+        let localNode = model.nodes.first { $0.id == localCallsign }
+        let edge = model.edges.first {
+            guard let grouped else { return false }
+            return Set([$0.sourceID, $0.targetID]) == Set([grouped.id, localCallsign])
+        }
+
+        XCTAssertNotNil(grouped)
+        XCTAssertNotNil(localNode)
+        XCTAssertNotNil(edge)
+
+        XCTAssertGreaterThan(grouped?.inBytes ?? 0, 0)
+        XCTAssertGreaterThan(grouped?.outBytes ?? 0, 0)
+        XCTAssertGreaterThan((grouped?.inBytes ?? 0) + (grouped?.outBytes ?? 0), 0)
+        XCTAssertGreaterThan(edge?.bytes ?? 0, 0)
     }
     
     func testBuildFromNetRomRoutes() {

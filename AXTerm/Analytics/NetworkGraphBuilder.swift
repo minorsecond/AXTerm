@@ -79,6 +79,7 @@ nonisolated struct NetworkGraphBuilder {
         routes: [RouteInfo],
         localCallsign: String,
         options: Options,
+        packets: [Packet] = [],
         now: Date = Date()
     ) -> ClassifiedGraphModel {
         
@@ -101,17 +102,84 @@ nonisolated struct NetworkGraphBuilder {
         // Map quality threshold: slider value 1-10 → quality 25-250
         let qualityThreshold = options.minimumEdgeCount * 25
 
+        // Packet-derived evidence for byte/count fields in inspector.
+        // This does not change NET/ROM topology selection, only displayed traffic metrics.
+        var packetNodeStats: [String: NodeAggregate] = [:]
+        var packetEdgeBytes: [UndirectedKey: Int] = [:]
+        func isUsableStation(_ value: String) -> Bool {
+            StationNormalizer.normalize(value) != nil
+        }
+
+        if !packets.isEmpty {
+            for event in packets.map({ PacketEvent(packet: $0) }) {
+                guard let rawFrom = event.from, let rawTo = event.to else { continue }
+                guard isUsableStation(rawFrom), isUsableStation(rawTo) else { continue }
+
+                let fromKey = identityKey(rawFrom)
+                let toKey = identityKey(rawTo)
+
+                let path: [String]
+                if options.includeViaDigipeaters {
+                    let viaKeys = event.via
+                        .filter(isUsableStation)
+                        .map(identityKey)
+                    path = [fromKey] + viaKeys + [toKey]
+                } else {
+                    path = [fromKey, toKey]
+                }
+
+                guard path.count >= 2 else { continue }
+                for index in 0..<(path.count - 1) {
+                    let source = path[index]
+                    let target = path[index + 1]
+                    guard source != target else { continue }
+
+                    var sourceStats = packetNodeStats[source, default: NodeAggregate()]
+                    sourceStats.outCount += 1
+                    sourceStats.outBytes += event.payloadBytes
+                    packetNodeStats[source] = sourceStats
+
+                    var targetStats = packetNodeStats[target, default: NodeAggregate()]
+                    targetStats.inCount += 1
+                    targetStats.inBytes += event.payloadBytes
+                    packetNodeStats[target] = targetStats
+
+                    let key = UndirectedKey(lhs: source, rhs: target)
+                    packetEdgeBytes[key, default: 0] += event.payloadBytes
+                }
+            }
+        }
+
+        func seededStats(for key: String) -> (inCount: Int, outCount: Int, inBytes: Int64, outBytes: Int64, routes: Int, ssids: Set<String>, isOfficial: Bool) {
+            let traffic = packetNodeStats[key] ?? NodeAggregate()
+            return (
+                traffic.inCount,
+                traffic.outCount,
+                Int64(traffic.inBytes),
+                Int64(traffic.outBytes),
+                0,
+                [],
+                false
+            )
+        }
+
+        func packetBytesBetween(_ a: String, _ b: String) -> Int64 {
+            Int64(packetEdgeBytes[UndirectedKey(lhs: a, rhs: b)] ?? 0)
+        }
+
         // Phase 1: Collect all nodes from neighbors and routes
         var nodeStats: [String: (inCount: Int, outCount: Int, inBytes: Int64, outBytes: Int64, routes: Int, ssids: Set<String>, isOfficial: Bool)] = [:]
 
         // Add neighbor nodes (direct connections)
         let localKey = identityKey(localCallsign)
-        var localStats = nodeStats[localKey] ?? (0, 0, 0, 0, 0, [], false)
+        var localStats = nodeStats[localKey] ?? seededStats(for: localKey)
         localStats.ssids.insert(localCallsign)
         nodeStats[localKey] = localStats
 
         // Deduplicate neighbors by identity key (pick highest quality)
         var bestNeighbors: [String: NeighborInfo] = [:]
+        var neighborIdentityMembers: [String: Set<String>] = [:]
+        var neighborIdentityHasOfficial: [String: Bool] = [:]
         for neighbor in neighbors {
             guard neighbor.quality >= qualityThreshold else { continue }
             // Skip stale neighbors when hideStaleEntries is enabled
@@ -119,6 +187,10 @@ nonisolated struct NetworkGraphBuilder {
                 continue
             }
             let key = identityKey(neighbor.call)
+            neighborIdentityMembers[key, default: []].insert(neighbor.call)
+            if neighbor.isOfficial {
+                neighborIdentityHasOfficial[key] = true
+            }
             if let existing = bestNeighbors[key] {
                 if neighbor.quality > existing.quality {
                     bestNeighbors[key] = neighbor
@@ -129,9 +201,11 @@ nonisolated struct NetworkGraphBuilder {
         }
 
         for (key, neighbor) in bestNeighbors {
-            var stats = nodeStats[key] ?? (0, 0, 0, 0, 0, [], false)
-            stats.ssids.insert(neighbor.call)
-            if neighbor.isOfficial {
+            var stats = nodeStats[key] ?? seededStats(for: key)
+            for callsign in neighborIdentityMembers[key] ?? [neighbor.call] {
+                stats.ssids.insert(callsign)
+            }
+            if neighborIdentityHasOfficial[key] == true || neighbor.isOfficial {
                 stats.isOfficial = true
             }
             nodeStats[key] = stats
@@ -150,12 +224,12 @@ nonisolated struct NetworkGraphBuilder {
             let originKey = identityKey(route.origin)
             
             // Count routes for sizing nodes
-            var destStats = nodeStats[destKey] ?? (0, 0, 0, 0, 0, [], false)
+            var destStats = nodeStats[destKey] ?? seededStats(for: destKey)
             destStats.routes += 1
             destStats.ssids.insert(route.destination)
             nodeStats[destKey] = destStats
             
-            var originStats = nodeStats[originKey] ?? (0, 0, 0, 0, 0, [], false)
+            var originStats = nodeStats[originKey] ?? seededStats(for: originKey)
             originStats.routes += 1
             originStats.ssids.insert(route.origin)
             if route.sourceType == "broadcast" || route.sourceType == "classic" {
@@ -170,7 +244,7 @@ nonisolated struct NetworkGraphBuilder {
                     // Skip if hop is same as origin or destination (already counted above)
                     if hopKey == originKey || hopKey == destKey { continue }
 
-                    var hopStats = nodeStats[hopKey] ?? (0, 0, 0, 0, 0, [], false)
+                    var hopStats = nodeStats[hopKey] ?? seededStats(for: hopKey)
                     hopStats.routes += 1
                     hopStats.ssids.insert(hop)
                     nodeStats[hopKey] = hopStats
@@ -195,7 +269,7 @@ nonisolated struct NetworkGraphBuilder {
                 targetID: neighborKey,
                 linkType: .directPeer,
                 weight: weight,
-                bytes: Int64(neighbor.quality),
+                bytes: packetBytesBetween(localKey, neighborKey),
                 isStale: isStale
             ))
         }
@@ -243,7 +317,7 @@ nonisolated struct NetworkGraphBuilder {
                         targetID: target,
                         linkType: .heardVia,
                         weight: weight,
-                        bytes: Int64(route.quality),
+                        bytes: packetBytesBetween(source, target),
                         isStale: isStale
                     ))
                 }
@@ -259,7 +333,7 @@ nonisolated struct NetworkGraphBuilder {
                     targetID: originKey,
                     linkType: linkType,
                     weight: weight,
-                    bytes: Int64(route.quality),
+                    bytes: packetBytesBetween(destKey, originKey),
                     isStale: isStale
                 ))
             }

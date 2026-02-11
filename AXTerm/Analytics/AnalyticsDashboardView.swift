@@ -397,18 +397,15 @@ struct AnalyticsDashboardView: View {
                     if showsStationLegend {
                         LegendItem(color: .secondaryLabelColor, label: "Station")
                     }
-                    
-                    Spacer()
 
-                    Text("Size = Route Centrality • Edge = Link Quality")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(AnalyticsStyle.Colors.neutralFill)
-                        .cornerRadius(4)
-                        .opacity(viewModel.graphViewMode.isNetRomMode ? 1 : 0)
-                        .accessibilityHidden(!viewModel.graphViewMode.isNetRomMode)
+                    Divider()
+                        .frame(height: 14)
+
+                    nodeSizeVisualLegend
+
+                    edgeVisualLegend
+
+                    Spacer()
                 }
                 .padding(.horizontal, 4)
 
@@ -713,6 +710,64 @@ extension AnalyticsDashboardView {
         }
     }
 
+    private var edgeVisualLegend: some View {
+        HStack(spacing: 8) {
+            EdgeStrokeLegendItem(
+                label: "Weak",
+                lineColor: Color(nsColor: .secondaryLabelColor),
+                thickness: 1.0,
+                opacity: 0.55,
+                tooltip: edgeWeakTooltip
+            )
+
+            EdgeStrokeLegendItem(
+                label: "Strong",
+                lineColor: Color(nsColor: .secondaryLabelColor),
+                thickness: 2.4,
+                opacity: 0.92,
+                tooltip: edgeStrongTooltip
+            )
+
+            if showsViaStrokeLegend {
+                EdgeStrokeLegendItem(
+                    label: "Via",
+                    lineColor: Color(nsColor: .tertiaryLabelColor),
+                    thickness: 1.6,
+                    opacity: 0.72,
+                    tooltip: "Digipeater-mediated path evidence. Reachability on network, not direct RF proof."
+                )
+            }
+
+            Text(edgeDimLegendLabel)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.88))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 0.5)
+                )
+                .help(edgeDimLegendTooltip)
+        }
+    }
+
+    private var nodeSizeVisualLegend: some View {
+        HStack(spacing: 8) {
+            ScaleDotLegendItem(
+                label: nodeSizeLowerLabel,
+                diameter: 6,
+                tooltip: nodeSizeSmallTooltip
+            )
+            ScaleDotLegendItem(
+                label: nodeSizeHigherLabel,
+                diameter: 12,
+                tooltip: nodeSizeLargeTooltip
+            )
+        }
+    }
+
     private func labelForGraphMode(_ mode: GraphViewMode) -> String {
         switch mode {
         case .connectivity:
@@ -736,6 +791,74 @@ extension AnalyticsDashboardView {
         } else {
             preferredPacketViewMode = mode
         }
+    }
+
+    private var showsViaStrokeLegend: Bool {
+        guard !viewModel.graphViewMode.isNetRomMode else { return false }
+        guard viewModel.includeViaDigipeaters else { return false }
+        return viewModel.graphViewMode == .routing || viewModel.graphViewMode == .all
+    }
+
+    private var edgeWeakTooltip: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Thinner/lighter lines indicate lower relative route quality in this view."
+        }
+        return "Thinner/lighter lines indicate lower relative packet volume in this view."
+    }
+
+    private var edgeStrongTooltip: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Thicker/darker lines indicate higher relative route quality in this view."
+        }
+        return "Thicker/darker lines indicate higher relative packet volume in this view."
+    }
+
+    private var edgeDimLegendLabel: String {
+        if viewModel.focusState.isFocusEnabled, viewModel.focusState.anchorNodeID != nil {
+            return "Dimmed: context"
+        }
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Dimmed: stale"
+        }
+        return "Dimmed: lower evidence"
+    }
+
+    private var edgeDimLegendTooltip: String {
+        if viewModel.focusState.isFocusEnabled, viewModel.focusState.anchorNodeID != nil {
+            return "Dimmed lines are outside the active focus neighborhood."
+        }
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Dimmed lines are stale NET/ROM routes or weaker context."
+        }
+        return "Dimmer lines represent weaker relative evidence in the current packet view."
+    }
+
+    private var nodeSizeSmallTooltip: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Smaller node: lower relative route centrality in the current NET/ROM view."
+        }
+        return "Smaller node: lower relative traffic/connection weight in the current packet view."
+    }
+
+    private var nodeSizeLargeTooltip: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Larger node: higher relative route centrality in the current NET/ROM view."
+        }
+        return "Larger node: higher relative traffic/connection weight in the current packet view."
+    }
+
+    private var nodeSizeLowerLabel: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Lower centrality"
+        }
+        return "Lower weight"
+    }
+
+    private var nodeSizeHigherLabel: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Higher centrality"
+        }
+        return "Higher weight"
     }
 
     private var canConfigureDigipeaterPaths: Bool {
@@ -998,6 +1121,60 @@ private struct LegendItem: View {
                 .font(.caption2)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
         }
+    }
+}
+
+private struct EdgeStrokeLegendItem: View {
+    let label: String
+    let lineColor: Color
+    let thickness: CGFloat
+    let opacity: Double
+    let tooltip: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Capsule()
+                .fill(lineColor.opacity(opacity))
+                .frame(width: 20, height: thickness)
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.88))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 0.5)
+        )
+        .help(tooltip)
+    }
+}
+
+private struct ScaleDotLegendItem: View {
+    let label: String
+    let diameter: CGFloat
+    let tooltip: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(Color(nsColor: .secondaryLabelColor).opacity(0.95))
+                .frame(width: diameter, height: diameter)
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.88))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 0.5)
+        )
+        .help(tooltip)
     }
 }
 

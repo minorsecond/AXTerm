@@ -971,6 +971,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                         neighborStaleTTL: neighborStaleTTLSnapshot,
                         routeStaleTTL: routeStaleTTLSnapshot
                     ),
+                    packets: packetSnapshot,
                     now: now
                 )
             } else {

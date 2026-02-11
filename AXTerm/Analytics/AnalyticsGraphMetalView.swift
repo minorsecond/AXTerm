@@ -492,7 +492,7 @@ private struct GraphTooltipView: View {
             
             Text("Packets: \(node.weight)")
                 .font(.caption2)
-            Text("Bytes: \((node.inBytes + node.outBytes).formatted())")
+            Text("Bytes: \(ByteCountFormatter.string(fromByteCount: Int64(node.inBytes + node.outBytes), countStyle: .file))")
                 .font(.caption2)
         }
         .padding(6)
