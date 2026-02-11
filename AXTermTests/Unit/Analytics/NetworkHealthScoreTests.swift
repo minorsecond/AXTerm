@@ -722,4 +722,215 @@ final class NetworkHealthScoreTests: XCTestCase {
         """
         XCTContext.runActivity(named: report) { _ in }
     }
+
+    /// Contract test: calculate(graphModel:...) must be driven by timeframe packets,
+    /// not by whichever rendered view graph was passed in.
+    func testCalculateGraphModelParameterDoesNotAffectComputedHealth() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+
+        _ = builder.addDirectPeerExchange(between: "W1ABC", and: "K2DEF", countEachDirection: 5)
+        _ = builder.addDirectPeerExchange(between: "K2DEF", and: "N3GHI", countEachDirection: 4)
+        _ = builder.addViaObservation(from: "N3GHI", to: "W4JKL", via: ["N0DIG"], count: 3)
+
+        let packets = builder.buildPackets()
+        XCTAssertFalse(packets.isEmpty)
+
+        let canonicalGraph = NetworkHealthCalculator.buildCanonicalGraph(
+            packets: packets,
+            includeViaDigipeaters: true
+        )
+        XCTAssertFalse(canonicalGraph.nodes.isEmpty)
+
+        let emptyGraph = GraphModel.empty
+
+        NetworkHealthCalculator.resetEMAState()
+        let healthFromCanonical = NetworkHealthCalculator.calculate(
+            graphModel: canonicalGraph,
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "10m",
+            includeViaDigipeaters: true,
+            now: now
+        )
+        NetworkHealthCalculator.resetEMAState()
+        let healthFromEmptyView = NetworkHealthCalculator.calculate(
+            graphModel: emptyGraph,
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "10m",
+            includeViaDigipeaters: true,
+            now: now
+        )
+
+        XCTAssertEqual(healthFromCanonical.score, healthFromEmptyView.score, "Health score must not depend on rendered graph parameter")
+        XCTAssertEqual(healthFromCanonical.metrics.totalStations, healthFromEmptyView.metrics.totalStations)
+        XCTAssertEqual(healthFromCanonical.scoreBreakdown.c1MainClusterPct, healthFromEmptyView.scoreBreakdown.c1MainClusterPct, accuracy: 0.001)
+        XCTAssertEqual(healthFromCanonical.scoreBreakdown.c2ConnectivityPct, healthFromEmptyView.scoreBreakdown.c2ConnectivityPct, accuracy: 0.001)
+        XCTAssertEqual(healthFromCanonical.scoreBreakdown.c3IsolationReduction, healthFromEmptyView.scoreBreakdown.c3IsolationReduction, accuracy: 0.001)
+        XCTAssertEqual(healthFromCanonical.scoreBreakdown.a1ActiveNodesPct, healthFromEmptyView.scoreBreakdown.a1ActiveNodesPct, accuracy: 0.001)
+        XCTAssertEqual(healthFromCanonical.scoreBreakdown.a2PacketRateScore, healthFromEmptyView.scoreBreakdown.a2PacketRateScore, accuracy: 0.001)
+    }
+
+    /// SQLite contract test using shifted timestamps so assertions remain valid over time.
+    /// This prevents production snapshots from "aging out" of recent-activity windows.
+    func testShiftedSQLiteSnapshotMaintainsHealthMetricsAtSyntheticNow() throws {
+        let packets = try loadSQLiteSnapshotPackets()
+        guard !packets.isEmpty else {
+            throw XCTSkip("No packets in sqlite snapshot")
+        }
+
+        // Anchor all packet times near a deterministic synthetic now while preserving relative spacing.
+        let syntheticNow = makeDate(year: 2026, month: 2, day: 11, hour: 12, minute: 0, second: 0)
+        let shiftedPackets = shiftPacketsToReferenceNow(packets, referenceNow: syntheticNow)
+
+        // Use fixed 7-day timeframe ending at syntheticNow.
+        let timeframeStart = syntheticNow.addingTimeInterval(-7 * 24 * 60 * 60)
+        let timeframePackets = shiftedPackets.filter { $0.timestamp >= timeframeStart && $0.timestamp <= syntheticNow }
+        XCTAssertFalse(timeframePackets.isEmpty, "Shifted timeframe packets should not be empty")
+
+        NetworkHealthCalculator.resetEMAState()
+        let directCanonical = NetworkHealthCalculator.buildCanonicalGraph(
+            packets: timeframePackets,
+            includeViaDigipeaters: false
+        )
+        let directHealth = NetworkHealthCalculator.calculate(
+            canonicalGraph: directCanonical,
+            timeframePackets: timeframePackets,
+            allRecentPackets: shiftedPackets,
+            timeframeDisplayName: "7d",
+            includeViaDigipeaters: false,
+            now: syntheticNow
+        )
+
+        NetworkHealthCalculator.resetEMAState()
+        let viaCanonical = NetworkHealthCalculator.buildCanonicalGraph(
+            packets: timeframePackets,
+            includeViaDigipeaters: true
+        )
+        let viaHealth = NetworkHealthCalculator.calculate(
+            canonicalGraph: viaCanonical,
+            timeframePackets: timeframePackets,
+            allRecentPackets: shiftedPackets,
+            timeframeDisplayName: "7d",
+            includeViaDigipeaters: true,
+            now: syntheticNow
+        )
+
+        for health in [directHealth, viaHealth] {
+            XCTAssertGreaterThan(health.metrics.activeStations, 0, "Shifted snapshot should have active stations in 10m window")
+            XCTAssertGreaterThan(health.scoreBreakdown.packetRatePerMin, 0, "Shifted snapshot should have non-zero packet rate")
+            XCTAssertLessThanOrEqual(health.score, 100)
+            XCTAssertGreaterThanOrEqual(health.score, 0)
+            XCTAssertLessThanOrEqual(health.metrics.largestComponentPercent, 100)
+            XCTAssertLessThanOrEqual(health.metrics.connectivityRatio, 100)
+            XCTAssertLessThanOrEqual(health.metrics.isolationReduction, 100)
+        }
+    }
+
+    /// Snapshot semantics contract at synthetic now:
+    /// Graph lens subsets must remain truthful on real-world packet snapshots.
+    func testShiftedSQLiteSnapshotLensSemanticsContract() throws {
+        let packets = try loadSQLiteSnapshotPackets()
+        guard !packets.isEmpty else {
+            throw XCTSkip("No packets in sqlite snapshot")
+        }
+
+        let syntheticNow = makeDate(year: 2026, month: 2, day: 11, hour: 12, minute: 0, second: 0)
+        let shiftedPackets = shiftPacketsToReferenceNow(packets, referenceNow: syntheticNow)
+        let timeframeStart = syntheticNow.addingTimeInterval(-7 * 24 * 60 * 60)
+        let timeframePackets = shiftedPackets.filter { $0.timestamp >= timeframeStart && $0.timestamp <= syntheticNow }
+
+        let classified = NetworkGraphBuilder.buildClassified(
+            packets: timeframePackets,
+            options: NetworkGraphBuilder.Options(
+                includeViaDigipeaters: true,
+                minimumEdgeCount: 1,
+                maxNodes: 300,
+                stationIdentityMode: .station
+            ),
+            now: syntheticNow
+        )
+        XCTAssertFalse(classified.nodes.isEmpty, "Shifted snapshot should produce classified nodes")
+
+        let connectivity = ViewGraphDeriver.deriveViewGraph(from: classified, viewMode: .connectivity)
+        let routing = ViewGraphDeriver.deriveViewGraph(from: classified, viewMode: .routing)
+        let combined = ViewGraphDeriver.deriveViewGraph(from: classified, viewMode: .all)
+
+        XCTAssertEqual(connectivity.nodes.count, classified.nodes.count)
+        XCTAssertEqual(routing.nodes.count, classified.nodes.count)
+        XCTAssertEqual(combined.nodes.count, classified.nodes.count)
+
+        let connectivityTypes = Set(connectivity.edges.map(\.linkType))
+        let routingTypes = Set(routing.edges.map(\.linkType))
+        let combinedTypes = Set(combined.edges.map(\.linkType))
+
+        XCTAssertTrue(connectivityTypes.isSubset(of: GraphViewMode.connectivity.visibleLinkTypes))
+        XCTAssertTrue(routingTypes.isSubset(of: GraphViewMode.routing.visibleLinkTypes))
+        XCTAssertTrue(combinedTypes.isSubset(of: GraphViewMode.all.visibleLinkTypes))
+
+        XCTAssertFalse(connectivityTypes.contains(.heardVia), "Direct lens must exclude heard-via")
+        XCTAssertFalse(routingTypes.contains(.heardDirect), "Routed lens must exclude heard-direct")
+        XCTAssertGreaterThanOrEqual(combined.edges.count, connectivity.edges.count, "Combined should not hide connectivity edges")
+        XCTAssertGreaterThanOrEqual(combined.edges.count, routing.edges.count, "Combined should not hide routed edges")
+    }
+
+    private func loadSQLiteSnapshotPackets() throws -> [Packet] {
+        let envPath = ProcessInfo.processInfo.environment["AXTERM_HEALTH_SQLITE_PATH"]
+        let defaultSnapshotPath = "/Users/rwardrup/dev/AXTerm/axterm.sqlite"
+        let path = (envPath?.isEmpty == false) ? envPath! : defaultSnapshotPath
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("SQLite snapshot not found at \(path)")
+        }
+
+        let dbQueue = try DatabaseQueue(path: path)
+        let store = SQLitePacketStore(dbQueue: dbQueue)
+
+        guard let newest = try store.loadRecent(limit: 1).first else {
+            return []
+        }
+
+        let end = newest.receivedAt.addingTimeInterval(1)
+        let start = end.addingTimeInterval(-7 * 24 * 60 * 60)
+        let window = DateInterval(start: start, end: end)
+        return try store.loadPackets(in: window)
+    }
+
+    private func shiftPacketsToReferenceNow(_ packets: [Packet], referenceNow: Date) -> [Packet] {
+        guard let newest = packets.map(\.timestamp).max() else { return packets }
+        let targetNewest = referenceNow.addingTimeInterval(-15) // keep newest safely inside "recent" window
+        let delta = targetNewest.timeIntervalSince(newest)
+        return packets.map { packet in
+            Packet(
+                id: packet.id,
+                timestamp: packet.timestamp.addingTimeInterval(delta),
+                from: packet.from,
+                to: packet.to,
+                via: packet.via,
+                frameType: packet.frameType,
+                control: packet.control,
+                controlByte1: packet.controlByte1,
+                pid: packet.pid,
+                info: packet.info,
+                rawAx25: packet.rawAx25,
+                kissEndpoint: packet.kissEndpoint,
+                infoText: packet.infoText
+            )
+        }
+    }
+
+    private func makeDate(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        return calendar.date(from: DateComponents(
+            calendar: calendar,
+            timeZone: calendar.timeZone,
+            year: year,
+            month: month,
+            day: day,
+            hour: hour,
+            minute: minute,
+            second: second
+        )) ?? Date(timeIntervalSince1970: 0)
+    }
 }

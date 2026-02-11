@@ -481,6 +481,127 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         }
     }
 
+    func testLensFilteringShowsExpectedRelationshipTypesEndToEnd() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let packets = [
+            // Direct peer evidence (bidirectional, no via)
+            makePacket(timestamp: timestamp, from: "W1AAA", to: "K2BBB"),
+            makePacket(timestamp: timestamp.addingTimeInterval(1), from: "K2BBB", to: "W1AAA"),
+
+            // Heard-direct evidence (one-way, repeated)
+            makePacket(timestamp: timestamp.addingTimeInterval(5), from: "N3CCC", to: "W1AAA"),
+            makePacket(timestamp: timestamp.addingTimeInterval(65), from: "N3CCC", to: "W1AAA"),
+
+            // Heard-via evidence
+            makePacket(timestamp: timestamp.addingTimeInterval(10), from: "W4DDD", to: "W1AAA", via: ["N0DIG"])
+        ]
+
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "fiveMinutes"
+        settings.analyticsIncludeVia = true
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 50
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.graphViewMode = .all
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-120)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(600)
+        viewModel.setActive(true)
+        viewModel.updatePackets(packets)
+        viewModel.manualRefresh()
+
+        await waitFor {
+            let types = Set(viewModel.viewState.graphModel.edges.map(\.linkType))
+            return types.contains(.directPeer) && types.contains(.heardDirect) && types.contains(.heardVia)
+        }
+
+        let allTypes = Set(viewModel.viewState.graphModel.edges.map(\.linkType))
+        XCTAssertTrue(allTypes.contains(.directPeer), "All lens should include direct peers")
+        XCTAssertTrue(allTypes.contains(.heardDirect), "All lens should include heard-direct evidence")
+        XCTAssertTrue(allTypes.contains(.heardVia), "All lens should include heard-via evidence")
+
+        viewModel.graphViewMode = .connectivity
+        await waitFor {
+            let types = Set(viewModel.viewState.graphModel.edges.map(\.linkType))
+            return types.isSubset(of: GraphViewMode.connectivity.visibleLinkTypes)
+        }
+        let connectivityTypes = Set(viewModel.viewState.graphModel.edges.map(\.linkType))
+        XCTAssertTrue(connectivityTypes.contains(.directPeer), "Direct lens should include direct peers")
+        XCTAssertTrue(connectivityTypes.contains(.heardDirect), "Direct lens should include heard-direct")
+        XCTAssertFalse(connectivityTypes.contains(.heardVia), "Direct lens should exclude heard-via")
+
+        viewModel.graphViewMode = .routing
+        await waitFor {
+            let types = Set(viewModel.viewState.graphModel.edges.map(\.linkType))
+            return types.isSubset(of: GraphViewMode.routing.visibleLinkTypes)
+        }
+        let routingTypes = Set(viewModel.viewState.graphModel.edges.map(\.linkType))
+        XCTAssertTrue(routingTypes.contains(.directPeer), "Routed lens should include direct peers")
+        XCTAssertTrue(routingTypes.contains(.heardVia), "Routed lens should include heard-via")
+        XCTAssertFalse(routingTypes.contains(.heardDirect), "Routed lens should exclude heard-direct")
+    }
+
+    func testNetworkHealthIsInvariantToViewFilters() async {
+        NetworkHealthCalculator.resetEMAState()
+
+        let now = Date()
+        let packets = [
+            makePacket(timestamp: now.addingTimeInterval(-120), from: "W1AAA", to: "K2BBB"),
+            makePacket(timestamp: now.addingTimeInterval(-119), from: "K2BBB", to: "W1AAA"),
+            makePacket(timestamp: now.addingTimeInterval(-110), from: "W1AAA", to: "N3CCC"),
+            makePacket(timestamp: now.addingTimeInterval(-109), from: "N3CCC", to: "W1AAA"),
+            makePacket(timestamp: now.addingTimeInterval(-100), from: "W4DDD", to: "W1AAA", via: ["N0DIG"]),
+            makePacket(timestamp: now.addingTimeInterval(-95), from: "W5EEE", to: "K2BBB", via: ["N0DIG"]),
+            makePacket(timestamp: now.addingTimeInterval(-90), from: "K2BBB", to: "W5EEE", via: ["N0DIG"])
+        ]
+
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "fiveMinutes"
+        settings.analyticsIncludeVia = true
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 200
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.graphViewMode = .all
+        viewModel.customRangeStart = now.addingTimeInterval(-900)
+        viewModel.customRangeEnd = now.addingTimeInterval(60)
+        viewModel.setActive(true)
+        viewModel.updatePackets(packets)
+        viewModel.manualRefresh()
+
+        await waitFor { viewModel.viewState.graphModel.nodes.count >= 4 }
+        let baseline = viewModel.viewState.networkHealth
+        let baselineVisibleEdgeCount = viewModel.viewState.graphModel.edges.count
+
+        viewModel.minEdgeCount = 6
+        viewModel.manualRefresh()
+
+        await waitFor { viewModel.viewState.graphModel.edges.count < baselineVisibleEdgeCount }
+        XCTAssertLessThan(viewModel.viewState.graphModel.edges.count, baselineVisibleEdgeCount, "View filters should materially change rendered edge set")
+
+        let filtered = viewModel.viewState.networkHealth
+        XCTAssertEqual(filtered.score, baseline.score, "Health score must not change due to view filters")
+        XCTAssertEqual(filtered.scoreBreakdown.c1MainClusterPct, baseline.scoreBreakdown.c1MainClusterPct, accuracy: 0.001)
+        XCTAssertEqual(filtered.scoreBreakdown.c2ConnectivityPct, baseline.scoreBreakdown.c2ConnectivityPct, accuracy: 0.001)
+        XCTAssertEqual(filtered.scoreBreakdown.c3IsolationReduction, baseline.scoreBreakdown.c3IsolationReduction, accuracy: 0.001)
+        XCTAssertEqual(filtered.scoreBreakdown.a1ActiveNodesPct, baseline.scoreBreakdown.a1ActiveNodesPct, accuracy: 0.001)
+        XCTAssertEqual(filtered.scoreBreakdown.a2PacketRateScore, baseline.scoreBreakdown.a2PacketRateScore, accuracy: 0.001)
+    }
+
     private func makeSettings() -> AppSettingsStore {
         let suiteName = "AXTermTests-AnalyticsDashboard-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard

@@ -739,6 +739,13 @@ final class NetRomRoutesViewModel: ObservableObject {
 
         linkStats = filteredLinkStats.map { LinkStatDisplayInfo(from: $0, now: now, ttl: linkStatTTL) }
 
+        validateRoutingTableIntegrity(
+            mode: routingMode,
+            neighbors: neighbors,
+            routes: routes,
+            linkStats: linkStats
+        )
+
         lastRefresh = now
         isLoading = false
     }
@@ -909,6 +916,75 @@ final class NetRomRoutesViewModel: ObservableObject {
 
     private func isDisplayableNode(_ callsign: String) -> Bool {
         CallsignValidator.isValidRoutingNode(callsign)
+    }
+
+    private func validateRoutingTableIntegrity(
+        mode: NetRomRoutingMode,
+        neighbors: [NeighborDisplayInfo],
+        routes: [RouteDisplayInfo],
+        linkStats: [LinkStatDisplayInfo]
+    ) {
+        var issues: [String] = []
+
+        func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
+            if !condition() {
+                issues.append(message)
+            }
+        }
+
+        // Duplicate IDs indicate unstable/ambiguous row identity in table views.
+        expect(Set(neighbors.map(\.id)).count == neighbors.count, "Duplicate neighbor IDs")
+        expect(Set(routes.map(\.id)).count == routes.count, "Duplicate route IDs")
+        expect(Set(linkStats.map(\.id)).count == linkStats.count, "Duplicate link-stat IDs")
+
+        for neighbor in neighbors {
+            expect(isDisplayableNode(neighbor.callsign), "Invalid neighbor callsign: \(neighbor.callsign)")
+            expect((0...255).contains(neighbor.quality), "Neighbor quality out of range: \(neighbor.callsign)=\(neighbor.quality)")
+        }
+
+        for route in routes {
+            expect(isDisplayableNode(route.destination), "Invalid route destination: \(route.destination)")
+            expect(isDisplayableNode(route.nextHop), "Invalid route nextHop: \(route.nextHop)")
+            expect(route.path.allSatisfy { isDisplayableNode($0) }, "Invalid route path node in \(route.id)")
+            expect(route.hopCount >= 1, "Invalid hop count for route \(route.id): \(route.hopCount)")
+            expect((0...255).contains(route.quality), "Route quality out of range: \(route.id)=\(route.quality)")
+            if mode == .classic {
+                expect(route.sourceType == "classic" || route.sourceType == "broadcast", "Classic mode leaked route source \(route.sourceType) for \(route.id)")
+            } else if mode == .inference {
+                expect(route.sourceType == "inferred", "Inference mode leaked route source \(route.sourceType) for \(route.id)")
+            }
+        }
+
+        for stat in linkStats {
+            expect(isDisplayableNode(stat.fromCall), "Invalid link-stat from node: \(stat.fromCall)")
+            expect(isDisplayableNode(stat.toCall), "Invalid link-stat to node: \(stat.toCall)")
+            expect((0...255).contains(stat.quality), "Link-stat quality out of range: \(stat.id)=\(stat.quality)")
+            if let df = stat.dfEstimate {
+                expect(df >= 0 && df <= 1, "Link-stat df out of range: \(stat.id)=\(df)")
+            }
+            if let dr = stat.drEstimate {
+                expect(dr >= 0 && dr <= 1, "Link-stat dr out of range: \(stat.id)=\(dr)")
+            }
+            if let etx = stat.etx {
+                expect(etx.isFinite && etx >= 1, "Link-stat etx invalid: \(stat.id)=\(etx)")
+            }
+        }
+
+        if !issues.isEmpty {
+            Telemetry.capture(
+                message: "netrom.routes.integrity_violation",
+                data: [
+                    "mode": String(describing: mode),
+                    "neighborCount": neighbors.count,
+                    "routeCount": routes.count,
+                    "linkStatCount": linkStats.count,
+                    "issues": issues.joined(separator: " | ")
+                ]
+            )
+            #if DEBUG
+            assertionFailure("NET/ROM routes integrity violation: \(issues.joined(separator: " | "))")
+            #endif
+        }
     }
 
     private func formatJSON(_ data: [[String: Any]]) -> String {
