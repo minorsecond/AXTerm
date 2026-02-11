@@ -8,6 +8,7 @@
 //
 
 import XCTest
+import GRDB
 @testable import AXTerm
 
 // MARK: - NetworkHealthScoreTests
@@ -577,5 +578,148 @@ final class NetworkHealthScoreTests: XCTestCase {
         let breakdown = HealthScoreBreakdown.empty
         let totalWeight = breakdown.components.reduce(0) { $0 + $1.weight }
         XCTAssertEqual(totalWeight, 100, accuracy: 0.01, "Component weights should sum to 100")
+    }
+
+    /// Routing aliases (e.g., DRL) must not cause topology percentages to exceed 100.
+    func testRoutingAliasesDoNotExceedTopologyPercentBounds() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-120))
+
+        _ = builder.addDirectPeerExchange(between: "W1ABC", and: "DRL", countEachDirection: 3)
+        let packets = builder.buildPackets()
+
+        let canonicalGraph = NetworkHealthCalculator.buildCanonicalGraph(
+            packets: packets,
+            includeViaDigipeaters: false
+        )
+
+        NetworkHealthCalculator.resetEMAState()
+        let health = NetworkHealthCalculator.calculate(
+            canonicalGraph: canonicalGraph,
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "test",
+            includeViaDigipeaters: false,
+            now: now
+        )
+
+        XCTAssertEqual(health.metrics.totalStations, 2, "Alias node should be counted in total station universe")
+        XCTAssertLessThanOrEqual(health.metrics.largestComponentPercent, 100, "Cluster % must be bounded")
+        XCTAssertLessThanOrEqual(health.metrics.isolationReduction, 100, "Isolation % must be bounded")
+        XCTAssertEqual(health.scoreBreakdown.c1MainClusterPct, 100, accuracy: 0.1, "Two-node connected graph should be 100% cluster")
+    }
+
+    /// Activity percentages must remain bounded even if recent packets include stations outside timeframe packets.
+    func testActivityPercentagesBoundedWhenRecentWindowHasExtraStations() {
+        let now = Date()
+
+        var timeframeBuilder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-3600))
+        _ = timeframeBuilder.addDirectPeerExchange(between: "W1ABC", and: "K2DEF", countEachDirection: 2)
+        let timeframePackets = timeframeBuilder.buildPackets()
+
+        var recentBuilder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-60))
+        _ = recentBuilder.addDirectPeerExchange(between: "N3GHI", and: "W4JKL", countEachDirection: 3)
+        let recentPackets = recentBuilder.buildPackets()
+
+        let canonicalGraph = NetworkHealthCalculator.buildCanonicalGraph(
+            packets: timeframePackets,
+            includeViaDigipeaters: false
+        )
+
+        NetworkHealthCalculator.resetEMAState()
+        let health = NetworkHealthCalculator.calculate(
+            canonicalGraph: canonicalGraph,
+            timeframePackets: timeframePackets,
+            allRecentPackets: recentPackets,
+            timeframeDisplayName: "test",
+            includeViaDigipeaters: false,
+            now: now
+        )
+
+        XCTAssertLessThanOrEqual(health.scoreBreakdown.a1ActiveNodesPct, 100, "Active-node % must be bounded")
+        XCTAssertLessThanOrEqual(health.metrics.freshness, 1, "Freshness ratio must be <= 1")
+    }
+
+    /// Integration sanity check for a local sqlite snapshot.
+    /// Run with AXTERM_HEALTH_SQLITE_PATH=/path/to/axterm.sqlite.
+    func testHealthMetricsFromSQLiteSnapshotWhenPathProvided() throws {
+        let envPath = ProcessInfo.processInfo.environment["AXTERM_HEALTH_SQLITE_PATH"]
+        let defaultSnapshotPath = "/Users/rwardrup/dev/AXTerm/axterm.sqlite"
+        let path = (envPath?.isEmpty == false) ? envPath! : defaultSnapshotPath
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("SQLite snapshot not found at \(path)")
+        }
+
+        let dbQueue = try DatabaseQueue(path: path)
+        let store = SQLitePacketStore(dbQueue: dbQueue)
+
+        guard let newest = try store.loadRecent(limit: 1).first else {
+            throw XCTSkip("No packets in sqlite snapshot")
+        }
+
+        let end = newest.receivedAt.addingTimeInterval(1)
+        let start = end.addingTimeInterval(-7 * 24 * 60 * 60)
+        let window = DateInterval(start: start, end: end)
+        let packets = try store.loadPackets(in: window)
+
+        XCTAssertFalse(packets.isEmpty, "Expected packets in the 7-day snapshot window")
+
+        NetworkHealthCalculator.resetEMAState()
+        let graphDirect = NetworkHealthCalculator.buildCanonicalGraph(
+            packets: packets,
+            includeViaDigipeaters: false
+        )
+        let healthDirect = NetworkHealthCalculator.calculate(
+            canonicalGraph: graphDirect,
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "7d",
+            includeViaDigipeaters: false,
+            now: end
+        )
+
+        NetworkHealthCalculator.resetEMAState()
+        let graphVia = NetworkHealthCalculator.buildCanonicalGraph(
+            packets: packets,
+            includeViaDigipeaters: true
+        )
+        let healthVia = NetworkHealthCalculator.calculate(
+            canonicalGraph: graphVia,
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "7d",
+            includeViaDigipeaters: true,
+            now: end
+        )
+
+        for health in [healthDirect, healthVia] {
+            XCTAssertLessThanOrEqual(health.metrics.largestComponentPercent, 100, "Cluster must be <= 100")
+            XCTAssertGreaterThanOrEqual(health.metrics.largestComponentPercent, 0, "Cluster must be >= 0")
+            XCTAssertLessThanOrEqual(health.metrics.connectivityRatio, 100, "Connectivity must be <= 100")
+            XCTAssertGreaterThanOrEqual(health.metrics.connectivityRatio, 0, "Connectivity must be >= 0")
+            XCTAssertLessThanOrEqual(health.metrics.isolationReduction, 100, "Isolation must be <= 100")
+            XCTAssertGreaterThanOrEqual(health.metrics.isolationReduction, 0, "Isolation must be >= 0")
+            XCTAssertLessThanOrEqual(health.metrics.freshness, 1, "Freshness ratio must be <= 1")
+            XCTAssertGreaterThanOrEqual(health.metrics.freshness, 0, "Freshness ratio must be >= 0")
+            XCTAssertLessThanOrEqual(health.score, 100, "Score must be <= 100")
+            XCTAssertGreaterThanOrEqual(health.score, 0, "Score must be >= 0")
+        }
+
+        let report = """
+        SQLite snapshot health (end=\(end)):
+          Direct includeVia=false:
+            score=\(healthDirect.score)
+            stations=\(healthDirect.metrics.totalStations)
+            cluster=\(String(format: "%.1f", healthDirect.metrics.largestComponentPercent))%
+            connectivity=\(String(format: "%.1f", healthDirect.metrics.connectivityRatio))%
+            isolation=\(String(format: "%.1f", healthDirect.metrics.isolationReduction))%
+          Routed includeVia=true:
+            score=\(healthVia.score)
+            stations=\(healthVia.metrics.totalStations)
+            cluster=\(String(format: "%.1f", healthVia.metrics.largestComponentPercent))%
+            connectivity=\(String(format: "%.1f", healthVia.metrics.connectivityRatio))%
+            isolation=\(String(format: "%.1f", healthVia.metrics.isolationReduction))%
+        """
+        XCTContext.runActivity(named: report) { _ in }
     }
 }

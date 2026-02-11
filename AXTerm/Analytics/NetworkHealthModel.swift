@@ -355,30 +355,34 @@ nonisolated enum NetworkHealthCalculator {
         now: Date
     ) -> NetworkHealthMetrics {
         // TOPOLOGY METRICS (from canonical graph)
-        let totalNodes = calculateTotalStations(
+        let countedStations = calculateTotalStations(
             packets: timeframePackets,
             includeViaDigipeaters: includeViaDigipeaters
         )
+        // Keep denominator aligned with canonical graph membership.
+        // Graph may include routing aliases (e.g., DRL/DRLNOD) that strict callsign-only
+        // counting previously excluded, which could produce >100% topology metrics.
+        let totalNodes = max(countedStations, canonicalGraph.nodes.count)
         let totalPackets = timeframePackets.count
 
         // C1: Main Cluster % = largest connected component / total nodes × 100
-        let c1MainClusterPct = calculateLargestComponentPercent(
+        let c1MainClusterPct = clampPercent(calculateLargestComponentPercent(
             graph: canonicalGraph,
             totalNodesOverride: totalNodes
-        )
+        ))
 
         // C2: Connectivity Ratio % = actualEdges / possibleEdges × 100
         let actualEdges = canonicalGraph.edges.count
         let possibleEdges = totalNodes > 1 ? (totalNodes * (totalNodes - 1)) / 2 : 0
-        let c2ConnectivityPct = possibleEdges > 0
+        let c2ConnectivityPct = clampPercent(possibleEdges > 0
             ? min(100, Double(actualEdges) / Double(possibleEdges) * 100)
-            : 0
+            : 0)
 
         // C3: Isolation Reduction = 100 - (% isolated nodes)
         let graphNodeIDs = Set(canonicalGraph.nodes.map(\.id))
         let isolatedCount = max(0, totalNodes - graphNodeIDs.count)
-        let isolatedPct = totalNodes > 0 ? Double(isolatedCount) / Double(totalNodes) * 100 : 0
-        let c3IsolationReduction = 100 - isolatedPct
+        let isolatedPct = clampPercent(totalNodes > 0 ? Double(isolatedCount) / Double(totalNodes) * 100 : 0)
+        let c3IsolationReduction = clampPercent(100 - isolatedPct)
 
         // Relay concentration (for warnings)
         let (topRelayPct, topRelayCallsign) = calculateRelayConcentration(graph: canonicalGraph)
@@ -389,10 +393,11 @@ nonisolated enum NetworkHealthCalculator {
 
         // A1 source count uses the same station-identity normalization as totalNodes.
         // This keeps percentages stable when SSIDs are grouped into station identities.
-        let activeStations = calculateTotalStations(
+        let activeStationsRaw = calculateTotalStations(
             packets: recentPackets,
             includeViaDigipeaters: includeViaDigipeaters
         )
+        let activeStations = min(activeStationsRaw, totalNodes)
 
         // Calculate raw packet rate
         let rawPacketRate = Double(recentPackets.count) / Double(activityWindowMinutes)
@@ -407,7 +412,7 @@ nonisolated enum NetworkHealthCalculator {
         previousPacketRateEMA = smoothedRate
 
         // Freshness = active / total (same identity model for numerator + denominator)
-        let freshness = totalNodes > 0 ? Double(activeStations) / Double(totalNodes) : 0
+        let freshness = clampRatio(totalNodes > 0 ? Double(activeStations) / Double(totalNodes) : 0)
 
         return NetworkHealthMetrics(
             totalStations: totalNodes,
@@ -427,20 +432,20 @@ nonisolated enum NetworkHealthCalculator {
     /// Calculate the composite health score using the new formula.
     private static func calculateCompositeScore(metrics: NetworkHealthMetrics) -> HealthScoreBreakdown {
         // Topology components (0-100 each)
-        let c1 = metrics.largestComponentPercent
-        let c2 = metrics.connectivityRatio
-        let c3 = metrics.isolationReduction
+        let c1 = clampPercent(metrics.largestComponentPercent)
+        let c2 = clampPercent(metrics.connectivityRatio)
+        let c3 = clampPercent(metrics.isolationReduction)
 
         // TopologyScore = 0.5×C1 + 0.3×C2 + 0.2×C3
         let topologyScore = 0.5 * c1 + 0.3 * c2 + 0.2 * c3
 
         // Activity components (0-100 each)
-        let a1 = metrics.totalStations > 0
+        let a1 = clampPercent(metrics.totalStations > 0
             ? Double(metrics.activeStations) / Double(metrics.totalStations) * 100
-            : 0
+            : 0)
 
         // A2 = min(100, (packetRate / idealRate) × 100)
-        let a2 = min(100, (metrics.packetRate / idealPacketRate) * 100)
+        let a2 = clampPercent(min(100, (metrics.packetRate / idealPacketRate) * 100))
 
         // ActivityScore = 0.6×A1 + 0.4×A2
         let activityScore = 0.6 * a1 + 0.4 * a2
@@ -501,7 +506,7 @@ nonisolated enum NetworkHealthCalculator {
             largestComponentSize = max(largestComponentSize, componentSize)
         }
 
-        return Double(largestComponentSize) / Double(totalNodesOverride) * 100
+        return clampPercent(Double(largestComponentSize) / Double(totalNodesOverride) * 100)
     }
 
     private static func calculateTotalStations(
@@ -513,16 +518,16 @@ nonisolated enum NetworkHealthCalculator {
         var stations: Set<String> = []
 
         for packet in packets {
-            if let from = packet.from?.call, CallsignValidator.isValidCallsign(from) {
+            if let from = packet.from?.call, CallsignValidator.isValidRoutingNode(from) {
                 stations.insert(CallsignParser.identityKey(for: from, mode: .station))
             }
-            if let to = packet.to?.call, CallsignValidator.isValidCallsign(to) {
+            if let to = packet.to?.call, CallsignValidator.isValidRoutingNode(to) {
                 stations.insert(CallsignParser.identityKey(for: to, mode: .station))
             }
             if includeViaDigipeaters {
                 for via in packet.via {
                     let call = via.call
-                    if CallsignValidator.isValidCallsign(call) {
+                    if CallsignValidator.isValidRoutingNode(call) {
                         stations.insert(CallsignParser.identityKey(for: call, mode: .station))
                     }
                 }
@@ -530,6 +535,14 @@ nonisolated enum NetworkHealthCalculator {
         }
 
         return stations.count
+    }
+
+    private static func clampPercent(_ value: Double) -> Double {
+        min(100, max(0, value))
+    }
+
+    private static func clampRatio(_ value: Double) -> Double {
+        min(1, max(0, value))
     }
 
     private static func calculateRelayConcentration(graph: GraphModel) -> (Double, String?) {
