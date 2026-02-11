@@ -496,6 +496,7 @@ extension PacketNSTableView {
                 field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
                 field.textColor = .secondaryLabelColor
                 field.alignment = .left
+                field.lineBreakMode = .byTruncatingMiddle
                 field.toolTip = row.viaText
             case ColumnIdentifier.type.rawValue:
                 field.stringValue = row.typeLabel
@@ -776,7 +777,7 @@ nonisolated private struct PacketTableColumnSizer {
         switch column {
         case .time: return 140
         case .from, .to: return 200
-        case .via: return 180
+        case .via: return 420
         case .type: return 80
         case .info: return 1200
         }
