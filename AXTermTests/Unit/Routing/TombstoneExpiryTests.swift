@@ -186,7 +186,7 @@ final class TombstoneExpiryTests: XCTestCase {
             timestamp: timestamp,
             from: AX25Address(call: from),
             to: AX25Address(call: to),
-            via: via.map { AX25Address(call: $0) },
+            via: via.map { AX25Address(call: $0, repeated: true) },
             frameType: .i,
             control: 0x00,
             controlByte1: 0x00,
