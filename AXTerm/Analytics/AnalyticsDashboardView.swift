@@ -600,14 +600,24 @@ struct AnalyticsDashboardView: View {
                 Divider()
                     .frame(height: 18)
 
-                Toggle(isOn: $viewModel.includeViaDigipeaters) {
-                    Text(GraphCopy.GraphControls.includeViaLabel)
+                if canConfigureDigipeaterPaths {
+                    Toggle(isOn: $viewModel.includeViaDigipeaters) {
+                        Text(GraphCopy.GraphControls.includeViaLabel)
+                            .font(.caption)
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .help(GraphCopy.GraphControls.includeViaTooltip)
+                } else {
+                    Text(digipeaterPathStatusLabel)
                         .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(AnalyticsStyle.Colors.neutralFill)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .help(digipeaterPathStatusTooltip)
                 }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .disabled(viewModel.graphViewMode.isNetRomMode)
-                .help(viewModel.graphViewMode.isNetRomMode ? GraphCopy.GraphControls.includeViaUnavailableTooltip : GraphCopy.GraphControls.includeViaTooltip)
 
                 HStack(spacing: 4) {
                     Text(GraphCopy.StationIdentity.pickerLabel)
@@ -687,9 +697,13 @@ extension AnalyticsDashboardView {
         case .connectivity:
             return "Packet source. Direct shows direct peer traffic and direct-heard RF evidence."
         case .routing:
-            return "Packet source. Routed emphasizes digipeater-mediated paths plus direct peers."
+            return viewModel.includeViaDigipeaters
+                ? "Packet source. Routed emphasizes digipeater-mediated paths plus direct peers."
+                : "Packet source. Routed currently shows direct peers only (digipeater paths are off)."
         case .all:
-            return "Packet source. Combined includes all packet-derived relationship evidence."
+            return viewModel.includeViaDigipeaters
+                ? "Packet source. Combined includes all packet-derived relationship evidence."
+                : "Packet source. Combined omits digipeater-mediated paths while this toggle is off."
         case .netromClassic:
             return "NET/ROM source. Classic uses broadcast routing tables with direct neighbors."
         case .netromInferred:
@@ -722,6 +736,24 @@ extension AnalyticsDashboardView {
         } else {
             preferredPacketViewMode = mode
         }
+    }
+
+    private var canConfigureDigipeaterPaths: Bool {
+        !viewModel.graphViewMode.isNetRomMode && viewModel.graphViewMode != .connectivity
+    }
+
+    private var digipeaterPathStatusLabel: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Digipeater Paths: Packet source only"
+        }
+        return "Digipeater Paths: Not used in Direct lens"
+    }
+
+    private var digipeaterPathStatusTooltip: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return GraphCopy.GraphControls.includeViaUnavailableTooltip
+        }
+        return "Direct lens excludes digipeater-mediated paths by definition. Switch to Routed or Combined to configure this."
     }
 
     private var metricColumns: [GridItem] {
