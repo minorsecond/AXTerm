@@ -1100,7 +1100,11 @@ struct TerminalView: View {
                 refreshConnectBarData()
             }
             .onReceive(connectCoordinator.$pendingRequest.compactMap { $0 }) { request in
-                handleConnectRequest(request)
+                // Defer request handling one run-loop turn to avoid publishing model
+                // updates while SwiftUI is still in the current view update pass.
+                DispatchQueue.main.async {
+                    handleConnectRequest(request)
+                }
             }
             .onChange(of: connectCoordinator.activeContext) { _, context in
                 connectBarViewModel.applyContext(context)
@@ -1923,17 +1927,25 @@ struct TerminalView: View {
 
     private func connectNETROM(intent: ConnectIntent, override: CallsignSSID?) {
         // Native NET/ROM L3 connect is not yet implemented in this stack.
-        // Fallback: open an AX.25 connected session to the selected next-hop neighbor
-        // when available, otherwise attempt direct destination connect.
+        // Fallback: attempt AX.25 connected mode to destination using best known digi path.
         let destination = intent.normalizedTo
-        let fallbackHop = override?.stringValue ?? intent.routeHint?.nextHop ?? destination
-        connectBarViewModel.toCall = fallbackHop
-        connectBarViewModel.viaDigipeaters = []
+        let selection = connectBarViewModel.nextFallbackDigipeaterSelection(
+            for: destination,
+            nextHopOverride: override
+        )
+        let chosenDigis = selection.path
+        // Make fallback explicit in UI and ensure legacy binding propagates digi path.
+        // Do not persist this as a context default; this is per-attempt fallback behavior.
+        connectBarViewModel.setMode(.ax25ViaDigi, for: nil)
+        connectBarViewModel.toCall = destination
+        connectBarViewModel.viaDigipeaters = chosenDigis
         syncLegacyFieldsFromConnectBar()
 
         if let frame = txViewModel.connect() {
+            let viaText = chosenDigis.isEmpty ? "direct" : chosenDigis.joined(separator: ",")
+            let alternateCount = selection.alternateCount
             client.appendSystemNotification(
-                "NET/ROM connect requested to \(destination). Native NET/ROM connect is unavailable; opened AX.25 session to \(fallbackHop)."
+                "NET/ROM connect requested to \(destination). Native NET/ROM connect is unavailable; opened AX.25 via Digi session to \(destination) via \(viaText). \(alternateCount > 0 ? "\(alternateCount) alternate path(s) known." : "")"
             )
             client.send(frame: frame) { result in
                 Task { @MainActor in

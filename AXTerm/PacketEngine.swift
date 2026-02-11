@@ -367,6 +367,7 @@ final class PacketEngine: ObservableObject {
         TxLog.hexDump(.kiss, "KISS frame", data: kissData)
 
         // Log the transmission: user payload as DATA (purple), protocol as SYS
+        let viaSuffix: String = frame.path.isEmpty ? "" : " via \(frame.path.display)"
         let showAsData: Bool
         if let text = frame.displayInfo, !text.isEmpty {
             showAsData = frame.isUserPayload || (frame.frameType.lowercased() == "i" && !isProtocolDisplayInfo(text))
@@ -374,10 +375,10 @@ final class PacketEngine: ObservableObject {
                 let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: text)
                 appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
             } else {
-                addSystemLine("TX: \(frame.source.display) → \(frame.destination.display): \(text)", category: .transmission)
+                addSystemLine("TX: \(frame.source.display) → \(frame.destination.display)\(viaSuffix): \(text)", category: .transmission)
             }
         } else {
-            addSystemLine("TX: \(frame.source.display) → \(frame.destination.display): \(frame.displayInfo ?? "")", category: .transmission)
+            addSystemLine("TX: \(frame.source.display) → \(frame.destination.display)\(viaSuffix): \(frame.displayInfo ?? "")", category: .transmission)
         }
         eventLogger?.log(
             level: .info,

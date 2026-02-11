@@ -144,6 +144,32 @@ nonisolated enum CallsignValidator {
         return true
     }
 
+    /// Checks if a candidate is valid in an AX.25 digipeater path.
+    ///
+    /// Accepts either:
+    /// - Standard amateur callsigns (with optional SSID), or
+    /// - Short tactical digi aliases used on packet networks (e.g. DRLNOD),
+    ///   with optional SSID.
+    ///
+    /// Still rejects known service endpoints and APRS-style pseudo paths
+    /// (e.g. WIDE/TRACE/RELAY prefixes) via `isValidRoutingNode`.
+    static func isValidDigipeaterAddress(_ candidate: String) -> Bool {
+        let normalized = normalize(candidate)
+        guard !normalized.isEmpty else { return false }
+
+        let parts = normalized.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count <= 2 else { return false }
+
+        if parts.count == 2 {
+            let ssidPart = String(parts[1])
+            guard let ssid = Int(ssidPart), (0...15).contains(ssid) else {
+                return false
+            }
+        }
+
+        return isValidRoutingNode(normalized)
+    }
+
     /// Replaces the user-configured service-endpoint ignore list.
     /// Values are normalized to uppercase, deduplicated, and matched on base callsign.
     static func configureIgnoredServiceEndpoints(_ values: [String]) {
