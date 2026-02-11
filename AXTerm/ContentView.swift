@@ -282,42 +282,80 @@ struct ContentView: View {
                         .font(.caption)
                 } else {
                     ForEach(client.stations) { station in
+                        let stationHasNetRomRoute = client.netRomIntegration?.bestRouteTo(CallsignValidator.normalize(station.call)) != nil
+                        let preferredMode = connectCoordinator.preferredMode(
+                            for: station.call,
+                            hasNetRomRoute: stationHasNetRomRoute
+                        )
+                        let isConnectedStation = sessionCoordinator.connectedSessions.contains {
+                            CallsignValidator.normalize($0.remoteAddress.display) == CallsignValidator.normalize(station.call)
+                        }
+
                         StationRowView(
                             station: station,
                             isSelected: client.selectedStationCall == station.call,
+                            isConnected: isConnectedStation,
                             capability: client.capabilityStore.capabilities(for: station.call)
                         )
                         .contentShape(Rectangle())
                         .contextMenu {
-                            Button("Connect (AX.25)") {
-                                connectCoordinator.activeContext = .stations
-                                let intent = ConnectIntent(
-                                    kind: .ax25Direct,
-                                    to: station.call,
-                                    sourceContext: .stations,
-                                    suggestedRoutePreview: nil,
-                                    validationErrors: [],
-                                    routeHint: nil,
-                                    note: nil
+                            Button("Connect") {
+                                issueStationConnectRequest(
+                                    stationCall: station.call,
+                                    mode: preferredMode,
+                                    executeImmediately: true
                                 )
-                                connectCoordinator.requestConnect(
-                                    ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true)
+                            }
+                            Button("Connect via AX.25") {
+                                issueStationConnectRequest(
+                                    stationCall: station.call,
+                                    mode: .ax25,
+                                    executeImmediately: true
                                 )
+                            }
+                            Button("Connect via NET/ROM") {
+                                issueStationConnectRequest(
+                                    stationCall: station.call,
+                                    mode: .netrom,
+                                    executeImmediately: true
+                                )
+                            }
+                            .disabled(!stationHasNetRomRoute)
+
+                            Menu("Routing Options") {
+                                Button("Prefill Preferred Route") {
+                                    issueStationConnectRequest(
+                                        stationCall: station.call,
+                                        mode: preferredMode,
+                                        executeImmediately: false
+                                    )
+                                }
+                                Button("Prefill AX.25 Draft") {
+                                    issueStationConnectRequest(
+                                        stationCall: station.call,
+                                        mode: .ax25,
+                                        executeImmediately: false
+                                    )
+                                }
+                                Button("Prefill NET/ROM Draft") {
+                                    issueStationConnectRequest(
+                                        stationCall: station.call,
+                                        mode: .netrom,
+                                        executeImmediately: false
+                                    )
+                                }
+                                .disabled(!stationHasNetRomRoute)
+                            }
+                            Divider()
+                            Button("Copy Callsign") {
+                                ClipboardWriter.copy(CallsignValidator.normalize(station.call))
                             }
                         }
                         .onTapGesture(count: 2) {
-                            connectCoordinator.activeContext = .stations
-                            let intent = ConnectIntent(
-                                kind: .ax25Direct,
-                                to: station.call,
-                                sourceContext: .stations,
-                                suggestedRoutePreview: nil,
-                                validationErrors: [],
-                                routeHint: nil,
-                                note: nil
-                            )
-                            connectCoordinator.requestConnect(
-                                ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true)
+                            issueStationConnectRequest(
+                                stationCall: station.call,
+                                mode: preferredMode,
+                                executeImmediately: true
                             )
                         }
                         .onTapGesture {
@@ -326,6 +364,11 @@ struct ContentView: View {
                             } else {
                                 client.selectedStationCall = station.call
                             }
+                            issueStationConnectRequest(
+                                stationCall: station.call,
+                                mode: preferredMode,
+                                executeImmediately: false
+                            )
                         }
                     }
                 }
@@ -343,6 +386,48 @@ struct ContentView: View {
         case .analytics: return "chart.bar"
         //case .raw: return "doc.text"
         }
+    }
+
+    private func issueStationConnectRequest(stationCall: String, mode: ConnectBarMode, executeImmediately: Bool) {
+        connectCoordinator.activeContext = .stations
+        let normalized = CallsignValidator.normalize(stationCall)
+        let intent: ConnectIntent
+        switch mode {
+        case .netrom:
+            intent = ConnectIntent(
+                kind: .netrom(nextHopOverride: nil),
+                to: normalized,
+                sourceContext: .stations,
+                suggestedRoutePreview: nil,
+                validationErrors: [],
+                routeHint: nil,
+                note: nil
+            )
+        case .ax25ViaDigi:
+            intent = ConnectIntent(
+                kind: .ax25ViaDigis([]),
+                to: normalized,
+                sourceContext: .stations,
+                suggestedRoutePreview: nil,
+                validationErrors: [],
+                routeHint: nil,
+                note: nil
+            )
+        case .ax25:
+            intent = ConnectIntent(
+                kind: .ax25Direct,
+                to: normalized,
+                sourceContext: .stations,
+                suggestedRoutePreview: nil,
+                validationErrors: [],
+                routeHint: nil,
+                note: nil
+            )
+        }
+
+        connectCoordinator.requestConnect(
+            ConnectRequest(intent: intent, mode: mode, executeImmediately: executeImmediately)
+        )
     }
 
     // MARK: - Detail View

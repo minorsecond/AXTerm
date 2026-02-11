@@ -10,6 +10,7 @@ import SwiftUI
 struct StationRowView: View {
     let station: Station
     let isSelected: Bool
+    var isConnected: Bool = false
 
     /// AXDP capability for this station (nil if not known)
     var capability: AXDPCapability?
@@ -22,6 +23,13 @@ struct StationRowView: View {
                         .font(.system(.body, design: .monospaced))
                         .fontWeight(isSelected ? .semibold : .regular)
                         .help("Station callsign")
+
+                    if isConnected {
+                        Image(systemName: "link.circle.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.green)
+                            .help("Connected session")
+                    }
 
                     // AXDP capability badge
                     if capability != nil {
@@ -50,7 +58,17 @@ struct StationRowView: View {
             }
         }
         .padding(.vertical, 2)
-        .background(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
+        .background(
+            Group {
+                if isConnected {
+                    Color.green.opacity(0.10)
+                } else if isSelected {
+                    Color.accentColor.opacity(0.10)
+                } else {
+                    Color.clear
+                }
+            }
+        )
         .cornerRadius(4)
     }
 }
