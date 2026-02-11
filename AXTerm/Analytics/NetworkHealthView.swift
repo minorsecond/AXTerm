@@ -404,7 +404,9 @@ private struct MetricCell: View {
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
         .help(tooltip)
     }
 }
@@ -531,6 +533,7 @@ struct ScoreExplainerView: View {
                         .foregroundStyle(Color(nsColor: .systemGreen))
                         .help(GraphCopy.ScoreBreakdown.topologyTooltip)
                 }
+                .contentShape(Rectangle())
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -553,6 +556,8 @@ struct ScoreExplainerView: View {
                             .font(.caption.monospacedDigit())
                             .frame(width: 28, alignment: .trailing)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                     .help(tooltip(for: component.name))
                 }
             }

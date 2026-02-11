@@ -1046,7 +1046,7 @@ private struct InspectorMetricRow: View {
                 .monospacedDigit()
         }
         .font(.caption)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
         .padding(.vertical, 2)
         .contentShape(Rectangle())
         .help(tooltip)
@@ -1129,7 +1129,7 @@ private struct InspectorMetricStringRow: View {
                 .monospacedDigit()
         }
         .font(.caption)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
         .padding(.vertical, 2)
         .background(Color.clear)
         .contentShape(Rectangle())
@@ -1151,7 +1151,7 @@ private struct MetricCell: View {
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
         .padding(.vertical, 2)
         .contentShape(Rectangle())
         .help(tooltip)
