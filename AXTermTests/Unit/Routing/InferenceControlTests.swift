@@ -15,7 +15,7 @@ final class InferenceControlTests: XCTestCase {
             timestamp: timestamp,
             from: AX25Address(call: from),
             to: AX25Address(call: "ANY"),
-            via: via.map { AX25Address(call: $0) },
+            via: via.map { AX25Address(call: $0, repeated: true) },
             frameType: .i,
             control: 0x00,
             controlByte1: 0x00,
@@ -59,7 +59,7 @@ final class InferenceControlTests: XCTestCase {
             timestamp: base,
             from: AX25Address(call: "K9OUT"),
             to: AX25Address(call: "ANY"),
-            via: [AX25Address(call: "W1ABC")],
+            via: [AX25Address(call: "W1ABC", repeated: true)],
             frameType: .s,
             control: 0xA1, // RR
             pid: nil,
