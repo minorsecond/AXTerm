@@ -1068,6 +1068,7 @@ struct TerminalView: View {
     @State private var lastObservedDestination: String = ""
     @State private var sessionRecords: [SessionRecord] = []
     @State private var activeSessionRecordID: String?
+    @State private var autoAttemptTask: Task<Void, Never>?
 
     init(
         client: PacketEngine,
@@ -1189,6 +1190,9 @@ struct TerminalView: View {
                 if newValue != lastAutoFilledPath {
                     lastAutoFilledPath = ""
                 }
+            }
+            .onDisappear {
+                stopAutoConnectAttempts()
             }
             .modifier(TerminalViewModifiers(
                 searchModel: searchModel,
@@ -1661,6 +1665,12 @@ struct TerminalView: View {
                 onConnectBarConnect: {
                     connectWithActiveIntent(sourceContext: connectCoordinator.activeContext)
                 },
+                onAutoConnect: {
+                    startAutoConnectAttempts(sourceContext: connectCoordinator.activeContext)
+                },
+                onStopAutoConnect: {
+                    stopAutoConnectAttempts()
+                },
                 onDisconnect: {
                     disconnectFromDestination()
                 },
@@ -2042,7 +2052,289 @@ struct TerminalView: View {
         connectWithActiveIntent(sourceContext: connectCoordinator.activeContext)
     }
 
+    private func startAutoConnectAttempts(sourceContext: ConnectSourceContext) {
+        stopAutoConnectAttempts()
+        syncLegacyFieldsFromConnectBar()
+
+        let destination = CallsignValidator.normalize(connectBarViewModel.toCall)
+        guard !destination.isEmpty else {
+            connectBarViewModel.markFailed(reason: .invalidDraft, detail: "Destination callsign is required")
+            return
+        }
+
+        let plan = ConnectAttemptPlanner.plan(mode: connectBarViewModel.mode, suggestions: connectBarViewModel.connectSuggestions)
+        if connectBarViewModel.mode == .ax25ViaDigi && plan.steps.isEmpty {
+            connectBarViewModel.markFailed(reason: .noRoute, detail: "No suggested digi paths available.")
+            return
+        }
+
+        connectCoordinator.navigateToTerminal?()
+        connectBarViewModel.beginAutoAttempting()
+
+        autoAttemptTask = Task { @MainActor in
+            let runner = ConnectAttemptRunner(maxAttempts: 3, backoffSeconds: 8)
+            let result = await runner.run(
+                plan: plan,
+                onStatus: { attemptIndex, totalAttempts, step in
+                    connectBarViewModel.updateAutoAttemptStatus(
+                        autoAttemptStatusText(
+                            step: step,
+                            attemptIndex: attemptIndex,
+                            totalAttempts: totalAttempts
+                        )
+                    )
+                },
+                execute: { step, _, _ in
+                    await executeAutoAttemptStep(
+                        step,
+                        destination: destination,
+                        sourceContext: sourceContext
+                    )
+                }
+            )
+
+            handleAutoAttemptRunnerResult(result)
+            autoAttemptTask = nil
+        }
+    }
+
+    private func stopAutoConnectAttempts() {
+        let wasRunning = autoAttemptTask != nil || connectBarViewModel.isAutoAttemptInProgress
+        autoAttemptTask?.cancel()
+        autoAttemptTask = nil
+        connectBarViewModel.endAutoAttempting()
+        if wasRunning {
+            txViewModel.forceDisconnect()
+            connectBarViewModel.markDisconnected()
+            updateActiveSessionRecordState("Disconnected")
+        }
+    }
+
+    private func autoAttemptStatusText(step: ConnectAttemptStep, attemptIndex: Int, totalAttempts: Int) -> String {
+        switch step {
+        case .ax25ViaDigis(let digis):
+            if digis.isEmpty {
+                return "Trying \(attemptIndex)/\(totalAttempts): direct"
+            }
+            return "Trying \(attemptIndex)/\(totalAttempts): via \(formatViaPath(digis))"
+        case .netrom(let nextHopOverride):
+            if let nextHopOverride, !nextHopOverride.isEmpty {
+                return "Trying \(attemptIndex)/\(totalAttempts): next hop \(nextHopOverride)"
+            }
+            return "Trying \(attemptIndex)/\(totalAttempts): next hop Auto"
+        }
+    }
+
+    private func formatViaPath(_ digis: [String]) -> String {
+        switch digis.count {
+        case 0:
+            return "Direct"
+        case 1:
+            return digis[0]
+        case 2:
+            return "\(digis[0]) → \(digis[1])"
+        default:
+            return "\(digis[0]) → \(digis[1]) → …"
+        }
+    }
+
+    private func handleAutoAttemptRunnerResult(_ result: ConnectAttemptRunnerResult) {
+        switch result.outcome {
+        case .success:
+            connectBarViewModel.endAutoAttempting()
+        case .failed:
+            connectBarViewModel.endAutoAttempting()
+            if case .failed = connectBarViewModel.barState {
+                return
+            }
+            connectBarViewModel.markFailed(reason: .timeout, detail: "Auto connect attempts exhausted.")
+        case .cancelled:
+            connectBarViewModel.endAutoAttempting()
+            updateActiveSessionRecordState("Cancelled")
+        case .unavailable(let message):
+            connectBarViewModel.endAutoAttempting()
+            connectBarViewModel.markFailed(reason: .unknown, detail: message)
+            updateActiveSessionRecordState("Failed")
+        case .noPlan:
+            connectBarViewModel.endAutoAttempting()
+        }
+    }
+
+    private func executeAutoAttemptStep(
+        _ step: ConnectAttemptStep,
+        destination: String,
+        sourceContext: ConnectSourceContext
+    ) async -> ConnectAttemptStepResult {
+        if Task.isCancelled {
+            return .cancelled
+        }
+
+        switch step {
+        case .ax25ViaDigis(let digis):
+            connectBarViewModel.setMode(.ax25ViaDigi, for: sourceContext)
+            connectBarViewModel.applySuggestedTo(destination)
+            connectBarViewModel.applyPathPreset(digis)
+            syncLegacyFieldsFromConnectBar()
+            let intent = connectBarViewModel.buildIntent(sourceContext: sourceContext)
+            guard intent.validationErrors.isEmpty else {
+                connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+                connectBarViewModel.markFailed(reason: .invalidDraft, detail: intent.validationErrors.joined(separator: "; "))
+                updateActiveSessionRecordState("Failed")
+                return .failed
+            }
+            return await executeAX25AutoAttempt(intent: intent, digis: digis)
+
+        case .netrom(let nextHopOverride):
+            connectBarViewModel.setMode(.netrom, for: sourceContext)
+            connectBarViewModel.applySuggestedTo(destination)
+            connectBarViewModel.nextHopSelection = nextHopOverride ?? ConnectBarViewModel.autoNextHopID
+            connectBarViewModel.validate()
+            syncLegacyFieldsFromConnectBar()
+            let intent = connectBarViewModel.buildIntent(sourceContext: sourceContext)
+            guard intent.validationErrors.isEmpty else {
+                connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+                connectBarViewModel.markFailed(reason: .invalidDraft, detail: intent.validationErrors.joined(separator: "; "))
+                updateActiveSessionRecordState("Failed")
+                return .failed
+            }
+            return executeNETROMAutoAttempt(intent: intent, override: nextHopOverride)
+        }
+    }
+
+    private func executeAX25AutoAttempt(intent: ConnectIntent, digis: [String]) async -> ConnectAttemptStepResult {
+        upsertSessionRecord(intent: intent, statusText: "Connecting")
+        connectBarViewModel.markConnecting()
+
+        guard let frame = txViewModel.connect() else {
+            connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+            connectBarViewModel.markFailed(reason: .unknown, detail: "Unable to build SABM frame")
+            updateActiveSessionRecordState("Failed")
+            return .failed
+        }
+
+        let sendResult = await sendFrameAsync(frame)
+        switch sendResult {
+        case .failure(let error):
+            TxLog.error(.session, "SABM send failed", error: error)
+            connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+            connectBarViewModel.markFailed(reason: .connectRejected, detail: error.localizedDescription)
+            updateActiveSessionRecordState("Failed")
+            return .failed
+        case .success:
+            TxLog.outbound(.session, "SABM sent (auto attempt)", [
+                "dest": frame.destination.display,
+                "via": digis.joined(separator: ",")
+            ])
+        }
+
+        let waitResult = await waitForAX25ConnectOutcome(destination: intent.normalizedTo, digis: digis, timeoutSeconds: 12)
+        switch waitResult {
+        case .success:
+            connectBarViewModel.recordAttempt(intent: intent, result: .success)
+            updateActiveSessionRecordState("Connected")
+            return .success
+        case .cancelled:
+            disconnectSession(destination: intent.normalizedTo, digis: digis)
+            return .cancelled
+        case .failed(let detail):
+            connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+            connectBarViewModel.markFailed(reason: .connectRejected, detail: detail)
+            updateActiveSessionRecordState("Failed")
+            disconnectSession(destination: intent.normalizedTo, digis: digis)
+            return .failed
+        case .timeout:
+            connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+            connectBarViewModel.markFailed(reason: .timeout, detail: "Connection timed out.")
+            updateActiveSessionRecordState("Failed")
+            disconnectSession(destination: intent.normalizedTo, digis: digis)
+            return .timeout
+        }
+    }
+
+    private func executeNETROMAutoAttempt(intent: ConnectIntent, override: String?) -> ConnectAttemptStepResult {
+        let message = "NET/ROM transport unavailable"
+        upsertSessionRecord(intent: intent, statusText: "Connecting")
+        connectBarViewModel.markConnecting()
+        connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+        connectBarViewModel.markFailed(reason: .unknown, detail: message)
+        updateActiveSessionRecordState("Failed")
+        client.appendSystemNotification(
+            "NET/ROM connect requested to \(intent.normalizedTo) (next hop: \(override ?? "Auto")). \(message)."
+        )
+        return .unavailable(message: message)
+    }
+
+    private enum AX25AutoWaitResult {
+        case success
+        case failed(detail: String)
+        case timeout
+        case cancelled
+    }
+
+    private func waitForAX25ConnectOutcome(
+        destination: String,
+        digis: [String],
+        timeoutSeconds: TimeInterval
+    ) async -> AX25AutoWaitResult {
+        let destinationAddress = CallsignNormalizer.toAddress(destination)
+        let path = DigiPath.from(digis)
+        let start = Date()
+        let deadline = start.addingTimeInterval(timeoutSeconds)
+
+        while Date() < deadline {
+            if Task.isCancelled {
+                return .cancelled
+            }
+
+            if let session = txViewModel.sessionManager.existingSession(for: destinationAddress, path: path)
+                ?? txViewModel.sessionManager.connectedSession(withPeer: destinationAddress) {
+                switch session.state {
+                case .connected:
+                    return .success
+                case .error:
+                    return .failed(detail: "Session entered error state.")
+                case .disconnected where Date().timeIntervalSince(start) > 2:
+                    return .failed(detail: "Peer disconnected before session establishment.")
+                case .disconnecting:
+                    return .failed(detail: "Session disconnected during connect attempt.")
+                case .connecting, .disconnected:
+                    break
+                }
+            }
+
+            do {
+                try await Task.sleep(nanoseconds: 250_000_000)
+            } catch {
+                return .cancelled
+            }
+        }
+        return .timeout
+    }
+
+    private func disconnectSession(destination: String, digis: [String]) {
+        let address = CallsignNormalizer.toAddress(destination)
+        let path = DigiPath.from(digis)
+        if let session = txViewModel.sessionManager.existingSession(for: address, path: path)
+            ?? txViewModel.sessionManager.connectedSession(withPeer: address) {
+            txViewModel.sessionManager.forceDisconnect(session: session)
+        }
+    }
+
+    private func sendFrameAsync(_ frame: OutboundFrame) async -> Result<Void, Error> {
+        await withCheckedContinuation { continuation in
+            client.send(frame: frame) { result in
+                switch result {
+                case .success:
+                    continuation.resume(returning: .success(()))
+                case .failure(let error):
+                    continuation.resume(returning: .failure(error))
+                }
+            }
+        }
+    }
+
     private func connectWithActiveIntent(sourceContext: ConnectSourceContext) {
+        stopAutoConnectAttempts()
         syncLegacyFieldsFromConnectBar()
         let intent = connectBarViewModel.buildIntent(sourceContext: sourceContext)
         guard intent.validationErrors.isEmpty else {
@@ -2090,16 +2382,16 @@ struct TerminalView: View {
     }
 
     private func connectNETROM(intent: ConnectIntent, override: CallsignSSID?) {
-        let destination = intent.normalizedTo
         let forced = override?.stringValue ?? "Auto"
+        let message = "NET/ROM transport unavailable"
         connectBarViewModel.recordAttempt(intent: intent, result: .failed)
         connectBarViewModel.markFailed(
             reason: .unknown,
-            detail: "Native NET/ROM connected transport is not available in this build (next hop: \(forced))."
+            detail: message
         )
         updateActiveSessionRecordState("Failed")
         client.appendSystemNotification(
-            "NET/ROM connect requested to \(destination) (next hop: \(forced)). Native NET/ROM connected transport is unavailable; session not opened."
+            "NET/ROM connect requested to \(intent.normalizedTo) (next hop: \(forced)). \(message)."
         )
     }
 

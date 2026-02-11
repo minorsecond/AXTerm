@@ -41,8 +41,74 @@ nonisolated struct ConnectAttemptRecord: Codable, Equatable {
     let to: String
     let mode: ConnectBarMode
     let timestamp: Date
-    let result: ConnectAttemptResult
+    let success: Bool
+    let digis: [String]
+    let nextHopOverride: String?
+
+    init(
+        to: String,
+        mode: ConnectBarMode,
+        timestamp: Date,
+        success: Bool,
+        digis: [String] = [],
+        nextHopOverride: String? = nil
+    ) {
+        self.to = CallsignValidator.normalize(to)
+        self.mode = mode
+        self.timestamp = timestamp
+        self.success = success
+        self.digis = digis.map { CallsignValidator.normalize($0) }
+        self.nextHopOverride = nextHopOverride.map { CallsignValidator.normalize($0) }
+    }
+
+    var result: ConnectAttemptResult {
+        success ? .success : .failed
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case to
+        case mode
+        case timestamp
+        case success
+        case digis
+        case nextHopOverride
+        case result
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        to = CallsignValidator.normalize(try container.decode(String.self, forKey: .to))
+        mode = try container.decode(ConnectBarMode.self, forKey: .mode)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        if let explicit = try container.decodeIfPresent(Bool.self, forKey: .success) {
+            success = explicit
+        } else {
+            let legacyResult = try container.decodeIfPresent(ConnectAttemptResult.self, forKey: .result) ?? .failed
+            success = legacyResult == .success
+        }
+        digis = (try container.decodeIfPresent([String].self, forKey: .digis) ?? [])
+            .map { CallsignValidator.normalize($0) }
+        if let override = try container.decodeIfPresent(String.self, forKey: .nextHopOverride) {
+            let normalized = CallsignValidator.normalize(override)
+            nextHopOverride = normalized.isEmpty ? nil : normalized
+        } else {
+            nextHopOverride = nil
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(to, forKey: .to)
+        try container.encode(mode, forKey: .mode)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(success, forKey: .success)
+        try container.encode(digis, forKey: .digis)
+        try container.encodeIfPresent(nextHopOverride, forKey: .nextHopOverride)
+        try container.encode(result, forKey: .result)
+    }
 }
+
+typealias ConnectAttempt = ConnectAttemptRecord
 
 nonisolated struct RecentDigiPath: Codable, Hashable {
     let path: [String]

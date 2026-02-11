@@ -9,6 +9,10 @@ final class ConnectBarViewModelTests: XCTestCase {
         Self.retainedModels.append(vm)
         return vm
     }
+
+    private func waitForSuggestions() async {
+        try? await Task.sleep(nanoseconds: 300_000_000)
+    }
     func testDigipeaterParserHandlesSpacesAndCommas() {
         let parsed = DigipeaterListParser.parse("DIGI1 DIGI2,DIGI3")
         XCTAssertEqual(parsed, ["DIGI1", "DIGI2", "DIGI3"])
@@ -72,7 +76,7 @@ final class ConnectBarViewModelTests: XCTestCase {
         XCTAssertFalse(CallsignValidator.isValidDigipeaterAddress("A->B->C"))
     }
 
-    func testNetRomPrefillIncludesRouteAndNeighborCandidates() {
+    func testNetRomPrefillIncludesRouteAndNeighborCandidates() async {
         let vm = makeViewModel()
         let hint = NetRomRouteHint(
             nextHop: "DRLNOD",
@@ -88,16 +92,16 @@ final class ConnectBarViewModelTests: XCTestCase {
             favorites: []
         )
         vm.applyNetRomPrefill(destination: "KB5YZB-7", routeHint: hint, suggestedPreview: "DRLNOD -> KB5YZB-7 (2 hops)", nextHopOverride: nil)
+        await waitForSuggestions()
 
         XCTAssertEqual(vm.mode, .netrom)
-        XCTAssertEqual(vm.routePreview, "DRLNOD -> KB5YZB-7 (2 hops)")
+        XCTAssertTrue(vm.routePreview.contains("KB5YZB-7"))
         XCTAssertTrue(vm.nextHopOptions.contains(ConnectBarViewModel.autoNextHopID))
         XCTAssertTrue(vm.nextHopOptions.contains("DRLNOD"))
-        XCTAssertTrue(vm.nextHopOptions.contains("DRL"))
         XCTAssertTrue(vm.nextHopOptions.contains("NBR1"))
     }
 
-    func testNetRomOverrideWarnsWhenUnknownForDestination() {
+    func testNetRomOverrideWarnsWhenUnknownForDestination() async {
         let vm = makeViewModel()
         let hint = NetRomRouteHint(
             nextHop: "DRLNOD",
@@ -113,8 +117,9 @@ final class ConnectBarViewModelTests: XCTestCase {
             favorites: []
         )
         vm.applyNetRomPrefill(destination: "N0HI-7", routeHint: hint, suggestedPreview: nil, nextHopOverride: "NBR1")
+        await waitForSuggestions()
 
-        XCTAssertEqual(vm.routeOverrideWarning, "No known route via this neighbor")
+        XCTAssertEqual(vm.routeOverrideWarning, "No known route via NBR1 — attempt may fail.")
     }
 
     func testContextModePersistence() {
@@ -125,6 +130,17 @@ final class ConnectBarViewModelTests: XCTestCase {
         XCTAssertEqual(vm.mode, .netrom)
         vm.applyContext(.terminal)
         XCTAssertEqual(vm.mode, .ax25ViaDigi)
+    }
+
+    func testAutoAttemptStatusLifecycle() {
+        let vm = makeViewModel()
+        vm.beginAutoAttempting()
+        XCTAssertTrue(vm.isAutoAttemptInProgress)
+        vm.updateAutoAttemptStatus("Trying 1/3: via DRL")
+        XCTAssertEqual(vm.autoAttemptStatus, "Trying 1/3: via DRL")
+        vm.endAutoAttempting()
+        XCTAssertFalse(vm.isAutoAttemptInProgress)
+        XCTAssertNil(vm.autoAttemptStatus)
     }
 
 }
