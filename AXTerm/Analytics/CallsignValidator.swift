@@ -10,6 +10,11 @@ import Foundation
 /// Validates and parses amateur radio callsigns.
 /// Filters out non-callsign entities like BEACON, ID, WIDE1-1, etc.
 nonisolated enum CallsignValidator {
+    private static let customServiceEndpointsQueue = DispatchQueue(
+        label: "axterm.callsignValidator.customServiceEndpoints",
+        attributes: .concurrent
+    )
+    private static var customServiceEndpoints: Set<String> = []
 
     // MARK: - Basic Validation (used by Settings)
 
@@ -43,8 +48,12 @@ nonisolated enum CallsignValidator {
 
     /// Prefixes that indicate non-callsign entities
     private static let nonCallsignPrefixes: [String] = [
-        "WIDE", "TRACE", "RELAY", "BLN", "NWS", "APRS"
+        "WIDE", "TRACE", "RELAY", "BLN", "NWS", "APRS", "BBS"
     ]
+
+    /// Tactical alias pattern used by some digipeaters and NET/ROM nodes.
+    /// Examples: DRL, DRLNOD. Excludes punctuation and keeps aliases short.
+    private static let routingAliasPattern = #"^[A-Z0-9]{3,6}$"#
 
     // MARK: - Validation
 
@@ -57,7 +66,7 @@ nonisolated enum CallsignValidator {
         let baseCall = upper.components(separatedBy: "-").first ?? upper
 
         // Check against known non-callsign patterns
-        if nonCallsignPatterns.contains(baseCall) {
+        if isKnownServiceEndpoint(baseCall) {
             return false
         }
 
@@ -100,6 +109,66 @@ nonisolated enum CallsignValidator {
         let reverseRegex = try? NSRegularExpression(pattern: reversePattern, options: [])
 
         return reverseRegex?.firstMatch(in: baseCall, options: [], range: range) != nil
+    }
+
+    /// Checks if a candidate is valid for routing/graph node identity.
+    ///
+    /// This is intentionally broader than `isValidCallsign(_:)` so that tactical
+    /// digipeater aliases (e.g. DRL, DRLNOD) can appear in graph and route contexts,
+    /// while still excluding known service endpoints like ID/BEACON/BBS/WIDE.
+    static func isValidRoutingNode(_ candidate: String) -> Bool {
+        let normalized = normalize(candidate)
+        guard !normalized.isEmpty else { return false }
+
+        if isValidCallsign(normalized) {
+            return true
+        }
+
+        let baseCall = normalized.components(separatedBy: "-").first ?? normalized
+        if isKnownServiceEndpoint(baseCall) {
+            return false
+        }
+        for prefix in nonCallsignPrefixes {
+            if baseCall.hasPrefix(prefix) && baseCall.count <= prefix.count + 2 {
+                return false
+            }
+        }
+        guard baseCall.range(of: routingAliasPattern, options: [.regularExpression]) != nil else {
+            return false
+        }
+        // Reject aliases that are purely numeric.
+        guard baseCall.rangeOfCharacter(from: .letters) != nil else {
+            return false
+        }
+
+        return true
+    }
+
+    /// Replaces the user-configured service-endpoint ignore list.
+    /// Values are normalized to uppercase, deduplicated, and matched on base callsign.
+    static func configureIgnoredServiceEndpoints(_ values: [String]) {
+        let normalized = Set(values.compactMap { value -> String? in
+            let token = normalize(value)
+            let base = token.components(separatedBy: "-").first ?? token
+            return base.isEmpty ? nil : base
+        })
+        customServiceEndpointsQueue.sync(flags: .barrier) {
+            customServiceEndpoints = normalized
+        }
+    }
+
+    private static func customServiceEndpointsSnapshot() -> Set<String> {
+        customServiceEndpointsQueue.sync { customServiceEndpoints }
+    }
+
+    private static func isKnownServiceEndpoint(_ baseCall: String) -> Bool {
+        if nonCallsignPatterns.contains(baseCall) {
+            return true
+        }
+        if customServiceEndpointsSnapshot().contains(baseCall) {
+            return true
+        }
+        return false
     }
 
     // MARK: - Suffix Extraction

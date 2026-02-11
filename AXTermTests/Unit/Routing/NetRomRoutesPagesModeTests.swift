@@ -302,6 +302,22 @@ final class NetRomRoutesPagesModeTests: XCTestCase {
                        "Routes should be filtered to classic only")
     }
 
+    func testViewModel_IgnoredServiceEndpointRemovedFromAllTables() {
+        let integration = makeIntegrationWithMixedData()
+        let settings = AppSettingsStore(defaults: UserDefaults(suiteName: "AXTermTests.NetRomRoutes.\(UUID().uuidString)") ?? .standard)
+        let viewModel = NetRomRoutesViewModel(integration: integration, settings: settings)
+        viewModel.setMode(.hybrid)
+
+        XCTAssertTrue(viewModel.neighbors.contains { $0.callsign == "K2BBB" })
+
+        settings.addIgnoredServiceEndpoint("K2BBB")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertFalse(viewModel.neighbors.contains { $0.callsign == "K2BBB" })
+        XCTAssertFalse(viewModel.routes.contains { $0.destination == "K1AAA" && $0.path.contains("K2BBB") })
+        XCTAssertFalse(viewModel.linkStats.contains { $0.fromCall == "K2BBB" || $0.toCall == "K2BBB" })
+    }
+
     // MARK: - Ordering Tests
 
     func testNeighbors_OrderedByQualityDescThenCallsign() {

@@ -51,6 +51,13 @@ struct GraphSidebar: View {
     let selectedMultiNodeDetails: GraphMultiInspectorDetails?
     let onSetAsAnchor: () -> Void
     let onClearSelection: () -> Void
+    let isServiceEndpointIgnored: (String) -> Bool
+    let isServiceEndpointSimulated: (String) -> Bool
+    let onAddServiceEndpointIgnore: (String) -> Void
+    let onRemoveServiceEndpointIgnore: (String) -> Void
+    let onSimulateServiceEndpointIgnore: (String) -> Void
+    let onApplySimulatedServiceEndpointIgnore: (String) -> Void
+    let onCancelSimulatedServiceEndpointIgnore: (String) -> Void
 
     // Hub metric for Primary Hub action
     @Binding var hubMetric: HubMetric
@@ -106,7 +113,14 @@ struct GraphSidebar: View {
                     details: selectedNodeDetails,
                     multiDetails: selectedMultiNodeDetails,
                     onSetAsAnchor: onSetAsAnchor,
-                    onClearSelection: onClearSelection
+                    onClearSelection: onClearSelection,
+                    isServiceEndpointIgnored: isServiceEndpointIgnored,
+                    isServiceEndpointSimulated: isServiceEndpointSimulated,
+                    onAddServiceEndpointIgnore: onAddServiceEndpointIgnore,
+                    onRemoveServiceEndpointIgnore: onRemoveServiceEndpointIgnore,
+                    onSimulateServiceEndpointIgnore: onSimulateServiceEndpointIgnore,
+                    onApplySimulatedServiceEndpointIgnore: onApplySimulatedServiceEndpointIgnore,
+                    onCancelSimulatedServiceEndpointIgnore: onCancelSimulatedServiceEndpointIgnore
                 )
             }
         }
@@ -442,6 +456,13 @@ private struct SidebarInspectorContent: View {
     let multiDetails: GraphMultiInspectorDetails?
     let onSetAsAnchor: () -> Void
     let onClearSelection: () -> Void
+    let isServiceEndpointIgnored: (String) -> Bool
+    let isServiceEndpointSimulated: (String) -> Bool
+    let onAddServiceEndpointIgnore: (String) -> Void
+    let onRemoveServiceEndpointIgnore: (String) -> Void
+    let onSimulateServiceEndpointIgnore: (String) -> Void
+    let onApplySimulatedServiceEndpointIgnore: (String) -> Void
+    let onCancelSimulatedServiceEndpointIgnore: (String) -> Void
     @State private var showAllSelectedStationsSheet = false
 
     var body: some View {
@@ -838,6 +859,9 @@ private struct SidebarInspectorContent: View {
                 connection.totalPackets
             )
         )
+        .contextMenu {
+            serviceEndpointContextMenu(for: connection.callsign)
+        }
     }
 
     private func selectedStationRow(_ node: NetworkGraphNode) -> some View {
@@ -859,6 +883,9 @@ private struct SidebarInspectorContent: View {
         .background(Color.clear)
         .contentShape(Rectangle())
         .help(String(format: Copy.Inspector.selectedStationRowTooltipTemplate, node.inCount, node.outCount, node.degree))
+        .contextMenu {
+            serviceEndpointContextMenu(for: node.callsign)
+        }
     }
 
     // MARK: - Relationship Sections
@@ -964,6 +991,35 @@ private struct SidebarInspectorContent: View {
                 Text(String(format: Copy.Inspector.lastHeardTemplate, relativeTimeString(lastHeard)))
                     .font(.caption2)
                     .foregroundStyle(AnalyticsStyle.Colors.textSecondary.opacity(0.7))
+            }
+        }
+        .contextMenu {
+            serviceEndpointContextMenu(for: rel.id)
+        }
+    }
+
+    @ViewBuilder
+    private func serviceEndpointContextMenu(for callsign: String) -> some View {
+        let normalized = CallsignValidator.normalize(callsign)
+        if !normalized.isEmpty {
+            if isServiceEndpointIgnored(normalized) && isServiceEndpointSimulated(normalized) {
+                Button("Apply Simulated Removal") {
+                    onApplySimulatedServiceEndpointIgnore(normalized)
+                }
+                Button("Cancel Simulated Removal") {
+                    onCancelSimulatedServiceEndpointIgnore(normalized)
+                }
+            } else if isServiceEndpointIgnored(normalized) {
+                Button("Remove From Ignored Service Endpoints") {
+                    onRemoveServiceEndpointIgnore(normalized)
+                }
+            } else {
+                Button("Ignore As Service Endpoint") {
+                    onAddServiceEndpointIgnore(normalized)
+                }
+                Button("Simulate Removing From Graph") {
+                    onSimulateServiceEndpointIgnore(normalized)
+                }
             }
         }
     }
@@ -1254,6 +1310,13 @@ struct GraphSidebar_Previews: PreviewProvider {
                 selectedMultiNodeDetails: nil,
                 onSetAsAnchor: {},
                 onClearSelection: {},
+                isServiceEndpointIgnored: { _ in false },
+                isServiceEndpointSimulated: { _ in false },
+                onAddServiceEndpointIgnore: { _ in },
+                onRemoveServiceEndpointIgnore: { _ in },
+                onSimulateServiceEndpointIgnore: { _ in },
+                onApplySimulatedServiceEndpointIgnore: { _ in },
+                onCancelSimulatedServiceEndpointIgnore: { _ in },
                 hubMetric: .constant(.degree)
             )
 
@@ -1268,6 +1331,13 @@ struct GraphSidebar_Previews: PreviewProvider {
                 selectedMultiNodeDetails: nil,
                 onSetAsAnchor: {},
                 onClearSelection: {},
+                isServiceEndpointIgnored: { _ in false },
+                isServiceEndpointSimulated: { _ in false },
+                onAddServiceEndpointIgnore: { _ in },
+                onRemoveServiceEndpointIgnore: { _ in },
+                onSimulateServiceEndpointIgnore: { _ in },
+                onApplySimulatedServiceEndpointIgnore: { _ in },
+                onCancelSimulatedServiceEndpointIgnore: { _ in },
                 hubMetric: .constant(.degree)
             )
 
@@ -1282,6 +1352,13 @@ struct GraphSidebar_Previews: PreviewProvider {
                 selectedMultiNodeDetails: nil,
                 onSetAsAnchor: {},
                 onClearSelection: {},
+                isServiceEndpointIgnored: { _ in false },
+                isServiceEndpointSimulated: { _ in false },
+                onAddServiceEndpointIgnore: { _ in },
+                onRemoveServiceEndpointIgnore: { _ in },
+                onSimulateServiceEndpointIgnore: { _ in },
+                onApplySimulatedServiceEndpointIgnore: { _ in },
+                onCancelSimulatedServiceEndpointIgnore: { _ in },
                 hubMetric: .constant(.degree)
             )
         }

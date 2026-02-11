@@ -505,7 +505,7 @@ nonisolated struct NetworkGraphBuilder {
                 // Packet with via path (digipeaters)
                 // Convert via callsigns to identity keys
                 let viaKeys = event.via.compactMap { rawVia -> String? in
-                    guard CallsignValidator.isValidCallsign(rawVia) else { return nil }
+                    guard CallsignValidator.isValidRoutingNode(rawVia) else { return nil }
                     return identityKey(for: rawVia)
                 }
 
@@ -1104,8 +1104,8 @@ nonisolated struct NetworkGraphBuilder {
             .filter { $0.value.count >= max(1, options.minimumEdgeCount) }
 
         let edgesExcludingSpecial = filteredEdges.filter { key, _ in
-            CallsignValidator.isValidCallsign(key.source) &&
-            CallsignValidator.isValidCallsign(key.target)
+            CallsignValidator.isValidRoutingNode(key.source) &&
+            CallsignValidator.isValidRoutingNode(key.target)
         }
 
         var adjacency: [String: [GraphNeighborStat]] = [:]
@@ -1119,7 +1119,7 @@ nonisolated struct NetworkGraphBuilder {
         }
 
         let activeNodeIDs = Set(edgesExcludingSpecial.keys.flatMap { [$0.source, $0.target] })
-            .filter { CallsignValidator.isValidCallsign($0) }
+            .filter { CallsignValidator.isValidRoutingNode($0) }
         var nodes: [NetworkGraphNode] = []
         nodes.reserveCapacity(activeNodeIDs.count)
 

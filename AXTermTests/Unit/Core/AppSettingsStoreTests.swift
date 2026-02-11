@@ -129,4 +129,35 @@ final class AppSettingsStoreTests: XCTestCase {
             XCTAssertTrue(defaults.bool(forKey: AppSettingsStore.analyticsAutoUpdateEnabledKey))
         }
     }
+
+    func testIgnoredServiceEndpointsSanitizePersistAndSyncValidator() {
+        withIsolatedDefaults { defaults in
+            let store = AppSettingsStore(defaults: defaults)
+            defer { CallsignValidator.configureIgnoredServiceEndpoints([]) }
+
+            store.ignoredServiceEndpoints = [" horse ", "HORSE", "drlnod"]
+
+            XCTAssertEqual(store.ignoredServiceEndpoints, ["HORSE", "DRLNOD"])
+            XCTAssertEqual(
+                defaults.stringArray(forKey: AppSettingsStore.ignoredServiceEndpointsKey),
+                ["HORSE", "DRLNOD"]
+            )
+            XCTAssertFalse(CallsignValidator.isValidRoutingNode("HORSE"))
+            XCTAssertFalse(CallsignValidator.isValidRoutingNode("DRLNOD"))
+            XCTAssertTrue(CallsignValidator.isValidRoutingNode("DRL"))
+        }
+    }
+
+    func testAddAndRemoveIgnoredServiceEndpoint() {
+        withIsolatedDefaults { defaults in
+            let store = AppSettingsStore(defaults: defaults)
+            defer { CallsignValidator.configureIgnoredServiceEndpoints([]) }
+
+            store.addIgnoredServiceEndpoint("horse")
+            XCTAssertTrue(store.isServiceEndpointIgnored("HORSE"))
+
+            store.removeIgnoredServiceEndpoint("HORSE")
+            XCTAssertFalse(store.isServiceEndpointIgnored("HORSE"))
+        }
+    }
 }

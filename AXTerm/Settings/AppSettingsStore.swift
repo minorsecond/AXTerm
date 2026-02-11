@@ -29,6 +29,7 @@ final class AppSettingsStore: ObservableObject {
     static let myCallsignKey = "myCallsign"
     static let watchCallsignsKey = "watchCallsigns"
     static let watchKeywordsKey = "watchKeywords"
+    static let ignoredServiceEndpointsKey = "ignoredServiceEndpoints"
     static let sentryEnabledKey = "sentryEnabled"
     static let sentrySendPacketContentsKey = "sentrySendPacketContents"
     static let sentrySendConnectionDetailsKey = "sentrySendConnectionDetails"
@@ -137,6 +138,7 @@ final class AppSettingsStore: ObservableObject {
     static let defaultNotifyOnWatch = true
     static let defaultNotifyPlaySound = true
     static let defaultNotifyOnlyWhenInactive = true
+    static let defaultIgnoredServiceEndpoints: [String] = []
     static let defaultSentryEnabled = false
     static let defaultSentrySendPacketContents = false
     static let defaultSentrySendConnectionDetails = false
@@ -354,6 +356,18 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
+    @Published var ignoredServiceEndpoints: [String] {
+        didSet {
+            let sanitized = Self.sanitizeWatchList(ignoredServiceEndpoints, normalize: CallsignValidator.normalize)
+            guard sanitized == ignoredServiceEndpoints else {
+                ignoredServiceEndpoints = sanitized
+                return
+            }
+            CallsignValidator.configureIgnoredServiceEndpoints(sanitized)
+            persistIgnoredServiceEndpoints()
+        }
+    }
+
     @Published var sentryEnabled: Bool {
         didSet { persistSentryEnabled() }
     }
@@ -462,6 +476,26 @@ final class AppSettingsStore: ObservableObject {
     func removeCallsignFromFileTransferDenylist(_ callsign: String) {
         let normalized = CallsignValidator.normalize(callsign)
         deniedFileTransferCallsigns.removeAll { CallsignValidator.normalize($0) == normalized }
+    }
+
+    /// Add an entry to the service-endpoint ignore list used by graph/routes validation.
+    func addIgnoredServiceEndpoint(_ endpoint: String) {
+        let normalized = CallsignValidator.normalize(endpoint)
+        guard !normalized.isEmpty else { return }
+        guard !ignoredServiceEndpoints.contains(normalized) else { return }
+        ignoredServiceEndpoints.append(normalized)
+    }
+
+    /// Remove an entry from the service-endpoint ignore list.
+    func removeIgnoredServiceEndpoint(_ endpoint: String) {
+        let normalized = CallsignValidator.normalize(endpoint)
+        ignoredServiceEndpoints.removeAll { CallsignValidator.normalize($0) == normalized }
+    }
+
+    /// True when endpoint exists in the user-managed service-endpoint ignore list.
+    func isServiceEndpointIgnored(_ endpoint: String) -> Bool {
+        let normalized = CallsignValidator.normalize(endpoint)
+        return ignoredServiceEndpoints.contains(normalized)
     }
 
     // MARK: - Analytics Settings
@@ -651,6 +685,7 @@ final class AppSettingsStore: ObservableObject {
         let storedMyCallsign = defaults.string(forKey: Self.myCallsignKey) ?? ""
         let storedWatchCallsigns = defaults.stringArray(forKey: Self.watchCallsignsKey) ?? []
         let storedWatchKeywords = defaults.stringArray(forKey: Self.watchKeywordsKey) ?? []
+        let storedIgnoredServiceEndpoints = defaults.stringArray(forKey: Self.ignoredServiceEndpointsKey) ?? Self.defaultIgnoredServiceEndpoints
         let storedSentryEnabled = defaults.object(forKey: Self.sentryEnabledKey) as? Bool ?? Self.defaultSentryEnabled
         let storedSentrySendPacketContents = defaults.object(forKey: Self.sentrySendPacketContentsKey) as? Bool ?? Self.defaultSentrySendPacketContents
         let storedSentrySendConnectionDetails = defaults.object(forKey: Self.sentrySendConnectionDetailsKey) as? Bool ?? Self.defaultSentrySendConnectionDetails
@@ -735,6 +770,7 @@ final class AppSettingsStore: ObservableObject {
         self.myCallsignStorage = CallsignValidator.normalize(storedMyCallsign)
         self.watchCallsigns = storedWatchCallsigns
         self.watchKeywords = storedWatchKeywords
+        self.ignoredServiceEndpoints = Self.sanitizeWatchList(storedIgnoredServiceEndpoints, normalize: CallsignValidator.normalize)
         self.sentryEnabled = storedSentryEnabled
         self.sentrySendPacketContents = storedSentrySendPacketContents
         self.sentrySendConnectionDetails = storedSentrySendConnectionDetails
@@ -774,6 +810,8 @@ final class AppSettingsStore: ObservableObject {
         self.terminalClearedAt = storedTerminalClearedAt
         self.consoleClearedAt = storedConsoleClearedAt
         self.rawClearedAt = storedRawClearedAt
+
+        CallsignValidator.configureIgnoredServiceEndpoints(self.ignoredServiceEndpoints)
 
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             Self.testRetainedStores.append(self)
@@ -894,6 +932,10 @@ final class AppSettingsStore: ObservableObject {
 
     private func persistWatchKeywords() {
         defaults.set(watchKeywords, forKey: Self.watchKeywordsKey)
+    }
+
+    private func persistIgnoredServiceEndpoints() {
+        defaults.set(ignoredServiceEndpoints, forKey: Self.ignoredServiceEndpointsKey)
     }
 
     private func persistSentryEnabled() {
@@ -1060,6 +1102,7 @@ final class AppSettingsStore: ObservableObject {
             Self.myCallsignKey: "",
             Self.watchCallsignsKey: [String](),
             Self.watchKeywordsKey: [String](),
+            Self.ignoredServiceEndpointsKey: Self.defaultIgnoredServiceEndpoints,
             Self.sentryEnabledKey: Self.defaultSentryEnabled,
             Self.sentrySendPacketContentsKey: Self.defaultSentrySendPacketContents,
             Self.sentrySendConnectionDetailsKey: Self.defaultSentrySendConnectionDetails,

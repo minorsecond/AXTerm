@@ -17,8 +17,15 @@ struct AnalyticsDashboardView: View {
     @State private var focusNodeID: String?
     @State private var sidebarTab: GraphSidebarTab = .overview
     @State private var showExportToast = false
+    @State private var endpointActionBanner: EndpointActionBannerState?
+    @State private var endpointSimulationSet: Set<String> = []
+    @State private var temporarilyUnignoredEndpoints: Set<String> = []
+    @State private var endpointBannerDismissTask: Task<Void, Never>?
+    @State private var temporaryShowAllActive = false
+    @State private var temporaryShowAllSnapshot: TemporaryShowAllSnapshot?
     @State private var showCustomRangePopover = false
     @State private var showGraphOptionsPopover = false
+    @State private var showHiddenByFiltersPopover = false
     @State private var graphViewportHeight: CGFloat = AnalyticsStyle.Layout.graphHeight
     @State private var preferredPacketViewMode: GraphViewMode = .connectivity
     @State private var preferredNetRomViewMode: GraphViewMode = .netromHybrid
@@ -32,6 +39,29 @@ struct AnalyticsDashboardView: View {
     @State private var scrollOffset: CGFloat = 0
     @State private var controlBarHeight: CGFloat = 56
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    private enum EndpointBannerMode {
+        case undoIgnore
+        case undoRemove
+        case simulation
+    }
+
+    private struct EndpointActionBannerState: Identifiable {
+        let id = UUID()
+        let callsign: String
+        let mode: EndpointBannerMode
+    }
+
+    private struct TemporaryShowAllSnapshot {
+        let minEdgeCount: Int
+        let maxNodes: Int
+        let focusState: GraphFocusState
+        let ignoredServiceEndpoints: [String]
+        let simulationSet: Set<String>
+        let temporarilyUnignoredEndpoints: Set<String>
+        let temporarilyUnhiddenCallsigns: [String]
+        let temporarilyUnhiddenCount: Int
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -96,6 +126,15 @@ struct AnalyticsDashboardView: View {
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+
+            if let endpointActionBanner {
+                VStack {
+                    Spacer()
+                    endpointActionBannerView(endpointActionBanner)
+                        .padding(.bottom, showExportToast ? 72 : 20)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .onAppear {
             viewModel.trackDashboardOpened()
@@ -120,12 +159,74 @@ struct AnalyticsDashboardView: View {
         .onChange(of: viewModel.graphViewMode) { _, newValue in
             syncPreferredGraphModes(with: newValue)
         }
+        .onChange(of: settings.ignoredServiceEndpoints) { _, newValue in
+            let normalized = Set(newValue.map(CallsignValidator.normalize))
+            endpointSimulationSet = endpointSimulationSet.intersection(normalized)
+            temporarilyUnignoredEndpoints.subtract(normalized)
+        }
         .onPreferenceChange(FloatingControlBarHeightPreferenceKey.self) { value in
             // Keep height stable and avoid tiny oscillations from fractional layout updates.
             let rounded = ceil(value)
             if abs(controlBarHeight - rounded) > 1 {
                 controlBarHeight = rounded
             }
+        }
+    }
+
+    @ViewBuilder
+    private func endpointActionBannerView(_ banner: EndpointActionBannerState) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: banner.mode == .undoRemove ? "arrow.uturn.backward.circle.fill" : "minus.circle.fill")
+                .foregroundStyle(banner.mode == .undoRemove ? .orange : .blue)
+
+            Text(endpointBannerMessage(for: banner))
+                .font(.callout.weight(.medium))
+                .lineLimit(2)
+
+            Spacer(minLength: 8)
+
+            switch banner.mode {
+            case .undoIgnore:
+                Button("Undo") {
+                    undoIgnore(for: banner.callsign)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            case .undoRemove:
+                Button("Undo") {
+                    undoRemove(for: banner.callsign)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            case .simulation:
+                Button("Apply") {
+                    applySimulation(for: banner.callsign)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                Button("Cancel") {
+                    cancelSimulation(for: banner.callsign)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+        .padding(.horizontal, 20)
+    }
+
+    private func endpointBannerMessage(for banner: EndpointActionBannerState) -> String {
+        switch banner.mode {
+        case .undoIgnore:
+            return "\(banner.callsign) removed from graph/routes analytics."
+        case .undoRemove:
+            return "\(banner.callsign) restored to graph/routes analytics."
+        case .simulation:
+            return "Simulating removal of \(banner.callsign). Apply to keep, or cancel to restore."
         }
     }
 
@@ -445,6 +546,27 @@ struct AnalyticsDashboardView: View {
                             },
                             onFocusHandled: {
                                 focusNodeID = nil
+                            },
+                            isServiceEndpointIgnored: { callsign in
+                                settings.isServiceEndpointIgnored(callsign)
+                            },
+                            isServiceEndpointSimulated: { callsign in
+                                endpointSimulationSet.contains(CallsignValidator.normalize(callsign))
+                            },
+                            onAddServiceEndpointIgnore: { callsign in
+                                ignoreServiceEndpoint(callsign)
+                            },
+                            onRemoveServiceEndpointIgnore: { callsign in
+                                removeIgnoredServiceEndpoint(callsign)
+                            },
+                            onSimulateServiceEndpointIgnore: { callsign in
+                                simulateServiceEndpointRemoval(callsign)
+                            },
+                            onApplySimulatedServiceEndpointIgnore: { callsign in
+                                applySimulation(for: callsign)
+                            },
+                            onCancelSimulatedServiceEndpointIgnore: { callsign in
+                                cancelSimulation(for: callsign)
                             }
                         )
                         if (!viewModel.hasLoadedGraph || viewModel.isGraphLoading) && viewModel.viewState.graphModel.nodes.isEmpty {
@@ -526,6 +648,27 @@ struct AnalyticsDashboardView: View {
                             // Clear selection AND fit to nodes (per UX spec)
                             viewModel.clearSelectionAndFit()
                         },
+                        isServiceEndpointIgnored: { callsign in
+                            settings.isServiceEndpointIgnored(callsign)
+                        },
+                        isServiceEndpointSimulated: { callsign in
+                            endpointSimulationSet.contains(CallsignValidator.normalize(callsign))
+                        },
+                        onAddServiceEndpointIgnore: { callsign in
+                            ignoreServiceEndpoint(callsign)
+                        },
+                        onRemoveServiceEndpointIgnore: { callsign in
+                            removeIgnoredServiceEndpoint(callsign)
+                        },
+                        onSimulateServiceEndpointIgnore: { callsign in
+                            simulateServiceEndpointRemoval(callsign)
+                        },
+                        onApplySimulatedServiceEndpointIgnore: { callsign in
+                            applySimulation(for: callsign)
+                        },
+                        onCancelSimulatedServiceEndpointIgnore: { callsign in
+                            cancelSimulation(for: callsign)
+                        },
                         hubMetric: $viewModel.focusState.hubMetric,
                         fixedHeight: graphViewportHeight
                     )
@@ -546,7 +689,7 @@ struct AnalyticsDashboardView: View {
             }
 
             // Keyboard shortcuts hint
-            Text("Click to select, Shift-drag to select, drag to pan, ⌘ or Opt + scroll to zoom, Esc clears")
+            Text("Click to select, Shift-drag to select, right-click a node for ignore/simulate actions, drag to pan, ⌘ or Opt + scroll to zoom, Esc clears")
                 .font(.caption)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 .padding(.top, 4)
@@ -631,6 +774,30 @@ struct AnalyticsDashboardView: View {
                     .controlSize(.small)
                     .help(GraphCopy.StationIdentity.pickerTooltip)
                 }
+
+                if temporaryShowAllActive || totalHiddenNodesCount > 0 {
+                    Button {
+                        showHiddenByFiltersPopover.toggle()
+                    } label: {
+                        if temporaryShowAllActive {
+                            Label("Showing all (temporary +\(temporaryUnhiddenCount))", systemImage: "eye")
+                                .font(.caption)
+                        } else {
+                            Label("Hidden by filters: \(totalHiddenNodesCount)", systemImage: "line.3.horizontal.decrease.circle")
+                                .font(.caption)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help(
+                        temporaryShowAllActive
+                            ? "Temporary show-all is active. Open to restore your previous filters."
+                            : "Some nodes exist in current data but are hidden by active filters."
+                    )
+                    .popover(isPresented: $showHiddenByFiltersPopover, arrowEdge: .bottom) {
+                        hiddenByFiltersPopover
+                    }
+                }
             }
 
             Text(graphViewSummaryText)
@@ -638,11 +805,489 @@ struct AnalyticsDashboardView: View {
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
         }
     }
+
+    private var hiddenByFiltersPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Hidden By Filters")
+                .font(.headline)
+
+            HStack(spacing: 8) {
+                Button(temporaryShowAllActive ? "Restore Filters" : "Show All (Temporary)") {
+                    if temporaryShowAllActive {
+                        exitTemporaryShowAll()
+                    } else {
+                        enterTemporaryShowAll()
+                    }
+                    showHiddenByFiltersPopover = false
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+
+                if temporaryShowAllActive {
+                    Button("Keep Current View") {
+                        endTemporaryShowAllWithoutRestore()
+                        showHiddenByFiltersPopover = false
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+
+                if focusHiddenNodeCount > 0 || structuralHiddenNodeCount > 0 || simulatedHiddenNodeCount > 0 {
+                    Button("Clear View Filters") {
+                        viewModel.clearFocus()
+                        viewModel.minEdgeCount = 1
+                        viewModel.maxNodes = 300
+                        clearAllSimulations()
+                        showHiddenByFiltersPopover = false
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
+            if temporaryShowAllActive {
+                Text("Temporarily unhidden: \(temporaryUnhiddenCount)")
+                    .font(.caption)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                if !temporaryUnhiddenPreview.isEmpty {
+                    Text(temporaryUnhiddenPreview.joined(separator: ", "))
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        .lineLimit(2)
+                }
+            }
+
+            if structuralHiddenNodeCount > 0 {
+                Text("Min Edge / Max Nodes: \(structuralHiddenNodeCount)")
+                    .font(.caption)
+            }
+            if focusHiddenNodeCount > 0 {
+                Text("Focus Mode: \(focusHiddenNodeCount)")
+                    .font(.caption)
+            }
+            if simulatedHiddenNodeCount > 0 {
+                Text("Simulated Removals: \(simulatedHiddenNodeCount)")
+                    .font(.caption)
+            }
+            if persistedIgnoredNodeCount > 0 {
+                Text("Ignored Endpoints: \(persistedIgnoredNodeCount)")
+                    .font(.caption)
+            }
+            if !temporarilyUnignoredEndpoints.isEmpty {
+                Text("Temporarily Unignored: \(temporarilyUnignoredEndpoints.count)")
+                    .font(.caption)
+            }
+
+            Divider()
+
+            if focusHiddenNodeCount > 0 {
+                Button("Exit Focus") {
+                    viewModel.clearFocus()
+                    showHiddenByFiltersPopover = false
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            if structuralHiddenNodeCount > 0 && viewModel.maxNodes < 300 {
+                Button("Increase Max Nodes (+50)") {
+                    viewModel.maxNodes = min(300, viewModel.maxNodes + 50)
+                    showHiddenByFiltersPopover = false
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            if simulatedHiddenNodeCount > 0 {
+                Button("Clear Simulations") {
+                    clearAllSimulations()
+                    showHiddenByFiltersPopover = false
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            if !temporarilyUnignoredEndpoints.isEmpty {
+                Button("Re-hide Temporary Nodes") {
+                    restoreTemporarilyUnignoredEndpoints()
+                    showHiddenByFiltersPopover = false
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            if !hiddenNodeEntries.isEmpty {
+                Divider()
+                Text("Hidden Nodes")
+                    .font(.caption.weight(.semibold))
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(hiddenNodeEntries.prefix(24), id: \.id) { entry in
+                            HStack(spacing: 8) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(entry.callsign)
+                                        .font(.caption.monospaced())
+                                    Text(entry.reason)
+                                        .font(.caption2)
+                                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                                }
+                                Spacer(minLength: 8)
+                                HStack(spacing: 4) {
+                                    Button(primaryActionLabel(for: entry)) {
+                                        showHiddenNode(entry)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.mini)
+
+                                    if entry.reasonKind == .ignored {
+                                        Button("Unignore") {
+                                            removeIgnoredServiceEndpoint(entry.callsign)
+                                            selectCallsignIfVisible(entry.callsign)
+                                            showHiddenByFiltersPopover = false
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.mini)
+                                        .help("Remove this node from ignored endpoints permanently.")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 190)
+            }
+        }
+        .padding(12)
+        .frame(width: 320)
+    }
 }
 
 
 
 extension AnalyticsDashboardView {
+    private enum HiddenNodeReason {
+        case focusMode
+        case simulated
+        case ignored
+    }
+
+    private struct HiddenNodeEntry: Identifiable {
+        let id: String
+        let callsign: String
+        let reason: String
+        let reasonKind: HiddenNodeReason
+        let nodeID: String?
+    }
+
+    private var hiddenNodeEntries: [HiddenNodeEntry] {
+        var entries: [HiddenNodeEntry] = []
+
+        if viewModel.focusState.isFocusEnabled {
+            let hiddenFocusNodes = viewModel.viewState.graphModel.nodes
+                .filter { !viewModel.filteredGraph.visibleNodeIDs.contains($0.id) }
+                .prefix(16)
+            entries.append(contentsOf: hiddenFocusNodes.map {
+                HiddenNodeEntry(
+                    id: "focus:\($0.id)",
+                    callsign: $0.callsign,
+                    reason: "Hidden by focus mode",
+                    reasonKind: .focusMode,
+                    nodeID: $0.id
+                )
+            })
+        }
+
+        let simulated = endpointSimulationSet.sorted()
+        entries.append(contentsOf: simulated.map {
+            HiddenNodeEntry(
+                id: "sim:\($0)",
+                callsign: $0,
+                reason: "Simulated removal",
+                reasonKind: .simulated,
+                nodeID: nil
+            )
+        })
+
+        let ignored = Set(settings.ignoredServiceEndpoints.map(CallsignValidator.normalize))
+            .subtracting(endpointSimulationSet)
+            .subtracting(temporarilyUnignoredEndpoints)
+            .sorted()
+        entries.append(contentsOf: ignored.map {
+            HiddenNodeEntry(
+                id: "ignore:\($0)",
+                callsign: $0,
+                reason: "Ignored endpoint",
+                reasonKind: .ignored,
+                nodeID: nil
+            )
+        })
+
+        // Deduplicate by callsign while preserving first reason.
+        var seen = Set<String>()
+        return entries.filter { entry in
+            guard !seen.contains(entry.callsign) else { return false }
+            seen.insert(entry.callsign)
+            return true
+        }
+    }
+
+    private var temporaryUnhiddenCount: Int {
+        temporaryShowAllSnapshot?.temporarilyUnhiddenCount ?? 0
+    }
+
+    private var temporaryUnhiddenPreview: [String] {
+        guard let snapshot = temporaryShowAllSnapshot else { return [] }
+        return Array(snapshot.temporarilyUnhiddenCallsigns.prefix(8))
+    }
+
+    private var structuralHiddenNodeCount: Int {
+        max(0, viewModel.viewState.classifiedGraphModel.droppedNodesCount)
+    }
+
+    private var focusHiddenNodeCount: Int {
+        guard viewModel.focusState.isFocusEnabled else { return 0 }
+        let total = viewModel.viewState.graphModel.nodes.count
+        let visible = viewModel.filteredGraph.visibleNodeIDs.count
+        return max(0, total - visible)
+    }
+
+    private var simulatedHiddenNodeCount: Int {
+        let nodeCallsigns = Set(viewModel.viewState.graphModel.nodes.map { CallsignValidator.normalize($0.callsign) })
+        return endpointSimulationSet.filter { nodeCallsigns.contains($0) }.count
+    }
+
+    private var persistedIgnoredNodeCount: Int {
+        let ignored = Set(settings.ignoredServiceEndpoints.map(CallsignValidator.normalize))
+        return ignored
+            .subtracting(endpointSimulationSet)
+            .subtracting(temporarilyUnignoredEndpoints)
+            .count
+    }
+
+    private var totalHiddenNodesCount: Int {
+        structuralHiddenNodeCount + focusHiddenNodeCount + simulatedHiddenNodeCount + persistedIgnoredNodeCount
+    }
+
+    private func normalizedEndpoint(_ callsign: String) -> String {
+        CallsignValidator.normalize(callsign)
+    }
+
+    private func isEndpointIgnored(_ callsign: String) -> Bool {
+        settings.isServiceEndpointIgnored(normalizedEndpoint(callsign))
+    }
+
+    private func ignoreServiceEndpoint(_ callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        guard !normalized.isEmpty else { return }
+        guard !isEndpointIgnored(normalized) else { return }
+        settings.addIgnoredServiceEndpoint(normalized)
+        endpointSimulationSet.remove(normalized)
+        temporarilyUnignoredEndpoints.remove(normalized)
+        showEndpointBanner(callsign: normalized, mode: .undoIgnore, autoDismissAfter: 8)
+    }
+
+    private func removeIgnoredServiceEndpoint(_ callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        guard !normalized.isEmpty else { return }
+        guard isEndpointIgnored(normalized) else { return }
+        settings.removeIgnoredServiceEndpoint(normalized)
+        endpointSimulationSet.remove(normalized)
+        temporarilyUnignoredEndpoints.remove(normalized)
+        showEndpointBanner(callsign: normalized, mode: .undoRemove, autoDismissAfter: 8)
+    }
+
+    private func simulateServiceEndpointRemoval(_ callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        guard !normalized.isEmpty else { return }
+        guard !isEndpointIgnored(normalized) else { return }
+        settings.addIgnoredServiceEndpoint(normalized)
+        endpointSimulationSet.insert(normalized)
+        showEndpointBanner(callsign: normalized, mode: .simulation, autoDismissAfter: nil)
+    }
+
+    private func applySimulation(for callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        guard !normalized.isEmpty else { return }
+        endpointSimulationSet.remove(normalized)
+        showEndpointBanner(callsign: normalized, mode: .undoIgnore, autoDismissAfter: 8)
+    }
+
+    private func cancelSimulation(for callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        guard !normalized.isEmpty else { return }
+        if endpointSimulationSet.contains(normalized) {
+            endpointSimulationSet.remove(normalized)
+            settings.removeIgnoredServiceEndpoint(normalized)
+        }
+        dismissEndpointBanner()
+    }
+
+    private func clearAllSimulations() {
+        for endpoint in endpointSimulationSet {
+            settings.removeIgnoredServiceEndpoint(endpoint)
+        }
+        endpointSimulationSet.removeAll()
+        dismissEndpointBanner()
+    }
+
+    private func showIgnoredNodeOnce(_ callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        guard !normalized.isEmpty else { return }
+        if isEndpointIgnored(normalized) {
+            settings.removeIgnoredServiceEndpoint(normalized)
+            temporarilyUnignoredEndpoints.insert(normalized)
+        }
+        selectCallsignIfVisible(normalized)
+    }
+
+    private func restoreTemporarilyUnignoredEndpoints() {
+        for endpoint in temporarilyUnignoredEndpoints {
+            if !isEndpointIgnored(endpoint) {
+                settings.addIgnoredServiceEndpoint(endpoint)
+            }
+        }
+        temporarilyUnignoredEndpoints.removeAll()
+    }
+
+    private func enterTemporaryShowAll() {
+        guard !temporaryShowAllActive else { return }
+        let hiddenAtEntry = hiddenNodeEntries.map(\.callsign)
+        temporaryShowAllSnapshot = TemporaryShowAllSnapshot(
+            minEdgeCount: viewModel.minEdgeCount,
+            maxNodes: viewModel.maxNodes,
+            focusState: viewModel.focusState,
+            ignoredServiceEndpoints: settings.ignoredServiceEndpoints,
+            simulationSet: endpointSimulationSet,
+            temporarilyUnignoredEndpoints: temporarilyUnignoredEndpoints,
+            temporarilyUnhiddenCallsigns: hiddenAtEntry,
+            temporarilyUnhiddenCount: hiddenAtEntry.count
+        )
+        temporaryShowAllActive = true
+
+        viewModel.clearFocus()
+        viewModel.minEdgeCount = 1
+        viewModel.maxNodes = 300
+        endpointSimulationSet.removeAll()
+        temporarilyUnignoredEndpoints.removeAll()
+        settings.ignoredServiceEndpoints = []
+    }
+
+    private func exitTemporaryShowAll() {
+        guard temporaryShowAllActive, let snapshot = temporaryShowAllSnapshot else { return }
+        temporaryShowAllActive = false
+        temporaryShowAllSnapshot = nil
+
+        viewModel.minEdgeCount = snapshot.minEdgeCount
+        viewModel.maxNodes = snapshot.maxNodes
+        viewModel.focusState = snapshot.focusState
+        endpointSimulationSet = snapshot.simulationSet
+        temporarilyUnignoredEndpoints = snapshot.temporarilyUnignoredEndpoints
+        settings.ignoredServiceEndpoints = snapshot.ignoredServiceEndpoints
+    }
+
+    private func endTemporaryShowAllWithoutRestore() {
+        guard temporaryShowAllActive else { return }
+        temporaryShowAllActive = false
+        temporaryShowAllSnapshot = nil
+    }
+
+    private func showHiddenNode(_ entry: HiddenNodeEntry) {
+        switch entry.reasonKind {
+        case .ignored:
+            showIgnoredNodeOnce(entry.callsign)
+            showHiddenByFiltersPopover = false
+            return
+        case .simulated:
+            cancelSimulation(for: entry.callsign)
+            selectCallsignIfVisible(entry.callsign)
+            showHiddenByFiltersPopover = false
+            return
+        case .focusMode:
+            break
+        }
+
+        if !temporaryShowAllActive {
+            enterTemporaryShowAll()
+        }
+        if let nodeID = entry.nodeID {
+            viewModel.handleNodeClick(nodeID, isShift: false)
+            focusNodeID = nodeID
+            sidebarTab = .inspector
+        } else {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(160))
+                if let node = viewModel.viewState.graphModel.nodes.first(where: {
+                    CallsignValidator.normalize($0.callsign) == entry.callsign
+                }) {
+                    viewModel.handleNodeClick(node.id, isShift: false)
+                    focusNodeID = node.id
+                    sidebarTab = .inspector
+                }
+            }
+        }
+        showHiddenByFiltersPopover = false
+    }
+
+    private func selectCallsignIfVisible(_ callsign: String) {
+        let normalized = CallsignValidator.normalize(callsign)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(140))
+            if let node = viewModel.viewState.graphModel.nodes.first(where: {
+                CallsignValidator.normalize($0.callsign) == normalized
+            }) {
+                viewModel.handleNodeClick(node.id, isShift: false)
+                focusNodeID = node.id
+                sidebarTab = .inspector
+            }
+        }
+    }
+
+    private func primaryActionLabel(for entry: HiddenNodeEntry) -> String {
+        switch entry.reasonKind {
+        case .focusMode:
+            return "Show"
+        case .simulated:
+            return "Cancel Sim"
+        case .ignored:
+            return "Show Once"
+        }
+    }
+
+    private func undoIgnore(for callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        settings.removeIgnoredServiceEndpoint(normalized)
+        endpointSimulationSet.remove(normalized)
+        dismissEndpointBanner()
+    }
+
+    private func undoRemove(for callsign: String) {
+        let normalized = normalizedEndpoint(callsign)
+        settings.addIgnoredServiceEndpoint(normalized)
+        dismissEndpointBanner()
+    }
+
+    private func showEndpointBanner(callsign: String, mode: EndpointBannerMode, autoDismissAfter: TimeInterval?) {
+        endpointBannerDismissTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.2)) {
+            endpointActionBanner = EndpointActionBannerState(callsign: callsign, mode: mode)
+        }
+
+        guard let autoDismissAfter else { return }
+        endpointBannerDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(autoDismissAfter * 1_000_000_000))
+            if Task.isCancelled { return }
+            dismissEndpointBanner()
+        }
+    }
+
+    private func dismissEndpointBanner() {
+        endpointBannerDismissTask?.cancel()
+        endpointBannerDismissTask = nil
+        withAnimation(.easeInOut(duration: 0.2)) {
+            endpointActionBanner = nil
+        }
+    }
+
     private var graphSourceBinding: Binding<GraphSourceChoice> {
         Binding(
             get: {

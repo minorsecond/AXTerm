@@ -12,6 +12,7 @@ struct NetworkSettingsView: View {
     @EnvironmentObject var router: SettingsRouter
 
     private let retentionStep = 1_000
+    @State private var pendingIgnoredEndpoint = ""
 
     var body: some View {
         Form {
@@ -21,6 +22,45 @@ struct NetworkSettingsView: View {
                 Text("When enabled, routes with 0% freshness are hidden from the Routes page. All routes are still kept in the database.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            PreferencesSection("Service Endpoint Filters") {
+                Text("Use this list to hide local/regional service endpoints (for example custom beacons, bulletin aliases, gateways) from graph and routing identities.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 8) {
+                    TextField("Add endpoint (e.g. HORSE, DRLBBS)", text: $pendingIgnoredEndpoint)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Add") {
+                        let normalized = CallsignValidator.normalize(pendingIgnoredEndpoint)
+                        guard !normalized.isEmpty else { return }
+                        settings.addIgnoredServiceEndpoint(normalized)
+                        pendingIgnoredEndpoint = ""
+                    }
+                    .disabled(CallsignValidator.normalize(pendingIgnoredEndpoint).isEmpty)
+                }
+
+                if settings.ignoredServiceEndpoints.isEmpty {
+                    Text("No custom service endpoints ignored.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(settings.ignoredServiceEndpoints, id: \.self) { endpoint in
+                            HStack(spacing: 8) {
+                                Text(endpoint)
+                                    .font(.caption.monospaced())
+                                Spacer()
+                                Button("Remove") {
+                                    settings.removeIgnoredServiceEndpoint(endpoint)
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
+                    }
+                    .padding(.top, 2)
+                }
             }
             
             PreferencesSection("Stale Policy") {

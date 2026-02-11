@@ -414,6 +414,7 @@ final class NetRomRoutesViewModel: ObservableObject {
     private weak var settings: AppSettingsStore?
     private let clock: ClockProviding
     private var refreshTimer: Timer?
+    private var cancellables: Set<AnyCancellable> = []
 
     /// Cached origin intervals for adaptive TTL calculation
     private var originIntervals: [String: OriginIntervalInfo] = [:]
@@ -511,6 +512,7 @@ final class NetRomRoutesViewModel: ObservableObject {
         self.packetEngine = packetEngine
         self.settings = settings
         self.clock = clock
+        bindSettings()
         startAutoRefresh()
     }
 
@@ -631,6 +633,15 @@ final class NetRomRoutesViewModel: ObservableObject {
         let rawNeighbors = integration.currentNeighbors(forMode: routingMode)
         let rawRoutes = integration.currentRoutes(forMode: routingMode)
         let rawLinkStats = integration.exportLinkStats(forMode: routingMode)
+        let filteredNeighbors = rawNeighbors.filter { isDisplayableNode($0.call) }
+        let filteredRoutes = rawRoutes.filter { route in
+            isDisplayableNode(route.destination) &&
+            isDisplayableNode(route.origin) &&
+            route.path.allSatisfy { isDisplayableNode($0) }
+        }
+        let filteredLinkStats = rawLinkStats.filter { stat in
+            isDisplayableNode(stat.fromCall) && isDisplayableNode(stat.toCall)
+        }
 
         #if DEBUG
         if !hasLoggedFirstRefresh {
@@ -718,15 +729,15 @@ final class NetRomRoutesViewModel: ObservableObject {
         let neighborTTL = neighborStaleTTLSeconds
         let linkStatTTL = linkStatStaleTTLSeconds
 
-        neighbors = rawNeighbors.map { NeighborDisplayInfo(from: $0, now: now, ttl: neighborTTL) }
+        neighbors = filteredNeighbors.map { NeighborDisplayInfo(from: $0, now: now, ttl: neighborTTL) }
 
         // Routes use different TTL strategies based on source type
-        routes = rawRoutes.map { route in
+        routes = filteredRoutes.map { route in
             let (ttl, isLearning) = routeTTL(for: route)
             return RouteDisplayInfo(from: route, now: now, ttl: ttl, isLearning: isLearning)
         }
 
-        linkStats = rawLinkStats.map { LinkStatDisplayInfo(from: $0, now: now, ttl: linkStatTTL) }
+        linkStats = filteredLinkStats.map { LinkStatDisplayInfo(from: $0, now: now, ttl: linkStatTTL) }
 
         lastRefresh = now
         isLoading = false
@@ -882,6 +893,22 @@ final class NetRomRoutesViewModel: ObservableObject {
                 self.refresh()
             }
         }
+    }
+
+    private func bindSettings() {
+        guard let settings else { return }
+
+        settings.$ignoredServiceEndpoints
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refresh()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func isDisplayableNode(_ callsign: String) -> Bool {
+        CallsignValidator.isValidRoutingNode(callsign)
     }
 
     private func formatJSON(_ data: [[String: Any]]) -> String {

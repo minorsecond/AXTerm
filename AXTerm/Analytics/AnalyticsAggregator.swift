@@ -39,7 +39,11 @@ nonisolated struct AnalyticsAggregator {
             limit: options.topLimit
         )
         let topDestinations = rankTop(stations: events.compactMap { $0.to }, limit: options.topLimit)
-        let topDigipeaters = rankTop(stations: events.flatMap { $0.via }, limit: options.topLimit)
+        let topDigipeaters = rankTop(
+            stations: events.flatMap { $0.via },
+            limit: options.topLimit,
+            allowRoutingAliases: true
+        )
 
         return AnalyticsAggregationResult(
             summary: summary,
@@ -63,13 +67,21 @@ nonisolated struct AnalyticsAggregator {
         var iFrames = 0
         for event in events {
             if let from = event.from {
-                uniqueStations.insert(from)
+                if isStationIncludedInMetrics(from) {
+                    uniqueStations.insert(from)
+                }
             }
             if let to = event.to {
-                uniqueStations.insert(to)
+                if isStationIncludedInMetrics(to) {
+                    uniqueStations.insert(to)
+                }
             }
             if includeVia {
-                event.via.forEach { uniqueStations.insert($0) }
+                event.via.forEach { via in
+                    if isStationIncludedInMetrics(via) {
+                        uniqueStations.insert(via)
+                    }
+                }
             }
 
             switch event.frameType {
@@ -110,13 +122,21 @@ nonisolated struct AnalyticsAggregator {
             packetCounts[key, default: 0] += 1
             payloadBytes[key, default: 0] += event.payloadBytes
             if let from = event.from {
-                uniqueStations[key, default: []].insert(from)
+                if isStationIncludedInMetrics(from) {
+                    uniqueStations[key, default: []].insert(from)
+                }
             }
             if let to = event.to {
-                uniqueStations[key, default: []].insert(to)
+                if isStationIncludedInMetrics(to) {
+                    uniqueStations[key, default: []].insert(to)
+                }
             }
             if includeVia {
-                event.via.forEach { uniqueStations[key, default: []].insert($0) }
+                event.via.forEach { via in
+                    if isStationIncludedInMetrics(via) {
+                        uniqueStations[key, default: []].insert(via)
+                    }
+                }
             }
         }
 
@@ -272,11 +292,18 @@ nonisolated struct AnalyticsAggregator {
         return HistogramData(bins: histogramBins, maxValue: maxValue)
     }
 
-    private static func rankTop(stations: [String], limit: Int) -> [RankRow] {
+    private static func rankTop(
+        stations: [String],
+        limit: Int,
+        allowRoutingAliases: Bool = false
+    ) -> [RankRow] {
         guard limit > 0 else { return [] }
         var counts: [String: Int] = [:]
         for station in stations {
-            guard CallsignValidator.isValidCallsign(station) else { continue }
+            let isValid = allowRoutingAliases
+                ? CallsignValidator.isValidRoutingNode(station)
+                : CallsignValidator.isValidCallsign(station)
+            guard isValid else { continue }
             counts[station, default: 0] += 1
         }
 
@@ -290,5 +317,9 @@ nonisolated struct AnalyticsAggregator {
             }
             .prefix(limit)
             .map { $0 }
+    }
+
+    private static func isStationIncludedInMetrics(_ station: String) -> Bool {
+        CallsignValidator.isValidRoutingNode(station)
     }
 }

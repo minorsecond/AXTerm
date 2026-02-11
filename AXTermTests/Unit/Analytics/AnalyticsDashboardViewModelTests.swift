@@ -445,6 +445,42 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.hasLoadedGraph)
     }
 
+    func testIgnoredServiceEndpointChangeRebuildsGraphAndAggregation() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "minute"
+        settings.analyticsIncludeVia = true
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 20
+        settings.analyticsAutoUpdateEnabled = false
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.graphViewMode = .all
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+        viewModel.setActive(true)
+
+        viewModel.updatePackets([makePacket(timestamp: timestamp, from: "K0SRC", to: "K0DST", via: ["DRLNOD"])])
+        viewModel.manualRefresh()
+        await waitFor { viewModel.hasLoadedAggregation && viewModel.hasLoadedGraph }
+
+        XCTAssertTrue(viewModel.viewState.graphModel.nodes.contains { $0.callsign == "DRLNOD" })
+        XCTAssertTrue(viewModel.viewState.topDigipeaters.contains { $0.label == "DRLNOD" })
+
+        settings.addIgnoredServiceEndpoint("DRLNOD")
+        await waitFor {
+            !viewModel.viewState.graphModel.nodes.contains { $0.callsign == "DRLNOD" } &&
+            !viewModel.viewState.topDigipeaters.contains { $0.label == "DRLNOD" }
+        }
+    }
+
     private func makeSettings() -> AppSettingsStore {
         let suiteName = "AXTermTests-AnalyticsDashboard-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName) ?? .standard

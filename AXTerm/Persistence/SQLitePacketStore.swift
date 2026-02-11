@@ -296,7 +296,7 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
                 histogram: histogram,
                 topTalkers: Self.rankRows(from: talkerCounts, limit: options.topLimit),
                 topDestinations: Self.rankRows(from: destinationCounts, limit: options.topLimit),
-                topDigipeaters: Self.rankRows(from: digipeaterCounts, limit: options.topLimit)
+                topDigipeaters: Self.rankRows(from: digipeaterCounts, limit: options.topLimit, allowRoutingAliases: true)
             )
         }
     }
@@ -381,10 +381,14 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
         return days
     }
 
-    private static func rankRows(from counts: [String: Int], limit: Int) -> [RankRow] {
+    private static func rankRows(
+        from counts: [String: Int],
+        limit: Int,
+        allowRoutingAliases: Bool = false
+    ) -> [RankRow] {
         guard limit > 0 else { return [] }
         return counts
-            .filter { CallsignValidator.isValidCallsign($0.key) }
+            .filter { allowRoutingAliases ? CallsignValidator.isValidRoutingNode($0.key) : CallsignValidator.isValidCallsign($0.key) }
             .map { RankRow(label: $0.key, count: $0.value) }
             .sorted { lhs, rhs in
                 if lhs.count == rhs.count {

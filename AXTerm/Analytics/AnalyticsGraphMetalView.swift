@@ -27,6 +27,13 @@ struct AnalyticsGraphView: View {
     let onClearSelection: () -> Void
     let onHover: (String?) -> Void
     let onFocusHandled: () -> Void
+    let isServiceEndpointIgnored: (String) -> Bool
+    let isServiceEndpointSimulated: (String) -> Bool
+    let onAddServiceEndpointIgnore: (String) -> Void
+    let onRemoveServiceEndpointIgnore: (String) -> Void
+    let onSimulateServiceEndpointIgnore: (String) -> Void
+    let onApplySimulatedServiceEndpointIgnore: (String) -> Void
+    let onCancelSimulatedServiceEndpointIgnore: (String) -> Void
 
     @State private var selectionRect: CGRect?
     @State private var hoverPoint: CGPoint?
@@ -64,6 +71,13 @@ struct AnalyticsGraphView: View {
                         }
                     },
                     onFocusHandled: onFocusHandled,
+                    isServiceEndpointIgnored: isServiceEndpointIgnored,
+                    isServiceEndpointSimulated: isServiceEndpointSimulated,
+                    onAddServiceEndpointIgnore: onAddServiceEndpointIgnore,
+                    onRemoveServiceEndpointIgnore: onRemoveServiceEndpointIgnore,
+                    onSimulateServiceEndpointIgnore: onSimulateServiceEndpointIgnore,
+                    onApplySimulatedServiceEndpointIgnore: onApplySimulatedServiceEndpointIgnore,
+                    onCancelSimulatedServiceEndpointIgnore: onCancelSimulatedServiceEndpointIgnore,
                     onCameraUpdate: { newState in
                         DispatchQueue.main.async {
                             cameraState = newState
@@ -283,7 +297,7 @@ private struct NodeLabelsOverlay: View {
 
             for node in sortedNodes.prefix(maxLabels) {
                 guard let position = positionMap[node.id] else { continue }
-                guard CallsignValidator.isValidCallsign(node.callsign) else { continue }
+                guard CallsignValidator.isValidRoutingNode(node.callsign) else { continue }
 
                 let suffix = CallsignValidator.extractSuffix(node.callsign)
 
@@ -415,6 +429,13 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
     let onHover: (String?, CGPoint?) -> Void
     let onSelectionRect: (CGRect?) -> Void
     let onFocusHandled: () -> Void
+    let isServiceEndpointIgnored: (String) -> Bool
+    let isServiceEndpointSimulated: (String) -> Bool
+    let onAddServiceEndpointIgnore: (String) -> Void
+    let onRemoveServiceEndpointIgnore: (String) -> Void
+    let onSimulateServiceEndpointIgnore: (String) -> Void
+    let onApplySimulatedServiceEndpointIgnore: (String) -> Void
+    let onCancelSimulatedServiceEndpointIgnore: (String) -> Void
     let onCameraUpdate: (CameraState) -> Void
 
     func makeCoordinator() -> GraphMetalCoordinator {
@@ -425,6 +446,13 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
             onHover: onHover,
             onSelectionRect: onSelectionRect,
             onFocusHandled: onFocusHandled,
+            isServiceEndpointIgnored: isServiceEndpointIgnored,
+            isServiceEndpointSimulated: isServiceEndpointSimulated,
+            onAddServiceEndpointIgnore: onAddServiceEndpointIgnore,
+            onRemoveServiceEndpointIgnore: onRemoveServiceEndpointIgnore,
+            onSimulateServiceEndpointIgnore: onSimulateServiceEndpointIgnore,
+            onApplySimulatedServiceEndpointIgnore: onApplySimulatedServiceEndpointIgnore,
+            onCancelSimulatedServiceEndpointIgnore: onCancelSimulatedServiceEndpointIgnore,
             onCameraUpdate: onCameraUpdate
         )
     }
@@ -616,6 +644,11 @@ nonisolated private final class GraphMetalView: MTKView {
             location: convert(recognizer.location(in: self), from: nil)
         )
     }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let location = convert(event.locationInWindow, from: nil)
+        return interactionDelegate?.contextMenu(at: location)
+    }
 }
 
 nonisolated private protocol GraphMetalInteractionDelegate: AnyObject {
@@ -627,6 +660,7 @@ nonisolated private protocol GraphMetalInteractionDelegate: AnyObject {
     /// Returns true if the scroll was consumed (graph panned/zoomed), false to pass through to parent
     func handleScroll(location: CGPoint, delta: CGSize, modifiers: NSEvent.ModifierFlags, isTrackpad: Bool) -> Bool
     func handleMagnify(magnification: CGFloat, location: CGPoint)
+    func contextMenu(at location: CGPoint) -> NSMenu?
 }
 
 private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetalInteractionDelegate {
@@ -668,7 +702,15 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     private let onHover: (String?, CGPoint?) -> Void
     private let onSelectionRect: (CGRect?) -> Void
     private let onFocusHandled: () -> Void
+    private let isServiceEndpointIgnored: (String) -> Bool
+    private let isServiceEndpointSimulated: (String) -> Bool
+    private let onAddServiceEndpointIgnore: (String) -> Void
+    private let onRemoveServiceEndpointIgnore: (String) -> Void
+    private let onSimulateServiceEndpointIgnore: (String) -> Void
+    private let onApplySimulatedServiceEndpointIgnore: (String) -> Void
+    private let onCancelSimulatedServiceEndpointIgnore: (String) -> Void
     private let onCameraUpdate: (CameraState) -> Void
+    private var contextMenuNodeCallsign: String?
 
     init(
         onSelect: @escaping (String, Bool) -> Void,
@@ -677,6 +719,13 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         onHover: @escaping (String?, CGPoint?) -> Void,
         onSelectionRect: @escaping (CGRect?) -> Void,
         onFocusHandled: @escaping () -> Void,
+        isServiceEndpointIgnored: @escaping (String) -> Bool,
+        isServiceEndpointSimulated: @escaping (String) -> Bool,
+        onAddServiceEndpointIgnore: @escaping (String) -> Void,
+        onRemoveServiceEndpointIgnore: @escaping (String) -> Void,
+        onSimulateServiceEndpointIgnore: @escaping (String) -> Void,
+        onApplySimulatedServiceEndpointIgnore: @escaping (String) -> Void,
+        onCancelSimulatedServiceEndpointIgnore: @escaping (String) -> Void,
         onCameraUpdate: @escaping (CameraState) -> Void
     ) {
         self.onSelect = onSelect
@@ -685,6 +734,13 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         self.onHover = onHover
         self.onSelectionRect = onSelectionRect
         self.onFocusHandled = onFocusHandled
+        self.isServiceEndpointIgnored = isServiceEndpointIgnored
+        self.isServiceEndpointSimulated = isServiceEndpointSimulated
+        self.onAddServiceEndpointIgnore = onAddServiceEndpointIgnore
+        self.onRemoveServiceEndpointIgnore = onRemoveServiceEndpointIgnore
+        self.onSimulateServiceEndpointIgnore = onSimulateServiceEndpointIgnore
+        self.onApplySimulatedServiceEndpointIgnore = onApplySimulatedServiceEndpointIgnore
+        self.onCancelSimulatedServiceEndpointIgnore = onCancelSimulatedServiceEndpointIgnore
         self.onCameraUpdate = onCameraUpdate
         super.init()
     }
@@ -1017,6 +1073,88 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         let zoomDelta = 1 + (clampedMag * 0.6)
         camera.zoom(at: location, scaleDelta: zoomDelta, view: view)
         requestInteractionRedraw()
+    }
+
+    func contextMenu(at location: CGPoint) -> NSMenu? {
+        guard let view, let hit = hitTest(at: location, in: view), let node = nodeIndex[hit.id] else {
+            contextMenuNodeCallsign = nil
+            return nil
+        }
+        let normalized = CallsignValidator.normalize(node.callsign)
+        guard !normalized.isEmpty else {
+            contextMenuNodeCallsign = nil
+            return nil
+        }
+        contextMenuNodeCallsign = normalized
+
+        let menu = NSMenu(title: "Node Actions")
+        if isServiceEndpointIgnored(normalized) && isServiceEndpointSimulated(normalized) {
+            let applyItem = NSMenuItem(
+                title: "Apply Simulated Removal",
+                action: #selector(handleContextMenuApplySimulatedIgnore),
+                keyEquivalent: ""
+            )
+            applyItem.target = self
+            menu.addItem(applyItem)
+
+            let cancelItem = NSMenuItem(
+                title: "Cancel Simulated Removal",
+                action: #selector(handleContextMenuCancelSimulatedIgnore),
+                keyEquivalent: ""
+            )
+            cancelItem.target = self
+            menu.addItem(cancelItem)
+        } else if isServiceEndpointIgnored(normalized) {
+            let removeItem = NSMenuItem(
+                title: "Remove From Ignored Service Endpoints",
+                action: #selector(handleContextMenuRemoveIgnore),
+                keyEquivalent: ""
+            )
+            removeItem.target = self
+            menu.addItem(removeItem)
+        } else {
+            let addItem = NSMenuItem(
+                title: "Ignore As Service Endpoint",
+                action: #selector(handleContextMenuAddIgnore),
+                keyEquivalent: ""
+            )
+            addItem.target = self
+            menu.addItem(addItem)
+
+            let simulateItem = NSMenuItem(
+                title: "Simulate Removing From Graph",
+                action: #selector(handleContextMenuSimulateIgnore),
+                keyEquivalent: ""
+            )
+            simulateItem.target = self
+            menu.addItem(simulateItem)
+        }
+        return menu
+    }
+
+    @objc private func handleContextMenuAddIgnore() {
+        guard let callsign = contextMenuNodeCallsign else { return }
+        onAddServiceEndpointIgnore(callsign)
+    }
+
+    @objc private func handleContextMenuRemoveIgnore() {
+        guard let callsign = contextMenuNodeCallsign else { return }
+        onRemoveServiceEndpointIgnore(callsign)
+    }
+
+    @objc private func handleContextMenuSimulateIgnore() {
+        guard let callsign = contextMenuNodeCallsign else { return }
+        onSimulateServiceEndpointIgnore(callsign)
+    }
+
+    @objc private func handleContextMenuApplySimulatedIgnore() {
+        guard let callsign = contextMenuNodeCallsign else { return }
+        onApplySimulatedServiceEndpointIgnore(callsign)
+    }
+
+    @objc private func handleContextMenuCancelSimulatedIgnore() {
+        guard let callsign = contextMenuNodeCallsign else { return }
+        onCancelSimulatedServiceEndpointIgnore(callsign)
     }
 
     // MARK: - Rendering Helpers

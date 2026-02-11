@@ -301,6 +301,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
         bindPackets(packetScheduler: packetScheduler)
         bindNetRomUpdates()
+        bindSettingsStore()
         bindFocusState()
     }
 
@@ -648,6 +649,18 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             .store(in: &cancellables)
     }
 
+    private func bindSettingsStore() {
+        guard let settingsStore else { return }
+
+        settingsStore.$ignoredServiceEndpoints
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refreshForServiceEndpointFilterChange()
+            }
+            .store(in: &cancellables)
+    }
+
     /// Observes focusState changes (from UI bindings) and recomputes filtered graph
     private func bindFocusState() {
         $focusState
@@ -695,6 +708,20 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
     }
 
+    /// Rebuilds analytics outputs when service-endpoint ignore filters change.
+    /// Classification depends on validator state, so caches must be invalidated.
+    func refreshForServiceEndpointFilterChange() {
+        aggregationCache.removeAll()
+        graphCache.removeAll()
+        classifiedGraphCache.removeAll()
+
+        guard isActive else { return }
+        isAggregationLoading = true
+        isGraphLoading = true
+        scheduleAggregation(reason: "serviceEndpointIgnoreList")
+        scheduleGraphBuild(reason: "serviceEndpointIgnoreList")
+    }
+
     private func recomputeAggregation(reason: String, applyToViewState: Bool = true, showLoadingState: Bool = true) async {
         let now = Date()
         let packetSnapshot = filteredPackets(now: now)
@@ -708,7 +735,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             packetCount: packetSnapshot.count,
             lastTimestamp: packetSnapshot.map { $0.timestamp }.max(),
             customStart: customRangeStart,
-            customEnd: customRangeEnd
+            customEnd: customRangeEnd,
+            ignoredServiceEndpointsHash: ignoredServiceEndpointsHash()
         )
 
         if loopDetection.record(reason: reason) {
@@ -861,6 +889,15 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         timeframe.dateInterval(now: now, customStart: customRangeStart, customEnd: customRangeEnd)
     }
 
+    private func ignoredServiceEndpointsHash() -> Int {
+        let ignored = settingsStore?.ignoredServiceEndpoints ?? []
+        var hasher = Hasher()
+        for endpoint in ignored.sorted() {
+            endpoint.hash(into: &hasher)
+        }
+        return hasher.finalize()
+    }
+
     private func filteredPackets(now: Date) -> [Packet] {
         let range = currentDateRange(now: now)
         return packets.filter { range.contains($0.timestamp) }
@@ -896,7 +933,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             lastTimestamp: packetSnapshot.map { $0.timestamp }.max(),
             netRomUpdateCount: netRomUpdateCount,
             customStart: customRangeStart,
-            customEnd: customRangeEnd
+            customEnd: customRangeEnd,
+            ignoredServiceEndpointsHash: ignoredServiceEndpointsHash()
         )
 
         // Check cache for classified graph
@@ -1628,6 +1666,7 @@ private struct AggregationCacheKey: Hashable {
     let lastTimestamp: Date?
     let customStart: Date
     let customEnd: Date
+    let ignoredServiceEndpointsHash: Int
 }
 
 private struct GraphCacheKey: Hashable {
@@ -1642,6 +1681,7 @@ private struct GraphCacheKey: Hashable {
     let netRomUpdateCount: Int
     let customStart: Date
     let customEnd: Date
+    let ignoredServiceEndpointsHash: Int
 }
 
 private struct NodeTrafficAggregate {

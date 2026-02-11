@@ -743,6 +743,60 @@ final class ClassificationCorrectnessTests: XCTestCase {
             "Infrastructure traffic should not create DirectPeer edges"
         )
     }
+
+    /// Digipeater aliases (without numeric call-area digits) should still appear as routing nodes.
+    func testDigipeaterAliasesIncludedWithoutIncludingServiceEndpoints() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+
+        // Valid endpoint traffic routed via tactical digi aliases.
+        _ = builder.addViaObservation(from: "K5STA", to: "N0CALL", via: ["DRL"], count: 3)
+        _ = builder.addViaObservation(from: "K5STA", to: "N0CALL", via: ["DRLNOD"], count: 2)
+
+        // Service endpoint traffic should not be admitted as routing nodes.
+        _ = builder.addViaObservation(from: "K5STA", to: "ID", via: ["DRL"], count: 2)
+        _ = builder.addViaObservation(from: "K5STA", to: "BEACON", via: ["DRLNOD"], count: 2)
+
+        let packets = builder.buildPackets()
+
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: true,
+            minimumEdgeCount: 1,
+            maxNodes: 100,
+            stationIdentityMode: .station
+        )
+
+        let graph = NetworkGraphBuilder.buildClassified(packets: packets, options: options, now: now)
+        let nodeIDs = Set(graph.nodes.map(\.id))
+
+        XCTAssertTrue(nodeIDs.contains("DRL"), "DRL alias digipeater should be present as a graph node")
+        XCTAssertTrue(nodeIDs.contains("DRLNOD"), "DRLNOD alias digipeater should be present as a graph node")
+        XCTAssertFalse(nodeIDs.contains("ID"), "ID should remain excluded from graph nodes")
+        XCTAssertFalse(nodeIDs.contains("BEACON"), "BEACON should remain excluded from graph nodes")
+    }
+
+    /// User-configured ignore entries should suppress regional service endpoints from graph identities.
+    func testUserIgnoredServiceEndpointIsExcluded() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+        defer { CallsignValidator.configureIgnoredServiceEndpoints([]) }
+
+        CallsignValidator.configureIgnoredServiceEndpoints(["HORSE"])
+
+        _ = builder.addViaObservation(from: "K5STA", to: "N0CALL", via: ["HORSE"], count: 4)
+        let packets = builder.buildPackets()
+
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: true,
+            minimumEdgeCount: 1,
+            maxNodes: 100,
+            stationIdentityMode: .station
+        )
+
+        let graph = NetworkGraphBuilder.buildClassified(packets: packets, options: options, now: now)
+        let nodeIDs = Set(graph.nodes.map(\.id))
+        XCTAssertFalse(nodeIDs.contains("HORSE"), "Custom ignored endpoint should be excluded from graph nodes")
+    }
 }
 
 // MARK: - ViewModeIntegrationTests
