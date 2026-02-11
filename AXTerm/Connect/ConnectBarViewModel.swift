@@ -44,6 +44,7 @@ final class ConnectBarViewModel: ObservableObject {
     private var neighbors: [String] = []
     private var routeDestinations: [String] = []
     private var routeHintsByDestination: [String: NetRomRouteHint] = [:]
+    private var routeHintsByDestinationAndNextHop: [String: [String: NetRomRouteHint]] = [:]
     private var routeFallbackDigisByDestination: [String: [[String]]] = [:]
     private var fallbackPathCursorByDestination: [String: Int] = [:]
     private var observedPaths: [[String]] = []
@@ -130,10 +131,22 @@ final class ConnectBarViewModel: ObservableObject {
         self.stations = stations.map { CallsignValidator.normalize($0.call) }
         self.neighbors = neighbors.map { CallsignValidator.normalize($0.call) }
         var bestRoutesByDestination: [String: RouteInfo] = [:]
+        var bestRoutesByDestinationAndNextHop: [String: [String: RouteInfo]] = [:]
         var fallbackDigisByDestination: [String: [[String]]] = [:]
         for route in routes {
             let destination = CallsignValidator.normalize(route.destination)
             let hint = hintFor(route: route)
+            if let hop = hint.nextHop, !hop.isEmpty {
+                var perHop = bestRoutesByDestinationAndNextHop[destination] ?? [:]
+                if let existing = perHop[hop] {
+                    if shouldPrefer(route, over: existing) {
+                        perHop[hop] = route
+                    }
+                } else {
+                    perHop[hop] = route
+                }
+                bestRoutesByDestinationAndNextHop[destination] = perHop
+            }
             let via = ConnectPrefillLogic.fallbackDigipeaters(
                 destination: destination,
                 hint: hint,
@@ -156,6 +169,11 @@ final class ConnectBarViewModel: ObservableObject {
                 (destination, hintFor(route: route))
             }
         )
+        self.routeHintsByDestinationAndNextHop = bestRoutesByDestinationAndNextHop.mapValues { perHop in
+            Dictionary(uniqueKeysWithValues: perHop.map { hop, route in
+                (hop, hintFor(route: route))
+            })
+        }
         self.routeDestinations = routeHintsByDestination.keys.sorted()
         self.routeFallbackDigisByDestination = fallbackDigisByDestination.mapValues { paths in
             var seen = Set<String>()
@@ -460,7 +478,11 @@ final class ConnectBarViewModel: ObservableObject {
             return
         }
 
-        let hint = routeHintsByDestination[destination]
+        var hint = routeHintsByDestination[destination]
+        if nextHopSelection != Self.autoNextHopID && !nextHopSelection.isEmpty,
+           let overrideHint = routeHintsByDestinationAndNextHop[destination]?[nextHopSelection] {
+            hint = overrideHint
+        }
         if let hint {
             let summary = hint.path.isEmpty ? destination : hint.path.joined(separator: " -> ")
             routePreview = "\(summary) (\(hint.hops) hops)"
@@ -471,7 +493,8 @@ final class ConnectBarViewModel: ObservableObject {
         }
 
         if nextHopSelection != Self.autoNextHopID && !nextHopSelection.isEmpty {
-            if hint == nil || (hint?.nextHop != nextHopSelection && !neighbors.contains(nextHopSelection)) {
+            let hasKnownOverride = routeHintsByDestinationAndNextHop[destination]?[nextHopSelection] != nil
+            if !hasKnownOverride {
                 routeOverrideWarning = "No known route via this neighbor"
             } else {
                 routeOverrideWarning = nil

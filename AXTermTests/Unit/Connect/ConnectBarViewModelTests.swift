@@ -61,4 +61,8 @@ final class ConnectBarViewModelTests: XCTestCase {
         XCTAssertFalse(CallsignValidator.isValidDigipeaterAddress("DRLNOD-99"))
     }
 
+    func testDigipeaterValidationRejectsHopChainSyntax() {
+        XCTAssertFalse(CallsignValidator.isValidDigipeaterAddress("A->B->C"))
+    }
+
 }
