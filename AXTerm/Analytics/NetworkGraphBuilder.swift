@@ -79,6 +79,7 @@ nonisolated struct NetworkGraphBuilder {
         routes: [RouteInfo],
         localCallsign: String,
         options: Options,
+        packets: [Packet] = [],
         now: Date = Date()
     ) -> ClassifiedGraphModel {
         
@@ -101,17 +102,84 @@ nonisolated struct NetworkGraphBuilder {
         // Map quality threshold: slider value 1-10 → quality 25-250
         let qualityThreshold = options.minimumEdgeCount * 25
 
+        // Packet-derived evidence for byte/count fields in inspector.
+        // This does not change NET/ROM topology selection, only displayed traffic metrics.
+        var packetNodeStats: [String: NodeAggregate] = [:]
+        var packetEdgeBytes: [UndirectedKey: Int] = [:]
+        func isUsableStation(_ value: String) -> Bool {
+            StationNormalizer.normalize(value) != nil
+        }
+
+        if !packets.isEmpty {
+            for event in packets.map({ PacketEvent(packet: $0) }) {
+                guard let rawFrom = event.from, let rawTo = event.to else { continue }
+                guard isUsableStation(rawFrom), isUsableStation(rawTo) else { continue }
+
+                let fromKey = identityKey(rawFrom)
+                let toKey = identityKey(rawTo)
+
+                let path: [String]
+                if options.includeViaDigipeaters {
+                    let viaKeys = event.via
+                        .filter(isUsableStation)
+                        .map(identityKey)
+                    path = [fromKey] + viaKeys + [toKey]
+                } else {
+                    path = [fromKey, toKey]
+                }
+
+                guard path.count >= 2 else { continue }
+                for index in 0..<(path.count - 1) {
+                    let source = path[index]
+                    let target = path[index + 1]
+                    guard source != target else { continue }
+
+                    var sourceStats = packetNodeStats[source, default: NodeAggregate()]
+                    sourceStats.outCount += 1
+                    sourceStats.outBytes += event.payloadBytes
+                    packetNodeStats[source] = sourceStats
+
+                    var targetStats = packetNodeStats[target, default: NodeAggregate()]
+                    targetStats.inCount += 1
+                    targetStats.inBytes += event.payloadBytes
+                    packetNodeStats[target] = targetStats
+
+                    let key = UndirectedKey(lhs: source, rhs: target)
+                    packetEdgeBytes[key, default: 0] += event.payloadBytes
+                }
+            }
+        }
+
+        func seededStats(for key: String) -> (inCount: Int, outCount: Int, inBytes: Int64, outBytes: Int64, routes: Int, ssids: Set<String>, isOfficial: Bool) {
+            let traffic = packetNodeStats[key] ?? NodeAggregate()
+            return (
+                traffic.inCount,
+                traffic.outCount,
+                Int64(traffic.inBytes),
+                Int64(traffic.outBytes),
+                0,
+                [],
+                false
+            )
+        }
+
+        func packetBytesBetween(_ a: String, _ b: String) -> Int64 {
+            Int64(packetEdgeBytes[UndirectedKey(lhs: a, rhs: b)] ?? 0)
+        }
+
         // Phase 1: Collect all nodes from neighbors and routes
         var nodeStats: [String: (inCount: Int, outCount: Int, inBytes: Int64, outBytes: Int64, routes: Int, ssids: Set<String>, isOfficial: Bool)] = [:]
 
         // Add neighbor nodes (direct connections)
         let localKey = identityKey(localCallsign)
-        var localStats = nodeStats[localKey] ?? (0, 0, 0, 0, 0, [], false)
+        var localStats = nodeStats[localKey] ?? seededStats(for: localKey)
         localStats.ssids.insert(localCallsign)
         nodeStats[localKey] = localStats
 
         // Deduplicate neighbors by identity key (pick highest quality)
         var bestNeighbors: [String: NeighborInfo] = [:]
+        var neighborIdentityMembers: [String: Set<String>] = [:]
+        var neighborIdentityHasOfficial: [String: Bool] = [:]
         for neighbor in neighbors {
             guard neighbor.quality >= qualityThreshold else { continue }
             // Skip stale neighbors when hideStaleEntries is enabled
@@ -119,6 +187,10 @@ nonisolated struct NetworkGraphBuilder {
                 continue
             }
             let key = identityKey(neighbor.call)
+            neighborIdentityMembers[key, default: []].insert(neighbor.call)
+            if neighbor.isOfficial {
+                neighborIdentityHasOfficial[key] = true
+            }
             if let existing = bestNeighbors[key] {
                 if neighbor.quality > existing.quality {
                     bestNeighbors[key] = neighbor
@@ -129,9 +201,11 @@ nonisolated struct NetworkGraphBuilder {
         }
 
         for (key, neighbor) in bestNeighbors {
-            var stats = nodeStats[key] ?? (0, 0, 0, 0, 0, [], false)
-            stats.ssids.insert(neighbor.call)
-            if neighbor.isOfficial {
+            var stats = nodeStats[key] ?? seededStats(for: key)
+            for callsign in neighborIdentityMembers[key] ?? [neighbor.call] {
+                stats.ssids.insert(callsign)
+            }
+            if neighborIdentityHasOfficial[key] == true || neighbor.isOfficial {
                 stats.isOfficial = true
             }
             nodeStats[key] = stats
@@ -150,12 +224,12 @@ nonisolated struct NetworkGraphBuilder {
             let originKey = identityKey(route.origin)
             
             // Count routes for sizing nodes
-            var destStats = nodeStats[destKey] ?? (0, 0, 0, 0, 0, [], false)
+            var destStats = nodeStats[destKey] ?? seededStats(for: destKey)
             destStats.routes += 1
             destStats.ssids.insert(route.destination)
             nodeStats[destKey] = destStats
             
-            var originStats = nodeStats[originKey] ?? (0, 0, 0, 0, 0, [], false)
+            var originStats = nodeStats[originKey] ?? seededStats(for: originKey)
             originStats.routes += 1
             originStats.ssids.insert(route.origin)
             if route.sourceType == "broadcast" || route.sourceType == "classic" {
@@ -163,16 +237,18 @@ nonisolated struct NetworkGraphBuilder {
             }
             nodeStats[originKey] = originStats
             
-            // Add intermediate nodes in path (exclude origin and destination to avoid double counting)
-            for hop in route.path {
-                let hopKey = identityKey(hop)
-                // Skip if hop is same as origin or destination (already counted above)
-                if hopKey == originKey || hopKey == destKey { continue }
-                
-                var hopStats = nodeStats[hopKey] ?? (0, 0, 0, 0, 0, [], false)
-                hopStats.routes += 1
-                hopStats.ssids.insert(hop)
-                nodeStats[hopKey] = hopStats
+            // Only promote intermediate path hops when includeViaDigipeaters is ON.
+            if options.includeViaDigipeaters {
+                for hop in route.path {
+                    let hopKey = identityKey(hop)
+                    // Skip if hop is same as origin or destination (already counted above)
+                    if hopKey == originKey || hopKey == destKey { continue }
+
+                    var hopStats = nodeStats[hopKey] ?? seededStats(for: hopKey)
+                    hopStats.routes += 1
+                    hopStats.ssids.insert(hop)
+                    nodeStats[hopKey] = hopStats
+                }
             }
         }
         
@@ -193,12 +269,14 @@ nonisolated struct NetworkGraphBuilder {
                 targetID: neighborKey,
                 linkType: .directPeer,
                 weight: weight,
-                bytes: Int64(neighbor.quality),
+                bytes: packetBytesBetween(localKey, neighborKey),
                 isStale: isStale
             ))
         }
         
-        // Add route edges (HeardVia for multi-hop, DirectPeer for single-hop)
+        // Add route edges:
+        // - includeViaDigipeaters OFF: summary edge origin<->destination
+        // - includeViaDigipeaters ON: hop-by-hop edges across the route path
         for route in routes {
             guard route.quality >= qualityThreshold else { continue }
             if options.hideStaleEntries && now.timeIntervalSince(route.lastUpdated) > options.routeStaleTTL {
@@ -210,22 +288,55 @@ nonisolated struct NetworkGraphBuilder {
             let weight = max(1, route.quality / 25)
             let isStale = now.timeIntervalSince(route.lastUpdated) > options.routeStaleTTL
             
-            // Determine link type based on path length
-            let linkType: LinkType = route.path.isEmpty || route.path.count <= 1 ? .directPeer : .heardVia
-            
-            // Create unique edge key
-            let edgeKey = "\(min(destKey, originKey))-\(max(destKey, originKey))"
-            guard !edgeKeys.contains(edgeKey) else { continue }
-            edgeKeys.insert(edgeKey)
-            
-            edges.append(ClassifiedEdge(
-                sourceID: destKey,
-                targetID: originKey,
-                linkType: linkType,
-                weight: weight,
-                bytes: Int64(route.quality),
-                isStale: isStale
-            ))
+            // Build canonical path of identity keys.
+            // route.path may or may not contain origin/destination; normalize it either way.
+            var pathKeys: [String] = []
+            pathKeys.append(originKey)
+            for hop in route.path.map(identityKey) {
+                if pathKeys.last != hop {
+                    pathKeys.append(hop)
+                }
+            }
+            if pathKeys.last != destKey {
+                pathKeys.append(destKey)
+            }
+
+            if options.includeViaDigipeaters && pathKeys.count > 2 {
+                // Hop-by-hop via edges for multi-hop routes.
+                for index in 0..<(pathKeys.count - 1) {
+                    let source = pathKeys[index]
+                    let target = pathKeys[index + 1]
+                    guard source != target else { continue }
+
+                    let edgeKey = "\(min(source, target))-\(max(source, target))"
+                    guard !edgeKeys.contains(edgeKey) else { continue }
+                    edgeKeys.insert(edgeKey)
+
+                    edges.append(ClassifiedEdge(
+                        sourceID: source,
+                        targetID: target,
+                        linkType: .heardVia,
+                        weight: weight,
+                        bytes: packetBytesBetween(source, target),
+                        isStale: isStale
+                    ))
+                }
+            } else {
+                // Summary edge between origin and destination.
+                let linkType: LinkType = pathKeys.count <= 2 ? .directPeer : .heardVia
+                let edgeKey = "\(min(destKey, originKey))-\(max(destKey, originKey))"
+                guard !edgeKeys.contains(edgeKey) else { continue }
+                edgeKeys.insert(edgeKey)
+
+                edges.append(ClassifiedEdge(
+                    sourceID: destKey,
+                    targetID: originKey,
+                    linkType: linkType,
+                    weight: weight,
+                    bytes: packetBytesBetween(destKey, originKey),
+                    isStale: isStale
+                ))
+            }
         }
         
         // Phase 3: Apply maxNodes cap
@@ -381,6 +492,7 @@ nonisolated struct NetworkGraphBuilder {
                 var toHeardDirect = heardDirectData[to, default: [:]]
                 var fromAgg = toHeardDirect[from, default: HeardDirectAggregate()]
                 fromAgg.count += 1
+                fromAgg.bytes += event.payloadBytes
                 fromAgg.lastHeard = max(fromAgg.lastHeard ?? .distantPast, event.timestamp)
 
                 // Track distinct 5-minute buckets for scoring
@@ -406,6 +518,7 @@ nonisolated struct NetworkGraphBuilder {
                 var toHeardVia = heardViaData[to, default: [:]]
                 var fromAgg = toHeardVia[from, default: HeardViaAggregate()]
                 fromAgg.count += 1
+                fromAgg.bytes += event.payloadBytes
                 fromAgg.lastHeard = max(fromAgg.lastHeard ?? .distantPast, event.timestamp)
                 for digiKey in viaKeys {
                     fromAgg.viaDigipeaters[digiKey, default: 0] += 1
@@ -512,6 +625,7 @@ nonisolated struct NetworkGraphBuilder {
         struct DirectEvidence {
             let count: Int
             let buckets: Int
+            let bytes: Int
             let lastHeard: Date?
             let score: Double
         }
@@ -526,6 +640,7 @@ nonisolated struct NetworkGraphBuilder {
             return DirectEvidence(
                 count: agg.count,
                 buckets: agg.distinctBuckets.count,
+                bytes: agg.bytes,
                 lastHeard: agg.lastHeard,
                 score: score
             )
@@ -566,6 +681,7 @@ nonisolated struct NetworkGraphBuilder {
 
             if heardMutualKeys.insert(uKey).inserted {
                 let combinedCount = ev.count + rev.count
+                let combinedBytes = ev.bytes + rev.bytes
                 let last = max(ev.lastHeard ?? .distantPast, rev.lastHeard ?? .distantPast)
                 classifiedEdges.append(
                     ClassifiedEdge(
@@ -573,7 +689,7 @@ nonisolated struct NetworkGraphBuilder {
                         targetID: uKey.target,
                         linkType: .heardMutual,
                         weight: combinedCount,
-                        bytes: 0,
+                        bytes: Int64(combinedBytes),
                         lastHeard: last == .distantPast ? nil : last,
                         viaDigipeaters: [],
                         isStale: false
@@ -608,6 +724,7 @@ nonisolated struct NetworkGraphBuilder {
 
                 var edgeAgg = heardDirectEdges[uKey, default: HeardDirectEdgeAggregate()]
                 edgeAgg.count += agg.count
+                edgeAgg.bytes += agg.bytes
                 edgeAgg.lastHeard = max(edgeAgg.lastHeard ?? .distantPast, agg.lastHeard ?? .distantPast)
                 edgeAgg.score = max(edgeAgg.score, score)
                 heardDirectEdges[uKey] = edgeAgg
@@ -621,7 +738,7 @@ nonisolated struct NetworkGraphBuilder {
                     targetID: key.target,
                     linkType: .heardDirect,
                     weight: agg.count,
-                    bytes: 0,
+                    bytes: Int64(agg.bytes),
                     lastHeard: agg.lastHeard == .distantPast ? nil : agg.lastHeard,
                     viaDigipeaters: [],
                     isStale: false
@@ -646,6 +763,7 @@ nonisolated struct NetworkGraphBuilder {
 
                 var edgeAgg = heardViaEdges[key, default: SeenViaEdgeAggregate()]
                 edgeAgg.count += agg.count
+                edgeAgg.bytes += agg.bytes
                 edgeAgg.lastHeard = max(edgeAgg.lastHeard ?? .distantPast, agg.lastHeard ?? .distantPast)
                 for (digi, count) in agg.viaDigipeaters {
                     edgeAgg.viaDigipeaters[digi, default: 0] += count
@@ -671,7 +789,7 @@ nonisolated struct NetworkGraphBuilder {
                     targetID: key.target,
                     linkType: .heardVia,
                     weight: agg.count,
-                    bytes: 0,
+                    bytes: Int64(agg.bytes),
                     lastHeard: agg.lastHeard == .distantPast ? nil : agg.lastHeard,
                     viaDigipeaters: topDigis,
                     isStale: false
@@ -1129,12 +1247,14 @@ nonisolated private struct ClassifiedEdgeAggregate {
 
 nonisolated private struct HeardDirectAggregate {
     var count: Int = 0
+    var bytes: Int = 0
     var lastHeard: Date?
     var distinctBuckets: Set<Int> = []
 }
 
 nonisolated private struct HeardViaAggregate {
     var count: Int = 0
+    var bytes: Int = 0
     var lastHeard: Date?
     var viaDigipeaters: [String: Int] = [:]
 }
@@ -1155,12 +1275,14 @@ nonisolated private struct BidirectionalTrafficAggregate {
 
 nonisolated private struct HeardDirectEdgeAggregate {
     var count: Int = 0
+    var bytes: Int = 0
     var lastHeard: Date?
     var score: Double = 0
 }
 
 nonisolated private struct SeenViaEdgeAggregate {
     var count: Int = 0
+    var bytes: Int = 0
     var lastHeard: Date?
     var viaDigipeaters: [String: Int] = [:]
 }

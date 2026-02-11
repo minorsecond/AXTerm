@@ -122,23 +122,46 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
     }
 
+    @Published var autoUpdateEnabled: Bool {
+        didSet {
+            guard autoUpdateEnabled != oldValue else { return }
+            persistAutoUpdateEnabled()
+            if autoUpdateEnabled && isActive {
+                scheduleAggregation(reason: "autoUpdateEnabled")
+                scheduleGraphBuild(reason: "autoUpdateEnabled")
+            }
+        }
+    }
+
     /// Graph view mode controls which edge types are visible.
     /// - `.connectivity`: Shows DirectPeer and HeardDirect edges (who can you reach directly?)
     /// - `.routing`: Shows DirectPeer and SeenVia edges (how do packets flow?)
     /// - `.all`: Shows all edge types
     @Published var graphViewMode: GraphViewMode = .connectivity {
         didSet {
+            guard graphViewMode != oldValue else { return }
             trackFilterChange(reason: "graphViewMode")
-            
+
+            let oldNetRomMode = oldValue.netRomRoutingMode
+            let newNetRomMode = graphViewMode.netRomRoutingMode
+
+            if oldNetRomMode == newNetRomMode {
+                // Same data source: only edge-type filtering changed.
+                // Avoid expensive full graph rebuild.
+                applyViewModeFilter()
+                return
+            }
+
             if graphViewMode.isNetRomMode {
-                // For NET/ROM modes, we need a full rebuild from the routing table
-                scheduleGraphBuild(reason: "graphViewMode (NET/ROM)")
+                // Entering NET/ROM mode or switching NET/ROM routing source
+                queueViewportFitToVisibleNodes()
+                scheduleGraphBuild(reason: "graphViewMode (NET/ROM source)")
             } else if oldValue.isNetRomMode {
-                // If switching BACK from NET/ROM to standard, we also need a rebuild
+                // Returning from NET/ROM to packet-derived graph
+                queueViewportFitToVisibleNodes()
                 scheduleGraphBuild(reason: "graphViewMode (Return to Packet)")
             } else {
-                // Standard view mode only affects edge filtering, not the underlying classified graph.
-                // Recompute the filtered view graph from the cached classified model.
+                // Packet mode to packet mode: filter only
                 applyViewModeFilter()
             }
         }
@@ -160,6 +183,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     /// Request for camera to fit to selection (consumed by view)
     @Published var fitToSelectionRequest: UUID?
+
+    /// Optional explicit node IDs to fit when a fit request is issued.
+    /// Empty set means "fit to current visible graph" behavior.
+    @Published var fitTargetNodeIDs: Set<String> = []
 
     /// Request for camera to reset (consumed by view)
     @Published var resetCameraRequest: UUID?
@@ -192,6 +219,16 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private var isActive = false
     private var latestTimeframePackets: [Packet] = []
     private var hasPrewarmed = false
+    private var lastPinnedRefitTimestamp: Date = .distantPast
+    private var lastPinnedRefitNodeIDs: Set<String> = []
+    private var lastPinnedRefitBounds: RefitBounds?
+    private var pendingViewportFitToVisibleNodes = false
+
+    /// Gate constants for automatic viewport maintenance.
+    /// Tuned to avoid jarring camera movement while still correcting meaningful drift.
+    private let pinnedRefitCooldown: TimeInterval = 0.45
+    private let pinnedRefitCenterThreshold: Double = 0.02
+    private let pinnedRefitSpanThreshold: Double = 0.03
 
     /// Creates the view model, optionally loading persisted settings.
     ///
@@ -225,6 +262,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         let loadedMaxNodes = settingsStore?.analyticsMaxNodes ?? AppSettingsStore.defaultAnalyticsMaxNodes
         let loadedHubMetric = Self.loadHubMetric(from: settingsStore)
         let loadedStationIdentityMode = Self.loadStationIdentityMode(from: settingsStore)
+        let loadedAutoUpdateEnabled = settingsStore?.analyticsAutoUpdateEnabled ?? AppSettingsStore.defaultAnalyticsAutoUpdateEnabled
 
         // Compute default range for bucket resolution
         let defaultRange = loadedTimeframe.dateInterval(
@@ -241,6 +279,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         self.minEdgeCount = AnalyticsInputNormalizer.minEdgeCount(loadedMinEdgeCount)
         self.maxNodes = AnalyticsInputNormalizer.maxNodes(loadedMaxNodes)
         self.stationIdentityMode = loadedStationIdentityMode
+        self.autoUpdateEnabled = loadedAutoUpdateEnabled
         self.customRangeStart = defaultRange.start
         self.customRangeEnd = defaultRange.end
         self.resolvedBucket = loadedBucket.resolvedBucket(
@@ -304,6 +343,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func persistStationIdentityMode() {
         settingsStore?.analyticsStationIdentityMode = stationIdentityMode.rawValue
+    }
+
+    private func persistAutoUpdateEnabled() {
+        settingsStore?.analyticsAutoUpdateEnabled = autoUpdateEnabled
     }
 
     private func persistHubMetric() {
@@ -398,22 +441,33 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         updateSelectionState()
     }
 
-    /// Clears selection entirely and fits view to all visible nodes.
+    /// Clears selection and focus state, then fits view to all visible nodes.
     /// Called from toolbar "Clear" button and sidebar "Clear Selection" button.
     func clearSelectionAndFit() {
         _ = GraphSelectionReducer.reduce(state: &selectionState, action: .clickBackground)
+        focusState.clearFocus()
         updateSelectionState()
+        recomputeFilteredGraph()
         // Fit to visible nodes after clearing
+        fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
 
         Telemetry.breadcrumb(
             category: "graph.clearSelection",
-            message: "Selection cleared and fit to view requested"
+            message: "Selection and focus cleared; fit to view requested"
         )
     }
 
     func updateHover(for nodeID: String?) {
         viewState.hoveredNodeID = nodeID
+    }
+
+    func manualRefresh() {
+        guard isActive else { return }
+        isAggregationLoading = true
+        isGraphLoading = true
+        scheduleAggregation(reason: "manualRefresh")
+        scheduleGraphBuild(reason: "manualRefresh")
     }
 
     func handleEscape() {
@@ -430,6 +484,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             }
             if !hasLoadedGraph {
                 isGraphLoading = true
+                // Initial open should frame current graph extents.
+                queueViewportFitToVisibleNodes()
             }
             Task { [weak self] in
                 await self?.recomputeAggregation(reason: "activate", applyToViewState: true, showLoadingState: true)
@@ -465,6 +521,91 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         )
     }
 
+    func selectedMultiNodeDetails() -> GraphMultiInspectorDetails? {
+        let selectedIDs = viewState.selectedNodeIDs
+        guard selectedIDs.count >= 2 else { return nil }
+
+        let nodeByID = Dictionary(uniqueKeysWithValues: viewState.graphModel.nodes.map { ($0.id, $0) })
+        let selectedNodes = selectedIDs.compactMap { nodeByID[$0] }.sorted { $0.callsign < $1.callsign }
+        guard selectedNodes.count >= 2 else { return nil }
+
+        let selectedIDSet = Set(selectedNodes.map(\.id))
+        let selectedCount = selectedNodes.count
+        let possibleInternalLinks = selectedCount * (selectedCount - 1) / 2
+
+        let internalLinks = viewState.graphModel.edges
+            .filter { selectedIDSet.contains($0.sourceID) && selectedIDSet.contains($0.targetID) }
+            .map { edge in
+                GraphMultiInspectorDetails.InternalLink(
+                    sourceID: edge.sourceID,
+                    sourceCallsign: nodeByID[edge.sourceID]?.callsign ?? edge.sourceID,
+                    targetID: edge.targetID,
+                    targetCallsign: nodeByID[edge.targetID]?.callsign ?? edge.targetID,
+                    packetCount: edge.weight,
+                    bytes: edge.bytes
+                )
+            }
+            .sorted {
+                if $0.packetCount != $1.packetCount { return $0.packetCount > $1.packetCount }
+                return $0.sortKey < $1.sortKey
+            }
+
+        let internalPacketCount = internalLinks.reduce(0) { $0 + $1.packetCount }
+        let internalByteCount = internalLinks.reduce(0) { $0 + $1.bytes }
+        let selectedNodeTotalBytes = selectedNodes.reduce(0) { $0 + $1.inBytes + $1.outBytes }
+        let touchingByteCount = max(0, selectedNodeTotalBytes - internalByteCount)
+
+        var externalAggregate: [String: GraphMultiInspectorDetails.SharedExternalConnection] = [:]
+        for selectedID in selectedIDSet {
+            guard let relationships = viewState.graphModel.adjacency[selectedID] else { continue }
+            for rel in relationships where !selectedIDSet.contains(rel.id) {
+                let callsign = nodeByID[rel.id]?.callsign ?? rel.id
+                var entry = externalAggregate[rel.id] ?? GraphMultiInspectorDetails.SharedExternalConnection(
+                    id: rel.id,
+                    callsign: callsign,
+                    connectedSelectedIDs: [],
+                    totalPackets: 0
+                )
+                entry.connectedSelectedIDs.insert(selectedID)
+                entry.totalPackets += rel.weight
+                externalAggregate[rel.id] = entry
+            }
+        }
+
+        let sharedExternalConnections = externalAggregate.values
+            .filter { $0.connectedSelectedIDs.count >= 2 }
+            .sorted {
+                if $0.connectedSelectedIDs.count != $1.connectedSelectedIDs.count {
+                    return $0.connectedSelectedIDs.count > $1.connectedSelectedIDs.count
+                }
+                if $0.totalPackets != $1.totalPackets {
+                    return $0.totalPackets > $1.totalPackets
+                }
+                return $0.callsign < $1.callsign
+            }
+
+        // Relationship breakdown uses classified edges so the inspector can explain interaction type.
+        let relationshipBreakdown = Dictionary(
+            grouping: viewState.classifiedGraphModel.edges.filter {
+                selectedIDSet.contains($0.sourceID) && selectedIDSet.contains($0.targetID)
+            },
+            by: \.linkType
+        ).mapValues { edges in
+            edges.reduce(0) { $0 + $1.weight }
+        }
+
+        return GraphMultiInspectorDetails(
+            selectedNodes: selectedNodes,
+            internalLinks: internalLinks,
+            sharedExternalConnections: sharedExternalConnections,
+            relationshipBreakdown: relationshipBreakdown,
+            possibleInternalLinks: possibleInternalLinks,
+            internalPacketCount: internalPacketCount,
+            internalByteCount: internalByteCount,
+            touchingByteCount: touchingByteCount
+        )
+    }
+
     deinit {
         aggregationTask?.cancel()
         graphTask?.cancel()
@@ -475,13 +616,15 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func bindPackets(packetScheduler: RunLoop) {
         packetSubject
-            .removeDuplicates(by: { lhs, rhs in
-                lhs.count == rhs.count && lhs.last?.id == rhs.last?.id
-            })
             .sink { [weak self] packets in
                 self?.packets = packets
+                guard self?.autoUpdateEnabled == true else { return }
                 self?.scheduleAggregation(reason: "packets")
-                self?.scheduleGraphBuild(reason: "packets")
+                // NET/ROM graph modes are built from routing snapshots, not packet edge classification.
+                // Skip packet-driven graph rebuilds in those modes to reduce churn and UI heaviness.
+                if self?.graphViewMode.isNetRomMode == false {
+                    self?.scheduleGraphBuild(reason: "packets")
+                }
             }
             .store(in: &cancellables)
     }
@@ -492,6 +635,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         netRomIntegration.didUpdate
             .receive(on: RunLoop.main)
             .sink { [weak self] in
+                guard self?.autoUpdateEnabled == true else { return }
                 self?.netRomUpdateCount += 1
                 self?.scheduleGraphBuild(reason: "NET/ROM update")
             }
@@ -536,6 +680,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func scheduleGraphBuild(reason: String) {
         guard isActive else { return }
+        isGraphLoading = true
         #if DEBUG
         debugLog("Scheduling graph build: \(reason)")
         #endif
@@ -826,6 +971,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                         neighborStaleTTL: neighborStaleTTLSnapshot,
                         routeStaleTTL: routeStaleTTLSnapshot
                     ),
+                    packets: packetSnapshot,
                     now: now
                 )
             } else {
@@ -893,6 +1039,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.graphModel = viewModel
         viewState.graphNote = classifiedModel.droppedNodesCount > 0 ? "Showing top \(maxNodes) nodes" : nil
         updateNetworkHealth()
+        // Keep explicit fit targets valid as the graph content changes.
+        fitTargetNodeIDs.formIntersection(Set(viewModel.nodes.map(\.id)))
         // Recompute filtered graph when underlying model changes
         recomputeFilteredGraph()
     }
@@ -908,6 +1056,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                     targetID: edge.targetID,
                     weight: edge.weight,
                     bytes: Int(edge.bytes),
+                    linkType: edge.linkType,
                     isStale: edge.isStale
                 )
             }
@@ -923,17 +1072,20 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             )
         }
 
+        let trafficByNodeID = packetTrafficByNodeID()
+
         // Recalculate degrees based on filtered edges
         let updatedNodes = classifiedModel.nodes.map { node in
             let neighbors = adjacency[node.id] ?? []
+            let traffic = trafficByNodeID[node.id]
             return NetworkGraphNode(
                 id: node.id,
                 callsign: node.callsign,
                 weight: node.weight,
-                inCount: node.inCount,
-                outCount: node.outCount,
-                inBytes: node.inBytes,
-                outBytes: node.outBytes,
+                inCount: traffic?.inCount ?? 0,
+                outCount: traffic?.outCount ?? 0,
+                inBytes: traffic?.inBytes ?? 0,
+                outBytes: traffic?.outBytes ?? 0,
                 degree: neighbors.count,
                 groupedSSIDs: node.groupedSSIDs,
                 isNetRomOfficial: node.isNetRomOfficial
@@ -969,6 +1121,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         guard !viewState.classifiedGraphModel.nodes.isEmpty else { return }
         let viewModel = deriveViewGraph(from: viewState.classifiedGraphModel)
         viewState.graphModel = viewModel
+        // Keep explicit fit targets valid as the graph content changes.
+        fitTargetNodeIDs.formIntersection(Set(viewModel.nodes.map(\.id)))
         recomputeFilteredGraph()
     }
 
@@ -1062,6 +1216,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
         // Request a single fit
         focusState.didAutoFitForCurrentAnchor = true
+        fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
 
         Telemetry.breadcrumb(
@@ -1076,16 +1231,35 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         )
     }
 
-    /// Sets the currently selected node as the focus anchor.
-    /// Only works if exactly one node is selected.
+    /// Single selection: sets selected node as focus anchor and fits focused graph.
+    /// Multi-selection: keeps current focus state and fits camera to selected node extents.
     func setSelectedAsAnchor() {
-        guard let selectedID = viewState.selectedNodeID,
+        let selectedIDs = viewState.selectedNodeIDs
+        guard !selectedIDs.isEmpty else { return }
+
+        if selectedIDs.count > 1 {
+            // Multi-select action is view-centric: zoom to selected extents.
+            fitTargetNodeIDs = selectedIDs
+            fitToSelectionRequest = UUID()
+
+            Telemetry.breadcrumb(
+                category: "graph.focusSelection",
+                message: "Focused selected node extents",
+                data: [
+                    "selectedCount": selectedIDs.count
+                ]
+            )
+            return
+        }
+
+        guard let selectedID = selectedIDs.first,
               let selectedNode = viewState.graphModel.nodes.first(where: { $0.id == selectedID }) else { return }
 
         focusState.setAnchor(nodeID: selectedID, displayName: selectedNode.callsign)
         recomputeFilteredGraph()
 
-        // Fit to the new focus area
+        // Fit to the new focus area.
+        fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
         focusState.didAutoFitForCurrentAnchor = true
 
@@ -1105,6 +1279,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         recomputeFilteredGraph()
 
         // Fit to show all nodes
+        fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
 
         Telemetry.breadcrumb(
@@ -1122,6 +1297,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                   let selectedNode = viewState.graphModel.nodes.first(where: { $0.id == selectedID }) {
             focusState.setAnchor(nodeID: selectedID, displayName: selectedNode.callsign)
             recomputeFilteredGraph()
+            fitTargetNodeIDs = []
             fitToSelectionRequest = UUID()
         }
     }
@@ -1144,6 +1320,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     /// Explicit fit-to-view camera action.
     /// Computes bounding box of visible nodes and fits camera.
     func requestFitToView() {
+        fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
     }
 
@@ -1231,6 +1408,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             viewState.nodePositions = cached
             viewState.layoutEnergy = 0
             reconcileSelectionAfterLayout()
+            maintainPinnedSelectionViewportIfNeeded()
+            consumeQueuedViewportFitIfNeeded()
             return
         }
 
@@ -1241,6 +1420,24 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.nodePositions = positions
         viewState.layoutEnergy = 0
         reconcileSelectionAfterLayout()
+        maintainPinnedSelectionViewportIfNeeded()
+        consumeQueuedViewportFitIfNeeded()
+    }
+
+    private func queueViewportFitToVisibleNodes() {
+        pendingViewportFitToVisibleNodes = true
+    }
+
+    private func consumeQueuedViewportFitIfNeeded() {
+        guard pendingViewportFitToVisibleNodes else { return }
+        pendingViewportFitToVisibleNodes = false
+
+        // Preserve explicit focus and selection-fit behavior.
+        if !fitTargetNodeIDs.isEmpty { return }
+        if focusState.isFocusEnabled, focusState.anchorNodeID != nil { return }
+
+        fitTargetNodeIDs = []
+        fitToSelectionRequest = UUID()
     }
 
     private func updateSelectionState() {
@@ -1249,12 +1446,72 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         viewState.selectedNodeID = selectionState.primarySelectionID
         captureMissingSelectionIfNeeded()
 
+        // If an explicit fit target is active (selection-focus mode), keep it aligned to selection changes.
+        if !fitTargetNodeIDs.isEmpty {
+            fitTargetNodeIDs.formIntersection(viewState.selectedNodeIDs)
+        }
+
         // Reset auto-fit flag when selection changes (unless via selectPrimaryHub)
         // This ensures explicit selection changes don't trigger unwanted auto-fits
         focusState.didAutoFitForCurrentAnchor = false
 
         // Recompute filtered graph when selection changes
         recomputeFilteredGraph()
+    }
+
+    /// When explicit selection-fit mode is active, keep selected nodes in frame across graph/layout updates.
+    private func maintainPinnedSelectionViewportIfNeeded() {
+        if !fitTargetNodeIDs.isEmpty {
+            let positionedIDs = Set(viewState.nodePositions.map(\.id))
+            let validTargets = fitTargetNodeIDs.intersection(positionedIDs)
+            guard !validTargets.isEmpty else { return }
+            requestPinnedRefitIfNeeded(targetNodeIDs: validTargets)
+            return
+        }
+
+        // Anchor-focused mode should also remain framed when graph/layout updates move nodes.
+        if focusState.isFocusEnabled, focusState.anchorNodeID != nil {
+            let targetIDs = filteredGraph.visibleNodeIDs.isEmpty
+                ? Set(viewState.graphModel.nodes.map(\.id))
+                : filteredGraph.visibleNodeIDs
+            requestPinnedRefitIfNeeded(targetNodeIDs: targetIDs)
+        }
+    }
+
+    private func requestPinnedRefitIfNeeded(targetNodeIDs: Set<String>) {
+        guard !targetNodeIDs.isEmpty else { return }
+        guard let bounds = GraphAlgorithms.boundingBox(
+            visibleNodeIDs: targetNodeIDs,
+            positions: viewState.nodePositions
+        ) else { return }
+
+        let now = Date()
+        let cooldownElapsed = now.timeIntervalSince(lastPinnedRefitTimestamp) >= pinnedRefitCooldown
+        let nodeSetChanged = targetNodeIDs != lastPinnedRefitNodeIDs
+        let driftedEnough = shouldRefitForBoundsChange(bounds)
+
+        // Only auto-refit when either:
+        // 1) target set changed, or
+        // 2) bounds drifted meaningfully and cooldown elapsed.
+        if !nodeSetChanged && !(cooldownElapsed && driftedEnough) {
+            return
+        }
+
+        fitTargetNodeIDs = targetNodeIDs
+        fitToSelectionRequest = UUID()
+        lastPinnedRefitTimestamp = now
+        lastPinnedRefitNodeIDs = targetNodeIDs
+        lastPinnedRefitBounds = RefitBounds(bounds)
+    }
+
+    private func shouldRefitForBoundsChange(
+        _ bounds: (minX: Double, minY: Double, maxX: Double, maxY: Double)
+    ) -> Bool {
+        guard let previous = lastPinnedRefitBounds else { return true }
+        let current = RefitBounds(bounds)
+        let centerDelta = hypot(current.centerX - previous.centerX, current.centerY - previous.centerY)
+        let spanDelta = abs(current.maxSpan - previous.maxSpan)
+        return centerDelta >= pinnedRefitCenterThreshold || spanDelta >= pinnedRefitSpanThreshold
     }
 
     private func captureMissingSelectionIfNeeded() {
@@ -1311,6 +1568,50 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         isGraphLoading = false
         loopDetection.reset()
     }
+
+    private func packetTrafficByNodeID() -> [String: NodeTrafficAggregate] {
+        var aggregates: [String: NodeTrafficAggregate] = [:]
+
+        for event in latestTimeframePackets.map({ PacketEvent(packet: $0) }) {
+            guard
+                let rawFrom = event.from,
+                let rawTo = event.to,
+                let from = StationNormalizer.normalize(rawFrom),
+                let to = StationNormalizer.normalize(rawTo)
+            else {
+                continue
+            }
+
+            let fromKey = CallsignParser.identityKey(for: from, mode: stationIdentityMode)
+            let toKey = CallsignParser.identityKey(for: to, mode: stationIdentityMode)
+
+            guard fromKey != toKey else { continue }
+
+            var fromAggregate = aggregates[fromKey, default: NodeTrafficAggregate()]
+            fromAggregate.outCount += 1
+            fromAggregate.outBytes += event.payloadBytes
+            aggregates[fromKey] = fromAggregate
+
+            var toAggregate = aggregates[toKey, default: NodeTrafficAggregate()]
+            toAggregate.inCount += 1
+            toAggregate.inBytes += event.payloadBytes
+            aggregates[toKey] = toAggregate
+        }
+
+        return aggregates
+    }
+}
+
+private struct RefitBounds {
+    let centerX: Double
+    let centerY: Double
+    let maxSpan: Double
+
+    init(_ bounds: (minX: Double, minY: Double, maxX: Double, maxY: Double)) {
+        centerX = (bounds.minX + bounds.maxX) * 0.5
+        centerY = (bounds.minY + bounds.maxY) * 0.5
+        maxSpan = max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY)
+    }
 }
 
 private struct AggregationCacheKey: Hashable {
@@ -1337,6 +1638,13 @@ private struct GraphCacheKey: Hashable {
     let customEnd: Date
 }
 
+private struct NodeTrafficAggregate {
+    var inCount: Int = 0
+    var outCount: Int = 0
+    var inBytes: Int = 0
+    var outBytes: Int = 0
+}
+
 struct GraphInspectorDetails: Hashable, Sendable {
     let node: NetworkGraphNode
     let neighbors: [GraphNeighborStat]
@@ -1361,6 +1669,44 @@ struct GraphInspectorDetails: Hashable, Sendable {
         self.heardDirect = heardDirect
         self.seenVia = seenVia
     }
+}
+
+struct GraphMultiInspectorDetails: Hashable, Sendable {
+    nonisolated struct InternalLink: Hashable, Sendable, Identifiable {
+        let sourceID: String
+        let sourceCallsign: String
+        let targetID: String
+        let targetCallsign: String
+        let packetCount: Int
+        let bytes: Int
+
+        var id: String { "\(sourceID)->\(targetID)" }
+        var sortKey: String { "\(sourceCallsign)|\(targetCallsign)" }
+    }
+
+    nonisolated struct SharedExternalConnection: Hashable, Sendable, Identifiable {
+        let id: String
+        let callsign: String
+        var connectedSelectedIDs: Set<String>
+        var totalPackets: Int
+    }
+
+    let selectedNodes: [NetworkGraphNode]
+    let internalLinks: [InternalLink]
+    let sharedExternalConnections: [SharedExternalConnection]
+    let relationshipBreakdown: [LinkType: Int]
+    let possibleInternalLinks: Int
+    let internalPacketCount: Int
+    let internalByteCount: Int
+    let touchingByteCount: Int
+
+    var selectionCount: Int { selectedNodes.count }
+    var internalLinkCount: Int { internalLinks.count }
+    var density: Double {
+        guard possibleInternalLinks > 0 else { return 0 }
+        return Double(internalLinkCount) / Double(possibleInternalLinks)
+    }
+    var externalReachCount: Int { sharedExternalConnections.count }
 }
 
 private enum AnalyticsInputHasher {

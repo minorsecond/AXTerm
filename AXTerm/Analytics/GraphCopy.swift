@@ -45,6 +45,9 @@ nonisolated enum GraphCopy {
         static let setAsAnchorLabel = "Focus Around This Node"
         static let setAsAnchorTooltip = "Filter the graph to show only nodes within the specified hop distance of this station. Enables focus mode if not already active."
         static let setAsAnchorAccessibility = "Set this node as focus anchor"
+        static let focusSelectionLabel = "Focus Around Selection"
+        static let focusSelectionTooltip = "Keep the current selection and zoom to the selected stations' extents."
+        static let focusSelectionAccessibility = "Focus around selected stations"
 
         static let hopCountLabel = "Hop Distance"
         static let hopCountTooltip = "Number of connection steps from the anchor node to include. Higher values show more of the network."
@@ -250,32 +253,39 @@ nonisolated enum GraphCopy {
     // MARK: Graph View Modes
 
     enum ViewMode {
-        static let pickerLabel = "View"
-        static let pickerTooltip = "Changes which link types are shown in the network graph. Does not affect Network Health."
+        static let pickerLabel = "Lens"
+        static let pickerTooltip = "Choose which relationships to emphasize for the selected graph source."
 
-        static let connectivityLabel = "Connectivity"
-        static let connectivityDescription = "Direct connections"
-        static let connectivityTooltip = "Visualize direct RF connections. High-fidelity map of stations you can reach without digipeaters. Best for antenna testing and propagation analysis."
+        static let sourceLabel = "Source"
+        static let sourceTooltip = "Choose where graph relationships come from."
+        static let packetSourceLabel = "Packets"
+        static let packetSourceTooltip = "Build the graph from observed AX.25 packet traffic."
+        static let netRomSourceLabel = "NET/ROM"
+        static let netRomSourceTooltip = "Build the graph from NET/ROM routing state."
 
-        static let routingLabel = "Routing"
-        static let routingDescription = "Packet flow paths"
-        static let routingTooltip = "Visualize the multi-hop network. Show how packets are digipeated and which nodes act as relays. Best for understanding regional coverage and packet flow."
+        static let connectivityLabel = "Direct"
+        static let connectivityDescription = "Direct RF evidence + direct peer links"
+        static let connectivityTooltip = "Packet source: show direct peer traffic and direct-heard RF evidence. Excludes digipeater-mediated edges."
 
-        static let allLabel = "All"
-        static let allDescription = "Everything"
-        static let allTooltip = "Complete AX.25 topology view. Combines direct connections with digipeated paths for a full view of all observed station interactions."
+        static let routingLabel = "Routed"
+        static let routingDescription = "Direct peer + digipeater-mediated paths"
+        static let routingTooltip = "Packet source: emphasize routed packet flow, including digipeater-mediated edges."
 
-        static let netromClassicLabel = "NET/ROM (Classic)"
-        static let netromClassicDescription = "NET/ROM broadcast routes"
-        static let netromClassicTooltip = "Official NET/ROM network map. Combines 'NODES' broadcasts for multi-hop routes with direct AX.25 neighbors for local topology. Best for backbone analysis."
+        static let allLabel = "Combined"
+        static let allDescription = "All packet-derived relationship evidence"
+        static let allTooltip = "Packet source: combines direct, routed, and infrastructure relationship evidence."
 
-        static let netromInferredLabel = "NET/ROM (Inferred)"
-        static let netromInferredDescription = "NET/ROM inferred routes"
-        static let netromInferredTooltip = "Passive NET/ROM discovery map. Reveals neighbors and routes detected from live L3/L4 traffic, showing paths that are active but not broadcasted."
+        static let netromClassicLabel = "Classic"
+        static let netromClassicDescription = "Broadcast routing table + direct neighbors"
+        static let netromClassicTooltip = "NET/ROM source: official broadcast-derived routes with direct neighbor topology."
 
-        static let netromHybridLabel = "NET/ROM (Hybrid)"
-        static let netromHybridDescription = "NET/ROM combined routes"
-        static let netromHybridTooltip = "Comprehensive NET/ROM view merging official broadcasts with live traffic discovery for the most accurate and up-to-date routing map."
+        static let netromInferredLabel = "Inferred"
+        static let netromInferredDescription = "Passively inferred routing relationships"
+        static let netromInferredTooltip = "NET/ROM source: inferred from observed traffic, including non-broadcasted active paths."
+
+        static let netromHybridLabel = "Hybrid"
+        static let netromHybridDescription = "Classic + inferred routing merged"
+        static let netromHybridTooltip = "NET/ROM source: merges broadcast and inferred routes for the broadest routing picture."
     }
 
     // MARK: Link Types (for legend and tooltips)
@@ -320,6 +330,8 @@ nonisolated enum GraphCopy {
 
         static let degreeLabel = "Connections"
         static let degreeTooltip = "Number of unique stations this node has communicated with."
+        static let trafficContextLabel = "Traffic from packet observations. Connections reflect the current source and lens."
+        static let trafficContextTooltip = "Traffic metrics stay consistent across Packet and NET/ROM sources for the selected timeframe. Relationship and connection sections follow the current source/lens."
 
         static let neighborsLabel = "Top Neighbors"
         static let neighborsTooltip = "Stations most frequently in contact with this node."
@@ -338,6 +350,45 @@ nonisolated enum GraphCopy {
 
         static let viaDigipeaterTemplate = "via %@"
         static let lastHeardTemplate = "Last: %@"
+
+        // Multi-selection inspector
+        static let multiSelectionTitle = "Stations Selected"
+        static let multiSelectionListTooltip = "Stations currently included in this selection."
+
+        static let internalLinksLabel = "Internal Links"
+        static let internalLinksTooltip = "Links where both endpoints are selected. Format: observed links / possible links."
+
+        static let selectionDensityLabel = "Selection Density"
+        static let selectionDensityTooltip = "How tightly connected the selected stations are."
+
+        static let packetsWithinSelectionLabel = "Internal Packets"
+        static let packetsWithinSelectionTooltip = "Packets on internal links (selected-to-selected only)."
+
+        static let bytesWithinSelectionLabel = "Internal Bytes"
+        static let bytesWithinSelectionTooltip = "Payload bytes on internal links (selected-to-selected only)."
+
+        static let bytesTouchingSelectionLabel = "Selected Bytes (Total)"
+        static let bytesTouchingSelectionTooltip = "Payload bytes on any link where at least one endpoint is selected."
+        static let selectionBytesLegend = "Internal = selected-to-selected. Total = all traffic touching selected stations."
+
+        static let sharedExternalRelaysLabel = "Shared External Relays"
+        static let sharedExternalRelaysTooltip = "Stations outside the selection that connect to two or more selected stations."
+
+        static let interactionTypesHeader = "Interaction Types"
+        static let interactionTypesTooltip = "Breakdown of within-selection links by relationship type."
+
+        static let withinSelectionHeader = "Within Selection"
+        static let withinSelectionTooltip = "Links where both endpoints are selected stations."
+
+        static let sharedConnectionsHeader = "Shared Connections"
+        static let sharedConnectionsTooltip = "Outside stations that connect to multiple selected stations."
+
+        static let selectedStationsHeader = "Selected Stations"
+        static let selectedStationsTooltip = "Per-station summary for each selected station."
+
+        static let selectedStationRowTooltipTemplate = "Packets in: %d, packets out: %d, unique connections: %d."
+        static let sharedConnectionRowTooltipTemplate = "Connected to %d selected stations with %d packets."
+        static let internalLinkRowTooltipTemplate = "Packets: %d, bytes: %d."
     }
 
     // MARK: Station Identity Mode
@@ -364,8 +415,9 @@ nonisolated enum GraphCopy {
     // MARK: Graph Controls (Network Graph Card Header)
 
     enum GraphControls {
-        static let includeViaLabel = "Include via digipeaters"
-        static let includeViaTooltip = "Shows links observed through digipeater paths in Routing/All views."
+        static let includeViaLabel = "Include Digipeater Paths"
+        static let includeViaTooltip = "Include digipeater-mediated packet paths when using Packet source."
+        static let includeViaUnavailableTooltip = "Digipeater-path toggle is available for Packet source only."
 
         static let minEdgeCountLabel = "Min edge"
         static let minEdgeCountTooltip = "Minimum packets required to display a connection in the graph (view only)."

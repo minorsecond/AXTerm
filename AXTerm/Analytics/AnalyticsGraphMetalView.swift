@@ -18,8 +18,9 @@ struct AnalyticsGraphView: View {
     let resetToken: UUID
     let focusNodeID: String?
     let fitToSelectionRequest: UUID?
+    let fitTargetNodeIDs: Set<String>
     let resetCameraRequest: UUID?
-    /// When focus mode is enabled, only render nodes in this set. Empty = show all.
+    /// Focus neighborhood IDs. Empty means no focus emphasis.
     let visibleNodeIDs: Set<String>
     let onSelect: (String, Bool) -> Void
     let onSelectMany: (Set<String>, Bool) -> Void
@@ -44,22 +45,29 @@ struct AnalyticsGraphView: View {
                     resetToken: resetToken,
                     focusNodeID: focusNodeID,
                     fitToSelectionRequest: fitToSelectionRequest,
+                    fitTargetNodeIDs: fitTargetNodeIDs,
                     resetCameraRequest: resetCameraRequest,
                     visibleNodeIDs: visibleNodeIDs,
                     onSelect: onSelect,
                     onSelectMany: onSelectMany,
                     onClearSelection: onClearSelection,
                     onHover: { nodeID, position in
-                        hoverNodeID = nodeID
-                        hoverPoint = position
+                        DispatchQueue.main.async {
+                            hoverNodeID = nodeID
+                            hoverPoint = position
+                        }
                         onHover(nodeID)
                     },
                     onSelectionRect: { rect in
-                        selectionRect = rect
+                        DispatchQueue.main.async {
+                            selectionRect = rect
+                        }
                     },
                     onFocusHandled: onFocusHandled,
                     onCameraUpdate: { newState in
-                        cameraState = newState
+                        DispatchQueue.main.async {
+                            cameraState = newState
+                        }
                     }
                 )
 
@@ -239,7 +247,7 @@ private struct NodeLabelsOverlay: View {
     let myCallsign: String
     let cameraState: CameraState
     let viewSize: CGSize
-    /// When focus mode is enabled, only render labels for nodes in this set. Empty = show all.
+    /// Focus neighborhood IDs. Empty means no focus emphasis.
     let visibleNodeIDs: Set<String>
 
     private let minZoomForLabels: CGFloat = 0.6
@@ -255,10 +263,7 @@ private struct NodeLabelsOverlay: View {
             let positionMap = Dictionary(uniqueKeysWithValues: nodePositions.map { ($0.id, $0) })
             let inset = AnalyticsStyle.Layout.graphInset
 
-            // Filter nodes if focus mode is active
-            let displayNodes = visibleNodeIDs.isEmpty
-                ? graphModel.nodes
-                : graphModel.nodes.filter { visibleNodeIDs.contains($0.id) }
+            let displayNodes = graphModel.nodes
 
             // Compute node weight range for radius calculation
             let weights = displayNodes.map { $0.weight }
@@ -307,7 +312,13 @@ private struct NodeLabelsOverlay: View {
                 let fontSize = max(8, min(11, 9 * cameraState.scale))
                 let isSelected = selectedNodeIDs.contains(node.id)
                 let isHovered = hoveredNodeID == node.id
+                let isInFocusNeighborhood = visibleNodeIDs.isEmpty || visibleNodeIDs.contains(node.id)
                 let isMyNode = CallsignMatcher.matches(candidate: node.callsign, target: normalizedCallsign)
+
+                // In focus mode, keep context labels out of the way unless actively relevant.
+                if !isInFocusNeighborhood && !isSelected && !isHovered && !isMyNode {
+                    continue
+                }
 
                 let font = Font.system(size: fontSize, weight: isSelected || isHovered ? .semibold : .regular)
                 var text = Text(suffix).font(font)
@@ -395,6 +406,7 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
     let resetToken: UUID
     let focusNodeID: String?
     let fitToSelectionRequest: UUID?
+    let fitTargetNodeIDs: Set<String>
     let resetCameraRequest: UUID?
     let visibleNodeIDs: Set<String>
     let onSelect: (String, Bool) -> Void
@@ -438,6 +450,7 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
         context.coordinator.handle(focusNodeID: focusNodeID)
         context.coordinator.handle(
             fitToSelectionRequest: fitToSelectionRequest,
+            fitTargetNodeIDs: fitTargetNodeIDs,
             visibleNodeIDs: visibleNodeIDs,
             nodePositions: nodePositions
         )
@@ -479,7 +492,7 @@ private struct GraphTooltipView: View {
             
             Text("Packets: \(node.weight)")
                 .font(.caption2)
-            Text("Bytes: \((node.inBytes + node.outBytes).formatted())")
+            Text("Bytes: \(ByteCountFormatter.string(fromByteCount: Int64(node.inBytes + node.outBytes), countStyle: .file))")
                 .font(.caption2)
         }
         .padding(6)
@@ -633,6 +646,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     private var edgeCache: [GraphEdgeInfo] = []
     private var nodeIndex: [String: GraphNodeInfo] = [:]
     private var metrics = GraphMetrics(minNodeWeight: 1, maxNodeWeight: 1, maxEdgeWeight: 1)
+    private var focusNeighborhoodIDs: Set<String> = []
 
     private var camera = GraphCamera()
     private var lastInteractionTime: CFTimeInterval = 0
@@ -746,6 +760,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     /// Always fits to all visible nodes (respecting focus filter), NOT to selection.
     func handle(
         fitToSelectionRequest: UUID?,
+        fitTargetNodeIDs: Set<String>,
         visibleNodeIDs: Set<String>,
         nodePositions: [NodePosition]
     ) {
@@ -753,11 +768,18 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         lastFitToSelectionRequest = fitToSelectionRequest
         guard fitToSelectionRequest != nil, let view else { return }
 
-        // Fit to all visible nodes (respecting focus filter)
-        // If visibleNodeIDs is empty, fall back to all nodes
-        let targetNodeIDs = visibleNodeIDs.isEmpty
-            ? Set(nodePositions.map { $0.id })
-            : visibleNodeIDs
+        // Priority:
+        // 1) Explicit fit targets (e.g., multi-selection extents).
+        // 2) Visible nodes (focus-filtered).
+        // 3) All nodes.
+        let targetNodeIDs: Set<String>
+        if !fitTargetNodeIDs.isEmpty {
+            targetNodeIDs = fitTargetNodeIDs
+        } else if !visibleNodeIDs.isEmpty {
+            targetNodeIDs = visibleNodeIDs
+        } else {
+            targetNodeIDs = Set(nodePositions.map { $0.id })
+        }
 
         guard let bounds = GraphAlgorithms.boundingBox(
             visibleNodeIDs: targetNodeIDs,
@@ -908,7 +930,9 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         _ = modifiers
         guard let selectionStart else { return }
         let previous = lastDragLocation ?? selectionStart
-        let delta = CGSize(width: location.x - previous.x, height: location.y - previous.y)
+        // AppKit mouse coordinates are Y-up, but the graph camera/shader pipeline uses screen-space Y-down.
+        // Flip the drag delta on Y so vertical pan direction matches expected scrolling behavior.
+        let delta = CGSize(width: location.x - previous.x, height: previous.y - location.y)
         accumulatedDrag.width += delta.width
         accumulatedDrag.height += delta.height
         lastDragLocation = location
@@ -1046,17 +1070,15 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         myCallsign: String,
         visibleNodeIDs: Set<String>
     ) {
+        focusNeighborhoodIDs = visibleNodeIDs
         nodeCache.removeAll()
         edgeCache.removeAll()
         nodeIndex.removeAll()
 
         let positionMap = Dictionary(uniqueKeysWithValues: positions.map { ($0.id, $0) })
 
-        // Determine which nodes to render (all if visibleNodeIDs is empty, otherwise filtered)
-        let shouldFilter = !visibleNodeIDs.isEmpty
-        let filteredNodes = shouldFilter
-            ? model.nodes.filter { visibleNodeIDs.contains($0.id) }
-            : model.nodes
+        // Focus mode is visual-only: keep full context visible and dim out-of-focus elements.
+        let filteredNodes = model.nodes
 
         let weights = filteredNodes.map { $0.weight }
         metrics = GraphMetrics(
@@ -1080,10 +1102,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             nodeIndex[node.id] = info
         }
 
-        // Filter edges: only include edges where both endpoints are visible
-        let filteredEdges = shouldFilter
-            ? model.edges.filter { visibleNodeIDs.contains($0.sourceID) && visibleNodeIDs.contains($0.targetID) }
-            : model.edges
+        let filteredEdges = model.edges
 
         for edge in filteredEdges {
             guard let source = nodeIndex[edge.sourceID],
@@ -1091,6 +1110,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             let info = GraphEdgeInfo(
                 source: source,
                 target: target,
+                linkType: edge.linkType,
                 weight: edge.weight,
                 isStale: edge.isStale
             )
@@ -1112,12 +1132,24 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     private func rebuildBaseEdgeBuffer() {
         guard let device = view?.device else { return }
         let instances: [EdgeInstance] = edgeCache.map { edge in
+            let isFocusedContext = focusNeighborhoodIDs.isEmpty ||
+                focusNeighborhoodIDs.contains(edge.source.id) ||
+                focusNeighborhoodIDs.contains(edge.target.id)
             var alpha = Float(metrics.edgeAlpha(for: edge.weight))
+            if edge.linkType == .heardVia {
+                alpha *= 0.55
+            }
             if edge.isStale {
                 alpha *= 0.3 // Dim stale routes
             }
-            let baseColor = colorVector(.secondaryLabelColor, alpha: alpha)
-            let thickness = metrics.edgeThickness(for: edge.weight)
+            if !isFocusedContext {
+                alpha *= 0.22
+            }
+            let edgeColor: NSColor = edge.linkType == .heardVia ? .tertiaryLabelColor : .secondaryLabelColor
+            let baseColor = colorVector(edgeColor, alpha: alpha)
+            let thickness = isFocusedContext
+                ? metrics.edgeThickness(for: edge.weight)
+                : metrics.edgeThickness(for: edge.weight) * 0.85
             return EdgeInstance(
                 start: edge.source.position,
                 end: edge.target.position,
@@ -1190,6 +1222,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             let isSelected = selectedNodeIDs.contains(node.id)
             let isHovered = hoveredNodeID == node.id
             let isMyNode = node.isMyNode
+            let isInFocusNeighborhood = focusNeighborhoodIDs.isEmpty || focusNeighborhoodIDs.contains(node.id)
             let scale: CGFloat = isMyNode ? AnalyticsStyle.Graph.myNodeScale : 1.0
             let resolvedRadius = Float(radius * scale)
             let color: SIMD4<Float>
@@ -1205,7 +1238,14 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
                 color = baseColor
             }
 
-            instances.append(NodeInstance(center: node.position, radius: resolvedRadius, color: color))
+            let finalColor: SIMD4<Float>
+            if isInFocusNeighborhood || isSelected || isHovered || isMyNode {
+                finalColor = color
+            } else {
+                finalColor = SIMD4(color.x, color.y, color.z, color.w * 0.28)
+            }
+
+            instances.append(NodeInstance(center: node.position, radius: resolvedRadius, color: finalColor))
 
             if isSelected || isHovered || isMyNode {
                 let outlineScale: Float = isSelected ? 1.4 : 1.2
@@ -1345,6 +1385,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
 nonisolated private struct GraphRenderKey: Hashable {
     let nodeCount: Int
     let edgeCount: Int
+    let modelChecksum: Int
     let myCallsign: String
     let positionsChecksum: Int
     let visibleNodeCount: Int
@@ -1356,6 +1397,32 @@ nonisolated private struct GraphRenderKey: Hashable {
         myCallsign: String,
         visibleNodeIDs: Set<String> = []
     ) -> GraphRenderKey {
+        // Include graph topology/content so renderer buffers are rebuilt whenever
+        // logical graph data changes even if counts stay the same.
+        var modelHasher = Hasher()
+        for node in model.nodes.sorted(by: { $0.id < $1.id }) {
+            node.id.hash(into: &modelHasher)
+            node.callsign.hash(into: &modelHasher)
+            node.weight.hash(into: &modelHasher)
+            node.degree.hash(into: &modelHasher)
+            node.isNetRomOfficial.hash(into: &modelHasher)
+            node.inBytes.hash(into: &modelHasher)
+            node.outBytes.hash(into: &modelHasher)
+        }
+        for edge in model.edges.sorted(by: {
+            if $0.sourceID != $1.sourceID { return $0.sourceID < $1.sourceID }
+            if $0.targetID != $1.targetID { return $0.targetID < $1.targetID }
+            if $0.linkType != $1.linkType { return $0.linkType.renderPriority < $1.linkType.renderPriority }
+            if $0.weight != $1.weight { return $0.weight < $1.weight }
+            return ($0.isStale ? 1 : 0) < ($1.isStale ? 1 : 0)
+        }) {
+            edge.sourceID.hash(into: &modelHasher)
+            edge.targetID.hash(into: &modelHasher)
+            edge.linkType.hash(into: &modelHasher)
+            edge.weight.hash(into: &modelHasher)
+            edge.isStale.hash(into: &modelHasher)
+        }
+
         var hasher = Hasher()
         for p in positions.sorted(by: { $0.id < $1.id }) {
             p.id.hash(into: &hasher)
@@ -1370,6 +1437,7 @@ nonisolated private struct GraphRenderKey: Hashable {
         return GraphRenderKey(
             nodeCount: model.nodes.count,
             edgeCount: model.edges.count,
+            modelChecksum: modelHasher.finalize(),
             myCallsign: myCallsign,
             positionsChecksum: hasher.finalize(),
             visibleNodeCount: visibleNodeIDs.count,
@@ -1395,6 +1463,7 @@ nonisolated private struct GraphNodeInfo: Hashable {
 nonisolated private struct GraphEdgeInfo: Hashable {
     let source: GraphNodeInfo
     let target: GraphNodeInfo
+    let linkType: LinkType
     let weight: Int
     let isStale: Bool
 }
@@ -1433,8 +1502,9 @@ nonisolated private struct GraphCamera {
     private var targetScale: CGFloat = 1
     private var targetOffset: CGSize = .zero
 
-    /// Maximum pan distance from center (as fraction of view size)
-    private static let maxPanFraction: CGFloat = 0.6
+    /// Maximum pan distance from center (as fraction of view size at 1x).
+    /// Kept tighter to prevent the graph from being panned mostly off-canvas.
+    private static let baseMaxPanFraction: CGFloat = 0.28
 
     var isSettled: Bool {
         abs(scale - targetScale) < AnalyticsStyle.Graph.cameraSnapScaleEpsilon &&
@@ -1458,11 +1528,11 @@ nonisolated private struct GraphCamera {
     /// Clamps target offset so the graph cannot be panned off-screen
     private mutating func clampOffset(viewSize: CGSize?) {
         guard let viewSize, viewSize.width > 0, viewSize.height > 0 else { return }
-        // Allow panning up to maxPanFraction of view size in any direction
-        // Scale the limit inversely with zoom - when zoomed out, allow less panning
+        // Allow modest panning at 1x, then expand allowance gradually when zoomed in.
         let effectiveScale = max(scale, targetScale)
-        let maxPanX = viewSize.width * Self.maxPanFraction * effectiveScale
-        let maxPanY = viewSize.height * Self.maxPanFraction * effectiveScale
+        let zoomAllowance = max(1, sqrt(effectiveScale))
+        let maxPanX = viewSize.width * Self.baseMaxPanFraction * zoomAllowance
+        let maxPanY = viewSize.height * Self.baseMaxPanFraction * zoomAllowance
         targetOffset.width = targetOffset.width.clamped(to: -maxPanX...maxPanX)
         targetOffset.height = targetOffset.height.clamped(to: -maxPanY...maxPanY)
     }

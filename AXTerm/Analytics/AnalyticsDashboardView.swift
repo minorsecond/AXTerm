@@ -17,6 +17,11 @@ struct AnalyticsDashboardView: View {
     @State private var focusNodeID: String?
     @State private var sidebarTab: GraphSidebarTab = .overview
     @State private var showExportToast = false
+    @State private var showCustomRangePopover = false
+    @State private var showGraphOptionsPopover = false
+    @State private var graphViewportHeight: CGFloat = AnalyticsStyle.Layout.graphHeight
+    @State private var preferredPacketViewMode: GraphViewMode = .connectivity
+    @State private var preferredNetRomViewMode: GraphViewMode = .netromHybrid
 
     init(packetEngine: PacketEngine, settings: AppSettingsStore, viewModel: AnalyticsDashboardViewModel) {
         self.packetEngine = packetEngine
@@ -25,6 +30,7 @@ struct AnalyticsDashboardView: View {
     }
 
     @State private var scrollOffset: CGFloat = 0
+    @State private var controlBarHeight: CGFloat = 56
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
@@ -34,7 +40,7 @@ struct AnalyticsDashboardView: View {
                 VStack(alignment: .leading, spacing: AnalyticsStyle.Layout.sectionSpacing) {
                     // Spacer for the floating header
                     Color.clear
-                        .frame(height: filterSectionHeight)
+                        .frame(height: controlBarHeight + 12)
 
                     summarySection
                     chartsSection
@@ -64,6 +70,12 @@ struct AnalyticsDashboardView: View {
             ) {
                 filterSection
             }
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .preference(key: FloatingControlBarHeightPreferenceKey.self, value: geo.size.height)
+                }
+            )
 
             // Export toast notification
             if showExportToast {
@@ -88,6 +100,7 @@ struct AnalyticsDashboardView: View {
         .onAppear {
             viewModel.trackDashboardOpened()
             viewModel.updatePackets(packetEngine.packets)
+            syncPreferredGraphModes(with: viewModel.graphViewMode)
             Task { @MainActor in
                 viewModel.setActive(true)
             }
@@ -100,18 +113,25 @@ struct AnalyticsDashboardView: View {
         }
         .onChange(of: viewModel.viewState.selectedNodeID) { _, newValue in
             packetEngine.selectedStationCall = newValue
+            if newValue == nil {
+                sidebarTab = .overview
+            }
+        }
+        .onChange(of: viewModel.graphViewMode) { _, newValue in
+            syncPreferredGraphModes(with: newValue)
+        }
+        .onPreferenceChange(FloatingControlBarHeightPreferenceKey.self) { value in
+            // Keep height stable and avoid tiny oscillations from fractional layout updates.
+            let rounded = ceil(value)
+            if abs(controlBarHeight - rounded) > 1 {
+                controlBarHeight = rounded
+            }
         }
     }
 
-    /// Estimated height of the filter section for the spacer
-    private var filterSectionHeight: CGFloat {
-        viewModel.timeframe == .custom ? 100 : 60
-    }
-
     private var filterSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Main controls row - wraps on narrow windows
-            FlowLayout(spacing: 12) {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .bottom, spacing: 12) {
                 FilterControlGroup(title: "Timeframe") {
                     Picker("Timeframe", selection: $viewModel.timeframe) {
                         ForEach(AnalyticsTimeframe.allCases, id: \.self) { timeframe in
@@ -123,6 +143,27 @@ struct AnalyticsDashboardView: View {
                     .pickerStyle(.segmented)
                     .fixedSize()
                     .controlSize(.small)
+                }
+
+                if viewModel.timeframe == .custom {
+                    Button {
+                        showCustomRangePopover.toggle()
+                    } label: {
+                        Label("Range", systemImage: "calendar")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .popover(isPresented: $showCustomRangePopover, arrowEdge: .bottom) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            DatePicker("Start", selection: $viewModel.customRangeStart, displayedComponents: [.date, .hourAndMinute])
+                                .datePickerStyle(.compact)
+                            DatePicker("End", selection: $viewModel.customRangeEnd, displayedComponents: [.date, .hourAndMinute])
+                                .datePickerStyle(.compact)
+                        }
+                        .padding(12)
+                        .frame(width: 320)
+                    }
                 }
 
                 FilterControlGroup(title: "Bucket") {
@@ -138,51 +179,67 @@ struct AnalyticsDashboardView: View {
                     .controlSize(.small)
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Min edge count")
-                        .font(.caption)
-                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                    HStack(spacing: 8) {
-                        Slider(
-                            value: Binding(
-                                get: { Double(viewModel.minEdgeCount) },
-                                set: { viewModel.minEdgeCount = Int($0) }
-                            ),
-                            in: 1...10,
-                            step: 1
-                        )
-                        .frame(width: 100)
-                        Text("\(viewModel.minEdgeCount)")
-                            .font(.caption.monospacedDigit())
-                            .frame(width: 20, alignment: .trailing)
-                    }
-                }
+                Toggle("Auto-update", isOn: $viewModel.autoUpdateEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .help("Automatically refresh analytics as new packets arrive")
 
-                Stepper(value: $viewModel.maxNodes, in: AnalyticsStyle.Graph.minNodes...300, step: 10) {
-                    Text("Max: \(viewModel.maxNodes)")
-                        .font(.caption)
-                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                }
-                .fixedSize()
-
-                Spacer(minLength: 0)
-
-                Button("Reset") {
-                    graphResetToken = UUID()
-                    viewModel.resetGraphView()
+                Button {
+                    viewModel.manualRefresh()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-            }
+                .help("Refresh analytics now")
 
-            if viewModel.timeframe == .custom {
-                HStack(spacing: 12) {
-                    DatePicker("Start", selection: $viewModel.customRangeStart, displayedComponents: [.date, .hourAndMinute])
-                        .datePickerStyle(.compact)
-                    DatePicker("End", selection: $viewModel.customRangeEnd, displayedComponents: [.date, .hourAndMinute])
-                        .datePickerStyle(.compact)
+                Button {
+                    showGraphOptionsPopover.toggle()
+                } label: {
+                    Label("Options", systemImage: "slider.horizontal.3")
                 }
-                .font(.caption)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .popover(isPresented: $showGraphOptionsPopover, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Graph Options")
+                            .font(.headline)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Min edge count")
+                                .font(.caption)
+                                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            HStack(spacing: 8) {
+                                Slider(
+                                    value: Binding(
+                                        get: { Double(viewModel.minEdgeCount) },
+                                        set: { viewModel.minEdgeCount = Int($0) }
+                                    ),
+                                    in: 1...10,
+                                    step: 1
+                                )
+                                .frame(width: 140)
+                                Text("\(viewModel.minEdgeCount)")
+                                    .font(.caption.monospacedDigit())
+                                    .frame(width: 20, alignment: .trailing)
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Max nodes")
+                                .font(.caption)
+                                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            Stepper(value: $viewModel.maxNodes, in: AnalyticsStyle.Graph.minNodes...300, step: 10) {
+                                Text("\(viewModel.maxNodes)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                    .padding(12)
+                    .frame(width: 240)
+                }
             }
         }
     }
@@ -210,10 +267,6 @@ struct AnalyticsDashboardView: View {
 
     private var chartsSection: some View {
         AnalyticsCard(title: "Charts") {
-            if viewModel.isAggregationLoading {
-                AnalyticsLoadingRow(label: "Updating charts")
-                    .padding(.bottom, 4)
-            }
             LazyVGrid(columns: chartColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
                 ChartCard(title: "Packets over time") {
                     if viewModel.hasLoadedAggregation {
@@ -282,6 +335,24 @@ struct AnalyticsDashboardView: View {
                     }
                 }
             }
+            .overlay(alignment: .topLeading) {
+                if viewModel.isAggregationLoading && viewModel.hasLoadedAggregation {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Updating charts")
+                            .font(.caption)
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .padding(.top, 4)
+                    .padding(.leading, 4)
+                    .allowsHitTesting(false)
+                }
+            }
         }
     }
 
@@ -326,18 +397,15 @@ struct AnalyticsDashboardView: View {
                     if showsStationLegend {
                         LegendItem(color: .secondaryLabelColor, label: "Station")
                     }
-                    
+
+                    Divider()
+                        .frame(height: 14)
+
+                    nodeSizeVisualLegend
+
+                    edgeVisualLegend
+
                     Spacer()
-                    
-                    if viewModel.graphViewMode.isNetRomMode {
-                        Text("Size = Route Centrality • Edge = Link Quality")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(AnalyticsStyle.Colors.neutralFill)
-                            .cornerRadius(4)
-                    }
                 }
                 .padding(.horizontal, 4)
 
@@ -353,17 +421,21 @@ struct AnalyticsDashboardView: View {
                             resetToken: graphResetToken,
                             focusNodeID: focusNodeID,
                             fitToSelectionRequest: viewModel.fitToSelectionRequest,
+                            fitTargetNodeIDs: viewModel.fitTargetNodeIDs,
                             resetCameraRequest: viewModel.resetCameraRequest,
                             visibleNodeIDs: viewModel.filteredGraph.visibleNodeIDs,
                             onSelect: { nodeID, isShift in
                                 viewModel.handleNodeClick(nodeID, isShift: isShift)
-                                // Switch to Inspector tab when a node is selected
-                                if !isShift {
+                                // Switch to Inspector tab whenever a selection exists (single or multi).
+                                if !viewModel.viewState.selectedNodeIDs.isEmpty {
                                     sidebarTab = .inspector
                                 }
                             },
                             onSelectMany: { nodeIDs, isShift in
                                 viewModel.handleSelectionRect(nodeIDs, isShift: isShift)
+                                if !viewModel.viewState.selectedNodeIDs.isEmpty {
+                                    sidebarTab = .inspector
+                                }
                             },
                             onClearSelection: {
                                 viewModel.handleBackgroundClick()
@@ -378,8 +450,35 @@ struct AnalyticsDashboardView: View {
                         if (!viewModel.hasLoadedGraph || viewModel.isGraphLoading) && viewModel.viewState.graphModel.nodes.isEmpty {
                             AnalyticsLoadingOverlay(label: "Building network graph")
                         }
+
+                        if viewModel.isGraphLoading && !viewModel.viewState.graphModel.nodes.isEmpty {
+                            Color.clear
+                                .overlay(alignment: .topLeading) {
+                                    HStack(spacing: 6) {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                        Text("Updating graph…")
+                                            .font(.caption2)
+                                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .padding(8)
+                                    .allowsHitTesting(false)
+                                }
+                        }
                     }
                     .frame(minHeight: AnalyticsStyle.Layout.graphHeight)
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: GraphViewportHeightPreferenceKey.self,
+                                value: proxy.size.height
+                            )
+                        }
+                    )
                     .onAppear {
                         viewModel.setMyCallsignForLayout(settings.myCallsign)
                     }
@@ -398,6 +497,9 @@ struct AnalyticsDashboardView: View {
                         onShowActiveNodes: {
                             let activeIDs = viewModel.activeNodeIDs()
                             viewModel.handleSelectionRect(activeIDs, isShift: false)
+                            if !viewModel.viewState.selectedNodeIDs.isEmpty {
+                                sidebarTab = .inspector
+                            }
                         },
                         onExportSummary: {
                             let summary = viewModel.exportNetworkSummary()
@@ -416,6 +518,7 @@ struct AnalyticsDashboardView: View {
                             }
                         },
                         selectedNodeDetails: viewModel.selectedNodeDetails(),
+                        selectedMultiNodeDetails: viewModel.selectedMultiNodeDetails(),
                         onSetAsAnchor: {
                             viewModel.setSelectedAsAnchor()
                         },
@@ -423,8 +526,15 @@ struct AnalyticsDashboardView: View {
                             // Clear selection AND fit to nodes (per UX spec)
                             viewModel.clearSelectionAndFit()
                         },
-                        hubMetric: $viewModel.focusState.hubMetric
+                        hubMetric: $viewModel.focusState.hubMetric,
+                        fixedHeight: graphViewportHeight
                     )
+                }
+                .onPreferenceChange(GraphViewportHeightPreferenceKey.self) { newHeight in
+                    guard newHeight > 0 else { return }
+                    if abs(graphViewportHeight - newHeight) > 1 {
+                        graphViewportHeight = newHeight
+                    }
                 }
             }
 
@@ -448,46 +558,84 @@ struct AnalyticsDashboardView: View {
     /// Controls scoped to the Network Graph card: View Mode and Station Identity.
     /// These settings affect only the graph visualization, not global analytics or Network Health.
     private var networkGraphHeaderControls: some View {
-        HStack(spacing: 16) {
-            // Include via digipeaters toggle
-            Toggle(isOn: $viewModel.includeViaDigipeaters) {
-                Text(GraphCopy.GraphControls.includeViaLabel)
-                    .font(.caption)
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .help(GraphCopy.GraphControls.includeViaTooltip)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 14) {
+                HStack(spacing: 6) {
+                    Text(GraphCopy.ViewMode.sourceLabel)
+                        .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    AnalyticsSegmentedPicker(
+                        selection: graphSourceBinding,
+                        items: GraphSourceChoice.allCases,
+                        label: { $0.label },
+                        tooltip: { $0.tooltip }
+                    )
+                }
 
-            Divider()
-                .frame(height: 20)
+                HStack(spacing: 6) {
+                    Text(GraphCopy.ViewMode.pickerLabel)
+                        .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
 
-            // View Mode: Connectivity | Routing | All
-            HStack(spacing: 4) {
-                Text(GraphCopy.ViewMode.pickerLabel)
-                    .font(.caption)
-                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                
-                AnalyticsSegmentedPicker(
-                    selection: $viewModel.graphViewMode,
-                    items: GraphViewMode.allCases,
-                    label: { $0.rawValue },
-                    tooltip: { $0.tooltip }
-                )
+                    if viewModel.graphViewMode.isNetRomMode {
+                        AnalyticsSegmentedPicker(
+                            selection: netRomModeBinding,
+                            items: [GraphViewMode.netromClassic, GraphViewMode.netromInferred, GraphViewMode.netromHybrid],
+                            label: { labelForGraphMode($0) },
+                            tooltip: { $0.tooltip }
+                        )
+                    } else {
+                        AnalyticsSegmentedPicker(
+                            selection: packetModeBinding,
+                            items: [GraphViewMode.connectivity, GraphViewMode.routing, GraphViewMode.all],
+                            label: { labelForGraphMode($0) },
+                            tooltip: { $0.tooltip }
+                        )
+                    }
+                }
+
+                Divider()
+                    .frame(height: 18)
+
+                if canConfigureDigipeaterPaths {
+                    Toggle(isOn: $viewModel.includeViaDigipeaters) {
+                        Text(GraphCopy.GraphControls.includeViaLabel)
+                            .font(.caption)
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .help(GraphCopy.GraphControls.includeViaTooltip)
+                } else {
+                    Text(digipeaterPathStatusLabel)
+                        .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(AnalyticsStyle.Colors.neutralFill)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .help(digipeaterPathStatusTooltip)
+                }
+
+                HStack(spacing: 4) {
+                    Text(GraphCopy.StationIdentity.pickerLabel)
+                        .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+
+                    Picker(GraphCopy.StationIdentity.pickerLabel, selection: $viewModel.stationIdentityMode) {
+                        ForEach(StationIdentityMode.allCases) { mode in
+                            Text(mode.shortName).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                    .help(GraphCopy.StationIdentity.pickerTooltip)
+                }
             }
 
-            // Station Identity: Station | SSID
-            HStack(spacing: 4) {
-                Text(GraphCopy.StationIdentity.pickerLabel)
-                    .font(.caption)
-                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                
-                AnalyticsSegmentedPicker(
-                    selection: $viewModel.stationIdentityMode,
-                    items: StationIdentityMode.allCases,
-                    label: { $0.shortName },
-                    tooltip: { $0.tooltip }
-                )
-            }
+            Text(graphViewSummaryText)
+                .font(.caption)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
         }
     }
 }
@@ -495,6 +643,242 @@ struct AnalyticsDashboardView: View {
 
 
 extension AnalyticsDashboardView {
+    private var graphSourceBinding: Binding<GraphSourceChoice> {
+        Binding(
+            get: {
+                viewModel.graphViewMode.isNetRomMode ? .netrom : .packets
+            },
+            set: { newSource in
+                switch newSource {
+                case .packets:
+                    if viewModel.graphViewMode.isNetRomMode {
+                        viewModel.graphViewMode = preferredPacketViewMode
+                    }
+                case .netrom:
+                    if !viewModel.graphViewMode.isNetRomMode {
+                        viewModel.graphViewMode = preferredNetRomViewMode
+                    }
+                }
+            }
+        )
+    }
+
+    private var packetModeBinding: Binding<GraphViewMode> {
+        Binding(
+            get: {
+                if viewModel.graphViewMode.isNetRomMode { return preferredPacketViewMode }
+                return viewModel.graphViewMode
+            },
+            set: { newMode in
+                guard [.connectivity, .routing, .all].contains(newMode) else { return }
+                viewModel.graphViewMode = newMode
+            }
+        )
+    }
+
+    private var netRomModeBinding: Binding<GraphViewMode> {
+        Binding(
+            get: {
+                if viewModel.graphViewMode.isNetRomMode { return viewModel.graphViewMode }
+                return preferredNetRomViewMode
+            },
+            set: { newMode in
+                guard [.netromClassic, .netromInferred, .netromHybrid].contains(newMode) else { return }
+                viewModel.graphViewMode = newMode
+            }
+        )
+    }
+
+    private var graphViewSummaryText: String {
+        switch viewModel.graphViewMode {
+        case .connectivity:
+            return "Packet source. Direct shows direct peer traffic and direct-heard RF evidence."
+        case .routing:
+            return viewModel.includeViaDigipeaters
+                ? "Packet source. Routed emphasizes digipeater-mediated paths plus direct peers."
+                : "Packet source. Routed currently shows direct peers only (digipeater paths are off)."
+        case .all:
+            return viewModel.includeViaDigipeaters
+                ? "Packet source. Combined includes all packet-derived relationship evidence."
+                : "Packet source. Combined omits digipeater-mediated paths while this toggle is off."
+        case .netromClassic:
+            return "NET/ROM source. Classic uses broadcast routing tables with direct neighbors."
+        case .netromInferred:
+            return "NET/ROM source. Inferred uses passive route discovery from observed traffic."
+        case .netromHybrid:
+            return "NET/ROM source. Hybrid merges classic broadcasts with inferred routes."
+        }
+    }
+
+    private var edgeVisualLegend: some View {
+        HStack(spacing: 8) {
+            EdgeStrokeLegendItem(
+                label: "Weak",
+                lineColor: Color(nsColor: .secondaryLabelColor),
+                thickness: 1.0,
+                opacity: 0.55,
+                tooltip: edgeWeakTooltip
+            )
+
+            EdgeStrokeLegendItem(
+                label: "Strong",
+                lineColor: Color(nsColor: .secondaryLabelColor),
+                thickness: 2.4,
+                opacity: 0.92,
+                tooltip: edgeStrongTooltip
+            )
+
+            if showsViaStrokeLegend {
+                EdgeStrokeLegendItem(
+                    label: "Via",
+                    lineColor: Color(nsColor: .tertiaryLabelColor),
+                    thickness: 1.6,
+                    opacity: 0.72,
+                    tooltip: "Digipeater-mediated path evidence. Reachability on network, not direct RF proof."
+                )
+            }
+
+            Text(edgeDimLegendLabel)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.88))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 0.5)
+                )
+                .help(edgeDimLegendTooltip)
+        }
+    }
+
+    private var nodeSizeVisualLegend: some View {
+        HStack(spacing: 8) {
+            ScaleDotLegendItem(
+                label: nodeSizeLowerLabel,
+                diameter: 6,
+                tooltip: nodeSizeSmallTooltip
+            )
+            ScaleDotLegendItem(
+                label: nodeSizeHigherLabel,
+                diameter: 12,
+                tooltip: nodeSizeLargeTooltip
+            )
+        }
+    }
+
+    private func labelForGraphMode(_ mode: GraphViewMode) -> String {
+        switch mode {
+        case .connectivity:
+            return GraphCopy.ViewMode.connectivityLabel
+        case .routing:
+            return GraphCopy.ViewMode.routingLabel
+        case .all:
+            return GraphCopy.ViewMode.allLabel
+        case .netromClassic:
+            return GraphCopy.ViewMode.netromClassicLabel
+        case .netromInferred:
+            return GraphCopy.ViewMode.netromInferredLabel
+        case .netromHybrid:
+            return GraphCopy.ViewMode.netromHybridLabel
+        }
+    }
+
+    private func syncPreferredGraphModes(with mode: GraphViewMode) {
+        if mode.isNetRomMode {
+            preferredNetRomViewMode = mode
+        } else {
+            preferredPacketViewMode = mode
+        }
+    }
+
+    private var showsViaStrokeLegend: Bool {
+        guard !viewModel.graphViewMode.isNetRomMode else { return false }
+        guard viewModel.includeViaDigipeaters else { return false }
+        return viewModel.graphViewMode == .routing || viewModel.graphViewMode == .all
+    }
+
+    private var edgeWeakTooltip: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Thinner/lighter lines indicate lower relative route quality in this view."
+        }
+        return "Thinner/lighter lines indicate lower relative packet volume in this view."
+    }
+
+    private var edgeStrongTooltip: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Thicker/darker lines indicate higher relative route quality in this view."
+        }
+        return "Thicker/darker lines indicate higher relative packet volume in this view."
+    }
+
+    private var edgeDimLegendLabel: String {
+        if viewModel.focusState.isFocusEnabled, viewModel.focusState.anchorNodeID != nil {
+            return "Dimmed: context"
+        }
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Dimmed: stale"
+        }
+        return "Dimmed: lower evidence"
+    }
+
+    private var edgeDimLegendTooltip: String {
+        if viewModel.focusState.isFocusEnabled, viewModel.focusState.anchorNodeID != nil {
+            return "Dimmed lines are outside the active focus neighborhood."
+        }
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Dimmed lines are stale NET/ROM routes or weaker context."
+        }
+        return "Dimmer lines represent weaker relative evidence in the current packet view."
+    }
+
+    private var nodeSizeSmallTooltip: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Smaller node: lower relative route centrality in the current NET/ROM view."
+        }
+        return "Smaller node: lower relative traffic/connection weight in the current packet view."
+    }
+
+    private var nodeSizeLargeTooltip: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Larger node: higher relative route centrality in the current NET/ROM view."
+        }
+        return "Larger node: higher relative traffic/connection weight in the current packet view."
+    }
+
+    private var nodeSizeLowerLabel: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Lower centrality"
+        }
+        return "Lower weight"
+    }
+
+    private var nodeSizeHigherLabel: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Higher centrality"
+        }
+        return "Higher weight"
+    }
+
+    private var canConfigureDigipeaterPaths: Bool {
+        !viewModel.graphViewMode.isNetRomMode && viewModel.graphViewMode != .connectivity
+    }
+
+    private var digipeaterPathStatusLabel: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return "Digipeater Paths: Packet source only"
+        }
+        return "Digipeater Paths: Not used in Direct lens"
+    }
+
+    private var digipeaterPathStatusTooltip: String {
+        if viewModel.graphViewMode.isNetRomMode {
+            return GraphCopy.GraphControls.includeViaUnavailableTooltip
+        }
+        return "Direct lens excludes digipeater-mediated paths by definition. Switch to Routed or Combined to configure this."
+    }
+
     private var metricColumns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: AnalyticsStyle.Layout.cardSpacing), count: AnalyticsStyle.Layout.metricColumns)
     }
@@ -540,6 +924,31 @@ extension AnalyticsDashboardView {
         if node.hasPrefix("\(mine)-") { return true }
         if mine.hasPrefix("\(node)-") { return true }
         return false
+    }
+}
+
+private enum GraphSourceChoice: String, CaseIterable, Identifiable {
+    case packets
+    case netrom
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .packets:
+            return GraphCopy.ViewMode.packetSourceLabel
+        case .netrom:
+            return GraphCopy.ViewMode.netRomSourceLabel
+        }
+    }
+
+    var tooltip: String {
+        switch self {
+        case .packets:
+            return GraphCopy.ViewMode.packetSourceTooltip
+        case .netrom:
+            return GraphCopy.ViewMode.netRomSourceTooltip
+        }
     }
 }
 
@@ -712,6 +1121,67 @@ private struct LegendItem: View {
                 .font(.caption2)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
         }
+    }
+}
+
+private struct EdgeStrokeLegendItem: View {
+    let label: String
+    let lineColor: Color
+    let thickness: CGFloat
+    let opacity: Double
+    let tooltip: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Capsule()
+                .fill(lineColor.opacity(opacity))
+                .frame(width: 20, height: thickness)
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.88))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 0.5)
+        )
+        .help(tooltip)
+    }
+}
+
+private struct ScaleDotLegendItem: View {
+    let label: String
+    let diameter: CGFloat
+    let tooltip: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(Color(nsColor: .secondaryLabelColor).opacity(0.95))
+                .frame(width: diameter, height: diameter)
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.88))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 0.5)
+        )
+        .help(tooltip)
+    }
+}
+
+private struct GraphViewportHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
@@ -1408,6 +1878,13 @@ nonisolated private struct ScrollOffsetPreferenceKey: PreferenceKey {
     }
 }
 
+nonisolated private struct FloatingControlBarHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 56
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 /// Floating glass control bar that sticks to the top of the scroll view.
 /// Uses material blur when available, falls back to solid background for accessibility.
 private struct FloatingControlBar<Content: View>: View {
@@ -1418,18 +1895,17 @@ private struct FloatingControlBar<Content: View>: View {
     /// Threshold in points before the bar transitions to "scrolled" state
     private let scrollThreshold: CGFloat = 12
     /// Corner radius for the pill-shaped bar
-    private let cornerRadius: CGFloat = 14
+    private let cornerRadius: CGFloat = 12
 
     private var isScrolled: Bool {
         scrollOffset > scrollThreshold
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            content
-                .padding(.horizontal, AnalyticsStyle.Layout.pagePadding)
-                .padding(.vertical, 10)
-        }
+        content
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: AnalyticsStyle.Layout.floatingBarMaxWidth, alignment: .leading)
         .background(
             Group {
                 if reduceTransparency {
@@ -1449,8 +1925,9 @@ private struct FloatingControlBar<Content: View>: View {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 0.5)
         )
-        .shadow(color: .black.opacity(isScrolled ? 0.12 : 0.06), radius: isScrolled ? 8 : 4, y: 2)
-        .padding(.horizontal, AnalyticsStyle.Layout.pagePadding)
+        .shadow(color: .black.opacity(isScrolled ? 0.10 : 0.05), radius: isScrolled ? 6 : 3, y: 1)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, AnalyticsStyle.Layout.floatingBarOuterPadding)
         .padding(.top, 8)
         .animation(.easeOut(duration: 0.2), value: isScrolled)
     }

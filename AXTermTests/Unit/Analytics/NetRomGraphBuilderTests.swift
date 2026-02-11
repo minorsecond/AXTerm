@@ -24,8 +24,8 @@ final class NetRomGraphBuilderTests: XCTestCase {
         let infoData = "HELLO".data(using: .ascii) ?? Data()
         return Packet(
             timestamp: timestamp,
-            from: AX25Address(call: from),
-            to: AX25Address(call: to),
+            from: CallsignNormalizer.toAddress(from),
+            to: CallsignNormalizer.toAddress(to),
             frameType: .ui,
             info: infoData,
             rawAx25: infoData,
@@ -49,7 +49,7 @@ final class NetRomGraphBuilderTests: XCTestCase {
         ])
         
         let options = NetworkGraphBuilder.Options(
-            includeViaDigipeaters: false,
+            includeViaDigipeaters: true,
             minimumEdgeCount: 1,
             maxNodes: 10,
             stationIdentityMode: .ssid
@@ -72,6 +72,100 @@ final class NetRomGraphBuilderTests: XCTestCase {
         XCTAssertEqual(edge.sourceID, localCallsign)
         XCTAssertEqual(edge.targetID, neighbor)
         XCTAssertEqual(edge.weight, 200 / 25)
+    }
+
+    func testBuildFromNetRomUsesPacketEvidenceForBytesAndDirectionalCounts() {
+        let now = Date()
+        let neighbor = "W0ABC"
+        let packets = [
+            makePacket(from: neighbor, to: localCallsign, timestamp: now),
+            makePacket(from: localCallsign, to: neighbor, timestamp: now.addingTimeInterval(1))
+        ]
+
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: false,
+            minimumEdgeCount: 1,
+            maxNodes: 10,
+            stationIdentityMode: .ssid
+        )
+
+        let model = NetworkGraphBuilder.buildFromNetRom(
+            neighbors: [NeighborInfo(call: neighbor, quality: 200, lastSeen: now, sourceType: "classic")],
+            routes: [],
+            localCallsign: localCallsign,
+            options: options,
+            packets: packets,
+            now: now
+        )
+
+        let localNode = model.nodes.first { $0.id == localCallsign }
+        let neighborNode = model.nodes.first { $0.id == neighbor }
+        let edge = model.edges.first { Set([$0.sourceID, $0.targetID]) == Set([localCallsign, neighbor]) }
+
+        XCTAssertNotNil(localNode)
+        XCTAssertNotNil(neighborNode)
+        XCTAssertNotNil(edge)
+
+        // Each synthetic packet in this test has 5 payload bytes.
+        XCTAssertEqual(localNode?.inCount, 1)
+        XCTAssertEqual(localNode?.outCount, 1)
+        XCTAssertEqual(localNode?.inBytes, 5)
+        XCTAssertEqual(localNode?.outBytes, 5)
+
+        XCTAssertEqual(neighborNode?.inCount, 1)
+        XCTAssertEqual(neighborNode?.outCount, 1)
+        XCTAssertEqual(neighborNode?.inBytes, 5)
+        XCTAssertEqual(neighborNode?.outBytes, 5)
+
+        XCTAssertEqual(edge?.bytes, 10)
+    }
+
+    func testBuildFromNetRomAggregatesPacketBytesAcrossGroupedSSIDs() {
+        let now = Date()
+        let s1 = "KOEPI-6"
+        let s2 = "KOEPI-7"
+        let packets = [
+            makePacket(from: s1, to: localCallsign, timestamp: now),
+            makePacket(from: s2, to: localCallsign, timestamp: now.addingTimeInterval(1)),
+            makePacket(from: localCallsign, to: s1, timestamp: now.addingTimeInterval(2))
+        ]
+
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: false,
+            minimumEdgeCount: 1,
+            maxNodes: 10,
+            stationIdentityMode: .station
+        )
+
+        let model = NetworkGraphBuilder.buildFromNetRom(
+            neighbors: [
+                NeighborInfo(call: s1, quality: 180, lastSeen: now, sourceType: "classic"),
+                NeighborInfo(call: s2, quality: 200, lastSeen: now, sourceType: "classic")
+            ],
+            routes: [],
+            localCallsign: localCallsign,
+            options: options,
+            packets: packets,
+            now: now
+        )
+
+        let grouped = model.nodes.first {
+            Set($0.groupedSSIDs).isSuperset(of: [s1, s2])
+        }
+        let localNode = model.nodes.first { $0.id == localCallsign }
+        let edge = model.edges.first {
+            guard let grouped else { return false }
+            return Set([$0.sourceID, $0.targetID]) == Set([grouped.id, localCallsign])
+        }
+
+        XCTAssertNotNil(grouped)
+        XCTAssertNotNil(localNode)
+        XCTAssertNotNil(edge)
+
+        XCTAssertGreaterThan(grouped?.inBytes ?? 0, 0)
+        XCTAssertGreaterThan(grouped?.outBytes ?? 0, 0)
+        XCTAssertGreaterThan((grouped?.inBytes ?? 0) + (grouped?.outBytes ?? 0), 0)
+        XCTAssertGreaterThan(edge?.bytes ?? 0, 0)
     }
     
     func testBuildFromNetRomRoutes() {
@@ -134,7 +228,7 @@ final class NetRomGraphBuilderTests: XCTestCase {
         ])
         
         let options = NetworkGraphBuilder.Options(
-            includeViaDigipeaters: false,
+            includeViaDigipeaters: true,
             minimumEdgeCount: 1,
             maxNodes: 10,
             stationIdentityMode: .ssid
@@ -349,44 +443,32 @@ final class NetRomGraphBuilderTests: XCTestCase {
     }
     
     func testRouteHopDoubleCounting() {
-        let integration = makeIntegration()
         let neighbor = "W0ABC"
         let destination = "W1XYZ"
         let intermediate = "W2MNO"
         let now = Date()
-        
-        // Route: Origin -> Intermediate -> Dest
-        // Path string typically includes [Origin, Intermediate, Dest]
-        let path = [neighbor, intermediate, destination]
-        
-        // Seed neighbors/Quality to ensure they aren't filtered out
-        integration.importLinkStats([
-            LinkStatRecord(fromCall: neighbor, toCall: localCallsign, quality: 200, lastUpdated: now)
-        ])
-        integration.importNeighbors([
-            NeighborInfo(call: neighbor, quality: 200, lastSeen: now, sourceType: "classic")
-        ])
-        
+
+        // Route: Origin -> Intermediate -> Destination.
+        // Pass it directly to the builder to isolate hop counting behavior.
         let route = RouteInfo(
             destination: destination,
             origin: neighbor,
             quality: 200,
-            path: path,
+            path: [neighbor, intermediate, destination],
             lastUpdated: now,
             sourceType: "broadcast"
         )
-        integration.importRoutes([route])
-        
+
         let options = NetworkGraphBuilder.Options(
-            includeViaDigipeaters: false,
+            includeViaDigipeaters: true,
             minimumEdgeCount: 1,
             maxNodes: 10,
             stationIdentityMode: .ssid
         )
-        
+
         let model = NetworkGraphBuilder.buildFromNetRom(
-            neighbors: integration.currentNeighbors(forMode: .hybrid),
-            routes: integration.currentRoutes(forMode: .hybrid),
+            neighbors: [],
+            routes: [route],
             localCallsign: localCallsign,
             options: options,
             now: now
@@ -405,5 +487,75 @@ final class NetRomGraphBuilderTests: XCTestCase {
         XCTAssertEqual(originNode?.weight, 1, "Origin should be counted once")
         XCTAssertEqual(destNode?.weight, 1, "Destination should be counted once")
         XCTAssertEqual(midNode?.weight, 1, "Intermediate should be counted once")
+    }
+
+    func testIncludeViaOffDoesNotPromoteIntermediateRouteHops() {
+        let now = Date()
+        let route = RouteInfo(
+            destination: "AA0QC",
+            origin: "KE0GB-7",
+            quality: 200,
+            path: ["KE0GB-7", "WOARP-7", "WOTX-7", "AA0QC"],
+            lastUpdated: now,
+            sourceType: "inferred"
+        )
+
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: false,
+            minimumEdgeCount: 1,
+            maxNodes: 50,
+            stationIdentityMode: .ssid
+        )
+
+        let model = NetworkGraphBuilder.buildFromNetRom(
+            neighbors: [],
+            routes: [route],
+            localCallsign: localCallsign,
+            options: options,
+            now: now
+        )
+
+        XCTAssertFalse(model.nodes.contains { $0.id == "WOARP-7" }, "Intermediate path hop should be hidden when include-via is OFF")
+        XCTAssertFalse(model.nodes.contains { $0.id == "WOTX-7" }, "Intermediate path hop should be hidden when include-via is OFF")
+        XCTAssertTrue(model.nodes.contains { $0.id == "KE0GB-7" }, "Origin should still be shown")
+        XCTAssertTrue(model.nodes.contains { $0.id == "AA0QC" }, "Destination should still be shown")
+    }
+
+    func testIncludeViaOnBuildsHopByHopRouteEdges() {
+        let now = Date()
+        let route = RouteInfo(
+            destination: "AA0QC",
+            origin: "KE0GB-7",
+            quality: 200,
+            path: ["KE0GB-7", "WOARP-7", "WOTX-7", "AA0QC"],
+            lastUpdated: now,
+            sourceType: "inferred"
+        )
+
+        let options = NetworkGraphBuilder.Options(
+            includeViaDigipeaters: true,
+            minimumEdgeCount: 1,
+            maxNodes: 50,
+            stationIdentityMode: .ssid
+        )
+
+        let model = NetworkGraphBuilder.buildFromNetRom(
+            neighbors: [],
+            routes: [route],
+            localCallsign: localCallsign,
+            options: options,
+            now: now
+        )
+
+        XCTAssertTrue(model.nodes.contains { $0.id == "WOARP-7" }, "Intermediate hops should be shown when include-via is ON")
+        XCTAssertTrue(model.nodes.contains { $0.id == "WOTX-7" }, "Intermediate hops should be shown when include-via is ON")
+
+        let undirectedEdges = Set(model.edges.map { Set([$0.sourceID, $0.targetID]) })
+        XCTAssertTrue(undirectedEdges.contains(Set(["KE0GB-7", "WOARP-7"])))
+        XCTAssertTrue(undirectedEdges.contains(Set(["WOARP-7", "WOTX-7"])))
+        XCTAssertTrue(undirectedEdges.contains(Set(["WOTX-7", "AA0QC"])))
+        XCTAssertFalse(undirectedEdges.contains(Set(["KE0GB-7", "AA0QC"])), "When include-via is ON, multi-hop route should render hop-by-hop rather than summary origin-destination edge")
+
+        XCTAssertTrue(model.edges.allSatisfy { $0.linkType == .heardVia }, "Hop-by-hop route edges should be typed as Heard Via")
     }
 }

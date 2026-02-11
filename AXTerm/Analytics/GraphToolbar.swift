@@ -59,22 +59,22 @@ struct GraphToolbar: View {
 
     private var viewControlsGroup: some View {
         HStack(spacing: 4) {
-            // Fit: Zooms to show all visible nodes at optimal size
+            // Fit: frames currently visible graph nodes.
             Button(action: onFitToView) {
                 Label(Copy.Toolbar.fitToNodesLabel, systemImage: "arrow.up.left.and.arrow.down.right")
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(.borderless)
-            .help(Copy.Toolbar.fitToNodesTooltip)
+            .help("Fit: Frame all currently visible nodes.")
             .accessibilityLabel(Copy.Toolbar.fitToNodesAccessibility)
 
-            // Home: Returns to default 1:1 zoom and centered position
+            // Home: returns to canonical default camera.
             Button(action: onResetView) {
                 Label(Copy.Toolbar.resetViewLabel, systemImage: "house")
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(.borderless)
-            .help(Copy.Toolbar.resetViewTooltip)
+            .help("Home: Reset to default zoom and centered position.")
             .accessibilityLabel(Copy.Toolbar.resetViewAccessibility)
         }
         .font(.system(size: 12))

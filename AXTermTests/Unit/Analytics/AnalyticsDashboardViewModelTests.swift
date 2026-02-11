@@ -150,6 +150,40 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.viewState.selectedNodeID)
     }
 
+    func testClearSelectionAndFitAlsoClearsFocusPillState() async {
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "fiveMinutes"
+        settings.analyticsIncludeVia = false
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.setActive(true)
+
+        viewModel.handleNodeClick("alpha", isShift: false)
+        viewModel.focusState.setAnchor(nodeID: "alpha", displayName: "ALPHA")
+
+        XCTAssertEqual(viewModel.viewState.selectedNodeID, "alpha")
+        XCTAssertTrue(viewModel.focusState.isFocusEnabled)
+        XCTAssertEqual(viewModel.focusState.anchorNodeID, "alpha")
+
+        viewModel.clearSelectionAndFit()
+
+        XCTAssertTrue(viewModel.viewState.selectedNodeIDs.isEmpty)
+        XCTAssertNil(viewModel.viewState.selectedNodeID)
+        XCTAssertFalse(viewModel.focusState.isFocusEnabled)
+        XCTAssertNil(viewModel.focusState.anchorNodeID)
+        XCTAssertNotNil(viewModel.fitToSelectionRequest)
+        XCTAssertTrue(viewModel.fitTargetNodeIDs.isEmpty)
+    }
+
     func testUsesDatabaseAggregationProviderWhenAvailable() async {
         let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
         let settings = makeSettings()
@@ -273,6 +307,58 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         viewModel.setActive(true)
         await waitFor { viewModel.viewState.summary?.totalPackets == 1 }
         XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 1)
+    }
+
+    func testAutoUpdateDisabledSkipsPacketDrivenAnalyticsRefresh() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+        settings.analyticsIncludeVia = false
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+        settings.analyticsAutoUpdateEnabled = false
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.graphViewMode = .all
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+        viewModel.setActive(true)
+
+        await waitFor { viewModel.hasLoadedAggregation && viewModel.hasLoadedGraph }
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets ?? 0, 0)
+
+        viewModel.updatePackets([makePacket(timestamp: timestamp, from: "SRC1", to: "DST1")])
+        try? await Task.sleep(for: .milliseconds(120))
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets ?? 0, 0)
+
+        viewModel.manualRefresh()
+        await waitFor { viewModel.viewState.summary?.totalPackets == 1 }
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 1)
+
+        // Reset to validate that enabling auto-update still resumes live updates.
+        viewModel.autoUpdateEnabled = true
+        let packet1 = makePacket(timestamp: timestamp, from: "SRC1", to: "DST1")
+        let packet2 = makePacket(timestamp: timestamp.addingTimeInterval(1), from: "SRC2", to: "DST2")
+        viewModel.updatePackets([packet1, packet2])
+        await waitFor { (viewModel.viewState.summary?.totalPackets ?? 0) == 2 }
+        XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 2)
+
+        // Keep this explicit transition check as regression coverage.
+        viewModel.autoUpdateEnabled = false
+        let packet3 = makePacket(timestamp: timestamp.addingTimeInterval(2), from: "SRC3", to: "DST3")
+        viewModel.updatePackets([packet1, packet2, packet3])
+        try? await Task.sleep(for: .milliseconds(120))
+        let frozenCount = viewModel.viewState.summary?.totalPackets ?? 0
+        viewModel.autoUpdateEnabled = true
+        await waitFor { (viewModel.viewState.summary?.totalPackets ?? 0) > frozenCount }
+
     }
 
     func testAggregationLoadingFlagClearsAfterActivate() async {

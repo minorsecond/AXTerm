@@ -137,6 +137,45 @@ final class PacketHandlingTests: XCTestCase {
         XCTAssertEqual(packet.viaDisplay, "W0ARP-7*")
     }
 
+    func testPacketCapRetainsNewestPackets() {
+        let base = Date()
+        let p1 = Packet(
+            timestamp: base,
+            from: AX25Address(call: "K0AAA"),
+            to: AX25Address(call: "K0DST"),
+            frameType: .ui,
+            control: 0x03,
+            info: Data([0x01]),
+            rawAx25: Data([0x01])
+        )
+        let p2 = Packet(
+            timestamp: base.addingTimeInterval(1),
+            from: AX25Address(call: "K0AAB"),
+            to: AX25Address(call: "K0DST"),
+            frameType: .ui,
+            control: 0x03,
+            info: Data([0x02]),
+            rawAx25: Data([0x02])
+        )
+        let p3 = Packet(
+            timestamp: base.addingTimeInterval(2),
+            from: AX25Address(call: "K0AAC"),
+            to: AX25Address(call: "K0DST"),
+            frameType: .ui,
+            control: 0x03,
+            info: Data([0x03]),
+            rawAx25: Data([0x03])
+        )
+
+        var packets: [Packet] = []
+        PacketEngine.insertPacketMaintainingCap(p1, into: &packets, maxPackets: 2)
+        PacketEngine.insertPacketMaintainingCap(p2, into: &packets, maxPackets: 2)
+        PacketEngine.insertPacketMaintainingCap(p3, into: &packets, maxPackets: 2)
+
+        XCTAssertEqual(packets.count, 2)
+        XCTAssertEqual(packets.map(\.id), [p2.id, p3.id], "Capped in-memory packets should keep the newest packets")
+    }
+
     @MainActor
     func testConsoleLineViaDedupesRepeatedDigis() throws {
         // This behavior is now thoroughly covered by PacketEncoding and

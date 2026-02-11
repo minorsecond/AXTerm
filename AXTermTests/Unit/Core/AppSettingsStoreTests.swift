@@ -117,4 +117,16 @@ final class AppSettingsStoreTests: XCTestCase {
             cancellable.cancel()
         }
     }
+
+    func testAnalyticsAutoUpdatePersists() {
+        withIsolatedDefaults { defaults in
+            let store = AppSettingsStore(defaults: defaults)
+
+            store.analyticsAutoUpdateEnabled = false
+            XCTAssertFalse(defaults.bool(forKey: AppSettingsStore.analyticsAutoUpdateEnabledKey))
+
+            store.analyticsAutoUpdateEnabled = true
+            XCTAssertTrue(defaults.bool(forKey: AppSettingsStore.analyticsAutoUpdateEnabledKey))
+        }
+    }
 }

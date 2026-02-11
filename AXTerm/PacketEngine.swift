@@ -584,11 +584,22 @@ final class PacketEngine: ObservableObject {
     // MARK: - Capped Array Helpers
 
     private func insertPacketSorted(_ packet: Packet) {
-        // NOTE: Persisted packets load newest-first; appending new packets at the end
-        // caused "All Packets" to appear stale because fresh rows landed off-screen.
+        PacketEngine.insertPacketMaintainingCap(packet, into: &packets, maxPackets: maxPackets)
+    }
+
+    /// Maintains packet ordering and in-memory cap while preserving newest packets.
+    /// Extracted for deterministic unit testing.
+    nonisolated static func insertPacketMaintainingCap(
+        _ packet: Packet,
+        into packets: inout [Packet],
+        maxPackets: Int
+    ) {
+        // Packets are kept in ascending timestamp order (oldest -> newest).
+        // When capped, drop oldest entries so newly received packets stay visible
+        // and downstream analytics/health calculations keep fresh activity.
         PacketOrdering.insert(packet, into: &packets)
         if packets.count > maxPackets {
-            packets.removeLast(packets.count - maxPackets)
+            packets.removeFirst(packets.count - maxPackets)
         }
     }
 
