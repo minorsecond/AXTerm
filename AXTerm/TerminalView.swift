@@ -1789,17 +1789,35 @@ struct TerminalView: View {
 
     @ViewBuilder
     private var sessionOutputView: some View {
+        let lines = displayedSessionLines
         ZStack {
             ConsoleView(
-                lines: txViewModel.filteredLines,
+                lines: lines,
                 showDaySeparators: settings.showConsoleDaySeparators,
                 clearedAt: $settings.terminalClearedAt
             )
-            .opacity(txViewModel.filteredLines.isEmpty ? 0 : 1)
+            .opacity(lines.isEmpty ? 0 : 1)
             
-            if txViewModel.filteredLines.isEmpty {
+            if lines.isEmpty {
                 emptyStateView
             }
+        }
+    }
+
+    private var displayedSessionLines: [TerminalLine] {
+        guard let activeSessionRecordID,
+              let record = sessionRecords.first(where: { $0.id == activeSessionRecordID }) else {
+            return txViewModel.filteredLines
+        }
+        let peer = CallsignValidator.normalize(record.destination)
+        guard !peer.isEmpty else { return txViewModel.filteredLines }
+        return txViewModel.filteredLines.filter { line in
+            let from = CallsignValidator.normalize(line.from ?? "")
+            let to = CallsignValidator.normalize(line.to ?? "")
+            if from == peer || to == peer {
+                return true
+            }
+            return line.text.uppercased().contains(peer)
         }
     }
 
