@@ -389,6 +389,9 @@ struct ContentView: View {
     }
 
     private func issueStationConnectRequest(stationCall: String, mode: ConnectBarMode, executeImmediately: Bool) {
+        if !executeImmediately {
+            connectCoordinator.navigateToTerminal?()
+        }
         connectCoordinator.activeContext = .stations
         let normalized = CallsignValidator.normalize(stationCall)
         let intent: ConnectIntent

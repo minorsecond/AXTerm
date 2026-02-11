@@ -250,6 +250,59 @@ struct SessionStatusBadge: View {
     }
 }
 
+private struct AdaptiveTelemetryChip: View {
+    let telemetry: AdaptiveTelemetry?
+    @State private var showDetails = false
+
+    var body: some View {
+        Button {
+            showDetails.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chart.line.uptrend.xyaxis")
+                    .font(.system(size: 10))
+                Text("Adaptive")
+                    .font(.system(size: 10, weight: .semibold))
+                if let telemetry {
+                    Text(telemetry.compactLabel)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.green.opacity(0.12), in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Color.green.opacity(0.35), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showDetails, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Adaptive Link Telemetry")
+                    .font(.headline)
+                if let telemetry {
+                    Group {
+                        Text("Window (K): \(telemetry.k)")
+                        Text("Packet (P): \(telemetry.p)")
+                        Text("Retries (N2): \(telemetry.n2)")
+                        Text("RTO min: \(String(format: "%.1fs", telemetry.rtoSeconds))")
+                        Text("Status: \(telemetry.qualityLabel)")
+                    }
+                    .font(.system(size: 11))
+                } else {
+                    Text("No adaptive telemetry available.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(12)
+            .frame(minWidth: 240)
+        }
+    }
+}
+
 private struct InlineConnectBar: View {
     @ObservedObject var viewModel: ConnectBarViewModel
     let context: ConnectSourceContext
@@ -609,12 +662,7 @@ struct TerminalComposeView: View {
                     // Session status indicators group
                     HStack(spacing: 8) {
                         // Adaptive Chip (new location)
-                        AdaptiveStatusChip(
-                            settings: settings,
-                            sessionCoordinator: sessionCoordinator,
-                            activeDestination: connectionMode == .connected ? destinationCall : nil,
-                            activePath: connectionMode == .connected ? digiPath : nil
-                        )
+                        AdaptiveTelemetryChip(telemetry: connectBarViewModel.adaptiveTelemetry)
                         
                         // Session status (for connected mode)
                         if connectionMode == .connected {

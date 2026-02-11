@@ -1092,6 +1092,7 @@ struct TerminalView: View {
                     .filter { !$0.isEmpty }
                 refreshConnectBarData()
                 connectBarViewModel.applyContext(connectCoordinator.activeContext)
+                syncAdaptiveTelemetry()
                 if txViewModel.viewModel.connectionMode == .datagram {
                     connectBarViewModel.enterBroadcastComposer()
                 } else {
@@ -1100,9 +1101,11 @@ struct TerminalView: View {
             }
             .onReceive(client.$stations) { _ in
                 refreshConnectBarData()
+                syncAdaptiveTelemetry()
             }
             .onReceive(client.$packets) { _ in
                 refreshConnectBarData()
+                syncAdaptiveTelemetry()
             }
             .onReceive(connectCoordinator.$pendingRequest.compactMap { $0 }) { request in
                 // Defer request handling one run-loop turn to avoid publishing model
@@ -1113,6 +1116,7 @@ struct TerminalView: View {
             }
             .onChange(of: connectCoordinator.activeContext) { _, context in
                 connectBarViewModel.applyContext(context)
+                syncAdaptiveTelemetry()
             }
             .onChange(of: txViewModel.viewModel.connectionMode) { _, newMode in
                 switch newMode {
@@ -1121,7 +1125,12 @@ struct TerminalView: View {
                 case .connected:
                     connectBarViewModel.enterConnectDraftMode()
                 }
+                syncAdaptiveTelemetry()
             }
+            .onChange(of: connectBarViewModel.mode) { _, _ in syncAdaptiveTelemetry() }
+            .onChange(of: connectBarViewModel.toCall) { _, _ in syncAdaptiveTelemetry() }
+            .onChange(of: connectBarViewModel.viaDigipeaters) { _, _ in syncAdaptiveTelemetry() }
+            .onChange(of: sessionCoordinator.adaptiveTransmissionEnabled) { _, _ in syncAdaptiveTelemetry() }
             .onChange(of: txViewModel.sessionState) { _, newState in
                 switch newState {
                 case .connecting:
@@ -1145,6 +1154,7 @@ struct TerminalView: View {
                 case .none:
                     break
                 }
+                syncAdaptiveTelemetry()
             }
             .onChange(of: txViewModel.viewModel.destinationCall) { _, newValue in
                 applyAutoPathSuggestionIfNeeded(previousDestination: lastObservedDestination, newDestination: newValue)
@@ -1299,6 +1309,7 @@ struct TerminalView: View {
     }
 
     private func handleConnectRequest(_ request: ConnectRequest) {
+        txViewModel.connectionMode.wrappedValue = .connected
         if request.intent.sourceContext == .stations {
             let normalized = CallsignValidator.normalize(request.intent.to)
             let hasRoute = client.netRomIntegration?.bestRouteTo(normalized) != nil
@@ -1330,6 +1341,7 @@ struct TerminalView: View {
         }
 
         syncLegacyFieldsFromConnectBar()
+        syncAdaptiveTelemetry()
 
         if request.executeImmediately {
             connectWithActiveIntent(sourceContext: request.intent.sourceContext)
@@ -1345,6 +1357,20 @@ struct TerminalView: View {
         } else {
             txViewModel.digiPath.wrappedValue = ""
         }
+    }
+
+    private func syncAdaptiveTelemetry() {
+        let destination = txViewModel.viewModel.connectionMode == .connected ? connectBarViewModel.toCall : nil
+        let path = txViewModel.viewModel.connectionMode == .connected ? connectBarViewModel.viaDigipeaters.joined(separator: ",") : nil
+        let effective = sessionCoordinator.effectiveAdaptiveSettings(destination: destination, path: path)
+        let telemetry = AdaptiveTelemetry(
+            k: effective.windowSize.effectiveValue,
+            p: effective.paclen.effectiveValue,
+            n2: effective.maxRetries.effectiveValue,
+            rtoSeconds: effective.rtoMin.effectiveValue,
+            qualityLabel: effective.windowSize.displayReason ?? "Adaptive"
+        )
+        connectBarViewModel.setAdaptiveTelemetry(telemetry)
     }
 
     private func applyAutoPathSuggestionIfNeeded(previousDestination: String, newDestination: String) {
