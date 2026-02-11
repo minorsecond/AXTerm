@@ -1159,6 +1159,12 @@ struct TerminalComposeView: View {
 
                     Spacer()
 
+                    if connectionMode == .connected,
+                       sessionState == .connected,
+                       connectBarViewModel.adaptiveTelemetry != nil {
+                        AdaptiveTelemetryChip(telemetry: connectBarViewModel.adaptiveTelemetry)
+                    }
+
                     if connectionMode == .connected {
                         RoutingCapsuleButton(
                             viewModel: connectBarViewModel,
@@ -1168,15 +1174,41 @@ struct TerminalComposeView: View {
                 }
 
                 if connectionMode == .connected {
-                    TextField("Destination (CALL-SSID)", text: destinationBinding)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 12, design: .monospaced))
-                        .accessibilityIdentifier("connectBar.destinationField")
-                        .onSubmit {
-                            if !primaryActionDisabled {
-                                handlePrimaryAction()
+                    if sessionState == .connected {
+                        // Locked destination when connected
+                        HStack(spacing: 8) {
+                            Text("Connected to")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                            Text(connectBarViewModel.toCall)
+                                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            Spacer()
+                            Button("Change") {
+                                onDisconnect()
                             }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                         }
+                        .accessibilityIdentifier("connectBar.lockedDestination")
+                    } else {
+                        // Editable combo box when not connected
+                        EditableComboBox(
+                            text: destinationBinding,
+                            placeholder: "Destination (CALL-SSID)",
+                            items: connectBarViewModel.flatToSuggestions,
+                            groups: connectBarViewModel.toSuggestionGroups.map { EditableComboBoxGroup(title: $0.title, items: $0.values) },
+                            width: 340,
+                            focusRequested: .constant(false),
+                            accessibilityIdentifier: "connectBar.destinationField",
+                            onCommit: {
+                                if !primaryActionDisabled {
+                                    handlePrimaryAction()
+                                }
+                            }
+                        )
+                        .frame(maxWidth: 350)
+                        .disabled(sessionState == .connecting || sessionState == .disconnecting)
+                    }
                 }
 
                 TextField(connectionMode == .connected ? "Message" : "Broadcast message", text: $composeText)

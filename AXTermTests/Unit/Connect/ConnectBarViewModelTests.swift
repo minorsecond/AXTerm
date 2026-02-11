@@ -143,4 +143,34 @@ final class ConnectBarViewModelTests: XCTestCase {
         XCTAssertNil(vm.autoAttemptStatus)
     }
 
+    func testCallsignNormalizationPreservesHyphenDuringTyping() {
+        let vm = makeViewModel()
+        vm.applySuggestedTo("kb5yzb-7")
+        XCTAssertEqual(vm.toCall, "KB5YZB-7", "applySuggestedTo should preserve hyphen (trim+uppercase only)")
+    }
+
+    func testBuildIntentUsesCurrentRoutingMode() {
+        let vm = makeViewModel()
+        vm.setMode(.netrom, for: .terminal)
+        vm.applySuggestedTo("KB5YZB-7")
+        let intent = vm.buildIntent(sourceContext: .terminal)
+        switch intent.kind {
+        case .netrom:
+            break // expected
+        default:
+            XCTFail("Expected .netrom kind but got \(intent.kind)")
+        }
+    }
+
+    func testAdaptiveTelemetryLabelUpdates() {
+        let vm = makeViewModel()
+        let t1 = AdaptiveTelemetry(k: 2, p: 128, n2: 2, rtoSeconds: 3.0, qualityLabel: "Good")
+        vm.setAdaptiveTelemetry(t1)
+        XCTAssertEqual(vm.adaptiveTelemetry?.compactLabel, "K2 P128 N2 2")
+
+        let t2 = AdaptiveTelemetry(k: 1, p: 64, n2: 4, rtoSeconds: 5.0, qualityLabel: "Degraded")
+        vm.setAdaptiveTelemetry(t2)
+        XCTAssertEqual(vm.adaptiveTelemetry?.compactLabel, "K1 P64 N2 4")
+    }
+
 }

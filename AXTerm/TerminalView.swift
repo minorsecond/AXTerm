@@ -1594,6 +1594,38 @@ struct TerminalView: View {
                     sessionSelectorView
                 }
 
+                // Session status pill (shown during active session lifecycle)
+                if txViewModel.viewModel.connectionMode == .connected,
+                   let state = txViewModel.sessionState,
+                   state != .disconnected {
+                    HStack(spacing: 8) {
+                        SessionStatusBadge(
+                            state: state,
+                            destinationCall: connectBarViewModel.toCall,
+                            onDisconnect: { disconnectFromDestination() },
+                            onForceDisconnect: { forceDisconnectFromDestination() },
+                            peerCapability: client.capabilityStore.capabilities(for: txViewModel.viewModel.destinationCall),
+                            capabilityStatus: sessionCoordinator.capabilityStatus(for: txViewModel.viewModel.destinationCall)
+                        )
+
+                        if !connectBarViewModel.viaDigipeaters.isEmpty,
+                           connectBarViewModel.mode == .ax25ViaDigi {
+                            Text("via \(connectBarViewModel.viaDigipeaters.joined(separator: " → "))")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        } else if connectBarViewModel.mode == .netrom {
+                            Text(connectBarViewModel.routePreview)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                }
+
                 sessionOutputView
 
                 // Outbound progress (sender: pending → sent → acked highlighting)

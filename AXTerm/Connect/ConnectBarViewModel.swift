@@ -288,7 +288,7 @@ final class ConnectBarViewModel: ObservableObject {
     }
 
     func applySuggestedTo(_ value: String) {
-        toCall = canonicalCallsign(value)
+        toCall = CallsignValidator.normalize(value)
         validate()
         syncStateFromDraftIfEditable()
     }
