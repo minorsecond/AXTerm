@@ -253,7 +253,6 @@ struct SessionStatusBadge: View {
 private struct InlineConnectBar: View {
     @ObservedObject var viewModel: ConnectBarViewModel
     let context: ConnectSourceContext
-    let isSessionActive: Bool
     let onConnect: () -> Void
 
     var body: some View {
@@ -298,13 +297,15 @@ private struct InlineConnectBar: View {
                 Spacer(minLength: 8)
 
                 Button {
-                    resetInputs()
+                    viewModel.applySuggestedTo("")
                 } label: {
-                    Label("Reset", systemImage: "arrow.counterclockwise")
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(!hasCustomInput || isSessionActive)
+                .buttonStyle(.plain)
+                .help("Clear destination")
+                .opacity(viewModel.toCall.isEmpty ? 0 : 1)
+                .accessibilityHidden(viewModel.toCall.isEmpty)
 
                 Button {
                     onConnect()
@@ -316,68 +317,63 @@ private struct InlineConnectBar: View {
                 .controlSize(.small)
             }
 
-            if viewModel.canEditDigis {
-                viaEditor
-            }
-
-            if viewModel.canEditNetRomRouting {
-                netRomEditor
-            }
-
-            if let note = viewModel.inlineNote {
-                Text(note)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-            }
-
-            if !viewModel.validationErrors.isEmpty {
-                Text(viewModel.validationErrors.joined(separator: " • "))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.red)
-            }
-
-            if !viewModel.warningMessages.isEmpty {
-                Text(viewModel.warningMessages.joined(separator: " • "))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.orange)
-            }
-
-            if let warning = viewModel.routeOverrideWarning {
-                Text(warning)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.orange)
-            }
-
             HStack(spacing: 8) {
-                if viewModel.canEditDigis && !isSessionActive {
-                    Menu {
-                        Section("Recent paths") {
+                Menu {
+                    if viewModel.mode == .ax25ViaDigi {
+                        Section("AX.25 Path Presets") {
                             ForEach(viewModel.recentPathPresets, id: \.self) { path in
                                 Button(path.joined(separator: " ")) {
                                     viewModel.applyPathPreset(path)
                                 }
                             }
-                        }
-                        Section("Observed paths") {
                             ForEach(viewModel.observedPathPresets, id: \.self) { path in
                                 Button(path.joined(separator: " ")) {
                                     viewModel.applyPathPreset(path)
                                 }
                             }
                         }
-                        Section("Known digipeaters") {
-                            ForEach(viewModel.knownDigiPresets, id: \.self) { digi in
-                                Button(digi) {
-                                    viewModel.appendDigipeaters([digi])
+                    }
+                    if viewModel.mode == .netrom {
+                        Section("NET/ROM Next Hop") {
+                            Button("Auto") {
+                                viewModel.nextHopSelection = ConnectBarViewModel.autoNextHopID
+                                viewModel.refreshRoutePreview()
+                            }
+                            ForEach(viewModel.nextHopOptions.filter { $0 != ConnectBarViewModel.autoNextHopID }, id: \.self) { hop in
+                                Button(hop) {
+                                    viewModel.nextHopSelection = hop
+                                    viewModel.refreshRoutePreview()
                                 }
                             }
                         }
-                    } label: {
-                        Label("Digi Presets", systemImage: "point.3.connected.trianglepath.dotted")
                     }
-                    .disabled(viewModel.recentPathPresets.isEmpty && viewModel.observedPathPresets.isEmpty && viewModel.knownDigiPresets.isEmpty)
-                    .font(.system(size: 11))
-                    .controlSize(.small)
+                    Divider()
+                    Button("Clear Draft") {
+                        viewModel.setMode(ConnectBarMode.defaultMode(for: context), for: context)
+                        viewModel.applySuggestedTo("")
+                        viewModel.viaDigipeaters = []
+                        viewModel.pendingViaTokenInput = ""
+                        viewModel.nextHopSelection = ConnectBarViewModel.autoNextHopID
+                        viewModel.applyInlineNote(nil)
+                        viewModel.validate()
+                    }
+                } label: {
+                    Label("Advanced", systemImage: "ellipsis.circle")
+                }
+                .font(.system(size: 11))
+                .controlSize(.small)
+                .disabled(viewModel.mode == .ax25 && viewModel.toCall.isEmpty)
+
+                if let note = viewModel.inlineNote {
+                    Text(note)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else {
+                    Text(summaryLine)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
 
                 Spacer()
@@ -412,131 +408,71 @@ private struct InlineConnectBar: View {
         )
     }
 
-    private var hasCustomInput: Bool {
-        if !viewModel.toCall.isEmpty { return true }
-        if !viewModel.viaDigipeaters.isEmpty { return true }
-        if !viewModel.pendingViaTokenInput.isEmpty { return true }
-        if viewModel.nextHopSelection != ConnectBarViewModel.autoNextHopID { return true }
-        return false
+    private var summaryLine: String {
+        switch viewModel.mode {
+        case .ax25:
+            return "AX.25 direct"
+        case .ax25ViaDigi:
+            if viewModel.viaDigipeaters.isEmpty { return "AX.25 direct" }
+            return "AX.25 via \(viewModel.viaDigipeaters.joined(separator: ", "))"
+        case .netrom:
+            if viewModel.nextHopSelection == ConnectBarViewModel.autoNextHopID {
+                return "NET/ROM auto route"
+            }
+            return "NET/ROM via \(viewModel.nextHopSelection) (forced)"
+        }
     }
+}
 
-    private func resetInputs() {
-        viewModel.setMode(ConnectBarMode.defaultMode(for: context), for: context)
-        viewModel.applySuggestedTo("")
-        viewModel.viaDigipeaters = []
-        viewModel.pendingViaTokenInput = ""
-        viewModel.nextHopSelection = ConnectBarViewModel.autoNextHopID
-        viewModel.applyInlineNote(nil)
-        viewModel.refreshRoutePreview()
-        viewModel.validate()
-    }
+private struct ConnectedSessionStrip: View {
+    let summary: String
 
-    private var viaEditor: some View {
+    var body: some View {
         HStack(spacing: 8) {
-            Label("Path", systemImage: "arrow.triangle.branch")
-                .font(.system(size: 11, weight: .medium))
+            Image(systemName: "lock.fill")
+                .font(.system(size: 10))
                 .foregroundStyle(.secondary)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    if viewModel.viaDigipeaters.isEmpty {
-                        Text("Direct")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(
-                                Capsule().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.08))
-                            )
-                    }
-
-                    ForEach(Array(viewModel.viaDigipeaters.enumerated()), id: \.offset) { idx, token in
-                        HStack(spacing: 4) {
-                            Text(token)
-                                .font(.system(size: 10, design: .monospaced))
-                            Button {
-                                viewModel.removeDigi(at: idx)
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(Color(nsColor: .windowBackgroundColor)))
-                        .overlay(
-                            Capsule()
-                                .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
-                        )
-                        .contextMenu {
-                            Button("Move Earlier") {
-                                viewModel.moveDigiLeft(at: idx)
-                            }
-                            .disabled(idx == 0)
-
-                            Button("Move Later") {
-                                viewModel.moveDigiRight(at: idx)
-                            }
-                            .disabled(idx >= viewModel.viaDigipeaters.count - 1)
-                        }
-                    }
-                }
-            }
-            .frame(maxWidth: 320)
-
-            TextField("Add digis (comma or space separated)", text: $viewModel.pendingViaTokenInput)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 11, design: .monospaced))
-                .frame(width: 200)
-                .onSubmit {
-                    viewModel.ingestViaInput()
-                }
-
-            Button("Add") {
-                viewModel.ingestViaInput()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-
-            Text("\(viewModel.viaHopCount) hops")
+            Text(summary)
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(viewModel.viaHopCount > 2 ? .orange : .secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(Color(nsColor: .windowBackgroundColor)))
-                .overlay(
-                    Capsule()
-                        .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
-                )
+                .foregroundStyle(.secondary)
+            Text("Disconnect to modify session")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+            Spacer()
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.45))
+        )
     }
+}
 
-    private var netRomEditor: some View {
+private struct BroadcastComposerStrip: View {
+    let unprotoPath: [String]
+
+    var body: some View {
         HStack(spacing: 8) {
-            Label("Route", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
-                .font(.system(size: 11, weight: .medium))
+            Image(systemName: "antenna.radiowaves.left.and.right")
+                .font(.system(size: 10))
                 .foregroundStyle(.secondary)
-
-            Text(viewModel.routePreview)
-                .font(.system(size: 10, design: .monospaced))
+            Text("Broadcast (unproto)")
+                .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .frame(maxWidth: 320, alignment: .leading)
-
-            Picker("Next hop", selection: $viewModel.nextHopSelection) {
-                Text("Auto").tag(ConnectBarViewModel.autoNextHopID)
-                ForEach(viewModel.nextHopOptions.filter { $0 != ConnectBarViewModel.autoNextHopID }, id: \.self) { hop in
-                    Text(hop).tag(hop)
-                }
+            if !unprotoPath.isEmpty {
+                Text("via \(unprotoPath.joined(separator: ","))")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.tertiary)
             }
-            .pickerStyle(.menu)
-            .frame(width: 170)
-            .onChange(of: viewModel.nextHopSelection) { _, _ in
-                viewModel.refreshRoutePreview()
-            }
+            Spacer()
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.35))
+        )
     }
 }
 
@@ -636,16 +572,10 @@ struct TerminalComposeView: View {
                                 .controlSize(.small)
                                 .help("Stopping…")
                         case .disconnected, .error, .none:
-                            Button {
-                                onConnectBarConnect()
-                            } label: {
-                                Image(systemName: "link.circle.fill")
-                                    .font(.system(size: 20))
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(isConnected && !destinationCall.isEmpty ? Color.accentColor : Color.secondary.opacity(0.3))
-                            .disabled(!isConnected || destinationCall.isEmpty)
-                            .help("Connect to \(destinationCall.isEmpty ? "destination" : destinationCall)")
+                            Image(systemName: "link.circle")
+                                .font(.system(size: 20))
+                                .foregroundStyle(.secondary.opacity(0.3))
+                                .help("Set destination in draft row, then connect")
                         }
                     } else {
                         Button {
@@ -716,54 +646,21 @@ struct TerminalComposeView: View {
                     }
                 }
 
-                InlineConnectBar(
-                    viewModel: connectBarViewModel,
-                    context: connectContext,
-                    isSessionActive: sessionState == .connecting || sessionState == .connected || sessionState == .disconnecting,
-                    onConnect: onConnectBarConnect
-                )
-
-                if connectionMode == .connected && sessionState == .connected && !destinationCall.isEmpty && !autoPathSuggestions.isEmpty {
-                    HStack(spacing: 6) {
-                        Text("Auto-path")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.tertiary)
-
-                        ForEach(autoPathSuggestions.prefix(3)) { suggestion in
-                            Button {
-                                onApplyAutoPath(suggestion.pathInput)
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Text(suggestion.pathDisplay)
-                                        .font(.system(size: 10, design: .monospaced))
-                                        .lineLimit(1)
-                                    Text("Q\(suggestion.quality)")
-                                        .font(.system(size: 9, weight: .semibold))
-                                        .foregroundStyle(.secondary)
-                                    Text("F\(suggestion.freshnessPercent)%")
-                                        .font(.system(size: 9, weight: .semibold))
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(
-                                    Capsule()
-                                        .fill(suggestion.pathInput == digiPath ? Color.accentColor.opacity(0.18) : Color(nsColor: .controlBackgroundColor))
-                                )
-                                .overlay(
-                                    Capsule()
-                                        .stroke(
-                                            suggestion.pathInput == digiPath ? Color.accentColor.opacity(0.45) : Color(nsColor: .separatorColor).opacity(0.35),
-                                            lineWidth: 0.5
-                                        )
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .help("\(suggestion.pathDisplay) · \(suggestion.hops) hops · \(suggestion.sourceLabel)")
-                        }
-
-                        Spacer(minLength: 0)
-                    }
+                switch connectBarViewModel.barState {
+                case .broadcastComposer(let broadcast):
+                    BroadcastComposerStrip(unprotoPath: broadcast.unprotoPath)
+                case .disconnectedDraft, .failed:
+                    InlineConnectBar(
+                        viewModel: connectBarViewModel,
+                        context: connectContext,
+                        onConnect: onConnectBarConnect
+                    )
+                case .connecting(let draft):
+                    ConnectedSessionStrip(summary: "Connecting to \(draft.normalizedDestination)")
+                case .connectedSession(let session):
+                    ConnectedSessionStrip(summary: session.summaryLine)
+                case .disconnecting(let session):
+                    ConnectedSessionStrip(summary: "Disconnecting \(session.destination)")
                 }
             }
             .padding(.horizontal, 16)
@@ -776,6 +673,10 @@ struct TerminalComposeView: View {
 
     /// Compact address summary for display
     private var addressSummary: String {
+        if case .broadcastComposer = connectBarViewModel.barState {
+            return "Broadcast"
+        }
+
         let from = sourceCall.isEmpty ? "?" : sourceCall
         let to = destinationCall.isEmpty ? "?" : destinationCall
         let route = digiPath.isEmpty ? "\(from)→\(to)" : "\(from)→\(to) via \(digiPath)"

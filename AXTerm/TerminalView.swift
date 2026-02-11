@@ -1299,20 +1299,36 @@ struct TerminalView: View {
     }
 
     private func handleConnectRequest(_ request: ConnectRequest) {
-        connectBarViewModel.setMode(request.mode, for: request.intent.sourceContext)
-        connectBarViewModel.toCall = request.intent.to
-        if case let .ax25ViaDigis(digis) = request.intent.kind {
-            connectBarViewModel.viaDigipeaters = digis.map(\.stringValue)
+        if request.intent.sourceContext == .stations {
+            let normalized = CallsignValidator.normalize(request.intent.to)
+            let hasRoute = client.netRomIntegration?.bestRouteTo(normalized) != nil
+            let selection = SidebarStationSelection(
+                callsign: normalized,
+                context: .stations,
+                lastUsedMode: request.mode,
+                hasNetRomRoute: hasRoute
+            )
+            connectBarViewModel.applySidebarSelection(
+                selection,
+                action: request.executeImmediately ? .connect : .prefill
+            )
         } else {
-            connectBarViewModel.viaDigipeaters = []
+            connectBarViewModel.setMode(request.mode, for: request.intent.sourceContext)
+            connectBarViewModel.toCall = request.intent.to
+            if case let .ax25ViaDigis(digis) = request.intent.kind {
+                connectBarViewModel.viaDigipeaters = digis.map(\.stringValue)
+            } else {
+                connectBarViewModel.viaDigipeaters = []
+            }
+            if case let .netrom(nextHopOverride) = request.intent.kind {
+                connectBarViewModel.nextHopSelection = nextHopOverride?.stringValue ?? ConnectBarViewModel.autoNextHopID
+            } else {
+                connectBarViewModel.nextHopSelection = ConnectBarViewModel.autoNextHopID
+            }
+            connectBarViewModel.applyInlineNote(request.intent.note)
+            connectBarViewModel.validate()
         }
-        if case let .netrom(nextHopOverride) = request.intent.kind {
-            connectBarViewModel.nextHopSelection = nextHopOverride?.stringValue ?? ConnectBarViewModel.autoNextHopID
-        } else {
-            connectBarViewModel.nextHopSelection = ConnectBarViewModel.autoNextHopID
-        }
-        connectBarViewModel.applyInlineNote(request.intent.note)
-        connectBarViewModel.validate()
+
         syncLegacyFieldsFromConnectBar()
 
         if request.executeImmediately {
