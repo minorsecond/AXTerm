@@ -22,6 +22,8 @@ nonisolated enum AnalyticsStyle {
         static let graphInset: CGFloat = 24
         static let metricColumns: Int = 3
         static let chartColumns: Int = 2
+        static let floatingBarMaxWidth: CGFloat = 1120
+        static let floatingBarOuterPadding: CGFloat = 12
     }
 
     enum Chart {

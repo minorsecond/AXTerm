@@ -18,6 +18,7 @@ struct AnalyticsDashboardView: View {
     @State private var sidebarTab: GraphSidebarTab = .overview
     @State private var showExportToast = false
     @State private var showCustomRangePopover = false
+    @State private var showGraphOptionsPopover = false
     @State private var graphViewportHeight: CGFloat = AnalyticsStyle.Layout.graphHeight
 
     init(packetEngine: PacketEngine, settings: AppSettingsStore, viewModel: AnalyticsDashboardViewModel) {
@@ -37,7 +38,7 @@ struct AnalyticsDashboardView: View {
                 VStack(alignment: .leading, spacing: AnalyticsStyle.Layout.sectionSpacing) {
                     // Spacer for the floating header
                     Color.clear
-                        .frame(height: controlBarHeight + 8)
+                        .frame(height: controlBarHeight + 12)
 
                     summarySection
                     chartsSection
@@ -142,10 +143,8 @@ struct AnalyticsDashboardView: View {
                     Button {
                         showCustomRangePopover.toggle()
                     } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "calendar")
-                            Text("Range")
-                        }
+                        Label("Range", systemImage: "calendar")
+                            .labelStyle(.titleAndIcon)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -174,33 +173,6 @@ struct AnalyticsDashboardView: View {
                     .controlSize(.small)
                 }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Min edge count")
-                        .font(.caption)
-                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                    HStack(spacing: 8) {
-                        Slider(
-                            value: Binding(
-                                get: { Double(viewModel.minEdgeCount) },
-                                set: { viewModel.minEdgeCount = Int($0) }
-                            ),
-                            in: 1...10,
-                            step: 1
-                        )
-                        .frame(width: 100)
-                        Text("\(viewModel.minEdgeCount)")
-                            .font(.caption.monospacedDigit())
-                            .frame(width: 20, alignment: .trailing)
-                    }
-                }
-
-                Stepper(value: $viewModel.maxNodes, in: AnalyticsStyle.Graph.minNodes...300, step: 10) {
-                    Text("Max: \(viewModel.maxNodes)")
-                        .font(.caption)
-                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                }
-                .fixedSize()
-
                 Toggle("Auto-update", isOn: $viewModel.autoUpdateEnabled)
                     .toggleStyle(.switch)
                     .controlSize(.small)
@@ -215,12 +187,53 @@ struct AnalyticsDashboardView: View {
                 .controlSize(.small)
                 .help("Refresh analytics now")
 
-                Button("Reset") {
-                    graphResetToken = UUID()
-                    viewModel.resetGraphView()
+                Button {
+                    showGraphOptionsPopover.toggle()
+                } label: {
+                    Label("Options", systemImage: "slider.horizontal.3")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .popover(isPresented: $showGraphOptionsPopover, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Graph Options")
+                            .font(.headline)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Min edge count")
+                                .font(.caption)
+                                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            HStack(spacing: 8) {
+                                Slider(
+                                    value: Binding(
+                                        get: { Double(viewModel.minEdgeCount) },
+                                        set: { viewModel.minEdgeCount = Int($0) }
+                                    ),
+                                    in: 1...10,
+                                    step: 1
+                                )
+                                .frame(width: 140)
+                                Text("\(viewModel.minEdgeCount)")
+                                    .font(.caption.monospacedDigit())
+                                    .frame(width: 20, alignment: .trailing)
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Max nodes")
+                                .font(.caption)
+                                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            Stepper(value: $viewModel.maxNodes, in: AnalyticsStyle.Graph.minNodes...300, step: 10) {
+                                Text("\(viewModel.maxNodes)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                    .padding(12)
+                    .frame(width: 240)
+                }
             }
         }
     }
@@ -1526,18 +1539,17 @@ private struct FloatingControlBar<Content: View>: View {
     /// Threshold in points before the bar transitions to "scrolled" state
     private let scrollThreshold: CGFloat = 12
     /// Corner radius for the pill-shaped bar
-    private let cornerRadius: CGFloat = 14
+    private let cornerRadius: CGFloat = 12
 
     private var isScrolled: Bool {
         scrollOffset > scrollThreshold
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            content
-                .padding(.horizontal, AnalyticsStyle.Layout.pagePadding)
-                .padding(.vertical, 10)
-        }
+        content
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: AnalyticsStyle.Layout.floatingBarMaxWidth, alignment: .leading)
         .background(
             Group {
                 if reduceTransparency {
@@ -1557,8 +1569,9 @@ private struct FloatingControlBar<Content: View>: View {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 0.5)
         )
-        .shadow(color: .black.opacity(isScrolled ? 0.12 : 0.06), radius: isScrolled ? 8 : 4, y: 2)
-        .padding(.horizontal, AnalyticsStyle.Layout.pagePadding)
+        .shadow(color: .black.opacity(isScrolled ? 0.10 : 0.05), radius: isScrolled ? 6 : 3, y: 1)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, AnalyticsStyle.Layout.floatingBarOuterPadding)
         .padding(.top, 8)
         .animation(.easeOut(duration: 0.2), value: isScrolled)
     }
