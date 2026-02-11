@@ -35,12 +35,23 @@ AXTerm now includes `Scripts/upload-sentry-dsyms.sh` as a target build phase.
 It uploads dSYMs when:
 
 - `ENABLE_SENTRY_DSYM_UPLOAD = YES`
-- `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, and `SENTRY_PROJECT` are set
 - `sentry-cli` is installed and in `PATH`
+- auth is available via `SENTRY_AUTH_TOKEN` or `~/.sentryclirc`
 
-Recommended CI env:
+Behavior by configuration:
+
+- **Debug** (`axterm-dev`): strict upload (`REQUIRE_SENTRY_DSYM_UPLOAD = YES`), UUID verification off by default.
+- **Release** (`axterm`): strict upload + strict UUID verification (`VERIFY_SENTRY_DSYM_UUIDS = YES`).
+
+Release verification checks every UUID found in generated `.dSYM` bundles against Sentry's debug-files API and fails the build if any UUID is missing.
+
+Recommended CI env/build settings:
 
 - `SENTRY_AUTH_TOKEN`
 - `SENTRY_ORG`
 - `SENTRY_PROJECT`
 - `SENTRY_GIT_COMMIT` (or `GIT_COMMIT_HASH`)
+- optional tuning:
+  - `SENTRY_DSYM_UPLOAD_WAIT_SECS` (default `120`)
+  - `SENTRY_DSYM_VERIFY_RETRIES` (default `12`)
+  - `SENTRY_DSYM_VERIFY_SLEEP_SECS` (default `5`)
