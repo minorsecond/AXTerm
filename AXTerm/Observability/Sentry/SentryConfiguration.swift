@@ -19,6 +19,8 @@ nonisolated struct SentryConfiguration: Equatable, Sendable {
     static let infoPlistDebugKey = "SENTRY_DEBUG"
     static let infoPlistTracesSampleRateKey = "SENTRY_TRACES_SAMPLE_RATE"
     static let infoPlistProfilesSampleRateKey = "SENTRY_PROFILES_SAMPLE_RATE"
+    static let legacyInfoPlistProfilesSampleRateKey = "sentry_profiles_sample_rate"
+    static let generatedInfoPlistProfilesSampleRateKey = "SentryProfilesSampleRate"
     static let infoPlistGitCommitKey = "SENTRY_GIT_COMMIT"
 
     /// Environment variable fallback for DSN (useful for CI or local overrides).
@@ -107,7 +109,7 @@ nonisolated struct SentryConfiguration: Equatable, Sendable {
         let environment = infoPlist.string(forKey: infoPlistEnvironmentKey) ?? "unknown"
         let debug = infoPlist.bool(forKey: infoPlistDebugKey)
         let tracesSampleRate = infoPlist.double(forKey: infoPlistTracesSampleRateKey) ?? 0.0
-        let profilesSampleRate = infoPlist.double(forKey: infoPlistProfilesSampleRateKey) ?? 0.0
+        let profilesSampleRate = resolveProfilesSampleRate(infoPlist: infoPlist)
         let gitCommit = resolveGitCommit(
             infoPlistValue: infoPlist.string(forKey: infoPlistGitCommitKey),
             environmentVariables: environmentVariables
@@ -253,6 +255,19 @@ nonisolated struct SentryConfiguration: Equatable, Sendable {
 
     private static func clampSampleRate(_ rate: Double) -> Double {
         min(max(rate, 0.0), 1.0)
+    }
+
+    private static func resolveProfilesSampleRate(infoPlist: InfoPlistReading) -> Double {
+        if let value = infoPlist.double(forKey: infoPlistProfilesSampleRateKey) {
+            return value
+        }
+        if let value = infoPlist.double(forKey: generatedInfoPlistProfilesSampleRateKey) {
+            return value
+        }
+        if let value = infoPlist.double(forKey: legacyInfoPlistProfilesSampleRateKey) {
+            return value
+        }
+        return 0.0
     }
 }
 

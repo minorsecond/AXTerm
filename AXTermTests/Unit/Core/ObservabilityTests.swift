@@ -119,6 +119,26 @@ final class ObservabilityTests: XCTestCase {
         XCTAssertEqual(config.profilesSampleRate, 0.0, accuracy: 0.001)
     }
 
+    func testSentryConfiguration_profilesSampleRateSupportsLegacyAndGeneratedKeys() {
+        let generatedKeyConfig = SentryConfiguration.load(
+            infoPlist: MockInfoPlistReader([
+                "SENTRY_DSN": "https://test@sentry.io/123",
+                "SentryProfilesSampleRate": "0.4"
+            ]),
+            enabledByUser: true
+        )
+        XCTAssertEqual(generatedKeyConfig.profilesSampleRate, 0.4, accuracy: 0.001)
+
+        let legacyKeyConfig = SentryConfiguration.load(
+            infoPlist: MockInfoPlistReader([
+                "SENTRY_DSN": "https://test@sentry.io/123",
+                "sentry_profiles_sample_rate": "0.3"
+            ]),
+            enabledByUser: true
+        )
+        XCTAssertEqual(legacyKeyConfig.profilesSampleRate, 0.3, accuracy: 0.001)
+    }
+
     func testSentryConfiguration_boolParsing() {
         // Test various boolean representations
         let testCases: [(value: Any, expected: Bool)] = [
