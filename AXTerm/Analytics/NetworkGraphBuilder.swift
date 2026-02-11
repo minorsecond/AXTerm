@@ -418,6 +418,7 @@ nonisolated struct NetworkGraphBuilder {
                 var toHeardDirect = heardDirectData[to, default: [:]]
                 var fromAgg = toHeardDirect[from, default: HeardDirectAggregate()]
                 fromAgg.count += 1
+                fromAgg.bytes += event.payloadBytes
                 fromAgg.lastHeard = max(fromAgg.lastHeard ?? .distantPast, event.timestamp)
 
                 // Track distinct 5-minute buckets for scoring
@@ -443,6 +444,7 @@ nonisolated struct NetworkGraphBuilder {
                 var toHeardVia = heardViaData[to, default: [:]]
                 var fromAgg = toHeardVia[from, default: HeardViaAggregate()]
                 fromAgg.count += 1
+                fromAgg.bytes += event.payloadBytes
                 fromAgg.lastHeard = max(fromAgg.lastHeard ?? .distantPast, event.timestamp)
                 for digiKey in viaKeys {
                     fromAgg.viaDigipeaters[digiKey, default: 0] += 1
@@ -549,6 +551,7 @@ nonisolated struct NetworkGraphBuilder {
         struct DirectEvidence {
             let count: Int
             let buckets: Int
+            let bytes: Int
             let lastHeard: Date?
             let score: Double
         }
@@ -563,6 +566,7 @@ nonisolated struct NetworkGraphBuilder {
             return DirectEvidence(
                 count: agg.count,
                 buckets: agg.distinctBuckets.count,
+                bytes: agg.bytes,
                 lastHeard: agg.lastHeard,
                 score: score
             )
@@ -603,6 +607,7 @@ nonisolated struct NetworkGraphBuilder {
 
             if heardMutualKeys.insert(uKey).inserted {
                 let combinedCount = ev.count + rev.count
+                let combinedBytes = ev.bytes + rev.bytes
                 let last = max(ev.lastHeard ?? .distantPast, rev.lastHeard ?? .distantPast)
                 classifiedEdges.append(
                     ClassifiedEdge(
@@ -610,7 +615,7 @@ nonisolated struct NetworkGraphBuilder {
                         targetID: uKey.target,
                         linkType: .heardMutual,
                         weight: combinedCount,
-                        bytes: 0,
+                        bytes: Int64(combinedBytes),
                         lastHeard: last == .distantPast ? nil : last,
                         viaDigipeaters: [],
                         isStale: false
@@ -645,6 +650,7 @@ nonisolated struct NetworkGraphBuilder {
 
                 var edgeAgg = heardDirectEdges[uKey, default: HeardDirectEdgeAggregate()]
                 edgeAgg.count += agg.count
+                edgeAgg.bytes += agg.bytes
                 edgeAgg.lastHeard = max(edgeAgg.lastHeard ?? .distantPast, agg.lastHeard ?? .distantPast)
                 edgeAgg.score = max(edgeAgg.score, score)
                 heardDirectEdges[uKey] = edgeAgg
@@ -658,7 +664,7 @@ nonisolated struct NetworkGraphBuilder {
                     targetID: key.target,
                     linkType: .heardDirect,
                     weight: agg.count,
-                    bytes: 0,
+                    bytes: Int64(agg.bytes),
                     lastHeard: agg.lastHeard == .distantPast ? nil : agg.lastHeard,
                     viaDigipeaters: [],
                     isStale: false
@@ -683,6 +689,7 @@ nonisolated struct NetworkGraphBuilder {
 
                 var edgeAgg = heardViaEdges[key, default: SeenViaEdgeAggregate()]
                 edgeAgg.count += agg.count
+                edgeAgg.bytes += agg.bytes
                 edgeAgg.lastHeard = max(edgeAgg.lastHeard ?? .distantPast, agg.lastHeard ?? .distantPast)
                 for (digi, count) in agg.viaDigipeaters {
                     edgeAgg.viaDigipeaters[digi, default: 0] += count
@@ -708,7 +715,7 @@ nonisolated struct NetworkGraphBuilder {
                     targetID: key.target,
                     linkType: .heardVia,
                     weight: agg.count,
-                    bytes: 0,
+                    bytes: Int64(agg.bytes),
                     lastHeard: agg.lastHeard == .distantPast ? nil : agg.lastHeard,
                     viaDigipeaters: topDigis,
                     isStale: false
@@ -1166,12 +1173,14 @@ nonisolated private struct ClassifiedEdgeAggregate {
 
 nonisolated private struct HeardDirectAggregate {
     var count: Int = 0
+    var bytes: Int = 0
     var lastHeard: Date?
     var distinctBuckets: Set<Int> = []
 }
 
 nonisolated private struct HeardViaAggregate {
     var count: Int = 0
+    var bytes: Int = 0
     var lastHeard: Date?
     var viaDigipeaters: [String: Int] = [:]
 }
@@ -1192,12 +1201,14 @@ nonisolated private struct BidirectionalTrafficAggregate {
 
 nonisolated private struct HeardDirectEdgeAggregate {
     var count: Int = 0
+    var bytes: Int = 0
     var lastHeard: Date?
     var score: Double = 0
 }
 
 nonisolated private struct SeenViaEdgeAggregate {
     var count: Int = 0
+    var bytes: Int = 0
     var lastHeard: Date?
     var viaDigipeaters: [String: Int] = [:]
 }

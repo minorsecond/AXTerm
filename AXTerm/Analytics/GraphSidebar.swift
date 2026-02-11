@@ -534,10 +534,20 @@ private struct SidebarInspectorContent: View {
                         tooltip: Copy.Inspector.bytesWithinSelectionTooltip
                     )
                     InspectorMetricStringRow(
+                        title: Copy.Inspector.bytesTouchingSelectionLabel,
+                        value: ByteCountFormatter.string(fromByteCount: Int64(details.touchingByteCount), countStyle: .file),
+                        tooltip: Copy.Inspector.bytesTouchingSelectionTooltip
+                    )
+                    InspectorMetricStringRow(
                         title: Copy.Inspector.sharedExternalRelaysLabel,
                         value: details.externalReachCount.formatted(),
                         tooltip: Copy.Inspector.sharedExternalRelaysTooltip
                     )
+
+                    Text(Copy.Inspector.selectionBytesLegend)
+                        .font(.caption2)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        .padding(.top, 2)
                 }
 
                 Divider()

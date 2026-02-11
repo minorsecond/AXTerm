@@ -545,6 +545,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
         let internalPacketCount = internalLinks.reduce(0) { $0 + $1.packetCount }
         let internalByteCount = internalLinks.reduce(0) { $0 + $1.bytes }
+        let selectedNodeTotalBytes = selectedNodes.reduce(0) { $0 + $1.inBytes + $1.outBytes }
+        let touchingByteCount = max(0, selectedNodeTotalBytes - internalByteCount)
 
         var externalAggregate: [String: GraphMultiInspectorDetails.SharedExternalConnection] = [:]
         for selectedID in selectedIDSet {
@@ -592,7 +594,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             relationshipBreakdown: relationshipBreakdown,
             possibleInternalLinks: possibleInternalLinks,
             internalPacketCount: internalPacketCount,
-            internalByteCount: internalByteCount
+            internalByteCount: internalByteCount,
+            touchingByteCount: touchingByteCount
         )
     }
 
@@ -1627,6 +1630,7 @@ struct GraphMultiInspectorDetails: Hashable, Sendable {
     let possibleInternalLinks: Int
     let internalPacketCount: Int
     let internalByteCount: Int
+    let touchingByteCount: Int
 
     var selectionCount: Int { selectedNodes.count }
     var internalLinkCount: Int { internalLinks.count }

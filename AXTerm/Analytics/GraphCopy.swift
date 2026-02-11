@@ -346,17 +346,21 @@ nonisolated enum GraphCopy {
         static let multiSelectionTitle = "Stations Selected"
         static let multiSelectionListTooltip = "Stations currently included in this selection."
 
-        static let internalLinksLabel = "Links Within Selection"
-        static let internalLinksTooltip = "Observed links between selected stations. Format: observed links / possible links."
+        static let internalLinksLabel = "Internal Links"
+        static let internalLinksTooltip = "Links where both endpoints are selected. Format: observed links / possible links."
 
         static let selectionDensityLabel = "Selection Density"
         static let selectionDensityTooltip = "How tightly connected the selected stations are."
 
-        static let packetsWithinSelectionLabel = "Packets Within Selection"
-        static let packetsWithinSelectionTooltip = "Total packets exchanged where both endpoints are selected stations."
+        static let packetsWithinSelectionLabel = "Internal Packets"
+        static let packetsWithinSelectionTooltip = "Packets on internal links (selected-to-selected only)."
 
-        static let bytesWithinSelectionLabel = "Bytes Within Selection"
-        static let bytesWithinSelectionTooltip = "Total payload bytes exchanged where both endpoints are selected stations."
+        static let bytesWithinSelectionLabel = "Internal Bytes"
+        static let bytesWithinSelectionTooltip = "Payload bytes on internal links (selected-to-selected only)."
+
+        static let bytesTouchingSelectionLabel = "Selected Bytes (Total)"
+        static let bytesTouchingSelectionTooltip = "Payload bytes on any link where at least one endpoint is selected."
+        static let selectionBytesLegend = "Internal = selected-to-selected. Total = all traffic touching selected stations."
 
         static let sharedExternalRelaysLabel = "Shared External Relays"
         static let sharedExternalRelaysTooltip = "Stations outside the selection that connect to two or more selected stations."
