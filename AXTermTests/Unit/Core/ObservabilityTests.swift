@@ -156,6 +156,22 @@ final class ObservabilityTests: XCTestCase {
         XCTAssertEqual(config.dsn, "https://env@sentry.io/2")
     }
 
+    func testResolveGitCommit_prefersEnvironmentVariables() {
+        let resolved = SentryConfiguration.resolveGitCommit(
+            infoPlistValue: "plist-hash",
+            environmentVariables: ["GIT_COMMIT_HASH": "env-hash"]
+        )
+        XCTAssertEqual(resolved, "env-hash")
+    }
+
+    func testResolveGitCommit_ignoresUnknownAndFallsBack() {
+        let resolved = SentryConfiguration.resolveGitCommit(
+            infoPlistValue: "plist-hash",
+            environmentVariables: ["SENTRY_GIT_COMMIT": "unknown"]
+        )
+        XCTAssertEqual(resolved, "plist-hash")
+    }
+
     // MARK: - Packet Payload Tests
 
     func testPacketSentryPayload_redactsContentsByDefault() {
@@ -294,4 +310,3 @@ final class ObservabilityTests: XCTestCase {
         XCTAssertEqual(store.sentrySendConnectionDetails, AppSettingsStore.defaultSentrySendConnectionDetails)
     }
 }
-

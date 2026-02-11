@@ -20,6 +20,7 @@ The app reads DSN in this precedence order:
 
 - **environment**: `debug` in Debug builds, `release` otherwise.
 - **release**: `AXTerm@<CFBundleShortVersionString>+<CFBundleVersion>`
+- **git_commit**: set from `SENTRY_GIT_COMMIT` / `GIT_COMMIT_HASH` / CI SHA env vars, with fallback to `git rev-parse`.
 
 ### Symbolication (dSYM upload)
 
@@ -30,5 +31,16 @@ To symbolicate macOS crashes, Sentry must have matching dSYMs for the build you 
   - In Sentry, locate your project’s **Debug Files / dSYM** upload instructions.
   - Use `sentry-cli` to upload the generated dSYMs from your `.xcarchive` (preferred), or from DerivedData if you’re testing locally.
 
-No build-phase scripts are required by AXTerm; you can add one later if you want automatic uploads on archive.
+AXTerm now includes `Scripts/upload-sentry-dsyms.sh` as a target build phase.
+It uploads dSYMs when:
 
+- `ENABLE_SENTRY_DSYM_UPLOAD = YES`
+- `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, and `SENTRY_PROJECT` are set
+- `sentry-cli` is installed and in `PATH`
+
+Recommended CI env:
+
+- `SENTRY_AUTH_TOKEN`
+- `SENTRY_ORG`
+- `SENTRY_PROJECT`
+- `SENTRY_GIT_COMMIT` (or `GIT_COMMIT_HASH`)

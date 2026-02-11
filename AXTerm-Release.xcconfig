@@ -24,3 +24,7 @@ SENTRY_TRACES_SAMPLE_RATE = 0.1
 // Sample rate for continuous profiling (0% in Release to minimize overhead).
 // Profiling is resource-intensive; enable sparingly in production.
 SENTRY_PROFILES_SAMPLE_RATE = 0.0
+
+// Git commit hash to attach to Sentry events. CI should override this value.
+SENTRY_GIT_COMMIT = unknown
+ENABLE_SENTRY_DSYM_UPLOAD = YES

@@ -19,9 +19,11 @@ nonisolated struct SentryConfiguration: Equatable, Sendable {
     static let infoPlistDebugKey = "SENTRY_DEBUG"
     static let infoPlistTracesSampleRateKey = "SENTRY_TRACES_SAMPLE_RATE"
     static let infoPlistProfilesSampleRateKey = "SENTRY_PROFILES_SAMPLE_RATE"
+    static let infoPlistGitCommitKey = "SENTRY_GIT_COMMIT"
 
     /// Environment variable fallback for DSN (useful for CI or local overrides).
     static let environmentVariableDSNKey = "SENTRY_DSN"
+    static let environmentVariableGitCommitKeys = ["SENTRY_GIT_COMMIT", "GIT_COMMIT_HASH", "GITHUB_SHA", "CI_COMMIT_SHA"]
 
     // MARK: - Configuration Properties
 
@@ -45,6 +47,9 @@ nonisolated struct SentryConfiguration: Equatable, Sendable {
 
     /// Distribution identifier (build number).
     let dist: String
+
+    /// Git commit hash associated with this build (if available).
+    let gitCommit: String?
 
     /// User preference: whether Sentry is enabled at all.
     let enabledByUser: Bool
@@ -103,6 +108,10 @@ nonisolated struct SentryConfiguration: Equatable, Sendable {
         let debug = infoPlist.bool(forKey: infoPlistDebugKey)
         let tracesSampleRate = infoPlist.double(forKey: infoPlistTracesSampleRateKey) ?? 0.0
         let profilesSampleRate = infoPlist.double(forKey: infoPlistProfilesSampleRateKey) ?? 0.0
+        let gitCommit = resolveGitCommit(
+            infoPlistValue: infoPlist.string(forKey: infoPlistGitCommitKey),
+            environmentVariables: environmentVariables
+        )
 
         let version = infoPlist.string(forKey: "CFBundleShortVersionString") ?? "0"
         let build = infoPlist.string(forKey: "CFBundleVersion") ?? "0"
@@ -116,6 +125,7 @@ nonisolated struct SentryConfiguration: Equatable, Sendable {
             profilesSampleRate: clampSampleRate(profilesSampleRate),
             release: "\(name)@\(version)+\(build)",
             dist: build,
+            gitCommit: gitCommit,
             enabledByUser: enabledByUser,
             sendPacketContents: sendPacketContents,
             sendConnectionDetails: sendConnectionDetails
@@ -131,6 +141,21 @@ nonisolated struct SentryConfiguration: Equatable, Sendable {
         }
         if let plistRaw = infoPlistValue, let plist = sanitizeDSNValue(plistRaw) {
             return plist
+        }
+        return nil
+    }
+
+    static func resolveGitCommit(infoPlistValue: String?, environmentVariables: [String: String]) -> String? {
+        for key in environmentVariableGitCommitKeys {
+            if let value = sanitizeGitCommit(environmentVariables[key]) {
+                return value
+            }
+        }
+        if let value = sanitizeGitCommit(infoPlistValue) {
+            return value
+        }
+        if let value = readGitCommitFromRepository() {
+            return value
         }
         return nil
     }
@@ -194,6 +219,36 @@ nonisolated struct SentryConfiguration: Equatable, Sendable {
         guard let raw else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func sanitizeGitCommit(_ raw: String?) -> String? {
+        guard let value = sanitizeValue(raw) else { return nil }
+        if value == "unknown" || value == "UNKNOWN" || value == "unset" || value == "UNSET" {
+            return nil
+        }
+        return value
+    }
+
+    private static func readGitCommitFromRepository() -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["rev-parse", "--short=12", "HEAD"]
+        process.currentDirectoryURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            let data = stdout.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8)
+            return sanitizeGitCommit(output)
+        } catch {
+            return nil
+        }
     }
 
     private static func clampSampleRate(_ rate: Double) -> Double {
@@ -281,4 +336,3 @@ nonisolated struct MockInfoPlistReader: InfoPlistReading {
         return nil
     }
 }
-

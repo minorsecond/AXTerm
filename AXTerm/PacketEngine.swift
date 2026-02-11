@@ -952,7 +952,7 @@ final class PacketEngine: ObservableObject {
                 options: options
             )
         } catch {
-            SentryManager.shared.capturePersistenceFailure("aggregate analytics", errorDescription: error.localizedDescription)
+            SentryManager.shared.capturePersistenceFailure("aggregate analytics", error: error)
             return nil
         }
     }
@@ -962,7 +962,7 @@ final class PacketEngine: ObservableObject {
         do {
             return try await persistenceWorker.loadPackets(in: timeframe)
         } catch {
-            SentryManager.shared.capturePersistenceFailure("load packets in timeframe", errorDescription: error.localizedDescription)
+            SentryManager.shared.capturePersistenceFailure("load packets in timeframe", error: error)
             return nil
         }
     }
@@ -999,7 +999,7 @@ final class PacketEngine: ObservableObject {
                     data: ["packetCount": result.packets.count, "stationCount": stations.count, "reason": reason]
                 )
             } catch {
-                SentryManager.shared.capturePersistenceFailure("loadRecent packets", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("loadRecent packets", error: error)
                 SentryManager.shared.captureMessage(
                     "stations.initial_load.failed",
                     level: .error,
@@ -1022,7 +1022,7 @@ final class PacketEngine: ObservableObject {
             do {
                 consoleLines = try await persistenceWorker.loadConsole(limit: limit)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("loadRecent console", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("loadRecent console", error: error)
             }
         }
     }
@@ -1034,7 +1034,7 @@ final class PacketEngine: ObservableObject {
             do {
                 rawChunks = try await persistenceWorker.loadRaw(limit: limit)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("loadRecent raw", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("loadRecent raw", error: error)
             }
         }
     }
@@ -1059,7 +1059,7 @@ final class PacketEngine: ObservableObject {
                     )
                 }
             } catch {
-                SentryManager.shared.capturePersistenceFailure("save/prune packet", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("save/prune packet", error: error)
             }
         }
     }
@@ -1088,7 +1088,7 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.appendConsole(entry, retentionLimit: retentionLimit)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("append/prune console", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("append/prune console", error: error)
             }
         }
     }
@@ -1111,7 +1111,7 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.appendRaw(entry, retentionLimit: retentionLimit)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("append/prune raw", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("append/prune raw", error: error)
             }
         }
     }
@@ -1122,7 +1122,7 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.setPinned(packetId: id, pinned: pinned)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("setPinned", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("setPinned", error: error)
             }
         }
     }
@@ -1187,7 +1187,7 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.prunePackets(retentionLimit: limit)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("prune packets", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("prune packets", error: error)
             }
         }
     }
@@ -1198,7 +1198,7 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.pruneConsole(retentionLimit: limit)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("prune console", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("prune console", error: error)
             }
         }
     }
@@ -1209,7 +1209,7 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.pruneRaw(retentionLimit: limit)
             } catch {
-                SentryManager.shared.capturePersistenceFailure("prune raw", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("prune raw", error: error)
             }
         }
     }
@@ -1220,7 +1220,7 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.deleteAllConsole()
             } catch {
-                SentryManager.shared.capturePersistenceFailure("deleteAll console", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("deleteAll console", error: error)
             }
         }
     }
@@ -1231,7 +1231,7 @@ final class PacketEngine: ObservableObject {
             do {
                 try await persistenceWorker.deleteAllRaw()
             } catch {
-                SentryManager.shared.capturePersistenceFailure("deleteAll raw", errorDescription: error.localizedDescription)
+                SentryManager.shared.capturePersistenceFailure("deleteAll raw", error: error)
             }
         }
     }
@@ -1361,7 +1361,7 @@ final class PacketEngine: ObservableObject {
             #if DEBUG
             print("[NETROM:STARTUP] ❌ Error loading snapshot: \(error)")
             #endif
-            SentryManager.shared.capturePersistenceFailure("load netrom snapshot", errorDescription: error.localizedDescription)
+            SentryManager.shared.capturePersistenceFailure("load netrom snapshot", error: error)
         }
     }
 
@@ -1407,7 +1407,7 @@ final class PacketEngine: ObservableObject {
                 print("[NETROM:SAVE] ❌ Error saving snapshot: \(error)")
                 #endif
                 await MainActor.run {
-                    SentryManager.shared.capturePersistenceFailure("save netrom snapshot", errorDescription: error.localizedDescription)
+                    SentryManager.shared.capturePersistenceFailure("save netrom snapshot", error: error)
                 }
             }
         }
@@ -1492,7 +1492,7 @@ final class PacketEngine: ObservableObject {
                 }
                 #endif
                 await MainActor.run {
-                    SentryManager.shared.capturePersistenceFailure("prune netrom entries", errorDescription: error.localizedDescription)
+                    SentryManager.shared.capturePersistenceFailure("prune netrom entries", error: error)
                 }
             }
         }
@@ -1535,7 +1535,7 @@ final class PacketEngine: ObservableObject {
                 }
                 #endif
                 await MainActor.run {
-                    SentryManager.shared.capturePersistenceFailure("clear netrom data", errorDescription: error.localizedDescription)
+                    SentryManager.shared.capturePersistenceFailure("clear netrom data", error: error)
                 }
             }
         }

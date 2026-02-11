@@ -117,7 +117,8 @@ final class SentryManager {
         configureScope(with: config)
         addBreadcrumb(category: "app.lifecycle", message: "Sentry initialized", level: .info, data: [
             "environment": config.environment,
-            "release": config.release
+            "release": config.release,
+            "git_commit": config.gitCommit as Any
         ])
         logDebug("Sentry started: environment=\(config.environment), release=\(config.release)")
     }
@@ -162,6 +163,10 @@ final class SentryManager {
             scope.setTag(value: config.environment, key: "environment")
             scope.setTag(value: config.release, key: "release")
             scope.setTag(value: config.dist, key: "dist")
+            if let gitCommit = config.gitCommit {
+                scope.setTag(value: gitCommit, key: "git_commit")
+                scope.setExtra(value: gitCommit, key: "git_commit")
+            }
         }
         #endif
     }

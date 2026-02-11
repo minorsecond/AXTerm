@@ -160,6 +160,7 @@
 				3487E8992F2AA2A700DF0172 /* Sources */,
 				3487E89A2F2AA2A700DF0172 /* Frameworks */,
 				3487E89B2F2AA2A700DF0172 /* Resources */,
+				A1B2C3D42F4D000100000001 /* Upload Sentry dSYMs */,
 			);
 			buildRules = (
 			);
@@ -331,6 +332,27 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		A1B2C3D42F4D000100000001 /* Upload Sentry dSYMs */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Scripts/upload-sentry-dsyms.sh",
+				"$(DWARF_DSYM_FOLDER_PATH)/$(DWARF_DSYM_FILE_NAME)",
+				"$(TARGET_BUILD_DIR)/$(EXECUTABLE_PATH)",
+			);
+			name = "Upload Sentry dSYMs";
+				outputPaths = (
+					"$(DERIVED_FILE_DIR)/sentry_dsym_upload.stamp",
+				);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/Scripts/upload-sentry-dsyms.sh\"";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		3487E8992F2AA2A700DF0172 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -415,7 +437,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;

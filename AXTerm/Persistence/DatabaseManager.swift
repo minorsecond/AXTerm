@@ -11,6 +11,7 @@ import GRDB
 nonisolated enum DatabaseManager {
     static let folderName = "AXTerm"
     static let databaseName = "axterm.sqlite"
+    private static let busyTimeoutMilliseconds = 8_000
 
     static func databaseURL() throws -> URL {
         let base = try FileManager.default.url(
@@ -53,6 +54,7 @@ nonisolated enum DatabaseManager {
 
         do {
             let queue = try DatabaseQueue(path: urlPath)
+            try configureDatabase(queue)
             try migrator.migrate(queue)
             return queue
         } catch {
@@ -82,6 +84,7 @@ nonisolated enum DatabaseManager {
         func openQueue() throws -> DatabaseQueue {
             do {
                 let queue = try DatabaseQueue(path: urlPath)
+                try configureDatabase(queue)
                 breadcrumbOpenSuccess()
                 
                 // Run migrations first
@@ -150,6 +153,16 @@ nonisolated enum DatabaseManager {
             throw DatabaseManagerError.schemaMismatch
         }
         return finalQueue
+    }
+
+    private static func configureDatabase(_ queue: DatabaseQueue) throws {
+        try queue.writeWithoutTransaction { db in
+            // WAL improves reader/writer concurrency and reduces lock contention.
+            try db.execute(sql: "PRAGMA journal_mode = WAL")
+            try db.execute(sql: "PRAGMA synchronous = NORMAL")
+            try db.execute(sql: "PRAGMA wal_autocheckpoint = 1000")
+            try db.execute(sql: "PRAGMA busy_timeout = \(busyTimeoutMilliseconds)")
+        }
     }
 
     // MARK: - Migration Table Creation (extracted for reuse)
