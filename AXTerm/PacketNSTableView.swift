@@ -223,6 +223,9 @@ extension PacketNSTableView {
         private var scrollObserver: NSObjectProtocol?
         private var pendingUpdate: PendingUpdate?
         private var isProgrammaticUpdate = false
+        private var isContextMenuTracking = false
+        private var menuDidBeginObserver: NSObjectProtocol?
+        private var menuDidEndObserver: NSObjectProtocol?
         private var scrollStateWorkItem: DispatchWorkItem?
         private var pendingIsAtBottom: Bool?
         private var lastPublishedIsAtBottom: Bool?
@@ -271,6 +274,7 @@ extension PacketNSTableView {
 
         func attach(tableView: NSTableView) {
             self.tableView = tableView
+            observeMenuTracking(for: tableView.menu)
         }
 
         func attach(scrollView: NSScrollView) {
@@ -334,13 +338,18 @@ extension PacketNSTableView {
 
         func tableView(_ tableView: NSTableView, menuFor event: NSEvent) -> NSMenu? {
             let clickedRow = tableView.row(at: tableView.convert(event.locationInWindow, from: nil))
-            lastContextRow = clickedRow >= 0 ? clickedRow : nil
-            if clickedRow >= 0, !tableView.selectedRowIndexes.contains(clickedRow) {
+            guard rows.indices.contains(clickedRow) else {
+                lastContextRow = nil
+                return nil
+            }
+            lastContextRow = clickedRow
+            if !tableView.selectedRowIndexes.contains(clickedRow) {
                 tableView.selectRowIndexes(IndexSet(integer: clickedRow), byExtendingSelection: false)
-                DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
-                    self.selection.wrappedValue = [self.rows[clickedRow].id]
-                }
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard self.rows.indices.contains(clickedRow) else { return }
+                self.selection.wrappedValue = [self.rows[clickedRow].id]
             }
             return tableView.menu
         }
@@ -445,6 +454,12 @@ extension PacketNSTableView {
             if let scrollObserver {
                 NotificationCenter.default.removeObserver(scrollObserver)
             }
+            if let menuDidBeginObserver {
+                NotificationCenter.default.removeObserver(menuDidBeginObserver)
+            }
+            if let menuDidEndObserver {
+                NotificationCenter.default.removeObserver(menuDidEndObserver)
+            }
             rowUpdateScheduler.cancel()
             columnSizingScheduler.cancel()
             scrollStateWorkItem?.cancel()
@@ -523,6 +538,7 @@ extension PacketNSTableView {
                 return
             }
             guard let pendingUpdate else { return }
+            guard !isContextMenuTracking else { return }
             self.pendingUpdate = nil
 
             #if DEBUG
@@ -563,6 +579,34 @@ extension PacketNSTableView {
                 level: .info,
                 data: ["rowCount": rows.count]
             )
+        }
+
+        private func observeMenuTracking(for menu: NSMenu?) {
+            if let menuDidBeginObserver {
+                NotificationCenter.default.removeObserver(menuDidBeginObserver)
+                self.menuDidBeginObserver = nil
+            }
+            if let menuDidEndObserver {
+                NotificationCenter.default.removeObserver(menuDidEndObserver)
+                self.menuDidEndObserver = nil
+            }
+            guard let menu else { return }
+            menuDidBeginObserver = NotificationCenter.default.addObserver(
+                forName: NSMenu.didBeginTrackingNotification,
+                object: menu,
+                queue: .main
+            ) { [weak self] _ in
+                self?.isContextMenuTracking = true
+            }
+            menuDidEndObserver = NotificationCenter.default.addObserver(
+                forName: NSMenu.didEndTrackingNotification,
+                object: menu,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self else { return }
+                self.isContextMenuTracking = false
+                self.applyPendingUpdate()
+            }
         }
 
         private func updateRows(packets: [Packet], in tableView: NSTableView) -> RowUpdate {

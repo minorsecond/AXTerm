@@ -18,6 +18,10 @@ final class PacketTableCoordinator: NSObject {
     private(set) var packets: [Packet] = []
     private var isApplyingSelection = false
     private var lastContextRow: Int?
+    private var isContextMenuTracking = false
+    private var deferredUpdate: (rows: [PacketRowViewModel], packets: [Packet], selection: Set<Packet.ID>)?
+    private var menuDidBeginObserver: NSObjectProtocol?
+    private var menuDidEndObserver: NSObjectProtocol?
 
     weak var tableView: NSTableView?
 
@@ -34,14 +38,16 @@ final class PacketTableCoordinator: NSObject {
     }
 
     func update(rows: [PacketRowViewModel], packets: [Packet], selection: Set<Packet.ID>) {
-        self.rows = rows
-        self.packets = packets
-        tableView?.reloadData()
-        applySelection(selection)
+        guard !isContextMenuTracking else {
+            deferredUpdate = (rows, packets, selection)
+            return
+        }
+        applyUpdate(rows: rows, packets: packets, selection: selection)
     }
 
     func attach(tableView: NSTableView) {
         self.tableView = tableView
+        observeMenuTracking(for: tableView.menu)
     }
 
     func applySelection(_ selection: Set<Packet.ID>) {
@@ -55,12 +61,16 @@ final class PacketTableCoordinator: NSObject {
     }
 
     func handleRightClick(row: Int) {
+        guard let tableView, rows.indices.contains(row) else {
+            lastContextRow = nil
+            return
+        }
         lastContextRow = row
-        guard let tableView, row >= 0 else { return }
         guard !tableView.selectedRowIndexes.contains(row) else { return }
         tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            guard self.rows.indices.contains(row) else { return }
             self.selection.wrappedValue = [self.rows[row].id]
         }
     }
@@ -106,6 +116,52 @@ final class PacketTableCoordinator: NSObject {
             self.onInspectSelection()
         }
     }
+
+    deinit {
+        if let menuDidBeginObserver {
+            NotificationCenter.default.removeObserver(menuDidBeginObserver)
+        }
+        if let menuDidEndObserver {
+            NotificationCenter.default.removeObserver(menuDidEndObserver)
+        }
+    }
+
+    private func applyUpdate(rows: [PacketRowViewModel], packets: [Packet], selection: Set<Packet.ID>) {
+        self.rows = rows
+        self.packets = packets
+        tableView?.reloadData()
+        applySelection(selection)
+    }
+
+    private func observeMenuTracking(for menu: NSMenu?) {
+        if let menuDidBeginObserver {
+            NotificationCenter.default.removeObserver(menuDidBeginObserver)
+            self.menuDidBeginObserver = nil
+        }
+        if let menuDidEndObserver {
+            NotificationCenter.default.removeObserver(menuDidEndObserver)
+            self.menuDidEndObserver = nil
+        }
+        guard let menu else { return }
+        menuDidBeginObserver = NotificationCenter.default.addObserver(
+            forName: NSMenu.didBeginTrackingNotification,
+            object: menu,
+            queue: .main
+        ) { [weak self] _ in
+            self?.isContextMenuTracking = true
+        }
+        menuDidEndObserver = NotificationCenter.default.addObserver(
+            forName: NSMenu.didEndTrackingNotification,
+            object: menu,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.isContextMenuTracking = false
+            guard let deferred = self.deferredUpdate else { return }
+            self.deferredUpdate = nil
+            self.applyUpdate(rows: deferred.rows, packets: deferred.packets, selection: deferred.selection)
+        }
+    }
 }
 
 extension PacketTableCoordinator: NSTableViewDataSource {
@@ -148,13 +204,18 @@ extension PacketTableCoordinator: NSTableViewDelegate {
 
     func tableView(_ tableView: NSTableView, menuFor event: NSEvent) -> NSMenu? {
         let clickedRow = tableView.row(at: tableView.convert(event.locationInWindow, from: nil))
-        lastContextRow = clickedRow >= 0 ? clickedRow : nil
-        if clickedRow >= 0, !tableView.selectedRowIndexes.contains(clickedRow) {
+        guard rows.indices.contains(clickedRow) else {
+            lastContextRow = nil
+            return nil
+        }
+        lastContextRow = clickedRow
+        if !tableView.selectedRowIndexes.contains(clickedRow) {
             tableView.selectRowIndexes(IndexSet(integer: clickedRow), byExtendingSelection: false)
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.selection.wrappedValue = [self.rows[clickedRow].id]
-            }
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard self.rows.indices.contains(clickedRow) else { return }
+            self.selection.wrappedValue = [self.rows[clickedRow].id]
         }
         return tableView.menu
     }
