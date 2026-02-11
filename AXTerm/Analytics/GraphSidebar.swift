@@ -679,14 +679,14 @@ private struct SidebarInspectorContent: View {
                         value: details.node.outCount,
                         tooltip: Copy.Inspector.packetsOutTooltip
                     )
-                    InspectorMetricRow(
+                    InspectorMetricStringRow(
                         title: Copy.Inspector.bytesInLabel,
-                        value: details.node.inBytes,
+                        value: ByteCountFormatter.string(fromByteCount: Int64(details.node.inBytes), countStyle: .file),
                         tooltip: Copy.Inspector.bytesInTooltip
                     )
-                    InspectorMetricRow(
+                    InspectorMetricStringRow(
                         title: Copy.Inspector.bytesOutLabel,
-                        value: details.node.outBytes,
+                        value: ByteCountFormatter.string(fromByteCount: Int64(details.node.outBytes), countStyle: .file),
                         tooltip: Copy.Inspector.bytesOutTooltip
                     )
                     InspectorMetricRow(
