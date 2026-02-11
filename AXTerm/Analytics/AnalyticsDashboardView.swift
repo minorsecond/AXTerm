@@ -20,6 +20,8 @@ struct AnalyticsDashboardView: View {
     @State private var showCustomRangePopover = false
     @State private var showGraphOptionsPopover = false
     @State private var graphViewportHeight: CGFloat = AnalyticsStyle.Layout.graphHeight
+    @State private var preferredPacketViewMode: GraphViewMode = .connectivity
+    @State private var preferredNetRomViewMode: GraphViewMode = .netromHybrid
 
     init(packetEngine: PacketEngine, settings: AppSettingsStore, viewModel: AnalyticsDashboardViewModel) {
         self.packetEngine = packetEngine
@@ -98,6 +100,7 @@ struct AnalyticsDashboardView: View {
         .onAppear {
             viewModel.trackDashboardOpened()
             viewModel.updatePackets(packetEngine.packets)
+            syncPreferredGraphModes(with: viewModel.graphViewMode)
             Task { @MainActor in
                 viewModel.setActive(true)
             }
@@ -113,6 +116,9 @@ struct AnalyticsDashboardView: View {
             if newValue == nil {
                 sidebarTab = .overview
             }
+        }
+        .onChange(of: viewModel.graphViewMode) { _, newValue in
+            syncPreferredGraphModes(with: newValue)
         }
         .onPreferenceChange(FloatingControlBarHeightPreferenceKey.self) { value in
             // Keep height stable and avoid tiny oscillations from fractional layout updates.
@@ -555,46 +561,84 @@ struct AnalyticsDashboardView: View {
     /// Controls scoped to the Network Graph card: View Mode and Station Identity.
     /// These settings affect only the graph visualization, not global analytics or Network Health.
     private var networkGraphHeaderControls: some View {
-        HStack(spacing: 16) {
-            // Include via digipeaters toggle
-            Toggle(isOn: $viewModel.includeViaDigipeaters) {
-                Text(GraphCopy.GraphControls.includeViaLabel)
-                    .font(.caption)
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .help(GraphCopy.GraphControls.includeViaTooltip)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 14) {
+                HStack(spacing: 6) {
+                    Text(GraphCopy.ViewMode.sourceLabel)
+                        .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                    Picker(GraphCopy.ViewMode.sourceLabel, selection: graphSourceBinding) {
+                        Text(GraphCopy.ViewMode.packetSourceLabel)
+                            .tag(GraphSourceChoice.packets)
+                        Text(GraphCopy.ViewMode.netRomSourceLabel)
+                            .tag(GraphSourceChoice.netrom)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                    .help(GraphCopy.ViewMode.sourceTooltip)
+                }
 
-            Divider()
-                .frame(height: 20)
+                HStack(spacing: 6) {
+                    Text(GraphCopy.ViewMode.pickerLabel)
+                        .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
 
-            // View Mode: Connectivity | Routing | All
-            HStack(spacing: 4) {
-                Text(GraphCopy.ViewMode.pickerLabel)
-                    .font(.caption)
-                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                
-                AnalyticsSegmentedPicker(
-                    selection: $viewModel.graphViewMode,
-                    items: GraphViewMode.allCases,
-                    label: { $0.rawValue },
-                    tooltip: { $0.tooltip }
-                )
+                    if viewModel.graphViewMode.isNetRomMode {
+                        Picker(GraphCopy.ViewMode.pickerLabel, selection: netRomModeBinding) {
+                            Text(GraphCopy.ViewMode.netromClassicLabel).tag(GraphViewMode.netromClassic)
+                            Text(GraphCopy.ViewMode.netromInferredLabel).tag(GraphViewMode.netromInferred)
+                            Text(GraphCopy.ViewMode.netromHybridLabel).tag(GraphViewMode.netromHybrid)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .controlSize(.small)
+                        .help(viewModel.graphViewMode.tooltip)
+                    } else {
+                        Picker(GraphCopy.ViewMode.pickerLabel, selection: packetModeBinding) {
+                            Text(GraphCopy.ViewMode.connectivityLabel).tag(GraphViewMode.connectivity)
+                            Text(GraphCopy.ViewMode.routingLabel).tag(GraphViewMode.routing)
+                            Text(GraphCopy.ViewMode.allLabel).tag(GraphViewMode.all)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .controlSize(.small)
+                        .help(viewModel.graphViewMode.tooltip)
+                    }
+                }
+
+                Divider()
+                    .frame(height: 18)
+
+                Toggle(isOn: $viewModel.includeViaDigipeaters) {
+                    Text(GraphCopy.GraphControls.includeViaLabel)
+                        .font(.caption)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .disabled(viewModel.graphViewMode.isNetRomMode)
+                .help(viewModel.graphViewMode.isNetRomMode ? GraphCopy.GraphControls.includeViaUnavailableTooltip : GraphCopy.GraphControls.includeViaTooltip)
+
+                HStack(spacing: 4) {
+                    Text(GraphCopy.StationIdentity.pickerLabel)
+                        .font(.caption)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+
+                    Picker(GraphCopy.StationIdentity.pickerLabel, selection: $viewModel.stationIdentityMode) {
+                        ForEach(StationIdentityMode.allCases) { mode in
+                            Text(mode.shortName).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                    .help(GraphCopy.StationIdentity.pickerTooltip)
+                }
             }
 
-            // Station Identity: Station | SSID
-            HStack(spacing: 4) {
-                Text(GraphCopy.StationIdentity.pickerLabel)
-                    .font(.caption)
-                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                
-                AnalyticsSegmentedPicker(
-                    selection: $viewModel.stationIdentityMode,
-                    items: StationIdentityMode.allCases,
-                    label: { $0.shortName },
-                    tooltip: { $0.tooltip }
-                )
-            }
+            Text(graphViewSummaryText)
+                .font(.caption)
+                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
         }
     }
 }
@@ -602,6 +646,77 @@ struct AnalyticsDashboardView: View {
 
 
 extension AnalyticsDashboardView {
+    private var graphSourceBinding: Binding<GraphSourceChoice> {
+        Binding(
+            get: {
+                viewModel.graphViewMode.isNetRomMode ? .netrom : .packets
+            },
+            set: { newSource in
+                switch newSource {
+                case .packets:
+                    if viewModel.graphViewMode.isNetRomMode {
+                        viewModel.graphViewMode = preferredPacketViewMode
+                    }
+                case .netrom:
+                    if !viewModel.graphViewMode.isNetRomMode {
+                        viewModel.graphViewMode = preferredNetRomViewMode
+                    }
+                }
+            }
+        )
+    }
+
+    private var packetModeBinding: Binding<GraphViewMode> {
+        Binding(
+            get: {
+                if viewModel.graphViewMode.isNetRomMode { return preferredPacketViewMode }
+                return viewModel.graphViewMode
+            },
+            set: { newMode in
+                guard [.connectivity, .routing, .all].contains(newMode) else { return }
+                viewModel.graphViewMode = newMode
+            }
+        )
+    }
+
+    private var netRomModeBinding: Binding<GraphViewMode> {
+        Binding(
+            get: {
+                if viewModel.graphViewMode.isNetRomMode { return viewModel.graphViewMode }
+                return preferredNetRomViewMode
+            },
+            set: { newMode in
+                guard [.netromClassic, .netromInferred, .netromHybrid].contains(newMode) else { return }
+                viewModel.graphViewMode = newMode
+            }
+        )
+    }
+
+    private var graphViewSummaryText: String {
+        switch viewModel.graphViewMode {
+        case .connectivity:
+            return "Packet source. Direct shows direct peer traffic and direct-heard RF evidence."
+        case .routing:
+            return "Packet source. Routed emphasizes digipeater-mediated paths plus direct peers."
+        case .all:
+            return "Packet source. Combined includes all packet-derived relationship evidence."
+        case .netromClassic:
+            return "NET/ROM source. Classic uses broadcast routing tables with direct neighbors."
+        case .netromInferred:
+            return "NET/ROM source. Inferred uses passive route discovery from observed traffic."
+        case .netromHybrid:
+            return "NET/ROM source. Hybrid merges classic broadcasts with inferred routes."
+        }
+    }
+
+    private func syncPreferredGraphModes(with mode: GraphViewMode) {
+        if mode.isNetRomMode {
+            preferredNetRomViewMode = mode
+        } else {
+            preferredPacketViewMode = mode
+        }
+    }
+
     private var metricColumns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: AnalyticsStyle.Layout.cardSpacing), count: AnalyticsStyle.Layout.metricColumns)
     }
@@ -648,6 +763,13 @@ extension AnalyticsDashboardView {
         if mine.hasPrefix("\(node)-") { return true }
         return false
     }
+}
+
+private enum GraphSourceChoice: String, CaseIterable, Identifiable {
+    case packets
+    case netrom
+
+    var id: String { rawValue }
 }
 
 private struct AnalyticsCard<Content: View>: View {
