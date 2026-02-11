@@ -250,7 +250,16 @@ struct NetRomRoutesView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .foregroundStyle(.secondary)
-                            .help("Full path: \(route.pathSummary)")
+                            .help("Connect path: \(route.pathSummary)")
+                    }
+                    .width(min: 120, ideal: 180)
+
+                    TableColumn("Heard As") { route in
+                        Text(route.heardPathSummary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundStyle(.tertiary)
+                            .help(route.heardPathTooltip)
                     }
                     .width(min: 120, ideal: 180)
 

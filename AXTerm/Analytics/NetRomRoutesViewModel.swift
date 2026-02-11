@@ -152,6 +152,8 @@ struct RouteDisplayInfo: Identifiable, Hashable {
     let sourceType: String
     let path: [String]
     let pathSummary: String
+    let heardPath: [String]
+    let heardPathSummary: String
     let hopCount: Int
     let lastUpdated: Date
     let lastUpdatedRelative: String
@@ -186,6 +188,14 @@ struct RouteDisplayInfo: Identifiable, Hashable {
         self.sourceType = info.sourceType
         self.path = info.path
         self.pathSummary = info.path.isEmpty ? info.origin : info.path.joined(separator: " → ")
+        if info.sourceType == "inferred" {
+            let reversedHeard = Array(info.path.dropLast().reversed())
+            self.heardPath = reversedHeard
+            self.heardPathSummary = reversedHeard.isEmpty ? "Direct" : reversedHeard.joined(separator: " → ")
+        } else {
+            self.heardPath = [info.origin]
+            self.heardPathSummary = "Broadcast from \(info.origin)"
+        }
         self.hopCount = max(1, info.path.count)
         self.lastUpdated = info.lastUpdated
         self.lastUpdatedRelative = Self.formatRelativeTime(info.lastUpdated, now: now)
@@ -203,6 +213,13 @@ struct RouteDisplayInfo: Identifiable, Hashable {
         } else {
             self.freshnessStatus = info.freshnessStatus(now: now, ttl: ttl, plateau: plateau)
         }
+    }
+
+    var heardPathTooltip: String {
+        if sourceType == "inferred" {
+            return "How traffic from \(destination) reached you: \(heardPathSummary)"
+        }
+        return "Last explicit routing advertisement heard from \(nextHop)"
     }
 
     private static func formatRelativeTime(_ date: Date, now: Date) -> String {
@@ -553,7 +570,8 @@ final class NetRomRoutesViewModel: ObservableObject {
             result = result.filter {
                 $0.destination.uppercased().contains(query) ||
                 $0.nextHop.uppercased().contains(query) ||
-                $0.pathSummary.uppercased().contains(query)
+                $0.pathSummary.uppercased().contains(query) ||
+                $0.heardPathSummary.uppercased().contains(query)
             }
         }
 
@@ -791,6 +809,8 @@ final class NetRomRoutesViewModel: ObservableObject {
                 "qualityPercent": String(format: "%.1f", route.qualityPercent),
                 "sourceType": route.sourceType,
                 "path": route.path,
+                "heardPath": route.heardPath,
+                "heardPathSummary": route.heardPathSummary,
                 "hopCount": route.hopCount,
                 "lastUpdated": ISO8601DateFormatter().string(from: route.lastUpdated),
                 "freshnessPercent": route.freshnessDisplayString,
@@ -802,10 +822,10 @@ final class NetRomRoutesViewModel: ObservableObject {
     }
 
     func copyRoutesAsCSV() -> String {
-        var lines = ["Destination,Next Hop,Quality,Quality %,Source,Path,Hops,Last Updated,Freshness %,Freshness 0-255,Status"]
+        var lines = ["Destination,Next Hop,Quality,Quality %,Source,Path,Heard As,Hops,Last Updated,Freshness %,Freshness 0-255,Status"]
         for r in filteredRoutes {
             let pathStr = r.path.joined(separator: " > ")
-            lines.append("\(r.destination),\(r.nextHop),\(r.quality),\(String(format: "%.1f", r.qualityPercent)),\(r.sourceType),\"\(pathStr)\",\(r.hopCount),\(ISO8601DateFormatter().string(from: r.lastUpdated)),\(r.freshnessDisplayString),\(r.freshness255),\(r.freshnessStatus)")
+            lines.append("\(r.destination),\(r.nextHop),\(r.quality),\(String(format: "%.1f", r.qualityPercent)),\(r.sourceType),\"\(pathStr)\",\"\(r.heardPathSummary)\",\(r.hopCount),\(ISO8601DateFormatter().string(from: r.lastUpdated)),\(r.freshnessDisplayString),\(r.freshness255),\(r.freshnessStatus)")
         }
         return lines.joined(separator: "\n")
     }

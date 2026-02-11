@@ -74,11 +74,20 @@ final class NetRomPassiveInference {
         guard !packet.via.isEmpty else { return }
 
         let viaNormalized = packet.via.compactMap { normalize($0.display) }
-        guard let nextHop = viaNormalized.last else { return }
+        // Prefer the actual repeated chain (H-bit set) when present; this reflects
+        // the path that truly delivered the frame to us.
+        let repeatedViaNormalized = packet.via
+            .filter(\.repeated)
+            .compactMap { normalize($0.display) }
+        // Inference should represent routes that actually carried traffic. If no
+        // repeated hops were observed, treat this as ambiguous and skip inference.
+        guard !repeatedViaNormalized.isEmpty else { return }
+        let heardViaNormalized = repeatedViaNormalized
+        guard let nextHop = heardViaNormalized.last else { return }
 
         // Guardrails: prevent loops and invalid routes
         // 1. Never infer if local callsign is in via path (avoid learning through ourselves)
-        guard !viaNormalized.contains(localCallsign) else { return }
+        guard !heardViaNormalized.contains(localCallsign) else { return }
         // 2. Never infer route to self
         guard normalizedFrom != localCallsign else { return }
         // 3. Never infer if nextHop equals destination (degenerate case)
@@ -105,10 +114,10 @@ final class NetRomPassiveInference {
         // Create inferred neighbor from the digipeater
         simulateNeighborObservationInferred(nextHop: nextHop, timestamp: timestamp)
 
-        // Record route evidence: route to the packet source via the full digipeater path
-        // The path we follow to reach the destination is the reverse of the path the packet took to reach us.
-        // If we hear FROM A VIA B, C, then the path to A is [C, B, A].
-        let fullPath = viaNormalized.reversed() + [normalizedFrom]
+        // Record route evidence using the path that actually repeated to us.
+        // The path we follow to reach the destination is reverse(heardVia) + source.
+        // Example: heard VIA W0TX, W0ARP (repeated) => connect path [W0ARP, W0TX, SRC].
+        let fullPath = heardViaNormalized.reversed() + [normalizedFrom]
         recordEvidence(destination: normalizedFrom, origin: nextHop, path: fullPath, timestamp: timestamp, classification: classification, isRetry: isRetry)
     }
 
@@ -168,10 +177,10 @@ final class NetRomPassiveInference {
         }
         evidenceByDestination[destination] = bucket
 
-        publishEvidence(bucket, timestamp: timestamp)
+        publishEvidence(bucket, destination: destination, timestamp: timestamp)
     }
 
-    private func publishEvidence(_ bucket: [NetRomRouteEvidence], timestamp: Date) {
+    private func publishEvidence(_ bucket: [NetRomRouteEvidence], destination: String, timestamp: Date) {
         for evidence in bucket {
             let advertisedQuality = evidence.advertisedQuality(using: config)
             let neighborQuality = router.neighborsForStation(evidence.origin).first?.quality ?? 0
@@ -192,6 +201,16 @@ final class NetRomPassiveInference {
                 ],
                 timestamp: timestamp
             )
+        }
+
+        // Keep inferred routes in router aligned to active evidence so stale origins
+        // do not continue to appear after stronger candidates take over.
+        let activeOrigins = Set(bucket.map(\.origin))
+        let staleOrigins = router.currentRoutes()
+            .filter { $0.destination == destination && $0.sourceType == "inferred" && !activeOrigins.contains($0.origin) }
+            .map(\.origin)
+        for origin in staleOrigins {
+            router.removeRoute(origin: origin, destination: destination, sourceType: "inferred")
         }
     }
 

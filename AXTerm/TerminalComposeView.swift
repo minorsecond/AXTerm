@@ -8,6 +8,16 @@
 
 import SwiftUI
 
+struct AutoPathSuggestionItem: Identifiable, Hashable {
+    let id: String
+    let pathInput: String
+    let pathDisplay: String
+    let quality: Int
+    let freshnessPercent: Int
+    let hops: Int
+    let sourceLabel: String
+}
+
 // MARK: - Connection Mode Toggle
 
 /// A Mac-native toggle for switching between datagram and connected modes
@@ -263,6 +273,8 @@ struct TerminalComposeView: View {
     var destinationCapability: AXDPCapability?
     /// AXDP capability negotiation status for the destination (if known)
     var capabilityStatus: SessionCoordinator.CapabilityStatus = .unknown
+    let autoPathSuggestions: [AutoPathSuggestionItem]
+    let onApplyAutoPath: (String) -> Void
 
     let onSend: () -> Void
     let onClear: () -> Void
@@ -437,6 +449,49 @@ struct TerminalComposeView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .help("Frames queued")
+                    }
+                }
+
+                if connectionMode == .connected && !destinationCall.isEmpty && !autoPathSuggestions.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("Auto-path")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.tertiary)
+
+                        ForEach(autoPathSuggestions.prefix(3)) { suggestion in
+                            Button {
+                                onApplyAutoPath(suggestion.pathInput)
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Text(suggestion.pathDisplay)
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .lineLimit(1)
+                                    Text("Q\(suggestion.quality)")
+                                        .font(.system(size: 9, weight: .semibold))
+                                        .foregroundStyle(.secondary)
+                                    Text("F\(suggestion.freshnessPercent)%")
+                                        .font(.system(size: 9, weight: .semibold))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(
+                                    Capsule()
+                                        .fill(suggestion.pathInput == digiPath ? Color.accentColor.opacity(0.18) : Color(nsColor: .controlBackgroundColor))
+                                )
+                                .overlay(
+                                    Capsule()
+                                        .stroke(
+                                            suggestion.pathInput == digiPath ? Color.accentColor.opacity(0.45) : Color(nsColor: .separatorColor).opacity(0.35),
+                                            lineWidth: 0.5
+                                        )
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .help("\(suggestion.pathDisplay) · \(suggestion.hops) hops · \(suggestion.sourceLabel)")
+                        }
+
+                        Spacer(minLength: 0)
                     }
                 }
             }
@@ -673,6 +728,8 @@ struct TxQueueView: View {
         queueDepth: 2,
         isConnected: true,
         sessionState: nil,
+        autoPathSuggestions: [],
+        onApplyAutoPath: { _ in },
         onSend: {},
         onClear: {},
         onConnect: {},
@@ -697,6 +754,8 @@ struct TxQueueView: View {
         queueDepth: 0,
         isConnected: true,
         sessionState: .connected,
+        autoPathSuggestions: [],
+        onApplyAutoPath: { _ in },
         onSend: {},
         onClear: {},
         onConnect: {},
@@ -721,6 +780,8 @@ struct TxQueueView: View {
         queueDepth: 0,
         isConnected: true,
         sessionState: .connecting,
+        autoPathSuggestions: [],
+        onApplyAutoPath: { _ in },
         onSend: {},
         onClear: {},
         onConnect: {},
@@ -759,5 +820,3 @@ struct TxQueueView: View {
     }
     .padding()
 }
-
-

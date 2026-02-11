@@ -1012,6 +1012,19 @@ enum TerminalTab: String, CaseIterable {
     case transfers = "Transfers"
 }
 
+private struct TerminalAutoPathCandidate: Identifiable, Hashable {
+    let pathInput: String
+    let pathDisplay: String
+    let quality: Int
+    let freshnessPercent: Int
+    let hops: Int
+    let sourceLabel: String
+
+    var id: String {
+        "\(pathInput)|\(quality)|\(sourceLabel)"
+    }
+}
+
 // MARK: - Terminal View
 
 /// Main terminal view with session output and transmission controls
@@ -1037,6 +1050,8 @@ struct TerminalView: View {
     @State private var connectionBannerTask: Task<Void, Never>?
     
     @State private var showAdaptiveSettingsPopover = false
+    @State private var lastAutoFilledPath: String = ""
+    @State private var lastObservedDestination: String = ""
 
     init(client: PacketEngine, settings: AppSettingsStore, sessionCoordinator: SessionCoordinator, searchModel: AppToolbarSearchModel) {
         self.client = client
@@ -1059,6 +1074,16 @@ struct TerminalView: View {
             }
             .onAppear {
                 txViewModel.updateSearchQuery(searchModel.query)
+                lastObservedDestination = txViewModel.viewModel.destinationCall
+            }
+            .onChange(of: txViewModel.viewModel.destinationCall) { _, newValue in
+                applyAutoPathSuggestionIfNeeded(previousDestination: lastObservedDestination, newDestination: newValue)
+                lastObservedDestination = newValue
+            }
+            .onChange(of: txViewModel.viewModel.digiPath) { _, newValue in
+                if newValue != lastAutoFilledPath {
+                    lastAutoFilledPath = ""
+                }
             }
             .modifier(TerminalViewModifiers(
                 searchModel: searchModel,
@@ -1179,6 +1204,90 @@ struct TerminalView: View {
         }
 
         // onSessionStateChanged is now handled inside txViewModel.setupSessionCallbacks()
+    }
+
+    private var autoPathSuggestions: [TerminalAutoPathCandidate] {
+        buildAutoPathCandidates(for: txViewModel.viewModel.destinationCall)
+    }
+
+    private func applyAutoPathSuggestionIfNeeded(previousDestination: String, newDestination: String) {
+        let previous = CallsignValidator.normalize(previousDestination)
+        let next = CallsignValidator.normalize(newDestination)
+        guard previous != next else { return }
+
+        let existingPath = txViewModel.viewModel.digiPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let canAutoFill = existingPath.isEmpty || existingPath == lastAutoFilledPath
+        guard canAutoFill else { return }
+
+        if let best = buildAutoPathCandidates(for: newDestination).first {
+            lastAutoFilledPath = best.pathInput
+            txViewModel.digiPath.wrappedValue = best.pathInput
+        } else {
+            lastAutoFilledPath = ""
+            txViewModel.digiPath.wrappedValue = ""
+        }
+    }
+
+    private func applyAutoPath(_ pathInput: String) {
+        lastAutoFilledPath = pathInput
+        txViewModel.digiPath.wrappedValue = pathInput
+    }
+
+    private func buildAutoPathCandidates(for destination: String) -> [TerminalAutoPathCandidate] {
+        guard let integration = client.netRomIntegration else { return [] }
+        let normalizedDestination = CallsignValidator.normalize(destination)
+        guard !normalizedDestination.isEmpty else { return [] }
+
+        let now = Date()
+        let mode = integration.currentMode
+        let routeCandidates = integration.currentRoutes(forMode: mode)
+            .filter { CallsignValidator.normalize($0.destination) == normalizedDestination }
+
+        var byPathInput: [String: TerminalAutoPathCandidate] = [:]
+
+        for route in routeCandidates {
+            let connectNodes = Array(route.path.dropLast())
+            let pathInput = connectNodes.joined(separator: ",")
+            let hops = connectNodes.count
+            let freshness = route.freshness(now: now, ttl: FreshnessCalculator.defaultTTL)
+            let candidate = TerminalAutoPathCandidate(
+                pathInput: pathInput,
+                pathDisplay: pathInput.isEmpty ? "Direct" : connectNodes.joined(separator: " → "),
+                quality: route.quality,
+                freshnessPercent: Int(round(freshness * 100.0)),
+                hops: hops,
+                sourceLabel: route.sourceType.capitalized
+            )
+
+            if let existing = byPathInput[pathInput] {
+                if candidate.quality > existing.quality ||
+                    (candidate.quality == existing.quality && candidate.freshnessPercent > existing.freshnessPercent) {
+                    byPathInput[pathInput] = candidate
+                }
+            } else {
+                byPathInput[pathInput] = candidate
+            }
+        }
+
+        let directNeighbor = integration.currentNeighbors(forMode: mode)
+            .contains { CallsignValidator.normalize($0.call) == normalizedDestination }
+        if directNeighbor && byPathInput[""] == nil {
+            byPathInput[""] = TerminalAutoPathCandidate(
+                pathInput: "",
+                pathDisplay: "Direct",
+                quality: 255,
+                freshnessPercent: 100,
+                hops: 0,
+                sourceLabel: "Direct"
+            )
+        }
+
+        return byPathInput.values.sorted {
+            if $0.quality != $1.quality { return $0.quality > $1.quality }
+            if $0.freshnessPercent != $1.freshnessPercent { return $0.freshnessPercent > $1.freshnessPercent }
+            if $0.hops != $1.hops { return $0.hops < $1.hops }
+            return $0.pathInput < $1.pathInput
+        }
     }
 
     private func dismissSessionNotification() {
@@ -1333,6 +1442,20 @@ struct TerminalView: View {
                 sessionState: txViewModel.sessionState,
                 destinationCapability: client.capabilityStore.capabilities(for: txViewModel.viewModel.destinationCall),
                 capabilityStatus: sessionCoordinator.capabilityStatus(for: txViewModel.viewModel.destinationCall),
+                autoPathSuggestions: autoPathSuggestions.map { suggestion in
+                    AutoPathSuggestionItem(
+                        id: suggestion.id,
+                        pathInput: suggestion.pathInput,
+                        pathDisplay: suggestion.pathDisplay,
+                        quality: suggestion.quality,
+                        freshnessPercent: suggestion.freshnessPercent,
+                        hops: suggestion.hops,
+                        sourceLabel: suggestion.sourceLabel
+                    )
+                },
+                onApplyAutoPath: { pathInput in
+                    applyAutoPath(pathInput)
+                },
                 onSend: {
                     sendCurrentMessage()
                 },

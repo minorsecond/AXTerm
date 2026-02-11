@@ -306,10 +306,16 @@ nonisolated final class NetRomRouter {
         }
     }
 
-    func removeRoute(origin: String, destination: String) {
+    func removeRoute(origin: String, destination: String, sourceType: String? = nil) {
         guard let normalizedDestination = normalize(destination) else { return }
         guard var bucket = routesByDestination[normalizedDestination] else { return }
-        bucket.removeAll { $0.origin == origin }
+        bucket.removeAll { route in
+            guard route.origin == origin else { return false }
+            if let sourceType {
+                return route.sourceType == sourceType
+            }
+            return true
+        }
         if bucket.isEmpty {
             routesByDestination.removeValue(forKey: normalizedDestination)
             return
