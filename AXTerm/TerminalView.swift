@@ -1092,6 +1092,11 @@ struct TerminalView: View {
                     .filter { !$0.isEmpty }
                 refreshConnectBarData()
                 connectBarViewModel.applyContext(connectCoordinator.activeContext)
+                if txViewModel.viewModel.connectionMode == .datagram {
+                    connectBarViewModel.enterBroadcastComposer()
+                } else {
+                    connectBarViewModel.enterConnectDraftMode()
+                }
             }
             .onReceive(client.$stations) { _ in
                 refreshConnectBarData()
@@ -1108,6 +1113,38 @@ struct TerminalView: View {
             }
             .onChange(of: connectCoordinator.activeContext) { _, context in
                 connectBarViewModel.applyContext(context)
+            }
+            .onChange(of: txViewModel.viewModel.connectionMode) { _, newMode in
+                switch newMode {
+                case .datagram:
+                    connectBarViewModel.enterBroadcastComposer()
+                case .connected:
+                    connectBarViewModel.enterConnectDraftMode()
+                }
+            }
+            .onChange(of: txViewModel.sessionState) { _, newState in
+                switch newState {
+                case .connecting:
+                    connectBarViewModel.markConnecting()
+                case .connected:
+                    connectBarViewModel.markConnected(
+                        sourceCall: txViewModel.viewModel.sourceCall,
+                        destination: txViewModel.viewModel.destinationCall,
+                        via: connectBarViewModel.viaDigipeaters,
+                        transportMode: connectBarViewModel.mode,
+                        forcedNextHop: connectBarViewModel.nextHopSelection == ConnectBarViewModel.autoNextHopID
+                            ? nil
+                            : connectBarViewModel.nextHopSelection
+                    )
+                case .disconnecting:
+                    connectBarViewModel.markDisconnecting()
+                case .disconnected:
+                    connectBarViewModel.markDisconnected()
+                case .error:
+                    connectBarViewModel.markFailed(reason: .unknown, detail: "Session state entered error")
+                case .none:
+                    break
+                }
             }
             .onChange(of: txViewModel.viewModel.destinationCall) { _, newValue in
                 applyAutoPathSuggestionIfNeeded(previousDestination: lastObservedDestination, newDestination: newValue)
@@ -1895,7 +1932,12 @@ struct TerminalView: View {
     private func connectWithActiveIntent(sourceContext: ConnectSourceContext) {
         syncLegacyFieldsFromConnectBar()
         let intent = connectBarViewModel.buildIntent(sourceContext: sourceContext)
-        guard intent.validationErrors.isEmpty else { return }
+        guard intent.validationErrors.isEmpty else {
+            connectBarViewModel.markFailed(reason: .invalidDraft, detail: intent.validationErrors.joined(separator: "; "))
+            return
+        }
+
+        connectBarViewModel.markConnecting()
 
         switch intent.kind {
         case .ax25Direct:
@@ -1908,7 +1950,10 @@ struct TerminalView: View {
     }
 
     private func connectAX25AndRecord(intent: ConnectIntent) {
-        guard let frame = txViewModel.connect() else { return }
+        guard let frame = txViewModel.connect() else {
+            connectBarViewModel.markFailed(reason: .unknown, detail: "Unable to build SABM frame")
+            return
+        }
         client.send(frame: frame) { result in
             Task { @MainActor in
                 switch result {
@@ -1920,6 +1965,7 @@ struct TerminalView: View {
                 case .failure(let error):
                     TxLog.error(.session, "SABM send failed", error: error)
                     connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+                    connectBarViewModel.markFailed(reason: .connectRejected, detail: error.localizedDescription)
                 }
             }
         }
@@ -1954,15 +2000,22 @@ struct TerminalView: View {
                         connectBarViewModel.recordAttempt(intent: intent, result: .success)
                     case .failure:
                         connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+                        connectBarViewModel.markFailed(reason: .connectRejected, detail: "Fallback AX.25 connect send failed")
                     }
                 }
             }
+        } else {
+            connectBarViewModel.markFailed(reason: .noRoute, detail: "No fallback AX.25 connect frame could be built")
         }
     }
 
     /// Disconnect from current session
     private func disconnectFromDestination() {
-        guard let frame = txViewModel.disconnect() else { return }
+        guard let frame = txViewModel.disconnect() else {
+            connectBarViewModel.markFailed(reason: .unknown, detail: "Unable to build DISC frame")
+            return
+        }
+        connectBarViewModel.markDisconnecting()
 
         // Send DISC
         client.send(frame: frame) { result in
@@ -1974,6 +2027,7 @@ struct TerminalView: View {
                     ])
                 case .failure(let error):
                     TxLog.error(.session, "DISC send failed", error: error)
+                    connectBarViewModel.markFailed(reason: .unknown, detail: error.localizedDescription)
                 }
             }
         }
@@ -1982,6 +2036,7 @@ struct TerminalView: View {
     /// Force disconnect immediately without DISC/UA exchange
     private func forceDisconnectFromDestination() {
         txViewModel.forceDisconnect()
+        connectBarViewModel.markDisconnected()
     }
 
     // MARK: - Transfers View

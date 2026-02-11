@@ -14,6 +14,8 @@ nonisolated enum RouteConnectAction {
 }
 
 final class ConnectBarViewModel: ObservableObject {
+    @Published private(set) var barState: ConnectBarState
+    @Published private(set) var adaptiveTelemetry: AdaptiveTelemetry?
     @Published var mode: ConnectBarMode = .ax25
     @Published var toCall: String = ""
     @Published var viaDigipeaters: [String] = []
@@ -32,6 +34,7 @@ final class ConnectBarViewModel: ObservableObject {
     private let recentAttemptsKey = "connectBar.recentAttempts"
     private let recentDigiPathsKey = "connectBar.recentDigiPaths"
     private let contextModeKey = "connectBar.contextModes"
+    private var activeDraftContext: ConnectSourceContext = .terminal
 
     private var contextModes: [ConnectSourceContext: ConnectBarMode] = [:]
     private var attemptHistory: [ConnectAttemptRecord] = []
@@ -48,6 +51,7 @@ final class ConnectBarViewModel: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        self.barState = .disconnectedDraft(.empty())
         loadPersistence()
     }
 
@@ -100,14 +104,17 @@ final class ConnectBarViewModel: ObservableObject {
     }
 
     func applyContext(_ context: ConnectSourceContext) {
+        activeDraftContext = context
         let resolved = contextModes[context] ?? ConnectBarMode.defaultMode(for: context)
         mode = resolved
         validate()
+        syncStateFromDraftIfEditable()
     }
 
     func setMode(_ newMode: ConnectBarMode, for context: ConnectSourceContext?) {
         mode = newMode
         if let context {
+            activeDraftContext = context
             contextModes[context] = newMode
             persistContextModes()
         }
@@ -116,6 +123,7 @@ final class ConnectBarViewModel: ObservableObject {
             routeOverrideWarning = nil
         }
         validate()
+        syncStateFromDraftIfEditable()
     }
 
     func updateRuntimeData(stations: [Station], neighbors: [NeighborInfo], routes: [RouteInfo], packets: [Packet], favorites: [String]) {
@@ -189,6 +197,7 @@ final class ConnectBarViewModel: ObservableObject {
         toCall = CallsignValidator.normalize(value)
         refreshRoutePreview()
         validate()
+        syncStateFromDraftIfEditable()
     }
 
     func applyInlineNote(_ note: String?) {
@@ -200,35 +209,41 @@ final class ConnectBarViewModel: ObservableObject {
         guard !parsed.isEmpty else { return }
         appendDigipeaters(parsed)
         pendingViaTokenInput = ""
+        syncStateFromDraftIfEditable()
     }
 
     func appendDigipeaters(_ rawValues: [String]) {
         let merged = viaDigipeaters + rawValues.map { CallsignValidator.normalize($0) }
         viaDigipeaters = DigipeaterListParser.capped(merged)
         validate()
+        syncStateFromDraftIfEditable()
     }
 
     func removeDigi(at index: Int) {
         guard viaDigipeaters.indices.contains(index) else { return }
         viaDigipeaters.remove(at: index)
         validate()
+        syncStateFromDraftIfEditable()
     }
 
     func moveDigiLeft(at index: Int) {
         guard index > 0, viaDigipeaters.indices.contains(index) else { return }
         viaDigipeaters.swapAt(index, index - 1)
         validate()
+        syncStateFromDraftIfEditable()
     }
 
     func moveDigiRight(at index: Int) {
         guard viaDigipeaters.indices.contains(index), index < viaDigipeaters.count - 1 else { return }
         viaDigipeaters.swapAt(index, index + 1)
         validate()
+        syncStateFromDraftIfEditable()
     }
 
     func applyPathPreset(_ path: [String]) {
         viaDigipeaters = DigipeaterListParser.capped(path.map { CallsignValidator.normalize($0) })
         validate()
+        syncStateFromDraftIfEditable()
     }
 
     func applyRoutePrefill(route: RouteDisplayInfo, action: RouteConnectAction) {
@@ -260,6 +275,7 @@ final class ConnectBarViewModel: ObservableObject {
         }
 
         validate()
+        syncStateFromDraftIfEditable()
     }
 
     func applyNeighborPrefill(_ neighbor: NeighborDisplayInfo) {
@@ -268,6 +284,7 @@ final class ConnectBarViewModel: ObservableObject {
         viaDigipeaters = []
         inlineNote = nil
         validate()
+        syncStateFromDraftIfEditable()
     }
 
     func applyStationPrefill(_ station: Station) {
@@ -276,6 +293,65 @@ final class ConnectBarViewModel: ObservableObject {
         viaDigipeaters = []
         inlineNote = nil
         validate()
+        syncStateFromDraftIfEditable()
+    }
+
+    func setAdaptiveTelemetry(_ telemetry: AdaptiveTelemetry?) {
+        adaptiveTelemetry = telemetry
+    }
+
+    func enterBroadcastComposer() {
+        barState = ConnectBarStateReducer.reduce(state: barState, event: .switchedToBroadcast)
+    }
+
+    func enterConnectDraftMode() {
+        barState = ConnectBarStateReducer.reduce(state: barState, event: .switchedToConnect)
+        syncStateFromDraftIfEditable()
+    }
+
+    func markConnecting() {
+        barState = ConnectBarStateReducer.reduce(state: barState, event: .connectRequested(currentDraft()))
+    }
+
+    func markConnected(sourceCall: String?, destination: String, via: [String], transportMode: ConnectBarMode, forcedNextHop: String?) {
+        let transport: SessionTransport
+        switch transportMode {
+        case .netrom:
+            transport = .netrom(nextHop: forcedNextHop, forced: forcedNextHop != nil)
+        case .ax25, .ax25ViaDigi:
+            transport = .ax25(via: via)
+        }
+
+        let session = SessionInfo(
+            sourceContext: activeDraftContext,
+            sourceCall: sourceCall,
+            destination: CallsignValidator.normalize(destination),
+            transport: transport,
+            connectedAt: Date()
+        )
+        barState = ConnectBarStateReducer.reduce(state: barState, event: .connectSucceeded(session))
+    }
+
+    func markDisconnecting() {
+        barState = ConnectBarStateReducer.reduce(state: barState, event: .disconnectRequested)
+    }
+
+    func markDisconnected() {
+        barState = ConnectBarStateReducer.reduce(
+            state: barState,
+            event: .disconnectCompleted(nextDraft: currentDraft())
+        )
+    }
+
+    func markFailed(reason: ConnectFailure.Reason, detail: String?) {
+        let failure = ConnectFailure(reason: reason, detail: detail)
+        barState = ConnectBarStateReducer.reduce(state: barState, event: .connectFailed(failure))
+    }
+
+    func applySidebarSelection(_ selection: SidebarStationSelection, action: SidebarConnectAction) {
+        barState = ConnectBarStateReducer.reduce(state: barState, event: .sidebarSelection(selection, action))
+        guard case let .disconnectedDraft(draft) = barState else { return }
+        applyDraft(draft)
     }
 
     func buildIntent(sourceContext: ConnectSourceContext) -> ConnectIntent {
@@ -441,6 +517,56 @@ final class ConnectBarViewModel: ObservableObject {
         validationErrors = errors
         warningMessages = warnings
         refreshRoutePreview()
+    }
+
+    private func currentDraft() -> ConnectDraft {
+        let transport: ConnectTransportDraft
+        switch mode {
+        case .ax25:
+            transport = .ax25(.direct)
+        case .ax25ViaDigi:
+            transport = .ax25(.viaDigipeaters(viaDigipeaters))
+        case .netrom:
+            let forced = nextHopSelection == Self.autoNextHopID ? nil : nextHopSelection
+            transport = .netrom(NetRomDraftOptions(forcedNextHop: forced, routePreview: routePreview))
+        }
+
+        return ConnectDraft(
+            sourceContext: activeDraftContext,
+            destination: toCall,
+            transport: transport
+        )
+    }
+
+    private func applyDraft(_ draft: ConnectDraft) {
+        activeDraftContext = draft.sourceContext
+        toCall = CallsignValidator.normalize(draft.destination)
+        switch draft.transport {
+        case let .ax25(option):
+            switch option {
+            case .direct:
+                mode = .ax25
+                viaDigipeaters = []
+            case let .viaDigipeaters(path):
+                mode = .ax25ViaDigi
+                viaDigipeaters = DigipeaterListParser.capped(path.map { CallsignValidator.normalize($0) })
+            }
+            nextHopSelection = Self.autoNextHopID
+        case let .netrom(option):
+            mode = .netrom
+            viaDigipeaters = []
+            nextHopSelection = option.forcedNextHop ?? Self.autoNextHopID
+        }
+        validate()
+    }
+
+    private func syncStateFromDraftIfEditable() {
+        switch barState {
+        case .disconnectedDraft, .failed:
+            barState = .disconnectedDraft(currentDraft())
+        case .connecting, .connectedSession, .disconnecting, .broadcastComposer:
+            break
+        }
     }
 
     private func dedupe(_ values: [String]) -> [String] {
