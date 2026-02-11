@@ -150,6 +150,40 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.viewState.selectedNodeID)
     }
 
+    func testClearSelectionAndFitAlsoClearsFocusPillState() async {
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "fiveMinutes"
+        settings.analyticsIncludeVia = false
+        settings.analyticsMinEdgeCount = 1
+        settings.analyticsMaxNodes = 10
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.setActive(true)
+
+        viewModel.handleNodeClick("alpha", isShift: false)
+        viewModel.focusState.setAnchor(nodeID: "alpha", displayName: "ALPHA")
+
+        XCTAssertEqual(viewModel.viewState.selectedNodeID, "alpha")
+        XCTAssertTrue(viewModel.focusState.isFocusEnabled)
+        XCTAssertEqual(viewModel.focusState.anchorNodeID, "alpha")
+
+        viewModel.clearSelectionAndFit()
+
+        XCTAssertTrue(viewModel.viewState.selectedNodeIDs.isEmpty)
+        XCTAssertNil(viewModel.viewState.selectedNodeID)
+        XCTAssertFalse(viewModel.focusState.isFocusEnabled)
+        XCTAssertNil(viewModel.focusState.anchorNodeID)
+        XCTAssertNotNil(viewModel.fitToSelectionRequest)
+        XCTAssertTrue(viewModel.fitTargetNodeIDs.isEmpty)
+    }
+
     func testUsesDatabaseAggregationProviderWhenAvailable() async {
         let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
         let settings = makeSettings()

@@ -441,18 +441,20 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         updateSelectionState()
     }
 
-    /// Clears selection entirely and fits view to all visible nodes.
+    /// Clears selection and focus state, then fits view to all visible nodes.
     /// Called from toolbar "Clear" button and sidebar "Clear Selection" button.
     func clearSelectionAndFit() {
         _ = GraphSelectionReducer.reduce(state: &selectionState, action: .clickBackground)
+        focusState.clearFocus()
         updateSelectionState()
+        recomputeFilteredGraph()
         // Fit to visible nodes after clearing
         fitTargetNodeIDs = []
         fitToSelectionRequest = UUID()
 
         Telemetry.breadcrumb(
             category: "graph.clearSelection",
-            message: "Selection cleared and fit to view requested"
+            message: "Selection and focus cleared; fit to view requested"
         )
     }
 
