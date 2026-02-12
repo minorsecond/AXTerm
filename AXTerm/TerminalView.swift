@@ -1033,7 +1033,7 @@ private struct SessionRecord: Identifiable, Hashable {
     var statusText: String
 
     var label: String {
-        "\(destination) • \(statusText)"
+        destination  // Removed "• \(statusText)" - state now only in header
     }
 }
 
@@ -1606,13 +1606,6 @@ struct TerminalView: View {
                         .accessibilityIdentifier("connectionStatus")
                         .accessibilityLabel(connectionMessage)
                         .accessibilityHidden(false)
-                        .frame(width: 1, height: 1)
-                }
-
-                // Connection status banner
-                if showConnectionBanner {
-                    connectionBanner
-                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
                 // Session output (reuse console view for now, filtered by session)
@@ -1621,35 +1614,15 @@ struct TerminalView: View {
                 }
 
                 // Session status pill (shown during active session lifecycle)
-                if txViewModel.viewModel.connectionMode == .connected,
-                   let state = txViewModel.sessionState,
-                   state != .disconnected {
-                    HStack(spacing: 8) {
-                        SessionStatusBadge(
-                            state: state,
-                            destinationCall: connectBarViewModel.toCall,
-                            onDisconnect: { disconnectFromDestination() },
-                            onForceDisconnect: { forceDisconnectFromDestination() },
-                            peerCapability: client.capabilityStore.capabilities(for: txViewModel.viewModel.destinationCall),
-                            capabilityStatus: sessionCoordinator.capabilityStatus(for: txViewModel.viewModel.destinationCall)
-                        )
-
-                        if !connectBarViewModel.viaDigipeaters.isEmpty,
-                           connectBarViewModel.mode == .ax25ViaDigi {
-                            Text("via \(connectBarViewModel.viaDigipeaters.joined(separator: " → "))")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        } else if connectBarViewModel.mode == .netrom {
-                            Text(connectBarViewModel.routePreview)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-
-                        Spacer()
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                if txViewModel.viewModel.connectionMode == .connected {
+                    ConnectionStatusStripView(
+                        session: txViewModel.currentSession,
+                        sessionState: txViewModel.sessionState,
+                        destinationCall: connectBarViewModel.toCall,
+                        viaDigipeaters: connectBarViewModel.viaDigipeaters,
+                        connectionMode: connectBarViewModel.mode,
+                        isTNCConnected: client.status == .connected
+                    )
                 }
 
                 sessionOutputView

@@ -46,7 +46,7 @@ struct MainView: View {
                 }
             }
             .padding()
-            .background(Color(UIColor.systemBackground))
+            .background(.background)
             .shadow(radius: 2)
 
             // Main Content Area

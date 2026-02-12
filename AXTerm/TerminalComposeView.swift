@@ -189,7 +189,7 @@ struct SessionStatusBadge: View {
         case .connecting:
             return "Connecting..."
         case .connected:
-            return destinationCall.isEmpty ? "Connected" : "Connected to \(destinationCall)"
+            return "Connected"  // Removed "to <callsign>" text - will be shown in header
         case .disconnecting:
             return "Disconnecting..."
         case .error:
@@ -1290,11 +1290,8 @@ struct TerminalComposeView: View {
                     // Row 1: Destination + Routing + Action (session mode)
                     HStack(spacing: 8) {
                         if sessionState == .connected {
-                            // Locked destination
+                            // Locked destination - callsign shown in header, no "Session:" label needed
                             HStack(spacing: 6) {
-                                Text("Session:")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
                                 Text(connectBarViewModel.toCall)
                                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                             }

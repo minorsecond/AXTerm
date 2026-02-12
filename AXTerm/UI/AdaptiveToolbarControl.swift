@@ -175,8 +175,9 @@ private struct AdaptivePopoverContent: View {
     }
 
     private func contextChipText(adaptive: AdaptiveParams?) -> String {
+        // Session information moved to consolidated header - show only global/network status
         if let destination = adaptive?.destination {
-            return "Session: \(destination)"
+            return "\(destination)"  // Show just destination without "Session:" prefix
         }
         return "Global Network"
     }
