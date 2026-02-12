@@ -1267,6 +1267,7 @@ struct TerminalComposeView: View {
 
     @FocusState private var isTextFieldFocused: Bool
     @State private var showRoutingChangeConfirmation = false
+    @StateObject private var destinationPickerViewModel = DestinationPickerViewModel()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1300,26 +1301,22 @@ struct TerminalComposeView: View {
                             .accessibilityIdentifier("connectBar.lockedDestination")
                         } else {
                             // Editable destination
-                            Text("To:")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.secondary)
-
-                            EditableComboBox(
-                                text: destinationBinding,
-                                placeholder: "Callsign-SSID",
-                                items: connectBarViewModel.flatToSuggestions,
-                                groups: connectBarViewModel.toSuggestionGroups.map { EditableComboBoxGroup(title: $0.title, items: $0.values) },
-                                width: 180,
-                                focusRequested: .constant(false),
-                                accessibilityIdentifier: "connectBar.destinationField",
-                                onCommit: {
+                            DestinationPickerControl(
+                                viewModel: destinationPickerViewModel,
+                                externalText: connectBarViewModel.toCall,
+                                groups: connectBarViewModel.toSuggestionGroups,
+                                disabled: sessionState == .connecting || sessionState == .disconnecting,
+                                onDestinationChanged: { value in
+                                    connectBarViewModel.applySuggestedTo(value)
+                                },
+                                onDestinationCommitted: { value in
+                                    connectBarViewModel.applySuggestedTo(value)
                                     if !primaryActionDisabled {
                                         handlePrimaryAction()
                                     }
                                 }
                             )
-                            .frame(maxWidth: 200)
-                            .disabled(sessionState == .connecting || sessionState == .disconnecting)
+                            .frame(maxWidth: 290)
                         }
 
                         RoutingCapsuleButton(
@@ -1334,7 +1331,7 @@ struct TerminalComposeView: View {
                         Spacer()
 
                         // Validation (subtle, only when relevant)
-                        if let validation = connectBarViewModel.validationErrors.first,
+                        if let validation = nonDestinationValidationError,
                            sessionState != .connected,
                            !connectBarViewModel.isAutoAttemptInProgress {
                             Text(validation)
@@ -1423,15 +1420,6 @@ struct TerminalComposeView: View {
         }
     }
 
-    // MARK: - Computed Properties
-
-    private var destinationBinding: Binding<String> {
-        Binding(
-            get: { connectBarViewModel.toCall },
-            set: { connectBarViewModel.applySuggestedTo($0) }
-        )
-    }
-
     // MARK: Session action (Connect/Disconnect/Cancel/Stop) — Row 1
 
     private var sessionActionTitle: String {
@@ -1454,8 +1442,21 @@ struct TerminalComposeView: View {
         case .connecting, .disconnecting, .connected:
             return false
         case .disconnected, .error, .none:
-            return !isConnected || !connectBarViewModel.validationErrors.isEmpty
+            return !isConnected || destinationValidationIsBlocking || !connectBarViewModel.validationErrors.isEmpty
         }
+    }
+
+    private var destinationValidationIsBlocking: Bool {
+        switch destinationPickerViewModel.validationState {
+        case .empty, .invalid:
+            return true
+        case .valid:
+            return false
+        }
+    }
+
+    private var nonDestinationValidationError: String? {
+        connectBarViewModel.validationErrors.first { !$0.lowercased().contains("destination") }
     }
 
     private func handleSessionAction() {
