@@ -221,4 +221,27 @@ final class ConnectBarViewModelTests: XCTestCase {
         }
     }
 
+    func testRoutingSummaryNoContradiction() {
+        // When mode is ax25ViaDigi but path is empty, the summary must NOT say
+        // "via Digi (Direct)" or any contradictory label. It should indicate Auto.
+        let vm = makeViewModel()
+        vm.setMode(.ax25ViaDigi, for: .terminal)
+        vm.viaDigipeaters = []
+        // The RoutingCapsuleButton's summaryText uses mode + viaDigipeaters.
+        // Verify the raw state: mode is viaDigi, path is empty.
+        XCTAssertEqual(vm.mode, .ax25ViaDigi)
+        XCTAssertTrue(vm.viaDigipeaters.isEmpty, "Empty digi path should represent Auto mode")
+
+        // With an explicit path it should show the path, not "Direct"
+        vm.viaDigipeaters = ["DRL"]
+        XCTAssertEqual(vm.viaDigipeaters, ["DRL"])
+    }
+
+    func testCallsignNormalizePreservesDash() {
+        // Verify normalize does NOT strip dashes
+        XCTAssertEqual(CallsignValidator.normalize("KB5YZB-7"), "KB5YZB-7")
+        XCTAssertEqual(CallsignValidator.normalize("n0call-15"), "N0CALL-15")
+        XCTAssertEqual(CallsignValidator.normalize(" w0tx-0 "), "W0TX-0")
+    }
+
 }

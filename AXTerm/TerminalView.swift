@@ -1673,8 +1673,6 @@ struct TerminalView: View {
                 characterCount: txViewModel.characterCount,
                 queueDepth: txViewModel.queueDepth,
                 isConnected: client.status == .connected,
-                tncStatus: client.status,
-                tncEndpoint: tncEndpointLabel,
                 sessionState: txViewModel.sessionState,
                 destinationCapability: client.capabilityStore.capabilities(for: txViewModel.viewModel.destinationCall),
                 capabilityStatus: sessionCoordinator.capabilityStatus(for: txViewModel.viewModel.destinationCall),
@@ -1824,11 +1822,6 @@ struct TerminalView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(connectionColor.opacity(0.1))
-    }
-
-    private var tncEndpointLabel: String? {
-        guard let host = client.connectedHost, let port = client.connectedPort else { return nil }
-        return "\(host):\(port)"
     }
 
     private var connectionIcon: String {

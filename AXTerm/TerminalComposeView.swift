@@ -18,56 +18,6 @@ struct AutoPathSuggestionItem: Identifiable, Hashable {
     let sourceLabel: String
 }
 
-// MARK: - TNC Status Indicator
-
-/// Compact LED showing TNC hardware connection status
-private struct TNCStatusIndicator: View {
-    let status: ConnectionStatus
-    let endpoint: String?
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(ledColor)
-                .frame(width: 8, height: 8)
-            Text("TNC")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-        }
-        .help(tooltipText)
-        .accessibilityLabel(accessibilityText)
-    }
-
-    private var ledColor: Color {
-        switch status {
-        case .connected: return .green
-        case .connecting: return .yellow
-        case .failed: return .red
-        case .disconnected: return .gray
-        }
-    }
-
-    private var tooltipText: String {
-        switch status {
-        case .connected:
-            if let endpoint {
-                return "TNC: Connected (KISS TCP @ \(endpoint))"
-            }
-            return "TNC: Connected"
-        case .connecting:
-            return "TNC: Connecting..."
-        case .failed:
-            return "TNC: Connection failed"
-        case .disconnected:
-            return "TNC: Disconnected"
-        }
-    }
-
-    private var accessibilityText: String {
-        tooltipText
-    }
-}
-
 // MARK: - Connection Mode Toggle
 
 /// A Mac-native toggle for switching between datagram and connected modes
@@ -400,18 +350,18 @@ private struct RoutingCapsuleButton: View {
     private var summaryText: String {
         switch viewModel.mode {
         case .ax25:
-            return "Routing: AX.25 Direct"
+            return "AX.25 \u{00B7} Direct"
         case .ax25ViaDigi:
             if viewModel.viaDigipeaters.isEmpty {
-                return "Routing: AX.25 via Digi (Direct)"
+                return "AX.25 \u{00B7} Digi \u{00B7} Auto"
             }
-            let compactPath = viewModel.viaDigipeaters.prefix(2).joined(separator: " → ")
-            return "Routing: AX.25 via Digi (\(compactPath))"
+            let compactPath = viewModel.viaDigipeaters.prefix(2).joined(separator: " \u{2192} ")
+            return "AX.25 \u{00B7} Digi: \(compactPath)"
         case .netrom:
             if viewModel.nextHopSelection == ConnectBarViewModel.autoNextHopID {
-                return "Routing: NET/ROM (Auto)"
+                return "NET/ROM \u{00B7} Auto"
             }
-            return "Routing: NET/ROM (Next Hop: \(viewModel.nextHopSelection))"
+            return "NET/ROM \u{00B7} \(viewModel.nextHopSelection)"
         }
     }
 }
@@ -1267,10 +1217,6 @@ struct TerminalComposeView: View {
     let characterCount: Int
     let queueDepth: Int
     let isConnected: Bool
-    /// TNC hardware connection status
-    let tncStatus: ConnectionStatus
-    /// Formatted TNC endpoint (e.g. "localhost:8001")
-    let tncEndpoint: String?
     /// Session state for connected mode (nil if not in connected mode)
     let sessionState: AX25SessionState?
     /// AXDP capability for the destination station (if known)
@@ -1299,10 +1245,9 @@ struct TerminalComposeView: View {
         VStack(spacing: 0) {
             Divider()
 
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 12) {
-                    TNCStatusIndicator(status: tncStatus, endpoint: tncEndpoint)
-
+            VStack(alignment: .leading, spacing: 8) {
+                // Row 0: Mode toggle (compact, left-aligned)
+                HStack(spacing: 8) {
                     ConnectionModeToggle(
                         mode: $connectionMode,
                         sessionState: sessionState,
@@ -1317,8 +1262,45 @@ struct TerminalComposeView: View {
                        connectBarViewModel.adaptiveTelemetry != nil {
                         AdaptiveTelemetryChip(telemetry: connectBarViewModel.adaptiveTelemetry)
                     }
+                }
 
-                    if connectionMode == .connected {
+                if connectionMode == .connected {
+                    // Row 1: Destination + Routing + Action (session mode)
+                    HStack(spacing: 8) {
+                        if sessionState == .connected {
+                            // Locked destination
+                            HStack(spacing: 6) {
+                                Text("Session:")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                Text(connectBarViewModel.toCall)
+                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            }
+                            .accessibilityIdentifier("connectBar.lockedDestination")
+                        } else {
+                            // Editable destination
+                            Text("To:")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+
+                            EditableComboBox(
+                                text: destinationBinding,
+                                placeholder: "Callsign-SSID",
+                                items: connectBarViewModel.flatToSuggestions,
+                                groups: connectBarViewModel.toSuggestionGroups.map { EditableComboBoxGroup(title: $0.title, items: $0.values) },
+                                width: 180,
+                                focusRequested: .constant(false),
+                                accessibilityIdentifier: "connectBar.destinationField",
+                                onCommit: {
+                                    if !primaryActionDisabled {
+                                        handlePrimaryAction()
+                                    }
+                                }
+                            )
+                            .frame(maxWidth: 200)
+                            .disabled(sessionState == .connecting || sessionState == .disconnecting)
+                        }
+
                         RoutingCapsuleButton(
                             viewModel: connectBarViewModel,
                             onAutoConnect: onAutoConnect,
@@ -1327,61 +1309,58 @@ struct TerminalComposeView: View {
                                 showRoutingChangeConfirmation = true
                             } : nil
                         )
-                    }
-                }
 
-                if connectionMode == .connected {
-                    if sessionState == .connected {
-                        // Locked destination when connected
-                        HStack(spacing: 8) {
-                            Text("Connected to")
-                                .font(.system(size: 12))
+                        Spacer()
+
+                        // Validation (subtle, only when relevant)
+                        if let validation = connectBarViewModel.validationErrors.first,
+                           sessionState != .connected,
+                           !connectBarViewModel.isAutoAttemptInProgress {
+                            Text(validation)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.red.opacity(0.7))
+                                .lineLimit(1)
+                        } else if let autoStatus = connectBarViewModel.autoAttemptStatus {
+                            Text(autoStatus)
+                                .font(.system(size: 10))
                                 .foregroundStyle(.secondary)
-                            Text(connectBarViewModel.toCall)
-                                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                            Spacer()
-                            Button("Disconnect") {
-                                onDisconnect()
+                                .lineLimit(1)
+                        }
+
+                        // Session action button
+                        if sessionState == .connected {
+                            Button(sessionActionTitle) {
+                                handleSessionAction()
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
-                            .help("Disconnect from \(connectBarViewModel.toCall)")
-                        }
-                        .accessibilityIdentifier("connectBar.lockedDestination")
-                    } else {
-                        // Editable combo box when not connected
-                        EditableComboBox(
-                            text: destinationBinding,
-                            placeholder: "Destination (CALL-SSID)",
-                            items: connectBarViewModel.flatToSuggestions,
-                            groups: connectBarViewModel.toSuggestionGroups.map { EditableComboBoxGroup(title: $0.title, items: $0.values) },
-                            width: 340,
-                            focusRequested: .constant(false),
-                            accessibilityIdentifier: "connectBar.destinationField",
-                            onCommit: {
-                                if !primaryActionDisabled {
-                                    handlePrimaryAction()
-                                }
+                            .accessibilityIdentifier("connectBar.disconnectButton")
+                        } else {
+                            Button(sessionActionTitle) {
+                                handleSessionAction()
                             }
-                        )
-                        .frame(maxWidth: 350)
-                        .disabled(sessionState == .connecting || sessionState == .disconnecting)
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(sessionActionDisabled)
+                            .accessibilityIdentifier(connectBarViewModel.isAutoAttemptInProgress ? "connectBar.stopAutoButton" : "connectBar.connectButton")
+                        }
                     }
                 }
 
-                TextField(connectionMode == .connected ? "Message" : "Broadcast message", text: $composeText)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
-                    .accessibilityIdentifier("terminalComposeField")
-                    .focused($isTextFieldFocused)
-                    .onSubmit {
-                        if !primaryActionDisabled {
-                            handlePrimaryAction()
+                // Row 2: Message field + Send (primary row)
+                HStack(spacing: 8) {
+                    TextField(connectionMode == .connected ? "Message" : "Broadcast message", text: $composeText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                        .accessibilityIdentifier("terminalComposeField")
+                        .focused($isTextFieldFocused)
+                        .onSubmit {
+                            if canSendMessage {
+                                onSend()
+                            }
                         }
-                    }
-                    .disabled(!isConnected || !canTypeMessage)
+                        .disabled(!isConnected || !canTypeMessage)
 
-                HStack(spacing: 10) {
                     if !composeText.isEmpty {
                         Text("\(characterCount)")
                             .font(.system(size: 10, design: .monospaced))
@@ -1389,35 +1368,19 @@ struct TerminalComposeView: View {
                             .monospacedDigit()
                     }
 
-                    if connectionMode == .connected,
-                       let validation = connectBarViewModel.validationErrors.first,
-                       !connectBarViewModel.isAutoAttemptInProgress {
-                        Text(validation)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    } else if let autoStatus = connectBarViewModel.autoAttemptStatus {
-                        Text(autoStatus)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-
-                    Spacer()
-
                     if queueDepth > 0 {
                         Label("\(queueDepth)", systemImage: "tray.full")
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
                     }
 
-                    Button(primaryActionTitle) {
-                        handlePrimaryAction()
+                    Button("Send") {
+                        onSend()
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.regular)
-                    .disabled(primaryActionDisabled)
-                    .accessibilityIdentifier(connectBarViewModel.isAutoAttemptInProgress ? "connectBar.stopAutoButton" : "connectBar.connectButton")
+                    .disabled(!canSendMessage || !isConnected)
+                    .keyboardShortcut(.return, modifiers: [])
                 }
 
                 if connectionMode == .datagram,
@@ -1425,8 +1388,8 @@ struct TerminalComposeView: View {
                     BroadcastComposerStrip(unprotoPath: broadcast.unprotoPath)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
             .background(Color(nsColor: .windowBackgroundColor))
             .alert("Change Routing?", isPresented: $showRoutingChangeConfirmation) {
                 Button("Reconnect with New Routing") {
@@ -1448,16 +1411,15 @@ struct TerminalComposeView: View {
         )
     }
 
-    private var primaryActionTitle: String {
-        if connectionMode == .datagram {
-            return "Send"
-        }
+    // MARK: Session action (Connect/Disconnect/Cancel/Stop) — Row 1
+
+    private var sessionActionTitle: String {
         if connectBarViewModel.isAutoAttemptInProgress {
             return "Stop"
         }
         switch sessionState {
         case .connected:
-            return "Send"
+            return "Disconnect"
         case .connecting, .disconnecting:
             return "Cancel"
         case .disconnected, .error, .none:
@@ -1465,23 +1427,47 @@ struct TerminalComposeView: View {
         }
     }
 
-    private var primaryActionDisabled: Bool {
-        if connectionMode == .datagram {
-            return !canSendMessage || !isConnected
-        }
-
-        if connectBarViewModel.isAutoAttemptInProgress {
-            return false
-        }
-
+    private var sessionActionDisabled: Bool {
+        if connectBarViewModel.isAutoAttemptInProgress { return false }
         switch sessionState {
-        case .connected:
-            return !canSendMessage || !isConnected
-        case .connecting, .disconnecting:
+        case .connecting, .disconnecting, .connected:
             return false
         case .disconnected, .error, .none:
             return !isConnected || !connectBarViewModel.validationErrors.isEmpty
         }
+    }
+
+    private func handleSessionAction() {
+        if connectBarViewModel.isAutoAttemptInProgress {
+            onStopAutoConnect()
+            return
+        }
+        switch sessionState {
+        case .connected:
+            onDisconnect()
+        case .connecting, .disconnecting:
+            onForceDisconnect()
+        case .disconnected, .error, .none:
+            // If digi mode with no explicit path, use auto-connect
+            if connectBarViewModel.mode == .ax25ViaDigi,
+               connectBarViewModel.viaDigipeaters.isEmpty {
+                onAutoConnect()
+            } else {
+                onConnectBarConnect()
+            }
+        }
+    }
+
+    // MARK: Legacy primary action (kept for InlineConnectBar compatibility)
+
+    private var primaryActionTitle: String {
+        if connectionMode == .datagram { return "Send" }
+        return sessionActionTitle
+    }
+
+    private var primaryActionDisabled: Bool {
+        if connectionMode == .datagram { return !canSendMessage || !isConnected }
+        return sessionActionDisabled
     }
 
     private func handlePrimaryAction() {
@@ -1489,20 +1475,7 @@ struct TerminalComposeView: View {
             onSend()
             return
         }
-
-        if connectBarViewModel.isAutoAttemptInProgress {
-            onStopAutoConnect()
-            return
-        }
-
-        switch sessionState {
-        case .connected:
-            onSend()
-        case .connecting, .disconnecting:
-            onForceDisconnect()
-        case .disconnected, .error, .none:
-            onConnectBarConnect()
-        }
+        handleSessionAction()
     }
 
     /// Whether the user can type a message
@@ -1718,8 +1691,7 @@ struct TxQueueView: View {
         characterCount: 11,
         queueDepth: 2,
         isConnected: true,
-        tncStatus: .connected,
-        tncEndpoint: "localhost:8001",
+
         sessionState: nil,
         connectBarViewModel: ConnectBarViewModel(),
         connectContext: .terminal,
@@ -1751,8 +1723,7 @@ struct TxQueueView: View {
         characterCount: 11,
         queueDepth: 0,
         isConnected: true,
-        tncStatus: .connected,
-        tncEndpoint: "localhost:8001",
+
         sessionState: .connected,
         connectBarViewModel: ConnectBarViewModel(),
         connectContext: .terminal,
@@ -1784,8 +1755,6 @@ struct TxQueueView: View {
         characterCount: 0,
         queueDepth: 0,
         isConnected: true,
-        tncStatus: .connecting,
-        tncEndpoint: nil,
         sessionState: .connecting,
         connectBarViewModel: ConnectBarViewModel(),
         connectContext: .terminal,

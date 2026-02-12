@@ -519,48 +519,84 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
-            connectionStatusCapsule
+            if sessionCoordinator.adaptiveTransmissionEnabled, client.status == .connected {
+                adaptiveToolbarChip
+            }
+            tncToolbarMenu
         }
     }
-    
-    
-    /// Right zone: Connection status capsule with actions
+
+    /// Adaptive parameters chip (secondary, shown only when TNC connected)
     @ViewBuilder
-    private var connectionStatusCapsule: some View {
+    private var adaptiveToolbarChip: some View {
+        let adaptive = sessionCoordinator.globalAdaptiveSettings
+        HStack(spacing: 4) {
+            Image(systemName: "chart.line.uptrend.xyaxis")
+                .font(.system(size: 9))
+                .foregroundStyle(.green)
+            Text("K\(adaptive.windowSize.effectiveValue) P\(adaptive.paclen.effectiveValue) N2 \(adaptive.maxRetries.effectiveValue)")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(.thinMaterial, in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(Color(nsColor: .separatorColor).opacity(0.25), lineWidth: 0.5)
+        )
+        .help("Adaptive Transmission: Window K\(adaptive.windowSize.effectiveValue), Packet P\(adaptive.paclen.effectiveValue), Retries N2 \(adaptive.maxRetries.effectiveValue)")
+    }
+
+    /// TNC transport status menu — clickable pill with connect/disconnect actions
+    @ViewBuilder
+    private var tncToolbarMenu: some View {
         Menu {
             switch client.status {
             case .connected:
-                Button("Disconnect", role: .destructive) {
+                Button("Disconnect TNC", role: .destructive) {
                     client.disconnect()
                 }
-                Button("Reconnect") {
+                Button("Reconnect TNC") {
                     reconnectToTNC()
                 }
             case .connecting:
                 Button("Cancel") {
                     client.disconnect()
                 }
-                Button("Reconnect") {
-                    reconnectToTNC()
-                }
             case .disconnected, .failed:
-                Button("Reconnect") {
+                Button("Connect TNC") {
+                    client.connect(host: settings.host, port: settings.portValue)
+                }
+                Button("Reconnect TNC") {
                     reconnectToTNC()
                 }
             }
 
             Divider()
 
-            Section("Connection details") {
-                Text(connectionHostPort)
+            Section("Endpoint") {
+                Text("KISS TCP @ \(connectionHostPort)")
+            }
+
+            if let lastError = client.lastError {
+                Section("Last error") {
+                    Text(lastError)
+                }
+            }
+
+            Divider()
+
+            Button("TNC Settings\u{2026}") {
+                SettingsRouter.shared.navigate(to: .network)
             }
         } label: {
             HStack(spacing: 6) {
                 Circle()
-                    .fill(client.status == .connected ? .green : Color(nsColor: .tertiaryLabelColor))
+                    .fill(tncLedColor)
                     .frame(width: 8, height: 8)
 
-                Text(connectionCapsuleLabel)
+                Text(tncCapsuleLabel)
                     .font(.system(size: 11, weight: .medium))
                     .lineLimit(1)
                     .foregroundStyle(.secondary)
@@ -574,7 +610,16 @@ struct ContentView: View {
             )
         }
         .menuStyle(.borderlessButton)
-        .help("Connection actions")
+        .help("TNC connection status and actions")
+    }
+
+    private var tncLedColor: Color {
+        switch client.status {
+        case .connected: return .green
+        case .connecting: return .yellow
+        case .failed: return .red
+        case .disconnected: return Color(nsColor: .tertiaryLabelColor)
+        }
     }
 
     // MARK: - Computed Properties
@@ -590,18 +635,17 @@ struct ContentView: View {
         }
     }
     
-    private var connectionCapsuleLabel: String {
+    private var tncCapsuleLabel: String {
         switch client.status {
         case .connected:
-            if sessionCoordinator.adaptiveTransmissionEnabled {
-                let adaptive = sessionCoordinator.globalAdaptiveSettings
-                return "Connected • Adaptive K\(adaptive.windowSize.effectiveValue) P\(adaptive.paclen.effectiveValue) N2 \(adaptive.maxRetries.effectiveValue)"
-            }
-            return "Connected"
+            let host = client.connectedHost ?? settings.host
+            return "TNC: \(host)"
         case .connecting:
-            return "Connecting…"
-        case .disconnected, .failed:
-            return "Not Connected"
+            return "TNC Connecting\u{2026}"
+        case .disconnected:
+            return "TNC Disconnected"
+        case .failed:
+            return "TNC Failed"
         }
     }
 
