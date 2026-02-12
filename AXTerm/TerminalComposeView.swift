@@ -327,8 +327,8 @@ private struct RoutingPopoverContent: View {
     @State private var digiInputMode: DigiInputMode = .auto
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text("Protocol")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -342,11 +342,11 @@ private struct RoutingPopoverContent: View {
                 .disabled(isLocked)
             }
 
+            protocolInfoCard
+
             switch viewModel.mode {
             case .ax25:
-                Text("Direct AX.25 uses no digipeater path overrides.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                EmptyView()
 
             case .ax25ViaDigi:
                 viaDigiProgressiveSection
@@ -370,11 +370,33 @@ private struct RoutingPopoverContent: View {
                 .controlSize(.small)
             }
         }
-        .padding(14)
-        .frame(width: 480)
+        .padding(12)
+        .frame(width: viewModel.mode == .ax25 ? 360 : 480)
         .onAppear {
             digiInputMode = viewModel.viaDigipeaters.isEmpty ? .auto : .manual
         }
+        .onChange(of: digiInputMode) { _, newMode in
+            guard !isLocked else { return }
+            if newMode == .auto, !viewModel.viaDigipeaters.isEmpty {
+                viewModel.applyPathPreset([])
+            }
+        }
+    }
+
+    private var protocolInfoCard: some View {
+        let description: String
+
+        switch viewModel.mode {
+        case .ax25:
+            description = "Sends frames directly to the destination without digipeater path overrides. Uses only the destination callsign for routing."
+        case .ax25ViaDigi:
+            description = "Routes via a specified digipeater path (e.g. DRLNODE). Auto selects a recommended path, or use Manual to pin hops."
+        case .netrom:
+            description = "Connects using node-to-node routing, not digipeater paths. AXTerm selects the next hop based on learned routes and link quality."
+        }
+
+        return ProtocolInfoCallout(description: description)
+            .padding(.top, 2)
     }
 
     @ViewBuilder
@@ -408,37 +430,6 @@ private struct RoutingPopoverContent: View {
                     Text("AXTerm will select the best path automatically.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-
-                    // Show compact preset chips if available
-                    if !viewModel.recommendedDigiPaths.isEmpty {
-                        HStack(spacing: 6) {
-                            ForEach(Array(viewModel.recommendedDigiPaths.prefix(3).enumerated()), id: \.offset) { idx, candidate in
-                                let unavailable = viewModel.isSuggestedPathUnavailable(candidate.digis)
-                                Button(pathLabel(for: candidate.digis, allowEllipsis: false)) {
-                                    viewModel.applyPathPreset(candidate.digis)
-                                    digiInputMode = .manual
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .disabled(unavailable)
-                                .opacity(unavailable ? 0.55 : 1.0)
-                                .help(unavailable ? "Already uses a digi in your current path" : "")
-                                .accessibilityIdentifier("connectBar.autoPresetChip.\(idx)")
-                            }
-
-                            Button("Auto") {
-                                onAutoConnect()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                        }
-                    } else {
-                        Button("Auto Connect") {
-                            onAutoConnect()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    }
                 } else {
                     viaEditorSection
                     recommendedDigiSection
@@ -547,23 +538,19 @@ private struct RoutingPopoverContent: View {
 
             HStack(spacing: 8) {
                 ForEach(Array(viewModel.recommendedDigiPaths.prefix(4).enumerated()), id: \.offset) { idx, candidate in
-                    let unavailable = viewModel.isSuggestedPathUnavailable(candidate.digis)
+                    let selected = isPathSelected(candidate.digis)
+                    let unavailable = viewModel.isSuggestedPathUnavailable(candidate.digis) && !selected
                     Button(pathLabel(for: candidate.digis, allowEllipsis: false)) {
                         viewModel.applyPathPreset(candidate.digis)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .tint(selected ? .accentColor : .secondary)
                     .disabled(unavailable)
                     .opacity(unavailable ? 0.55 : 1.0)
                     .help(unavailable ? "Already uses a digi in your current path" : "")
                     .accessibilityIdentifier("connectBar.recommendedPathChip.\(idx)")
                 }
-
-                Button("Auto") {
-                    onAutoConnect()
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
 
                 Spacer(minLength: 0)
 
@@ -681,6 +668,31 @@ private struct RoutingPopoverContent: View {
             }
             return digis.joined(separator: " → ")
         }
+    }
+
+    private func isPathSelected(_ digis: [String]) -> Bool {
+        let lhs = viewModel.viaDigipeaters.map(DigipeaterListParser.normalizeForComparison)
+            .filter { !$0.isEmpty }
+        let rhs = digis.map(DigipeaterListParser.normalizeForComparison)
+            .filter { !$0.isEmpty }
+        return lhs == rhs
+    }
+}
+
+private struct ProtocolInfoCallout: View {
+    let description: String
+
+    var body: some View {
+        Text(description)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        .padding(7)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(.quaternary.opacity(0.4))
+        )
+        .accessibilityLabel(description)
     }
 }
 
