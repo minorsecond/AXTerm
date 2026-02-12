@@ -424,11 +424,8 @@ struct ConsoleLineView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
-            // Category indicator (left border) - matches filter button colors
-            RoundedRectangle(cornerRadius: 1)
-                .fill(categoryBorderColor)
-                .frame(width: 3)
-                .help(categoryTooltip)
+            // Enhanced indicator bar with premium styling for system/error messages
+            indicatorBar
 
             // Timestamp
             Text(line.timestampString)
@@ -471,10 +468,38 @@ struct ConsoleLineView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.system(size: 12, design: .monospaced))
-        .padding(.vertical, 2)
-        .padding(.horizontal, 4)
-        .background(rowBackground)
-        .cornerRadius(4)
+        .padding(.vertical, ConsoleTheme.rowPadding)
+        .padding(.horizontal, ConsoleTheme.rowPadding)
+        .background(premiumBackground)
+        .cornerRadius(ConsoleTheme.rowCornerRadius)
+    }
+    
+    // MARK: - Premium Styling Components
+    
+    /// Enhanced indicator bar with emphasis for system/error messages
+    @ViewBuilder
+    private var indicatorBar: some View {
+        RoundedRectangle(cornerRadius: 1)
+            .fill(indicatorBarColor)
+            .frame(width: ConsoleTheme.indicatorBarWidth)
+            .help(categoryTooltip)
+    }
+    
+    /// Premium indicator color that emphasizes system/error messages
+    private var indicatorBarColor: Color {
+        switch line.kind {
+        case .system:
+            return Color.gray.opacity(ConsoleTheme.systemIndicatorOpacity)
+        case .error:
+            return Color.red.opacity(ConsoleTheme.errorIndicatorOpacity)
+        case .packet:
+            return categoryBorderColor  // Keep existing packet colors
+        }
+    }
+    
+    /// Premium background with subtle tint for system/error messages
+    private var premiumBackground: Color {
+        return ConsoleTheme.backgroundColor(for: line.kind)
     }
 
     /// Left border color based on message category (matches filter buttons)
@@ -525,15 +550,10 @@ struct ConsoleLineView: View {
         }
     }
 
+    // Note: rowBackground is now handled by premiumBackground
+    // This property is kept for backward compatibility but should not be used
     private var rowBackground: Color {
-        switch line.kind {
-        case .system:
-            return Color.gray.opacity(0.05)
-        case .error:
-            return Color.red.opacity(0.08)
-        case .packet:
-            return .clear
-        }
+        return premiumBackground
     }
 
     private var messageColor: Color {
