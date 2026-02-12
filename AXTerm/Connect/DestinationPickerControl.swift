@@ -13,6 +13,7 @@ struct DestinationPickerControl: View {
 
     @FocusState private var textFieldFocused: Bool
     @State private var showPopover = false
+    @State private var userInitiatedPopover = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -27,16 +28,15 @@ struct DestinationPickerControl: View {
                         .font(.system(size: 12, design: .monospaced))
                         .monospacedDigit()
                         .focused($textFieldFocused)
-                        .onSubmit {
-                            commitFromKeyboard()
-                        }
+                        .onSubmit { commitFromKeyboard() }
                         .accessibilityIdentifier("connectBar.destinationField")
 
                     Button {
                         if showPopover {
                             showPopover = false
+                            userInitiatedPopover = false
                         } else {
-                            viewModel.openSuggestions()
+                            userInitiatedPopover = true
                             showPopover = true
                             textFieldFocused = true
                         }
@@ -90,41 +90,34 @@ struct DestinationPickerControl: View {
         .onChange(of: textFieldFocused) { _, isFocused in
             if !isFocused {
                 showPopover = false
+                userInitiatedPopover = false
             }
         }
         .onMoveCommand { direction in
-            guard showPopover else {
-                if direction == .down {
-                    viewModel.openSuggestions()
-                    showPopover = true
-                }
-                return
+            if direction == .down && textFieldFocused {
+                userInitiatedPopover = true
+                showPopover = true
             }
+            guard showPopover else { return }
             switch direction {
-            case .up:
-                viewModel.moveHighlight(up: true)
-            case .down:
-                viewModel.moveHighlight(up: false)
-            default:
-                break
+            case .up: viewModel.moveHighlight(up: true)
+            case .down: viewModel.moveHighlight(up: false)
+            default: break
             }
         }
         .onExitCommand {
             showPopover = false
+            userInitiatedPopover = false
         }
     }
 
     private var borderColor: Color {
-        if case .invalid = viewModel.validationState {
-            return .red.opacity(0.55)
-        }
+        if case .invalid = viewModel.validationState { return .red.opacity(0.55) }
         return Color(nsColor: .separatorColor).opacity(0.45)
     }
 
     private var borderLineWidth: CGFloat {
-        if case .invalid = viewModel.validationState {
-            return 1
-        }
+        if case .invalid = viewModel.validationState { return 1 }
         return 0.6
     }
 
@@ -132,7 +125,14 @@ struct DestinationPickerControl: View {
         Binding(
             get: { viewModel.typedText },
             set: { newValue in
-                viewModel.handleTypedTextChanged(newValue, autoOpenPopover: textFieldFocused)
+                viewModel.handleTypedTextChanged(newValue, autoOpenPopover: false)
+                if textFieldFocused {
+                    if !viewModel.typedText.isEmpty {
+                        showPopover = true
+                    } else if userInitiatedPopover {
+                        showPopover = true
+                    }
+                }
                 onDestinationChanged(DestinationPickerViewModel.normalizeCandidate(viewModel.typedText))
             }
         )
@@ -174,10 +174,10 @@ struct DestinationPickerControl: View {
                 }
             } else {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("No recent stations")
+                    Text("No matching stations")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                    Text("Type a callsign to connect.")
+                    Text("Type to filter suggestions")
                         .font(.footnote)
                         .foregroundStyle(.tertiary)
                 }

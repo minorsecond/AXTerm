@@ -301,6 +301,9 @@ final class DestinationPickerViewModel: ObservableObject {
         guard !normalizedQuery.isEmpty else { return deduped }
 
         return deduped
+            .filter { candidate in
+                candidate.hasPrefix(normalizedQuery) || candidate.contains(normalizedQuery)
+            }
             .map { candidate -> (String, Int) in
                 let prefixScore = candidate.hasPrefix(normalizedQuery) ? 0 : 1
                 let containsScore = candidate.contains(normalizedQuery) ? 0 : 2
