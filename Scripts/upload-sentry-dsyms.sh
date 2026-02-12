@@ -203,6 +203,13 @@ if [ "${ENABLE_SENTRY_DSYM_UPLOAD:-NO}" != "YES" ]; then
   exit 0
 fi
 
+# Detect CI/CD environments where sentry-cli may not be available
+if [ "${CI:-}" = "true" ] || [ "${XCODE_CLOUD:-}" = "true" ] || [ "${CI_XCODE_CLOUD:-}" = "true" ]; then
+  echo "[sentry-dsym] Skipping upload (CI/CD environment detected)."
+  touch "${STAMP_FILE}"
+  exit 0
+fi
+
 SENTRY_CLI="$(resolve_sentry_cli || true)"
 if [ -z "${SENTRY_CLI}" ]; then
   maybe_fail "Skipping upload: sentry-cli not found in PATH."
