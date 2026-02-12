@@ -233,4 +233,89 @@ final class ConnectBarViewModelTests: XCTestCase {
         XCTAssertEqual(CallsignValidator.normalize(" w0tx-0 "), "W0TX-0")
     }
 
+    func testDigiComparisonTreatsCaseAsDuplicate() {
+        let duplicate = DigipeaterListParser.firstDuplicate(in: ["DRLNOD", "drlnod"], existing: [])
+        XCTAssertEqual(duplicate, "DRLNOD")
+    }
+
+    func testDigiComparisonTreatsDashZeroAsDuplicate() {
+        let duplicate = DigipeaterListParser.firstDuplicate(in: ["DRLNOD", "DRLNOD-0"], existing: [])
+        XCTAssertEqual(duplicate, "DRLNOD-0")
+    }
+
+    func testDigiComparisonKeepsNonZeroSsidDistinct() {
+        let duplicate = DigipeaterListParser.firstDuplicate(in: ["DRLNOD-2", "DRLNOD"], existing: [])
+        XCTAssertNil(duplicate)
+    }
+
+    func testRecommendedPathDedupesPreservingOrder() {
+        let deduped = DigipeaterListParser.dedupedPreservingOrder(["A", "B", "a", "C"])
+        XCTAssertEqual(deduped, ["A", "B", "C"])
+    }
+
+    func testDuplicatePendingTokenDisablesAddAndShowsInlineError() {
+        let vm = makeViewModel()
+        vm.viaDigipeaters = ["DRLNOD"]
+        vm.pendingViaTokenInput = "drlnod"
+
+        XCTAssertFalse(vm.canAddPendingDigipeaters)
+        XCTAssertEqual(vm.pendingViaDuplicateError, "DRLNOD is already in the path.")
+
+        vm.ingestViaInput()
+        XCTAssertEqual(vm.viaDigipeaters, ["DRLNOD"])
+        XCTAssertEqual(vm.viaInputError, "DRLNOD is already in the path.")
+    }
+
+    func testApplyPathPresetSanitizesDuplicatesAndSetsNote() {
+        let vm = makeViewModel()
+        vm.applyPathPreset(["A", "B", "a", "C"])
+
+        XCTAssertEqual(vm.viaDigipeaters, ["A", "B", "C"])
+        XCTAssertEqual(vm.inlineNote, "Removed duplicate digis from path.")
+    }
+
+    func testKnownDigiAvailabilityUsesCurrentPathWithCallZeroEquivalence() {
+        let vm = makeViewModel()
+        vm.viaDigipeaters = ["DRLNOD"]
+
+        XCTAssertTrue(vm.isDigipeaterUnavailableInCurrentPath("drlnod"))
+        XCTAssertTrue(vm.isDigipeaterUnavailableInCurrentPath("DRLNOD-0"))
+        XCTAssertFalse(vm.isDigipeaterUnavailableInCurrentPath("DRLNOD-2"))
+    }
+
+    func testRecommendedPathsAreSanitizedForDisplay() async {
+        let vm = makeViewModel()
+        vm.setMode(.ax25ViaDigi, for: .terminal)
+        vm.applySuggestedTo("KB5YZB-7")
+
+        vm.updateRuntimeData(
+            stations: [],
+            neighbors: [],
+            routes: [
+                RouteInfo(
+                    destination: "KB5YZB-7",
+                    origin: "DRL",
+                    quality: 220,
+                    path: ["DRL", "drl", "KB5YZB-7"],
+                    lastUpdated: Date(),
+                    sourceType: "classic"
+                )
+            ],
+            packets: [],
+            favorites: []
+        )
+        await waitForSuggestions()
+
+        XCTAssertEqual(vm.recommendedDigiPaths.first?.digis, ["DRL"])
+    }
+
+    func testSuggestedPathUnavailableWhenItSharesDigiWithCurrentPath() {
+        let vm = makeViewModel()
+        vm.viaDigipeaters = ["DRL"]
+
+        XCTAssertTrue(vm.isSuggestedPathUnavailable(["DRLNOD", "DRL"]))
+        XCTAssertTrue(vm.isSuggestedPathUnavailable(["drl-0"]))
+        XCTAssertFalse(vm.isSuggestedPathUnavailable(["DRLNOD"]))
+    }
+
 }

@@ -1426,8 +1426,12 @@ struct TerminalView: View {
         guard canAutoFill else { return }
 
         if let best = buildAutoPathCandidates(for: newDestination).first {
-            lastAutoFilledPath = best.pathInput
-            txViewModel.digiPath.wrappedValue = best.pathInput
+            let sanitized = sanitizedPathInput(best.pathInput)
+            lastAutoFilledPath = sanitized
+            txViewModel.digiPath.wrappedValue = sanitized
+            if sanitized != best.pathInput {
+                connectBarViewModel.applyInlineNote("Removed duplicate digis from path.")
+            }
         } else {
             lastAutoFilledPath = ""
             txViewModel.digiPath.wrappedValue = ""
@@ -1435,8 +1439,18 @@ struct TerminalView: View {
     }
 
     private func applyAutoPath(_ pathInput: String) {
-        lastAutoFilledPath = pathInput
-        txViewModel.digiPath.wrappedValue = pathInput
+        let sanitized = sanitizedPathInput(pathInput)
+        lastAutoFilledPath = sanitized
+        txViewModel.digiPath.wrappedValue = sanitized
+        if sanitized != pathInput {
+            connectBarViewModel.applyInlineNote("Removed duplicate digis from path.")
+        }
+    }
+
+    private func sanitizedPathInput(_ raw: String) -> String {
+        let parsed = DigipeaterListParser.parse(raw)
+        let deduped = DigipeaterListParser.dedupedPreservingOrder(parsed)
+        return deduped.joined(separator: ",")
     }
 
     private func buildAutoPathCandidates(for destination: String) -> [TerminalAutoPathCandidate] {

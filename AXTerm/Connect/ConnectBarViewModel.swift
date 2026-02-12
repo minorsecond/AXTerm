@@ -25,6 +25,7 @@ final class ConnectBarViewModel: ObservableObject {
     @Published var toCall: String = ""
     @Published var viaDigipeaters: [String] = []
     @Published var pendingViaTokenInput: String = ""
+    @Published private(set) var viaInputError: String?
     @Published var nextHopSelection: String = "__AUTO__"
     @Published private(set) var nextHopOptions: [String] = ["__AUTO__"]
     @Published private(set) var routePreview: String = "No known route"
@@ -113,16 +114,31 @@ final class ConnectBarViewModel: ObservableObject {
         viaDigipeaters.count
     }
 
+    var pendingViaTokens: [String] {
+        DigipeaterListParser.parse(pendingViaTokenInput)
+    }
+
+    var pendingViaDuplicateError: String? {
+        guard let duplicate = DigipeaterListParser.firstDuplicate(in: pendingViaTokens, existing: viaDigipeaters) else {
+            return nil
+        }
+        return "\(duplicate) is already in the path."
+    }
+
+    var canAddPendingDigipeaters: Bool {
+        !pendingViaTokens.isEmpty && pendingViaDuplicateError == nil
+    }
+
     var connectSuggestions: ConnectSuggestions {
         suggestions
     }
 
     var recommendedDigiPaths: [ConnectSuggestions.DigiPath] {
-        suggestions.recommendedDigiPaths
+        sanitizedDigiPaths(suggestions.recommendedDigiPaths)
     }
 
     var fallbackDigiPaths: [ConnectSuggestions.DigiPath] {
-        suggestions.fallbackDigiPaths
+        sanitizedDigiPaths(suggestions.fallbackDigiPaths)
     }
 
     var recommendedNextHopSuggestions: [ConnectSuggestions.NetRomNextHop] {
@@ -135,6 +151,24 @@ final class ConnectBarViewModel: ObservableObject {
 
     var knownDigiPresets: [String] {
         knownDigis
+    }
+
+    func isDigipeaterUnavailableInCurrentPath(_ candidate: String) -> Bool {
+        let key = DigipeaterListParser.normalizeForComparison(candidate)
+        guard !key.isEmpty else { return false }
+        return viaDigipeaters.contains { DigipeaterListParser.normalizeForComparison($0) == key }
+    }
+
+    func isSuggestedPathUnavailable(_ digis: [String]) -> Bool {
+        guard !viaDigipeaters.isEmpty, !digis.isEmpty else { return false }
+        let currentKeys = Set(viaDigipeaters.map(DigipeaterListParser.normalizeForComparison).filter { !$0.isEmpty })
+        for digi in digis {
+            let key = DigipeaterListParser.normalizeForComparison(digi)
+            if !key.isEmpty && currentKeys.contains(key) {
+                return true
+            }
+        }
+        return false
     }
 
     var observedPathPresets: [[String]] {
@@ -194,6 +228,9 @@ final class ConnectBarViewModel: ObservableObject {
 
     func setMode(_ newMode: ConnectBarMode, for context: ConnectSourceContext?) {
         mode = newMode
+        if newMode != .ax25ViaDigi {
+            viaInputError = nil
+        }
         if let context {
             activeDraftContext = context
             contextModes[context] = newMode
@@ -297,16 +334,33 @@ final class ConnectBarViewModel: ObservableObject {
     }
 
     func ingestViaInput() {
-        let parsed = DigipeaterListParser.parse(pendingViaTokenInput)
+        let parsed = pendingViaTokens
         guard !parsed.isEmpty else { return }
+        if let duplicate = DigipeaterListParser.firstDuplicate(in: parsed, existing: viaDigipeaters) {
+            viaInputError = "\(duplicate) is already in the path."
+            return
+        }
+        if inlineNote == "Removed duplicate digis from path." {
+            inlineNote = nil
+        }
         appendDigipeaters(parsed)
+        viaInputError = nil
         pendingViaTokenInput = ""
         syncStateFromDraftIfEditable()
     }
 
     func appendDigipeaters(_ rawValues: [String]) {
-        let merged = viaDigipeaters + rawValues.map { canonicalCallsign($0) }
-        viaDigipeaters = DigipeaterListParser.capped(merged.filter { !$0.isEmpty })
+        if let duplicate = DigipeaterListParser.firstDuplicate(in: rawValues, existing: viaDigipeaters) {
+            viaInputError = "\(duplicate) is already in the path."
+        } else {
+            viaInputError = nil
+            if inlineNote == "Removed duplicate digis from path." {
+                inlineNote = nil
+            }
+        }
+        let merged = viaDigipeaters + rawValues
+        let deduped = DigipeaterListParser.dedupedPreservingOrder(merged)
+        viaDigipeaters = DigipeaterListParser.capped(deduped)
         validate()
         syncStateFromDraftIfEditable()
     }
@@ -314,6 +368,7 @@ final class ConnectBarViewModel: ObservableObject {
     func removeDigi(at index: Int) {
         guard viaDigipeaters.indices.contains(index) else { return }
         viaDigipeaters.remove(at: index)
+        viaInputError = nil
         validate()
         syncStateFromDraftIfEditable()
     }
@@ -321,6 +376,7 @@ final class ConnectBarViewModel: ObservableObject {
     func moveDigiLeft(at index: Int) {
         guard index > 0, viaDigipeaters.indices.contains(index) else { return }
         viaDigipeaters.swapAt(index, index - 1)
+        viaInputError = nil
         validate()
         syncStateFromDraftIfEditable()
     }
@@ -328,12 +384,21 @@ final class ConnectBarViewModel: ObservableObject {
     func moveDigiRight(at index: Int) {
         guard viaDigipeaters.indices.contains(index), index < viaDigipeaters.count - 1 else { return }
         viaDigipeaters.swapAt(index, index + 1)
+        viaInputError = nil
         validate()
         syncStateFromDraftIfEditable()
     }
 
     func applyPathPreset(_ path: [String]) {
-        viaDigipeaters = DigipeaterListParser.capped(path.map { canonicalCallsign($0) }.filter { !$0.isEmpty })
+        let normalized = path.map { canonicalCallsign($0) }.filter { !$0.isEmpty }
+        let deduped = DigipeaterListParser.dedupedPreservingOrder(normalized)
+        viaDigipeaters = DigipeaterListParser.capped(deduped)
+        if deduped.count != normalized.count {
+            applyInlineNote("Removed duplicate digis from path.")
+        } else if inlineNote == "Removed duplicate digis from path." {
+            inlineNote = nil
+        }
+        viaInputError = nil
         validate()
         syncStateFromDraftIfEditable()
     }
@@ -358,7 +423,11 @@ final class ConnectBarViewModel: ObservableObject {
         case .ax25ViaDigi:
             mode = .ax25ViaDigi
             toCall = destination
-            viaDigipeaters = DigipeaterListParser.capped(route.heardPath.map { canonicalCallsign($0) }.filter { !$0.isEmpty })
+            viaDigipeaters = DigipeaterListParser.capped(
+                DigipeaterListParser.dedupedPreservingOrder(
+                    route.heardPath.map { canonicalCallsign($0) }.filter { !$0.isEmpty }
+                )
+            )
             nextHopSelection = Self.autoNextHopID
             inlineNote = nil
         }
@@ -520,7 +589,7 @@ final class ConnectBarViewModel: ObservableObject {
 
         let normalizedDestination = canonicalCallsign(destination)
         if canonicalCallsign(toCall) == normalizedDestination {
-            let ranked = (suggestions.recommendedDigiPaths + suggestions.fallbackDigiPaths).map(\.digis)
+            let ranked = (recommendedDigiPaths + fallbackDigiPaths).map(\.digis)
             if !ranked.isEmpty {
                 return ranked
             }
@@ -687,6 +756,9 @@ final class ConnectBarViewModel: ObservableObject {
             if !invalidDigis.isEmpty {
                 errors.append("Invalid digipeater: \(invalidDigis.joined(separator: ", "))")
             }
+            if let duplicate = DigipeaterListParser.firstDuplicate(in: viaDigipeaters, existing: []) {
+                errors.append("\(duplicate) is already in the path.")
+            }
         }
 
         validationErrors = errors
@@ -725,7 +797,9 @@ final class ConnectBarViewModel: ObservableObject {
                 viaDigipeaters = []
             case let .viaDigipeaters(path):
                 mode = .ax25ViaDigi
-                viaDigipeaters = DigipeaterListParser.capped(path.map { canonicalCallsign($0) }.filter { !$0.isEmpty })
+                viaDigipeaters = DigipeaterListParser.capped(
+                    DigipeaterListParser.dedupedPreservingOrder(path.map { canonicalCallsign($0) }.filter { !$0.isEmpty })
+                )
             }
             nextHopSelection = Self.autoNextHopID
         case let .netrom(option):
@@ -754,6 +828,26 @@ final class ConnectBarViewModel: ObservableObject {
             }
             .filter { !$0.isEmpty || $0 == Self.autoNextHopID }
             .filter { seen.insert($0).inserted }
+    }
+
+    private func sanitizedDigiPaths(_ paths: [ConnectSuggestions.DigiPath]) -> [ConnectSuggestions.DigiPath] {
+        var seen = Set<String>()
+        var result: [ConnectSuggestions.DigiPath] = []
+        for path in paths {
+            let deduped = DigipeaterListParser.capped(
+                DigipeaterListParser.dedupedPreservingOrder(path.digis)
+            )
+            let key = deduped.map { DigipeaterListParser.normalizeForComparison($0) }.joined(separator: ",")
+            guard !key.isEmpty, seen.insert(key).inserted else { continue }
+            result.append(
+                ConnectSuggestions.DigiPath(
+                    digis: deduped,
+                    score: path.score,
+                    source: path.source
+                )
+            )
+        }
+        return result
     }
 
     private func favoriteCalls() -> [String] {

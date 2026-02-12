@@ -60,4 +60,64 @@ final class AXTermUITests: XCTestCase {
             app.terminate()
         }
     }
+
+    @MainActor
+    func testKnownDigiRowBecomesDisabledWhenInPath() throws {
+        let app = launchApp()
+
+        let sessionButton = app.buttons["Session"]
+        if sessionButton.waitForExistence(timeout: 2) {
+            sessionButton.tap()
+        }
+
+        let routingButton = app.buttons["connectBar.routingButton"]
+        guard routingButton.waitForExistence(timeout: 5) else {
+            throw XCTSkip("Routing button not available in current launch state")
+        }
+        routingButton.tap()
+
+        let viaDigiRadio = app.radioButtons["AX.25 via Digi"]
+        if viaDigiRadio.waitForExistence(timeout: 2) {
+            viaDigiRadio.tap()
+        }
+
+        let manualButton = app.buttons["Manual"]
+        if manualButton.waitForExistence(timeout: 2) {
+            manualButton.tap()
+        }
+
+        let morePathsButton = app.buttons["connectBar.morePathsButton"]
+        guard morePathsButton.waitForExistence(timeout: 3) else {
+            throw XCTSkip("Known digis menu is not available")
+        }
+        morePathsButton.tap()
+
+        let knownQuery = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "connectBar.knownDigi."))
+        guard knownQuery.count > 0 else {
+            throw XCTSkip("No known digi rows available in this environment")
+        }
+
+        var selected: XCUIElement?
+        for index in 0..<knownQuery.count {
+            let candidate = knownQuery.element(boundBy: index)
+            if candidate.isEnabled {
+                selected = candidate
+                break
+            }
+        }
+        guard let selected else {
+            throw XCTSkip("No enabled known digi rows available to select")
+        }
+
+        let selectedID = selected.identifier
+        let selectedLabel = selected.label
+        selected.tap()
+
+        morePathsButton.tap()
+        let sameRow = app.descendants(matching: .any)[selectedID]
+        XCTAssertTrue(sameRow.waitForExistence(timeout: 2))
+        XCTAssertFalse(sameRow.isEnabled)
+        XCTAssertTrue(app.staticTexts["In path"].waitForExistence(timeout: 2), "Expected visible in-path indicator for \(selectedLabel)")
+    }
 }

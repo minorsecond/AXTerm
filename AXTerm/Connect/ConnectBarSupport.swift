@@ -35,6 +35,53 @@ nonisolated enum DigipeaterListParser {
     static func capped(_ values: [String]) -> [String] {
         Array(values.prefix(maxDigipeaters))
     }
+
+    /// Normalization used for duplicate comparison only.
+    /// - Trims whitespace
+    /// - Uppercases
+    /// - Treats CALL and CALL-0 as equivalent
+    static func normalizeForComparison(_ raw: String) -> String {
+        let normalized = CallsignValidator.normalize(raw)
+        guard !normalized.isEmpty else { return "" }
+
+        guard let dash = normalized.lastIndex(of: "-"), dash < normalized.endIndex else {
+            return normalized
+        }
+        let ssidStart = normalized.index(after: dash)
+        guard ssidStart < normalized.endIndex else { return normalized }
+        let ssidPart = normalized[ssidStart...]
+        guard ssidPart.allSatisfy(\.isNumber), let ssid = Int(ssidPart), ssid == 0 else {
+            return normalized
+        }
+        return String(normalized[..<dash])
+    }
+
+    static func firstDuplicate(in incoming: [String], existing: [String]) -> String? {
+        var seen = Set(existing.map(normalizeForComparison))
+        for raw in incoming {
+            let key = normalizeForComparison(raw)
+            guard !key.isEmpty else { continue }
+            if !seen.insert(key).inserted {
+                return CallsignValidator.normalize(raw)
+            }
+        }
+        return nil
+    }
+
+    static func dedupedPreservingOrder(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for raw in values {
+            let display = CallsignValidator.normalize(raw)
+            guard !display.isEmpty else { continue }
+            let key = normalizeForComparison(display)
+            guard !key.isEmpty else { continue }
+            if seen.insert(key).inserted {
+                result.append(display)
+            }
+        }
+        return result
+    }
 }
 
 nonisolated struct ConnectAttemptRecord: Codable, Equatable {

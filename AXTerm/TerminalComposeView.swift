@@ -279,6 +279,7 @@ private struct RoutingCapsuleButton: View {
             )
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("connectBar.routingButton")
         .popover(isPresented: $isPopoverPresented, arrowEdge: .top) {
             RoutingPopoverContent(
                 viewModel: viewModel,
@@ -412,12 +413,16 @@ private struct RoutingPopoverContent: View {
                     if !viewModel.recommendedDigiPaths.isEmpty {
                         HStack(spacing: 6) {
                             ForEach(Array(viewModel.recommendedDigiPaths.prefix(3).enumerated()), id: \.offset) { idx, candidate in
+                                let unavailable = viewModel.isSuggestedPathUnavailable(candidate.digis)
                                 Button(pathLabel(for: candidate.digis, allowEllipsis: false)) {
                                     viewModel.applyPathPreset(candidate.digis)
                                     digiInputMode = .manual
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
+                                .disabled(unavailable)
+                                .opacity(unavailable ? 0.55 : 1.0)
+                                .help(unavailable ? "Already uses a digi in your current path" : "")
                                 .accessibilityIdentifier("connectBar.autoPresetChip.\(idx)")
                             }
 
@@ -518,6 +523,14 @@ private struct RoutingPopoverContent: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .disabled(!viewModel.canAddPendingDigipeaters)
+            }
+
+            if let duplicateError = viewModel.pendingViaDuplicateError ?? viewModel.viaInputError {
+                Text(duplicateError)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.red.opacity(0.8))
+                    .lineLimit(1)
             }
 
             Text("\(viewModel.viaHopCount) hops")
@@ -534,11 +547,15 @@ private struct RoutingPopoverContent: View {
 
             HStack(spacing: 8) {
                 ForEach(Array(viewModel.recommendedDigiPaths.prefix(4).enumerated()), id: \.offset) { idx, candidate in
+                    let unavailable = viewModel.isSuggestedPathUnavailable(candidate.digis)
                     Button(pathLabel(for: candidate.digis, allowEllipsis: false)) {
                         viewModel.applyPathPreset(candidate.digis)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .disabled(unavailable)
+                    .opacity(unavailable ? 0.55 : 1.0)
+                    .help(unavailable ? "Already uses a digi in your current path" : "")
                     .accessibilityIdentifier("connectBar.recommendedPathChip.\(idx)")
                 }
 
@@ -554,23 +571,45 @@ private struct RoutingPopoverContent: View {
                     ForEach(viewModel.moreDigiPathSections) { section in
                         Section(section.title) {
                             ForEach(section.paths, id: \.self) { path in
+                                let unavailable = viewModel.isSuggestedPathUnavailable(path.digis)
                                 Button(pathLabel(for: path.digis, allowEllipsis: true)) {
                                     viewModel.applyPathPreset(path.digis)
                                 }
+                                .disabled(unavailable)
                             }
                         }
                     }
                     if !viewModel.knownDigiPresets.isEmpty {
                         Section("Known digis") {
                             ForEach(Array(viewModel.knownDigiPresets.prefix(10)), id: \.self) { digi in
-                                Button(digi) {
+                                let inPath = viewModel.isDigipeaterUnavailableInCurrentPath(digi)
+                                Button {
                                     viewModel.appendDigipeaters([digi])
+                                } label: {
+                                    HStack {
+                                        Text(digi)
+                                        Spacer()
+                                        if inPath {
+                                            Label("In path", systemImage: "checkmark")
+                                                .accessibilityIdentifier("connectBar.knownDigiInPath.\(digi)")
+                                        }
+                                    }
                                 }
+                                .disabled(inPath)
+                                .opacity(inPath ? 0.45 : 1.0)
+                                .accessibilityIdentifier("connectBar.knownDigi.\(digi)")
                             }
                         }
                     }
                 }
                 .controlSize(.small)
+                .accessibilityIdentifier("connectBar.morePathsButton")
+            }
+
+            if let note = viewModel.inlineNote, note == "Removed duplicate digis from path." {
+                Text(note)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -920,6 +959,14 @@ private struct ConnectBarAdvancedDisclosure: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .disabled(!viewModel.canAddPendingDigipeaters)
+
+            if let duplicateError = viewModel.pendingViaDuplicateError ?? viewModel.viaInputError {
+                Text(duplicateError)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.red.opacity(0.8))
+                    .lineLimit(1)
+            }
 
             Text("\(viewModel.viaHopCount) hops")
                 .font(.system(size: 10, weight: .medium))
@@ -953,11 +1000,15 @@ private struct ConnectBarAdvancedDisclosure: View {
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 6, alignment: .leading)], alignment: .leading, spacing: 6) {
                     ForEach(Array(viewModel.recommendedDigiPaths.enumerated()), id: \.offset) { idx, candidate in
+                        let unavailable = viewModel.isSuggestedPathUnavailable(candidate.digis)
                         Button(pathLabel(for: candidate.digis, allowEllipsis: false)) {
                             viewModel.applyPathPreset(candidate.digis)
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
+                        .disabled(unavailable)
+                        .opacity(unavailable ? 0.55 : 1.0)
+                        .help(unavailable ? "Already uses a digi in your current path" : "")
                         .accessibilityIdentifier("connectBar.recommendedPathChip.\(idx)")
                     }
 
@@ -975,24 +1026,45 @@ private struct ConnectBarAdvancedDisclosure: View {
                     ForEach(viewModel.moreDigiPathSections) { section in
                         Section(section.title) {
                             ForEach(section.paths, id: \.self) { path in
+                                let unavailable = viewModel.isSuggestedPathUnavailable(path.digis)
                                 Button(pathLabel(for: path.digis, allowEllipsis: true)) {
                                     viewModel.applyPathPreset(path.digis)
                                 }
+                                .disabled(unavailable)
                             }
                         }
                     }
                     if !viewModel.knownDigiPresets.isEmpty {
                         Section("Known digis") {
                             ForEach(Array(viewModel.knownDigiPresets.prefix(10)), id: \.self) { digi in
-                                Button(digi) {
+                                let inPath = viewModel.isDigipeaterUnavailableInCurrentPath(digi)
+                                Button {
                                     viewModel.appendDigipeaters([digi])
+                                } label: {
+                                    HStack {
+                                        Text(digi)
+                                        Spacer()
+                                        if inPath {
+                                            Label("In path", systemImage: "checkmark")
+                                                .accessibilityIdentifier("connectBar.knownDigiInPath.\(digi)")
+                                        }
+                                    }
                                 }
+                                .disabled(inPath)
+                                .opacity(inPath ? 0.45 : 1.0)
+                                .accessibilityIdentifier("connectBar.knownDigi.\(digi)")
                             }
                         }
                     }
                 }
                 .controlSize(.small)
                 .accessibilityIdentifier("connectBar.morePathsButton")
+            }
+
+            if let note = viewModel.inlineNote, note == "Removed duplicate digis from path." {
+                Text(note)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
             }
         }
     }
