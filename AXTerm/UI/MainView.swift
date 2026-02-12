@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import UIKit
 
 struct MainView: View {
     @ObservedObject private var settings = AppSettingsStore()
