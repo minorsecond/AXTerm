@@ -33,16 +33,16 @@ struct MainView: View {
                     .fill(isConnected ? Color.green : Color.gray)
                     .frame(width: 12, height: 12)
                 
-                VStack(alignment: .leading, spacing: 0) {
-                    if isConnected {
+                if isConnected {
+                    VStack(alignment: .leading, spacing: 0) {
                         Text("AX.25 · via \(viaPath) · RTT \(String(format: "%.1f", rtt))s")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                    } else {
-                        Text("Not connected")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
                     }
+                } else {
+                    Text("Not connected")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
             }
             .padding()
