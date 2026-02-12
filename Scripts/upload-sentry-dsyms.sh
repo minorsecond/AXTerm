@@ -204,8 +204,15 @@ if [ "${ENABLE_SENTRY_DSYM_UPLOAD:-NO}" != "YES" ]; then
 fi
 
 # Detect CI/CD environments where sentry-cli may not be available
-if [ "${CI:-}" = "true" ] || [ "${XCODE_CLOUD:-}" = "true" ] || [ "${CI_XCODE_CLOUD:-}" = "true" ]; then
+if [ "${CI:-}" = "true" ] || [ "${XCODE_CLOUD:-}" = "true" ] || [ "${CI_XCODE_CLOUD:-}" = "true" ] || [ -n "${JENKINS_URL:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ] || [ -n "${BITRISE_IO:-}" ] || [ -n "${GITLAB_CI:-}" ] || [ -n "${TRAVIS:-}" ] || [ -n "${APPLE_CI:-}" ] || [ -n "${XCS:-}" ]; then
   echo "[sentry-dsym] Skipping upload (CI/CD environment detected)."
+  touch "${STAMP_FILE}"
+  exit 0
+fi
+
+# Also skip if we're in a mounted workspace directory (common in CI environments)
+if echo "${PWD:-}" | grep -q "/workspace\|/build\|/ci\|Volumes/workspace"; then
+  echo "[sentry-dsym] Skipping upload (workspace/CI directory detected)."
   touch "${STAMP_FILE}"
   exit 0
 fi
