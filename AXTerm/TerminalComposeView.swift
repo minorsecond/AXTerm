@@ -110,7 +110,7 @@ struct SessionStatusBadge: View {
                             .controlSize(.mini)
                             .help(axdpStatusHelp)
                     case .confirmed:
-                         // Simple dot to indicate AXDP active (details in Adaptive chip or tooltip)
+                         // Simple dot to indicate AXDP active.
                         Circle()
                             .fill(.blue)
                             .frame(width: 4, height: 4)
@@ -246,59 +246,6 @@ struct SessionStatusBadge: View {
             }
         case .notSupported:
             return "AXDP not supported."
-        }
-    }
-}
-
-private struct AdaptiveTelemetryChip: View {
-    let telemetry: AdaptiveTelemetry?
-    @State private var showDetails = false
-
-    var body: some View {
-        Button {
-            showDetails.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "chart.line.uptrend.xyaxis")
-                    .font(.system(size: 10))
-                Text("Adaptive")
-                    .font(.system(size: 10, weight: .semibold))
-                if let telemetry {
-                    Text(telemetry.compactLabel)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(Color.green.opacity(0.12), in: Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(Color.green.opacity(0.35), lineWidth: 0.5)
-            )
-        }
-        .buttonStyle(.plain)
-        .popover(isPresented: $showDetails, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Adaptive Link Telemetry")
-                    .font(.headline)
-                if let telemetry {
-                    Group {
-                        Text("Window (K): \(telemetry.k)")
-                        Text("Packet (P): \(telemetry.p)")
-                        Text("Retries (N2): \(telemetry.n2)")
-                        Text("RTO min: \(String(format: "%.1fs", telemetry.rtoSeconds))")
-                        Text("Status: \(telemetry.qualityLabel)")
-                    }
-                    .font(.system(size: 11))
-                } else {
-                    Text("No adaptive telemetry available.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(12)
-            .frame(minWidth: 240)
         }
     }
 }
@@ -1208,10 +1155,6 @@ struct TerminalComposeView: View {
     @Binding var connectionMode: TxConnectionMode
     @Binding var useAXDP: Bool
     
-    // Dependencies needed for adaptive telemetry display
-    @ObservedObject var settings: AppSettingsStore
-    @ObservedObject var sessionCoordinator: SessionCoordinator
-
     let sourceCall: String
     let canSend: Bool
     let characterCount: Int
@@ -1256,12 +1199,6 @@ struct TerminalComposeView: View {
                     )
 
                     Spacer()
-
-                    if connectionMode == .connected,
-                       sessionState == .connected,
-                       connectBarViewModel.adaptiveTelemetry != nil {
-                        AdaptiveTelemetryChip(telemetry: connectBarViewModel.adaptiveTelemetry)
-                    }
                 }
 
                 if connectionMode == .connected {
@@ -1684,8 +1621,6 @@ struct TxQueueView: View {
         composeText: .constant("Hello World"),
         connectionMode: .constant(.datagram),
         useAXDP: .constant(false),
-        settings: AppSettingsStore(),
-        sessionCoordinator: SessionCoordinator(),
         sourceCall: "MYCALL",
         canSend: true,
         characterCount: 11,
@@ -1716,8 +1651,6 @@ struct TxQueueView: View {
         composeText: .constant("Hello World"),
         connectionMode: .constant(.connected),
         useAXDP: .constant(false),
-        settings: AppSettingsStore(),
-        sessionCoordinator: SessionCoordinator(),
         sourceCall: "MYCALL",
         canSend: true,
         characterCount: 11,
@@ -1748,8 +1681,6 @@ struct TxQueueView: View {
         composeText: .constant(""),
         connectionMode: .constant(.connected),
         useAXDP: .constant(false),
-        settings: AppSettingsStore(),
-        sessionCoordinator: SessionCoordinator(),
         sourceCall: "MYCALL",
         canSend: true,
         characterCount: 0,

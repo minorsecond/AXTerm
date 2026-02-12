@@ -520,32 +520,15 @@ struct ContentView: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             if sessionCoordinator.adaptiveTransmissionEnabled, client.status == .connected {
-                adaptiveToolbarChip
+                AdaptiveToolbarControl(
+                    store: sessionCoordinator.adaptiveStatusStore,
+                    onOpenAnalytics: {
+                        selectedNav = .analytics
+                    }
+                )
             }
             tncToolbarMenu
         }
-    }
-
-    /// Adaptive parameters chip (secondary, shown only when TNC connected)
-    @ViewBuilder
-    private var adaptiveToolbarChip: some View {
-        let adaptive = sessionCoordinator.globalAdaptiveSettings
-        HStack(spacing: 4) {
-            Image(systemName: "chart.line.uptrend.xyaxis")
-                .font(.system(size: 9))
-                .foregroundStyle(.green)
-            Text("K\(adaptive.windowSize.effectiveValue) P\(adaptive.paclen.effectiveValue) N2 \(adaptive.maxRetries.effectiveValue)")
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(.thinMaterial, in: Capsule())
-        .overlay(
-            Capsule()
-                .stroke(Color(nsColor: .separatorColor).opacity(0.25), lineWidth: 0.5)
-        )
-        .help("Adaptive Transmission: Window K\(adaptive.windowSize.effectiveValue), Packet P\(adaptive.paclen.effectiveValue), Retries N2 \(adaptive.maxRetries.effectiveValue)")
     }
 
     /// TNC transport status menu — clickable pill with connect/disconnect actions

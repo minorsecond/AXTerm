@@ -110,18 +110,6 @@ nonisolated struct BroadcastComposerState: Equatable {
     static let `default` = BroadcastComposerState(unprotoPath: [], remembersLastUsedPath: true)
 }
 
-nonisolated struct AdaptiveTelemetry: Equatable {
-    let k: Int
-    let p: Int
-    let n2: Int
-    let rtoSeconds: Double
-    let qualityLabel: String
-
-    var compactLabel: String {
-        "K\(k) P\(p) N2 \(n2)"
-    }
-}
-
 nonisolated struct ConnectFailure: Equatable {
     nonisolated enum Reason: Equatable {
         case invalidDraft

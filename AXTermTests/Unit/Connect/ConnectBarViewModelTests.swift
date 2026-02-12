@@ -162,17 +162,6 @@ final class ConnectBarViewModelTests: XCTestCase {
         }
     }
 
-    func testAdaptiveTelemetryLabelUpdates() {
-        let vm = makeViewModel()
-        let t1 = AdaptiveTelemetry(k: 2, p: 128, n2: 2, rtoSeconds: 3.0, qualityLabel: "Good")
-        vm.setAdaptiveTelemetry(t1)
-        XCTAssertEqual(vm.adaptiveTelemetry?.compactLabel, "K2 P128 N2 2")
-
-        let t2 = AdaptiveTelemetry(k: 1, p: 64, n2: 4, rtoSeconds: 5.0, qualityLabel: "Degraded")
-        vm.setAdaptiveTelemetry(t2)
-        XCTAssertEqual(vm.adaptiveTelemetry?.compactLabel, "K1 P64 N2 4")
-    }
-
     func testDestinationSelectionPersistsAfterValidation() {
         let vm = makeViewModel()
         vm.applySuggestedTo("KB5YZB-7")

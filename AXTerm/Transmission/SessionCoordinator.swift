@@ -152,7 +152,13 @@ final class SessionCoordinator: ObservableObject {
     private var awaitingCompletionRequestTask: Task<Void, Never>?
 
     /// Global adaptive settings (for compression, etc.)
-    var globalAdaptiveSettings: TxAdaptiveSettings = TxAdaptiveSettings()
+    var globalAdaptiveSettings: TxAdaptiveSettings = TxAdaptiveSettings() {
+        didSet {
+            adaptiveStatusStore.refreshGlobalSettings(globalAdaptiveSettings)
+        }
+    }
+
+    let adaptiveStatusStore = AdaptiveStatusStore()
 
     /// When true, learn from session and network and use learned params; when false, use fixed defaults.
     @Published var adaptiveTransmissionEnabled: Bool = true
@@ -184,6 +190,7 @@ final class SessionCoordinator: ObservableObject {
     init() {
         SessionCoordinator.shared = self
         setupCallbacks()
+        adaptiveStatusStore.updateGlobal(settings: globalAdaptiveSettings, lossRate: nil, etx: nil, srtt: nil)
     }
 
     /// True if any session is in an active state (connecting, connected, or disconnecting).
@@ -213,6 +220,25 @@ final class SessionCoordinator: ObservableObject {
             return cached.settings
         }
         return globalAdaptiveSettings
+    }
+
+    func adaptiveSessionID(destination: String, path: String?) -> AdaptiveSessionID {
+        let canon = canonicalDestination(destination)
+        let normalizedPath = (path ?? "").uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(canon)|\(normalizedPath)"
+    }
+
+    func selectAdaptiveSession(destination: String?, path: String?) {
+        guard let destination else {
+            adaptiveStatusStore.setSelectedSession(id: nil)
+            return
+        }
+        let normalizedDestination = canonicalDestination(destination)
+        guard !normalizedDestination.isEmpty else {
+            adaptiveStatusStore.setSelectedSession(id: nil)
+            return
+        }
+        adaptiveStatusStore.setSelectedSession(id: adaptiveSessionID(destination: normalizedDestination, path: path))
     }
 
     /// Sync AX.25 session config from global adaptive settings so both messaging and file transfer use the same window size, RTO bounds, and retries.
@@ -313,6 +339,15 @@ final class SessionCoordinator: ObservableObject {
             let before = AdaptiveSnapshot(from: entry)
             entry.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt)
             adaptiveCache[normalizedKey] = CachedAdaptiveEntry(settings: entry, lastUpdated: Date())
+            adaptiveStatusStore.updateSession(
+                id: adaptiveSessionID(destination: normalizedKey.destination, path: normalizedKey.pathSignature),
+                destination: normalizedKey.destination,
+                pathSignature: normalizedKey.pathSignature,
+                settings: entry,
+                lossRate: lossRate,
+                etx: etx,
+                srtt: srtt
+            )
             let a = entry
             let reason = a.windowSize.adaptiveReason ?? a.paclen.adaptiveReason ?? "updated"
             TxLog.adaptiveLearning(
@@ -332,6 +367,12 @@ final class SessionCoordinator: ObservableObject {
         } else {
             let before = AdaptiveSnapshot(from: globalAdaptiveSettings)
             globalAdaptiveSettings.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt)
+            adaptiveStatusStore.updateGlobal(
+                settings: globalAdaptiveSettings,
+                lossRate: lossRate,
+                etx: etx,
+                srtt: srtt
+            )
             let a = globalAdaptiveSettings
             let reason = a.windowSize.adaptiveReason ?? a.paclen.adaptiveReason ?? "updated"
             TxLog.adaptiveLearning(
@@ -568,6 +609,8 @@ final class SessionCoordinator: ObservableObject {
                     pathSignature: pathSig
                 )
                 if let cached = self.adaptiveCache.removeValue(forKey: routeKey) {
+                    let sessionID = self.adaptiveSessionID(destination: routeKey.destination, path: routeKey.pathSignature)
+                    self.adaptiveStatusStore.removeSession(id: sessionID)
                     let cachedSnap = AdaptiveSnapshot(from: cached.settings)
                     let defaults = TxAdaptiveSettings()
                     let defaultSnap = AdaptiveSnapshot(from: defaults)
@@ -585,6 +628,8 @@ final class SessionCoordinator: ObservableObject {
                         )
                     }
                 } else {
+                    let sessionID = self.adaptiveSessionID(destination: routeKey.destination, path: routeKey.pathSignature)
+                    self.adaptiveStatusStore.removeSession(id: sessionID)
                     let pathDesc = pathSig.isEmpty ? "direct" : "via \(pathSig)"
                     self.packetEngine?.appendSystemNotification(
                         "Adaptive: Session ended (\(dest) \(pathDesc))"
@@ -596,6 +641,7 @@ final class SessionCoordinator: ObservableObject {
                 if !self.hasActiveSessions {
                     let before = AdaptiveSnapshot(from: self.globalAdaptiveSettings)
                     self.globalAdaptiveSettings.resetAdaptiveToDefaults()
+                    self.adaptiveStatusStore.setSelectedSession(id: nil)
                     self.syncSessionManagerConfigFromAdaptive()
                     let after = AdaptiveSnapshot(from: self.globalAdaptiveSettings)
                     if before.k != after.k || before.p != after.p || before.n2 != after.n2

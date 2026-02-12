@@ -1063,7 +1063,6 @@ struct TerminalView: View {
     @State private var showConnectionBanner = false
     @State private var connectionBannerTask: Task<Void, Never>?
     
-    @State private var showAdaptiveSettingsPopover = false
     @State private var lastAutoFilledPath: String = ""
     @State private var lastObservedDestination: String = ""
     @State private var sessionRecords: [SessionRecord] = []
@@ -1108,7 +1107,7 @@ struct TerminalView: View {
                     .filter { !$0.isEmpty }
                 refreshConnectBarData()
                 connectBarViewModel.applyContext(connectCoordinator.activeContext)
-                syncAdaptiveTelemetry()
+                syncAdaptiveSelection()
                 if txViewModel.viewModel.connectionMode == .datagram {
                     connectBarViewModel.enterBroadcastComposer()
                 } else {
@@ -1117,11 +1116,9 @@ struct TerminalView: View {
             }
             .onReceive(client.$stations) { _ in
                 refreshConnectBarData()
-                syncAdaptiveTelemetry()
             }
             .onReceive(client.$packets) { _ in
                 refreshConnectBarData()
-                syncAdaptiveTelemetry()
             }
             .onReceive(connectCoordinator.$pendingRequest.compactMap { $0 }) { request in
                 // Defer request handling one run-loop turn to avoid publishing model
@@ -1132,7 +1129,7 @@ struct TerminalView: View {
             }
             .onChange(of: connectCoordinator.activeContext) { _, context in
                 connectBarViewModel.applyContext(context)
-                syncAdaptiveTelemetry()
+                syncAdaptiveSelection()
             }
             .onChange(of: txViewModel.viewModel.connectionMode) { _, newMode in
                 switch newMode {
@@ -1141,12 +1138,12 @@ struct TerminalView: View {
                 case .connected:
                     connectBarViewModel.enterConnectDraftMode()
                 }
-                syncAdaptiveTelemetry()
+                syncAdaptiveSelection()
             }
-            .onChange(of: connectBarViewModel.mode) { _, _ in syncAdaptiveTelemetry() }
-            .onChange(of: connectBarViewModel.toCall) { _, _ in syncAdaptiveTelemetry() }
-            .onChange(of: connectBarViewModel.viaDigipeaters) { _, _ in syncAdaptiveTelemetry() }
-            .onChange(of: sessionCoordinator.adaptiveTransmissionEnabled) { _, _ in syncAdaptiveTelemetry() }
+            .onChange(of: connectBarViewModel.mode) { _, _ in syncAdaptiveSelection() }
+            .onChange(of: connectBarViewModel.toCall) { _, _ in syncAdaptiveSelection() }
+            .onChange(of: connectBarViewModel.viaDigipeaters) { _, _ in syncAdaptiveSelection() }
+            .onChange(of: sessionCoordinator.adaptiveTransmissionEnabled) { _, _ in syncAdaptiveSelection() }
             .onChange(of: txViewModel.sessionState) { _, newState in
                 switch newState {
                 case .connecting:
@@ -1181,7 +1178,7 @@ struct TerminalView: View {
                 case .none:
                     break
                 }
-                syncAdaptiveTelemetry()
+                syncAdaptiveSelection()
             }
             .onChange(of: txViewModel.viewModel.destinationCall) { _, newValue in
                 applyAutoPathSuggestionIfNeeded(previousDestination: lastObservedDestination, newDestination: newValue)
@@ -1376,7 +1373,7 @@ struct TerminalView: View {
         }
 
         syncLegacyFieldsFromConnectBar()
-        syncAdaptiveTelemetry()
+        syncAdaptiveSelection()
 
         if request.executeImmediately {
             connectWithActiveIntent(sourceContext: request.intent.sourceContext)
@@ -1394,18 +1391,29 @@ struct TerminalView: View {
         }
     }
 
-    private func syncAdaptiveTelemetry() {
-        let destination = txViewModel.viewModel.connectionMode == .connected ? connectBarViewModel.toCall : nil
-        let path = txViewModel.viewModel.connectionMode == .connected ? connectBarViewModel.viaDigipeaters.joined(separator: ",") : nil
-        let effective = sessionCoordinator.effectiveAdaptiveSettings(destination: destination, path: path)
-        let telemetry = AdaptiveTelemetry(
-            k: effective.windowSize.effectiveValue,
-            p: effective.paclen.effectiveValue,
-            n2: effective.maxRetries.effectiveValue,
-            rtoSeconds: effective.rtoMin.effectiveValue,
-            qualityLabel: effective.windowSize.displayReason ?? "Adaptive"
-        )
-        connectBarViewModel.setAdaptiveTelemetry(telemetry)
+    private func syncAdaptiveSelection() {
+        guard sessionCoordinator.adaptiveTransmissionEnabled,
+              txViewModel.viewModel.connectionMode == .connected,
+              let state = txViewModel.sessionState,
+              state == .connecting || state == .connected || state == .disconnecting else {
+            sessionCoordinator.selectAdaptiveSession(destination: nil, path: nil)
+            return
+        }
+
+        let destination = CallsignValidator.normalize(connectBarViewModel.toCall)
+        guard !destination.isEmpty else {
+            sessionCoordinator.selectAdaptiveSession(destination: nil, path: nil)
+            return
+        }
+        let path: String
+        if let sessionPath = txViewModel.currentSession?.path.display, !sessionPath.isEmpty {
+            path = sessionPath
+        } else if connectBarViewModel.mode == .ax25ViaDigi {
+            path = connectBarViewModel.viaDigipeaters.joined(separator: ",")
+        } else {
+            path = ""
+        }
+        sessionCoordinator.selectAdaptiveSession(destination: destination, path: path)
     }
 
     private func applyAutoPathSuggestionIfNeeded(previousDestination: String, newDestination: String) {
@@ -1556,9 +1564,6 @@ struct TerminalView: View {
 
     // MARK: - View Components
     
-    // Old adaptiveStatusIndicator removed - moved to TerminalComposeView
-
-
     private func showConnectionBannerTemporarily() {
         connectionBannerTask?.cancel()
         withAnimation(.easeOut(duration: 0.2)) {
@@ -1666,8 +1671,6 @@ struct TerminalView: View {
                 composeText: txViewModel.composeText,
                 connectionMode: txViewModel.connectionMode,
                 useAXDP: useAXDPBinding,
-                settings: settings,
-                sessionCoordinator: sessionCoordinator,
                 sourceCall: txViewModel.sourceCall,
                 canSend: txViewModel.canSend,
                 characterCount: txViewModel.characterCount,

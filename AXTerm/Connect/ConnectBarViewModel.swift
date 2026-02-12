@@ -21,7 +21,6 @@ nonisolated struct ConnectDigiPathSection: Identifiable, Hashable {
 
 final class ConnectBarViewModel: ObservableObject {
     @Published private(set) var barState: ConnectBarState
-    @Published private(set) var adaptiveTelemetry: AdaptiveTelemetry?
     @Published var mode: ConnectBarMode = .ax25
     @Published var toCall: String = ""
     @Published var viaDigipeaters: [String] = []
@@ -407,10 +406,6 @@ final class ConnectBarViewModel: ObservableObject {
         inlineNote = nil
         validate()
         syncStateFromDraftIfEditable()
-    }
-
-    func setAdaptiveTelemetry(_ telemetry: AdaptiveTelemetry?) {
-        adaptiveTelemetry = telemetry
     }
 
     func beginAutoAttempting() {
