@@ -12,6 +12,7 @@ struct DestinationPickerControl: View {
     var onViewStationDetails: ((String) -> Void)? = nil
 
     @FocusState private var textFieldFocused: Bool
+    @State private var showPopover = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -26,21 +27,17 @@ struct DestinationPickerControl: View {
                         .font(.system(size: 12, design: .monospaced))
                         .monospacedDigit()
                         .focused($textFieldFocused)
-                        .onTapGesture {
-                            if !viewModel.isPopoverPresented {
-                                viewModel.openSuggestions()
-                            }
-                        }
                         .onSubmit {
                             commitFromKeyboard()
                         }
                         .accessibilityIdentifier("connectBar.destinationField")
 
                     Button {
-                        if viewModel.isPopoverPresented {
-                            viewModel.dismissSuggestions()
+                        if showPopover {
+                            showPopover = false
                         } else {
                             viewModel.openSuggestions()
+                            showPopover = true
                             textFieldFocused = true
                         }
                     } label: {
@@ -64,7 +61,7 @@ struct DestinationPickerControl: View {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(borderColor, lineWidth: borderLineWidth)
                 )
-                .popover(isPresented: $viewModel.isPopoverPresented, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+                .popover(isPresented: $showPopover, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
                     suggestionsPopover
                 }
             }
@@ -90,10 +87,16 @@ struct DestinationPickerControl: View {
         .onChange(of: groups) { _, newValue in
             viewModel.updateDataSources(groups: newValue)
         }
+        .onChange(of: textFieldFocused) { _, isFocused in
+            if !isFocused {
+                showPopover = false
+            }
+        }
         .onMoveCommand { direction in
-            guard viewModel.isPopoverPresented else {
+            guard showPopover else {
                 if direction == .down {
                     viewModel.openSuggestions()
+                    showPopover = true
                 }
                 return
             }
@@ -107,7 +110,7 @@ struct DestinationPickerControl: View {
             }
         }
         .onExitCommand {
-            viewModel.dismissSuggestions()
+            showPopover = false
         }
     }
 
@@ -129,7 +132,7 @@ struct DestinationPickerControl: View {
         Binding(
             get: { viewModel.typedText },
             set: { newValue in
-                viewModel.handleTypedTextChanged(newValue)
+                viewModel.handleTypedTextChanged(newValue, autoOpenPopover: textFieldFocused)
                 onDestinationChanged(DestinationPickerViewModel.normalizeCandidate(viewModel.typedText))
             }
         )

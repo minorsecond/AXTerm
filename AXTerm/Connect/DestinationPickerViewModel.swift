@@ -145,11 +145,11 @@ final class DestinationPickerViewModel: ObservableObject {
         updateValidationAndSuggestions()
     }
 
-    func handleTypedTextChanged(_ raw: String) {
+    func handleTypedTextChanged(_ raw: String, autoOpenPopover: Bool = true) {
         typedText = Self.sanitizeForTyping(raw)
         selectedStation = nil
         updateValidationAndSuggestions()
-        if !isPopoverPresented {
+        if autoOpenPopover && !isPopoverPresented {
             isPopoverPresented = true
         }
     }
