@@ -105,6 +105,10 @@ final class DestinationPickerViewModel: ObservableObject {
         let evidence: [DestinationAliasEvidenceCodable]
     }
 
+    /// Explicit nonisolated deinit to avoid Swift concurrency runtime bug
+    /// where isolated deallocating deinit triggers task-local scope corruption.
+    nonisolated deinit {}
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         loadPersistedFavorites()

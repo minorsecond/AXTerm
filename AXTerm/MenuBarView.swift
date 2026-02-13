@@ -103,7 +103,7 @@ struct MenuBarView: View {
         case .connected, .connecting:
             client.disconnect()
         case .disconnected, .failed:
-            client.connect(host: settings.host, port: settings.portValue)
+            client.connectUsingSettings()
         }
     }
 

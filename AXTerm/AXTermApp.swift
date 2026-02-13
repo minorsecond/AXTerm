@@ -112,7 +112,12 @@ struct AXTermApp: App {
 
         // Auto-connect if settings say so OR if test mode requests it
         if !isUnitTests && (settingsStore.autoConnectOnLaunch || testConfig.autoConnect) {
-            self.client.connect(host: effectiveHost, port: effectivePort)
+            if testConfig.isTestMode {
+                // Test mode always uses network with explicit host/port
+                self.client.connect(host: effectiveHost, port: effectivePort)
+            } else {
+                self.client.connectUsingSettings()
+            }
         }
         appDelegate.settings = settingsStore
         appDelegate.notificationDelegate = notificationHandler

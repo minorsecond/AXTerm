@@ -1830,7 +1830,7 @@ struct TerminalView: View {
 
             if client.status == .disconnected || client.status == .failed {
                 Button("Connect") {
-                    client.connect(host: settings.host, port: settings.portValue)
+                    client.connectUsingSettings()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)

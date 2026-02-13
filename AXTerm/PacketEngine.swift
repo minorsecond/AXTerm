@@ -17,6 +17,24 @@ nonisolated enum ConnectionStatus: String {
     case connecting = "Connecting"
     case connected = "Connected"
     case failed = "Failed"
+
+    /// Map from KISSLinkState
+    init(linkState: KISSLinkState) {
+        switch linkState {
+        case .disconnected: self = .disconnected
+        case .connecting: self = .connecting
+        case .connected: self = .connected
+        case .failed: self = .failed
+        }
+    }
+}
+
+/// Transport type for KISS connections
+nonisolated enum KISSTransportType: String, CaseIterable, Identifiable, Sendable {
+    case network = "Network"
+    case serial = "Local USB Serial"
+
+    var id: String { rawValue }
 }
 
 /// Filter settings for packet display
@@ -178,6 +196,7 @@ final class PacketEngine: ObservableObject {
     // MARK: - Private State
 
     private var connection: NWConnection?
+    private var link: KISSLink?
     private var parser = KISSFrameParser()
     private var stationTracker = StationTracker()
 
@@ -265,6 +284,21 @@ final class PacketEngine: ObservableObject {
 
     // MARK: - Connection Management
 
+    /// Connect using the transport configured in settings.
+    /// Falls back to network if transport type is unknown.
+    func connectUsingSettings() {
+        if settings.isSerialTransport {
+            let config = SerialConfig(
+                devicePath: settings.serialDevicePath,
+                baudRate: settings.serialBaudRate,
+                autoReconnect: settings.serialAutoReconnect
+            )
+            connectSerial(config: config)
+        } else {
+            connect(host: settings.host, port: settings.portValue)
+        }
+    }
+
     func connect(host: String = "localhost", port: UInt16 = 8001) {
         disconnect()
 
@@ -286,34 +320,35 @@ final class PacketEngine: ObservableObject {
         eventLogger?.log(level: .info, category: .connection, message: "Connecting to \(host):\(port)", metadata: nil)
         loadPersistedPackets(reason: "connect")
 
-        let nwHost = NWEndpoint.Host(host)
-        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
-            status = .failed
-            lastError = "Invalid port \(port)"
-            addErrorLine("Connection failed: invalid port \(port)", category: .connection)
-            eventLogger?.log(level: .error, category: .connection, message: "Connection failed: invalid port \(port)", metadata: nil)
-            SentryManager.shared.captureConnectionFailure("Connection failed: invalid port \(port)")
-            return
-        }
+        let networkLink = KISSLinkNetwork(host: host, port: port)
+        connectViaLink(networkLink)
+    }
 
-        let params = NWParameters.tcp
-        params.allowLocalEndpointReuse = true
+    /// Connect using a serial device
+    func connectSerial(config: SerialConfig) {
+        disconnect()
 
-        connection = NWConnection(host: nwHost, port: nwPort, using: params)
+        status = .connecting
+        lastError = nil
+        connectedHost = nil
+        connectedPort = nil
+        eventLogger?.log(level: .info, category: .connection, message: "Connecting to serial: \(config.devicePath)", metadata: nil)
+        loadPersistedPackets(reason: "connect")
 
-        let hostCopy = host
-        let portCopy = port
-        connection?.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
-            Task { @MainActor in
-                self.handleConnectionState(state, host: hostCopy, port: portCopy)
-            }
-        }
+        let serialLink = KISSLinkSerial(config: config)
+        connectViaLink(serialLink)
+    }
 
-        connection?.start(queue: .main)
+    /// Connect using any KISSLink transport
+    private func connectViaLink(_ newLink: KISSLink) {
+        link = newLink
+        newLink.delegate = self
+        newLink.open()
     }
 
     func disconnect() {
+        link?.close()
+        link = nil
         connection?.cancel()
         connection = nil
         parser.reset()
@@ -329,7 +364,9 @@ final class PacketEngine: ObservableObject {
     /// - Parameter frame: The frame to send
     /// - Parameter completion: Callback with success or error
     func send(frame: OutboundFrame, completion: ((Result<Void, Error>) -> Void)? = nil) {
-        guard status == .connected, let conn = connection else {
+        let activeLink = link
+        let activeConn = connection
+        guard status == .connected, (activeLink != nil || activeConn != nil) else {
             let error = NSError(domain: "PacketEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not connected"])
             TxLog.error(.transport, "Send failed: not connected", error: error, ["frameId": String(frame.id.uuidString.prefix(8))])
             addErrorLine("Send failed: not connected", category: .transmission)
@@ -392,8 +429,8 @@ final class PacketEngine: ObservableObject {
             ]
         )
 
-        // Send via connection
-        conn.send(content: kissData, completion: .contentProcessed { [weak self] error in
+        // Send via link (preferred) or legacy connection
+        let sendCompletion: (Error?) -> Void = { [weak self] error in
             guard let self else { return }
             Task { @MainActor in
                 if let error = error {
@@ -421,7 +458,17 @@ final class PacketEngine: ObservableObject {
                     completion?(.success(()))
                 }
             }
-        })
+        }
+
+        if let activeLink = activeLink {
+            activeLink.send(kissData) { error in
+                sendCompletion(error)
+            }
+        } else if let conn = activeConn {
+            conn.send(content: kissData, completion: .contentProcessed { error in
+                sendCompletion(error)
+            })
+        }
     }
 
     private func handleConnectionState(_ state: NWConnection.State, host: String, port: UInt16) {
@@ -1751,6 +1798,46 @@ struct DebugRebuildResult {
     let errorMessage: String?
 }
 #endif
+
+// MARK: - KISSLinkDelegate
+
+extension PacketEngine: KISSLinkDelegate {
+    func linkDidReceive(_ data: Data) {
+        handleIncomingData(data)
+    }
+
+    func linkDidChangeState(_ state: KISSLinkState) {
+        let newStatus = ConnectionStatus(linkState: state)
+        self.status = newStatus
+
+        switch state {
+        case .connected:
+            let endpoint = link?.endpointDescription ?? "unknown"
+            addSystemLine("Connected to \(endpoint)", category: .connection)
+            eventLogger?.log(level: .info, category: .connection, message: "Connected to \(endpoint)", metadata: nil)
+            SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Connected", level: .info, data: nil)
+
+        case .disconnected:
+            addSystemLine("Disconnected", category: .connection)
+            eventLogger?.log(level: .info, category: .connection, message: "Disconnected", metadata: nil)
+            SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Disconnected", level: .info, data: nil)
+
+        case .failed:
+            let endpoint = link?.endpointDescription ?? "unknown"
+            addErrorLine("Connection to \(endpoint) failed", category: .connection)
+            eventLogger?.log(level: .error, category: .connection, message: "Connection failed: \(endpoint)", metadata: nil)
+
+        case .connecting:
+            break
+        }
+    }
+
+    func linkDidError(_ message: String) {
+        lastError = message
+        addErrorLine(message, category: .connection)
+        eventLogger?.log(level: .error, category: .connection, message: message, metadata: nil)
+    }
+}
 
 private struct ConsoleEntryMetadata: Codable {
     let from: String?

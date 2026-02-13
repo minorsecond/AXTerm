@@ -549,7 +549,7 @@ struct ContentView: View {
                 }
             case .disconnected, .failed:
                 Button("Connect TNC") {
-                    client.connect(host: settings.host, port: settings.portValue)
+                    client.connectUsingSettings()
                 }
                 Button("Reconnect TNC") {
                     reconnectToTNC()
@@ -559,7 +559,7 @@ struct ContentView: View {
             Divider()
 
             Section("Endpoint") {
-                Text("KISS TCP @ \(connectionHostPort)")
+                Text(connectionEndpointLabel)
             }
 
             if let lastError = client.lastError {
@@ -632,6 +632,16 @@ struct ContentView: View {
         }
     }
 
+    private var connectionEndpointLabel: String {
+        if settings.isSerialTransport {
+            let device = settings.serialDevicePath.isEmpty
+                ? "No device"
+                : (settings.serialDevicePath as NSString).lastPathComponent
+            return "KISS Serial @ \(device)"
+        }
+        return "KISS TCP @ \(connectionHostPort)"
+    }
+
     private var connectionHostPort: String {
         let hostValue = client.connectedHost ?? settings.host
         let portValue = client.connectedPort.map(String.init) ?? String(settings.port)
@@ -643,7 +653,7 @@ struct ContentView: View {
         case .connected, .connecting:
             client.disconnect()
         case .disconnected, .failed:
-            client.connect(host: settings.host, port: settings.portValue)
+            client.connectUsingSettings()
         }
     }
 
@@ -651,7 +661,7 @@ struct ContentView: View {
         client.disconnect()
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
-            client.connect(host: settings.host, port: settings.portValue)
+            client.connectUsingSettings()
         }
     }
 

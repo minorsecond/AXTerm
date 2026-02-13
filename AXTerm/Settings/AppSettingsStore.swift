@@ -34,6 +34,12 @@ final class AppSettingsStore: ObservableObject {
     static let sentrySendPacketContentsKey = "sentrySendPacketContents"
     static let sentrySendConnectionDetailsKey = "sentrySendConnectionDetails"
 
+    // Serial transport settings keys
+    static let transportTypeKey = "kissTransportType"
+    static let serialDevicePathKey = "serialDevicePath"
+    static let serialBaudRateKey = "serialBaudRate"
+    static let serialAutoReconnectKey = "serialAutoReconnect"
+
     // File transfer settings keys
     static let allowedFileTransferCallsignsKey = "allowedFileTransferCallsigns"
     static let deniedFileTransferCallsignsKey = "deniedFileTransferCallsigns"
@@ -66,6 +72,11 @@ final class AppSettingsStore: ObservableObject {
     static let adaptiveStaleMissedBroadcastsKey = "adaptiveStaleMissedBroadcasts"
     static let neighborStaleTTLHoursKey = "neighborStaleTTLHours"
     static let linkStatStaleTTLHoursKey = "linkStatStaleTTLHours"
+
+    static let defaultTransportType = "network"
+    static let defaultSerialDevicePath = ""
+    static let defaultSerialBaudRate = 115200
+    static let defaultSerialAutoReconnect = true
 
     static let defaultHost = "localhost"
     static let defaultPort = 8001
@@ -318,6 +329,41 @@ final class AppSettingsStore: ObservableObject {
 
     @Published var autoConnectOnLaunch: Bool {
         didSet { persistAutoConnect() }
+    }
+
+    // MARK: - Serial Transport Settings
+
+    @Published var transportType: String {
+        didSet { persistTransportType() }
+    }
+
+    @Published var serialDevicePath: String {
+        didSet { persistSerialDevicePath() }
+    }
+
+    @Published var serialBaudRate: Int {
+        didSet {
+            let clamped = Self.commonBaudRates.contains(serialBaudRate) ? serialBaudRate : Self.defaultSerialBaudRate
+            guard clamped == serialBaudRate else {
+                deferUpdate { [weak self, clamped] in
+                    self?.serialBaudRate = clamped
+                }
+                return
+            }
+            persistSerialBaudRate()
+        }
+    }
+
+    @Published var serialAutoReconnect: Bool {
+        didSet { persistSerialAutoReconnect() }
+    }
+
+    /// Common baud rates for KISS TNCs
+    static let commonBaudRates = [1200, 9600, 19200, 38400, 57600, 115200, 230400]
+
+    /// Whether the current transport type is serial
+    var isSerialTransport: Bool {
+        transportType == "serial"
     }
 
     @Published var notifyOnWatchHits: Bool {
@@ -679,6 +725,10 @@ final class AppSettingsStore: ObservableObject {
         // Note: runInMenuBar is now a computed property, not stored
         let storedLaunchAtLogin = defaults.object(forKey: Self.launchAtLoginKey) as? Bool ?? Self.defaultLaunchAtLogin
         let storedAutoConnect = defaults.object(forKey: Self.autoConnectKey) as? Bool ?? Self.defaultAutoConnect
+        let storedTransportType = defaults.string(forKey: Self.transportTypeKey) ?? Self.defaultTransportType
+        let storedSerialDevicePath = defaults.string(forKey: Self.serialDevicePathKey) ?? Self.defaultSerialDevicePath
+        let storedSerialBaudRate = defaults.object(forKey: Self.serialBaudRateKey) as? Int ?? Self.defaultSerialBaudRate
+        let storedSerialAutoReconnect = defaults.object(forKey: Self.serialAutoReconnectKey) as? Bool ?? Self.defaultSerialAutoReconnect
         let storedNotifyOnWatch = defaults.object(forKey: Self.notifyOnWatchKey) as? Bool ?? Self.defaultNotifyOnWatch
         let storedNotifyPlaySound = defaults.object(forKey: Self.notifyPlaySoundKey) as? Bool ?? Self.defaultNotifyPlaySound
         let storedNotifyOnlyWhenInactive = defaults.object(forKey: Self.notifyOnlyWhenInactiveKey) as? Bool ?? Self.defaultNotifyOnlyWhenInactive
@@ -764,6 +814,10 @@ final class AppSettingsStore: ObservableObject {
         // runInMenuBar is computed, no stored property to set
         self.launchAtLogin = storedLaunchAtLogin
         self.autoConnectOnLaunch = storedAutoConnect
+        self.transportType = storedTransportType
+        self.serialDevicePath = storedSerialDevicePath
+        self.serialBaudRate = Self.commonBaudRates.contains(storedSerialBaudRate) ? storedSerialBaudRate : Self.defaultSerialBaudRate
+        self.serialAutoReconnect = storedSerialAutoReconnect
         self.notifyOnWatchHits = storedNotifyOnWatch
         self.notifyPlaySound = storedNotifyPlaySound
         self.notifyOnlyWhenInactive = storedNotifyOnlyWhenInactive
@@ -908,6 +962,22 @@ final class AppSettingsStore: ObservableObject {
 
     private func persistAutoConnect() {
         defaults.set(autoConnectOnLaunch, forKey: Self.autoConnectKey)
+    }
+
+    private func persistTransportType() {
+        defaults.set(transportType, forKey: Self.transportTypeKey)
+    }
+
+    private func persistSerialDevicePath() {
+        defaults.set(serialDevicePath, forKey: Self.serialDevicePathKey)
+    }
+
+    private func persistSerialBaudRate() {
+        defaults.set(serialBaudRate, forKey: Self.serialBaudRateKey)
+    }
+
+    private func persistSerialAutoReconnect() {
+        defaults.set(serialAutoReconnect, forKey: Self.serialAutoReconnectKey)
     }
 
     private func persistNotifyOnWatch() {
@@ -1096,6 +1166,10 @@ final class AppSettingsStore: ObservableObject {
             Self.runInMenuBarKey: Self.defaultRunInMenuBar,
             Self.launchAtLoginKey: Self.defaultLaunchAtLogin,
             Self.autoConnectKey: Self.defaultAutoConnect,
+            Self.transportTypeKey: Self.defaultTransportType,
+            Self.serialDevicePathKey: Self.defaultSerialDevicePath,
+            Self.serialBaudRateKey: Self.defaultSerialBaudRate,
+            Self.serialAutoReconnectKey: Self.defaultSerialAutoReconnect,
             Self.notifyOnWatchKey: Self.defaultNotifyOnWatch,
             Self.notifyPlaySoundKey: Self.defaultNotifyPlaySound,
             Self.notifyOnlyWhenInactiveKey: Self.defaultNotifyOnlyWhenInactive,

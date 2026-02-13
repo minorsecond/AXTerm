@@ -331,9 +331,6 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
-/* Begin PBXShellScriptBuildPhase section */
-/* End PBXShellScriptBuildPhase section */
-
 /* Begin PBXSourcesBuildPhase section */
 		3487E8992F2AA2A700DF0172 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
