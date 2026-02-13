@@ -40,6 +40,11 @@ final class AppSettingsStore: ObservableObject {
     static let serialBaudRateKey = "serialBaudRate"
     static let serialAutoReconnectKey = "serialAutoReconnect"
 
+    // BLE transport settings keys
+    static let blePeripheralUUIDKey = "blePeripheralUUID"
+    static let blePeripheralNameKey = "blePeripheralName"
+    static let bleAutoReconnectKey = "bleAutoReconnect"
+
     // File transfer settings keys
     static let allowedFileTransferCallsignsKey = "allowedFileTransferCallsigns"
     static let deniedFileTransferCallsignsKey = "deniedFileTransferCallsigns"
@@ -77,6 +82,10 @@ final class AppSettingsStore: ObservableObject {
     static let defaultSerialDevicePath = ""
     static let defaultSerialBaudRate = 115200
     static let defaultSerialAutoReconnect = true
+
+    static let defaultBLEPeripheralUUID = ""
+    static let defaultBLEPeripheralName = ""
+    static let defaultBLEAutoReconnect = true
 
     static let defaultHost = "localhost"
     static let defaultPort = 8001
@@ -364,6 +373,25 @@ final class AppSettingsStore: ObservableObject {
     /// Whether the current transport type is serial
     var isSerialTransport: Bool {
         transportType == "serial"
+    }
+
+    // MARK: - BLE Transport Settings
+
+    @Published var blePeripheralUUID: String {
+        didSet { persistBLEPeripheralUUID() }
+    }
+
+    @Published var blePeripheralName: String {
+        didSet { persistBLEPeripheralName() }
+    }
+
+    @Published var bleAutoReconnect: Bool {
+        didSet { persistBLEAutoReconnect() }
+    }
+
+    /// Whether the current transport type is BLE
+    var isBLETransport: Bool {
+        transportType == "ble"
     }
 
     @Published var notifyOnWatchHits: Bool {
@@ -729,6 +757,9 @@ final class AppSettingsStore: ObservableObject {
         let storedSerialDevicePath = defaults.string(forKey: Self.serialDevicePathKey) ?? Self.defaultSerialDevicePath
         let storedSerialBaudRate = defaults.object(forKey: Self.serialBaudRateKey) as? Int ?? Self.defaultSerialBaudRate
         let storedSerialAutoReconnect = defaults.object(forKey: Self.serialAutoReconnectKey) as? Bool ?? Self.defaultSerialAutoReconnect
+        let storedBLEPeripheralUUID = defaults.string(forKey: Self.blePeripheralUUIDKey) ?? Self.defaultBLEPeripheralUUID
+        let storedBLEPeripheralName = defaults.string(forKey: Self.blePeripheralNameKey) ?? Self.defaultBLEPeripheralName
+        let storedBLEAutoReconnect = defaults.object(forKey: Self.bleAutoReconnectKey) as? Bool ?? Self.defaultBLEAutoReconnect
         let storedNotifyOnWatch = defaults.object(forKey: Self.notifyOnWatchKey) as? Bool ?? Self.defaultNotifyOnWatch
         let storedNotifyPlaySound = defaults.object(forKey: Self.notifyPlaySoundKey) as? Bool ?? Self.defaultNotifyPlaySound
         let storedNotifyOnlyWhenInactive = defaults.object(forKey: Self.notifyOnlyWhenInactiveKey) as? Bool ?? Self.defaultNotifyOnlyWhenInactive
@@ -818,6 +849,9 @@ final class AppSettingsStore: ObservableObject {
         self.serialDevicePath = storedSerialDevicePath
         self.serialBaudRate = Self.commonBaudRates.contains(storedSerialBaudRate) ? storedSerialBaudRate : Self.defaultSerialBaudRate
         self.serialAutoReconnect = storedSerialAutoReconnect
+        self.blePeripheralUUID = storedBLEPeripheralUUID
+        self.blePeripheralName = storedBLEPeripheralName
+        self.bleAutoReconnect = storedBLEAutoReconnect
         self.notifyOnWatchHits = storedNotifyOnWatch
         self.notifyPlaySound = storedNotifyPlaySound
         self.notifyOnlyWhenInactive = storedNotifyOnlyWhenInactive
@@ -978,6 +1012,18 @@ final class AppSettingsStore: ObservableObject {
 
     private func persistSerialAutoReconnect() {
         defaults.set(serialAutoReconnect, forKey: Self.serialAutoReconnectKey)
+    }
+
+    private func persistBLEPeripheralUUID() {
+        defaults.set(blePeripheralUUID, forKey: Self.blePeripheralUUIDKey)
+    }
+
+    private func persistBLEPeripheralName() {
+        defaults.set(blePeripheralName, forKey: Self.blePeripheralNameKey)
+    }
+
+    private func persistBLEAutoReconnect() {
+        defaults.set(bleAutoReconnect, forKey: Self.bleAutoReconnectKey)
     }
 
     private func persistNotifyOnWatch() {
@@ -1170,6 +1216,9 @@ final class AppSettingsStore: ObservableObject {
             Self.serialDevicePathKey: Self.defaultSerialDevicePath,
             Self.serialBaudRateKey: Self.defaultSerialBaudRate,
             Self.serialAutoReconnectKey: Self.defaultSerialAutoReconnect,
+            Self.blePeripheralUUIDKey: Self.defaultBLEPeripheralUUID,
+            Self.blePeripheralNameKey: Self.defaultBLEPeripheralName,
+            Self.bleAutoReconnectKey: Self.defaultBLEAutoReconnect,
             Self.notifyOnWatchKey: Self.defaultNotifyOnWatch,
             Self.notifyPlaySoundKey: Self.defaultNotifyPlaySound,
             Self.notifyOnlyWhenInactiveKey: Self.defaultNotifyOnlyWhenInactive,

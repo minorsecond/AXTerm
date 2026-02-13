@@ -41,6 +41,7 @@ protocol KISSLinkDelegate: AnyObject {
 /// Concrete implementations:
 /// - `KISSLinkNetwork`: TCP connection via Network.framework
 /// - `KISSLinkSerial`: USB serial via POSIX file descriptors
+/// - `KISSLinkBLE`: Bluetooth Low Energy via CoreBluetooth
 protocol KISSLink: AnyObject {
     /// Current connection state
     var state: KISSLinkState { get }

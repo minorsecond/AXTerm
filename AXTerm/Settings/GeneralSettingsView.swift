@@ -5,6 +5,7 @@
 //  Refactored by Settings Redesign on 2/8/26.
 //
 
+import CoreBluetooth
 import SwiftUI
 import ServiceManagement
 
@@ -15,6 +16,7 @@ struct GeneralSettingsView: View {
 
     @State private var launchAtLoginFeedback: String?
     @State private var showAllSerialDevices = false
+    @StateObject private var bleScanner = BLEDeviceScanner()
     @AppStorage(AppSettingsStore.runInMenuBarKey) private var runInMenuBar = AppSettingsStore.defaultRunInMenuBar
 
     var body: some View {
@@ -22,12 +24,15 @@ struct GeneralSettingsView: View {
             PreferencesSection("Connection") {
                 Picker("Transport", selection: $settings.transportType) {
                     Text("Network (TCP)").tag("network")
-                    Text("Local USB Serial").tag("serial")
+                    Text("USB Serial").tag("serial")
+                    Text("Bluetooth LE").tag("ble")
                 }
                 .pickerStyle(.segmented)
 
                 if settings.transportType == "network" {
                     networkSettingsContent
+                } else if settings.transportType == "ble" {
+                    bleSettingsContent
                 } else {
                     serialSettingsContent
                 }
@@ -125,6 +130,71 @@ struct GeneralSettingsView: View {
             Label("Device not found. Connect the TNC and select it again.", systemImage: "exclamationmark.triangle")
                 .font(.caption)
                 .foregroundStyle(.orange)
+        }
+    }
+
+    // MARK: - BLE Settings
+
+    @State private var showAllBLEDevices = false
+
+    @ViewBuilder
+    private var bleSettingsContent: some View {
+        Picker("Device", selection: $settings.blePeripheralUUID) {
+            Text("Select a device…").tag("")
+
+            ForEach(bleScanner.devices) { device in
+                Text("\(device.displayName) (\(device.rssi) dBm)")
+                    .tag(device.id.uuidString)
+            }
+
+            // Show previously selected device if not in scan results
+            if !settings.blePeripheralUUID.isEmpty,
+               !bleScanner.devices.contains(where: { $0.id.uuidString == settings.blePeripheralUUID }) {
+                Text(settings.blePeripheralName.isEmpty
+                     ? "Previously paired (\(settings.blePeripheralUUID.prefix(8))…)"
+                     : settings.blePeripheralName)
+                    .tag(settings.blePeripheralUUID)
+            }
+        }
+        .onChange(of: settings.blePeripheralUUID) { _, newValue in
+            if let device = bleScanner.devices.first(where: { $0.id.uuidString == newValue }) {
+                settings.blePeripheralName = device.displayName
+            }
+        }
+
+        HStack {
+            Button(bleScanner.isScanning ? "Scanning…" : "Scan for Devices") {
+                bleScanner.showAllDevices = showAllBLEDevices
+                bleScanner.startScan()
+            }
+            .disabled(bleScanner.isScanning)
+            .controlSize(.small)
+
+            if bleScanner.isScanning {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+
+        Toggle("Show all BLE devices", isOn: $showAllBLEDevices)
+            .controlSize(.small)
+
+        if bleScanner.bluetoothState == .poweredOff {
+            Label("Bluetooth is turned off. Enable it in System Settings.", systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        } else if bleScanner.bluetoothState == .unauthorized {
+            Label("Bluetooth access not authorized. Check System Settings > Privacy & Security.", systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+
+        Toggle("Auto-reconnect on disconnect", isOn: $settings.bleAutoReconnect)
+
+        if !settings.blePeripheralName.isEmpty {
+            Text("Last selected: \(settings.blePeripheralName)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

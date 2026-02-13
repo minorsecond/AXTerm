@@ -33,6 +33,7 @@ nonisolated enum ConnectionStatus: String {
 nonisolated enum KISSTransportType: String, CaseIterable, Identifiable, Sendable {
     case network = "Network"
     case serial = "Local USB Serial"
+    case ble = "Bluetooth LE"
 
     var id: String { rawValue }
 }
@@ -294,6 +295,13 @@ final class PacketEngine: ObservableObject {
                 autoReconnect: settings.serialAutoReconnect
             )
             connectSerial(config: config)
+        } else if settings.isBLETransport {
+            let config = BLEConfig(
+                peripheralUUID: settings.blePeripheralUUID,
+                peripheralName: settings.blePeripheralName,
+                autoReconnect: settings.bleAutoReconnect
+            )
+            connectBLE(config: config)
         } else {
             connect(host: settings.host, port: settings.portValue)
         }
@@ -337,6 +345,21 @@ final class PacketEngine: ObservableObject {
 
         let serialLink = KISSLinkSerial(config: config)
         connectViaLink(serialLink)
+    }
+
+    /// Connect using a BLE device
+    func connectBLE(config: BLEConfig) {
+        disconnect()
+
+        status = .connecting
+        lastError = nil
+        connectedHost = nil
+        connectedPort = nil
+        eventLogger?.log(level: .info, category: .connection, message: "Connecting to BLE: \(config.peripheralName.isEmpty ? config.peripheralUUID : config.peripheralName)", metadata: nil)
+        loadPersistedPackets(reason: "connect")
+
+        let bleLink = KISSLinkBLE(config: config)
+        connectViaLink(bleLink)
     }
 
     /// Connect using any KISSLink transport
