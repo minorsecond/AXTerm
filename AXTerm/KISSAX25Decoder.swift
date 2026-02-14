@@ -100,6 +100,13 @@ nonisolated enum KISS {
 
 // MARK: - KISS Frame Parser
 
+/// Output from the KISS frame parser
+nonisolated enum KISSFrameOutput {
+    case ax25(Data)
+    case mobilinkdTelemetry(Data) // Raw hardware frame payload
+    case unknown(command: UInt8, payload: Data)
+}
+
 /// Stateful parser for extracting KISS frames from a TCP byte stream.
 /// Handles arbitrary chunk boundaries and frame splitting.
 nonisolated struct KISSFrameParser {
@@ -108,17 +115,16 @@ nonisolated struct KISSFrameParser {
 
     init() {}
 
-    /// Feed a chunk of data from TCP. Returns zero or more complete AX.25 frame payloads.
-    /// Each returned Data is an unescaped AX.25 frame (KISS command byte stripped).
-    mutating func feed(_ chunk: Data) -> [Data] {
-        var frames: [Data] = []
+    /// Feed a chunk of data from TCP. Returns zero or more processed KISS frames.
+    mutating func feed(_ chunk: Data) -> [KISSFrameOutput] {
+        var frames: [KISSFrameOutput] = []
 
         for byte in chunk {
             if byte == KISS.FEND {
                 if inFrame && !buffer.isEmpty {
                     // End of frame - process it
-                    if let payload = processKISSFrame(buffer) {
-                        frames.append(payload)
+                    if let result = processKISSFrame(buffer) {
+                        frames.append(result)
                     }
                 }
                 // Start fresh for next frame
@@ -139,26 +145,49 @@ nonisolated struct KISSFrameParser {
         inFrame = false
     }
 
-    /// Process a complete KISS frame buffer, returning the AX.25 payload if valid
-    private func processKISSFrame(_ data: Data) -> Data? {
+    /// Process a complete KISS frame buffer
+    private func processKISSFrame(_ data: Data) -> KISSFrameOutput? {
         guard !data.isEmpty else { return nil }
 
         // First byte is KISS command byte
         let command = data[0]
 
-        // Only handle data frames on port 0 for now
         // Command byte format: high nibble = port, low nibble = command type
         let port = (command >> 4) & 0x0F
         let cmdType = command & 0x0F
 
-        guard port == 0 && cmdType == 0 else { return nil }
+        // Payload is properly escaped, but for non-data commands it might depend on the TNC.
+        // Standard KISS says "The data field contains standard KISS-escaped data."
+        
+        let escapedPayload = data.count > 1 ? data.subdata(in: 1..<data.count) : Data()
+        let payload = KISS.unescape(escapedPayload)
 
-        // Rest is the AX.25 frame (escaped)
-        guard data.count > 1 else { return nil }
-        let escapedPayload = data.subdata(in: 1..<data.count)
+        // Handle Data Frame (Port 0)
+        if port == 0 && cmdType == KISS.CMD_DATA {
+             return .ax25(payload)
+        }
+        
+        // Handle Mobilinkd Hardware Command (0x06)
+        // This is used for battery levels and other telemetry
+        if cmdType == 0x06 {
+             // We pass the full unescaped payload (including subcommand)
+             // But wait, the standard hardware command structure is:
+             // [CMD=6] [Subcommand] [Args...]
+             // The parser stripped CMD. So `payload` starts with Subcommand.
+             // We'll wrap it in telemetry case.
+             // Actually, to be safe for MobilinkdTNC helper, we should check if we need to include the command byte?
+             // MobilinkdTNC.parseBatteryLevel checks for data[0] == CMD_HARDWARE (0x06).
+             // So we should reconstruct the full frame or change the parser helpers.
+             // `parseBatteryLevel` expects [CMD, SUB, DATA...]
+             // So let's prepend the command byte back? No, `unescape` is for the payload.
+             // If we prepend 0x06, we match the structure expected by `parseBatteryLevel`.
+             
+             var fullFrame = Data([command])
+             fullFrame.append(payload)
+             return .mobilinkdTelemetry(fullFrame)
+        }
 
-        // Unescape and return
-        return KISS.unescape(escapedPayload)
+        return .unknown(command: command, payload: payload)
     }
 }
 

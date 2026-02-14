@@ -126,6 +126,9 @@ final class BLEDeviceScanner: NSObject, ObservableObject {
     }
 
     func startScan(duration: TimeInterval = 10) {
+        // Debounce scan requests if already running
+        if isScanning { return }
+        
         devices.removeAll()
 
         if centralManager == nil {
@@ -161,6 +164,7 @@ final class BLEDeviceScanner: NSObject, ObservableObject {
     }
 
     func stopScan() {
+        guard isScanning else { return }
         centralManager?.stopScan()
         isScanning = false
         scanTimer?.invalidate()

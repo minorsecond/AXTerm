@@ -45,6 +45,12 @@ final class AppSettingsStore: ObservableObject {
     static let blePeripheralNameKey = "blePeripheralName"
     static let bleAutoReconnectKey = "bleAutoReconnect"
 
+    // Mobilinkd TNC4 settings keys
+    static let mobilinkdEnabledKey = "mobilinkdEnabled"
+    static let mobilinkdModemTypeKey = "mobilinkdModemType"
+    static let mobilinkdOutputGainKey = "mobilinkdOutputGain"
+    static let mobilinkdInputGainKey = "mobilinkdInputGain"
+
     // File transfer settings keys
     static let allowedFileTransferCallsignsKey = "allowedFileTransferCallsigns"
     static let deniedFileTransferCallsignsKey = "deniedFileTransferCallsigns"
@@ -86,6 +92,11 @@ final class AppSettingsStore: ObservableObject {
     static let defaultBLEPeripheralUUID = ""
     static let defaultBLEPeripheralName = ""
     static let defaultBLEAutoReconnect = true
+
+    static let defaultMobilinkdEnabled = false
+    static let defaultMobilinkdModemType = 1 // 1200 baud
+    static let defaultMobilinkdOutputGain = 128
+    static let defaultMobilinkdInputGain = 4
 
     static let defaultHost = "localhost"
     static let defaultPort = 8001
@@ -392,6 +403,24 @@ final class AppSettingsStore: ObservableObject {
     /// Whether the current transport type is BLE
     var isBLETransport: Bool {
         transportType == "ble"
+    }
+
+    // MARK: - Mobilinkd Settings
+
+    @Published var mobilinkdEnabled: Bool {
+        didSet { persistMobilinkdEnabled() }
+    }
+
+    @Published var mobilinkdModemType: Int {
+        didSet { persistMobilinkdModemType() }
+    }
+
+    @Published var mobilinkdOutputGain: Int {
+        didSet { persistMobilinkdOutputGain() }
+    }
+
+    @Published var mobilinkdInputGain: Int {
+        didSet { persistMobilinkdInputGain() }
     }
 
     @Published var notifyOnWatchHits: Bool {
@@ -760,6 +789,12 @@ final class AppSettingsStore: ObservableObject {
         let storedBLEPeripheralUUID = defaults.string(forKey: Self.blePeripheralUUIDKey) ?? Self.defaultBLEPeripheralUUID
         let storedBLEPeripheralName = defaults.string(forKey: Self.blePeripheralNameKey) ?? Self.defaultBLEPeripheralName
         let storedBLEAutoReconnect = defaults.object(forKey: Self.bleAutoReconnectKey) as? Bool ?? Self.defaultBLEAutoReconnect
+
+        let storedMobilinkdEnabled = defaults.object(forKey: Self.mobilinkdEnabledKey) as? Bool ?? Self.defaultMobilinkdEnabled
+        let storedMobilinkdModemType = defaults.object(forKey: Self.mobilinkdModemTypeKey) as? Int ?? Self.defaultMobilinkdModemType
+        let storedMobilinkdOutputGain = defaults.object(forKey: Self.mobilinkdOutputGainKey) as? Int ?? Self.defaultMobilinkdOutputGain
+        let storedMobilinkdInputGain = defaults.object(forKey: Self.mobilinkdInputGainKey) as? Int ?? Self.defaultMobilinkdInputGain
+
         let storedNotifyOnWatch = defaults.object(forKey: Self.notifyOnWatchKey) as? Bool ?? Self.defaultNotifyOnWatch
         let storedNotifyPlaySound = defaults.object(forKey: Self.notifyPlaySoundKey) as? Bool ?? Self.defaultNotifyPlaySound
         let storedNotifyOnlyWhenInactive = defaults.object(forKey: Self.notifyOnlyWhenInactiveKey) as? Bool ?? Self.defaultNotifyOnlyWhenInactive
@@ -852,6 +887,12 @@ final class AppSettingsStore: ObservableObject {
         self.blePeripheralUUID = storedBLEPeripheralUUID
         self.blePeripheralName = storedBLEPeripheralName
         self.bleAutoReconnect = storedBLEAutoReconnect
+
+        self.mobilinkdEnabled = storedMobilinkdEnabled
+        self.mobilinkdModemType = storedMobilinkdModemType
+        self.mobilinkdOutputGain = storedMobilinkdOutputGain
+        self.mobilinkdInputGain = storedMobilinkdInputGain
+
         self.notifyOnWatchHits = storedNotifyOnWatch
         self.notifyPlaySound = storedNotifyPlaySound
         self.notifyOnlyWhenInactive = storedNotifyOnlyWhenInactive
@@ -1024,6 +1065,22 @@ final class AppSettingsStore: ObservableObject {
 
     private func persistBLEAutoReconnect() {
         defaults.set(bleAutoReconnect, forKey: Self.bleAutoReconnectKey)
+    }
+
+    private func persistMobilinkdEnabled() {
+        defaults.set(mobilinkdEnabled, forKey: Self.mobilinkdEnabledKey)
+    }
+
+    private func persistMobilinkdModemType() {
+        defaults.set(mobilinkdModemType, forKey: Self.mobilinkdModemTypeKey)
+    }
+
+    private func persistMobilinkdOutputGain() {
+        defaults.set(mobilinkdOutputGain, forKey: Self.mobilinkdOutputGainKey)
+    }
+
+    private func persistMobilinkdInputGain() {
+        defaults.set(mobilinkdInputGain, forKey: Self.mobilinkdInputGainKey)
     }
 
     private func persistNotifyOnWatch() {

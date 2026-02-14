@@ -30,8 +30,8 @@ struct SettingsView: View {
                 .tabItem { Label("Notifications", systemImage: "bell.badge") }
                 .tag(SettingsTab.notifications)
 
-            NetworkSettingsView(settings: settings)
-                .tabItem { Label("Network", systemImage: "network") }
+            ConnectionSettingsView(settings: settings, packetEngine: client)
+                .tabItem { Label("Connection", systemImage: "cable.connector") }
                 .tag(SettingsTab.network)
             
             TransmissionSettingsView(settings: settings, client: client)

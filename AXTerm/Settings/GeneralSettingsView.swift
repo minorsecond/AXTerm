@@ -15,58 +15,33 @@ struct GeneralSettingsView: View {
     @EnvironmentObject var router: SettingsRouter
 
     @State private var launchAtLoginFeedback: String?
-    @State private var showAllSerialDevices = false
-    @StateObject private var bleScanner = BLEDeviceScanner()
     @AppStorage(AppSettingsStore.runInMenuBarKey) private var runInMenuBar = AppSettingsStore.defaultRunInMenuBar
 
     var body: some View {
         Form {
-            PreferencesSection("Connection") {
-                Picker("Transport", selection: $settings.transportType) {
-                    Text("Network (TCP)").tag("network")
-                    Text("USB Serial").tag("serial")
-                    Text("Bluetooth LE").tag("ble")
-                }
-                .pickerStyle(.segmented)
-
-                if settings.transportType == "network" {
-                    networkSettingsContent
-                } else if settings.transportType == "ble" {
-                    bleSettingsContent
-                } else {
-                    serialSettingsContent
-                }
-
-                Toggle("Connect automatically on launch", isOn: $settings.autoConnectOnLaunch)
-
-                if shouldSuggestReconnect {
-                    Text("Reconnect to apply changes.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
             PreferencesSection("Identity") {
                 CallsignField(title: "My Callsign", text: $settings.myCallsign)
-
+                
                 Text("Used to highlight your node in the graph and identify you in sessions.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-
+            
             PreferencesSection("Display") {
                 Toggle("Show day separators in Console", isOn: $settings.showConsoleDaySeparators)
                 Toggle("Show day separators in Raw Data", isOn: $settings.showRawDaySeparators)
             }
-
+            
             PreferencesSection("System") {
+                Toggle("Connect automatically on launch", isOn: $settings.autoConnectOnLaunch)
+                
                 Toggle("Show icon in Menu Bar", isOn: $runInMenuBar)
-
+                
                 Toggle("Launch at Login", isOn: $settings.launchAtLogin)
                     .onChange(of: settings.launchAtLogin) { _, newValue in
                         updateLaunchAtLogin(enabled: newValue)
                     }
-
+                
                 if let feedback = launchAtLoginFeedback {
                     Text(feedback)
                         .font(.caption)
@@ -80,155 +55,6 @@ struct GeneralSettingsView: View {
             // Clear focus when clicking background
             NSApp.keyWindow?.makeFirstResponder(nil)
         }
-    }
-
-    // MARK: - Network Settings
-
-    @ViewBuilder
-    private var networkSettingsContent: some View {
-        TextField("Host", text: $settings.host)
-            .textFieldStyle(.roundedBorder)
-            .controlSize(.regular)
-
-        NumericInput("Port", value: $settings.port, range: 1...65535)
-    }
-
-    // MARK: - Serial Settings
-
-    @ViewBuilder
-    private var serialSettingsContent: some View {
-        Picker("Device", selection: $settings.serialDevicePath) {
-            Text("Select a device…").tag("")
-
-            ForEach(availableSerialDevices, id: \.self) { device in
-                Text(serialDeviceLabel(device))
-                    .tag(device)
-            }
-        }
-
-        HStack {
-            Toggle("Show all serial devices", isOn: $showAllSerialDevices)
-                .controlSize(.small)
-
-            Button("Refresh") {
-                // Force SwiftUI to re-evaluate availableSerialDevices
-                showAllSerialDevices.toggle()
-                showAllSerialDevices.toggle()
-            }
-            .controlSize(.small)
-        }
-
-        Picker("Baud Rate", selection: $settings.serialBaudRate) {
-            ForEach(AppSettingsStore.commonBaudRates, id: \.self) { rate in
-                Text(formatBaudRate(rate)).tag(rate)
-            }
-        }
-
-        Toggle("Auto-reconnect on disconnect", isOn: $settings.serialAutoReconnect)
-
-        if !settings.serialDevicePath.isEmpty && !FileManager.default.fileExists(atPath: settings.serialDevicePath) {
-            Label("Device not found. Connect the TNC and select it again.", systemImage: "exclamationmark.triangle")
-                .font(.caption)
-                .foregroundStyle(.orange)
-        }
-    }
-
-    // MARK: - BLE Settings
-
-    @State private var showAllBLEDevices = false
-
-    @ViewBuilder
-    private var bleSettingsContent: some View {
-        Picker("Device", selection: $settings.blePeripheralUUID) {
-            Text("Select a device…").tag("")
-
-            ForEach(bleScanner.devices) { device in
-                Text("\(device.displayName) (\(device.rssi) dBm)")
-                    .tag(device.id.uuidString)
-            }
-
-            // Show previously selected device if not in scan results
-            if !settings.blePeripheralUUID.isEmpty,
-               !bleScanner.devices.contains(where: { $0.id.uuidString == settings.blePeripheralUUID }) {
-                Text(settings.blePeripheralName.isEmpty
-                     ? "Previously paired (\(settings.blePeripheralUUID.prefix(8))…)"
-                     : settings.blePeripheralName)
-                    .tag(settings.blePeripheralUUID)
-            }
-        }
-        .onChange(of: settings.blePeripheralUUID) { _, newValue in
-            if let device = bleScanner.devices.first(where: { $0.id.uuidString == newValue }) {
-                settings.blePeripheralName = device.displayName
-            }
-        }
-
-        HStack {
-            Button(bleScanner.isScanning ? "Scanning…" : "Scan for Devices") {
-                bleScanner.showAllDevices = showAllBLEDevices
-                bleScanner.startScan()
-            }
-            .disabled(bleScanner.isScanning)
-            .controlSize(.small)
-
-            if bleScanner.isScanning {
-                ProgressView()
-                    .controlSize(.small)
-            }
-        }
-
-        Toggle("Show all BLE devices", isOn: $showAllBLEDevices)
-            .controlSize(.small)
-
-        if bleScanner.bluetoothState == .poweredOff {
-            Label("Bluetooth is turned off. Enable it in System Settings.", systemImage: "exclamationmark.triangle")
-                .font(.caption)
-                .foregroundStyle(.orange)
-        } else if bleScanner.bluetoothState == .unauthorized {
-            Label("Bluetooth access not authorized. Check System Settings > Privacy & Security.", systemImage: "exclamationmark.triangle")
-                .font(.caption)
-                .foregroundStyle(.orange)
-        }
-
-        Toggle("Auto-reconnect on disconnect", isOn: $settings.bleAutoReconnect)
-
-        if !settings.blePeripheralName.isEmpty {
-            Text("Last selected: \(settings.blePeripheralName)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    // MARK: - Helpers
-
-    private var availableSerialDevices: [String] {
-        showAllSerialDevices
-            ? SerialDeviceEnumerator.allCUDevices()
-            : SerialDeviceEnumerator.likelyTNCDevices()
-    }
-
-    private func serialDeviceLabel(_ path: String) -> String {
-        // Show just the device name, not the full /dev/ path
-        let name = (path as NSString).lastPathComponent
-        return name
-    }
-
-    private func formatBaudRate(_ rate: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        return formatter.string(from: NSNumber(value: rate)) ?? "\(rate)"
-    }
-
-    private var shouldSuggestReconnect: Bool {
-        guard client.status == .connected else { return false }
-        if settings.transportType == "network" {
-            if let connectedHost = client.connectedHost, connectedHost != settings.host {
-                return true
-            }
-            if let connectedPort = client.connectedPort, connectedPort != settings.portValue {
-                return true
-            }
-        }
-        return false
     }
 
     private func updateLaunchAtLogin(enabled: Bool) {

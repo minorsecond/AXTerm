@@ -96,6 +96,10 @@ nonisolated enum KISSLinkLog {
         logger.info("Link reconnect: \(endpoint, privacy: .public) attempt #\(attempt)")
     }
 
+    static func info(_ endpoint: String, message: String) {
+        logger.info("Link info: \(endpoint, privacy: .public) \(message, privacy: .public)")
+    }
+    
     static func frameDecodeError(_ endpoint: String, reason: String) {
         logger.warning("Link frame decode error: \(endpoint, privacy: .public) \(reason, privacy: .public)")
     }

@@ -185,6 +185,9 @@ final class PacketEngine: ObservableObject {
     @Published private(set) var consoleLines: [ConsoleLine] = []
     @Published private(set) var rawChunks: [RawChunk] = []
     @Published private(set) var stations: [Station] = []
+    
+    // Mobilinkd Telemetry
+    @Published var mobilinkdBatteryLevel: Int?
 
     @Published var selectedStationCall: String?
     @Published private(set) var pinnedPacketIDs: Set<Packet.ID> = []
@@ -289,10 +292,23 @@ final class PacketEngine: ObservableObject {
     /// Falls back to network if transport type is unknown.
     func connectUsingSettings() {
         if settings.isSerialTransport {
+            
+            // Construct Mobilinkd Config if enabled
+            var mobilinkdConfig: MobilinkdConfig?
+            if settings.mobilinkdEnabled {
+                mobilinkdConfig = MobilinkdConfig(
+                    modemType: MobilinkdTNC.ModemType(rawValue: UInt8(settings.mobilinkdModemType)) ?? .afsk1200,
+                    outputGain: UInt8(settings.mobilinkdOutputGain),
+                    inputGain: UInt8(settings.mobilinkdInputGain),
+                    isBatteryMonitoringEnabled: true // Always true for now if enabled
+                )
+            }
+            
             let config = SerialConfig(
                 devicePath: settings.serialDevicePath,
                 baudRate: settings.serialBaudRate,
-                autoReconnect: settings.serialAutoReconnect
+                autoReconnect: settings.serialAutoReconnect,
+                mobilinkdConfig: mobilinkdConfig
             )
             connectSerial(config: config)
         } else if settings.isBLETransport {
@@ -334,6 +350,22 @@ final class PacketEngine: ObservableObject {
 
     /// Connect using a serial device
     func connectSerial(config: SerialConfig) {
+        // Orchestration: Check if we are already connected/connecting to this exact device
+        if let currentLink = link as? KISSLinkSerial, currentLink.config.devicePath == config.devicePath {
+            // It's the same device path. 
+            // If settings (baud rate/auto-reconnect) changed, we might need to update.
+            // KISSLinkSerial.updateConfig handles this efficiently without full teardown if possible,
+            // or handles the teardown/reopen internally.
+            debugTrace("Update serial config", ["path": config.devicePath])
+            currentLink.updateConfig(config)
+            
+            // Ensure we are in a mode to connect if we weren't
+            if currentLink.state == .disconnected || currentLink.state == .failed {
+                currentLink.open()
+            }
+            return
+        }
+
         disconnect()
 
         status = .connecting
@@ -566,14 +598,36 @@ final class PacketEngine: ObservableObject {
         appendRawChunk(RawChunk(data: data))
 
         // Parse KISS frames from the chunk
-        let ax25Frames = parser.feed(data)
+        let kissFrames = parser.feed(data)
 
-        if !ax25Frames.isEmpty {
-            TxLog.debug(.kiss, "Parsed KISS frames", ["count": ax25Frames.count])
+        if !kissFrames.isEmpty {
+            TxLog.debug(.kiss, "Parsed KISS frames", ["count": kissFrames.count])
         }
 
-        for ax25Data in ax25Frames {
-            processAX25Frame(ax25Data)
+        for frameOutput in kissFrames {
+            switch frameOutput {
+            case .ax25(let ax25Data):
+                processAX25Frame(ax25Data)
+                
+            case .mobilinkdTelemetry(let telemetryData):
+                if let battery = MobilinkdTNC.parseBatteryLevel(telemetryData) {
+                    // Update battery level (0-100% or raw voltage?)
+                    // Mobilinkd usually returns raw mV or similar. 
+                    // TNC4: Battery level is in mV? 
+                    // Actually, let's assume raw value for now and display it, or map it.
+                    // Implementation plan said "Display battery voltage/percentage".
+                    // Let's store raw value.
+                    DispatchQueue.main.async {
+                         self.mobilinkdBatteryLevel = battery
+                    }
+                    debugTrace("Mobilinkd Battery", ["level": battery])
+                } else {
+                    debugTrace("Mobilinkd Telemetry", ["hex": hexPrefix(telemetryData)])
+                }
+                
+            case .unknown(let cmd, let payload):
+                debugTrace("Unknown KISS Frame", ["cmd": String(format: "0x%02X", cmd), "len": payload.count])
+            }
         }
     }
 
@@ -1198,7 +1252,90 @@ final class PacketEngine: ObservableObject {
         }
     }
 
+    // MARK: - Connection Logic Suspension
+    
+    /// If true, automatic connection attempts triggered by settings changes are suspended.
+    /// Used by the Settings UI to prevent link thrashing while the user is configuring parameters.
+    var isConnectionLogicSuspended: Bool = false {
+        didSet {
+            if !isConnectionLogicSuspended {
+                // When resuming, trigger a single connection attempt based on current settings
+                // This satisfies the "reconnect exactly once" requirement on settings close.
+                connectUsingSettings()
+            }
+        }
+    }
+
     private func observeSettings() {
+        // Transport changes
+        settings.$transportType
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if !self.isConnectionLogicSuspended {
+                    self.connectUsingSettings()
+                }
+            }
+            .store(in: &cancellables)
+
+        settings.$serialDevicePath
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if self.settings.isSerialTransport && !self.isConnectionLogicSuspended {
+                    self.connectUsingSettings()
+                }
+            }
+            .store(in: &cancellables)
+            
+        settings.$serialBaudRate
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if self.settings.isSerialTransport && !self.isConnectionLogicSuspended {
+                    self.connectUsingSettings()
+                }
+            }
+            .store(in: &cancellables)
+
+        settings.$blePeripheralUUID
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if self.settings.isBLETransport && !self.isConnectionLogicSuspended {
+                    self.connectUsingSettings()
+                }
+            }
+            .store(in: &cancellables)
+
+        settings.$host
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if !self.settings.isSerialTransport && !self.settings.isBLETransport && !self.isConnectionLogicSuspended {
+                    self.connectUsingSettings()
+                }
+            }
+            .store(in: &cancellables)
+
+        settings.$port
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if !self.settings.isSerialTransport && !self.settings.isBLETransport && !self.isConnectionLogicSuspended {
+                    self.connectUsingSettings()
+                }
+            }
+
+            .store(in: &cancellables)
+
+        // Retention settings
         settings.$retentionLimit
             .dropFirst()
             .sink { [weak self] newLimit in

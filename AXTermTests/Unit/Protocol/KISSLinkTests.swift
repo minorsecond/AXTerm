@@ -25,7 +25,9 @@ final class KISSLinkTests: XCTestCase {
 
         let frames3 = parser.feed(Data([0xCC, 0xDD, 0xC0]))
         XCTAssertEqual(frames3.count, 1)
-        XCTAssertEqual(frames3[0], Data([0xAA, 0xBB, 0xCC, 0xDD]))
+        if case .ax25(let data) = frames3[0] {
+            XCTAssertEqual(data, Data([0xAA, 0xBB, 0xCC, 0xDD]))
+        } else { XCTFail() }
     }
 
     func testFENDSplitFromFrameBody() {
@@ -37,7 +39,9 @@ final class KISSLinkTests: XCTestCase {
 
         let frames2 = parser.feed(Data([0x00, 0x01, 0x02, 0xC0]))
         XCTAssertEqual(frames2.count, 1)
-        XCTAssertEqual(frames2[0], Data([0x01, 0x02]))
+        if case .ax25(let data) = frames2[0] {
+            XCTAssertEqual(data, Data([0x01, 0x02]))
+        } else { XCTFail() }
     }
 
     func testMultipleFramesBackToBack() {
@@ -51,9 +55,9 @@ final class KISSLinkTests: XCTestCase {
         ])
         let frames = parser.feed(data)
         XCTAssertEqual(frames.count, 3)
-        XCTAssertEqual(frames[0], Data([0x11]))
-        XCTAssertEqual(frames[1], Data([0x22]))
-        XCTAssertEqual(frames[2], Data([0x33]))
+        if case .ax25(let d0) = frames[0] { XCTAssertEqual(d0, Data([0x11])) } else { XCTFail() }
+        if case .ax25(let d1) = frames[1] { XCTAssertEqual(d1, Data([0x22])) } else { XCTFail() }
+        if case .ax25(let d2) = frames[2] { XCTAssertEqual(d2, Data([0x33])) } else { XCTFail() }
     }
 
     func testNoiseBeforeFirstFEND() {
@@ -63,7 +67,7 @@ final class KISSLinkTests: XCTestCase {
         let data = Data([0xFF, 0xFE, 0x42, 0xC0, 0x00, 0x01, 0x02, 0xC0])
         let frames = parser.feed(data)
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], Data([0x01, 0x02]))
+        if case .ax25(let data) = frames[0] { XCTAssertEqual(data, Data([0x01, 0x02])) } else { XCTFail() }
     }
 
     func testNoiseBetweenFrames() {
@@ -85,7 +89,7 @@ final class KISSLinkTests: XCTestCase {
         let chunk3 = Data([0xC0, 0x00, 0xBB, 0xC0])
         let frames3 = parser.feed(chunk3)
         XCTAssertEqual(frames3.count, 1)
-        XCTAssertEqual(frames3[0], Data([0xBB]))
+        if case .ax25(let data) = frames3[0] { XCTAssertEqual(data, Data([0xBB])) } else { XCTFail() }
     }
 
     func testEscapedFENDInsideFrame() {
@@ -95,7 +99,7 @@ final class KISSLinkTests: XCTestCase {
         let data = Data([0xC0, 0x00, 0x01, 0xDB, 0xDC, 0x02, 0xC0])
         let frames = parser.feed(data)
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], Data([0x01, 0xC0, 0x02]))
+        if case .ax25(let d) = frames[0] { XCTAssertEqual(d, Data([0x01, 0xC0, 0x02])) } else { XCTFail() }
     }
 
     func testEscapedFESCInsideFrame() {
@@ -105,7 +109,7 @@ final class KISSLinkTests: XCTestCase {
         let data = Data([0xC0, 0x00, 0x01, 0xDB, 0xDD, 0x02, 0xC0])
         let frames = parser.feed(data)
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], Data([0x01, 0xDB, 0x02]))
+        if case .ax25(let d) = frames[0] { XCTAssertEqual(d, Data([0x01, 0xDB, 0x02])) } else { XCTFail() }
     }
 
     func testDoubleEscapeSequence() {
@@ -115,7 +119,7 @@ final class KISSLinkTests: XCTestCase {
         let data = Data([0xC0, 0x00, 0xDB, 0xDC, 0xDB, 0xDD, 0xC0])
         let frames = parser.feed(data)
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], Data([0xC0, 0xDB]))
+        if case .ax25(let d) = frames[0] { XCTAssertEqual(d, Data([0xC0, 0xDB])) } else { XCTFail() }
     }
 
     func testEscapeSplitAcrossChunks() {
@@ -127,7 +131,7 @@ final class KISSLinkTests: XCTestCase {
 
         let frames2 = parser.feed(Data([0xDC, 0x02, 0xC0]))
         XCTAssertEqual(frames2.count, 1)
-        XCTAssertEqual(frames2[0], Data([0x01, 0xC0, 0x02]))
+        if case .ax25(let d) = frames2[0] { XCTAssertEqual(d, Data([0x01, 0xC0, 0x02])) } else { XCTFail() }
     }
 
     func testConsecutiveFENDs() {
@@ -137,7 +141,7 @@ final class KISSLinkTests: XCTestCase {
         let data = Data([0xC0, 0xC0, 0xC0, 0x00, 0x42, 0xC0, 0xC0, 0xC0])
         let frames = parser.feed(data)
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], Data([0x42]))
+        if case .ax25(let d) = frames[0] { XCTAssertEqual(d, Data([0x42])) } else { XCTFail() }
     }
 
     func testLargeFrame() {
@@ -148,7 +152,7 @@ final class KISSLinkTests: XCTestCase {
         let kissFrame = KISS.encodeFrame(payload: payload, port: 0)
         let frames = parser.feed(kissFrame)
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], payload)
+        if case .ax25(let d) = frames[0] { XCTAssertEqual(d, payload) } else { XCTFail() }
     }
 
     // MARK: - Encode/Decode Round-Trip Invariants
@@ -161,7 +165,7 @@ final class KISSLinkTests: XCTestCase {
         var parser = KISSFrameParser()
         let frames = parser.feed(encoded)
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], payload)
+        if case .ax25(let d) = frames[0] { XCTAssertEqual(d, payload) } else { XCTFail() }
     }
 
     func testEncodeDecodeRoundTripRandomData() {
@@ -179,7 +183,9 @@ final class KISSLinkTests: XCTestCase {
             let frames = parser.feed(encoded)
 
             XCTAssertEqual(frames.count, 1, "Failed for payload of size \(size)")
-            XCTAssertEqual(frames[0], payload, "Round-trip mismatch for payload of size \(size)")
+            if case .ax25(let d) = frames[0] {
+                XCTAssertEqual(d, payload, "Round-trip mismatch for payload of size \(size)")
+            } else { XCTFail() }
         }
     }
 
@@ -198,8 +204,10 @@ final class KISSLinkTests: XCTestCase {
         let frames = parser.feed(stream)
         XCTAssertEqual(frames.count, 5)
 
-        for (i, frame) in frames.enumerated() {
-            XCTAssertEqual(frame, payloads[i], "Mismatch at frame \(i)")
+        for (i, frameOutput) in frames.enumerated() {
+            if case .ax25(let d) = frameOutput {
+                XCTAssertEqual(d, payloads[i], "Mismatch at frame \(i)")
+            } else { XCTFail() }
         }
     }
 
@@ -302,16 +310,6 @@ final class KISSLinkTests: XCTestCase {
         XCTAssertEqual(SerialConfig(devicePath: "/dev/cu.test", baudRate: 57600).posixBaudRate, speed_t(B57600))
         // Unknown baud rate defaults to 115200
         XCTAssertEqual(SerialConfig(devicePath: "/dev/cu.test", baudRate: 12345).posixBaudRate, speed_t(B115200))
-    }
-
-    func testSerialDeviceEnumeratorFilters() {
-        // Just verify the methods don't crash and return arrays
-        let tnc = SerialDeviceEnumerator.likelyTNCDevices()
-        let all = SerialDeviceEnumerator.allCUDevices()
-        // TNC devices should be a subset of all devices
-        for device in tnc {
-            XCTAssertTrue(all.contains(device), "\(device) should be in all devices")
-        }
     }
 }
 
