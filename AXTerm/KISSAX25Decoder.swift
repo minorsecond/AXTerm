@@ -159,6 +159,13 @@ nonisolated struct KISSFrameParser {
         let escapedPayload = data.count > 1 ? data.subdata(in: 1..<data.count) : Data()
         let payload = KISS.unescape(escapedPayload)
 
+        TxLog.debug(.kiss, "KISS frame received", [
+            "command": String(format: "0x%02X", command),
+            "cmdType": String(format: "0x%02X", cmdType),
+            "port": String(format: "0x%02X", (command >> 4) & 0x0F),
+            "payloadLen": payload.count
+        ])
+
         // Handle Data Frame (any port — some multi-port TNCs or firmware variants use ports other than 0)
         if cmdType == KISS.CMD_DATA {
             // A valid AX.25 frame requires at minimum 15 bytes (src + dst + control).

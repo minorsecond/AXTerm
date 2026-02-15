@@ -1,0 +1,68 @@
+
+# 2026-02-12 10:35:20.781753
++y
+
+# 2026-02-12 10:35:28.818539
++d
+
+# 2026-02-12 10:35:31.319976
++n
+
+# 2026-02-12 10:36:07.044520
++Goal: Remove redundant connection UI and consolidate connection state into a single elegant header.
++
++Tasks:
++1. Remove the “Connected to <callsign>” banner entirely.
++2. Remove any duplicate session labeling in the bottom bar (e.g. “Session: NOHI-7 | AX.25: Digi: WOARP-7”).
++3. In the top header area, display:
++   - Large bold callsign (e.g. NOHI-7)
++   - Small green status dot if connected
++   - Secondary caption under it: “AX.25 · via WOARP-7 · RTT 4.5s”
++4. When disconnected:
++   - Show gray dot
++   - Replace subcaption with “Not connected”
++
++Do not change layout structure yet — just consolidate connection state into one clean header.
+
+# 2026-02-12 10:38:03.932105
++D
+
+# 2026-02-12 10:38:06.520896
++a
+
+# 2026-02-12 10:45:32.828995
++d
+
+# 2026-02-12 10:45:47.704356
++Goal: Remove redundant connection UI and consolidate connection state into a single elegant header.
++
++Tasks:
++1. Remove the “Connected to <callsign>” banner entirely.
++2. Remove any duplicate session labeling in the bottom bar (e.g. “Session: NOHI-7 | AX.25: Digi: WOARP-7”).
++3. In the top header area, display:
++   - Large bold callsign (e.g. NOHI-7)
++   - Small green status dot if connected
++   - Secondary caption under it: “AX.25 · via WOARP-7 · RTT 4.5s”
++4. When disconnected:
++   - Show gray dot
++   - Replace subcaption with “Not connected”
++
++Do not change layout structure yet — just consolidate connection state into one clean header.
+
+# 2026-02-12 10:46:39.237220
++A
+
+# 2026-02-12 10:49:24.669447
++/Users/rwardrup/dev/AXTerm/AXTerm/UI/MainView.swift:49:31 Cannot find 'UIColor' in scope - got that error in MainView.swift
+
+# 2026-02-12 10:49:40.660203
++got this error in mainview.swift: "/Users/rwardrup/dev/AXTerm/AXTerm/UI/MainView.swift:49:31 Cannot find 'UIColor' in scope"
+
+# 2026-02-12 10:51:25.405015
++now getting this error in mainview.swift: "/Users/rwardrup/dev/AXTerm/AXTerm/UI/MainView.swift:9:8 Unable to find module dependency: 'UIKit'"
+
+# 2026-02-12 10:53:07.121298
++now getting this in mainview.swift again: "/Users/rwardrup/dev/AXTerm/AXTerm/UI/MainView.swift:49:31 Cannot find 'UIColor' in scope"
+
+# 2026-02-12 12:58:02.042365
++D

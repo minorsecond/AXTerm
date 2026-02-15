@@ -758,6 +758,7 @@ final class PacketEngine: ObservableObject {
         for frameOutput in kissFrames {
             switch frameOutput {
             case .ax25(let ax25Data):
+                debugTrace("KISS AX.25 frame parsed", ["len": ax25Data.count])
                 LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
                     timestamp: Date(), direction: .rx, rawBytes: ax25Data,
                     frameType: "AX25", byteCount: ax25Data.count))
@@ -804,6 +805,7 @@ final class PacketEngine: ObservableObject {
     }
 
     private func processAX25Frame(_ ax25Data: Data) {
+        debugTrace("processAX25Frame called", ["len": ax25Data.count, "hex": hexPrefix(ax25Data)])
         TxLog.hexDump(.ax25, "Received AX.25 frame", data: ax25Data)
         debugTrace("RX AX.25 raw", [
             "len": ax25Data.count,
