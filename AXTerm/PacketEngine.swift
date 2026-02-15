@@ -199,6 +199,39 @@ final class PacketEngine: ObservableObject {
         packetInsertSubject.eraseToAnyPublisher()
     }
 
+    // MARK: - Connection Config Snapshot
+
+    /// Captures all connection-relevant settings at a point in time.
+    /// Used to detect whether settings actually changed while the settings panel was open.
+    struct ConnectionConfigSnapshot: Equatable {
+        let transportType: String
+        let serialDevicePath: String
+        let serialBaudRate: Int
+        let blePeripheralUUID: String
+        let host: String
+        let port: Int
+        let mobilinkdEnabled: Bool
+        let mobilinkdModemType: Int
+        let mobilinkdOutputGain: Int
+        let mobilinkdInputGain: Int
+
+        init(settings: AppSettingsStore) {
+            self.transportType = settings.transportType
+            self.serialDevicePath = settings.serialDevicePath
+            self.serialBaudRate = settings.serialBaudRate
+            self.blePeripheralUUID = settings.blePeripheralUUID
+            self.host = settings.host
+            self.port = settings.port
+            self.mobilinkdEnabled = settings.mobilinkdEnabled
+            self.mobilinkdModemType = settings.mobilinkdModemType
+            self.mobilinkdOutputGain = settings.mobilinkdOutputGain
+            self.mobilinkdInputGain = settings.mobilinkdInputGain
+        }
+    }
+
+    /// Snapshot taken when connection logic is suspended (settings panel opens).
+    private var suspendedConfigSnapshot: ConnectionConfigSnapshot?
+
     // MARK: - Private State
 
     private var connection: NWConnection?
@@ -288,6 +321,37 @@ final class PacketEngine: ObservableObject {
         netRomSnapshotTimer?.invalidate()
     }
 
+    // MARK: - USB Device Path Resolution
+
+    /// Resolve a serial device path, falling back to auto-detection if the configured path doesn't exist.
+    /// Scans `/dev/cu.*` for `usbmodem` devices (TNC4 uses CDC-ACM).
+    /// Does NOT modify saved settings — returns the resolved path for this connection attempt only.
+    func resolveSerialDevicePath(_ configuredPath: String) -> String {
+        if !configuredPath.isEmpty && FileManager.default.fileExists(atPath: configuredPath) {
+            return configuredPath
+        }
+
+        debugTrace("Configured serial path missing or empty, scanning for USB devices", ["path": configuredPath])
+
+        do {
+            let devContents = try FileManager.default.contentsOfDirectory(atPath: "/dev")
+            let usbDevices = devContents
+                .filter { $0.hasPrefix("cu.") && $0.lowercased().contains("usbmodem") }
+                .sorted()
+
+            if let first = usbDevices.first {
+                let resolved = "/dev/\(first)"
+                debugTrace("Auto-detected USB serial device", ["resolved": resolved])
+                return resolved
+            }
+        } catch {
+            debugTrace("Failed to scan /dev for USB devices: \(error)")
+        }
+
+        // Return original path — KISSLinkSerial will handle the missing device gracefully
+        return configuredPath
+    }
+
     // MARK: - Connection Management
 
     /// Connect using the transport configured in settings.
@@ -306,8 +370,9 @@ final class PacketEngine: ObservableObject {
                 )
             }
             
+            let resolvedPath = resolveSerialDevicePath(settings.serialDevicePath)
             let config = SerialConfig(
-                devicePath: settings.serialDevicePath,
+                devicePath: resolvedPath,
                 baudRate: settings.serialBaudRate,
                 autoReconnect: settings.serialAutoReconnect,
                 mobilinkdConfig: mobilinkdConfig
@@ -394,6 +459,17 @@ final class PacketEngine: ObservableObject {
 
     /// Connect using a BLE device
     func connectBLE(config: BLEConfig) {
+        // Reuse existing BLE link if it's the same peripheral (mirrors serial pattern)
+        if let currentLink = link as? KISSLinkBLE, currentLink.config.peripheralUUID == config.peripheralUUID {
+            debugTrace("Update BLE config", ["uuid": config.peripheralUUID])
+            currentLink.updateConfig(config)
+
+            if currentLink.state == .disconnected || currentLink.state == .failed {
+                currentLink.open()
+            }
+            return
+        }
+
         disconnect(reason: "switching to BLE transport")
 
         status = .connecting
@@ -1420,10 +1496,20 @@ final class PacketEngine: ObservableObject {
     /// Used by the Settings UI to prevent link thrashing while the user is configuring parameters.
     var isConnectionLogicSuspended: Bool = false {
         didSet {
-            if !isConnectionLogicSuspended {
-                // When resuming, trigger a single connection attempt based on current settings
-                // This satisfies the "reconnect exactly once" requirement on settings close.
-                connectUsingSettings()
+            if isConnectionLogicSuspended {
+                // Capture current settings when panel opens
+                suspendedConfigSnapshot = ConnectionConfigSnapshot(settings: settings)
+                debugTrace("Connection logic suspended — snapshot captured")
+            } else {
+                // Compare snapshot to current settings on panel close
+                let currentSnapshot = ConnectionConfigSnapshot(settings: settings)
+                if currentSnapshot != suspendedConfigSnapshot {
+                    debugTrace("Settings changed while suspended — reconnecting")
+                    connectUsingSettings()
+                } else {
+                    debugTrace("Settings unchanged while suspended — skipping reconnect")
+                }
+                suspendedConfigSnapshot = nil
             }
         }
     }

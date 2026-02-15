@@ -24,8 +24,11 @@ final class RealHardwareTNCTests: XCTestCase {
     
     var fileDescriptor: Int32 = -1
     
-    override func setUp() {
-        super.setUp()
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        guard FileManager.default.fileExists(atPath: "/tmp/axterm_rf_tests_enabled") else {
+            throw XCTSkip("RF tests disabled — use run_rf_tests.sh to enable")
+        }
         // Open the serial port directly to bypass AXTerm's stack for raw verification
         fileDescriptor = open(devicePath, O_RDWR | O_NOCTTY | O_NONBLOCK)
         if fileDescriptor < 0 {

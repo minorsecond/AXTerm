@@ -276,6 +276,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     // MARK: - Reconnect State
 
     private var reconnectTimer: DispatchSourceTimer?
+    private var kissInitWorkItem: DispatchWorkItem?
     private var reconnectAttempt = 0
     private static let maxReconnectDelay: TimeInterval = 30
     private static let baseReconnectDelay: TimeInterval = 1
@@ -439,6 +440,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     // MARK: - Private: Close
 
     private func closeInternal(reason: String) {
+        cancelKISSInit()
         cancelReconnectTimer()
         cancelBatteryPolling()
 
@@ -534,6 +536,38 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
                 }
             }
         }
+        
+        // Always send RESET after configuration commands to ensure the demodulator
+        // is in a clean, running state. The default path sends Mobilinkd-specific
+        // gain commands (0x06 type) which can affect demodulator state on TNC4.
+        // POLL_INPUT_LEVEL (0x04) is NOT sent — it stops the demodulator.
+        let resetWork = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            let resetFrame = Data(MobilinkdTNC.reset())
+            self.send(resetFrame) { err in
+                if let err = err {
+                    KISSLinkLog.error(self.endpointDescription, message: "Failed to send post-config RESET: \(err)")
+                } else {
+                    KISSLinkLog.info(self.endpointDescription, message: "Sent post-config RESET to ensure demodulator is running")
+                }
+            }
+            self.lock.lock()
+            self.kissInitWorkItem = nil
+            self.lock.unlock()
+        }
+        lock.lock()
+        kissInitWorkItem = resetWork
+        lock.unlock()
+        bleQueue.asyncAfter(deadline: .now() + 2.0, execute: resetWork)
+    }
+
+    /// Cancel any in-flight KISS init work items (POLL/RESET sequence).
+    private func cancelKISSInit() {
+        lock.lock()
+        let work = kissInitWorkItem
+        kissInitWorkItem = nil
+        lock.unlock()
+        work?.cancel()
     }
 
     private func startBatteryPolling() {
