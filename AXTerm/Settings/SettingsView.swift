@@ -48,9 +48,13 @@ struct SettingsView: View {
             )
             .tabItem { Label("Advanced", systemImage: "wrench.and.screwdriver") }
             .tag(SettingsTab.advanced)
+
+            LinkDebugView(packetEngine: client)
+                .tabItem { Label("Link Debug", systemImage: "ant") }
+                .tag(SettingsTab.linkDebug)
         }
         .environmentObject(router) // Provide router to all tabs
-        .frame(width: 550, height: 600)
+        .frame(width: 550, height: 700)
         .accessibilityIdentifier("settingsView")
     }
 }

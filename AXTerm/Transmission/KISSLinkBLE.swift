@@ -17,17 +17,20 @@ struct BLEConfig: Equatable, Sendable {
     var peripheralUUID: String
     var peripheralName: String
     var autoReconnect: Bool
+    var mobilinkdConfig: MobilinkdConfig?
 
     static let defaultAutoReconnect = true
 
     init(
         peripheralUUID: String,
         peripheralName: String = "",
-        autoReconnect: Bool = Self.defaultAutoReconnect
+        autoReconnect: Bool = Self.defaultAutoReconnect,
+        mobilinkdConfig: MobilinkdConfig? = nil
     ) {
         self.peripheralUUID = peripheralUUID
         self.peripheralName = peripheralName
         self.autoReconnect = autoReconnect
+        self.mobilinkdConfig = mobilinkdConfig
     }
 }
 
@@ -128,7 +131,7 @@ final class BLEDeviceScanner: NSObject, ObservableObject {
     func startScan(duration: TimeInterval = 10) {
         // Debounce scan requests if already running
         if isScanning { return }
-        
+
         devices.removeAll()
 
         if centralManager == nil {
@@ -140,12 +143,22 @@ final class BLEDeviceScanner: NSObject, ObservableObject {
         self._delegateHelper = delegateHelper
         centralManager?.delegate = delegateHelper
 
+        // Mark scanning intent BEFORE checking state — if BT isn't ready yet,
+        // handleStateUpdate will see isScanning==true and start scanning when poweredOn fires.
+        isScanning = true
+
+        // Start the scan timeout regardless of BT state so we don't hang forever
+        scanTimer?.invalidate()
+        scanTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.stopScan()
+            }
+        }
+
         guard centralManager?.state == .poweredOn else {
             bluetoothState = centralManager?.state ?? .unknown
             return
         }
-
-        isScanning = true
 
         // Pass nil for services to discover ALL BLE peripherals,
         // or pass known TNC services to filter
@@ -154,13 +167,6 @@ final class BLEDeviceScanner: NSObject, ObservableObject {
             withServices: serviceFilter,
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: false]
         )
-
-        scanTimer?.invalidate()
-        scanTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.stopScan()
-            }
-        }
     }
 
     func stopScan() {
@@ -274,6 +280,10 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     private static let maxReconnectDelay: TimeInterval = 30
     private static let baseReconnectDelay: TimeInterval = 1
 
+    // MARK: - Battery Polling
+
+    private var batteryPollTimer: DispatchSourceTimer?
+
     // MARK: - Stats
 
     private var _totalBytesIn = 0
@@ -310,6 +320,8 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         lock.lock()
         let timer = reconnectTimer
         reconnectTimer = nil
+        let batTimer = batteryPollTimer
+        batteryPollTimer = nil
         let periph = peripheral
         let cm = centralManager
         peripheral = nil
@@ -320,6 +332,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         lock.unlock()
 
         timer?.cancel()
+        batTimer?.cancel()
 
         // Cancel the BLE connection synchronously if possible.
         // CBCentralManager tolerates cancelPeripheralConnection from any thread.
@@ -427,6 +440,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
     private func closeInternal(reason: String) {
         cancelReconnectTimer()
+        cancelBatteryPolling()
 
         lock.lock()
         let periph = peripheral
@@ -481,6 +495,71 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         timer?.cancel()
     }
 
+    // MARK: - Private: KISS Init
+
+    /// Send KISS parameter frames and Mobilinkd-specific config after BLE connection.
+    /// Same init sequence as the serial transport.
+    private func sendKISSInit() {
+        var frames: [[UInt8]] = [
+            // Duplex = 1 (Full) — ignore DCD, transmit immediately
+            [0xC0, 0x05, 0x01, 0xC0],
+            // Persistence = 255 (100%) — always transmit
+            [0xC0, 0x02, 0xFF, 0xC0],
+            // Slot Time = 0 — no delay between checks
+            [0xC0, 0x03, 0x00, 0xC0],
+            // TX Delay = 30 (300ms) — radio key-up time
+            [0xC0, 0x01, 30, 0xC0],
+        ]
+
+        if let mobiConfig = config.mobilinkdConfig {
+            KISSLinkLog.info(endpointDescription, message: "Applying Mobilinkd BLE Config: \(mobiConfig.modemType.description), Out=\(mobiConfig.outputGain), In=\(mobiConfig.inputGain)")
+            frames.append(MobilinkdTNC.setModemType(mobiConfig.modemType))
+            frames.append(MobilinkdTNC.setOutputGain(mobiConfig.outputGain))
+            frames.append(MobilinkdTNC.setInputGain(mobiConfig.inputGain))
+            // REMOVED: Reset demodulator.
+            // This command triggers a telemetry flood on TNC4 which jams the connection.
+            // frames.append(MobilinkdTNC.reset())
+        } else {
+            // Default gain config for unspecified Mobilinkd
+            frames.append([0xC0, 0x06, 0x01, 0x00, 0x80, 0xC0])
+            frames.append([0xC0, 0x06, 0x02, 0x00, 0x00, 0xC0])
+            KISSLinkLog.info(endpointDescription, message: "Sending default BLE KISS init (Duplex=1, P=255, Slot=0)")
+        }
+
+        for frame in frames {
+            let data = Data(frame)
+            self.send(data) { error in
+                if let error {
+                    KISSLinkLog.error("BLE", message: "KISS init frame send failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func startBatteryPolling() {
+        let timer = DispatchSource.makeTimerSource(queue: bleQueue)
+        timer.schedule(deadline: .now() + 5.0, repeating: 60.0)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            let frame = MobilinkdTNC.pollBatteryLevel()
+            self.send(Data(frame)) { _ in }
+        }
+        timer.resume()
+
+        lock.lock()
+        batteryPollTimer?.cancel()
+        batteryPollTimer = timer
+        lock.unlock()
+    }
+
+    private func cancelBatteryPolling() {
+        lock.lock()
+        let timer = batteryPollTimer
+        batteryPollTimer = nil
+        lock.unlock()
+        timer?.cancel()
+    }
+
     // MARK: - Private: State Helpers
 
     private func setState(_ newState: KISSLinkState) {
@@ -516,15 +595,17 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
         for char in characteristics {
             switch char.uuid {
-            // Mobilinkd: "RX" characteristic is what we write to (peripheral receives)
-            case BLECharacteristicUUIDs.mobilinkdRX:
-                tx = char
+            // Mobilinkd: "TX" (00000002) has Write property — we write TO the TNC here
             case BLECharacteristicUUIDs.mobilinkdTX:
+                tx = char
+            // Mobilinkd: "RX" (00000003) has Notify property — we receive FROM the TNC here
+            case BLECharacteristicUUIDs.mobilinkdRX:
                 rx = char
 
-            // Nordic UART: "RX" characteristic is what we write to
+            // Nordic UART: "RX" (6E400002) has Write property — we write TO the peripheral
             case BLECharacteristicUUIDs.nordicUARTRX:
                 tx = char
+            // Nordic UART: "TX" (6E400003) has Notify property — we receive FROM the peripheral
             case BLECharacteristicUUIDs.nordicUARTTX:
                 rx = char
 
@@ -692,6 +773,12 @@ extension KISSLinkBLE: CBPeripheralDelegate {
             setState(.connected)
             reconnectAttempt = 0
             cancelReconnectTimer()
+            sendKISSInit()
+
+            // Start battery polling if Mobilinkd config is present
+            if let mobiConfig = config.mobilinkdConfig, mobiConfig.isBatteryMonitoringEnabled {
+                startBatteryPolling()
+            }
         }
     }
 

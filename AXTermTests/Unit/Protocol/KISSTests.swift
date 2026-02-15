@@ -124,14 +124,19 @@ final class KISSTests: XCTestCase {
         }
     }
 
-    func testKISSStreamParserIgnoresNonPort0() {
+    func testKISSStreamParserAcceptsNonPort0DataFrames() {
         var parser = KISSFrameParser()
 
-        // Frame on port 1 (command byte 0x10)
+        // Frame on port 1 (command byte 0x10) — data frames on any port should be accepted
         let chunk = Data([0xC0, 0x10, 0x01, 0x02, 0xC0])
         let frames = parser.feed(chunk)
 
-        XCTAssertEqual(frames.count, 0, "Should ignore non-port-0 frames")
+        XCTAssertEqual(frames.count, 1, "Should accept data frames on any KISS port")
+        if case .ax25(let data) = frames[0] {
+            XCTAssertEqual(data, Data([0x01, 0x02]))
+        } else {
+            XCTFail("Expected .ax25 frame")
+        }
     }
 
     func testKISSStreamParserReset() {

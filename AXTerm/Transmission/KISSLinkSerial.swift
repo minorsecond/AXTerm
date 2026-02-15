@@ -63,6 +63,7 @@ nonisolated enum KISSSerialError: Error, LocalizedError {
     case configurationFailed(String)
     case writeFailed(String)
     case notOpen
+    case openTimeout(String)
 
     var errorDescription: String? {
         switch self {
@@ -76,6 +77,8 @@ nonisolated enum KISSSerialError: Error, LocalizedError {
             return "Serial write failed: \(reason)"
         case .notOpen:
             return "Serial port not open"
+        case .openTimeout(let path):
+            return "Timed out opening \(path) (Bluetooth RFCOMM connection failed)"
         }
     }
 }
@@ -135,14 +138,17 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     private var reconnectAttempt = 0
     private static let maxReconnectDelay: TimeInterval = 15 // Cap at 15s per requirements
     private static let baseReconnectDelay: TimeInterval = 1
+    private static let btOpenTimeout: TimeInterval = 10 // Timeout for BT serial open()
     private var originalTermios = termios()
+    private var isBluetoothSerial = false
 
     // MARK: - Stats
 
     private var _totalBytesIn = 0
     private var _totalBytesOut = 0
-    
-    // ...
+
+    var totalBytesIn: Int { lock.lock(); defer { lock.unlock() }; return _totalBytesIn }
+    var totalBytesOut: Int { lock.lock(); defer { lock.unlock() }; return _totalBytesOut }
 
     // MARK: - Init
 
@@ -211,13 +217,15 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                     
                     if count < 0 {
                         let err = errno
-                        if err == EINTR { continue } // Interrupted, retry
-                        if err == EAGAIN {
-                            // In blocking mode (which we are), this shouldn't happen unless O_NONBLOCK is somehow set.
-                            // If it does, we should probably wait/select, but for now treat as error or busy loop (bad).
-                            // Given we cleared O_NONBLOCK in openInternal, this is a real error.
-                             KISSLinkLog.error(self.endpointDescription, message: "Write EAGAIN (unexpected in blocking mode)")
-                             return -1
+                        if err == EINTR { continue }
+                        if err == EAGAIN || err == EWOULDBLOCK {
+                            // FD is non-blocking; output buffer momentarily full.
+                            // Use poll() to wait for writability (up to 500ms).
+                            var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                            let pollResult = poll(&pfd, 1, 500)
+                            if pollResult > 0 { continue } // Writable now, retry
+                            KISSLinkLog.error(self.endpointDescription, message: "Write poll timeout or error")
+                            return -1
                         }
                         return -1 // Real error
                     }
@@ -281,7 +289,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         if current == .connected || alreadyConnecting {
             return
         }
-        
+
         // Static Guard: Check if ANY instance is using this path
         KISSLinkSerial.pathLock.lock()
         if KISSLinkSerial.activePaths.contains(config.devicePath) {
@@ -296,9 +304,9 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         lock.lock()
         isConnecting = true
         lock.unlock()
-        
+
         setState(.connecting)
-        
+
         // Log "Opening..." only on first attempt to avoid spam
         if reconnectAttempt == 0 {
             KISSLinkLog.info(endpointDescription, message: "Opening serial port... [\(_shortID)]")
@@ -315,26 +323,141 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             return
         }
 
-        // Open the serial device
-        // O_NONBLOCK is essential to avoid hanging
-        let fd = Darwin.open(config.devicePath, O_RDWR | O_NOCTTY | O_NONBLOCK | O_EXLOCK)
-        
+        // Detect Bluetooth serial ports.
+        // macOS Bluetooth serial driver creates /dev/cu.<DeviceName> for paired BT SPP devices.
+        // The open() syscall blocks until the RFCOMM channel is established, even with O_NONBLOCK.
+        // We must open on a detached thread with a timeout to avoid deadlocking the serial queue.
+        let isBT = Self.isBluetoothSerialDevice(config.devicePath)
+        isBluetoothSerial = isBT
+        if isBT {
+            KISSLinkLog.info(endpointDescription, message: "Detected Bluetooth serial port — using threaded open with \(Int(Self.btOpenTimeout))s timeout")
+        }
+
+        if isBT {
+            openBluetoothSerial()
+        } else {
+            openUSBSerial()
+        }
+    }
+
+    /// Check if a serial device is backed by the Bluetooth serial driver.
+    /// Uses ioreg to check if the TTY name matches an IOBluetoothDevice.
+    private static func isBluetoothSerialDevice(_ devicePath: String) -> Bool {
+        // Extract the device name from path: /dev/cu.TNC4Mobilinkd -> TNC4Mobilinkd
+        let deviceName = URL(fileURLWithPath: devicePath).lastPathComponent
+        let ttyName: String
+        if deviceName.hasPrefix("cu.") {
+            ttyName = String(deviceName.dropFirst(3))
+        } else if deviceName.hasPrefix("tty.") {
+            ttyName = String(deviceName.dropFirst(4))
+        } else {
+            return false
+        }
+
+        // Check ioreg for a matching BTTTYName
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/sbin/ioreg")
+        proc.arguments = ["-r", "-c", "IOBluetoothDevice", "-l"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            if let output = String(data: data, encoding: .utf8) {
+                return output.contains("\"BTTTYName\" = \"\(ttyName)\"")
+            }
+        } catch {
+            // If ioreg fails, fall back to heuristic
+        }
+
+        // Fallback heuristic: common BT serial device names don't contain "usbmodem" or "usbserial"
+        let lower = devicePath.lowercased()
+        if lower.contains("usbmodem") || lower.contains("usbserial") || lower.contains("wchusbserial") {
+            return false
+        }
+        // Known BT devices
+        if lower.contains("mobilinkd") {
+            return true
+        }
+        return false
+    }
+
+    /// Open a Bluetooth serial port on a detached thread with a timeout.
+    /// The macOS BT serial driver blocks open() until RFCOMM is established,
+    /// which can hang indefinitely. This method prevents blocking the serial queue.
+    private func openBluetoothSerial() {
+        let path = config.devicePath
+        let timeout = Self.btOpenTimeout
+
+        // Dispatch the blocking open() to a global concurrent queue
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+
+            let sem = DispatchSemaphore(value: 0)
+            var resultFD: Int32 = -1
+
+            // The actual open() call — this may block for a long time
+            let openThread = Thread {
+                let fd = Darwin.open(path, O_RDWR | O_NOCTTY | O_NONBLOCK)
+                resultFD = fd
+                sem.signal()
+            }
+            openThread.name = "BT-Serial-Open"
+            openThread.start()
+
+            let waitResult = sem.wait(timeout: .now() + timeout)
+
+            if waitResult == .timedOut {
+                // The open() is stuck in kernel space. We can't cancel it, but we
+                // won't use the FD if it eventually returns. The thread will linger
+                // until the BT connection times out or the device is power-cycled.
+                KISSLinkLog.error(self.endpointDescription,
+                    message: "Bluetooth serial open() timed out after \(Int(timeout))s. "
+                           + "The TNC may need to be power-cycled.")
+                self.serialQueue.async {
+                    self.cleanupOpenAttempt(success: false)
+                    self.setState(.failed)
+                    self.notifyError("Bluetooth connection timed out — try power-cycling the TNC")
+                    self.scheduleReconnectIfEnabled(initialDelay: 5.0)
+                }
+                return
+            }
+
+            // open() completed (either success or error)
+            self.serialQueue.async {
+                self.finishOpen(fd: resultFD)
+            }
+        }
+    }
+
+    /// Open a USB serial port directly on the serial queue.
+    /// USB CDC serial open() with O_NONBLOCK returns immediately.
+    private func openUSBSerial() {
+        let fd = Darwin.open(config.devicePath, O_RDWR | O_NOCTTY | O_NONBLOCK)
+        finishOpen(fd: fd)
+    }
+
+    /// Complete the open sequence after the file descriptor is obtained.
+    /// Must be called on serialQueue.
+    private func finishOpen(fd: Int32) {
         guard fd >= 0 else {
             let err = errno
             cleanupOpenAttempt(success: false)
-            
+
             if err == EBUSY {
                 KISSLinkLog.error(endpointDescription, message: "Port is busy (EBUSY). Held by another process?")
                 setState(.failed)
                 notifyError("Port Busy (held by another app)")
                 scheduleReconnectIfEnabled(initialDelay: 1.0)
-                
+
             } else if err == EAGAIN {
                 KISSLinkLog.error(endpointDescription, message: "Port temporarily unavailable (EAGAIN).")
                 setState(.failed)
                 notifyError("Temporarily unavailable (retrying...)")
                 scheduleReconnectIfEnabled(initialDelay: 1.0)
-                
+
             } else {
                 let errStr = String(cString: strerror(err))
                 setState(.failed)
@@ -344,25 +467,28 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             return
         }
 
-        // Configure the serial port
-        do {
-            try configurePort(fd: fd)
-            // TNC4 (and possibly others) needs time to initialize USB CDC after DTR is asserted.
-            // Without this pause, early frames (like KISS Init) may be dropped by the firmware.
-            Thread.sleep(forTimeInterval: 1.0)
-        } catch {
+        // Check that we haven't been closed while waiting for open to complete
+        lock.lock()
+        let stillConnecting = isConnecting
+        lock.unlock()
+        guard stillConnecting else {
+            KISSLinkLog.info(endpointDescription, message: "Open completed but connection was cancelled, closing fd")
             Darwin.close(fd)
             cleanupOpenAttempt(success: false)
-            setState(.failed)
-            notifyError(error.localizedDescription)
-            scheduleReconnectIfEnabled(initialDelay: 1.0)
             return
         }
 
-        // Clear O_NONBLOCK
-        var flags = fcntl(fd, F_GETFL)
-        flags &= ~O_NONBLOCK
-        _ = fcntl(fd, F_SETFL, flags)
+        // Configure the serial port
+        configurePort(fd: fd)
+
+        // Post-open stabilization delay.
+        // TNC4 needs time to initialize after connection (USB CDC after DTR,
+        // or Bluetooth RFCOMM after channel establishment).
+        Thread.sleep(forTimeInterval: isBluetoothSerial ? 0.5 : 1.0)
+
+        // Keep O_NONBLOCK set — DispatchSourceRead requires non-blocking FD
+        // on macOS to properly deliver kqueue events for serial (character) devices.
+        // The write path handles EAGAIN with a poll loop.
 
         lock.lock()
         fileDescriptor = fd
@@ -376,29 +502,29 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         source.setEventHandler { [weak self] in
             self?.handleReadEvent()
         }
-        
+
         // CLEANUP when source is cancelled
         source.setCancelHandler { [weak self] in
             guard let self else { return }
             self.lock.lock()
             let currentFd = self.fileDescriptor
+            let isBT = self.isBluetoothSerial
             self.lock.unlock()
-            
+
             if currentFd >= 0 {
-                // Restore original termios before closing
-                var origTermios = self.originalTermios
-                tcsetattr(currentFd, TCSANOW, &origTermios)
+                // Restore original termios before closing (skip for BT serial)
+                if !isBT {
+                    var origTermios = self.originalTermios
+                    tcsetattr(currentFd, TCSANOW, &origTermios)
+                }
                 Darwin.close(currentFd)
                 self.lock.lock()
                 self.fileDescriptor = -1
                 self.lock.unlock()
             }
-            
-            // Release static guard
-            KISSLinkSerial.pathLock.lock()
-            KISSLinkSerial.activePaths.remove(self.config.devicePath)
-            KISSLinkSerial.pathLock.unlock()
-            
+
+            // Static guard already released by closeInternal synchronously
+
             KISSLinkLog.info(self.endpointDescription, message: "Port released [\(self._shortID)]")
         }
 
@@ -407,21 +533,28 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         lock.unlock()
 
         source.resume()
-        
+
         cleanupOpenAttempt(success: true)
         setState(.connected)
         KISSLinkLog.opened(endpointDescription)
-        
+
+        if isBluetoothSerial {
+            KISSLinkLog.info(endpointDescription, message: "Bluetooth RFCOMM serial connected successfully")
+        }
+
         // Send KISS Init Sequence (TX Delay etc)
         sendKISSInit()
-        
+
         reconnectAttempt = 0
         cancelReconnectTimer()
-        
+
         // Start Battery Polling if enabled
         if let mobiConfig = config.mobilinkdConfig, mobiConfig.isBatteryMonitoringEnabled {
             startBatteryPolling()
         }
+
+        // NOTE: Do NOT auto-poll input levels — POLL_INPUT_LEVEL (0x04)
+        // stops the TNC4 demodulator. Use manual one-shot measurement only.
     }
     
     private func startBatteryPolling() {
@@ -439,7 +572,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         batteryPollTimer = timer
         lock.unlock()
     }
-    
+
     private func cleanupOpenAttempt(success: Bool) {
         lock.lock()
         isConnecting = false
@@ -484,16 +617,20 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         // Mobilinkd Specific Configuration
         if let mobiConfig = config.mobilinkdConfig {
             KISSLinkLog.info(endpointDescription, message: "Applying Mobilinkd Config: \(mobiConfig.modemType.description), Out=\(mobiConfig.outputGain), In=\(mobiConfig.inputGain)")
-            
+
             // Set Modem Type
             frames.append(MobilinkdTNC.setModemType(mobiConfig.modemType))
-            
+
             // Set Output Gain (TX Volume)
             frames.append(MobilinkdTNC.setOutputGain(mobiConfig.outputGain))
-            
+
             // Set Input Gain (RX Volume)
             frames.append(MobilinkdTNC.setInputGain(mobiConfig.inputGain))
-            
+
+            // REMOVED: Reset demodulator. 
+            // This command triggers a telemetry flood on TNC4 which jams the connection.
+            // frames.append(MobilinkdTNC.reset())
+
         } else {
             // Default rudimentary config if not explicitly configured as Mobilinkd but we suspect it is TNC4
              // 5. Set Output Gain (TX Volume) -> Hardware Command 0x06, Subcommand 0x01
@@ -501,12 +638,40 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
              frames.append([0xC0, 0x06, 0x01, 0x00, 0x80, 0xC0])
              
              // 6. Set Input Gain (RX Volume) -> Hardware Command 0x06, Subcommand 0x02
-             //    Setting to 4 (0x0004).
-             frames.append([0xC0, 0x06, 0x02, 0x00, 0x04, 0xC0])
+             //    Setting to 0 (0x0000) for TNC4 (min gain/attenuation).
+             frames.append([0xC0, 0x06, 0x02, 0x00, 0x00, 0xC0])
             
             KISSLinkLog.info(endpointDescription, message: "Sending Default TNC Configuration (Duplex=1, P=255, Slot=0, Vol=128)")
         }
         
+        // Record KISS init config to debug log
+        let configLabels: [String] = {
+            var labels = [
+                "Duplex = 1 (Full)",
+                "Persistence = 255 (100%)",
+                "Slot Time = 0",
+                "TX Delay = 30 (300ms)"
+            ]
+            if let mobiConfig = config.mobilinkdConfig {
+                labels.append("Modem: \(mobiConfig.modemType.description)")
+                labels.append("Output Gain: \(mobiConfig.outputGain)")
+                labels.append("Input Gain: \(mobiConfig.inputGain)")
+                labels.append("Reset Demodulator")
+            } else {
+                labels.append("Output Gain: 128 (default)")
+                labels.append("Input Gain: 4 (default)")
+            }
+            return labels
+        }()
+
+        for (i, frame) in frames.enumerated() {
+            let label = i < configLabels.count ? configLabels[i] : "Config \(i)"
+            let data = Data(frame)
+            Task { @MainActor in
+                LinkDebugLog.shared.recordKISSInit(label: label, rawBytes: data)
+            }
+        }
+
         // Send all config frames in sequence
         for (index, frame) in frames.enumerated() {
             // Small stagger to ensure firmware processes each command
@@ -523,69 +688,83 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
 
     // MARK: - Private: Configure Port
 
-    private func configurePort(fd: Int32) throws {
-        // Save original settings for restore on close
+    private func configurePort(fd: Int32) {
+        if isBluetoothSerial {
+            // Bluetooth RFCOMM serial: termios settings (baud rate, flow control, DTR/RTS)
+            // are irrelevant — the Bluetooth stack handles framing and flow control.
+            // We only need raw mode and VMIN/VTIME for non-blocking reads.
+            KISSLinkLog.info(endpointDescription, message: "Bluetooth serial — skipping baud/DTR/RTS config")
+
+            // Still try tcgetattr/tcsetattr for raw mode — the BT serial driver
+            // usually supports these even though baud rate is meaningless.
+            var options = termios()
+            if tcgetattr(fd, &options) == 0 {
+                originalTermios = options
+                cfmakeraw(&options)
+                options.c_cflag |= UInt(CLOCAL | CREAD)
+                options.c_cc.16 = 0   // VMIN
+                options.c_cc.17 = 0   // VTIME
+                if tcsetattr(fd, TCSANOW, &options) == 0 {
+                    KISSLinkLog.info(endpointDescription, message: "BT serial: raw mode set")
+                } else {
+                    KISSLinkLog.info(endpointDescription, message: "BT serial: tcsetattr failed (non-fatal): \(String(cString: strerror(errno)))")
+                }
+            } else {
+                KISSLinkLog.info(endpointDescription, message: "BT serial: tcgetattr failed (non-fatal): \(String(cString: strerror(errno)))")
+            }
+
+            tcflush(fd, TCIOFLUSH)
+            return
+        }
+
+        // USB serial: full termios configuration
         if tcgetattr(fd, &originalTermios) != 0 {
-            throw KISSSerialError.configurationFailed("tcgetattr failed: \(String(cString: strerror(errno)))")
+            KISSLinkLog.error(endpointDescription, message: "tcgetattr failed: \(String(cString: strerror(errno))) (non-fatal)")
         }
 
         var options = termios()
         if tcgetattr(fd, &options) != 0 {
-            throw KISSSerialError.configurationFailed("tcgetattr failed")
+            KISSLinkLog.error(endpointDescription, message: "tcgetattr failed (non-fatal)")
+            return
         }
 
         // Raw mode - no echo, no signals, no canonical processing
         cfmakeraw(&options)
 
-        // Set baud rate (Force 115200 for Mobilinkd compatibility if not otherwise specified, though config usually carries it)
-        // config.posixBaudRate handles the mapping.
+        // Set baud rate
         let speed = config.posixBaudRate
         cfsetispeed(&options, speed)
         cfsetospeed(&options, speed)
 
         // 8N1: 8 data bits, no parity, 1 stop bit
         options.c_cflag |= UInt(CS8)
-        options.c_cflag &= ~UInt(PARENB)   // No parity
-        options.c_cflag &= ~UInt(CSTOPB)   // 1 stop bit
-        
+        options.c_cflag &= ~UInt(PARENB)
+        options.c_cflag &= ~UInt(CSTOPB)
+
         // FLOW CONTROL: Explicitly Disable All
-        options.c_cflag &= ~UInt(CRTSCTS)       // No HW flow control
-        options.c_iflag &= ~UInt(IXON | IXOFF | IXANY) // No SW flow control
-        
+        options.c_cflag &= ~UInt(CRTSCTS)
+        options.c_iflag &= ~UInt(IXON | IXOFF | IXANY)
+
         // Assert CLOCAL (ignore modem status lines) and CREAD (enable receiver)
         options.c_cflag |= UInt(CLOCAL | CREAD)
-        
-        // Valid for partial reads if strictly needed, but we use non-blocking or select usually.
-        // Here we configure for blocking read with timeout for safety?
-        // Actually we use DispatchSource which implies O_NONBLOCK usually, but we clear it in openInternal.
-        // When using DispatchSourceRead, the FD should ideally be O_NONBLOCK, but for Write we want blocking?
-        // Wait, if we clear O_NONBLOCK, DispatchSource might misbehave or block a thread?
-        // Re-reading DispatchSource docs: It supports blocking FDs but it's better to be non-blocking.
-        // HOWEVER, the previous code cleared O_NONBLOCK. Let's stick to that but ensure VMIN/VTIME are safe.
 
-        // VMIN=1, VTIME=0 -> Blocking read until at least 1 byte.
-        // This effectively makes the DispatchSource callback fire only when data is available...
-        // ...but wait, DispatchSourceRead monitors specific events.
-        // Ideally:
-        options.c_cc.16 = 1   // VMIN
+        // VMIN=0, VTIME=0 -> Non-blocking reads (return immediately with available data).
+        // Required because we keep O_NONBLOCK set for DispatchSourceRead compatibility.
+        options.c_cc.16 = 0   // VMIN
         options.c_cc.17 = 0   // VTIME
 
         if tcsetattr(fd, TCSANOW, &options) != 0 {
-            throw KISSSerialError.configurationFailed("tcsetattr failed: \(String(cString: strerror(errno)))")
+            KISSLinkLog.error(endpointDescription, message: "tcsetattr failed (non-fatal): \(String(cString: strerror(errno)))")
         }
-        
+
         // Log configuration for debugging TNC issues
         KISSLinkLog.info(endpointDescription, message: "Serial Configured: Baud \(config.baudRate), 8N1, NoFlow. c_cflag=\(String(format: "%x", options.c_cflag)) c_iflag=\(String(format: "%x", options.c_iflag))")
 
         // Flush any stale data
         tcflush(fd, TCIOFLUSH)
-        
+
         // Assert DTR and RTS
         // Many TNCs/Radios require DTR to be high to accept data or power the interface.
-        // POSIX constants for macOS (from ioctl.h):
-        // TIOCMBIS = 0x8004746c
-        // TIOCM_DTR = 0x002
-        // TIOCM_RTS = 0x004
         var bits: Int32 = 0x002 | 0x004 // TIOCM_DTR | TIOCM_RTS
         if ioctl(fd, 0x8004746c, &bits) == -1 {
              KISSLinkLog.error(endpointDescription, message: "Failed to assert DTR/RTS: \(String(cString: strerror(errno)))")
@@ -596,12 +775,16 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
 
     // MARK: - Private: Read
 
+    private var readEventCount = 0
+
     private func handleReadEvent() {
         lock.lock()
         let fd = fileDescriptor
         lock.unlock()
 
         guard fd >= 0 else { return }
+
+        readEventCount += 1
 
         var buffer = [UInt8](repeating: 0, count: 4096)
         let bytesRead = Darwin.read(fd, &buffer, buffer.count)
@@ -611,16 +794,27 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             lock.lock()
             _totalBytesIn += bytesRead
             lock.unlock()
+            // Log first few RX events with hex for debugging
+            if readEventCount <= 5 {
+                let hex = data.prefix(32).map { String(format: "%02X", $0) }.joined(separator: " ")
+                KISSLinkLog.info(endpointDescription, message: "RX[\(readEventCount)] \(bytesRead) bytes: \(hex)\(data.count > 32 ? "..." : "")")
+            }
             KISSLinkLog.bytesIn(endpointDescription, count: bytesRead)
             Task { @MainActor [weak self] in
                 self?.delegate?.linkDidReceive(data)
             }
         } else if bytesRead == 0 {
             // EOF - device disconnected
+            KISSLinkLog.info(endpointDescription, message: "Read returned 0 (EOF) at event #\(readEventCount)")
             handleDeviceDisconnect()
         } else {
             let err = errno
-            if err != EAGAIN && err != EWOULDBLOCK {
+            if err == EAGAIN || err == EWOULDBLOCK {
+                // Spurious wakeup — no data yet. Log first few to help debug.
+                if readEventCount <= 3 {
+                    KISSLinkLog.info(endpointDescription, message: "Read EAGAIN at event #\(readEventCount)")
+                }
+            } else {
                 let message = String(cString: strerror(err))
                 KISSLinkLog.error(endpointDescription, message: "Read error: \(message)")
                 if err == ENXIO || err == EIO {
@@ -643,29 +837,25 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         let fd = fileDescriptor
         lock.unlock()
 
+        // Always release the static guard synchronously so that an immediate
+        // reopen (e.g. from updateConfig) can proceed without waiting for the
+        // async cancel handler.
+        KISSLinkSerial.pathLock.lock()
+        KISSLinkSerial.activePaths.remove(config.devicePath)
+        KISSLinkSerial.pathLock.unlock()
+
         if let source = source {
-            source.cancel() // Cancel handler will close fd and remove static guard
+            source.cancel() // Cancel handler will close fd and restore termios
         } else if fd >= 0 {
             // If no source was set up, close directly
-            var origTermios = originalTermios
-            tcsetattr(fd, TCSANOW, &origTermios)
+            if !isBluetoothSerial {
+                var origTermios = originalTermios
+                tcsetattr(fd, TCSANOW, &origTermios)
+            }
             Darwin.close(fd)
             lock.lock()
             fileDescriptor = -1
             lock.unlock()
-            
-            // RELEASE GUARD MANUALLY since no cancel handler runs
-            KISSLinkSerial.pathLock.lock()
-            KISSLinkSerial.activePaths.remove(config.devicePath)
-            KISSLinkSerial.pathLock.unlock()
-        } else {
-             // If we were failed/connecting, ensure guard is released?
-             // cleanupOpenAttempt should have handled it, but safety check:
-             if !isConnecting {
-                KISSLinkSerial.pathLock.lock()
-                KISSLinkSerial.activePaths.remove(config.devicePath)
-                KISSLinkSerial.pathLock.unlock()
-             }
         }
 
         setState(.disconnected)

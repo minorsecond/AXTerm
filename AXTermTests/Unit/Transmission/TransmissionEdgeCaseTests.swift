@@ -63,17 +63,12 @@ final class TransmissionEdgeCaseTests: XCTestCase {
     func testKISSEmptyAfterStrippingCommand() {
         var parser = KISSFrameParser()
 
-        // Frame with only command byte, no data
+        // Frame with only command byte, no data — no valid AX.25 payload
         let chunk = Data([0xC0, 0x00, 0xC0])
         let frames = parser.feed(chunk)
 
-        // Parser returns 1 frame with empty payload (valid behavior)
-        XCTAssertEqual(frames.count, 1)
-        if case .ax25(let d) = frames[0] {
-            XCTAssertEqual(d.count, 0, "Payload should be empty")
-        } else {
-            XCTFail("Should be AX.25 frame")
-        }
+        // Empty payload should be discarded (no valid AX.25 frame possible)
+        XCTAssertEqual(frames.count, 0, "Empty payload should be discarded")
     }
 
     func testKISSAllBytesNeedEscaping() {

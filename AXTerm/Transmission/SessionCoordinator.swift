@@ -1021,7 +1021,14 @@ final class SessionCoordinator: ObservableObject {
         let parts = input.uppercased().split(separator: "-")
         let baseCall = String(parts.first ?? "NOCALL")
         let ssid = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
-        sessionManager.localCallsign = AX25Address(call: baseCall, ssid: ssid)
+        let newAddress = AX25Address(call: baseCall, ssid: ssid)
+
+        // Purge stale sessions if the callsign actually changed
+        if sessionManager.localCallsign != newAddress {
+            sessionManager.purgeSessionsForCallsignChange()
+        }
+
+        sessionManager.localCallsign = newAddress
     }
 
     /// Subscribe to incoming packets from PacketEngine.

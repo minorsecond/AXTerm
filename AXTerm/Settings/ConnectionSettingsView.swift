@@ -88,6 +88,17 @@ struct NetworkSettingsContent: View {
 struct SerialSettingsContent: View {
     @ObservedObject var viewModel: ConnectionTransportViewModel
     
+    // State variables to prevent "Publishing changes during view updates" warnings
+    @State private var inputLevelText: String = "Waiting for data..."
+    @State private var inputLevelProgress: Double = 0.0
+    @State private var inputLevelColor: Color = .gray
+    @State private var batteryLevel: String = ""
+    @State private var isAdjusting: Bool = false
+    @State private var lastMeasurement: Date? = nil
+    @State private var mobilinkdEnabled: Bool = false
+    @State private var mobilinkdOutputGain: Double = 128.0
+    @State private var mobilinkdInputGain: Double = 4.0
+    
     var body: some View {
         let selectionBinding = Binding<String>(
             get: { viewModel.selectedSerialDevicePath },
@@ -99,6 +110,16 @@ struct SerialSettingsContent: View {
                 Picker("Device:", selection: selectionBinding) {
                     Text("Select a device...").tag("")
                     Divider()
+                    
+                    // Always show the currently selected device first if it's not empty
+                    if !viewModel.selectedSerialDevicePath.isEmpty {
+                        let isInList = viewModel.serialDevices.contains { $0.path == viewModel.selectedSerialDevicePath }
+                        if !isInList {
+                            Text("\(viewModel.selectedSerialDevicePath.split(separator: "/").last ?? "") (Current Connection)")
+                                .tag(viewModel.selectedSerialDevicePath)
+                        }
+                    }
+                    
                     ForEach(viewModel.serialDevices) { device in
                         if !device.path.isEmpty {
                             if device.isAvailable {
@@ -153,7 +174,7 @@ struct SerialSettingsContent: View {
             
             Toggle("Enable Mobilinkd TNC4 Mode", isOn: $viewModel.mobilinkdEnabled)
             
-            if viewModel.mobilinkdEnabled {
+            if mobilinkdEnabled {
                 VStack(alignment: .leading, spacing: 10) {
                     Picker("Modem Type", selection: $viewModel.mobilinkdModemType) {
                         ForEach(MobilinkdTNC.ModemType.allCases) { type in
@@ -165,7 +186,7 @@ struct SerialSettingsContent: View {
                         HStack {
                             Text("TX Volume (Output Gain)")
                             Spacer()
-                            Text("\(Int(viewModel.mobilinkdOutputGain))")
+                            Text("\(Int(mobilinkdOutputGain))")
                                 .foregroundStyle(.secondary)
                         }
                         Slider(value: $viewModel.mobilinkdOutputGain, in: 0...255, step: 1)
@@ -175,7 +196,7 @@ struct SerialSettingsContent: View {
                         HStack {
                             Text("RX Volume (Input Gain)")
                             Spacer()
-                            Text("\(Int(viewModel.mobilinkdInputGain))")
+                            Text("\(Int(mobilinkdInputGain))")
                                 .foregroundStyle(.secondary)
                         }
                         // TNC4 Input Gain is typically 0-4 (attenuation steps?) or raw values?
@@ -183,16 +204,63 @@ struct SerialSettingsContent: View {
                         // Safe range 0-15? Let's use 0-4 as previously determined safe default, but expand range slightly if needed.
                         // Actually, KissHardware.cpp shows input_gain is uint16_t, but comments say 0-4.
                         Slider(value: $viewModel.mobilinkdInputGain, in: 0...4, step: 1)
+                        
+                        Button {
+                            viewModel.triggerAutoGain()
+                        } label: {
+                            if isAdjusting {
+                                HStack(spacing: 4) {
+                                    ProgressView()
+                                        .scaleEffect(0.6)
+                                        .frame(width: 12, height: 12)
+                                    Text("Measuring...")
+                                }
+                            } else {
+                                Text("Measure & Auto-Adjust Input Levels")
+                            }
+                        }
+                        .disabled(isAdjusting)
+                        .font(.caption)
+                        .padding(.top, 4)
+                        .help("Temporarily stops packet reception for ~5 seconds to measure and optimize input levels")
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text("Last Measured Input Level")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                if isAdjusting {
+                                    Text("Measuring...")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.orange)
+                                } else {
+                                    Text(inputLevelText)
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(inputLevelColor)
+                                }
+                            }
+                            
+                            if let timestamp = lastMeasurement {
+                                Text("Measured \(timestamp.formatted(.relative(presentation: .named)))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            
+                            ProgressView(value: inputLevelProgress)
+                                .tint(inputLevelColor)
+                        }
+                        .padding(.top, 4)
                     }
                     
-                    if !viewModel.mobilinkdBatteryLevel.isEmpty {
+                    if !batteryLevel.isEmpty {
                         Divider()
                         HStack {
                             Image(systemName: "battery.100")
                                 .foregroundStyle(.green)
                             Text("Battery Level:")
                             Spacer()
-                            Text(viewModel.mobilinkdBatteryLevel)
+                            Text(batteryLevel)
                                 .font(.body.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
@@ -201,6 +269,69 @@ struct SerialSettingsContent: View {
                 }
                 .padding(.leading)
             }
+        }
+        .onAppear {
+            // Initialize @State variables from ViewModel on first render
+            mobilinkdEnabled = viewModel.mobilinkdEnabled
+            mobilinkdOutputGain = viewModel.mobilinkdOutputGain
+            mobilinkdInputGain = viewModel.mobilinkdInputGain
+            batteryLevel = viewModel.mobilinkdBatteryLevel
+            isAdjusting = viewModel.isAdjustingInputLevels
+            lastMeasurement = viewModel.lastInputLevelMeasurement
+            
+            if let level = viewModel.mobilinkdInputLevelState {
+                let percentage = (Double(level.vpp) / 65535.0) * 100.0
+                inputLevelText = String(format: "Vpp: %d (%.0f%%)", level.vpp, percentage)
+                inputLevelProgress = Double(level.vpp) / 65535.0
+                
+                let per = Double(level.vpp) / 65535.0
+                if per > 0.9 {
+                    inputLevelColor = .red
+                } else if per < 0.1 {
+                    inputLevelColor = .yellow
+                } else {
+                    inputLevelColor = .green
+                }
+            }
+        }
+        .onChange(of: viewModel.mobilinkdInputLevelState) { oldValue, newLevel in
+            // Update state asynchronously to prevent "Publishing changes during view updates"
+            if let level = newLevel {
+                let percentage = (Double(level.vpp) / 65535.0) * 100.0
+                inputLevelText = String(format: "Vpp: %d (%.0f%%)", level.vpp, percentage)
+                inputLevelProgress = Double(level.vpp) / 65535.0
+                
+                let per = Double(level.vpp) / 65535.0
+                if per > 0.9 {
+                    inputLevelColor = .red      // Clipping
+                } else if per < 0.1 {
+                    inputLevelColor = .yellow   // Too low
+                } else {
+                    inputLevelColor = .green    // Good
+                }
+            } else {
+                inputLevelText = "Waiting for data..."
+                inputLevelProgress = 0.0
+                inputLevelColor = .gray
+            }
+        }
+        .onChange(of: viewModel.mobilinkdBatteryLevel) { _, newValue in
+            batteryLevel = newValue
+        }
+        .onChange(of: viewModel.isAdjustingInputLevels) { _, newValue in
+            isAdjusting = newValue
+        }
+        .onChange(of: viewModel.lastInputLevelMeasurement) { _, newValue in
+            lastMeasurement = newValue
+        }
+        .onChange(of: viewModel.mobilinkdEnabled) { _, newValue in
+            mobilinkdEnabled = newValue
+        }
+        .onChange(of: viewModel.mobilinkdOutputGain) { _, newValue in
+            mobilinkdOutputGain = newValue
+        }
+        .onChange(of: viewModel.mobilinkdInputGain) { _, newValue in
+            mobilinkdInputGain = newValue
         }
     }
 }

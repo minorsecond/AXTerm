@@ -64,6 +64,7 @@ nonisolated enum SettingsTab: Hashable {
     case network
     case transmission
     case advanced
+    case linkDebug
 }
 
 /// Identifiers for specific sections within tabs (for deep linking).

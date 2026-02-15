@@ -140,6 +140,11 @@ final class ConnectionTransportViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Bind Mobilinkd Input Level (to avoid direct access in View)
+        packetEngine.$mobilinkdInputLevel
+            .receive(on: RunLoop.main)
+            .assign(to: &$mobilinkdInputLevelState)
+
         // Bind Serial Discovery with Grace Period Logic
         serialDiscovery.$devices
             .receive(on: RunLoop.main)
@@ -277,6 +282,17 @@ final class ConnectionTransportViewModel: ObservableObject {
     func refreshSerialPorts() {
         Task { await serialDiscovery.startScanning() }
     }
+
+    func triggerAutoGain() {
+        isAdjustingInputLevels = true
+        lastInputLevelMeasurement = Date()
+        packetEngine.sendAdjustInputLevels()
+        
+        // Reset the measuring state after 5 seconds (matching the RESET timing in PacketEngine)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+            self?.isAdjustingInputLevels = false
+        }
+    }
     
     // MARK: - Auto-Reconnect Suspension
     
@@ -384,6 +400,14 @@ final class ConnectionTransportViewModel: ObservableObject {
     
     @Published var mobilinkdBatteryLevel: String = ""
     
+    @Published var mobilinkdInputLevelState: MobilinkdInputLevel?
+    
+    /// Tracks whether an auto-adjust measurement is currently in progress
+    @Published var isAdjustingInputLevels: Bool = false
+    
+    /// Timestamp of the last input level measurement
+    @Published var lastInputLevelMeasurement: Date?
+
     // MARK: - Subscriptions
     
 }

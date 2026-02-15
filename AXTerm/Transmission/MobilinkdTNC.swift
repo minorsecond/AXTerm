@@ -19,8 +19,11 @@ enum MobilinkdTNC {
     // Hardware Commands (from KissHardware.hpp)
     static let SET_OUTPUT_GAIN: UInt8 = 0x01 // TX Volume (0-255)
     static let SET_INPUT_GAIN: UInt8 = 0x02  // RX Volume (0-4 on TNC4?) or 0-255 depending on FW.
+    static let POLL_INPUT_LEVEL: UInt8 = 0x04   // Returns Vpp/Vavg/Vmin/Vmax
     static let GET_BATTERY_LEVEL: UInt8 = 0x06
     static let STREAM_AMPLIFIED_INPUT: UInt8 = 29 // Scope data
+    static let ADJUST_INPUT_LEVELS: UInt8 = 0x2B  // Runs firmware auto-AGC (43)
+    static let RESET: UInt8 = 0x0B                // Restarts the demodulator
     
     // Extended Commands (starts with 0xC1)
     static let EXT_CMD_PREFIX: UInt8 = 0xC1
@@ -71,6 +74,23 @@ enum MobilinkdTNC {
     static func pollBatteryLevel() -> [UInt8] {
         return [KISS_FEND, CMD_HARDWARE, GET_BATTERY_LEVEL, KISS_FEND]
     }
+
+    /// Generates a frame to poll audio input levels (Vpp/Vavg/Vmin/Vmax).
+    static func pollInputLevel() -> [UInt8] {
+        return [KISS_FEND, CMD_HARDWARE, POLL_INPUT_LEVEL, KISS_FEND]
+    }
+
+    /// Generates a frame to trigger the firmware's auto-AGC adjustment.
+    /// NOTE: This stops the demodulator during calibration. Send reset() after to restart.
+    static func adjustInputLevels() -> [UInt8] {
+        return [KISS_FEND, CMD_HARDWARE, ADJUST_INPUT_LEVELS, KISS_FEND]
+    }
+
+    /// Generates a frame to restart the demodulator.
+    /// Must be sent after POLL_INPUT_LEVEL or ADJUST_INPUT_LEVELS to resume packet reception.
+    static func reset() -> [UInt8] {
+        return [KISS_FEND, CMD_HARDWARE, RESET, KISS_FEND]
+    }
     
     // MARK: - Parsers
     
@@ -88,6 +108,50 @@ enum MobilinkdTNC {
         let low = Int(data[3])
         return (high << 8) + low
     }
+
+    /// Parses audio input level from a hardware response frame.
+    /// Expected format: [CMD_HARDWARE, POLL_INPUT_LEVEL, Vpp_hi, Vpp_lo, Vavg_hi, Vavg_lo, Vmin_hi, Vmin_lo, Vmax_hi, Vmax_lo]
+    /// Returns MobilinkdInputLevel or nil if invalid.
+    static func parseInputLevel(_ data: Data) -> MobilinkdInputLevel? {
+        guard data.count >= 10,
+              data[0] == CMD_HARDWARE,
+              data[1] == POLL_INPUT_LEVEL else {
+            return nil
+        }
+
+        let vpp  = UInt16(data[2]) << 8 | UInt16(data[3])
+        let vavg = UInt16(data[4]) << 8 | UInt16(data[5])
+        let vmin = UInt16(data[6]) << 8 | UInt16(data[7])
+        let vmax = UInt16(data[8]) << 8 | UInt16(data[9])
+
+        return MobilinkdInputLevel(vpp: vpp, vavg: vavg, vmin: vmin, vmax: vmax)
+    }
+    static let GET_INPUT_GAIN: UInt8 = 0x0D       // Reported by TNC after Auto-Adjust
+    
+    // ... (existing constants) ...
+
+    /// Parses the input gain from a hardware response frame.
+    /// Expected format: [CMD_HARDWARE, GET_INPUT_GAIN, HighByte, LowByte]
+    /// Returns gain level (0-N) or nil if invalid.
+    static func parseInputGain(_ data: Data) -> Int? {
+        guard data.count >= 4,
+              data[0] == CMD_HARDWARE,
+              data[1] == GET_INPUT_GAIN else {
+            return nil
+        }
+        
+        let high = Int(data[2])
+        let low = Int(data[3])
+        return (high << 8) + low
+    }
+}
+
+/// Audio input level readings from TNC4 ADC
+struct MobilinkdInputLevel: Equatable, Sendable {
+    let vpp: UInt16    // Peak-to-peak voltage (ADC units)
+    let vavg: UInt16   // Average (DC offset)
+    let vmin: UInt16   // Minimum
+    let vmax: UInt16   // Maximum
 }
 
 /// Configuration payload for Mobilinkd TNC4

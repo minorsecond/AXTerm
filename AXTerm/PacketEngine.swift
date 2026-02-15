@@ -177,6 +177,7 @@ final class PacketEngine: ObservableObject {
 
     @Published private(set) var status: ConnectionStatus = .disconnected
     @Published private(set) var lastError: String?
+    private var previousLinkState: KISSLinkState = .disconnected
     @Published private(set) var bytesReceived: Int = 0
     @Published private(set) var connectedHost: String?
     @Published private(set) var connectedPort: UInt16?
@@ -188,6 +189,7 @@ final class PacketEngine: ObservableObject {
     
     // Mobilinkd Telemetry
     @Published var mobilinkdBatteryLevel: Int?
+    @Published var mobilinkdInputLevel: MobilinkdInputLevel?
 
     @Published var selectedStationCall: String?
     @Published private(set) var pinnedPacketIDs: Set<Packet.ID> = []
@@ -312,10 +314,21 @@ final class PacketEngine: ObservableObject {
             )
             connectSerial(config: config)
         } else if settings.isBLETransport {
+            // Construct Mobilinkd config for BLE just like serial
+            var bleMobilinkdConfig: MobilinkdConfig?
+            if settings.mobilinkdEnabled {
+                bleMobilinkdConfig = MobilinkdConfig(
+                    modemType: MobilinkdTNC.ModemType(rawValue: UInt8(settings.mobilinkdModemType)) ?? .afsk1200,
+                    outputGain: UInt8(settings.mobilinkdOutputGain),
+                    inputGain: UInt8(settings.mobilinkdInputGain),
+                    isBatteryMonitoringEnabled: true
+                )
+            }
             let config = BLEConfig(
                 peripheralUUID: settings.blePeripheralUUID,
                 peripheralName: settings.blePeripheralName,
-                autoReconnect: settings.bleAutoReconnect
+                autoReconnect: settings.bleAutoReconnect,
+                mobilinkdConfig: bleMobilinkdConfig
             )
             connectBLE(config: config)
         } else {
@@ -366,7 +379,7 @@ final class PacketEngine: ObservableObject {
             return
         }
 
-        disconnect()
+        disconnect(reason: "switching to new serial device")
 
         status = .connecting
         lastError = nil
@@ -381,7 +394,7 @@ final class PacketEngine: ObservableObject {
 
     /// Connect using a BLE device
     func connectBLE(config: BLEConfig) {
-        disconnect()
+        disconnect(reason: "switching to BLE transport")
 
         status = .connecting
         lastError = nil
@@ -401,7 +414,8 @@ final class PacketEngine: ObservableObject {
         newLink.open()
     }
 
-    func disconnect() {
+    func disconnect(reason: String = "unknown") {
+        let previousStatus = status
         link?.close()
         link = nil
         connection?.cancel()
@@ -410,6 +424,13 @@ final class PacketEngine: ObservableObject {
         status = .disconnected
         connectedHost = nil
         connectedPort = nil
+        addSystemLine("Disconnected (reason: \(reason))", category: .connection)
+        SentryManager.shared.addBreadcrumb(
+            category: "kiss.connection",
+            message: "Disconnected",
+            level: .info,
+            data: ["reason": reason, "previousStatus": previousStatus.rawValue]
+        )
         SentryManager.shared.breadcrumbDisconnect()
     }
 
@@ -458,8 +479,13 @@ final class PacketEngine: ObservableObject {
         TxLog.kissSend(frameId: frame.id, size: kissData.count)
         TxLog.hexDump(.kiss, "KISS frame", data: kissData)
 
+        LinkDebugLog.shared.recordTxBytes(kissData.count)
+        LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+            timestamp: Date(), direction: .tx, rawBytes: kissData,
+            frameType: frame.frameType, byteCount: kissData.count))
+
         // Log the transmission: user payload as DATA (purple), protocol as SYS
-        let viaSuffix: String = frame.path.isEmpty ? "" : " via \(frame.path.display)"
+        let viaSuffix = formatViaPath(frame.path.digis)
         let showAsData: Bool
         if let text = frame.displayInfo, !text.isEmpty {
             showAsData = frame.isUserPayload || (frame.frameType.lowercased() == "i" && !isProtocolDisplayInfo(text))
@@ -467,10 +493,13 @@ final class PacketEngine: ObservableObject {
                 let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: text)
                 appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
             } else {
-                addSystemLine("TX: \(frame.source.display) → \(frame.destination.display)\(viaSuffix): \(text)", category: .transmission)
+                // Build a richer control frame description for TX SYS lines
+                let txDesc = txControlFrameDescription(frame) ?? text
+                addSystemLine("TX: \(frame.source.display) → \(frame.destination.display)\(viaSuffix): \(txDesc)", category: .transmission)
             }
         } else {
-            addSystemLine("TX: \(frame.source.display) → \(frame.destination.display)\(viaSuffix): \(frame.displayInfo ?? "")", category: .transmission)
+            let txDesc = txControlFrameDescription(frame) ?? frame.displayInfo ?? ""
+            addSystemLine("TX: \(frame.source.display) → \(frame.destination.display)\(viaSuffix): \(txDesc)", category: .transmission)
         }
         eventLogger?.log(
             level: .info,
@@ -526,6 +555,51 @@ final class PacketEngine: ObservableObject {
         }
     }
 
+    // MARK: - Mobilinkd Commands
+
+    /// One-shot poll of audio input levels. Stops the demodulator during measurement,
+    /// then sends RESET to restart it. Do NOT call this in a loop.
+    func sendPollInputLevel() {
+        guard let activeLink = link else { return }
+        let pollFrame = Data(MobilinkdTNC.pollInputLevel())
+        let resetFrame = Data(MobilinkdTNC.reset())
+        activeLink.send(pollFrame) { [weak activeLink] _ in
+            // Send RESET after a delay to allow measurement to complete,
+            // then restart the demodulator for normal packet reception.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
+                activeLink?.send(resetFrame) { _ in }
+            }
+        }
+    }
+
+    /// Sends the ADJUST_INPUT_LEVELS command to trigger the TNC4's auto-AGC.
+    /// Stops the demodulator during calibration; sends RESET after 5s to restart.
+    func sendAdjustInputLevels() {
+        guard let activeLink = link else { return }
+        let frame = Data(MobilinkdTNC.adjustInputLevels())
+        let resetFrame = Data(MobilinkdTNC.reset())
+        activeLink.send(frame) { [weak activeLink] _ in
+            // Auto-adjust takes several seconds (gain stepping + measurements).
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5.0) {
+                activeLink?.send(resetFrame) { _ in }
+            }
+        }
+    }
+
+    /// Sends a SET_INPUT_GAIN command to set manual input gain level (0-4, 6dB steps).
+    func sendSetInputGain(_ level: UInt8) {
+        guard let activeLink = link else { return }
+        let frame = Data(MobilinkdTNC.setInputGain(level))
+        activeLink.send(frame) { _ in }
+    }
+
+    /// Sends RESET to restart the TNC4 demodulator.
+    func sendMobilinkdReset() {
+        guard let activeLink = link else { return }
+        let frame = Data(MobilinkdTNC.reset())
+        activeLink.send(frame) { _ in }
+    }
+
     private func handleConnectionState(_ state: NWConnection.State, host: String, port: UInt16) {
         switch state {
         case .ready:
@@ -575,7 +649,7 @@ final class PacketEngine: ObservableObject {
                 }
 
                 if isComplete {
-                    self.disconnect()
+                    self.disconnect(reason: "legacy NWConnection receive complete")
                     return
                 }
 
@@ -587,6 +661,7 @@ final class PacketEngine: ObservableObject {
 
     func handleIncomingData(_ data: Data) {
         bytesReceived += data.count
+        LinkDebugLog.shared.recordRxBytes(data.count)
 
         TxLog.kissReceive(size: data.count)
         debugTrace("RX KISS chunk", [
@@ -607,26 +682,47 @@ final class PacketEngine: ObservableObject {
         for frameOutput in kissFrames {
             switch frameOutput {
             case .ax25(let ax25Data):
+                LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+                    timestamp: Date(), direction: .rx, rawBytes: ax25Data,
+                    frameType: "AX25", byteCount: ax25Data.count))
                 processAX25Frame(ax25Data)
-                
+
             case .mobilinkdTelemetry(let telemetryData):
-                if let battery = MobilinkdTNC.parseBatteryLevel(telemetryData) {
-                    // Update battery level (0-100% or raw voltage?)
-                    // Mobilinkd usually returns raw mV or similar. 
-                    // TNC4: Battery level is in mV? 
-                    // Actually, let's assume raw value for now and display it, or map it.
-                    // Implementation plan said "Display battery voltage/percentage".
-                    // Let's store raw value.
+                if let inputLevel = MobilinkdTNC.parseInputLevel(telemetryData) {
+                    DispatchQueue.main.async {
+                        self.mobilinkdInputLevel = inputLevel
+                    }
+                    debugTrace("Mobilinkd InputLevel", [
+                        "vpp": inputLevel.vpp, "vavg": inputLevel.vavg,
+                        "vmin": inputLevel.vmin, "vmax": inputLevel.vmax
+                    ])
+                } else if let battery = MobilinkdTNC.parseBatteryLevel(telemetryData) {
                     DispatchQueue.main.async {
                          self.mobilinkdBatteryLevel = battery
                     }
                     debugTrace("Mobilinkd Battery", ["level": battery])
+                } else if let gain = MobilinkdTNC.parseInputGain(telemetryData) {
+                     DispatchQueue.main.async {
+                         if self.settings.mobilinkdInputGain != gain {
+                             self.settings.mobilinkdInputGain = gain
+                             self.debugTrace("Mobilinkd Auto-Gain Updated", ["newGain": gain])
+                         }
+                     }
                 } else {
                     debugTrace("Mobilinkd Telemetry", ["hex": hexPrefix(telemetryData)])
                 }
-                
+                LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+                    timestamp: Date(), direction: .rx, rawBytes: telemetryData,
+                    frameType: "Telemetry", byteCount: telemetryData.count))
+
             case .unknown(let cmd, let payload):
                 debugTrace("Unknown KISS Frame", ["cmd": String(format: "0x%02X", cmd), "len": payload.count])
+                LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+                    timestamp: Date(), direction: .rx, rawBytes: payload,
+                    frameType: "Unknown(0x\(String(format: "%02X", cmd)))", byteCount: payload.count))
+                LinkDebugLog.shared.recordParseError(
+                    message: "Unknown KISS command: 0x\(String(format: "%02X", cmd))",
+                    rawBytes: payload)
             }
         }
     }
@@ -639,6 +735,9 @@ final class PacketEngine: ObservableObject {
         ])
 
         guard let decoded = AX25.decodeFrame(ax25: ax25Data) else {
+            LinkDebugLog.shared.recordParseError(
+                message: "AX.25 decode failed (\(ax25Data.count) bytes)",
+                rawBytes: ax25Data)
             TxLog.ax25DecodeError(reason: "Invalid frame structure", size: ax25Data.count)
             eventLogger?.log(
                 level: .warning,
@@ -754,6 +853,65 @@ final class PacketEngine: ObservableObject {
 
     private func addErrorLine(_ text: String, category: ConsoleEntryRecord.Category) {
         appendConsoleLine(ConsoleLine.error(text), category: category)
+    }
+
+    // MARK: - Control Frame SYS Logging
+
+    /// Format a via path with H-bit indicators (digi callsigns with `*` suffix = has been repeated).
+    private func formatViaPath(_ via: [AX25Address]) -> String {
+        guard !via.isEmpty else { return "" }
+        let formatted = via.map { addr -> String in
+            addr.repeated ? "\(addr.display)*" : addr.display
+        }.joined(separator: ",")
+        return " via \(formatted)"
+    }
+
+    /// Build a human-readable control frame description for SYS logging.
+    /// Examples: "SABM P", "UA F", "RR(3)", "I(1,3) P", "REJ(5) F"
+    private func describeControlFrame(_ decoded: AX25ControlFieldDecoded) -> String? {
+        let pf = (decoded.pf ?? 0) == 1
+
+        switch decoded.frameClass {
+        case .U:
+            guard let uType = decoded.uType else { return nil }
+            switch uType {
+            case .UI:
+                return nil  // UI frames are data, not control — skip SYS line
+            case .SABM, .SABME, .DISC:
+                return "\(uType.rawValue)\(pf ? " P" : "")"
+            case .UA, .DM, .FRMR:
+                return "\(uType.rawValue)\(pf ? " F" : "")"
+            case .UNKNOWN:
+                return "U?\(pf ? " P/F" : "")"
+            }
+        case .S:
+            guard let sType = decoded.sType else { return nil }
+            let nr = decoded.nr ?? 0
+            return "\(sType.rawValue)(\(nr))\(pf ? " P/F" : "")"
+        case .I:
+            let ns = decoded.ns ?? 0
+            let nr = decoded.nr ?? 0
+            return "I(\(ns),\(nr))\(pf ? " P" : "")"
+        case .unknown:
+            return nil
+        }
+    }
+
+    /// Log an RX control frame as a SYS line in the console.
+    /// Called from handleIncomingPacket for all decoded frames.
+    private func logRxControlFrame(_ packet: Packet, decoded: AX25ControlFieldDecoded) {
+        guard let description = describeControlFrame(decoded),
+              let from = packet.from, let to = packet.to else { return }
+        let via = formatViaPath(packet.via)
+        addSystemLine("RX: \(from.display) → \(to.display)\(via): \(description)", category: .transmission)
+    }
+
+    /// Build a richer control frame description for outbound frames.
+    /// Returns nil if the frame doesn't have enough info for a richer description.
+    private func txControlFrameDescription(_ frame: OutboundFrame) -> String? {
+        guard let controlByte = frame.controlByte else { return nil }
+        let decoded = AX25ControlFieldDecoder.decode(control: controlByte, controlByte1: nil)
+        return describeControlFrame(decoded)
     }
 
     /// Append decoded AXDP/session chat to the console so it appears in the terminal.
@@ -928,6 +1086,10 @@ final class PacketEngine: ObservableObject {
         )
         insertPacketSorted(packet)
         packetInsertSubject.send(packet)
+
+        // Log RX control frames (SABM, UA, DM, DISC, RR, REJ, I) as SYS lines with digi H-bit status
+        let controlDecoded = AX25ControlFieldDecoder.decode(control: packet.control, controlByte1: packet.controlByte1)
+        logRxControlFrame(packet, decoded: controlDecoded)
 
         // Feed packet to NET/ROM integration for route inference
         observePacketForNetRom(packet)
@@ -1968,6 +2130,12 @@ extension PacketEngine: KISSLinkDelegate {
 
     func linkDidChangeState(_ state: KISSLinkState) {
         let newStatus = ConnectionStatus(linkState: state)
+        let endpoint = link?.endpointDescription ?? "unknown"
+        LinkDebugLog.shared.recordStateChange(
+            from: previousLinkState.rawValue,
+            to: state.rawValue,
+            endpoint: endpoint)
+        previousLinkState = state
         self.status = newStatus
 
         switch state {
@@ -1994,6 +2162,7 @@ extension PacketEngine: KISSLinkDelegate {
 
     func linkDidError(_ message: String) {
         lastError = message
+        LinkDebugLog.shared.recordParseError(message: "Link error: \(message)")
         addErrorLine(message, category: .connection)
         eventLogger?.log(level: .error, category: .connection, message: message, metadata: nil)
     }

@@ -538,14 +538,14 @@ struct ContentView: View {
             switch client.status {
             case .connected:
                 Button("Disconnect TNC", role: .destructive) {
-                    client.disconnect()
+                    client.disconnect(reason: "user disconnect")
                 }
                 Button("Reconnect TNC") {
                     reconnectToTNC()
                 }
             case .connecting:
                 Button("Cancel") {
-                    client.disconnect()
+                    client.disconnect(reason: "user cancelled connect")
                 }
             case .disconnected, .failed:
                 Button("Connect TNC") {
@@ -651,14 +651,14 @@ struct ContentView: View {
     private func toggleConnection() {
         switch client.status {
         case .connected, .connecting:
-            client.disconnect()
+            client.disconnect(reason: "user toggle connection")
         case .disconnected, .failed:
             client.connectUsingSettings()
         }
     }
 
     private func reconnectToTNC() {
-        client.disconnect()
+        client.disconnect(reason: "user reconnect")
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
             client.connectUsingSettings()

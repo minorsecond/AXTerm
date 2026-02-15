@@ -145,7 +145,8 @@ nonisolated struct KISSFrameParser {
         inFrame = false
     }
 
-    /// Process a complete KISS frame buffer
+    /// Process a complete KISS frame buffer.
+    /// Returns nil for malformed or unrecognized frames (logged, not passed downstream).
     private func processKISSFrame(_ data: Data) -> KISSFrameOutput? {
         guard !data.isEmpty else { return nil }
 
@@ -153,41 +154,40 @@ nonisolated struct KISSFrameParser {
         let command = data[0]
 
         // Command byte format: high nibble = port, low nibble = command type
-        let port = (command >> 4) & 0x0F
         let cmdType = command & 0x0F
 
-        // Payload is properly escaped, but for non-data commands it might depend on the TNC.
-        // Standard KISS says "The data field contains standard KISS-escaped data."
-        
         let escapedPayload = data.count > 1 ? data.subdata(in: 1..<data.count) : Data()
         let payload = KISS.unescape(escapedPayload)
 
-        // Handle Data Frame (Port 0)
-        if port == 0 && cmdType == KISS.CMD_DATA {
-             return .ax25(payload)
+        // Handle Data Frame (any port — some multi-port TNCs or firmware variants use ports other than 0)
+        if cmdType == KISS.CMD_DATA {
+            // A valid AX.25 frame requires at minimum 15 bytes (src + dst + control).
+            // An empty payload means we got a bare command byte with no data — discard it.
+            guard !payload.isEmpty else {
+                TxLog.debug(.kiss, "Discarding DATA frame with empty payload")
+                return nil
+            }
+            return .ax25(payload)
         }
-        
+
         // Handle Mobilinkd Hardware Command (0x06)
         // This is used for battery levels and other telemetry
         if cmdType == 0x06 {
-             // We pass the full unescaped payload (including subcommand)
-             // But wait, the standard hardware command structure is:
-             // [CMD=6] [Subcommand] [Args...]
-             // The parser stripped CMD. So `payload` starts with Subcommand.
-             // We'll wrap it in telemetry case.
-             // Actually, to be safe for MobilinkdTNC helper, we should check if we need to include the command byte?
-             // MobilinkdTNC.parseBatteryLevel checks for data[0] == CMD_HARDWARE (0x06).
-             // So we should reconstruct the full frame or change the parser helpers.
-             // `parseBatteryLevel` expects [CMD, SUB, DATA...]
-             // So let's prepend the command byte back? No, `unescape` is for the payload.
-             // If we prepend 0x06, we match the structure expected by `parseBatteryLevel`.
-             
-             var fullFrame = Data([command])
-             fullFrame.append(payload)
-             return .mobilinkdTelemetry(fullFrame)
+            // Reconstruct full frame: parseBatteryLevel expects [CMD, SUB, DATA...]
+            var fullFrame = Data([command])
+            fullFrame.append(payload)
+            return .mobilinkdTelemetry(fullFrame)
         }
 
-        return .unknown(command: command, payload: payload)
+        // Unrecognized command type — log and discard.
+        // This catches noise bytes between valid frames and non-standard TNC commands.
+        // Per CLAUDE.md: "Malformed frames MUST be logged, not dropped silently."
+        TxLog.debug(.kiss, "Discarding unrecognized KISS command", [
+            "command": String(format: "0x%02X", command),
+            "cmdType": String(format: "0x%02X", cmdType),
+            "payloadLen": payload.count
+        ])
+        return nil
     }
 }
 
