@@ -503,8 +503,9 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     /// Same init sequence as the serial transport.
     private func sendKISSInit() {
         var frames: [[UInt8]] = [
-            // Duplex = 1 (Full) — ignore DCD, transmit immediately
-            [0xC0, 0x05, 0x01, 0xC0],
+            // Duplex = 0 (Half) — required for proper RX frame forwarding on TNC4
+            // Full-duplex (0x01) appears to prevent RX data from being sent back to KISS client
+            [0xC0, 0x05, 0x00, 0xC0],
             // Persistence = 255 (100%) — always transmit
             [0xC0, 0x02, 0xFF, 0xC0],
             // Slot Time = 0 — no delay between checks

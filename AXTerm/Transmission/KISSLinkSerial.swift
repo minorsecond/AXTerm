@@ -597,10 +597,11 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         // We configure the TNC to be aggressive about transmitting, ignoring DCD if possible.
         
         var frames: [[UInt8]] = [
-            // 1. Set Duplex = 1 (Full Duplex).
-            //    Most TNCs use this to ignore DCD (Carrier Detect) and transmit immediately.
-            //    Critical for TNC4 if squelch/DCD is stuck open.
-            [0xC0, 0x05, 0x01, 0xC0],
+            // 1. Set Duplex = 0 (Half Duplex).
+            //    Required for proper RX frame forwarding on TNC4.
+            //    In half-duplex mode, TNC4 correctly sends received AX.25 frames back to KISS client.
+            //    Full-duplex (0x01) appears to break RX data return on newer TNC4 firmware.
+            [0xC0, 0x05, 0x00, 0xC0],
             
             // 2. Set Persistence = 255 (0xFF).
             //    Probability of transmitting = 100%. Don't wait for random slots.
