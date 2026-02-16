@@ -687,28 +687,33 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             }
         }
         
-        // Always send RESET after configuration commands to ensure the demodulator
-        // is in a clean, running state. The default path sends Mobilinkd-specific
-        // gain commands (0x06 type) which can affect demodulator state on TNC4.
-        // POLL_INPUT_LEVEL (0x04) is NOT sent — it stops the demodulator.
-        let resetWork = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            let resetFrame = Data(MobilinkdTNC.reset())
-            self.send(resetFrame) { err in
-                if let err = err {
-                    KISSLinkLog.error(self.endpointDescription, message: "Failed to send post-config RESET: \(err)")
-                } else {
-                    KISSLinkLog.info(self.endpointDescription, message: "Sent post-config RESET to ensure demodulator is running")
+        // Send RESET after configuration to ensure clean demodulator state
+        // BUT: Only do this when using explicit Mobilinkd config.
+        // The default TNC4 config may not need a reset, and it can disrupt
+        // ongoing connections or I-frame reception.
+        let shouldSendReset = config.mobilinkdConfig != nil
+        if shouldSendReset {
+            let resetWork = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                let resetFrame = Data(MobilinkdTNC.reset())
+                self.send(resetFrame) { err in
+                    if let err = err {
+                        KISSLinkLog.error(self.endpointDescription, message: "Failed to send post-config RESET: \(err)")
+                    } else {
+                        KISSLinkLog.info(self.endpointDescription, message: "Sent post-config RESET to ensure demodulator is running")
+                    }
                 }
+                self.lock.lock()
+                self.kissInitWorkItem = nil
+                self.lock.unlock()
             }
-            self.lock.lock()
-            self.kissInitWorkItem = nil
-            self.lock.unlock()
+            lock.lock()
+            kissInitWorkItem = resetWork
+            lock.unlock()
+            serialQueue.asyncAfter(deadline: .now() + 2.0, execute: resetWork)
+        } else {
+            KISSLinkLog.info(endpointDescription, message: "Skipping post-config RESET for default TNC4 mode")
         }
-        lock.lock()
-        kissInitWorkItem = resetWork
-        lock.unlock()
-        serialQueue.asyncAfter(deadline: .now() + 2.0, execute: resetWork)
     }
 
     /// Cancel any in-flight KISS init work items (POLL/RESET sequence).
