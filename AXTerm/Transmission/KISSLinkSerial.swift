@@ -635,10 +635,15 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             // frames.append(MobilinkdTNC.reset())
 
         } else {
-            // Default config when Mobilinkd-specific commands are disabled.
-            // Only send standard KISS configuration, no Mobilinkd Hardware Commands (0x06).
-            // Hardware commands can cause issues if the device doesn't support them or interprets them differently.
-            KISSLinkLog.info(endpointDescription, message: "Sending Standard KISS Configuration (Duplex=0, P=63, Slot=0) - Mobilinkd commands disabled")
+            // Default Mobilinkd config for TNC4 when not explicitly configured
+            // These gain settings are critical for proper RX/TX on TNC4:
+            // - Output Gain (TX Volume): 128 = half scale, ensures TX audio is heard
+            // - Input Gain (RX Volume): 128 = required for I-frame demodulation
+            // Without these, control frames (SABM/UA/RR/DISC) work but I-frames fail silently.
+            frames.append([0xC0, 0x06, 0x01, 0x00, 0x80, 0xC0])  // Set Output Gain = 128
+            frames.append([0xC0, 0x06, 0x02, 0x00, 0x80, 0xC0])  // Set Input Gain = 128
+            
+            KISSLinkLog.info(endpointDescription, message: "Sending Default TNC4 Config (Duplex=0, P=63, Slot=0, InputGain=128, OutputGain=128)")
         }
         
         // Record KISS init config to debug log
