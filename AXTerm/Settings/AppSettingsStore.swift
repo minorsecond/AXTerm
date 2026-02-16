@@ -96,7 +96,8 @@ final class AppSettingsStore: ObservableObject {
     static let defaultMobilinkdEnabled = false
     static let defaultMobilinkdModemType = 1 // 1200 baud
     static let defaultMobilinkdOutputGain = 128
-    static let defaultMobilinkdInputGain = 0
+    static let defaultMobilinkdInputGain = 128  // CRITICAL: Increased from 0 to allow RX demodulation of I-frames
+
 
     static let defaultHost = "localhost"
     static let defaultPort = 8001

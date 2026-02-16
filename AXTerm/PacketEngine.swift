@@ -193,6 +193,42 @@ final class PacketEngine: ObservableObject {
 
     @Published var selectedStationCall: String?
     @Published private(set) var pinnedPacketIDs: Set<Packet.ID> = []
+    
+    // MARK: - Frame Statistics (Diagnostics)
+    @Published private(set) var frameStats: FrameStatistics = FrameStatistics()
+    
+    struct FrameStatistics {
+        var totalFramesReceived: Int = 0
+        var ax25FramesReceived: Int = 0
+        var telemetryFramesReceived: Int = 0
+        var unknownFramesReceived: Int = 0
+        
+        var frameSizeHistogram: [String: Int] = [:]  // "size_range" -> count
+        var frameTypeHistogram: [String: Int] = [:]   // "frameType" -> count
+        
+        mutating func recordFrame(type: String, size: Int) {
+            totalFramesReceived += 1
+            frameTypeHistogram[type, default: 0] += 1
+            
+            let sizeRange: String
+            if size < 20 {
+                sizeRange = "0-19"
+            } else if size < 50 {
+                sizeRange = "20-49"
+            } else if size < 100 {
+                sizeRange = "50-99"
+            } else {
+                sizeRange = "100+"
+            }
+            frameSizeHistogram[sizeRange, default: 0] += 1
+        }
+        
+        var diagnosticSummary: String {
+            let typeStr = frameTypeHistogram.map { "\($0.key):\($0.value)" }.joined(separator: ", ")
+            let sizeStr = frameSizeHistogram.map { "\($0.key):\($0.value)" }.joined(separator: ", ")
+            return "Total:\(totalFramesReceived) Types:[\(typeStr)] Sizes:[\(sizeStr)]"
+        }
+    }
 
     /// Publisher for incoming packets - subscribe to receive all decoded packets
     var packetPublisher: AnyPublisher<Packet, Never> {
@@ -759,12 +795,14 @@ final class PacketEngine: ObservableObject {
             switch frameOutput {
             case .ax25(let ax25Data):
                 debugTrace("KISS AX.25 frame parsed", ["len": ax25Data.count])
+                frameStats.recordFrame(type: "AX.25", size: ax25Data.count)
                 LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
                     timestamp: Date(), direction: .rx, rawBytes: ax25Data,
                     frameType: "AX25", byteCount: ax25Data.count))
                 processAX25Frame(ax25Data)
 
             case .mobilinkdTelemetry(let telemetryData):
+                frameStats.recordFrame(type: "Telemetry", size: telemetryData.count)
                 if let inputLevel = MobilinkdTNC.parseInputLevel(telemetryData) {
                     DispatchQueue.main.async {
                         self.mobilinkdInputLevel = inputLevel
@@ -793,6 +831,7 @@ final class PacketEngine: ObservableObject {
                     frameType: "Telemetry", byteCount: telemetryData.count))
 
             case .unknown(let cmd, let payload):
+                frameStats.recordFrame(type: "Unknown(0x\(String(format: "%02X", cmd)))", size: payload.count)
                 debugTrace("Unknown KISS Frame", ["cmd": String(format: "0x%02X", cmd), "len": payload.count])
                 LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
                     timestamp: Date(), direction: .rx, rawBytes: payload,

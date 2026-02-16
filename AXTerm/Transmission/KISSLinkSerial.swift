@@ -603,9 +603,10 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             //    Full-duplex (0x01) appears to break RX data return on newer TNC4 firmware.
             [0xC0, 0x05, 0x00, 0xC0],
             
-            // 2. Set Persistence = 255 (0xFF).
-            //    Probability of transmitting = 100%. Don't wait for random slots.
-            [0xC0, 0x02, 0xFF, 0xC0],
+            // 2. Set Persistence = 63 (25%).
+            //    Standard value for half-duplex operation.
+            //    Full persistence (255) with half-duplex may interfere with RX forwarding.
+            [0xC0, 0x02, 0x3F, 0xC0],
             
             // 3. Set Slot Time = 0 (0x00).
             //    No delay between checks.
@@ -640,11 +641,16 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
              frames.append([0xC0, 0x06, 0x01, 0x00, 0x80, 0xC0])
              
              // 6. Set Input Gain (RX Volume) -> Hardware Command 0x06, Subcommand 0x02
-             //    Setting to 0 (0x0000) for TNC4 (min gain/attenuation).
-             frames.append([0xC0, 0x06, 0x02, 0x00, 0x00, 0xC0])
+             //    Increased from 0x0000 to 0x0080 (128) to ensure RX audio is captured properly.
+             //    Low input gain was preventing demodulation of larger frames (I-frames).
+             frames.append([0xC0, 0x06, 0x02, 0x00, 0x80, 0xC0])
             
-            KISSLinkLog.info(endpointDescription, message: "Sending Default TNC Configuration (Duplex=1, P=255, Slot=0, Vol=128)")
+            KISSLinkLog.info(endpointDescription, message: "Sending Default TNC Configuration (Duplex=0, P=63, Slot=0, InputGain=128)")
         }
+        
+        // 7. Enable PassAll mode (allow invalid CRC frames, in case RX has slight issues)
+        //    Command 0x51 = SET_PASSALL, parameter 0x01 = enabled
+        frames.append([0xC0, 0x51, 0x01, 0xC0])
         
         // Record KISS init config to debug log
         let configLabels: [String] = {
@@ -828,10 +834,14 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             lock.lock()
             _totalBytesIn += bytesRead
             lock.unlock()
-            // Log first few RX events with hex for debugging
-            if readEventCount <= 5 {
-                let hex = data.prefix(32).map { String(format: "%02X", $0) }.joined(separator: " ")
-                KISSLinkLog.info(endpointDescription, message: "RX[\(readEventCount)] \(bytesRead) bytes: \(hex)\(data.count > 32 ? "..." : "")")
+            
+            // Log all RX events that contain frame markers (FEND=0xC0)
+            let hasFEND = data.contains(0xC0)
+            let hasLargePayload = bytesRead > 30
+            
+            if readEventCount <= 5 || hasFEND || hasLargePayload {
+                let hex = data.prefix(64).map { String(format: "%02X", $0) }.joined(separator: " ")
+                KISSLinkLog.info(endpointDescription, message: "RX[\(readEventCount)] \(bytesRead) bytes: \(hex)\(data.count > 64 ? "..." : "")")
             }
             KISSLinkLog.bytesIn(endpointDescription, count: bytesRead)
             Task { @MainActor [weak self] in
