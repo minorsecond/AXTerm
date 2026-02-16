@@ -635,22 +635,11 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             // frames.append(MobilinkdTNC.reset())
 
         } else {
-            // Default rudimentary config if not explicitly configured as Mobilinkd but we suspect it is TNC4
-             // 5. Set Output Gain (TX Volume) -> Hardware Command 0x06, Subcommand 0x01
-             //    Setting to 128 (0x0080) approx half scale to ensure it's not silent.
-             frames.append([0xC0, 0x06, 0x01, 0x00, 0x80, 0xC0])
-             
-             // 6. Set Input Gain (RX Volume) -> Hardware Command 0x06, Subcommand 0x02
-             //    Increased from 0x0000 to 0x0080 (128) to ensure RX audio is captured properly.
-             //    Low input gain was preventing demodulation of larger frames (I-frames).
-             frames.append([0xC0, 0x06, 0x02, 0x00, 0x80, 0xC0])
-            
-            KISSLinkLog.info(endpointDescription, message: "Sending Default TNC Configuration (Duplex=0, P=63, Slot=0, InputGain=128)")
+            // Default config when Mobilinkd-specific commands are disabled.
+            // Only send standard KISS configuration, no Mobilinkd Hardware Commands (0x06).
+            // Hardware commands can cause issues if the device doesn't support them or interprets them differently.
+            KISSLinkLog.info(endpointDescription, message: "Sending Standard KISS Configuration (Duplex=0, P=63, Slot=0) - Mobilinkd commands disabled")
         }
-        
-        // 7. Enable PassAll mode (allow invalid CRC frames, in case RX has slight issues)
-        //    Command 0x51 = SET_PASSALL, parameter 0x01 = enabled
-        frames.append([0xC0, 0x51, 0x01, 0xC0])
         
         // Record KISS init config to debug log
         let configLabels: [String] = {
