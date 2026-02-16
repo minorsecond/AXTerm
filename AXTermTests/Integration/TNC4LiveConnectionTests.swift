@@ -302,8 +302,8 @@ final class TNC4LiveConnectionTests: XCTestCase {
             return
         }
 
-        // Wait for KISS init + POLL/RESET sequence to complete (4.5s) + demodulator stabilization
-        try await Task.sleep(nanoseconds: 7_000_000_000)
+        // Wait for KISS init RESET to fire (0.5s when no mobilinkd config) + demodulator stabilization
+        try await Task.sleep(nanoseconds: 3_000_000_000)
 
         let destination = AX25Address(call: "K0EPI", ssid: 7)
         let sessionManager = coordinator.sessionManager
@@ -338,6 +338,56 @@ final class TNC4LiveConnectionTests: XCTestCase {
         XCTAssertEqual(session.state, .connected, "Session to K0EPI-7 should be connected")
     }
 
+    // MARK: - Test 3b: Connect with Mobilinkd enabled (matches real app)
+
+    /// Same as testConnectToK0EPI7 but with mobilinkdEnabled=true and factory gains,
+    /// which is how the real app connects to the TNC4.
+    func testConnectToK0EPI7WithMobilinkdEnabled() async throws {
+        // Override: enable Mobilinkd with factory-correct gains
+        settings.mobilinkdEnabled = true
+        settings.mobilinkdModemType = 1  // AFSK 1200
+        settings.mobilinkdOutputGain = 11  // TNC4 factory default
+        settings.mobilinkdInputGain = 0    // TNC4 factory default
+
+        setupFullStack()
+        engine.connectUsingSettings()
+        guard await waitForStatus(.connected, timeout: 10.0) else {
+            XCTFail("Failed to connect to TNC4")
+            return
+        }
+
+        // Mobilinkd path sends modem + gains + RESET (RESET fires after ~2s)
+        try await Task.sleep(nanoseconds: 5_000_000_000)
+
+        let destination = AX25Address(call: "K0EPI", ssid: 7)
+        let sessionManager = coordinator.sessionManager
+
+        let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), channel: 0)
+        XCTAssertNotNil(sabmFrame, "Should generate SABM frame")
+
+        if let frame = sabmFrame {
+            engine.send(frame: frame)
+        }
+
+        let sessionConnected = await waitForSessionState(
+            destination: destination,
+            expectedState: .connected,
+            timeout: 30.0
+        )
+
+        if !sessionConnected {
+            let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+            if session.state == .disconnected {
+                throw XCTSkip("K0EPI-7 responded with DM (busy or not accepting connections)")
+            }
+            XCTFail("Session did not reach .connected state within 30s (current: \(session.state.rawValue))")
+            return
+        }
+
+        let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+        XCTAssertEqual(session.state, .connected, "Session to K0EPI-7 should be connected")
+    }
+
     // MARK: - Test 4: Send and Receive Data
 
     /// Establish a connection to K0EPI-7, send data, and verify we get
@@ -350,8 +400,8 @@ final class TNC4LiveConnectionTests: XCTestCase {
             return
         }
 
-        // Wait for KISS init + RESET (2s) + demodulator stabilization
-        try await Task.sleep(nanoseconds: 7_000_000_000)
+        // Wait for KISS init RESET (0.5s) + demodulator stabilization
+        try await Task.sleep(nanoseconds: 3_000_000_000)
 
         let destination = AX25Address(call: "K0EPI", ssid: 7)
         let sessionManager = coordinator.sessionManager
@@ -895,6 +945,205 @@ final class TNC4LiveConnectionTests: XCTestCase {
 
         XCTAssertFalse(response.isEmpty, "USERS command should return a response")
         // We should see ourselves listed as a connected user
+    }
+
+    // MARK: - Test 15: Diagnostic Connection Test
+
+    /// Write diagnostic log to a file since print() output is lost in xcodebuild.
+    /// Uses NSLog which gets captured in system log and xcodebuild output.
+    private func diag(_ msg: String) {
+        NSLog("[DIAG] %@", msg)
+    }
+
+    /// Comprehensive diagnostic test that traces the full connection path:
+    /// TNC4 serial → KISS init → RESET → SABM → UA reception.
+    /// Logs raw bytes at each stage and cross-checks with Direwolf monitor.
+    func testDiagnosticConnectionToK0EPI7() async throws {
+        // 1. Connect TNC4 at the lowest level to capture raw bytes
+        let devicePath = resolveDevicePath()
+        guard let devicePath else {
+            throw XCTSkip("TNC4 not connected")
+        }
+
+        // Use config WITHOUT mobilinkd to test the default path (the one that was broken)
+        let config = SerialConfig(
+            devicePath: devicePath,
+            baudRate: baudRate,
+            autoReconnect: false,
+            mobilinkdConfig: nil
+        )
+
+        let link = KISSLinkSerial(config: config)
+        var rawBytesReceived = Data()
+        var kissFrames: [(timestamp: Date, data: Data, type: String)] = []
+        var parser = KISSFrameParser()
+
+        let delegate = TestLinkDelegate()
+        delegate.onStateChange = { [weak self] state in
+            self?.diag("[DIAG] Link state: \(state)")
+        }
+        delegate.onReceive = { [weak self] data in
+            rawBytesReceived.append(data)
+            let hex = data.prefix(64).map { String(format: "%02X", $0) }.joined(separator: " ")
+            self?.diag("[DIAG] RX raw \(data.count) bytes: \(hex)\(data.count > 64 ? "..." : "")")
+
+            let frames = parser.feed(data)
+            for frame in frames {
+                switch frame {
+                case .ax25(let ax25):
+                    let frameData = Data(ax25)
+                    kissFrames.append((Date(), frameData, "ax25"))
+                    if let decoded = AX25.decodeFrame(ax25: ax25) {
+                        self?.diag("[DIAG] RX AX.25: \(decoded.from?.display ?? "?") > \(decoded.to?.display ?? "?") type=\(decoded.frameType.rawValue) ctrl=\(String(format: "0x%02X", decoded.control))")
+                    } else {
+                        let hex = frameData.prefix(30).map { String(format: "%02X", $0) }.joined(separator: " ")
+                        self?.diag("[DIAG] RX AX.25 (decode failed): \(hex)")
+                    }
+                case .mobilinkdTelemetry(let data):
+                    self?.diag("[DIAG] RX Mobilinkd telemetry: \(data.count) bytes")
+                default:
+                    self?.diag("[DIAG] RX KISS frame type: \(frame)")
+                }
+            }
+        }
+        link.delegate = delegate
+
+        // 2. Open link
+        link.open()
+        let openDeadline = Date().addingTimeInterval(10.0)
+        while Date() < openDeadline {
+            if link.state == .connected { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertEqual(link.state, .connected, "TNC4 should connect")
+        diag("[DIAG] TNC4 connected. Raw bytes so far: \(rawBytesReceived.count)")
+
+        // 3. Wait for KISS init + RESET sequence (2s delay in sendKISSInit)
+        diag("[DIAG] Waiting 4s for KISS init + RESET to complete...")
+        try await Task.sleep(nanoseconds: 4_000_000_000)
+        diag("[DIAG] After KISS init: \(rawBytesReceived.count) bytes, \(kissFrames.count) KISS frames received")
+
+        // 4. Also connect Direwolf for cross-verification (if available)
+        var dwEngine: PacketEngine? = nil
+        do {
+            dwEngine = try await connectDirewolfEngine()
+            diag("[DIAG] Direwolf monitor connected")
+        } catch {
+            diag("[DIAG] Direwolf not available (skipping cross-check): \(error)")
+        }
+        defer { dwEngine?.disconnect(reason: "Diagnostic teardown") }
+
+        // 5. Build and send SABM manually via the link
+        let destAddr = AX25Address(call: "K0EPI", ssid: 7)
+        let srcAddr = AX25Address(call: "K0EPI", ssid: 6)
+
+        // Encode AX.25 SABM frame
+        var ax25Frame = [UInt8]()
+        // Destination address (7 bytes)
+        ax25Frame.append(contentsOf: encodeAX25Address(destAddr, isLast: false, isCommand: true))
+        // Source address (7 bytes)
+        ax25Frame.append(contentsOf: encodeAX25Address(srcAddr, isLast: true, isCommand: false))
+        // Control: SABM with P=1 (0x3F = 0010 1111 | 0001 0000 = 0x2F | 0x10)
+        ax25Frame.append(0x3F)
+
+        // KISS-encode
+        var kissFrame = Data([0xC0, 0x00]) // FEND, Port 0 Data
+        for byte in ax25Frame {
+            if byte == 0xC0 {
+                kissFrame.append(contentsOf: [0xDB, 0xDC])
+            } else if byte == 0xDB {
+                kissFrame.append(contentsOf: [0xDB, 0xDD])
+            } else {
+                kissFrame.append(byte)
+            }
+        }
+        kissFrame.append(0xC0) // FEND
+
+        let kissHex = kissFrame.map { String(format: "%02X", $0) }.joined(separator: " ")
+        diag("[DIAG] Sending SABM (\(kissFrame.count) bytes): \(kissHex)")
+
+        let beforeSABM = kissFrames.count
+        link.send(kissFrame) { [weak self] err in
+            if let err = err {
+                self?.diag("[DIAG] SABM send error: \(err)")
+            } else {
+                self?.diag("[DIAG] SABM sent successfully")
+            }
+        }
+
+        // 6. Wait for response (up to 15s)
+        diag("[DIAG] Waiting up to 15s for UA response...")
+        var gotUA = false
+        let uaDeadline = Date().addingTimeInterval(15.0)
+        while Date() < uaDeadline {
+            // Check if any new AX.25 frames arrived that look like UA
+            for i in beforeSABM..<kissFrames.count {
+                let frame = kissFrames[i]
+                if frame.type == "ax25" {
+                    let bytes = [UInt8](frame.data)
+                    // Check control byte at offset 14 (after 2 x 7-byte addresses)
+                    if bytes.count > 14 {
+                        let ctl = bytes[14]
+                        // UA = 0x63, with F bit = 0x73
+                        if (ctl & 0xEF) == 0x63 {
+                            diag("[DIAG] *** UA RECEIVED! ctl=\(String(format: "0x%02X", ctl)) ***")
+                            gotUA = true
+                            break
+                        }
+                        // DM = 0x0F, with F bit = 0x1F
+                        if (ctl & 0xEF) == 0x0F {
+                            diag("[DIAG] *** DM RECEIVED! ctl=\(String(format: "0x%02X", ctl)) ***")
+                            break
+                        }
+                    }
+                }
+            }
+            if gotUA { break }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+
+        // 7. Report diagnostics
+        diag("[DIAG] === RESULTS ===")
+        diag("[DIAG] Total raw bytes received: \(rawBytesReceived.count)")
+        diag("[DIAG] Total KISS frames received: \(kissFrames.count)")
+        diag("[DIAG] UA received: \(gotUA)")
+
+        if let dw = dwEngine {
+            diag("[DIAG] Direwolf packets seen: \(dw.packets.count)")
+            for pkt in dw.packets {
+                diag("[DIAG] DW: \(pkt.from?.display ?? "?") > \(pkt.to?.display ?? "?") type=\(pkt.frameType.rawValue)")
+            }
+        }
+
+        // Dump all raw bytes for analysis if no UA
+        if !gotUA && rawBytesReceived.count > 0 {
+            let allHex = rawBytesReceived.prefix(512).map { String(format: "%02X", $0) }.joined(separator: " ")
+            diag("[DIAG] Raw bytes dump: \(allHex)")
+        }
+
+        link.close()
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        XCTAssertTrue(gotUA, "Should receive UA from K0EPI-7 after sending SABM")
+    }
+
+    /// Encode an AX.25 address into 7 bytes (6 chars shifted left + SSID byte)
+    private func encodeAX25Address(_ addr: AX25Address, isLast: Bool, isCommand: Bool) -> [UInt8] {
+        var bytes = [UInt8]()
+        let callChars = Array(addr.call.uppercased().utf8)
+        for i in 0..<6 {
+            if i < callChars.count {
+                bytes.append(callChars[i] << 1)
+            } else {
+                bytes.append(0x40) // space << 1
+            }
+        }
+        // SSID byte: C/R bit (7), RR bits (6:5) = 11, SSID (4:1), extension bit (0)
+        var ssidByte = UInt8((addr.ssid & 0x0F) << 1) | 0x60
+        if isLast { ssidByte |= 0x01 }
+        if isCommand { ssidByte |= 0x80 }
+        bytes.append(ssidByte)
+        return bytes
     }
 }
 

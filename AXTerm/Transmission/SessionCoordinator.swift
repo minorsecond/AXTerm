@@ -878,13 +878,17 @@ final class SessionCoordinator: ObservableObject {
         ))
     }
 
-    /// Fallback timer: send text probe after 3 seconds even without inbound data.
+    /// Fallback timer: send text probe after 15 seconds even without inbound data.
     /// Handles AXTerm-to-AXTerm connections where neither side sends a welcome banner.
     /// Text probe is safe for legacy nodes (treated as unknown command).
+    /// NOTE: 15s delay is critical — transmitting a UI frame too early (e.g., 3s) on
+    /// half-duplex radio blocks RX, causing the TNC to miss inbound I-frames and
+    /// RR polls from the remote station. The longer delay lets the initial data
+    /// exchange (welcome banner, RR acks) complete first.
     private func scheduleTextProbeFallback(for session: AX25Session) {
         let peer = session.remoteAddress.display.uppercased()
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
             guard self.pendingTextProbe.remove(peer) != nil else { return }
             guard session.state == .connected else { return }
             self.debugAXDP("Text probe fallback timer fired", [

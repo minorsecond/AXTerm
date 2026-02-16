@@ -257,6 +257,61 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         }
     }
 
+    /// Write raw bytes to the serial FD, bypassing the .connected state check.
+    /// Used only during KISS init (before .connected is set) to send config frames and RESET.
+    /// MUST be called on serialQueue.
+    private func writeRaw(_ data: Data, completion: @escaping (Error?) -> Void) {
+        let fd: Int32
+        lock.lock()
+        fd = fileDescriptor
+        lock.unlock()
+
+        guard fd >= 0 else {
+            completion(KISSSerialError.notOpen)
+            return
+        }
+
+        let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
+        KISSLinkLog.info(endpointDescription, message: "KISS init writing \(data.count) bytes: \(hex)")
+
+        var bytesWritten = 0
+        let totalBytes = data.count
+
+        let result = data.withUnsafeBytes { buffer -> Int in
+            guard let baseAddress = buffer.baseAddress else { return -1 }
+            while bytesWritten < totalBytes {
+                let ptr = baseAddress.advanced(by: bytesWritten)
+                let remaining = totalBytes - bytesWritten
+                let count = Darwin.write(fd, ptr, remaining)
+                if count < 0 {
+                    let err = errno
+                    if err == EINTR { continue }
+                    if err == EAGAIN || err == EWOULDBLOCK {
+                        var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                        let pollResult = poll(&pfd, 1, 500)
+                        if pollResult > 0 { continue }
+                        return -1
+                    }
+                    return -1
+                }
+                bytesWritten += count
+            }
+            return bytesWritten
+        }
+
+        if result < 0 {
+            let err = errno
+            let message = String(cString: strerror(err))
+            KISSLinkLog.error(endpointDescription, message: "KISS init write failed (errno \(err)): \(message)")
+            completion(KISSSerialError.writeFailed(message))
+        } else {
+            lock.lock()
+            _totalBytesOut += result
+            lock.unlock()
+            completion(nil)
+        }
+    }
+
     /// Update configuration (e.g. when user changes settings).
     /// If currently connected, closes and reopens with new config.
     func updateConfig(_ newConfig: SerialConfig) {
@@ -536,14 +591,15 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         source.resume()
 
         cleanupOpenAttempt(success: true)
-        setState(.connected)
+        // NOTE: Do NOT setState(.connected) here — the demodulator is not running yet.
+        // sendKISSInit() will set .connected after RESET is sent.
         KISSLinkLog.opened(endpointDescription)
 
         if isBluetoothSerial {
             KISSLinkLog.info(endpointDescription, message: "Bluetooth RFCOMM serial connected successfully")
         }
 
-        // Send KISS Init Sequence (TX Delay etc)
+        // Send KISS Init Sequence — sets .connected after RESET fires
         sendKISSInit()
 
         reconnectAttempt = 0
@@ -593,78 +649,29 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     }
 
     private func sendKISSInit() {
-        // TNC4 Configuration Sequence
-        // We configure the TNC to be aggressive about transmitting, ignoring DCD if possible.
-        
-        var frames: [[UInt8]] = [
-            // 1. Set Duplex = 0 (Half Duplex).
-            //    Required for proper RX frame forwarding on TNC4.
-            //    In half-duplex mode, TNC4 correctly sends received AX.25 frames back to KISS client.
-            //    Full-duplex (0x01) appears to break RX data return on newer TNC4 firmware.
-            [0xC0, 0x05, 0x00, 0xC0],
-            
-            // 2. Set Persistence = 63 (25%).
-            //    Standard value for half-duplex operation.
-            //    Full persistence (255) with half-duplex may interfere with RX forwarding.
-            [0xC0, 0x02, 0x3F, 0xC0],
-            
-            // 3. Set Slot Time = 0 (0x00).
-            //    No delay between checks.
-            [0xC0, 0x03, 0x00, 0xC0],
-            
-            // 4. Set TX Delay = 30 (300ms).
-            //    Give radio time to key up before data.
-            [0xC0, 0x01, 30, 0xC0]
-        ]
-        
-        // Mobilinkd Specific Configuration
+        // TNC4 KISS Init Strategy:
+        // 1. Do NOT override factory KISS parameters (Duplex, Persistence, Slot, TXDelay, gains).
+        //    Factory defaults are correct. Sending gain overrides (128/128) breaks the demodulator.
+        // 2. When mobilinkdConfig is set, send user-configured modem/gains only.
+        // 3. Always finish with RESET to start the demodulator.
+
+        var frames: [[UInt8]] = []
+        var configLabels: [String] = []
+
         if let mobiConfig = config.mobilinkdConfig {
             KISSLinkLog.info(endpointDescription, message: "Applying Mobilinkd Config: \(mobiConfig.modemType.description), Out=\(mobiConfig.outputGain), In=\(mobiConfig.inputGain)")
 
-            // Set Modem Type
             frames.append(MobilinkdTNC.setModemType(mobiConfig.modemType))
+            configLabels.append("Modem: \(mobiConfig.modemType.description)")
 
-            // Set Output Gain (TX Volume)
             frames.append(MobilinkdTNC.setOutputGain(mobiConfig.outputGain))
+            configLabels.append("Output Gain: \(mobiConfig.outputGain)")
 
-            // Set Input Gain (RX Volume)
             frames.append(MobilinkdTNC.setInputGain(mobiConfig.inputGain))
-
-            // REMOVED: Reset demodulator. 
-            // This command triggers a telemetry flood on TNC4 which jams the connection.
-            // frames.append(MobilinkdTNC.reset())
-
+            configLabels.append("Input Gain: \(mobiConfig.inputGain)")
         } else {
-            // Default Mobilinkd config for TNC4 when not explicitly configured
-            // These gain settings are critical for proper RX/TX on TNC4:
-            // - Output Gain (TX Volume): 128 = half scale, ensures TX audio is heard
-            // - Input Gain (RX Volume): 128 = required for I-frame demodulation
-            // Without these, control frames (SABM/UA/RR/DISC) work but I-frames fail silently.
-            frames.append([0xC0, 0x06, 0x01, 0x00, 0x80, 0xC0])  // Set Output Gain = 128
-            frames.append([0xC0, 0x06, 0x02, 0x00, 0x80, 0xC0])  // Set Input Gain = 128
-            
-            KISSLinkLog.info(endpointDescription, message: "Sending Default TNC4 Config (Duplex=0, P=63, Slot=0, InputGain=128, OutputGain=128)")
+            KISSLinkLog.info(endpointDescription, message: "Sending Duplex=0 + RESET only (no gain overrides)")
         }
-        
-        // Record KISS init config to debug log
-        let configLabels: [String] = {
-            var labels = [
-                "Duplex = 1 (Full)",
-                "Persistence = 255 (100%)",
-                "Slot Time = 0",
-                "TX Delay = 30 (300ms)"
-            ]
-            if let mobiConfig = config.mobilinkdConfig {
-                labels.append("Modem: \(mobiConfig.modemType.description)")
-                labels.append("Output Gain: \(mobiConfig.outputGain)")
-                labels.append("Input Gain: \(mobiConfig.inputGain)")
-                labels.append("Reset Demodulator")
-            } else {
-                labels.append("Output Gain: 128 (default)")
-                labels.append("Input Gain: 4 (default)")
-            }
-            return labels
-        }()
 
         for (i, frame) in frames.enumerated() {
             let label = i < configLabels.count ? configLabels[i] : "Config \(i)"
@@ -674,46 +681,51 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             }
         }
 
-        // Send all config frames in sequence
+        // Send config frames (if any) in sequence with stagger.
+        // Uses writeRaw() since .connected isn't set until after RESET.
         for (index, frame) in frames.enumerated() {
-            // Small stagger to ensure firmware processes each command
             let delay = Double(index) * 0.1
             serialQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.send(Data(frame)) { err in
+                self?.writeRaw(Data(frame)) { err in
                     if let err = err {
                         KISSLinkLog.error(self?.endpointDescription ?? "Serial", message: "Failed to send config frame \(index): \(err.localizedDescription)")
                     }
                 }
             }
         }
-        
-        // Send RESET after configuration to ensure clean demodulator state
-        // BUT: Only do this when using explicit Mobilinkd config.
-        // The default TNC4 config may not need a reset, and it can disrupt
-        // ongoing connections or I-frame reception.
-        let shouldSendReset = config.mobilinkdConfig != nil
-        if shouldSendReset {
-            let resetWork = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                let resetFrame = Data(MobilinkdTNC.reset())
-                self.send(resetFrame) { err in
-                    if let err = err {
-                        KISSLinkLog.error(self.endpointDescription, message: "Failed to send post-config RESET: \(err)")
-                    } else {
-                        KISSLinkLog.info(self.endpointDescription, message: "Sent post-config RESET to ensure demodulator is running")
-                    }
+
+        // Always send RESET to ensure the demodulator is running.
+        // RESET (0x0B) is the ONLY way to start the TNC4 demodulator.
+        // POLL_INPUT_LEVEL (0x04) is NOT sent — it stops the demodulator.
+        let resetDelay = frames.isEmpty ? 0.5 : Double(frames.count) * 0.1 + 1.0
+        let resetWork = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            let resetFrame = Data(MobilinkdTNC.reset())
+            // RESET must bypass the .connected state check in send(), since we haven't
+            // set .connected yet (that happens below, after RESET is sent).
+            self.writeRaw(resetFrame) { err in
+                if let err = err {
+                    KISSLinkLog.error(self.endpointDescription, message: "Failed to send RESET: \(err)")
+                } else {
+                    KISSLinkLog.info(self.endpointDescription, message: "Sent RESET — demodulator started")
                 }
-                self.lock.lock()
-                self.kissInitWorkItem = nil
-                self.lock.unlock()
             }
-            lock.lock()
-            kissInitWorkItem = resetWork
-            lock.unlock()
-            serialQueue.asyncAfter(deadline: .now() + 2.0, execute: resetWork)
-        } else {
-            KISSLinkLog.info(endpointDescription, message: "Skipping post-config RESET for default TNC4 mode")
+            Task { @MainActor in
+                LinkDebugLog.shared.recordKISSInit(label: "RESET (start demodulator)", rawBytes: Data(MobilinkdTNC.reset()))
+            }
+            self.lock.lock()
+            self.kissInitWorkItem = nil
+            self.lock.unlock()
+
+            // NOW the demodulator is running — mark the link as connected.
+            // This unblocks send() for the rest of the app (SABM, RR, etc).
+            self.setState(.connected)
+            KISSLinkLog.info(self.endpointDescription, message: "KISS init complete — link ready")
         }
+        lock.lock()
+        kissInitWorkItem = resetWork
+        lock.unlock()
+        serialQueue.asyncAfter(deadline: .now() + resetDelay, execute: resetWork)
     }
 
     /// Cancel any in-flight KISS init work items (POLL/RESET sequence).

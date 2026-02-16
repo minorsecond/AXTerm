@@ -366,35 +366,50 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
             self.lock.lock()
             let currentState = self._state
-            let txChar = self.txCharacteristic
-            let periph = self.peripheral
-            let mtu = self.bleMTU
             self.lock.unlock()
 
-            guard currentState == .connected, let txChar, let periph else {
+            guard currentState == .connected else {
                 completion(KISSBLEError.notConnected)
                 return
             }
 
-            // BLE has MTU limits; chunk data if needed
-            let writeType: CBCharacteristicWriteType = txChar.properties.contains(.writeWithoutResponse)
-                ? .withoutResponse
-                : .withResponse
-
-            var offset = 0
-            while offset < data.count {
-                let chunkEnd = min(offset + mtu, data.count)
-                let chunk = data[offset..<chunkEnd]
-                periph.writeValue(Data(chunk), for: txChar, type: writeType)
-                offset = chunkEnd
-            }
-
-            self.lock.lock()
-            self._totalBytesOut += data.count
-            self.lock.unlock()
-            KISSLinkLog.bytesOut(self.endpointDescription, count: data.count)
-            completion(nil)
+            self.writeBLE(data, completion: completion)
         }
+    }
+
+    /// Write raw bytes to BLE, bypassing the .connected state check.
+    /// Used only during KISS init (before .connected is set) to send config frames and RESET.
+    /// MUST be called on bleQueue.
+    private func writeBLE(_ data: Data, completion: @escaping (Error?) -> Void) {
+        lock.lock()
+        let txChar = txCharacteristic
+        let periph = peripheral
+        let mtu = bleMTU
+        lock.unlock()
+
+        guard let txChar, let periph else {
+            completion(KISSBLEError.notConnected)
+            return
+        }
+
+        // BLE has MTU limits; chunk data if needed
+        let writeType: CBCharacteristicWriteType = txChar.properties.contains(.writeWithoutResponse)
+            ? .withoutResponse
+            : .withResponse
+
+        var offset = 0
+        while offset < data.count {
+            let chunkEnd = min(offset + mtu, data.count)
+            let chunk = data[offset..<chunkEnd]
+            periph.writeValue(Data(chunk), for: txChar, type: writeType)
+            offset = chunkEnd
+        }
+
+        lock.lock()
+        _totalBytesOut += data.count
+        lock.unlock()
+        KISSLinkLog.bytesOut(endpointDescription, count: data.count)
+        completion(nil)
     }
 
     /// Update configuration. If connected, reconnects with new config.
@@ -502,65 +517,61 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     /// Send KISS parameter frames and Mobilinkd-specific config after BLE connection.
     /// Same init sequence as the serial transport.
     private func sendKISSInit() {
-        var frames: [[UInt8]] = [
-            // Duplex = 0 (Half) — required for proper RX frame forwarding on TNC4
-            // Full-duplex (0x01) appears to prevent RX data from being sent back to KISS client
-            [0xC0, 0x05, 0x00, 0xC0],
-            // Persistence = 63 (25%) — standard value for half-duplex operation
-            // Full persistence (255) with half-duplex may interfere with RX forwarding
-            [0xC0, 0x02, 0x3F, 0xC0],
-            // Slot Time = 0 — no delay between checks
-            [0xC0, 0x03, 0x00, 0xC0],
-            // TX Delay = 30 (300ms) — radio key-up time
-            [0xC0, 0x01, 30, 0xC0],
-        ]
+        // TNC4 KISS Init Strategy:
+        // 1. Do NOT override factory KISS parameters (Duplex, Persistence, Slot, TXDelay, gains).
+        //    Factory defaults are correct. Sending gain overrides (128/128) breaks the demodulator.
+        // 2. When mobilinkdConfig is set, send user-configured modem/gains only.
+        // 3. Always finish with RESET to start the demodulator.
+
+        var frames: [[UInt8]] = []
 
         if let mobiConfig = config.mobilinkdConfig {
             KISSLinkLog.info(endpointDescription, message: "Applying Mobilinkd BLE Config: \(mobiConfig.modemType.description), Out=\(mobiConfig.outputGain), In=\(mobiConfig.inputGain)")
             frames.append(MobilinkdTNC.setModemType(mobiConfig.modemType))
             frames.append(MobilinkdTNC.setOutputGain(mobiConfig.outputGain))
             frames.append(MobilinkdTNC.setInputGain(mobiConfig.inputGain))
-            // REMOVED: Reset demodulator.
-            // This command triggers a telemetry flood on TNC4 which jams the connection.
-            // frames.append(MobilinkdTNC.reset())
         } else {
-            // Default gain config for unspecified Mobilinkd
-            frames.append([0xC0, 0x06, 0x01, 0x00, 0x80, 0xC0])
-            frames.append([0xC0, 0x06, 0x02, 0x00, 0x00, 0xC0])
-            KISSLinkLog.info(endpointDescription, message: "Sending default BLE KISS init (Duplex=1, P=255, Slot=0)")
+            KISSLinkLog.info(endpointDescription, message: "Sending Duplex=0 + RESET only (no gain overrides)")
         }
 
+        // Send config frames using writeBLE (bypasses .connected check).
         for frame in frames {
             let data = Data(frame)
-            self.send(data) { error in
-                if let error {
-                    KISSLinkLog.error("BLE", message: "KISS init frame send failed: \(error.localizedDescription)")
+            bleQueue.async { [weak self] in
+                self?.writeBLE(data) { error in
+                    if let error {
+                        KISSLinkLog.error("BLE", message: "KISS init frame send failed: \(error.localizedDescription)")
+                    }
                 }
             }
         }
-        
-        // Always send RESET after configuration commands to ensure the demodulator
-        // is in a clean, running state. The default path sends Mobilinkd-specific
-        // gain commands (0x06 type) which can affect demodulator state on TNC4.
+
+        // Always send RESET to ensure the demodulator is running.
+        // RESET (0x0B) is the ONLY way to start the TNC4 demodulator.
         // POLL_INPUT_LEVEL (0x04) is NOT sent — it stops the demodulator.
+        let resetDelay = frames.isEmpty ? 0.5 : 2.0
         let resetWork = DispatchWorkItem { [weak self] in
             guard let self else { return }
             let resetFrame = Data(MobilinkdTNC.reset())
-            self.send(resetFrame) { err in
+            self.writeBLE(resetFrame) { err in
                 if let err = err {
-                    KISSLinkLog.error(self.endpointDescription, message: "Failed to send post-config RESET: \(err)")
+                    KISSLinkLog.error(self.endpointDescription, message: "Failed to send RESET: \(err)")
                 } else {
-                    KISSLinkLog.info(self.endpointDescription, message: "Sent post-config RESET to ensure demodulator is running")
+                    KISSLinkLog.info(self.endpointDescription, message: "Sent RESET — demodulator started")
                 }
             }
             self.lock.lock()
             self.kissInitWorkItem = nil
             self.lock.unlock()
+
+            // NOW the demodulator is running — mark the link as connected.
+            self.setState(.connected)
+            KISSLinkLog.info(self.endpointDescription, message: "KISS init complete — BLE link ready")
         }
         lock.lock()
         kissInitWorkItem = resetWork
         lock.unlock()
-        bleQueue.asyncAfter(deadline: .now() + 2.0, execute: resetWork)
+        bleQueue.asyncAfter(deadline: .now() + resetDelay, execute: resetWork)
     }
 
     /// Cancel any in-flight KISS init work items (POLL/RESET sequence).
@@ -804,9 +815,10 @@ extension KISSLinkBLE: CBPeripheralDelegate {
             peripheral.setNotifyValue(true, for: rxChar)
         }
 
-        // If we have both characteristics, we're connected
+        // If we have both characteristics, start KISS init.
+        // NOTE: Do NOT setState(.connected) here — the demodulator is not running yet.
+        // sendKISSInit() will set .connected after RESET is sent.
         if haveTx && haveRx {
-            setState(.connected)
             reconnectAttempt = 0
             cancelReconnectTimer()
             sendKISSInit()
