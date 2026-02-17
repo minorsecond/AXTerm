@@ -14,6 +14,36 @@ import UniformTypeIdentifiers
 
 typealias TerminalLine = ConsoleLine
 
+nonisolated enum TerminalSessionLineFilter {
+    static func apply(_ lines: [TerminalLine], peer: String?) -> [TerminalLine] {
+        guard let peer, !peer.isEmpty else { return lines }
+        let normalizedPeer = CallsignValidator.normalize(peer)
+        guard !normalizedPeer.isEmpty else { return lines }
+
+        return lines.filter { line in
+            let from = CallsignValidator.normalize(line.from ?? "")
+            let to = CallsignValidator.normalize(line.to ?? "")
+            if from == normalizedPeer || to == normalizedPeer {
+                return true
+            }
+            return line.text.uppercased().contains(normalizedPeer)
+        }
+    }
+}
+
+nonisolated enum TerminalSessionDisplayScope {
+    static func selectedPeer(
+        sessionState: AX25SessionState?,
+        activeSessionRecordID: String?,
+        destinationByRecordID: [String: String]
+    ) -> String? {
+        guard sessionState == .connected, let activeSessionRecordID else {
+            return nil
+        }
+        return destinationByRecordID[activeSessionRecordID]
+    }
+}
+
 /// Observable wrapper around TerminalTxViewModel for SwiftUI binding
 @MainActor
 final class ObservableTerminalTxViewModel: ObservableObject {
@@ -1178,6 +1208,9 @@ struct TerminalView: View {
                 case .disconnected:
                     connectBarViewModel.markDisconnected()
                     updateActiveSessionRecordState("Disconnected")
+                    if sessionCoordinator.connectedSessions.isEmpty {
+                        activeSessionRecordID = nil
+                    }
                     if pendingRoutingReconnect {
                         pendingRoutingReconnect = false
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -1187,6 +1220,9 @@ struct TerminalView: View {
                 case .error:
                     connectBarViewModel.markFailed(reason: .unknown, detail: "Session state entered error")
                     updateActiveSessionRecordState("Failed")
+                    if sessionCoordinator.connectedSessions.isEmpty {
+                        activeSessionRecordID = nil
+                    }
                 case .none:
                     break
                 }
@@ -1798,6 +1834,7 @@ struct TerminalView: View {
                 .foregroundStyle(.secondary)
 
             Picker("Sessions", selection: $activeSessionRecordID) {
+                Text("All Traffic").tag(Optional<String>.none)
                 ForEach(sessionRecords) { record in
                     Text(record.label).tag(Optional(record.id))
                 }
@@ -1815,7 +1852,7 @@ struct TerminalView: View {
                 sessionRecords.removeAll { $0.statusText == "Disconnected" || $0.statusText == "Failed" }
                 if let activeID = activeSessionRecordID,
                    !sessionRecords.contains(where: { $0.id == activeID }) {
-                    activeSessionRecordID = sessionRecords.first?.id
+                    activeSessionRecordID = nil
                 }
             }
             .buttonStyle(.bordered)
@@ -1898,20 +1935,13 @@ struct TerminalView: View {
     }
 
     private var displayedSessionLines: [TerminalLine] {
-        guard let activeSessionRecordID,
-              let record = sessionRecords.first(where: { $0.id == activeSessionRecordID }) else {
-            return txViewModel.filteredLines
-        }
-        let peer = CallsignValidator.normalize(record.destination)
-        guard !peer.isEmpty else { return txViewModel.filteredLines }
-        return txViewModel.filteredLines.filter { line in
-            let from = CallsignValidator.normalize(line.from ?? "")
-            let to = CallsignValidator.normalize(line.to ?? "")
-            if from == peer || to == peer {
-                return true
-            }
-            return line.text.uppercased().contains(peer)
-        }
+        let destinationByRecordID = Dictionary(uniqueKeysWithValues: sessionRecords.map { ($0.id, $0.destination) })
+        let selectedPeer = TerminalSessionDisplayScope.selectedPeer(
+            sessionState: txViewModel.sessionState,
+            activeSessionRecordID: activeSessionRecordID,
+            destinationByRecordID: destinationByRecordID
+        )
+        return TerminalSessionLineFilter.apply(txViewModel.filteredLines, peer: selectedPeer)
     }
 
     @ViewBuilder

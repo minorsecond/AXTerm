@@ -7,6 +7,48 @@
 
 import SwiftUI
 
+nonisolated struct ConsoleTypeFilterFlags: Equatable, Sendable {
+    var showID: Bool = true
+    var showBeacon: Bool = true
+    var showMail: Bool = true
+    var showData: Bool = true
+    var showPrompt: Bool = true
+    var showOther: Bool = true
+    var showSystem: Bool = true
+}
+
+nonisolated enum ConsoleVisibilityFilter {
+    static func apply(
+        lines: [ConsoleLine],
+        clearedAt: Date?,
+        flags: ConsoleTypeFilterFlags
+    ) -> [ConsoleLine] {
+        let timeFiltered: [ConsoleLine]
+        if let cutoff = clearedAt {
+            timeFiltered = lines.filter { $0.timestamp > cutoff }
+        } else {
+            timeFiltered = lines
+        }
+
+        return timeFiltered.filter { line in
+            switch line.kind {
+            case .system, .error:
+                return flags.showSystem
+            case .packet:
+                guard let messageType = line.messageType else { return flags.showOther }
+                switch messageType {
+                case .id: return flags.showID
+                case .beacon: return flags.showBeacon
+                case .mail: return flags.showMail
+                case .data: return flags.showData
+                case .prompt: return flags.showPrompt
+                case .message: return flags.showOther
+                }
+            }
+        }
+    }
+}
+
 struct ConsoleView: View {
     let lines: [ConsoleLine]
     let showDaySeparators: Bool
@@ -29,30 +71,21 @@ struct ConsoleView: View {
     @State private var showOther = true
     @State private var showSystem = true
 
-    /// Lines filtered by clear timestamp
-    private var filteredLines: [ConsoleLine] {
-        guard let cutoff = clearedAt else { return lines }
-        return lines.filter { $0.timestamp > cutoff }
-    }
-
-    /// Lines filtered by message type preferences
+    /// Lines filtered by clear timestamp and message type preferences
     private var typeFilteredLines: [ConsoleLine] {
-        filteredLines.filter { line in
-            switch line.kind {
-            case .system, .error:
-                return showSystem
-            case .packet:
-                guard let messageType = line.messageType else { return showOther }
-                switch messageType {
-                case .id: return showID
-                case .beacon: return showBeacon
-                case .mail: return showMail
-                case .data: return showData
-                case .prompt: return showPrompt
-                case .message: return showOther
-                }
-            }
-        }
+        ConsoleVisibilityFilter.apply(
+            lines: lines,
+            clearedAt: clearedAt,
+            flags: ConsoleTypeFilterFlags(
+                showID: showID,
+                showBeacon: showBeacon,
+                showMail: showMail,
+                showData: showData,
+                showPrompt: showPrompt,
+                showOther: showOther,
+                showSystem: showSystem
+            )
+        )
     }
 
     /// Group duplicates together by content signature.

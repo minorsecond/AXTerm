@@ -1088,24 +1088,29 @@ final class PacketEngine: ObservableObject {
         guard packet.frameType == .i, packet.pid == 0xF0 else {
             return false
         }
-        
-        // Check if the user is a participant in this session
-        // If source OR destination matches myCallsign, it's a user session - skip it
-        // because SessionCoordinator will deliver it via appendSessionChatLine.
-        // Use addressMatchesDisplay() to correctly handle SSID (e.g. "K0EPI-7" vs base "K0EPI")
-        let myCallDisplay = settings.myCallsign
-        guard !myCallDisplay.isEmpty else {
-            // If myCallsign is not set, show all I-frames (nothing to match against)
+
+        guard let from = packet.from, let to = packet.to else {
             return false
         }
 
-        let fromMatch = packet.from.map { CallsignNormalizer.addressMatchesDisplay($0, myCallDisplay) } ?? false
-        let toMatch = packet.to.map { CallsignNormalizer.addressMatchesDisplay($0, myCallDisplay) } ?? false
+        let myCallDisplay = settings.myCallsign
+        guard !myCallDisplay.isEmpty else { return false }
+        let local = CallsignNormalizer.toAddress(myCallDisplay)
 
-        let isUserSession = fromMatch || toMatch
-        
-        // Skip if it's the user's session, show if it's monitored traffic
-        return isUserSession
+        let isFromLocal = CallsignNormalizer.addressesMatch(from, local)
+        let isToLocal = CallsignNormalizer.addressesMatch(to, local)
+        guard isFromLocal || isToLocal else {
+            return false
+        }
+
+        let peer = isFromLocal ? to : from
+        guard let coordinator = SessionCoordinator.shared else {
+            return false
+        }
+
+        // Only suppress raw I-frame console lines if there's an active connected
+        // session with the peer. Without a session, keep the wire payload visible.
+        return coordinator.sessionManager.connectedSession(withPeer: peer) != nil
     }
 
     /// True if displayInfo is a protocol label (AXDP PING, SABM, etc.), not user chat
@@ -1123,6 +1128,21 @@ final class PacketEngine: ObservableObject {
     private func computeContentSignature(from: String, to: String, text: String) -> String {
         let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return "\(from.uppercased())|\(to.uppercased())|\(normalizedText)"
+    }
+
+    /// Returns the text to render in terminal for packet payload.
+    /// Falls back to placeholders so empty/binary UI/I frames remain visible.
+    private func packetConsoleDisplayText(_ packet: Packet) -> String? {
+        if let text = packet.infoText {
+            return text
+        }
+        guard packet.frameType == .ui || packet.frameType == .i else {
+            return nil
+        }
+        if packet.info.isEmpty {
+            return "[no payload]"
+        }
+        return "[\(packet.info.count) bytes]"
     }
 
     // MARK: - Filtering
@@ -1227,7 +1247,7 @@ final class PacketEngine: ObservableObject {
             ])
         }
 
-        if !skipRawIFrameLine, let text = packet.infoText {
+        if !skipRawIFrameLine, let text = packetConsoleDisplayText(packet) {
             // Extract via path as array of callsign strings
             let viaPath = Packet.normalizedViaItems(from: packet.via)
 
@@ -1421,7 +1441,8 @@ final class PacketEngine: ObservableObject {
         let limit = min(settings.consoleRetentionLimit, maxConsoleLines)
         Task {
             do {
-                consoleLines = try await persistenceWorker.loadConsole(limit: limit)
+                let loaded = try await persistenceWorker.loadConsole(limit: limit)
+                consoleLines = Self.mergeLoadedConsoleLines(loaded, into: consoleLines, maxLines: maxConsoleLines)
             } catch {
                 SentryManager.shared.capturePersistenceFailure("loadRecent console", error: error)
             }
@@ -1433,11 +1454,74 @@ final class PacketEngine: ObservableObject {
         let limit = min(settings.rawRetentionLimit, maxRawChunks)
         Task {
             do {
-                rawChunks = try await persistenceWorker.loadRaw(limit: limit)
+                let loaded = try await persistenceWorker.loadRaw(limit: limit)
+                rawChunks = Self.mergeLoadedRawChunks(loaded, into: rawChunks, maxChunks: maxRawChunks)
             } catch {
                 SentryManager.shared.capturePersistenceFailure("loadRecent raw", error: error)
             }
         }
+    }
+
+    nonisolated static func mergeLoadedConsoleLines(
+        _ loaded: [ConsoleLine],
+        into current: [ConsoleLine],
+        maxLines: Int
+    ) -> [ConsoleLine] {
+        if current.isEmpty {
+            return Array(loaded.suffix(maxLines))
+        }
+
+        var byId: [UUID: ConsoleLine] = [:]
+        for line in loaded {
+            byId[line.id] = line
+        }
+        // Prefer current (live) lines when IDs collide.
+        for line in current {
+            byId[line.id] = line
+        }
+
+        var merged = Array(byId.values)
+        merged.sort {
+            if $0.timestamp == $1.timestamp {
+                return $0.id.uuidString < $1.id.uuidString
+            }
+            return $0.timestamp < $1.timestamp
+        }
+        if merged.count > maxLines {
+            merged.removeFirst(merged.count - maxLines)
+        }
+        return merged
+    }
+
+    nonisolated static func mergeLoadedRawChunks(
+        _ loaded: [RawChunk],
+        into current: [RawChunk],
+        maxChunks: Int
+    ) -> [RawChunk] {
+        if current.isEmpty {
+            return Array(loaded.suffix(maxChunks))
+        }
+
+        var byId: [UUID: RawChunk] = [:]
+        for chunk in loaded {
+            byId[chunk.id] = chunk
+        }
+        // Prefer current (live) chunks when IDs collide.
+        for chunk in current {
+            byId[chunk.id] = chunk
+        }
+
+        var merged = Array(byId.values)
+        merged.sort {
+            if $0.timestamp == $1.timestamp {
+                return $0.id.uuidString < $1.id.uuidString
+            }
+            return $0.timestamp < $1.timestamp
+        }
+        if merged.count > maxChunks {
+            merged.removeFirst(merged.count - maxChunks)
+        }
+        return merged
     }
 
     private func rebuildStations(from packets: [Packet]) {
