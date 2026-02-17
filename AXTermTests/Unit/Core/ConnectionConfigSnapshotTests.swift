@@ -3,6 +3,8 @@
 //  AXTermTests
 //
 //  Tests for ConnectionConfigSnapshot equality and change detection.
+//  Snapshot captures transport-level settings ONLY — Mobilinkd config
+//  changes must NOT trigger reconnection (they disrupt the TNC4 demodulator).
 //
 
 import XCTest
@@ -27,7 +29,7 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
         XCTAssertEqual(a, b, "Snapshots from the same unchanged settings should be equal")
     }
 
-    // MARK: - Detect each type of change
+    // MARK: - Transport field changes trigger inequality
 
     func testSnapshotDetectsTransportTypeChange() {
         let settings = makeSettings()
@@ -78,39 +80,75 @@ final class ConnectionConfigSnapshotTests: XCTestCase {
         XCTAssertNotEqual(before, after)
     }
 
-    func testSnapshotDetectsMobilinkdEnabledChange() {
+    // MARK: - Mobilinkd field changes must NOT trigger inequality
+    // These fields are excluded from the snapshot to prevent settings panel
+    // close from triggering a reconnect that disrupts the TNC4 demodulator.
+
+    func testSnapshotIgnoresMobilinkdEnabledChange() {
         let settings = makeSettings()
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         settings.mobilinkdEnabled = !settings.mobilinkdEnabled
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        XCTAssertNotEqual(before, after)
+        XCTAssertEqual(before, after,
+            "Mobilinkd enabled toggle must not trigger reconnect")
     }
 
-    func testSnapshotDetectsMobilinkdModemTypeChange() {
+    func testSnapshotIgnoresMobilinkdModemTypeChange() {
         let settings = makeSettings()
         settings.mobilinkdEnabled = true
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         settings.mobilinkdModemType = 5
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        XCTAssertNotEqual(before, after)
+        XCTAssertEqual(before, after,
+            "Modem type change must not trigger reconnect")
     }
 
-    func testSnapshotDetectsMobilinkdOutputGainChange() {
+    func testSnapshotIgnoresMobilinkdOutputGainChange() {
         let settings = makeSettings()
         settings.mobilinkdEnabled = true
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         settings.mobilinkdOutputGain = 200
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        XCTAssertNotEqual(before, after)
+        XCTAssertEqual(before, after,
+            "Output gain change must not trigger reconnect")
     }
 
-    func testSnapshotDetectsMobilinkdInputGainChange() {
+    func testSnapshotIgnoresMobilinkdInputGainChange() {
         let settings = makeSettings()
         settings.mobilinkdEnabled = true
         settings.mobilinkdInputGain = 2
         let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
         settings.mobilinkdInputGain = 4
         let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
-        XCTAssertNotEqual(before, after)
+        XCTAssertEqual(before, after,
+            "Input gain change must not trigger reconnect")
+    }
+
+    // MARK: - Combined changes
+
+    func testSnapshotIgnoresMobilinkdWhenTransportAlsoChanges() {
+        let settings = makeSettings()
+        let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
+        // Change both transport and Mobilinkd fields
+        settings.serialDevicePath = "/dev/cu.usbmodem1234"
+        settings.mobilinkdInputGain = 3
+        let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
+        // Should be unequal because of the transport field change
+        XCTAssertNotEqual(before, after,
+            "Transport change should still be detected even with Mobilinkd changes")
+    }
+
+    func testSnapshotOnlyMobilinkdFieldsChangedStaysEqual() {
+        let settings = makeSettings()
+        settings.mobilinkdEnabled = true
+        let before = PacketEngine.ConnectionConfigSnapshot(settings: settings)
+        // Change ALL Mobilinkd fields
+        settings.mobilinkdEnabled = false
+        settings.mobilinkdModemType = 9
+        settings.mobilinkdOutputGain = 255
+        settings.mobilinkdInputGain = 0
+        let after = PacketEngine.ConnectionConfigSnapshot(settings: settings)
+        XCTAssertEqual(before, after,
+            "Changing only Mobilinkd fields must keep snapshots equal")
     }
 }
