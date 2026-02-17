@@ -276,7 +276,6 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     // MARK: - Reconnect State
 
     private var reconnectTimer: DispatchSourceTimer?
-    private var kissInitWorkItem: DispatchWorkItem?
     private var reconnectAttempt = 0
     private static let maxReconnectDelay: TimeInterval = 30
     private static let baseReconnectDelay: TimeInterval = 1
@@ -455,7 +454,6 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     // MARK: - Private: Close
 
     private func closeInternal(reason: String) {
-        cancelKISSInit()
         cancelReconnectTimer()
         cancelBatteryPolling()
 
@@ -534,15 +532,6 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
         setState(.connected)
         KISSLinkLog.info(endpointDescription, message: "KISS init complete — BLE link ready (no commands sent)")
-    }
-
-    /// Cancel any in-flight KISS init work items (POLL/RESET sequence).
-    private func cancelKISSInit() {
-        lock.lock()
-        let work = kissInitWorkItem
-        kissInitWorkItem = nil
-        lock.unlock()
-        work?.cancel()
     }
 
     private func startBatteryPolling() {

@@ -132,5 +132,3 @@ fastlane/test_output/
 # Docker
 # ---------------------------------------
 Docker/.env
-*.log
-

@@ -135,7 +135,6 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     private let serialQueue = DispatchQueue(label: "com.axterm.kisslink.serial", qos: .userInitiated)
     private var reconnectTimer: DispatchSourceTimer?
     private var batteryPollTimer: DispatchSourceTimer?
-    private var kissInitWorkItem: DispatchWorkItem?
     private var reconnectAttempt = 0
     private static let maxReconnectDelay: TimeInterval = 15 // Cap at 15s per requirements
     private static let baseReconnectDelay: TimeInterval = 1
@@ -254,61 +253,6 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                 }
                 completion(nil)
             }
-        }
-    }
-
-    /// Write raw bytes to the serial FD, bypassing the .connected state check.
-    /// Used only during KISS init (before .connected is set) to send config frames and RESET.
-    /// MUST be called on serialQueue.
-    private func writeRaw(_ data: Data, completion: @escaping (Error?) -> Void) {
-        let fd: Int32
-        lock.lock()
-        fd = fileDescriptor
-        lock.unlock()
-
-        guard fd >= 0 else {
-            completion(KISSSerialError.notOpen)
-            return
-        }
-
-        let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-        KISSLinkLog.info(endpointDescription, message: "KISS init writing \(data.count) bytes: \(hex)")
-
-        var bytesWritten = 0
-        let totalBytes = data.count
-
-        let result = data.withUnsafeBytes { buffer -> Int in
-            guard let baseAddress = buffer.baseAddress else { return -1 }
-            while bytesWritten < totalBytes {
-                let ptr = baseAddress.advanced(by: bytesWritten)
-                let remaining = totalBytes - bytesWritten
-                let count = Darwin.write(fd, ptr, remaining)
-                if count < 0 {
-                    let err = errno
-                    if err == EINTR { continue }
-                    if err == EAGAIN || err == EWOULDBLOCK {
-                        var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-                        let pollResult = poll(&pfd, 1, 500)
-                        if pollResult > 0 { continue }
-                        return -1
-                    }
-                    return -1
-                }
-                bytesWritten += count
-            }
-            return bytesWritten
-        }
-
-        if result < 0 {
-            let err = errno
-            let message = String(cString: strerror(err))
-            KISSLinkLog.error(endpointDescription, message: "KISS init write failed (errno \(err)): \(message)")
-            completion(KISSSerialError.writeFailed(message))
-        } else {
-            lock.lock()
-            _totalBytesOut += result
-            lock.unlock()
-            completion(nil)
         }
     }
 
@@ -655,11 +599,6 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         }
     }
     
-    /// Placeholder for finding process holding port
-    private func findProcessHoldingPort(path: String) -> String? {
-        return nil
-    }
-
     private func sendKISSInit() {
         // TNC4 KISS Init Strategy — ZERO DISRUPTION:
         //
@@ -681,31 +620,6 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
 
         setState(.connected)
         KISSLinkLog.info(endpointDescription, message: "KISS init complete — link ready (no commands sent)")
-    }
-
-    /// Build a raw KISS frame: FEND + type + SLIP-escaped payload + FEND
-    private func kissFrame(type: UInt8, payload: [UInt8]) -> [UInt8] {
-        var frame: [UInt8] = [0xC0, type]
-        for byte in payload {
-            if byte == 0xC0 {
-                frame.append(contentsOf: [0xDB, 0xDC])
-            } else if byte == 0xDB {
-                frame.append(contentsOf: [0xDB, 0xDD])
-            } else {
-                frame.append(byte)
-            }
-        }
-        frame.append(0xC0)
-        return frame
-    }
-
-    /// Cancel any in-flight KISS init work items (POLL/RESET sequence).
-    private func cancelKISSInit() {
-        lock.lock()
-        let work = kissInitWorkItem
-        kissInitWorkItem = nil
-        lock.unlock()
-        work?.cancel()
     }
 
     // MARK: - Private: Configure Port
@@ -870,7 +784,6 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     // MARK: - Private: Close
 
     private func closeInternal(reason: String) {
-        cancelKISSInit()
         cancelReconnectTimer()
 
         lock.lock()
