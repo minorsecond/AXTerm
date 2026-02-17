@@ -793,6 +793,10 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         let timer = readPollTimer
         readPollTimer = nil
         let fd = fileDescriptor
+        // Mark descriptor as no longer owned by this instance immediately.
+        // This keeps close() idempotent while an async timer cancel is in flight,
+        // so a second close() call cannot directly close the same numeric fd.
+        fileDescriptor = -1
         isConnecting = false
         lock.unlock()
 
@@ -812,9 +816,6 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                 tcsetattr(fd, TCSANOW, &origTermios)
             }
             Darwin.close(fd)
-            lock.lock()
-            fileDescriptor = -1
-            lock.unlock()
         }
 
         setState(.disconnected)
