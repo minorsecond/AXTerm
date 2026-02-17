@@ -135,10 +135,13 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     private let serialQueue = DispatchQueue(label: "com.axterm.kisslink.serial", qos: .userInitiated)
     private var reconnectTimer: DispatchSourceTimer?
     private var batteryPollTimer: DispatchSourceTimer?
+    private var startupRecoveryTimer: DispatchSourceTimer?
+    private let startupReceptionGuard = MobilinkdStartupReceptionGuard()
     private var reconnectAttempt = 0
     private static let maxReconnectDelay: TimeInterval = 15 // Cap at 15s per requirements
     private static let baseReconnectDelay: TimeInterval = 1
     private static let btOpenTimeout: TimeInterval = 10 // Timeout for BT serial open()
+    private static let startupRecoveryDelay: TimeInterval = 3.0
     private var originalTermios = termios()
     private var isBluetoothSerial = false
 
@@ -546,6 +549,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         readPollTimer = pollTimer
         lock.unlock()
 
+        startupReceptionGuard.resetForNewConnection()
         pollTimer.resume()
 
         cleanupOpenAttempt(success: true)
@@ -566,13 +570,24 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             startBatteryPolling()
         }
 
+        scheduleStartupRecoveryWatchdogIfNeeded()
+
         // NOTE: Do NOT auto-poll input levels — POLL_INPUT_LEVEL (0x04)
         // stops the TNC4 demodulator. Use manual one-shot measurement only.
     }
     
     private func startBatteryPolling() {
+        // Prime the CDC data path shortly after connect.
+        // Some USB CDC stacks deliver unsolicited RX only after the first host write.
+        // A one-shot battery poll is safe and avoids waiting for user TX.
+        let initialPoll = MobilinkdTNC.pollBatteryLevel()
+        serialQueue.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self else { return }
+            self.send(Data(initialPoll)) { _ in }
+        }
+
         let timer = DispatchSource.makeTimerSource(queue: serialQueue)
-        timer.schedule(deadline: .now() + 5.0, repeating: 60.0) // First poll after 5s, then every 60s
+        timer.schedule(deadline: .now() + 60.0, repeating: 60.0)
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             let frame = MobilinkdTNC.pollBatteryLevel()
@@ -584,6 +599,59 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         lock.lock()
         batteryPollTimer = timer
         lock.unlock()
+    }
+
+    private func scheduleStartupRecoveryWatchdogIfNeeded() {
+        cancelStartupRecoveryWatchdog()
+
+        guard config.mobilinkdConfig != nil else { return }
+
+        let timer = DispatchSource.makeTimerSource(queue: serialQueue)
+        timer.schedule(deadline: .now() + Self.startupRecoveryDelay)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+
+            self.lock.lock()
+            let connected = self._state == .connected
+            self.startupRecoveryTimer = nil
+            self.lock.unlock()
+
+            let shouldSendReset = self.startupReceptionGuard.shouldIssueRecoveryReset(
+                isConnected: connected,
+                isMobilinkd: self.config.mobilinkdConfig != nil
+            )
+
+            guard shouldSendReset else { return }
+
+            KISSLinkLog.info(
+                self.endpointDescription,
+                message: "Startup RX watchdog: no inbound AX.25 seen, sending one-shot demodulator RESET"
+            )
+
+            let resetFrame = Data(MobilinkdTNC.reset())
+            self.send(resetFrame) { error in
+                if let error {
+                    KISSLinkLog.error(
+                        self.endpointDescription,
+                        message: "Startup RX watchdog RESET failed: \(error.localizedDescription)"
+                    )
+                }
+            }
+        }
+
+        lock.lock()
+        startupRecoveryTimer = timer
+        lock.unlock()
+
+        timer.resume()
+    }
+
+    private func cancelStartupRecoveryWatchdog() {
+        lock.lock()
+        let timer = startupRecoveryTimer
+        startupRecoveryTimer = nil
+        lock.unlock()
+        timer?.cancel()
     }
 
     private func cleanupOpenAttempt(success: Bool) {
@@ -649,7 +717,9 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                 KISSLinkLog.info(endpointDescription, message: "BT serial: tcgetattr failed (non-fatal): \(String(cString: strerror(errno)))")
             }
 
-            tcflush(fd, TCIOFLUSH)
+            // Do not flush inbound bytes here. TCIOFLUSH can discard legitimate
+            // early RX frames that arrive during startup.
+            tcflush(fd, TCOFLUSH)
             return
         }
 
@@ -696,8 +766,9 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         // Log configuration for debugging TNC issues
         KISSLinkLog.info(endpointDescription, message: "Serial Configured: Baud \(config.baudRate), 8N1, NoFlow. c_cflag=\(String(format: "%x", options.c_cflag)) c_iflag=\(String(format: "%x", options.c_iflag))")
 
-        // Flush any stale data
-        tcflush(fd, TCIOFLUSH)
+        // Flush output only. Avoid dropping inbound bytes that may already be
+        // queued from legitimate over-the-air frames during startup.
+        tcflush(fd, TCOFLUSH)
 
         // Assert DTR and RTS
         // Many TNCs/Radios require DTR to be high to accept data or power the interface.
@@ -748,6 +819,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                 let hex = data.prefix(128).map { String(format: "%02X", $0) }.joined(separator: " ")
                 KISSLinkLog.info(endpointDescription, message: "RX[\(readEventCount)] \(bytesRead) bytes: \(hex)\(data.count > 128 ? "..." : "")")
                 KISSLinkLog.bytesIn(endpointDescription, count: bytesRead)
+                startupReceptionGuard.observeInboundChunk(data)
                 Task { @MainActor [weak self] in
                     self?.delegate?.linkDidReceive(data)
                 }
@@ -785,6 +857,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
 
     private func closeInternal(reason: String) {
         cancelReconnectTimer()
+        cancelStartupRecoveryWatchdog()
 
         lock.lock()
         batteryPollTimer?.cancel()
@@ -898,4 +971,3 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         }
     }
 }
-
