@@ -33,14 +33,26 @@ nonisolated enum TerminalSessionLineFilter {
 
 nonisolated enum TerminalSessionDisplayScope {
     static func selectedPeer(
+        connectionMode: TxConnectionMode,
         sessionState: AX25SessionState?,
         activeSessionRecordID: String?,
-        destinationByRecordID: [String: String]
+        destinationByRecordID: [String: String],
+        connectedPeers: Set<String>
     ) -> String? {
-        guard sessionState == .connected, let activeSessionRecordID else {
+        guard connectionMode == .connected,
+              sessionState == .connected,
+              let activeSessionRecordID,
+              let destination = destinationByRecordID[activeSessionRecordID] else {
             return nil
         }
-        return destinationByRecordID[activeSessionRecordID]
+
+        let normalizedDestination = CallsignValidator.normalize(destination)
+        guard !normalizedDestination.isEmpty,
+              connectedPeers.contains(normalizedDestination) else {
+            return nil
+        }
+
+        return destination
     }
 }
 
@@ -1936,10 +1948,17 @@ struct TerminalView: View {
 
     private var displayedSessionLines: [TerminalLine] {
         let destinationByRecordID = Dictionary(uniqueKeysWithValues: sessionRecords.map { ($0.id, $0.destination) })
+        let connectedPeers = Set(
+            sessionCoordinator.connectedSessions
+                .map { CallsignValidator.normalize($0.remoteAddress.display) }
+                .filter { !$0.isEmpty }
+        )
         let selectedPeer = TerminalSessionDisplayScope.selectedPeer(
+            connectionMode: txViewModel.viewModel.connectionMode,
             sessionState: txViewModel.sessionState,
             activeSessionRecordID: activeSessionRecordID,
-            destinationByRecordID: destinationByRecordID
+            destinationByRecordID: destinationByRecordID,
+            connectedPeers: connectedPeers
         )
         return TerminalSessionLineFilter.apply(txViewModel.filteredLines, peer: selectedPeer)
     }
