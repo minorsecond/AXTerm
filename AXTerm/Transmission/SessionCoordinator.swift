@@ -114,6 +114,13 @@ final class SessionCoordinator: ObservableObject {
     private var displayedChatMessageIds: Set<String> = []
     /// How long to remember "not supported" before allowing auto-discovery again
     private let axdpNotSupportedTTL: TimeInterval = 86400.0
+    /// Default fallback delay before sending text probe when no inbound I-frame arrives.
+    /// Kept intentionally long to avoid early half-duplex TX interfering with initial RX.
+    private static let defaultTextProbeFallbackDelay: TimeInterval = 15.0
+    #if DEBUG
+    /// Test-only override for text probe fallback delay (`nil` uses default).
+    var testTextProbeFallbackDelay: TimeInterval?
+    #endif
 
     /// Callback for capability discovery events (for debug display)
     var onCapabilityEvent: ((CapabilityDebugEvent) -> Void)?
@@ -565,7 +572,7 @@ final class SessionCoordinator: ObservableObject {
                             "peer": session.remoteAddress.display
                         ])
                     } else {
-                        // Schedule text-safe probe after first inbound I-frame (or 3s fallback).
+                        // Schedule text-safe probe after first inbound I-frame (or fallback timer).
                         // Text probes are plain ASCII — harmless to legacy nodes (treated as unknown command).
                         // Note: invalidateCapability clears confirmed state on disconnect, so peers
                         // are always re-probed on reconnect. This is intentional — the peer may have
@@ -887,8 +894,14 @@ final class SessionCoordinator: ObservableObject {
     /// exchange (welcome banner, RR acks) complete first.
     private func scheduleTextProbeFallback(for session: AX25Session) {
         let peer = session.remoteAddress.display.uppercased()
+        #if DEBUG
+        let fallbackDelay = max(0, testTextProbeFallbackDelay ?? Self.defaultTextProbeFallbackDelay)
+        #else
+        let fallbackDelay = Self.defaultTextProbeFallbackDelay
+        #endif
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 15_000_000_000)
+            let nanos = UInt64(fallbackDelay * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanos)
             guard self.pendingTextProbe.remove(peer) != nil else { return }
             guard session.state == .connected else { return }
             self.debugAXDP("Text probe fallback timer fired", [

@@ -1010,13 +1010,16 @@ final class SessionCoordinatorTests: XCTestCase {
             "After receiving PONG from text probe, initiator should send PING with capabilities")
     }
 
-    /// Fallback timer sends text probe after 3 seconds even without inbound data.
+    /// Fallback timer sends text probe even without inbound data.
     func testTextProbeFallbackTimerSendsProbe() async throws {
         let coordinator = SessionCoordinator()
         defer { SessionCoordinator.shared = nil }
 
         coordinator.globalAdaptiveSettings.axdpExtensionsEnabled = true
         coordinator.globalAdaptiveSettings.autoNegotiateCapabilities = true
+        #if DEBUG
+        coordinator.testTextProbeFallbackDelay = 0.2
+        #endif
 
         coordinator.sessionManager.localCallsign = AX25Address(call: "LOCAL", ssid: 1)
         let peer = AX25Address(call: "PEER", ssid: 1)
@@ -1027,11 +1030,11 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.sessionManager.onSessionStateChanged?(session, .connecting, .connected)
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .unknown)
 
-        // Wait for fallback timer (3s + buffer)
-        try await Task.sleep(nanoseconds: 3_500_000_000)
+        // Wait for fallback timer + small buffer
+        try await Task.sleep(nanoseconds: 400_000_000)
 
         XCTAssertEqual(coordinator.capabilityStatus(for: peer.display), .pending,
-            "Fallback timer should send text probe after 3 seconds")
+            "Fallback timer should send text probe after configured delay")
     }
 
     /// Disconnect cancels pending text probe.
