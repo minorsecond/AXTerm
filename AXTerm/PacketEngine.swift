@@ -239,6 +239,11 @@ final class PacketEngine: ObservableObject {
 
     /// Captures all connection-relevant settings at a point in time.
     /// Used to detect whether settings actually changed while the settings panel was open.
+    ///
+    /// NOTE: Mobilinkd-specific settings (modemType, gains) are intentionally EXCLUDED.
+    /// Those settings are stored in TNC4 EEPROM and applied via auto-calibration,
+    /// NOT via KISS init commands on connect. Changing them in the UI should NOT
+    /// trigger a serial port close/reopen cycle, which disrupts the running demodulator.
     struct ConnectionConfigSnapshot: Equatable {
         let transportType: String
         let serialDevicePath: String
@@ -246,10 +251,6 @@ final class PacketEngine: ObservableObject {
         let blePeripheralUUID: String
         let host: String
         let port: Int
-        let mobilinkdEnabled: Bool
-        let mobilinkdModemType: Int
-        let mobilinkdOutputGain: Int
-        let mobilinkdInputGain: Int
 
         init(settings: AppSettingsStore) {
             self.transportType = settings.transportType
@@ -258,10 +259,6 @@ final class PacketEngine: ObservableObject {
             self.blePeripheralUUID = settings.blePeripheralUUID
             self.host = settings.host
             self.port = settings.port
-            self.mobilinkdEnabled = settings.mobilinkdEnabled
-            self.mobilinkdModemType = settings.mobilinkdModemType
-            self.mobilinkdOutputGain = settings.mobilinkdOutputGain
-            self.mobilinkdInputGain = settings.mobilinkdInputGain
         }
     }
 

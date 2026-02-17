@@ -49,7 +49,7 @@ final class AppSettingsStore: ObservableObject {
     static let mobilinkdEnabledKey = "mobilinkdEnabled"
     static let mobilinkdModemTypeKey = "mobilinkdModemType"
     static let mobilinkdOutputGainKey = "mobilinkdOutputGain"
-    static let mobilinkdInputGainKey = "mobilinkdInputGain_v2"
+    static let mobilinkdInputGainKey = "mobilinkdInputGain_v3"
 
     // File transfer settings keys
     static let allowedFileTransferCallsignsKey = "allowedFileTransferCallsigns"
