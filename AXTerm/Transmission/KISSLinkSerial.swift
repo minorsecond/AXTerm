@@ -141,7 +141,10 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     private static let maxReconnectDelay: TimeInterval = 15 // Cap at 15s per requirements
     private static let baseReconnectDelay: TimeInterval = 1
     private static let btOpenTimeout: TimeInterval = 10 // Timeout for BT serial open()
-    private static let startupRecoveryDelay: TimeInterval = 3.0
+    // Wait long enough for normal RF traffic to arrive before forcing a
+    // demodulator reset. A short timeout can reset healthy demodulators on
+    // quiet channels and reduce startup receive reliability.
+    private static let startupRecoveryDelay: TimeInterval = 30.0
     private var originalTermios = termios()
     private var isBluetoothSerial = false
 
@@ -621,7 +624,13 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                 isMobilinkd: self.config.mobilinkdConfig != nil
             )
 
-            guard shouldSendReset else { return }
+            guard shouldSendReset else {
+                KISSLinkLog.info(
+                    self.endpointDescription,
+                    message: "Startup RX watchdog skipped (inboundKISS=\(self.startupReceptionGuard.hasSeenInboundKISSFrame), inboundAX25=\(self.startupReceptionGuard.hasSeenInboundAX25))"
+                )
+                return
+            }
 
             KISSLinkLog.info(
                 self.endpointDescription,

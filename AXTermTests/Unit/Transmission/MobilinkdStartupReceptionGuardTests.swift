@@ -27,7 +27,7 @@ final class MobilinkdStartupReceptionGuardTests: XCTestCase {
         )
     }
 
-    func testTelemetryOnlyDoesNotCountAsAX25() {
+    func testTelemetrySuppressesResetButDoesNotCountAsAX25() {
         let guardState = MobilinkdStartupReceptionGuard()
         guardState.resetForNewConnection()
 
@@ -35,9 +35,11 @@ final class MobilinkdStartupReceptionGuardTests: XCTestCase {
         let telemetry = Data([0xC0, 0x06, 0x06, 0x10, 0x71, 0xC0])
         guardState.observeInboundChunk(telemetry)
 
-        XCTAssertTrue(
+        XCTAssertFalse(guardState.hasSeenInboundAX25, "Telemetry must not be treated as AX.25 payload.")
+        XCTAssertTrue(guardState.hasSeenInboundKISSFrame, "Telemetry confirms inbound KISS path is alive.")
+        XCTAssertFalse(
             guardState.shouldIssueRecoveryReset(isConnected: true, isMobilinkd: true),
-            "Telemetry-only startup should still allow one-shot demod recovery reset."
+            "If valid inbound KISS traffic exists, startup demod reset should be suppressed."
         )
     }
 
