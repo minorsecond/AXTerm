@@ -520,22 +520,23 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         }
 
         // CLEANUP when timer is cancelled
+        let timerFD = fd
+        let timerIsBluetoothSerial = isBluetoothSerial
+        let timerOriginalTermios = originalTermios
+
         pollTimer.setCancelHandler { [weak self] in
             guard let self else { return }
-            self.lock.lock()
-            let currentFd = self.fileDescriptor
-            let isBT = self.isBluetoothSerial
-            self.lock.unlock()
-
-            if currentFd >= 0 {
+            if timerFD >= 0 {
                 // Restore original termios before closing (skip for BT serial)
-                if !isBT {
-                    var origTermios = self.originalTermios
-                    tcsetattr(currentFd, TCSANOW, &origTermios)
+                if !timerIsBluetoothSerial {
+                    var origTermios = timerOriginalTermios
+                    tcsetattr(timerFD, TCSANOW, &origTermios)
                 }
-                Darwin.close(currentFd)
+                Darwin.close(timerFD)
                 self.lock.lock()
-                self.fileDescriptor = -1
+                if self.fileDescriptor == timerFD {
+                    self.fileDescriptor = -1
+                }
                 self.lock.unlock()
             }
 
@@ -792,6 +793,11 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         let timer = readPollTimer
         readPollTimer = nil
         let fd = fileDescriptor
+        // Mark descriptor as no longer owned by this instance immediately.
+        // This keeps close() idempotent while an async timer cancel is in flight,
+        // so a second close() call cannot directly close the same numeric fd.
+        fileDescriptor = -1
+        isConnecting = false
         lock.unlock()
 
         // Always release the static guard synchronously so that an immediate
@@ -810,9 +816,6 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                 tcsetattr(fd, TCSANOW, &origTermios)
             }
             Darwin.close(fd)
-            lock.lock()
-            fileDescriptor = -1
-            lock.unlock()
         }
 
         setState(.disconnected)
@@ -898,4 +901,3 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         }
     }
 }
-
