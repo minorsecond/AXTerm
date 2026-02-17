@@ -131,7 +131,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     // MARK: - Private State
 
     private var fileDescriptor: Int32 = -1
-    private var readSource: DispatchSourceRead?
+    private var readPollTimer: DispatchSourceTimer?
     private let serialQueue = DispatchQueue(label: "com.axterm.kisslink.serial", qos: .userInitiated)
     private var reconnectTimer: DispatchSourceTimer?
     private var batteryPollTimer: DispatchSourceTimer?
@@ -313,7 +313,9 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     }
 
     /// Update configuration (e.g. when user changes settings).
-    /// If currently connected, closes and reopens with new config.
+    /// Only closes and reopens if transport-level settings changed (device path, baud rate).
+    /// Mobilinkd-specific settings (gains, modem type) are stored in the config but
+    /// do NOT trigger a reconnect — they're applied via EEPROM, not KISS init commands.
     func updateConfig(_ newConfig: SerialConfig) {
         serialQueue.async { [weak self] in
             guard let self else { return }
@@ -322,11 +324,19 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             wasConnected = self._state == .connected
             self.lock.unlock()
 
+            let needsReconnect = wasConnected && (
+                newConfig.devicePath != self.config.devicePath ||
+                newConfig.baudRate != self.config.baudRate
+            )
+
             self.config = newConfig
 
-            if wasConnected {
+            if needsReconnect {
+                KISSLinkLog.info(self.endpointDescription, message: "Transport config changed — reconnecting")
                 self.closeInternal(reason: "Config changed")
                 self.openInternal()
+            } else if wasConnected {
+                KISSLinkLog.info(self.endpointDescription, message: "Config updated (no reconnect needed)")
             }
         }
     }
@@ -552,15 +562,21 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         _totalBytesOut = 0
         lock.unlock()
 
-        // Set up read source
-        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: serialQueue)
-
-        source.setEventHandler { [weak self] in
-            self?.handleReadEvent()
+        // Set up polling timer for reads.
+        // We use a timer instead of DispatchSourceRead because kqueue-based
+        // read sources on macOS do NOT reliably fire for unsolicited data on
+        // USB CDC serial ports (e.g., Mobilinkd TNC4). The kqueue fires for
+        // the initial response to our writes, but never fires for data the
+        // device sends asynchronously (decoded radio frames). A 50ms poll
+        // interval is more than adequate for 1200-baud packet radio.
+        let pollTimer = DispatchSource.makeTimerSource(queue: serialQueue)
+        pollTimer.schedule(deadline: .now() + 0.05, repeating: .milliseconds(50), leeway: .milliseconds(10))
+        pollTimer.setEventHandler { [weak self] in
+            self?.pollSerialPort()
         }
 
-        // CLEANUP when source is cancelled
-        source.setCancelHandler { [weak self] in
+        // CLEANUP when timer is cancelled
+        pollTimer.setCancelHandler { [weak self] in
             guard let self else { return }
             self.lock.lock()
             let currentFd = self.fileDescriptor
@@ -579,27 +595,23 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                 self.lock.unlock()
             }
 
-            // Static guard already released by closeInternal synchronously
-
             KISSLinkLog.info(self.endpointDescription, message: "Port released [\(self._shortID)]")
         }
 
         lock.lock()
-        readSource = source
+        readPollTimer = pollTimer
         lock.unlock()
 
-        source.resume()
+        pollTimer.resume()
 
         cleanupOpenAttempt(success: true)
-        // NOTE: Do NOT setState(.connected) here — the demodulator is not running yet.
-        // sendKISSInit() will set .connected after RESET is sent.
         KISSLinkLog.opened(endpointDescription)
 
         if isBluetoothSerial {
             KISSLinkLog.info(endpointDescription, message: "Bluetooth RFCOMM serial connected successfully")
         }
 
-        // Send KISS Init Sequence — sets .connected after RESET fires
+        // KISS init — goes straight to .connected (no commands sent to TNC)
         sendKISSInit()
 
         reconnectAttempt = 0
@@ -649,83 +661,42 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     }
 
     private func sendKISSInit() {
-        // TNC4 KISS Init Strategy:
-        // 1. Do NOT override factory KISS parameters (Duplex, Persistence, Slot, TXDelay, gains).
-        //    Factory defaults are correct. Sending gain overrides (128/128) breaks the demodulator.
-        // 2. When mobilinkdConfig is set, send user-configured modem/gains only.
-        // 3. Always finish with RESET to start the demodulator.
+        // TNC4 KISS Init Strategy — ZERO DISRUPTION:
+        //
+        // The TNC4 auto-starts its demodulator on USB connect (and BLE connect).
+        // The EEPROM holds calibrated gain/twist/DC-offset from ADJUST_INPUT_LEVELS.
+        // Sending ANY commands on connect (RESET, SET_MODEM_TYPE, gain commands,
+        // even standard KISS params) risks disrupting the already-running demodulator.
+        //
+        // qth.app and other working KISS clients don't send init commands — they
+        // just open the port and start listening. We do the same.
+        //
+        // Go straight to .connected and let the auto-started demodulator do its job.
 
-        var frames: [[UInt8]] = []
-        var configLabels: [String] = []
-
-        if let mobiConfig = config.mobilinkdConfig {
-            KISSLinkLog.info(endpointDescription, message: "Applying Mobilinkd Config: \(mobiConfig.modemType.description), Out=\(mobiConfig.outputGain), In=\(mobiConfig.inputGain)")
-
-            frames.append(MobilinkdTNC.setModemType(mobiConfig.modemType))
-            configLabels.append("Modem: \(mobiConfig.modemType.description)")
-
-            frames.append(MobilinkdTNC.setOutputGain(mobiConfig.outputGain))
-            configLabels.append("Output Gain: \(mobiConfig.outputGain)")
-
-            frames.append(MobilinkdTNC.setInputGain(mobiConfig.inputGain))
-            configLabels.append("Input Gain: \(mobiConfig.inputGain)")
+        if config.mobilinkdConfig != nil {
+            KISSLinkLog.info(endpointDescription, message: "Mobilinkd serial detected — sending NO init commands (EEPROM config + auto-start demodulator)")
         } else {
-            KISSLinkLog.info(endpointDescription, message: "Sending Duplex=0 + RESET only (no gain overrides)")
+            KISSLinkLog.info(endpointDescription, message: "Serial connected — no KISS init needed")
         }
 
-        for (i, frame) in frames.enumerated() {
-            let label = i < configLabels.count ? configLabels[i] : "Config \(i)"
-            let data = Data(frame)
-            Task { @MainActor in
-                LinkDebugLog.shared.recordKISSInit(label: label, rawBytes: data)
+        setState(.connected)
+        KISSLinkLog.info(endpointDescription, message: "KISS init complete — link ready (no commands sent)")
+    }
+
+    /// Build a raw KISS frame: FEND + type + SLIP-escaped payload + FEND
+    private func kissFrame(type: UInt8, payload: [UInt8]) -> [UInt8] {
+        var frame: [UInt8] = [0xC0, type]
+        for byte in payload {
+            if byte == 0xC0 {
+                frame.append(contentsOf: [0xDB, 0xDC])
+            } else if byte == 0xDB {
+                frame.append(contentsOf: [0xDB, 0xDD])
+            } else {
+                frame.append(byte)
             }
         }
-
-        // Send config frames (if any) in sequence with stagger.
-        // Uses writeRaw() since .connected isn't set until after RESET.
-        for (index, frame) in frames.enumerated() {
-            let delay = Double(index) * 0.1
-            serialQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.writeRaw(Data(frame)) { err in
-                    if let err = err {
-                        KISSLinkLog.error(self?.endpointDescription ?? "Serial", message: "Failed to send config frame \(index): \(err.localizedDescription)")
-                    }
-                }
-            }
-        }
-
-        // Always send RESET to ensure the demodulator is running.
-        // RESET (0x0B) is the ONLY way to start the TNC4 demodulator.
-        // POLL_INPUT_LEVEL (0x04) is NOT sent — it stops the demodulator.
-        let resetDelay = frames.isEmpty ? 0.5 : Double(frames.count) * 0.1 + 1.0
-        let resetWork = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            let resetFrame = Data(MobilinkdTNC.reset())
-            // RESET must bypass the .connected state check in send(), since we haven't
-            // set .connected yet (that happens below, after RESET is sent).
-            self.writeRaw(resetFrame) { err in
-                if let err = err {
-                    KISSLinkLog.error(self.endpointDescription, message: "Failed to send RESET: \(err)")
-                } else {
-                    KISSLinkLog.info(self.endpointDescription, message: "Sent RESET — demodulator started")
-                }
-            }
-            Task { @MainActor in
-                LinkDebugLog.shared.recordKISSInit(label: "RESET (start demodulator)", rawBytes: Data(MobilinkdTNC.reset()))
-            }
-            self.lock.lock()
-            self.kissInitWorkItem = nil
-            self.lock.unlock()
-
-            // NOW the demodulator is running — mark the link as connected.
-            // This unblocks send() for the rest of the app (SABM, RR, etc).
-            self.setState(.connected)
-            KISSLinkLog.info(self.endpointDescription, message: "KISS init complete — link ready")
-        }
-        lock.lock()
-        kissInitWorkItem = resetWork
-        lock.unlock()
-        serialQueue.asyncAfter(deadline: .now() + resetDelay, execute: resetWork)
+        frame.append(0xC0)
+        return frame
     }
 
     /// Cancel any in-flight KISS init work items (POLL/RESET sequence).
@@ -827,54 +798,71 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     // MARK: - Private: Read
 
     private var readEventCount = 0
+    private var pollCount = 0
 
-    private func handleReadEvent() {
+    /// Poll the serial port for available data. Called by the read poll timer
+    /// every 50ms. Reads ALL available data in a loop until no more is available.
+    /// This replaces DispatchSourceRead which doesn't reliably fire for
+    /// unsolicited data on macOS USB CDC serial ports.
+    ///
+    /// IMPORTANT: On macOS USB CDC serial with O_NONBLOCK + VMIN=0/VTIME=0,
+    /// read() returns 0 when no data is available (NOT -1/EAGAIN). This is
+    /// because the termios layer returns "0 bytes available" before the
+    /// O_NONBLOCK layer can return EAGAIN. We must NOT treat 0 as EOF.
+    /// Device disconnect is detected via ENXIO/EIO errors or file existence.
+    private func pollSerialPort() {
         lock.lock()
         let fd = fileDescriptor
         lock.unlock()
 
         guard fd >= 0 else { return }
 
-        readEventCount += 1
-
+        pollCount += 1
         var buffer = [UInt8](repeating: 0, count: 4096)
-        let bytesRead = Darwin.read(fd, &buffer, buffer.count)
 
-        if bytesRead > 0 {
-            let data = Data(buffer[0..<bytesRead])
-            lock.lock()
-            _totalBytesIn += bytesRead
-            lock.unlock()
-            
-            // Log all RX events that contain frame markers (FEND=0xC0)
-            let hasFEND = data.contains(0xC0)
-            let hasLargePayload = bytesRead > 30
-            
-            if readEventCount <= 5 || hasFEND || hasLargePayload {
-                let hex = data.prefix(64).map { String(format: "%02X", $0) }.joined(separator: " ")
-                KISSLinkLog.info(endpointDescription, message: "RX[\(readEventCount)] \(bytesRead) bytes: \(hex)\(data.count > 64 ? "..." : "")")
-            }
-            KISSLinkLog.bytesIn(endpointDescription, count: bytesRead)
-            Task { @MainActor [weak self] in
-                self?.delegate?.linkDidReceive(data)
-            }
-        } else if bytesRead == 0 {
-            // EOF - device disconnected
-            KISSLinkLog.info(endpointDescription, message: "Read returned 0 (EOF) at event #\(readEventCount)")
-            handleDeviceDisconnect()
-        } else {
-            let err = errno
-            if err == EAGAIN || err == EWOULDBLOCK {
-                // Spurious wakeup — no data yet. Log first few to help debug.
-                if readEventCount <= 3 {
-                    KISSLinkLog.info(endpointDescription, message: "Read EAGAIN at event #\(readEventCount)")
+        // Read all available data in a tight loop
+        while true {
+            let bytesRead = Darwin.read(fd, &buffer, buffer.count)
+
+            if bytesRead > 0 {
+                readEventCount += 1
+                let data = Data(buffer[0..<bytesRead])
+                lock.lock()
+                _totalBytesIn += bytesRead
+                lock.unlock()
+
+                let hex = data.prefix(128).map { String(format: "%02X", $0) }.joined(separator: " ")
+                KISSLinkLog.info(endpointDescription, message: "RX[\(readEventCount)] \(bytesRead) bytes: \(hex)\(data.count > 128 ? "..." : "")")
+                KISSLinkLog.bytesIn(endpointDescription, count: bytesRead)
+                Task { @MainActor [weak self] in
+                    self?.delegate?.linkDidReceive(data)
                 }
+            } else if bytesRead == 0 {
+                // On USB CDC serial with O_NONBLOCK + VMIN=0/VTIME=0, read()
+                // returns 0 when no data is available. This is NOT EOF.
+                // (Same behavior as MinimalTNC4ConnectTest.readAllAvailable)
+                break
             } else {
-                let message = String(cString: strerror(err))
-                KISSLinkLog.error(endpointDescription, message: "Read error: \(message)")
-                if err == ENXIO || err == EIO {
-                    handleDeviceDisconnect()
+                let err = errno
+                if err == EAGAIN || err == EWOULDBLOCK {
+                    // No more data available — normal for non-blocking fd
+                    break
+                } else {
+                    let message = String(cString: strerror(err))
+                    KISSLinkLog.error(endpointDescription, message: "Read error at poll #\(pollCount): \(message)")
+                    if err == ENXIO || err == EIO {
+                        handleDeviceDisconnect()
+                    }
+                    return
                 }
+            }
+        }
+
+        // Periodic device existence check (every ~5s = every 100 polls)
+        if pollCount % 100 == 0 {
+            if !FileManager.default.fileExists(atPath: config.devicePath) {
+                KISSLinkLog.info(endpointDescription, message: "Device file disappeared at poll #\(pollCount)")
+                handleDeviceDisconnect()
             }
         }
     }
@@ -888,8 +876,8 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         lock.lock()
         batteryPollTimer?.cancel()
         batteryPollTimer = nil
-        let source = readSource
-        readSource = nil
+        let timer = readPollTimer
+        readPollTimer = nil
         let fd = fileDescriptor
         lock.unlock()
 
@@ -900,8 +888,8 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         KISSLinkSerial.activePaths.remove(config.devicePath)
         KISSLinkSerial.pathLock.unlock()
 
-        if let source = source {
-            source.cancel() // Cancel handler will close fd and restore termios
+        if let timer = timer {
+            timer.cancel() // Cancel handler will close fd and restore termios
         } else if fd >= 0 {
             // If no source was set up, close directly
             if !isBluetoothSerial {
