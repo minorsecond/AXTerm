@@ -101,9 +101,9 @@ struct MenuBarView: View {
     private func toggleConnection() {
         switch client.status {
         case .connected, .connecting:
-            client.disconnect()
+            client.disconnect(reason: "user toggle connection (menu bar)")
         case .disconnected, .failed:
-            client.connect(host: settings.host, port: settings.portValue)
+            client.connectUsingSettings()
         }
     }
 

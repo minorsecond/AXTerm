@@ -1,5 +1,15 @@
 # Local AI tooling
 CLAUDE.md
+AGENTS.md
+.aider*
+.junie/
+
+# TNC4 utility scripts & dumps (local-only)
+test_tnc4_connect.swift
+tnc4_config.py
+tnc4_factory_defaults.json
+debug.md
+debug_test_trace.swift
 
 DerivedDataTest/
 .ui-test-build
@@ -122,5 +132,3 @@ fastlane/test_output/
 # Docker
 # ---------------------------------------
 Docker/.env
-*.log
-

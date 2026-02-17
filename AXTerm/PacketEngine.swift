@@ -17,6 +17,25 @@ nonisolated enum ConnectionStatus: String {
     case connecting = "Connecting"
     case connected = "Connected"
     case failed = "Failed"
+
+    /// Map from KISSLinkState
+    init(linkState: KISSLinkState) {
+        switch linkState {
+        case .disconnected: self = .disconnected
+        case .connecting: self = .connecting
+        case .connected: self = .connected
+        case .failed: self = .failed
+        }
+    }
+}
+
+/// Transport type for KISS connections
+nonisolated enum KISSTransportType: String, CaseIterable, Identifiable, Sendable {
+    case network = "Network"
+    case serial = "Local USB Serial"
+    case ble = "Bluetooth LE"
+
+    var id: String { rawValue }
 }
 
 /// Filter settings for packet display
@@ -158,6 +177,7 @@ final class PacketEngine: ObservableObject {
 
     @Published private(set) var status: ConnectionStatus = .disconnected
     @Published private(set) var lastError: String?
+    private var previousLinkState: KISSLinkState = .disconnected
     @Published private(set) var bytesReceived: Int = 0
     @Published private(set) var connectedHost: String?
     @Published private(set) var connectedPort: UInt16?
@@ -166,18 +186,89 @@ final class PacketEngine: ObservableObject {
     @Published private(set) var consoleLines: [ConsoleLine] = []
     @Published private(set) var rawChunks: [RawChunk] = []
     @Published private(set) var stations: [Station] = []
+    
+    // Mobilinkd Telemetry
+    @Published var mobilinkdBatteryLevel: Int?
+    @Published var mobilinkdInputLevel: MobilinkdInputLevel?
 
     @Published var selectedStationCall: String?
     @Published private(set) var pinnedPacketIDs: Set<Packet.ID> = []
+    
+    // MARK: - Frame Statistics (Diagnostics)
+    @Published private(set) var frameStats: FrameStatistics = FrameStatistics()
+    
+    struct FrameStatistics {
+        var totalFramesReceived: Int = 0
+        var ax25FramesReceived: Int = 0
+        var telemetryFramesReceived: Int = 0
+        var unknownFramesReceived: Int = 0
+        
+        var frameSizeHistogram: [String: Int] = [:]  // "size_range" -> count
+        var frameTypeHistogram: [String: Int] = [:]   // "frameType" -> count
+        
+        mutating func recordFrame(type: String, size: Int) {
+            totalFramesReceived += 1
+            frameTypeHistogram[type, default: 0] += 1
+            
+            let sizeRange: String
+            if size < 20 {
+                sizeRange = "0-19"
+            } else if size < 50 {
+                sizeRange = "20-49"
+            } else if size < 100 {
+                sizeRange = "50-99"
+            } else {
+                sizeRange = "100+"
+            }
+            frameSizeHistogram[sizeRange, default: 0] += 1
+        }
+        
+        var diagnosticSummary: String {
+            let typeStr = frameTypeHistogram.map { "\($0.key):\($0.value)" }.joined(separator: ", ")
+            let sizeStr = frameSizeHistogram.map { "\($0.key):\($0.value)" }.joined(separator: ", ")
+            return "Total:\(totalFramesReceived) Types:[\(typeStr)] Sizes:[\(sizeStr)]"
+        }
+    }
 
     /// Publisher for incoming packets - subscribe to receive all decoded packets
     var packetPublisher: AnyPublisher<Packet, Never> {
         packetInsertSubject.eraseToAnyPublisher()
     }
 
+    // MARK: - Connection Config Snapshot
+
+    /// Captures all connection-relevant settings at a point in time.
+    /// Used to detect whether settings actually changed while the settings panel was open.
+    ///
+    /// NOTE: Mobilinkd-specific settings (modemType, gains) are intentionally EXCLUDED.
+    /// Those settings are stored in TNC4 EEPROM and applied via auto-calibration,
+    /// NOT via KISS init commands on connect. Changing them in the UI should NOT
+    /// trigger a serial port close/reopen cycle, which disrupts the running demodulator.
+    struct ConnectionConfigSnapshot: Equatable {
+        let transportType: String
+        let serialDevicePath: String
+        let serialBaudRate: Int
+        let blePeripheralUUID: String
+        let host: String
+        let port: Int
+
+        init(settings: AppSettingsStore) {
+            self.transportType = settings.transportType
+            self.serialDevicePath = settings.serialDevicePath
+            self.serialBaudRate = settings.serialBaudRate
+            self.blePeripheralUUID = settings.blePeripheralUUID
+            self.host = settings.host
+            self.port = settings.port
+        }
+    }
+
+    /// Snapshot taken when connection logic is suspended (settings panel opens).
+    private var suspendedConfigSnapshot: ConnectionConfigSnapshot?
+
     // MARK: - Private State
 
     private var connection: NWConnection?
+    private var link: KISSLink?
     private var parser = KISSFrameParser()
     private var stationTracker = StationTracker()
 
@@ -263,7 +354,85 @@ final class PacketEngine: ObservableObject {
         netRomSnapshotTimer?.invalidate()
     }
 
+    // MARK: - USB Device Path Resolution
+
+    /// Resolve a serial device path, falling back to auto-detection if the configured path doesn't exist.
+    /// Scans `/dev/cu.*` for `usbmodem` devices (TNC4 uses CDC-ACM).
+    /// Does NOT modify saved settings — returns the resolved path for this connection attempt only.
+    func resolveSerialDevicePath(_ configuredPath: String) -> String {
+        if !configuredPath.isEmpty && FileManager.default.fileExists(atPath: configuredPath) {
+            return configuredPath
+        }
+
+        debugTrace("Configured serial path missing or empty, scanning for USB devices", ["path": configuredPath])
+
+        do {
+            let devContents = try FileManager.default.contentsOfDirectory(atPath: "/dev")
+            let usbDevices = devContents
+                .filter { $0.hasPrefix("cu.") && $0.lowercased().contains("usbmodem") }
+                .sorted()
+
+            if let first = usbDevices.first {
+                let resolved = "/dev/\(first)"
+                debugTrace("Auto-detected USB serial device", ["resolved": resolved])
+                return resolved
+            }
+        } catch {
+            debugTrace("Failed to scan /dev for USB devices: \(error)")
+        }
+
+        // Return original path — KISSLinkSerial will handle the missing device gracefully
+        return configuredPath
+    }
+
     // MARK: - Connection Management
+
+    /// Connect using the transport configured in settings.
+    /// Falls back to network if transport type is unknown.
+    func connectUsingSettings() {
+        if settings.isSerialTransport {
+            
+            // Construct Mobilinkd Config if enabled
+            var mobilinkdConfig: MobilinkdConfig?
+            if settings.mobilinkdEnabled {
+                mobilinkdConfig = MobilinkdConfig(
+                    modemType: MobilinkdTNC.ModemType(rawValue: UInt8(settings.mobilinkdModemType)) ?? .afsk1200,
+                    outputGain: UInt8(settings.mobilinkdOutputGain),
+                    inputGain: UInt8(settings.mobilinkdInputGain),
+                    isBatteryMonitoringEnabled: true // Always true for now if enabled
+                )
+            }
+            
+            let resolvedPath = resolveSerialDevicePath(settings.serialDevicePath)
+            let config = SerialConfig(
+                devicePath: resolvedPath,
+                baudRate: settings.serialBaudRate,
+                autoReconnect: settings.serialAutoReconnect,
+                mobilinkdConfig: mobilinkdConfig
+            )
+            connectSerial(config: config)
+        } else if settings.isBLETransport {
+            // Construct Mobilinkd config for BLE just like serial
+            var bleMobilinkdConfig: MobilinkdConfig?
+            if settings.mobilinkdEnabled {
+                bleMobilinkdConfig = MobilinkdConfig(
+                    modemType: MobilinkdTNC.ModemType(rawValue: UInt8(settings.mobilinkdModemType)) ?? .afsk1200,
+                    outputGain: UInt8(settings.mobilinkdOutputGain),
+                    inputGain: UInt8(settings.mobilinkdInputGain),
+                    isBatteryMonitoringEnabled: true
+                )
+            }
+            let config = BLEConfig(
+                peripheralUUID: settings.blePeripheralUUID,
+                peripheralName: settings.blePeripheralName,
+                autoReconnect: settings.bleAutoReconnect,
+                mobilinkdConfig: bleMobilinkdConfig
+            )
+            connectBLE(config: config)
+        } else {
+            connect(host: settings.host, port: settings.portValue)
+        }
+    }
 
     func connect(host: String = "localhost", port: UInt16 = 8001) {
         disconnect()
@@ -286,40 +455,91 @@ final class PacketEngine: ObservableObject {
         eventLogger?.log(level: .info, category: .connection, message: "Connecting to \(host):\(port)", metadata: nil)
         loadPersistedPackets(reason: "connect")
 
-        let nwHost = NWEndpoint.Host(host)
-        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
-            status = .failed
-            lastError = "Invalid port \(port)"
-            addErrorLine("Connection failed: invalid port \(port)", category: .connection)
-            eventLogger?.log(level: .error, category: .connection, message: "Connection failed: invalid port \(port)", metadata: nil)
-            SentryManager.shared.captureConnectionFailure("Connection failed: invalid port \(port)")
+        let networkLink = KISSLinkNetwork(host: host, port: port)
+        connectViaLink(networkLink)
+    }
+
+    /// Connect using a serial device
+    func connectSerial(config: SerialConfig) {
+        // Orchestration: Check if we are already connected/connecting to this exact device
+        if let currentLink = link as? KISSLinkSerial, currentLink.config.devicePath == config.devicePath {
+            // It's the same device path. 
+            // If settings (baud rate/auto-reconnect) changed, we might need to update.
+            // KISSLinkSerial.updateConfig handles this efficiently without full teardown if possible,
+            // or handles the teardown/reopen internally.
+            debugTrace("Update serial config", ["path": config.devicePath])
+            currentLink.updateConfig(config)
+            
+            // Ensure we are in a mode to connect if we weren't
+            if currentLink.state == .disconnected || currentLink.state == .failed {
+                currentLink.open()
+            }
             return
         }
 
-        let params = NWParameters.tcp
-        params.allowLocalEndpointReuse = true
+        disconnect(reason: "switching to new serial device")
 
-        connection = NWConnection(host: nwHost, port: nwPort, using: params)
+        status = .connecting
+        lastError = nil
+        connectedHost = nil
+        connectedPort = nil
+        eventLogger?.log(level: .info, category: .connection, message: "Connecting to serial: \(config.devicePath)", metadata: nil)
+        loadPersistedPackets(reason: "connect")
 
-        let hostCopy = host
-        let portCopy = port
-        connection?.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
-            Task { @MainActor in
-                self.handleConnectionState(state, host: hostCopy, port: portCopy)
-            }
-        }
-
-        connection?.start(queue: .main)
+        let serialLink = KISSLinkSerial(config: config)
+        connectViaLink(serialLink)
     }
 
-    func disconnect() {
+    /// Connect using a BLE device
+    func connectBLE(config: BLEConfig) {
+        // Reuse existing BLE link if it's the same peripheral (mirrors serial pattern)
+        if let currentLink = link as? KISSLinkBLE, currentLink.config.peripheralUUID == config.peripheralUUID {
+            debugTrace("Update BLE config", ["uuid": config.peripheralUUID])
+            currentLink.updateConfig(config)
+
+            if currentLink.state == .disconnected || currentLink.state == .failed {
+                currentLink.open()
+            }
+            return
+        }
+
+        disconnect(reason: "switching to BLE transport")
+
+        status = .connecting
+        lastError = nil
+        connectedHost = nil
+        connectedPort = nil
+        eventLogger?.log(level: .info, category: .connection, message: "Connecting to BLE: \(config.peripheralName.isEmpty ? config.peripheralUUID : config.peripheralName)", metadata: nil)
+        loadPersistedPackets(reason: "connect")
+
+        let bleLink = KISSLinkBLE(config: config)
+        connectViaLink(bleLink)
+    }
+
+    /// Connect using any KISSLink transport
+    private func connectViaLink(_ newLink: KISSLink) {
+        link = newLink
+        newLink.delegate = self
+        newLink.open()
+    }
+
+    func disconnect(reason: String = "unknown") {
+        let previousStatus = status
+        link?.close()
+        link = nil
         connection?.cancel()
         connection = nil
         parser.reset()
         status = .disconnected
         connectedHost = nil
         connectedPort = nil
+        addSystemLine("Disconnected (reason: \(reason))", category: .connection)
+        SentryManager.shared.addBreadcrumb(
+            category: "kiss.connection",
+            message: "Disconnected",
+            level: .info,
+            data: ["reason": reason, "previousStatus": previousStatus.rawValue]
+        )
         SentryManager.shared.breadcrumbDisconnect()
     }
 
@@ -329,7 +549,9 @@ final class PacketEngine: ObservableObject {
     /// - Parameter frame: The frame to send
     /// - Parameter completion: Callback with success or error
     func send(frame: OutboundFrame, completion: ((Result<Void, Error>) -> Void)? = nil) {
-        guard status == .connected, let conn = connection else {
+        let activeLink = link
+        let activeConn = connection
+        guard status == .connected, (activeLink != nil || activeConn != nil) else {
             let error = NSError(domain: "PacketEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not connected"])
             TxLog.error(.transport, "Send failed: not connected", error: error, ["frameId": String(frame.id.uuidString.prefix(8))])
             addErrorLine("Send failed: not connected", category: .transmission)
@@ -366,8 +588,13 @@ final class PacketEngine: ObservableObject {
         TxLog.kissSend(frameId: frame.id, size: kissData.count)
         TxLog.hexDump(.kiss, "KISS frame", data: kissData)
 
+        LinkDebugLog.shared.recordTxBytes(kissData.count)
+        LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+            timestamp: Date(), direction: .tx, rawBytes: kissData,
+            frameType: frame.frameType, byteCount: kissData.count))
+
         // Log the transmission: user payload as DATA (purple), protocol as SYS
-        let viaSuffix: String = frame.path.isEmpty ? "" : " via \(frame.path.display)"
+        let viaSuffix = formatViaPath(frame.path.digis)
         let showAsData: Bool
         if let text = frame.displayInfo, !text.isEmpty {
             showAsData = frame.isUserPayload || (frame.frameType.lowercased() == "i" && !isProtocolDisplayInfo(text))
@@ -375,10 +602,13 @@ final class PacketEngine: ObservableObject {
                 let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: text)
                 appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
             } else {
-                addSystemLine("TX: \(frame.source.display) → \(frame.destination.display)\(viaSuffix): \(text)", category: .transmission)
+                // Build a richer control frame description for TX SYS lines
+                let txDesc = txControlFrameDescription(frame) ?? text
+                addSystemLine("TX: \(frame.source.display) → \(frame.destination.display)\(viaSuffix): \(txDesc)", category: .transmission)
             }
         } else {
-            addSystemLine("TX: \(frame.source.display) → \(frame.destination.display)\(viaSuffix): \(frame.displayInfo ?? "")", category: .transmission)
+            let txDesc = txControlFrameDescription(frame) ?? frame.displayInfo ?? ""
+            addSystemLine("TX: \(frame.source.display) → \(frame.destination.display)\(viaSuffix): \(txDesc)", category: .transmission)
         }
         eventLogger?.log(
             level: .info,
@@ -392,8 +622,8 @@ final class PacketEngine: ObservableObject {
             ]
         )
 
-        // Send via connection
-        conn.send(content: kissData, completion: .contentProcessed { [weak self] error in
+        // Send via link (preferred) or legacy connection
+        let sendCompletion: (Error?) -> Void = { [weak self] error in
             guard let self else { return }
             Task { @MainActor in
                 if let error = error {
@@ -421,7 +651,62 @@ final class PacketEngine: ObservableObject {
                     completion?(.success(()))
                 }
             }
-        })
+        }
+
+        if let activeLink = activeLink {
+            activeLink.send(kissData) { error in
+                sendCompletion(error)
+            }
+        } else if let conn = activeConn {
+            conn.send(content: kissData, completion: .contentProcessed { error in
+                sendCompletion(error)
+            })
+        }
+    }
+
+    // MARK: - Mobilinkd Commands
+
+    /// One-shot poll of audio input levels. Stops the demodulator during measurement,
+    /// then sends RESET to restart it. Do NOT call this in a loop.
+    func sendPollInputLevel() {
+        guard let activeLink = link else { return }
+        let pollFrame = Data(MobilinkdTNC.pollInputLevel())
+        let resetFrame = Data(MobilinkdTNC.reset())
+        activeLink.send(pollFrame) { [weak activeLink] _ in
+            // Send RESET after a delay to allow measurement to complete,
+            // then restart the demodulator for normal packet reception.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
+                activeLink?.send(resetFrame) { _ in }
+            }
+        }
+    }
+
+    /// Sends the ADJUST_INPUT_LEVELS command to trigger the TNC4's auto-AGC.
+    /// Stops the demodulator during calibration; sends RESET after 5s to restart.
+    func sendAdjustInputLevels() {
+        guard let activeLink = link else { return }
+        let frame = Data(MobilinkdTNC.adjustInputLevels())
+        let resetFrame = Data(MobilinkdTNC.reset())
+        activeLink.send(frame) { [weak activeLink] _ in
+            // Auto-adjust takes several seconds (gain stepping + measurements).
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5.0) {
+                activeLink?.send(resetFrame) { _ in }
+            }
+        }
+    }
+
+    /// Sends a SET_INPUT_GAIN command to set manual input gain level (0-4, 6dB steps).
+    func sendSetInputGain(_ level: UInt8) {
+        guard let activeLink = link else { return }
+        let frame = Data(MobilinkdTNC.setInputGain(level))
+        activeLink.send(frame) { _ in }
+    }
+
+    /// Sends RESET to restart the TNC4 demodulator.
+    func sendMobilinkdReset() {
+        guard let activeLink = link else { return }
+        let frame = Data(MobilinkdTNC.reset())
+        activeLink.send(frame) { _ in }
     }
 
     private func handleConnectionState(_ state: NWConnection.State, host: String, port: UInt16) {
@@ -473,7 +758,7 @@ final class PacketEngine: ObservableObject {
                 }
 
                 if isComplete {
-                    self.disconnect()
+                    self.disconnect(reason: "legacy NWConnection receive complete")
                     return
                 }
 
@@ -485,6 +770,7 @@ final class PacketEngine: ObservableObject {
 
     func handleIncomingData(_ data: Data) {
         bytesReceived += data.count
+        LinkDebugLog.shared.recordRxBytes(data.count)
 
         TxLog.kissReceive(size: data.count)
         debugTrace("RX KISS chunk", [
@@ -496,18 +782,66 @@ final class PacketEngine: ObservableObject {
         appendRawChunk(RawChunk(data: data))
 
         // Parse KISS frames from the chunk
-        let ax25Frames = parser.feed(data)
+        let kissFrames = parser.feed(data)
 
-        if !ax25Frames.isEmpty {
-            TxLog.debug(.kiss, "Parsed KISS frames", ["count": ax25Frames.count])
+        if !kissFrames.isEmpty {
+            TxLog.debug(.kiss, "Parsed KISS frames", ["count": kissFrames.count])
         }
 
-        for ax25Data in ax25Frames {
-            processAX25Frame(ax25Data)
+        for frameOutput in kissFrames {
+            switch frameOutput {
+            case .ax25(let ax25Data):
+                debugTrace("KISS AX.25 frame parsed", ["len": ax25Data.count])
+                frameStats.recordFrame(type: "AX.25", size: ax25Data.count)
+                LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+                    timestamp: Date(), direction: .rx, rawBytes: ax25Data,
+                    frameType: "AX25", byteCount: ax25Data.count))
+                processAX25Frame(ax25Data)
+
+            case .mobilinkdTelemetry(let telemetryData):
+                frameStats.recordFrame(type: "Telemetry", size: telemetryData.count)
+                if let inputLevel = MobilinkdTNC.parseInputLevel(telemetryData) {
+                    DispatchQueue.main.async {
+                        self.mobilinkdInputLevel = inputLevel
+                    }
+                    debugTrace("Mobilinkd InputLevel", [
+                        "vpp": inputLevel.vpp, "vavg": inputLevel.vavg,
+                        "vmin": inputLevel.vmin, "vmax": inputLevel.vmax
+                    ])
+                } else if let battery = MobilinkdTNC.parseBatteryLevel(telemetryData) {
+                    DispatchQueue.main.async {
+                         self.mobilinkdBatteryLevel = battery
+                    }
+                    debugTrace("Mobilinkd Battery", ["level": battery])
+                } else if let gain = MobilinkdTNC.parseInputGain(telemetryData) {
+                     DispatchQueue.main.async {
+                         if self.settings.mobilinkdInputGain != gain {
+                             self.settings.mobilinkdInputGain = gain
+                             self.debugTrace("Mobilinkd Auto-Gain Updated", ["newGain": gain])
+                         }
+                     }
+                } else {
+                    debugTrace("Mobilinkd Telemetry", ["hex": hexPrefix(telemetryData)])
+                }
+                LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+                    timestamp: Date(), direction: .rx, rawBytes: telemetryData,
+                    frameType: "Telemetry", byteCount: telemetryData.count))
+
+            case .unknown(let cmd, let payload):
+                frameStats.recordFrame(type: "Unknown(0x\(String(format: "%02X", cmd)))", size: payload.count)
+                debugTrace("Unknown KISS Frame", ["cmd": String(format: "0x%02X", cmd), "len": payload.count])
+                LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+                    timestamp: Date(), direction: .rx, rawBytes: payload,
+                    frameType: "Unknown(0x\(String(format: "%02X", cmd)))", byteCount: payload.count))
+                LinkDebugLog.shared.recordParseError(
+                    message: "Unknown KISS command: 0x\(String(format: "%02X", cmd))",
+                    rawBytes: payload)
+            }
         }
     }
 
     private func processAX25Frame(_ ax25Data: Data) {
+        debugTrace("processAX25Frame called", ["len": ax25Data.count, "hex": hexPrefix(ax25Data)])
         TxLog.hexDump(.ax25, "Received AX.25 frame", data: ax25Data)
         debugTrace("RX AX.25 raw", [
             "len": ax25Data.count,
@@ -515,6 +849,9 @@ final class PacketEngine: ObservableObject {
         ])
 
         guard let decoded = AX25.decodeFrame(ax25: ax25Data) else {
+            LinkDebugLog.shared.recordParseError(
+                message: "AX.25 decode failed (\(ax25Data.count) bytes)",
+                rawBytes: ax25Data)
             TxLog.ax25DecodeError(reason: "Invalid frame structure", size: ax25Data.count)
             eventLogger?.log(
                 level: .warning,
@@ -630,6 +967,65 @@ final class PacketEngine: ObservableObject {
 
     private func addErrorLine(_ text: String, category: ConsoleEntryRecord.Category) {
         appendConsoleLine(ConsoleLine.error(text), category: category)
+    }
+
+    // MARK: - Control Frame SYS Logging
+
+    /// Format a via path with H-bit indicators (digi callsigns with `*` suffix = has been repeated).
+    private func formatViaPath(_ via: [AX25Address]) -> String {
+        guard !via.isEmpty else { return "" }
+        let formatted = via.map { addr -> String in
+            addr.repeated ? "\(addr.display)*" : addr.display
+        }.joined(separator: ",")
+        return " via \(formatted)"
+    }
+
+    /// Build a human-readable control frame description for SYS logging.
+    /// Examples: "SABM P", "UA F", "RR(3)", "I(1,3) P", "REJ(5) F"
+    private func describeControlFrame(_ decoded: AX25ControlFieldDecoded) -> String? {
+        let pf = (decoded.pf ?? 0) == 1
+
+        switch decoded.frameClass {
+        case .U:
+            guard let uType = decoded.uType else { return nil }
+            switch uType {
+            case .UI:
+                return nil  // UI frames are data, not control — skip SYS line
+            case .SABM, .SABME, .DISC:
+                return "\(uType.rawValue)\(pf ? " P" : "")"
+            case .UA, .DM, .FRMR:
+                return "\(uType.rawValue)\(pf ? " F" : "")"
+            case .UNKNOWN:
+                return "U?\(pf ? " P/F" : "")"
+            }
+        case .S:
+            guard let sType = decoded.sType else { return nil }
+            let nr = decoded.nr ?? 0
+            return "\(sType.rawValue)(\(nr))\(pf ? " P/F" : "")"
+        case .I:
+            let ns = decoded.ns ?? 0
+            let nr = decoded.nr ?? 0
+            return "I(\(ns),\(nr))\(pf ? " P" : "")"
+        case .unknown:
+            return nil
+        }
+    }
+
+    /// Log an RX control frame as a SYS line in the console.
+    /// Called from handleIncomingPacket for all decoded frames.
+    private func logRxControlFrame(_ packet: Packet, decoded: AX25ControlFieldDecoded) {
+        guard let description = describeControlFrame(decoded),
+              let from = packet.from, let to = packet.to else { return }
+        let via = formatViaPath(packet.via)
+        addSystemLine("RX: \(from.display) → \(to.display)\(via): \(description)", category: .transmission)
+    }
+
+    /// Build a richer control frame description for outbound frames.
+    /// Returns nil if the frame doesn't have enough info for a richer description.
+    private func txControlFrameDescription(_ frame: OutboundFrame) -> String? {
+        guard let controlByte = frame.controlByte else { return nil }
+        let decoded = AX25ControlFieldDecoder.decode(control: controlByte, controlByte1: nil)
+        return describeControlFrame(decoded)
     }
 
     /// Append decoded AXDP/session chat to the console so it appears in the terminal.
@@ -804,6 +1200,10 @@ final class PacketEngine: ObservableObject {
         )
         insertPacketSorted(packet)
         packetInsertSubject.send(packet)
+
+        // Log RX control frames (SABM, UA, DM, DISC, RR, REJ, I) as SYS lines with digi H-bit status
+        let controlDecoded = AX25ControlFieldDecoder.decode(control: packet.control, controlByte1: packet.controlByte1)
+        logRxControlFrame(packet, decoded: controlDecoded)
 
         // Feed packet to NET/ROM integration for route inference
         observePacketForNetRom(packet)
@@ -1128,7 +1528,100 @@ final class PacketEngine: ObservableObject {
         }
     }
 
+    // MARK: - Connection Logic Suspension
+    
+    /// If true, automatic connection attempts triggered by settings changes are suspended.
+    /// Used by the Settings UI to prevent link thrashing while the user is configuring parameters.
+    var isConnectionLogicSuspended: Bool = false {
+        didSet {
+            if isConnectionLogicSuspended {
+                // Capture current settings when panel opens
+                suspendedConfigSnapshot = ConnectionConfigSnapshot(settings: settings)
+                debugTrace("Connection logic suspended — snapshot captured")
+            } else {
+                // Compare snapshot to current settings on panel close
+                let currentSnapshot = ConnectionConfigSnapshot(settings: settings)
+                if currentSnapshot != suspendedConfigSnapshot {
+                    debugTrace("Settings changed while suspended — reconnecting")
+                    connectUsingSettings()
+                } else {
+                    debugTrace("Settings unchanged while suspended — skipping reconnect")
+                }
+                suspendedConfigSnapshot = nil
+            }
+        }
+    }
+
     private func observeSettings() {
+        // Transport changes
+        settings.$transportType
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if !self.isConnectionLogicSuspended {
+                    self.connectUsingSettings()
+                }
+            }
+            .store(in: &cancellables)
+
+        settings.$serialDevicePath
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if self.settings.isSerialTransport && !self.isConnectionLogicSuspended {
+                    self.connectUsingSettings()
+                }
+            }
+            .store(in: &cancellables)
+            
+        settings.$serialBaudRate
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if self.settings.isSerialTransport && !self.isConnectionLogicSuspended {
+                    self.connectUsingSettings()
+                }
+            }
+            .store(in: &cancellables)
+
+        settings.$blePeripheralUUID
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if self.settings.isBLETransport && !self.isConnectionLogicSuspended {
+                    self.connectUsingSettings()
+                }
+            }
+            .store(in: &cancellables)
+
+        settings.$host
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if !self.settings.isSerialTransport && !self.settings.isBLETransport && !self.isConnectionLogicSuspended {
+                    self.connectUsingSettings()
+                }
+            }
+            .store(in: &cancellables)
+
+        settings.$port
+            .dropFirst()
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if !self.settings.isSerialTransport && !self.settings.isBLETransport && !self.isConnectionLogicSuspended {
+                    self.connectUsingSettings()
+                }
+            }
+
+            .store(in: &cancellables)
+
+        // Retention settings
         settings.$retentionLimit
             .dropFirst()
             .sink { [weak self] newLimit in
@@ -1751,6 +2244,53 @@ struct DebugRebuildResult {
     let errorMessage: String?
 }
 #endif
+
+// MARK: - KISSLinkDelegate
+
+extension PacketEngine: KISSLinkDelegate {
+    func linkDidReceive(_ data: Data) {
+        handleIncomingData(data)
+    }
+
+    func linkDidChangeState(_ state: KISSLinkState) {
+        let newStatus = ConnectionStatus(linkState: state)
+        let endpoint = link?.endpointDescription ?? "unknown"
+        LinkDebugLog.shared.recordStateChange(
+            from: previousLinkState.rawValue,
+            to: state.rawValue,
+            endpoint: endpoint)
+        previousLinkState = state
+        self.status = newStatus
+
+        switch state {
+        case .connected:
+            let endpoint = link?.endpointDescription ?? "unknown"
+            addSystemLine("Connected to \(endpoint)", category: .connection)
+            eventLogger?.log(level: .info, category: .connection, message: "Connected to \(endpoint)", metadata: nil)
+            SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Connected", level: .info, data: nil)
+
+        case .disconnected:
+            addSystemLine("Disconnected", category: .connection)
+            eventLogger?.log(level: .info, category: .connection, message: "Disconnected", metadata: nil)
+            SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Disconnected", level: .info, data: nil)
+
+        case .failed:
+            let endpoint = link?.endpointDescription ?? "unknown"
+            addErrorLine("Connection to \(endpoint) failed", category: .connection)
+            eventLogger?.log(level: .error, category: .connection, message: "Connection failed: \(endpoint)", metadata: nil)
+
+        case .connecting:
+            break
+        }
+    }
+
+    func linkDidError(_ message: String) {
+        lastError = message
+        LinkDebugLog.shared.recordParseError(message: "Link error: \(message)")
+        addErrorLine(message, category: .connection)
+        eventLogger?.log(level: .error, category: .connection, message: message, metadata: nil)
+    }
+}
 
 private struct ConsoleEntryMetadata: Codable {
     let from: String?

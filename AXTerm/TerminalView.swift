@@ -858,8 +858,20 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     func updateSourceCall(_ call: String) {
         viewModel.sourceCall = call
         let (baseCall, ssid) = CallsignNormalizer.parse(call.isEmpty ? "NOCALL" : call)
-        sessionManager.localCallsign = AX25Address(call: baseCall.isEmpty ? "NOCALL" : baseCall, ssid: ssid)
+        let newAddress = AX25Address(call: baseCall.isEmpty ? "NOCALL" : baseCall, ssid: ssid)
+
+        // Purge stale sessions if callsign actually changed
+        if sessionManager.localCallsign != newAddress {
+            sessionManager.purgeSessionsForCallsignChange()
+        }
+
+        sessionManager.localCallsign = newAddress
         print("[updateSourceCall] Set localCallsign: call='\(baseCall)', ssid=\(ssid)")
+
+        // Clear currentSession if it has a stale localAddress
+        if let session = currentSession, session.localAddress != newAddress {
+            currentSession = nil
+        }
     }
 
     func enqueueCurrentMessage() {
@@ -1830,7 +1842,7 @@ struct TerminalView: View {
 
             if client.status == .disconnected || client.status == .failed {
                 Button("Connect") {
-                    client.connect(host: settings.host, port: settings.portValue)
+                    client.connectUsingSettings()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -2143,7 +2155,7 @@ struct TerminalView: View {
         connectBarViewModel.beginAutoAttempting()
 
         autoAttemptTask = Task { @MainActor in
-            let runner = ConnectAttemptRunner(maxAttempts: 3, backoffSeconds: 8)
+            let runner = ConnectAttemptRunner(maxAttempts: 3, backoffSeconds: 5)
             let result = await runner.run(
                 plan: plan,
                 onStatus: { attemptIndex, totalAttempts, step in
@@ -2298,7 +2310,7 @@ struct TerminalView: View {
             ])
         }
 
-        let waitResult = await waitForAX25ConnectOutcome(destination: intent.normalizedTo, digis: digis, timeoutSeconds: 12)
+        let waitResult = await waitForAX25ConnectOutcome(destination: intent.normalizedTo, digis: digis, timeoutSeconds: 45)
         switch waitResult {
         case .success:
             connectBarViewModel.recordAttempt(intent: intent, result: .success)

@@ -464,6 +464,34 @@ final class AX25SessionManager: ObservableObject {
         ])
     }
 
+    /// Purge all sessions after a local callsign change.
+    /// Active sessions (connecting/connected/disconnecting) are force-disconnected first,
+    /// then ALL sessions are removed since they retain the stale `localAddress`.
+    func purgeSessionsForCallsignChange() {
+        guard !sessions.isEmpty else { return }
+
+        let count = sessions.count
+        for session in sessions.values {
+            // Cancel timers to prevent background tasks from firing after removal
+            session.t1TimerTask?.cancel()
+            session.t1PendingRetransmitTask?.cancel()
+            session.t3TimerTask?.cancel()
+
+            switch session.state {
+            case .connecting, .connected, .disconnecting:
+                forceDisconnect(session: session)
+            case .disconnected, .error:
+                break
+            }
+        }
+
+        sessions.removeAll()
+
+        TxLog.debug(.session, "Purged all sessions for callsign change", [
+            "purgedCount": count
+        ])
+    }
+
     /// Find a session that's expecting a UA response from the given source
     /// Used when the return path doesn't match the outbound path
     private func findSessionExpectingUA(

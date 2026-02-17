@@ -22,7 +22,9 @@ final class TransmissionEdgeCaseTests: XCTestCase {
         let frames = parser.feed(chunk)
 
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], Data([0x01, 0x02]))
+        if case .ax25(let data) = frames[0] {
+            XCTAssertEqual(data, Data([0x01, 0x02]))
+        } else { XCTFail() }
     }
 
     func testKISSInvalidEscapeSequence() {
@@ -53,18 +55,20 @@ final class TransmissionEdgeCaseTests: XCTestCase {
         let frames = parser.feed(kissFrame)
 
         XCTAssertEqual(frames.count, 1)
-        XCTAssertEqual(frames[0], largePayload)
+        if case .ax25(let data) = frames[0] {
+            XCTAssertEqual(data, largePayload)
+        } else { XCTFail() }
     }
 
     func testKISSEmptyAfterStrippingCommand() {
         var parser = KISSFrameParser()
 
-        // Frame with only command byte, no data
+        // Frame with only command byte, no data — no valid AX.25 payload
         let chunk = Data([0xC0, 0x00, 0xC0])
         let frames = parser.feed(chunk)
 
-        // Empty payload should be ignored
-        XCTAssertEqual(frames.count, 0)
+        // Empty payload should be discarded (no valid AX.25 frame possible)
+        XCTAssertEqual(frames.count, 0, "Empty payload should be discarded")
     }
 
     func testKISSAllBytesNeedEscaping() {

@@ -5,6 +5,7 @@
 //  Refactored by Settings Redesign on 2/8/26.
 //
 
+import CoreBluetooth
 import SwiftUI
 import ServiceManagement
 
@@ -12,28 +13,12 @@ struct GeneralSettingsView: View {
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var client: PacketEngine
     @EnvironmentObject var router: SettingsRouter
-    
+
     @State private var launchAtLoginFeedback: String?
     @AppStorage(AppSettingsStore.runInMenuBarKey) private var runInMenuBar = AppSettingsStore.defaultRunInMenuBar
-    
+
     var body: some View {
         Form {
-            PreferencesSection("Connection") {
-                TextField("Host", text: $settings.host)
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.regular)
-                
-                NumericInput("Port", value: $settings.port, range: 1...65535)
-                
-                Toggle("Connect automatically on launch", isOn: $settings.autoConnectOnLaunch)
-                
-                if shouldSuggestReconnect {
-                    Text("Reconnect to apply changes.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            
             PreferencesSection("Identity") {
                 CallsignField(title: "My Callsign", text: $settings.myCallsign)
                 
@@ -48,6 +33,8 @@ struct GeneralSettingsView: View {
             }
             
             PreferencesSection("System") {
+                Toggle("Connect automatically on launch", isOn: $settings.autoConnectOnLaunch)
+                
                 Toggle("Show icon in Menu Bar", isOn: $runInMenuBar)
                 
                 Toggle("Launch at Login", isOn: $settings.launchAtLogin)
@@ -68,19 +55,6 @@ struct GeneralSettingsView: View {
             // Clear focus when clicking background
             NSApp.keyWindow?.makeFirstResponder(nil)
         }
-    }
-    
-    // MARK: - Helpers
-    
-    private var shouldSuggestReconnect: Bool {
-        guard client.status == .connected else { return false }
-        if let connectedHost = client.connectedHost, connectedHost != settings.host {
-            return true
-        }
-        if let connectedPort = client.connectedPort, connectedPort != settings.portValue {
-            return true
-        }
-        return false
     }
 
     private func updateLaunchAtLogin(enabled: Bool) {

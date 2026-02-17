@@ -538,18 +538,18 @@ struct ContentView: View {
             switch client.status {
             case .connected:
                 Button("Disconnect TNC", role: .destructive) {
-                    client.disconnect()
+                    client.disconnect(reason: "user disconnect")
                 }
                 Button("Reconnect TNC") {
                     reconnectToTNC()
                 }
             case .connecting:
                 Button("Cancel") {
-                    client.disconnect()
+                    client.disconnect(reason: "user cancelled connect")
                 }
             case .disconnected, .failed:
                 Button("Connect TNC") {
-                    client.connect(host: settings.host, port: settings.portValue)
+                    client.connectUsingSettings()
                 }
                 Button("Reconnect TNC") {
                     reconnectToTNC()
@@ -559,7 +559,7 @@ struct ContentView: View {
             Divider()
 
             Section("Endpoint") {
-                Text("KISS TCP @ \(connectionHostPort)")
+                Text(connectionEndpointLabel)
             }
 
             if let lastError = client.lastError {
@@ -632,6 +632,16 @@ struct ContentView: View {
         }
     }
 
+    private var connectionEndpointLabel: String {
+        if settings.isSerialTransport {
+            let device = settings.serialDevicePath.isEmpty
+                ? "No device"
+                : (settings.serialDevicePath as NSString).lastPathComponent
+            return "KISS Serial @ \(device)"
+        }
+        return "KISS TCP @ \(connectionHostPort)"
+    }
+
     private var connectionHostPort: String {
         let hostValue = client.connectedHost ?? settings.host
         let portValue = client.connectedPort.map(String.init) ?? String(settings.port)
@@ -641,17 +651,17 @@ struct ContentView: View {
     private func toggleConnection() {
         switch client.status {
         case .connected, .connecting:
-            client.disconnect()
+            client.disconnect(reason: "user toggle connection")
         case .disconnected, .failed:
-            client.connect(host: settings.host, port: settings.portValue)
+            client.connectUsingSettings()
         }
     }
 
     private func reconnectToTNC() {
-        client.disconnect()
+        client.disconnect(reason: "user reconnect")
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
-            client.connect(host: settings.host, port: settings.portValue)
+            client.connectUsingSettings()
         }
     }
 

@@ -30,8 +30,8 @@ struct SettingsView: View {
                 .tabItem { Label("Notifications", systemImage: "bell.badge") }
                 .tag(SettingsTab.notifications)
 
-            NetworkSettingsView(settings: settings)
-                .tabItem { Label("Network", systemImage: "network") }
+            ConnectionSettingsView(settings: settings, packetEngine: client)
+                .tabItem { Label("Connection", systemImage: "cable.connector") }
                 .tag(SettingsTab.network)
             
             TransmissionSettingsView(settings: settings, client: client)
@@ -48,9 +48,13 @@ struct SettingsView: View {
             )
             .tabItem { Label("Advanced", systemImage: "wrench.and.screwdriver") }
             .tag(SettingsTab.advanced)
+
+            LinkDebugView(packetEngine: client)
+                .tabItem { Label("Link Debug", systemImage: "ant") }
+                .tag(SettingsTab.linkDebug)
         }
         .environmentObject(router) // Provide router to all tabs
-        .frame(width: 550, height: 600)
+        .frame(width: 550, height: 700)
         .accessibilityIdentifier("settingsView")
     }
 }

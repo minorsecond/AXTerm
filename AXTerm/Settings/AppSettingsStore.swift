@@ -34,6 +34,23 @@ final class AppSettingsStore: ObservableObject {
     static let sentrySendPacketContentsKey = "sentrySendPacketContents"
     static let sentrySendConnectionDetailsKey = "sentrySendConnectionDetails"
 
+    // Serial transport settings keys
+    static let transportTypeKey = "kissTransportType"
+    static let serialDevicePathKey = "serialDevicePath"
+    static let serialBaudRateKey = "serialBaudRate"
+    static let serialAutoReconnectKey = "serialAutoReconnect"
+
+    // BLE transport settings keys
+    static let blePeripheralUUIDKey = "blePeripheralUUID"
+    static let blePeripheralNameKey = "blePeripheralName"
+    static let bleAutoReconnectKey = "bleAutoReconnect"
+
+    // Mobilinkd TNC4 settings keys
+    static let mobilinkdEnabledKey = "mobilinkdEnabled"
+    static let mobilinkdModemTypeKey = "mobilinkdModemType"
+    static let mobilinkdOutputGainKey = "mobilinkdOutputGain"
+    static let mobilinkdInputGainKey = "mobilinkdInputGain_v3"
+
     // File transfer settings keys
     static let allowedFileTransferCallsignsKey = "allowedFileTransferCallsigns"
     static let deniedFileTransferCallsignsKey = "deniedFileTransferCallsigns"
@@ -66,6 +83,21 @@ final class AppSettingsStore: ObservableObject {
     static let adaptiveStaleMissedBroadcastsKey = "adaptiveStaleMissedBroadcasts"
     static let neighborStaleTTLHoursKey = "neighborStaleTTLHours"
     static let linkStatStaleTTLHoursKey = "linkStatStaleTTLHours"
+
+    static let defaultTransportType = "network"
+    static let defaultSerialDevicePath = ""
+    static let defaultSerialBaudRate = 115200
+    static let defaultSerialAutoReconnect = true
+
+    static let defaultBLEPeripheralUUID = ""
+    static let defaultBLEPeripheralName = ""
+    static let defaultBLEAutoReconnect = true
+
+    static let defaultMobilinkdEnabled = false
+    static let defaultMobilinkdModemType = 1 // 1200 baud
+    static let defaultMobilinkdOutputGain = 11   // TNC4 factory default
+    static let defaultMobilinkdInputGain = 0     // TNC4 factory default
+
 
     static let defaultHost = "localhost"
     static let defaultPort = 8001
@@ -318,6 +350,78 @@ final class AppSettingsStore: ObservableObject {
 
     @Published var autoConnectOnLaunch: Bool {
         didSet { persistAutoConnect() }
+    }
+
+    // MARK: - Serial Transport Settings
+
+    @Published var transportType: String {
+        didSet { persistTransportType() }
+    }
+
+    @Published var serialDevicePath: String {
+        didSet { persistSerialDevicePath() }
+    }
+
+    @Published var serialBaudRate: Int {
+        didSet {
+            let clamped = Self.commonBaudRates.contains(serialBaudRate) ? serialBaudRate : Self.defaultSerialBaudRate
+            guard clamped == serialBaudRate else {
+                deferUpdate { [weak self, clamped] in
+                    self?.serialBaudRate = clamped
+                }
+                return
+            }
+            persistSerialBaudRate()
+        }
+    }
+
+    @Published var serialAutoReconnect: Bool {
+        didSet { persistSerialAutoReconnect() }
+    }
+
+    /// Common baud rates for KISS TNCs
+    static let commonBaudRates = [1200, 9600, 19200, 38400, 57600, 115200, 230400]
+
+    /// Whether the current transport type is serial
+    var isSerialTransport: Bool {
+        transportType == "serial"
+    }
+
+    // MARK: - BLE Transport Settings
+
+    @Published var blePeripheralUUID: String {
+        didSet { persistBLEPeripheralUUID() }
+    }
+
+    @Published var blePeripheralName: String {
+        didSet { persistBLEPeripheralName() }
+    }
+
+    @Published var bleAutoReconnect: Bool {
+        didSet { persistBLEAutoReconnect() }
+    }
+
+    /// Whether the current transport type is BLE
+    var isBLETransport: Bool {
+        transportType == "ble"
+    }
+
+    // MARK: - Mobilinkd Settings
+
+    @Published var mobilinkdEnabled: Bool {
+        didSet { persistMobilinkdEnabled() }
+    }
+
+    @Published var mobilinkdModemType: Int {
+        didSet { persistMobilinkdModemType() }
+    }
+
+    @Published var mobilinkdOutputGain: Int {
+        didSet { persistMobilinkdOutputGain() }
+    }
+
+    @Published var mobilinkdInputGain: Int {
+        didSet { persistMobilinkdInputGain() }
     }
 
     @Published var notifyOnWatchHits: Bool {
@@ -679,6 +783,19 @@ final class AppSettingsStore: ObservableObject {
         // Note: runInMenuBar is now a computed property, not stored
         let storedLaunchAtLogin = defaults.object(forKey: Self.launchAtLoginKey) as? Bool ?? Self.defaultLaunchAtLogin
         let storedAutoConnect = defaults.object(forKey: Self.autoConnectKey) as? Bool ?? Self.defaultAutoConnect
+        let storedTransportType = defaults.string(forKey: Self.transportTypeKey) ?? Self.defaultTransportType
+        let storedSerialDevicePath = defaults.string(forKey: Self.serialDevicePathKey) ?? Self.defaultSerialDevicePath
+        let storedSerialBaudRate = defaults.object(forKey: Self.serialBaudRateKey) as? Int ?? Self.defaultSerialBaudRate
+        let storedSerialAutoReconnect = defaults.object(forKey: Self.serialAutoReconnectKey) as? Bool ?? Self.defaultSerialAutoReconnect
+        let storedBLEPeripheralUUID = defaults.string(forKey: Self.blePeripheralUUIDKey) ?? Self.defaultBLEPeripheralUUID
+        let storedBLEPeripheralName = defaults.string(forKey: Self.blePeripheralNameKey) ?? Self.defaultBLEPeripheralName
+        let storedBLEAutoReconnect = defaults.object(forKey: Self.bleAutoReconnectKey) as? Bool ?? Self.defaultBLEAutoReconnect
+
+        let storedMobilinkdEnabled = defaults.object(forKey: Self.mobilinkdEnabledKey) as? Bool ?? Self.defaultMobilinkdEnabled
+        let storedMobilinkdModemType = defaults.object(forKey: Self.mobilinkdModemTypeKey) as? Int ?? Self.defaultMobilinkdModemType
+        let storedMobilinkdOutputGain = defaults.object(forKey: Self.mobilinkdOutputGainKey) as? Int ?? Self.defaultMobilinkdOutputGain
+        let storedMobilinkdInputGain = defaults.object(forKey: Self.mobilinkdInputGainKey) as? Int ?? Self.defaultMobilinkdInputGain
+
         let storedNotifyOnWatch = defaults.object(forKey: Self.notifyOnWatchKey) as? Bool ?? Self.defaultNotifyOnWatch
         let storedNotifyPlaySound = defaults.object(forKey: Self.notifyPlaySoundKey) as? Bool ?? Self.defaultNotifyPlaySound
         let storedNotifyOnlyWhenInactive = defaults.object(forKey: Self.notifyOnlyWhenInactiveKey) as? Bool ?? Self.defaultNotifyOnlyWhenInactive
@@ -764,6 +881,19 @@ final class AppSettingsStore: ObservableObject {
         // runInMenuBar is computed, no stored property to set
         self.launchAtLogin = storedLaunchAtLogin
         self.autoConnectOnLaunch = storedAutoConnect
+        self.transportType = storedTransportType
+        self.serialDevicePath = storedSerialDevicePath
+        self.serialBaudRate = Self.commonBaudRates.contains(storedSerialBaudRate) ? storedSerialBaudRate : Self.defaultSerialBaudRate
+        self.serialAutoReconnect = storedSerialAutoReconnect
+        self.blePeripheralUUID = storedBLEPeripheralUUID
+        self.blePeripheralName = storedBLEPeripheralName
+        self.bleAutoReconnect = storedBLEAutoReconnect
+
+        self.mobilinkdEnabled = storedMobilinkdEnabled
+        self.mobilinkdModemType = storedMobilinkdModemType
+        self.mobilinkdOutputGain = storedMobilinkdOutputGain
+        self.mobilinkdInputGain = storedMobilinkdInputGain
+
         self.notifyOnWatchHits = storedNotifyOnWatch
         self.notifyPlaySound = storedNotifyPlaySound
         self.notifyOnlyWhenInactive = storedNotifyOnlyWhenInactive
@@ -908,6 +1038,50 @@ final class AppSettingsStore: ObservableObject {
 
     private func persistAutoConnect() {
         defaults.set(autoConnectOnLaunch, forKey: Self.autoConnectKey)
+    }
+
+    private func persistTransportType() {
+        defaults.set(transportType, forKey: Self.transportTypeKey)
+    }
+
+    private func persistSerialDevicePath() {
+        defaults.set(serialDevicePath, forKey: Self.serialDevicePathKey)
+    }
+
+    private func persistSerialBaudRate() {
+        defaults.set(serialBaudRate, forKey: Self.serialBaudRateKey)
+    }
+
+    private func persistSerialAutoReconnect() {
+        defaults.set(serialAutoReconnect, forKey: Self.serialAutoReconnectKey)
+    }
+
+    private func persistBLEPeripheralUUID() {
+        defaults.set(blePeripheralUUID, forKey: Self.blePeripheralUUIDKey)
+    }
+
+    private func persistBLEPeripheralName() {
+        defaults.set(blePeripheralName, forKey: Self.blePeripheralNameKey)
+    }
+
+    private func persistBLEAutoReconnect() {
+        defaults.set(bleAutoReconnect, forKey: Self.bleAutoReconnectKey)
+    }
+
+    private func persistMobilinkdEnabled() {
+        defaults.set(mobilinkdEnabled, forKey: Self.mobilinkdEnabledKey)
+    }
+
+    private func persistMobilinkdModemType() {
+        defaults.set(mobilinkdModemType, forKey: Self.mobilinkdModemTypeKey)
+    }
+
+    private func persistMobilinkdOutputGain() {
+        defaults.set(mobilinkdOutputGain, forKey: Self.mobilinkdOutputGainKey)
+    }
+
+    private func persistMobilinkdInputGain() {
+        defaults.set(mobilinkdInputGain, forKey: Self.mobilinkdInputGainKey)
     }
 
     private func persistNotifyOnWatch() {
@@ -1096,6 +1270,13 @@ final class AppSettingsStore: ObservableObject {
             Self.runInMenuBarKey: Self.defaultRunInMenuBar,
             Self.launchAtLoginKey: Self.defaultLaunchAtLogin,
             Self.autoConnectKey: Self.defaultAutoConnect,
+            Self.transportTypeKey: Self.defaultTransportType,
+            Self.serialDevicePathKey: Self.defaultSerialDevicePath,
+            Self.serialBaudRateKey: Self.defaultSerialBaudRate,
+            Self.serialAutoReconnectKey: Self.defaultSerialAutoReconnect,
+            Self.blePeripheralUUIDKey: Self.defaultBLEPeripheralUUID,
+            Self.blePeripheralNameKey: Self.defaultBLEPeripheralName,
+            Self.bleAutoReconnectKey: Self.defaultBLEAutoReconnect,
             Self.notifyOnWatchKey: Self.defaultNotifyOnWatch,
             Self.notifyPlaySoundKey: Self.defaultNotifyPlaySound,
             Self.notifyOnlyWhenInactiveKey: Self.defaultNotifyOnlyWhenInactive,

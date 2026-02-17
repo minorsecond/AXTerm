@@ -148,7 +148,14 @@ final class PlainTextUIFrameTests: XCTestCase {
         XCTAssertEqual(frames.count, 1, "Should decode one KISS frame")
         
         // Decode AX.25
-        let decodedAX25 = AX25.decodeFrame(ax25: frames[0])
+        var frameData: Data?
+        if case .ax25(let d) = frames[0] {
+            frameData = d
+        } else {
+            XCTFail("Not AX.25 frame")
+            return
+        }
+        let decodedAX25 = AX25.decodeFrame(ax25: frameData!)
         XCTAssertNotNil(decodedAX25)
         XCTAssertEqual(decodedAX25?.info, plainText)
     }
@@ -817,7 +824,14 @@ final class KISSPlainTextTests: XCTestCase {
         
         XCTAssertEqual(frames.count, 1)
         
-        let decodedAX25 = AX25.decodeFrame(ax25: frames[0])
+        var frameData: Data?
+        if case .ax25(let d) = frames[0] {
+            frameData = d
+        } else {
+            XCTFail("Not AX.25 frame")
+            return
+        }
+        let decodedAX25 = AX25.decodeFrame(ax25: frameData!)
         XCTAssertNotNil(decodedAX25)
         XCTAssertEqual(decodedAX25?.info, plainText)
         XCTAssertFalse(AXDP.hasMagic(decodedAX25?.info ?? Data()))
@@ -841,7 +855,14 @@ final class KISSPlainTextTests: XCTestCase {
         
         XCTAssertEqual(frames.count, 1)
         
-        let decoded = AX25.decodeFrame(ax25: frames[0])
+        var frameData: Data?
+        if case .ax25(let d) = frames[0] {
+            frameData = d
+        } else {
+            XCTFail("Not AX.25 frame")
+            return
+        }
+        let decoded = AX25.decodeFrame(ax25: frameData!)
         XCTAssertNotNil(decoded)
         XCTAssertEqual(decoded?.info, specialData, "Special bytes should be preserved after KISS escape/unescape")
     }
@@ -867,7 +888,14 @@ final class KISSPlainTextTests: XCTestCase {
         XCTAssertEqual(frames.count, messages.count)
         
         for (i, frame) in frames.enumerated() {
-            let decoded = AX25.decodeFrame(ax25: frame)
+            var frameData: Data?
+            if case .ax25(let d) = frame {
+                frameData = d
+            } else {
+                XCTFail("Not AX.25 frame")
+                continue
+            }
+            let decoded = AX25.decodeFrame(ax25: frameData!)
             XCTAssertNotNil(decoded)
             XCTAssertEqual(String(data: decoded?.info ?? Data(), encoding: .utf8), messages[i])
         }

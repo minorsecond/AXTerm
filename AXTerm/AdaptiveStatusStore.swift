@@ -75,7 +75,9 @@ final class AdaptiveStatusStore: ObservableObject {
     private let sessionWindow: TimeInterval = 10 * 60
     private let minSampleSpacing: TimeInterval = 2
 
-    isolated deinit {}
+    /// Explicit nonisolated deinit to avoid Swift concurrency runtime bug
+    /// where isolated deallocating deinit triggers task-local scope corruption.
+    nonisolated deinit {}
 
     var effectiveAdaptive: AdaptiveParams? {
         if let selectedSessionID, let session = sessionAdaptiveByID[selectedSessionID] {
