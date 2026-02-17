@@ -1,3 +1,4 @@
+#if AXTERM_RF_TESTS
 //
 //  MinimalTNC4ConnectTest.swift
 //  AXTermTests
@@ -367,3 +368,4 @@ final class MinimalTNC4ConnectTest: XCTestCase {
         hexDump([UInt8](data))
     }
 }
+#endif

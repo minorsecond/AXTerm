@@ -1,3 +1,4 @@
+#if AXTERM_RF_TESTS
 //
 //  RealHardwareTNCTests.swift
 //  AXTermTests
@@ -182,3 +183,4 @@ final class RealHardwareTNCTests: XCTestCase {
         return false
     }
 }
+#endif

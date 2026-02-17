@@ -1,3 +1,4 @@
+#if AXTERM_RF_TESTS
 //
 //  TNC4BluetoothSerialConnectionTests.swift
 //  AXTermTests
@@ -78,3 +79,4 @@ final class TNC4BluetoothSerialConnectionTests: XCTestCase {
         XCTAssertEqual(link.state, .disconnected)
     }
 }
+#endif

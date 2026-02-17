@@ -1,3 +1,4 @@
+#if AXTERM_RF_TESTS
 //
 //  TNC4LiveConnectionTests.swift
 //  AXTermTests
@@ -1154,3 +1155,4 @@ final class TNC4LiveConnectionTests: XCTestCase {
 private final class DataCapture {
     var data = Data()
 }
+#endif

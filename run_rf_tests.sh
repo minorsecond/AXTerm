@@ -140,6 +140,7 @@ echo ""
 xcodebuild test \
     -scheme "$SCHEME" \
     -destination "$DESTINATION" \
+    OTHER_SWIFT_FLAGS='$(inherited) -DAXTERM_RF_TESTS' \
     "${TEST_FILTER[@]}" \
     2>&1 | grep -E 'Test (Case|Suite)|passed|failed|skipped|Executed|error:|assert' || true
 
