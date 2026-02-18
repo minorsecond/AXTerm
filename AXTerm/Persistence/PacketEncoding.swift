@@ -8,7 +8,6 @@
 import Foundation
 
 nonisolated enum PacketEncoding {
-    static let printableThreshold: Double = 0.75
     static let separator: Character = ","
     static let repeatedMarker: Character = "*"
 
@@ -53,10 +52,7 @@ nonisolated enum PacketEncoding {
     }
 
     static func isPrintableText(_ data: Data) -> Bool {
-        guard !data.isEmpty else { return false }
-        let printableCount = data.filter { $0 >= 0x20 && $0 < 0x7F || $0 == 0x0A || $0 == 0x0D }.count
-        let ratio = Double(printableCount) / Double(data.count)
-        return ratio >= printableThreshold
+        Packet.computeInfoText(from: data) != nil
     }
 
     static func encodeViaPath(_ via: [AX25Address]) -> String {

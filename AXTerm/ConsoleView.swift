@@ -30,7 +30,7 @@ nonisolated enum ConsoleVisibilityFilter {
             timeFiltered = lines
         }
 
-        return timeFiltered.filter { line in
+        let visibilityFiltered = timeFiltered.filter { line in
             switch line.kind {
             case .system, .error:
                 return flags.showSystem
@@ -46,6 +46,19 @@ nonisolated enum ConsoleVisibilityFilter {
                 }
             }
         }
+
+        #if DEBUG
+        let hiddenCount = timeFiltered.count - visibilityFiltered.count
+        if hiddenCount > 0 {
+            print(
+                "[ConsoleFilter] hidden=\(hiddenCount) total=\(timeFiltered.count) "
+                + "flags={ID:\(flags.showID) BCN:\(flags.showBeacon) MAIL:\(flags.showMail) "
+                + "DATA:\(flags.showData) PR:\(flags.showPrompt) OTH:\(flags.showOther) SYS:\(flags.showSystem)}"
+            )
+        }
+        #endif
+
+        return visibilityFiltered
     }
 }
 

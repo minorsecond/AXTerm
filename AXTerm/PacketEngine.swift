@@ -141,6 +141,29 @@ final class PacketEngine: ObservableObject {
         return data.prefix(limit).map { String(format: "%02X", $0) }.joined()
     }
 
+    private func packetLogTransport() -> String {
+        if link is KISSLinkSerial { return "serial" }
+        if link is KISSLinkBLE { return "ble" }
+        if link is KISSLinkNetwork { return "network" }
+        if connection != nil { return "legacy-network" }
+        if settings.isSerialTransport { return "serial" }
+        if settings.isBLETransport { return "ble" }
+        return "network"
+    }
+
+    private func packetLogEndpoint() -> String {
+        if let endpoint = link?.endpointDescription, !endpoint.isEmpty {
+            return endpoint
+        }
+        if let host = connectedHost, let port = connectedPort {
+            return "\(host):\(port)"
+        }
+        if let host = connectedHost {
+            return host
+        }
+        return "unknown"
+    }
+
     // MARK: - NET/ROM Integration
 
     /// NET/ROM routing integration for passive route inference and link quality estimation.
@@ -347,6 +370,12 @@ final class PacketEngine: ObservableObject {
         configureStationSubscription()
         observeSettings()
         observeCapabilityStore()
+        PacketDebugFileLogger.startSession(context: [
+            "component": "PacketEngine",
+            "myCallsign": settings.myCallsign.isEmpty ? "NOCALL" : settings.myCallsign,
+            "maxPackets": String(maxPackets),
+            "maxRawChunks": String(maxRawChunks)
+        ])
         loadPersistedPackets(reason: "startup")
     }
 
@@ -435,6 +464,10 @@ final class PacketEngine: ObservableObject {
     }
 
     func connect(host: String = "localhost", port: UInt16 = 8001) {
+        PacketDebugFileLogger.log(event: "CONNECT_NETWORK_REQUEST", fields: [
+            "host": host,
+            "port": String(port)
+        ])
         disconnect()
 
         guard port > 0 else {
@@ -461,6 +494,11 @@ final class PacketEngine: ObservableObject {
 
     /// Connect using a serial device
     func connectSerial(config: SerialConfig) {
+        PacketDebugFileLogger.log(event: "CONNECT_SERIAL_REQUEST", fields: [
+            "path": config.devicePath,
+            "baud": String(config.baudRate),
+            "autoReconnect": config.autoReconnect ? "true" : "false"
+        ])
         // Orchestration: Check if we are already connected/connecting to this exact device
         if let currentLink = link as? KISSLinkSerial, currentLink.config.devicePath == config.devicePath {
             // It's the same device path. 
@@ -492,6 +530,11 @@ final class PacketEngine: ObservableObject {
 
     /// Connect using a BLE device
     func connectBLE(config: BLEConfig) {
+        PacketDebugFileLogger.log(event: "CONNECT_BLE_REQUEST", fields: [
+            "uuid": config.peripheralUUID,
+            "name": config.peripheralName.isEmpty ? "(unknown)" : config.peripheralName,
+            "autoReconnect": config.autoReconnect ? "true" : "false"
+        ])
         // Reuse existing BLE link if it's the same peripheral (mirrors serial pattern)
         if let currentLink = link as? KISSLinkBLE, currentLink.config.peripheralUUID == config.peripheralUUID {
             debugTrace("Update BLE config", ["uuid": config.peripheralUUID])
@@ -520,10 +563,20 @@ final class PacketEngine: ObservableObject {
     private func connectViaLink(_ newLink: KISSLink) {
         link = newLink
         newLink.delegate = self
+        PacketDebugFileLogger.log(event: "LINK_OPEN", fields: [
+            "endpoint": newLink.endpointDescription,
+            "transport": packetLogTransport()
+        ])
         newLink.open()
     }
 
     func disconnect(reason: String = "unknown") {
+        PacketDebugFileLogger.log(event: "DISCONNECT", fields: [
+            "reason": reason,
+            "status": status.rawValue,
+            "endpoint": packetLogEndpoint(),
+            "transport": packetLogTransport()
+        ])
         let previousStatus = status
         link?.close()
         link = nil
@@ -771,6 +824,10 @@ final class PacketEngine: ObservableObject {
     func handleIncomingData(_ data: Data) {
         bytesReceived += data.count
         LinkDebugLog.shared.recordRxBytes(data.count)
+        PacketDebugFileLogger.logData(event: "RX_KISS_CHUNK", data: data, fields: [
+            "endpoint": packetLogEndpoint(),
+            "transport": packetLogTransport()
+        ])
 
         TxLog.kissReceive(size: data.count)
         debugTrace("RX KISS chunk", [
@@ -783,6 +840,10 @@ final class PacketEngine: ObservableObject {
 
         // Parse KISS frames from the chunk
         let kissFrames = parser.feed(data)
+        PacketDebugFileLogger.log(event: "RX_KISS_PARSE_RESULT", fields: [
+            "chunkBytes": String(data.count),
+            "frameCount": String(kissFrames.count)
+        ])
 
         if !kissFrames.isEmpty {
             TxLog.debug(.kiss, "Parsed KISS frames", ["count": kissFrames.count])
@@ -791,6 +852,9 @@ final class PacketEngine: ObservableObject {
         for frameOutput in kissFrames {
             switch frameOutput {
             case .ax25(let ax25Data):
+                PacketDebugFileLogger.logData(event: "RX_KISS_AX25_FRAME", data: ax25Data, fields: [
+                    "endpoint": packetLogEndpoint()
+                ])
                 debugTrace("KISS AX.25 frame parsed", ["len": ax25Data.count])
                 frameStats.recordFrame(type: "AX.25", size: ax25Data.count)
                 LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
@@ -799,11 +863,20 @@ final class PacketEngine: ObservableObject {
                 processAX25Frame(ax25Data)
 
             case .mobilinkdTelemetry(let telemetryData):
+                PacketDebugFileLogger.logData(event: "RX_MOBILINKD_TELEMETRY", data: telemetryData, fields: [
+                    "endpoint": packetLogEndpoint()
+                ])
                 frameStats.recordFrame(type: "Telemetry", size: telemetryData.count)
                 if let inputLevel = MobilinkdTNC.parseInputLevel(telemetryData) {
                     DispatchQueue.main.async {
                         self.mobilinkdInputLevel = inputLevel
                     }
+                    PacketDebugFileLogger.log(event: "RX_MOBILINKD_INPUT_LEVEL", fields: [
+                        "vpp": String(inputLevel.vpp),
+                        "vavg": String(inputLevel.vavg),
+                        "vmin": String(inputLevel.vmin),
+                        "vmax": String(inputLevel.vmax)
+                    ])
                     debugTrace("Mobilinkd InputLevel", [
                         "vpp": inputLevel.vpp, "vavg": inputLevel.vavg,
                         "vmin": inputLevel.vmin, "vmax": inputLevel.vmax
@@ -812,6 +885,9 @@ final class PacketEngine: ObservableObject {
                     DispatchQueue.main.async {
                          self.mobilinkdBatteryLevel = battery
                     }
+                    PacketDebugFileLogger.log(event: "RX_MOBILINKD_BATTERY", fields: [
+                        "level": String(battery)
+                    ])
                     debugTrace("Mobilinkd Battery", ["level": battery])
                 } else if let gain = MobilinkdTNC.parseInputGain(telemetryData) {
                      DispatchQueue.main.async {
@@ -820,6 +896,15 @@ final class PacketEngine: ObservableObject {
                              self.debugTrace("Mobilinkd Auto-Gain Updated", ["newGain": gain])
                          }
                      }
+                    PacketDebugFileLogger.log(event: "RX_MOBILINKD_INPUT_GAIN", fields: [
+                        "gain": String(gain)
+                    ])
+                    if gain <= 1 {
+                        PacketDebugFileLogger.log(event: "RX_DIAG_LOW_INPUT_GAIN", fields: [
+                            "gain": String(gain),
+                            "hint": "Low input gain can limit reception to only very strong stations"
+                        ])
+                    }
                 } else {
                     debugTrace("Mobilinkd Telemetry", ["hex": hexPrefix(telemetryData)])
                 }
@@ -828,6 +913,10 @@ final class PacketEngine: ObservableObject {
                     frameType: "Telemetry", byteCount: telemetryData.count))
 
             case .unknown(let cmd, let payload):
+                PacketDebugFileLogger.logData(event: "RX_KISS_UNKNOWN_FRAME", data: payload, fields: [
+                    "command": String(format: "0x%02X", cmd),
+                    "endpoint": packetLogEndpoint()
+                ])
                 frameStats.recordFrame(type: "Unknown(0x\(String(format: "%02X", cmd)))", size: payload.count)
                 debugTrace("Unknown KISS Frame", ["cmd": String(format: "0x%02X", cmd), "len": payload.count])
                 LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
@@ -841,6 +930,10 @@ final class PacketEngine: ObservableObject {
     }
 
     private func processAX25Frame(_ ax25Data: Data) {
+        PacketDebugFileLogger.logData(event: "RX_AX25_RAW", data: ax25Data, fields: [
+            "endpoint": packetLogEndpoint(),
+            "transport": packetLogTransport()
+        ])
         debugTrace("processAX25Frame called", ["len": ax25Data.count, "hex": hexPrefix(ax25Data)])
         TxLog.hexDump(.ax25, "Received AX.25 frame", data: ax25Data)
         debugTrace("RX AX.25 raw", [
@@ -849,6 +942,10 @@ final class PacketEngine: ObservableObject {
         ])
 
         guard let decoded = AX25.decodeFrame(ax25: ax25Data) else {
+            PacketDebugFileLogger.logData(event: "RX_AX25_DECODE_FAILED", data: ax25Data, fields: [
+                "reason": "Invalid frame structure",
+                "endpoint": packetLogEndpoint()
+            ])
             LinkDebugLog.shared.recordParseError(
                 message: "AX.25 decode failed (\(ax25Data.count) bytes)",
                 rawBytes: ax25Data)
@@ -869,6 +966,32 @@ final class PacketEngine: ObservableObject {
             type: decoded.frameType.rawValue,
             size: ax25Data.count
         )
+        let controlDecoded = AX25ControlFieldDecoder.decode(control: decoded.control, controlByte1: decoded.controlByte1)
+        let viaDisplay = decoded.via.map { $0.display }.joined(separator: ",")
+        PacketDebugFileLogger.log(event: "RX_AX25_DECODED", fields: [
+            "src": decoded.from?.display ?? "?",
+            "dest": decoded.to?.display ?? "?",
+            "via": viaDisplay.isEmpty ? "(direct)" : viaDisplay,
+            "frameType": decoded.frameType.rawValue,
+            "frameClass": controlDecoded.frameClass.rawValue,
+            "sType": controlDecoded.sType?.rawValue ?? "nil",
+            "uType": controlDecoded.uType?.rawValue ?? "nil",
+            "ns": controlDecoded.ns.map(String.init) ?? "nil",
+            "nr": controlDecoded.nr.map(String.init) ?? "nil",
+            "pf": controlDecoded.pf.map(String.init) ?? "nil",
+            "control": String(format: "0x%02X", decoded.control),
+            "controlByte1": decoded.controlByte1.map { String(format: "0x%02X", $0) } ?? "nil",
+            "pid": decoded.pid.map { String(format: "0x%02X", $0) } ?? "nil",
+            "infoLen": String(decoded.info.count),
+            "endpoint": packetLogEndpoint(),
+            "transport": packetLogTransport()
+        ])
+        PacketDebugFileLogger.logData(event: "RX_AX25_INFO", data: decoded.info, fields: [
+            "src": decoded.from?.display ?? "?",
+            "dest": decoded.to?.display ?? "?",
+            "frameType": decoded.frameType.rawValue,
+            "pid": decoded.pid.map { String(format: "0x%02X", $0) } ?? "nil"
+        ])
         debugTrace("RX AX.25 decoded", [
             "src": decoded.from?.display ?? "?",
             "dest": decoded.to?.display ?? "?",
@@ -1017,6 +1140,19 @@ final class PacketEngine: ObservableObject {
         guard let description = describeControlFrame(decoded),
               let from = packet.from, let to = packet.to else { return }
         let via = formatViaPath(packet.via)
+        PacketDebugFileLogger.log(event: "RX_CONTROL_FRAME", fields: [
+            "packetID": packet.id.uuidString,
+            "from": from.display,
+            "to": to.display,
+            "via": packet.viaDisplay.isEmpty ? "(direct)" : packet.viaDisplay,
+            "description": description,
+            "frameClass": decoded.frameClass.rawValue,
+            "sType": decoded.sType?.rawValue ?? "nil",
+            "uType": decoded.uType?.rawValue ?? "nil",
+            "ns": decoded.ns.map(String.init) ?? "nil",
+            "nr": decoded.nr.map(String.init) ?? "nil",
+            "pf": decoded.pf.map(String.init) ?? "nil"
+        ])
         addSystemLine("RX: \(from.display) → \(to.display)\(via): \(description)", category: .transmission)
     }
 
@@ -1133,15 +1269,23 @@ final class PacketEngine: ObservableObject {
     /// Returns the text to render in terminal for packet payload.
     /// Falls back to placeholders so empty/binary UI/I frames remain visible.
     private func packetConsoleDisplayText(_ packet: Packet) -> String? {
-        if let text = packet.infoText {
-            return text
-        }
         guard packet.frameType == .ui || packet.frameType == .i else {
             return nil
         }
         if packet.info.isEmpty {
             return "[no payload]"
         }
+
+        if let text = packet.displayText?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !text.isEmpty {
+            return text
+        }
+
+        let asciiFallback = PayloadFormatter.asciiString(packet.info)
+        if !asciiFallback.isEmpty {
+            return asciiFallback
+        }
+
         return "[\(packet.info.count) bytes]"
     }
 
@@ -1212,6 +1356,31 @@ final class PacketEngine: ObservableObject {
     // MARK: - Persistence Integration
 
     func handleIncomingPacket(_ packet: Packet) {
+        let viaPath = Packet.normalizedViaItems(from: packet.via)
+        let viaPathString = viaPath.isEmpty ? "(direct)" : viaPath.joined(separator: ",")
+        let displayPreview = packet.displayText.map { String($0.prefix(96)) } ?? ""
+        PacketDebugFileLogger.log(event: "RX_PACKET_INGRESS", fields: [
+            "packetID": packet.id.uuidString,
+            "from": packet.fromDisplay,
+            "to": packet.toDisplay,
+            "via": viaPathString,
+            "frameType": packet.frameType.rawValue,
+            "pid": packet.pid.map { String(format: "0x%02X", $0) } ?? "nil",
+            "infoLen": String(packet.info.count),
+            "displayPreview": displayPreview
+        ])
+
+        debugTrace("RX pipeline ingress", [
+            "packetID": packet.id.uuidString,
+            "from": packet.fromDisplay,
+            "to": packet.toDisplay,
+            "via": viaPathString,
+            "frameType": packet.frameType.rawValue,
+            "pid": packet.pid.map { String(format: "0x%02X", $0) } ?? "nil",
+            "infoLen": packet.info.count,
+            "preview": displayPreview
+        ])
+
         SentryManager.shared.addBreadcrumb(
             category: "packets.insert",
             message: "Packet insert received",
@@ -1220,6 +1389,15 @@ final class PacketEngine: ObservableObject {
         )
         insertPacketSorted(packet)
         packetInsertSubject.send(packet)
+        PacketDebugFileLogger.log(event: "RX_PACKET_INSERTED", fields: [
+            "packetID": packet.id.uuidString,
+            "packetsCount": String(packets.count)
+        ])
+
+        debugTrace("RX pipeline inserted", [
+            "packetID": packet.id.uuidString,
+            "packetsCount": packets.count
+        ])
 
         // Log RX control frames (SABM, UA, DM, DISC, RR, REJ, I) as SYS lines with digi H-bit status
         let controlDecoded = AX25ControlFieldDecoder.decode(control: packet.control, controlByte1: packet.controlByte1)
@@ -1247,9 +1425,23 @@ final class PacketEngine: ObservableObject {
             ])
         }
 
-        if !skipRawIFrameLine, let text = packetConsoleDisplayText(packet) {
-            // Extract via path as array of callsign strings
-            let viaPath = Packet.normalizedViaItems(from: packet.via)
+        let consoleDisplayText = packetConsoleDisplayText(packet)
+        if skipRawIFrameLine {
+            PacketDebugFileLogger.log(event: "RX_PACKET_CONSOLE_SUPPRESSED", fields: [
+                "packetID": packet.id.uuidString,
+                "reason": "active-session-i-frame",
+                "from": packet.fromDisplay,
+                "to": packet.toDisplay,
+                "via": viaPathString
+            ])
+            debugTrace("RX pipeline console suppressed", [
+                "packetID": packet.id.uuidString,
+                "reason": "active-session-i-frame",
+                "from": packet.fromDisplay,
+                "to": packet.toDisplay,
+                "via": viaPathString
+            ])
+        } else if let text = consoleDisplayText {
 
             // Check for duplicate (same content via different path)
             var isDuplicate = false
@@ -1270,6 +1462,36 @@ final class PacketEngine: ObservableObject {
             )
 
             appendConsoleLine(line, category: .packet, packetID: packet.id, byteCount: packet.info.count)
+            PacketDebugFileLogger.log(event: "RX_PACKET_CONSOLE_APPENDED", fields: [
+                "packetID": packet.id.uuidString,
+                "lineID": line.id.uuidString,
+                "duplicate": isDuplicate ? "true" : "false",
+                "messageType": line.messageType?.rawValue ?? "unknown",
+                "textLen": String(text.count)
+            ])
+
+            debugTrace("RX pipeline console appended", [
+                "packetID": packet.id.uuidString,
+                "lineID": line.id.uuidString,
+                "duplicate": isDuplicate,
+                "messageType": line.messageType?.rawValue ?? "unknown",
+                "textLen": text.count
+            ])
+        } else {
+            PacketDebugFileLogger.log(event: "RX_PACKET_CONSOLE_SUPPRESSED", fields: [
+                "packetID": packet.id.uuidString,
+                "reason": "no-display-text",
+                "frameType": packet.frameType.rawValue,
+                "pid": packet.pid.map { String(format: "0x%02X", $0) } ?? "nil",
+                "infoLen": String(packet.info.count)
+            ])
+            debugTrace("RX pipeline console suppressed", [
+                "packetID": packet.id.uuidString,
+                "reason": "no-display-text",
+                "frameType": packet.frameType.rawValue,
+                "pid": packet.pid.map { String(format: "0x%02X", $0) } ?? "nil",
+                "infoLen": packet.info.count
+            ])
         }
 
         persistPacket(packet)
@@ -2339,6 +2561,12 @@ extension PacketEngine: KISSLinkDelegate {
     func linkDidChangeState(_ state: KISSLinkState) {
         let newStatus = ConnectionStatus(linkState: state)
         let endpoint = link?.endpointDescription ?? "unknown"
+        PacketDebugFileLogger.log(event: "LINK_STATE_CHANGE", fields: [
+            "from": previousLinkState.rawValue,
+            "to": state.rawValue,
+            "endpoint": endpoint,
+            "transport": packetLogTransport()
+        ])
         LinkDebugLog.shared.recordStateChange(
             from: previousLinkState.rawValue,
             to: state.rawValue,
@@ -2369,6 +2597,11 @@ extension PacketEngine: KISSLinkDelegate {
     }
 
     func linkDidError(_ message: String) {
+        PacketDebugFileLogger.log(event: "LINK_ERROR", fields: [
+            "message": message,
+            "endpoint": packetLogEndpoint(),
+            "transport": packetLogTransport()
+        ])
         lastError = message
         LinkDebugLog.shared.recordParseError(message: "Link error: \(message)")
         addErrorLine(message, category: .connection)

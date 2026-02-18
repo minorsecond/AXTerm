@@ -58,6 +58,31 @@ final class AXTermTests: XCTestCase {
         XCTAssertTrue(packet.infoPreview.hasSuffix("..."))
     }
 
+    func testPacketInfoDisplayDecodesUTF8NodeIDText() {
+        let payload = "K0EPI-7 Denver area packet node \r145.x simplex — PBBS & AXIP\r"
+        let packet = Packet(
+            frameType: .ui,
+            info: Data(payload.utf8)
+        )
+
+        XCTAssertNotNil(packet.infoText)
+        XCTAssertTrue(packet.infoDisplay.contains("K0EPI-7 Denver area packet node"))
+        XCTAssertTrue(packet.infoDisplay.contains("145.x simplex"))
+        XCTAssertTrue(packet.infoDisplay.contains("PBBS & AXIP"))
+        XCTAssertFalse(packet.infoDisplay.contains("[63 bytes]"))
+    }
+
+    func testPacketInfoDisplayUsesBestEffortTextFallback() {
+        let packet = Packet(
+            frameType: .ui,
+            info: Data([0x01, 0x02, 0x03, 0x04])
+        )
+
+        XCTAssertNil(packet.infoText)
+        XCTAssertEqual(packet.infoDisplay, "····")
+        XCTAssertEqual(packet.infoPreview, "····")
+    }
+
     func testPacketWithNilAddresses() {
         let packet = Packet()
 

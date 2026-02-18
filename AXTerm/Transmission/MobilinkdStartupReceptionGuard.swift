@@ -20,6 +20,14 @@ nonisolated final class MobilinkdStartupReceptionGuard {
         didIssueRecoveryReset = false
     }
 
+    /// Mark that a RESET was already sent during KISS init, so the startup
+    /// watchdog does not send a redundant second RESET. Double-resetting the
+    /// demodulator prevents the analog front end (AGC, DC offset) from fully
+    /// settling, degrading sensitivity for weaker signals.
+    func markInitResetSent() {
+        didIssueRecoveryReset = true
+    }
+
     func observeInboundChunk(_ chunk: Data) {
         guard !chunk.isEmpty else { return }
         // We only need to keep parsing until first AX.25 is observed.
@@ -33,9 +41,12 @@ nonisolated final class MobilinkdStartupReceptionGuard {
                 hasSeenInboundAX25 = true
                 hasSeenInboundKISSFrame = true
                 return
+            case .ax25:
+                hasSeenInboundKISSFrame = true
             case .mobilinkdTelemetry:
                 hasSeenInboundKISSFrame = true
-                return
+            case .unknown:
+                hasSeenInboundKISSFrame = true
             default:
                 continue
             }

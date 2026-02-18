@@ -59,27 +59,11 @@ final class MinimalTNC4ConnectTest: XCTestCase {
     /// This test bypasses ALL AXTerm code to verify the hardware/protocol path works.
     func testMinimalConnectToK0EPI7() throws {
 
-        // Step 1: Send minimal KISS init (from firmware analysis)
-        // Duplex=0 (half duplex, required for RX frame forwarding)
-        writeKISS(fd, type: 0x05, payload: [0x00])
-        Thread.sleep(forTimeInterval: 0.05)
-
-        // Persistence=63 (25%)
-        writeKISS(fd, type: 0x02, payload: [0x3F])
-        Thread.sleep(forTimeInterval: 0.05)
-
-        // Slot time=0
-        writeKISS(fd, type: 0x03, payload: [0x00])
-        Thread.sleep(forTimeInterval: 0.05)
-
-        // TX Delay=30 (300ms)
-        writeKISS(fd, type: 0x01, payload: [30])
-        Thread.sleep(forTimeInterval: 0.05)
-
-        // CRITICAL: Send RESET (0x0B) via Hardware command (type=0x06)
-        // This is the ONLY way to start the demodulator per firmware analysis.
+        // Step 1: Send RESET only — starts demodulator using EEPROM-calibrated settings.
+        // Do NOT send KISS params (duplex, persistence, slot time, TX delay) — these are
+        // unnecessary for RX and the TNC4 EEPROM already holds correct values.
         writeKISS(fd, type: 0x06, payload: [0x0B])
-        NSLog("[MINIMAL] Sent KISS init + RESET. Waiting 3s for demodulator startup...")
+        NSLog("[MINIMAL] Sent RESET via Hardware command. Waiting 3s for demodulator startup...")
         Thread.sleep(forTimeInterval: 3.0)
 
         // Drain any init response bytes

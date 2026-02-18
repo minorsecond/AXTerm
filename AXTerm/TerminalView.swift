@@ -295,8 +295,6 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                         self?.showSessionNotification(notification)
                     }
                 }
-                
-                self?.objectWillChange.send()
             }
         }
 
@@ -390,9 +388,6 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         #if DEBUG
         print("[TerminalSearch] query=\"\(debouncedQuery)\" all=\(totalCount) visible=\(visibleLines.count) filtered=\(filteredLines.count)")
         #endif
-        
-        // Ensure UI updates reliably
-        objectWillChange.send()
     }
 
     /// Start tracking an outbound message for progressive highlighting
@@ -420,7 +415,6 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             lastKnownVa: startingVs,  // Initially, no frames are acked, so va == startingVs
             chunksAcked: 0
         )
-        objectWillChange.send()
     }
 
     /// Update bytes-sent count when a chunk is transmitted
@@ -431,7 +425,6 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         if prog.isComplete {
             clearOutboundProgressAfterDelay()
         }
-        objectWillChange.send()
     }
 
     /// Update bytes-acked from RR (va = N(R) sequence number, uses modulo-8)
@@ -467,7 +460,6 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             if prog.isComplete {
                 clearOutboundProgressAfterDelay()
             }
-            objectWillChange.send()
         }
     }
 
@@ -477,7 +469,6 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             try? await Task.sleep(nanoseconds: 1_500_000_000)  // 1.5s
             if currentOutboundProgress?.isComplete == true {
                 currentOutboundProgress = nil
-                objectWillChange.send()
             }
         }
     }
@@ -485,7 +476,6 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Clear progress immediately (e.g. user sends another message)
     func clearOutboundProgress() {
         currentOutboundProgress = nil
-        objectWillChange.send()
     }
 
     /// Append decoded AXDP chat text to the session transcript.
@@ -1123,6 +1113,7 @@ struct TerminalView: View {
     @State private var activeSessionRecordID: String?
     @State private var autoAttemptTask: Task<Void, Never>?
     @State private var pendingRoutingReconnect = false
+    @State private var adaptiveSelectionWorkItem: DispatchWorkItem?
 
     init(
         client: PacketEngine,
@@ -1256,6 +1247,7 @@ struct TerminalView: View {
                 }
             }
             .onDisappear {
+                adaptiveSelectionWorkItem?.cancel()
                 stopAutoConnectAttempts()
             }
             .modifier(TerminalViewModifiers(
@@ -1452,18 +1444,30 @@ struct TerminalView: View {
     }
 
     private func syncAdaptiveSelection() {
+        let selection = resolvedAdaptiveSelection()
+
+        adaptiveSelectionWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [sessionCoordinator] in
+            sessionCoordinator.selectAdaptiveSession(
+                destination: selection.destination,
+                path: selection.path
+            )
+        }
+        adaptiveSelectionWorkItem = workItem
+        DispatchQueue.main.async(execute: workItem)
+    }
+
+    private func resolvedAdaptiveSelection() -> (destination: String?, path: String?) {
         guard sessionCoordinator.adaptiveTransmissionEnabled,
               txViewModel.viewModel.connectionMode == .connected,
               let state = txViewModel.sessionState,
               state == .connecting || state == .connected || state == .disconnecting else {
-            sessionCoordinator.selectAdaptiveSession(destination: nil, path: nil)
-            return
+            return (nil, nil)
         }
 
         let destination = CallsignValidator.normalize(connectBarViewModel.toCall)
         guard !destination.isEmpty else {
-            sessionCoordinator.selectAdaptiveSession(destination: nil, path: nil)
-            return
+            return (nil, nil)
         }
         let path: String
         if let sessionPath = txViewModel.currentSession?.path.display, !sessionPath.isEmpty {
@@ -1473,7 +1477,7 @@ struct TerminalView: View {
         } else {
             path = ""
         }
-        sessionCoordinator.selectAdaptiveSession(destination: destination, path: path)
+        return (destination, path)
     }
 
     private func applyAutoPathSuggestionIfNeeded(previousDestination: String, newDestination: String) {

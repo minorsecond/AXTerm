@@ -80,6 +80,11 @@ enum MobilinkdTNC {
         return [KISS_FEND, CMD_HARDWARE, POLL_INPUT_LEVEL, KISS_FEND]
     }
 
+    /// Generates a frame to query the current input gain setting.
+    static func pollInputGain() -> [UInt8] {
+        return [KISS_FEND, CMD_HARDWARE, GET_INPUT_GAIN, KISS_FEND]
+    }
+
     /// Generates a frame to trigger the firmware's auto-AGC adjustment.
     /// NOTE: This stops the demodulator during calibration. Send reset() after to restart.
     static func adjustInputLevels() -> [UInt8] {

@@ -34,7 +34,7 @@ final class PacketEngineConsoleVisibilityTests: XCTestCase {
         )
     }
 
-    func testBinaryUIPayloadUsesByteCountFallbackInTerminalConsole() {
+    func testBinaryUIPayloadUsesTextFallbackInTerminalConsole() {
         let settings = makeSettings()
         let engine = PacketEngine(settings: settings)
 
@@ -54,9 +54,9 @@ final class PacketEngineConsoleVisibilityTests: XCTestCase {
                 $0.kind == .packet &&
                 $0.from == "PEER-1" &&
                 $0.to == "CQ" &&
-                $0.text == "[4 bytes]"
+                $0.text == "····"
             },
-            "Binary UI payload should be visible with a byte-count placeholder."
+            "Binary UI payload should be visible with text fallback instead of a byte-count placeholder."
         )
     }
 

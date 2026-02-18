@@ -515,23 +515,22 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     /// Send KISS parameter frames and Mobilinkd-specific config after BLE connection.
     /// Same init sequence as the serial transport.
     private func sendKISSInit() {
-        // TNC4 KISS Init Strategy — ZERO DISRUPTION:
+        // TNC4 KISS Init Strategy — NO COMMANDS ON CONNECT:
         //
-        // The TNC4 auto-starts its demodulator on BLE connect. The EEPROM holds
-        // calibrated gain/twist/DC-offset from ADJUST_INPUT_LEVELS. We send NOTHING
-        // on connect — no RESET, no SET_MODEM_TYPE, no gain commands. Any command
-        // risks disrupting the already-running demodulator.
+        // The TNC4 firmware auto-starts the demodulator when it detects a BLE
+        // connection (CMD_BT_CONNECT in IOEventTask.cpp). Every other app that
+        // works with Mobilinkd TNCs sends ZERO init commands.
         //
-        // Go straight to .connected and let the auto-started demodulator do its job.
+        // Sending RESET on connect DISRUPTS the already-running demodulator.
+        // If auto-start fails, the host app can send RESET as recovery.
+
+        setState(.connected)
 
         if config.mobilinkdConfig != nil {
-            KISSLinkLog.info(endpointDescription, message: "Mobilinkd BLE detected — sending NO init commands (EEPROM config + auto-start demodulator)")
+            KISSLinkLog.info(endpointDescription, message: "Mobilinkd BLE — no init commands (firmware auto-starts demodulator on BLE connect)")
         } else {
             KISSLinkLog.info(endpointDescription, message: "Non-Mobilinkd BLE device — no KISS init needed")
         }
-
-        setState(.connected)
-        KISSLinkLog.info(endpointDescription, message: "KISS init complete — BLE link ready (no commands sent)")
     }
 
     private func startBatteryPolling() {

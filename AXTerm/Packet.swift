@@ -22,17 +22,61 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
     let controlByte1: UInt8?
     let pid: UInt8?
     let info: Data
-    /// Cached text decoding of `info` (if mostly printable ASCII).
+    /// Cached text decoding of `info` when payload looks human-readable.
     let infoText: String?
     let rawAx25: Data
     let kissEndpoint: KISSEndpoint?
 
     nonisolated static func computeInfoText(from info: Data) -> String? {
         guard !info.isEmpty else { return nil }
-        let printableCount = info.filter { $0 >= 0x20 && $0 < 0x7F || $0 == 0x0A || $0 == 0x0D }.count
+        let printableCount = info.filter { $0 >= 0x20 && $0 < 0x7F || $0 == 0x0A || $0 == 0x0D || $0 == 0x09 }.count
         let ratio = Double(printableCount) / Double(info.count)
         guard ratio >= 0.75 else { return nil }
-        return String(data: info, encoding: .ascii)?.trimmingCharacters(in: .controlCharacters)
+
+        let candidates: [String.Encoding] = [.utf8, .ascii, .isoLatin1]
+        for encoding in candidates {
+            guard let decoded = String(data: info, encoding: encoding) else { continue }
+            let normalized = normalizedPayloadText(decoded)
+            if !normalized.isEmpty {
+                return normalized
+            }
+        }
+
+        return nil
+    }
+
+    nonisolated static func bestEffortInfoText(from info: Data) -> String? {
+        guard !info.isEmpty else { return nil }
+
+        let lossyUTF8 = normalizedPayloadText(String(decoding: info, as: UTF8.self))
+        if !lossyUTF8.isEmpty {
+            return lossyUTF8
+        }
+
+        let asciiFallback = PayloadFormatter.asciiString(info)
+        return asciiFallback.isEmpty ? nil : asciiFallback
+    }
+
+    private nonisolated static func normalizedPayloadText(_ text: String) -> String {
+        guard !text.isEmpty else { return "" }
+
+        let space = UnicodeScalar(0x20)!
+        var scalars = String.UnicodeScalarView()
+        scalars.reserveCapacity(text.unicodeScalars.count)
+
+        for scalar in text.unicodeScalars {
+            if scalar.value == 0x0A || scalar.value == 0x0D || scalar.value == 0x09 || !CharacterSet.controlCharacters.contains(scalar) {
+                scalars.append(scalar)
+            } else {
+                scalars.append(space)
+            }
+        }
+
+        return String(scalars).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var displayText: String? {
+        infoText ?? Self.bestEffortInfoText(from: info)
     }
 
     // MARK: - Display Helpers
@@ -58,7 +102,7 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
         if let netromSummary = netRomBroadcastSummary {
             return netromSummary
         }
-        if let text = infoText {
+        if let text = displayText {
             return text
                 .replacingOccurrences(of: "\r", with: " ")
                 .replacingOccurrences(of: "\n", with: " ")
@@ -72,7 +116,7 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
         if let netromSummary = netRomBroadcastSummary {
             return netromSummary.wordSafeTruncate(limit: Self.infoPreviewLimit)
         }
-        if let text = infoText {
+        if let text = displayText {
             let trimmed = text.replacingOccurrences(of: "\r", with: " ")
                               .replacingOccurrences(of: "\n", with: " ")
             return trimmed.wordSafeTruncate(limit: Self.infoPreviewLimit)
@@ -108,7 +152,7 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
     }
 
     var infoTooltip: String {
-        infoText ?? infoPreview
+        displayText ?? infoPreview
     }
 
     var isLowSignal: Bool {

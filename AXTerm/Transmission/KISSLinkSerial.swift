@@ -140,22 +140,28 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     private var ongoingNoAX25RecoveryTimer: DispatchSourceTimer?
     private let startupReceptionGuard = MobilinkdStartupReceptionGuard()
     private var connectionOpenedAt: Date?
+    private var lastTelemetryOnlyWarningAt: Date?
     private var ongoingNoAX25RecoveryAttempts = 0
     private var reconnectAttempt = 0
     private static let maxReconnectDelay: TimeInterval = 15 // Cap at 15s per requirements
     private static let baseReconnectDelay: TimeInterval = 1
     private static let btOpenTimeout: TimeInterval = 10 // Timeout for BT serial open()
+    private static let batteryPollInitialDelay: TimeInterval = 15.0
+    private static let batteryPollInterval: TimeInterval = 60.0
+    private static let startupInputGainPollDelay: TimeInterval = 5.0
+    private static let telemetryOnlyWarningDelay: TimeInterval = 30.0
+    private static let telemetryOnlyWarningInterval: TimeInterval = 60.0
     // Stage 1: if we see no inbound KISS at all after connect, the receive
     // path may be wedged, so issue one-shot demodulator reset.
-    private static let startupNoKISSRecoveryDelay: TimeInterval = 30.0
+    private static let startupNoKISSRecoveryDelay: TimeInterval = 10.0
     // Stage 2: even if telemetry is arriving, the demodulator can still be
-    // stuck (no AX.25 decode). If no AX.25 arrives for a longer interval,
-    // issue one-shot reset.
-    private static let startupNoAX25RecoveryDelay: TimeInterval = 90.0
+    // stuck (no AX.25 decode). If no AX.25 arrives within this window,
+    // issue one-shot reset as safety net.
+    private static let startupNoAX25RecoveryDelay: TimeInterval = 15.0
     // If the demodulator still hasn't produced any AX.25 well after startup,
     // send limited additional recovery resets.
-    private static let ongoingNoAX25RecoveryDelay: TimeInterval = 180.0
-    private static let ongoingNoAX25RecoveryInterval: TimeInterval = 180.0
+    private static let ongoingNoAX25RecoveryDelay: TimeInterval = 60.0
+    private static let ongoingNoAX25RecoveryInterval: TimeInterval = 60.0
     private static let maxOngoingNoAX25RecoveryAttempts = 3
     private var originalTermios = termios()
     private var isBluetoothSerial = false
@@ -220,6 +226,10 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             // Log hex dump of outbound frame for debugging
             let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
             KISSLinkLog.info(self.endpointDescription, message: "Writing \(data.count) bytes: \(hex)")
+            PacketDebugFileLogger.logData(event: "TX_KISS_CHUNK", data: data, fields: [
+                "endpoint": self.endpointDescription,
+                "transport": "serial"
+            ])
 
             // WRITE LOOP: Ensure full frame is written
             var bytesWritten = 0
@@ -566,6 +576,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
 
         startupReceptionGuard.resetForNewConnection()
         connectionOpenedAt = Date()
+        lastTelemetryOnlyWarningAt = nil
         ongoingNoAX25RecoveryAttempts = 0
         pollTimer.resume()
 
@@ -582,6 +593,8 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         reconnectAttempt = 0
         cancelReconnectTimer()
 
+        requestStartupInputGainPollIfNeeded()
+
         // Start Battery Polling if enabled
         if let mobiConfig = config.mobilinkdConfig, mobiConfig.isBatteryMonitoringEnabled {
             startBatteryPolling()
@@ -594,28 +607,49 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     }
     
     private func startBatteryPolling() {
-        // Prime the CDC data path shortly after connect.
-        // Some USB CDC stacks deliver unsolicited RX only after the first host write.
-        // A one-shot battery poll is safe and avoids waiting for user TX.
-        let initialPoll = MobilinkdTNC.pollBatteryLevel()
-        serialQueue.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            guard let self else { return }
-            self.send(Data(initialPoll)) { _ in }
-        }
-
         let timer = DispatchSource.makeTimerSource(queue: serialQueue)
-        timer.schedule(deadline: .now() + 60.0, repeating: 60.0)
+        timer.schedule(
+            deadline: .now() + Self.batteryPollInitialDelay,
+            repeating: Self.batteryPollInterval
+        )
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             let frame = MobilinkdTNC.pollBatteryLevel()
-            // Send directly without queuing if possible, or use standard send
             self.send(Data(frame)) { _ in } 
         }
         timer.resume()
+        KISSLinkLog.info(
+            endpointDescription,
+            message: "Battery polling enabled (start in \(Int(Self.batteryPollInitialDelay))s, every \(Int(Self.batteryPollInterval))s)"
+        )
+        PacketDebugFileLogger.log(event: "BATTERY_POLL_SCHEDULED", fields: [
+            "initialDelaySec": String(Int(Self.batteryPollInitialDelay)),
+            "intervalSec": String(Int(Self.batteryPollInterval)),
+            "endpoint": endpointDescription,
+            "transport": "serial"
+        ])
         
         lock.lock()
         batteryPollTimer = timer
         lock.unlock()
+    }
+
+    private func requestStartupInputGainPollIfNeeded() {
+        guard config.mobilinkdConfig != nil else { return }
+        serialQueue.asyncAfter(deadline: .now() + Self.startupInputGainPollDelay) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let connected = self._state == .connected
+            self.lock.unlock()
+            guard connected else { return }
+
+            PacketDebugFileLogger.log(event: "STARTUP_GAIN_POLL_REQUEST", fields: [
+                "delaySec": String(Int(Self.startupInputGainPollDelay)),
+                "endpoint": self.endpointDescription,
+                "transport": "serial"
+            ])
+            self.send(Data(MobilinkdTNC.pollInputGain())) { _ in }
+        }
     }
 
     private func scheduleStartupRecoveryWatchdogIfNeeded() {
@@ -649,24 +683,31 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
             )
         }
 
-        let ongoingNoAX25Timer = DispatchSource.makeTimerSource(queue: serialQueue)
-        ongoingNoAX25Timer.schedule(
-            deadline: .now() + Self.ongoingNoAX25RecoveryDelay,
-            repeating: Self.ongoingNoAX25RecoveryInterval
-        )
-        ongoingNoAX25Timer.setEventHandler { [weak self] in
-            self?.handleOngoingNoAX25Recovery()
-        }
-
         lock.lock()
         startupNoKISSRecoveryTimer = noKISSTimer
         startupNoAX25RecoveryTimer = noAX25Timer
-        ongoingNoAX25RecoveryTimer = ongoingNoAX25Timer
         lock.unlock()
 
         noKISSTimer.resume()
         noAX25Timer.resume()
-        ongoingNoAX25Timer.resume()
+
+        // Only schedule ongoing recovery if no RESET was sent during init.
+        // Additional RESETs after the init RESET can crash the USB CDC
+        // connection ("Device not configured" error observed in testing).
+        if !startupReceptionGuard.didIssueRecoveryReset {
+            let ongoingNoAX25Timer = DispatchSource.makeTimerSource(queue: serialQueue)
+            ongoingNoAX25Timer.schedule(
+                deadline: .now() + Self.ongoingNoAX25RecoveryDelay,
+                repeating: Self.ongoingNoAX25RecoveryInterval
+            )
+            ongoingNoAX25Timer.setEventHandler { [weak self] in
+                self?.handleOngoingNoAX25Recovery()
+            }
+            lock.lock()
+            ongoingNoAX25RecoveryTimer = ongoingNoAX25Timer
+            lock.unlock()
+            ongoingNoAX25Timer.resume()
+        }
     }
 
     private func handleStartupRecovery(
@@ -779,26 +820,40 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
     }
     
     private func sendKISSInit() {
-        // TNC4 KISS Init Strategy — ZERO DISRUPTION:
+        // TNC4 KISS Init Strategy — SINGLE RESET, NO WATCHDOG FOLLOW-UP:
         //
-        // The TNC4 auto-starts its demodulator on USB connect (and BLE connect).
-        // The EEPROM holds calibrated gain/twist/DC-offset from ADJUST_INPUT_LEVELS.
-        // Sending ANY commands on connect (RESET, SET_MODEM_TYPE, gain commands,
-        // even standard KISS params) risks disrupting the already-running demodulator.
+        // Despite the firmware having auto-start code (CMD_USB_CDC_CONNECT in
+        // IOEventTask.cpp), it does NOT reliably auto-start the demodulator on
+        // macOS USB CDC connect. Confirmed by testing: no AX.25 packets arrive
+        // until a RESET is sent explicitly.
         //
-        // qth.app and other working KISS clients don't send init commands — they
-        // just open the port and start listening. We do the same.
+        // We send exactly ONE RESET (0x0B) on connect. The startup watchdog is
+        // suppressed via markInitResetSent() so it doesn't send a redundant
+        // second RESET. Additional RESETs are harmful — they can crash the USB
+        // CDC connection ("Device not configured" error observed in testing).
         //
-        // Go straight to .connected and let the auto-started demodulator do its job.
-
-        if config.mobilinkdConfig != nil {
-            KISSLinkLog.info(endpointDescription, message: "Mobilinkd serial detected — sending NO init commands (EEPROM config + auto-start demodulator)")
-        } else {
-            KISSLinkLog.info(endpointDescription, message: "Serial connected — no KISS init needed")
-        }
+        // We do NOT send: SET_MODEM_TYPE, SET_INPUT_GAIN, SET_OUTPUT_GAIN, or
+        // any standard KISS params (TX delay, persistence, etc.).
+        // Those commands disrupt the calibrated EEPROM state.
 
         setState(.connected)
-        KISSLinkLog.info(endpointDescription, message: "KISS init complete — link ready (no commands sent)")
+
+        if config.mobilinkdConfig != nil {
+            KISSLinkLog.info(endpointDescription, message: "Mobilinkd serial — sending single RESET to start demodulator")
+            // Suppress startup watchdog — a second RESET can crash the USB connection.
+            startupReceptionGuard.markInitResetSent()
+            let resetFrame = Data(MobilinkdTNC.reset())
+            send(resetFrame) { [weak self] error in
+                guard let self else { return }
+                if let error {
+                    KISSLinkLog.error(self.endpointDescription, message: "KISS init RESET failed: \(error.localizedDescription)")
+                } else {
+                    KISSLinkLog.info(self.endpointDescription, message: "KISS init complete — single RESET sent, demodulator starting")
+                }
+            }
+        } else {
+            KISSLinkLog.info(endpointDescription, message: "Non-Mobilinkd serial — no KISS init needed")
+        }
     }
 
     // MARK: - Private: Configure Port
@@ -965,6 +1020,42 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
                 handleDeviceDisconnect()
             }
         }
+
+        emitTelemetryOnlyNoAX25WarningIfNeeded()
+    }
+
+    private func emitTelemetryOnlyNoAX25WarningIfNeeded() {
+        guard config.mobilinkdConfig != nil else { return }
+        guard startupReceptionGuard.hasSeenInboundKISSFrame else { return }
+
+        if startupReceptionGuard.hasSeenInboundAX25 {
+            lastTelemetryOnlyWarningAt = nil
+            return
+        }
+
+        guard let openedAt = connectionOpenedAt else { return }
+        let now = Date()
+        let elapsed = now.timeIntervalSince(openedAt)
+        guard elapsed >= Self.telemetryOnlyWarningDelay else { return }
+
+        if let last = lastTelemetryOnlyWarningAt,
+           now.timeIntervalSince(last) < Self.telemetryOnlyWarningInterval {
+            return
+        }
+        lastTelemetryOnlyWarningAt = now
+
+        let elapsedSec = Int(elapsed)
+        KISSLinkLog.info(
+            endpointDescription,
+            message: "Inbound KISS telemetry is active but no AX.25 frames after \(elapsedSec)s (demodulator or RF input issue)"
+        )
+        PacketDebugFileLogger.log(event: "RX_DIAG_TELEMETRY_ONLY", fields: [
+            "elapsedSec": String(elapsedSec),
+            "hasInboundKISS": startupReceptionGuard.hasSeenInboundKISSFrame ? "true" : "false",
+            "hasInboundAX25": startupReceptionGuard.hasSeenInboundAX25 ? "true" : "false",
+            "endpoint": endpointDescription,
+            "transport": "serial"
+        ])
     }
 
     // MARK: - Private: Close
@@ -973,6 +1064,7 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         cancelReconnectTimer()
         cancelStartupRecoveryWatchdog()
         connectionOpenedAt = nil
+        lastTelemetryOnlyWarningAt = nil
         ongoingNoAX25RecoveryAttempts = 0
 
         lock.lock()

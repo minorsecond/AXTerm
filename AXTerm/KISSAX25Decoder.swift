@@ -165,6 +165,12 @@ nonisolated struct KISSFrameParser {
             "port": String(format: "0x%02X", (command >> 4) & 0x0F),
             "payloadLen": payload.count
         ])
+        PacketDebugFileLogger.log(event: "KISS_FRAME_PARSED", fields: [
+            "command": String(format: "0x%02X", command),
+            "cmdType": String(format: "0x%02X", cmdType),
+            "port": String((command >> 4) & 0x0F),
+            "payloadLen": String(payload.count)
+        ])
 
         // Handle Data Frame (any port — some multi-port TNCs or firmware variants use ports other than 0)
         if cmdType == KISS.CMD_DATA {
@@ -172,6 +178,10 @@ nonisolated struct KISSFrameParser {
             // An empty payload means we got a bare command byte with no data — discard it.
             guard !payload.isEmpty else {
                 TxLog.debug(.kiss, "Discarding DATA frame with empty payload")
+                PacketDebugFileLogger.log(event: "KISS_DISCARDED_EMPTY_DATA", fields: [
+                    "command": String(format: "0x%02X", command),
+                    "port": String((command >> 4) & 0x0F)
+                ])
                 return nil
             }
             return .ax25(payload)
@@ -183,6 +193,10 @@ nonisolated struct KISSFrameParser {
             // Reconstruct full frame: parseBatteryLevel expects [CMD, SUB, DATA...]
             var fullFrame = Data([command])
             fullFrame.append(payload)
+            PacketDebugFileLogger.logData(event: "KISS_MOBILINKD_FRAME", data: fullFrame, fields: [
+                "command": String(format: "0x%02X", command),
+                "payloadLen": String(payload.count)
+            ])
             return .mobilinkdTelemetry(fullFrame)
         }
 
@@ -193,6 +207,11 @@ nonisolated struct KISSFrameParser {
             "command": String(format: "0x%02X", command),
             "cmdType": String(format: "0x%02X", cmdType),
             "payloadLen": payload.count
+        ])
+        PacketDebugFileLogger.logData(event: "KISS_DISCARDED_UNKNOWN_COMMAND", data: payload, fields: [
+            "command": String(format: "0x%02X", command),
+            "cmdType": String(format: "0x%02X", cmdType),
+            "port": String((command >> 4) & 0x0F)
         ])
         return nil
     }

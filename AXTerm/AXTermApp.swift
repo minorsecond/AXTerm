@@ -43,6 +43,11 @@ struct AXTermApp: App {
         _inspectionRouter = StateObject(wrappedValue: router)
 
         TxLog.configure(wireDebugEnabled: WireDebugSettings.isEnabled)
+        PacketDebugFileLogger.startSession(context: [
+            "component": "AXTermApp",
+            "wireDebugEnabled": WireDebugSettings.isEnabled ? "true" : "false",
+            "isTestMode": isTestModeRun ? "true" : "false"
+        ])
 
         // Apply test mode overrides
         if testConfig.isTestMode {
