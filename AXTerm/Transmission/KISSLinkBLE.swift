@@ -851,6 +851,7 @@ extension KISSLinkBLE: CBPeripheralDelegate {
         lock.lock()
         let alreadyHaveTx = txCharacteristic != nil
         let alreadyHaveRx = rxCharacteristic != nil
+        let oldRxChar = rxCharacteristic  // Save for unsubscribing if overridden
         // Known services (Mobilinkd, Nordic UART) always override heuristic
         // assignments from unknown services (e.g. Microchip Transparent UART).
         // The TNC4 advertises both a default Microchip service and its custom
@@ -869,6 +870,13 @@ extension KISSLinkBLE: CBPeripheralDelegate {
         let haveRx = rxCharacteristic != nil
         let rxChar = rxCharacteristic
         lock.unlock()
+
+        // When overriding, unsubscribe from the old (heuristic) RX characteristic
+        // to prevent duplicate data delivery from both services.
+        if shouldOverride, let oldRxChar, oldRxChar.uuid != rxChar?.uuid {
+            peripheral.setNotifyValue(false, for: oldRxChar)
+            KISSLinkLog.info(endpointDescription, message: "Unsubscribed old RX: \(oldRxChar.uuid)")
+        }
 
         // Subscribe to RX notifications if we have a new or overridden RX characteristic
         if let rxChar, (!alreadyHaveRx || shouldOverride) {
