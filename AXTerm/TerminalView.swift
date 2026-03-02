@@ -56,6 +56,38 @@ nonisolated enum TerminalSessionDisplayScope {
     }
 }
 
+// MARK: - NET/ROM Relay
+
+/// Phase of a NET/ROM connect-through relay handshake.
+fileprivate enum NetRomRelayPhase {
+    /// L2 connected to next-hop node, waiting for welcome banner.
+    case awaitingBanner(destination: String, nextHop: String)
+    /// Banner received + C command sent, waiting for node "Connected" response.
+    case awaitingConnected(destination: String, nextHop: String)
+    /// Relay established — transparent I/O to final destination.
+    case established(destination: String, nextHop: String)
+}
+
+/// Matches plain-text success/failure responses from BBS/NET/ROM nodes during relay handshake.
+nonisolated struct NetRomRelayResponseParser {
+    static let successPatterns = ["connected to", "*** connected", "linked to", "link established"]
+    static let failurePatterns = ["no route", "not found", "invalid command", "busy", "*** busy", "rejected", "failure"]
+
+    static func isSuccess(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return successPatterns.contains { lower.contains($0) }
+    }
+
+    static func isFailure(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return failurePatterns.contains { lower.contains($0) }
+    }
+
+    static func failureDetail(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 /// Observable wrapper around TerminalTxViewModel for SwiftUI binding
 @MainActor
 final class ObservableTerminalTxViewModel: ObservableObject {
@@ -88,6 +120,21 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
     /// Cancellables for Combine subscriptions
     private var cancellables = Set<AnyCancellable>()
+
+    // MARK: - NET/ROM Relay State
+
+    /// Current phase of a NET/ROM connect-through handshake (nil when no relay active).
+    /// fileprivate so TerminalView (same file) can both read and write the phase.
+    @Published fileprivate var netRomRelayPhase: NetRomRelayPhase?
+
+    /// Called when relay handshake succeeds (destination, nextHop).
+    var onNetRomRelayEstablished: ((String, String) -> Void)?
+
+    /// Called when relay handshake fails (error detail).
+    var onNetRomRelayFailed: ((String) -> Void)?
+
+    /// Called to send data frames produced by sessionManager.sendData (e.g. relay C command).
+    var onSendFrames: (([OutboundFrame]) -> Void)?
 
     // MARK: - Filtering Pipeline
     
@@ -823,6 +870,43 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             return
         }
 
+        // NET/ROM relay phase: intercept handshake data from next-hop node.
+        // Side effects (send C command, update phase, fire callbacks) happen here;
+        // the data still falls through so the user sees all node text in the transcript.
+        if let phase = netRomRelayPhase {
+            switch phase {
+            case let .awaitingBanner(destination, nextHop) where peerKey == nextHop.uppercased():
+                // First I-frame from node — banner arrived; send relay connect command
+                netRomRelayPhase = .awaitingConnected(destination: destination, nextHop: nextHop)
+                sendRelayConnectCommand(destination: destination)
+                TxLog.outbound(.session, "NET/ROM relay: banner received, C command sent", [
+                    "destination": destination, "nextHop": nextHop
+                ])
+
+            case let .awaitingConnected(destination, nextHop) where peerKey == nextHop.uppercased():
+                // Check node response for success/failure patterns
+                let text = String(data: data, encoding: .utf8) ?? ""
+                if NetRomRelayResponseParser.isSuccess(text) {
+                    netRomRelayPhase = .established(destination: destination, nextHop: nextHop)
+                    onNetRomRelayEstablished?(destination, nextHop)
+                    TxLog.inbound(.session, "NET/ROM relay established", [
+                        "destination": destination, "nextHop": nextHop
+                    ])
+                } else if NetRomRelayResponseParser.isFailure(text) {
+                    netRomRelayPhase = nil
+                    onNetRomRelayFailed?(NetRomRelayResponseParser.failureDetail(text))
+                    TxLog.inbound(.session, "NET/ROM relay handshake failed", [
+                        "destination": destination, "nextHop": nextHop,
+                        "response": String(text.prefix(80))
+                    ])
+                }
+                // Fall through — node response text is shown in the transcript either way
+
+            default:
+                break
+            }
+        }
+
         // Auto-select the session when data arrives:
         // - If no currentSession is set, use the incoming session
         // - If currentSession is set but to a different session, check if the incoming
@@ -893,6 +977,22 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     func clearPlainTextBuffer(for address: AX25Address) {
         let peerKey = address.display.uppercased()
         currentLineBuffers.removeValue(forKey: peerKey)
+    }
+
+    /// Send a `C DESTINATION\r` command through the current AX.25 session to relay to a node.
+    private func sendRelayConnectCommand(destination: String) {
+        guard let session = currentSession else {
+            TxLog.error(.session, "NET/ROM relay: no current session to send C command through", ["destination": destination])
+            return
+        }
+        let command = Data("C \(destination)\r".utf8)
+        let frames = sessionManager.sendData(command, to: session.remoteAddress, path: session.path, channel: session.channel, pid: 0xF0)
+        onSendFrames?(frames)
+        TxLog.outbound(.session, "NET/ROM relay connect command queued", [
+            "destination": destination,
+            "nextHop": session.remoteAddress.display,
+            "frames": frames.count
+        ])
     }
 
     // MARK: - Actions
@@ -1204,6 +1304,10 @@ struct TerminalView: View {
                     connectBarViewModel.markConnecting()
                     updateActiveSessionRecordState("Connecting")
                 case .connected:
+                    // When a NET/ROM relay is in progress, L2 to the next-hop just became
+                    // connected. Do not call markConnected yet — the relay handshake will
+                    // call onNetRomRelayEstablished (→ markConnected) once the node confirms.
+                    guard txViewModel.netRomRelayPhase == nil else { break }
                     connectBarViewModel.markConnected(
                         sourceCall: txViewModel.viewModel.sourceCall,
                         destination: txViewModel.viewModel.destinationCall,
@@ -1218,6 +1322,8 @@ struct TerminalView: View {
                     connectBarViewModel.markDisconnecting()
                     updateActiveSessionRecordState("Disconnecting")
                 case .disconnected:
+                    // If a relay was active, abandon it on disconnect
+                    txViewModel.netRomRelayPhase = nil
                     connectBarViewModel.markDisconnected()
                     updateActiveSessionRecordState("Disconnected")
                     if sessionCoordinator.connectedSessions.isEmpty {
@@ -1230,6 +1336,8 @@ struct TerminalView: View {
                         }
                     }
                 case .error:
+                    // If a relay was active, abandon it on error
+                    txViewModel.netRomRelayPhase = nil
                     connectBarViewModel.markFailed(reason: .unknown, detail: "Session state entered error")
                     updateActiveSessionRecordState("Failed")
                     if sessionCoordinator.connectedSessions.isEmpty {
@@ -1374,6 +1482,36 @@ struct TerminalView: View {
                     }
                 }
             }
+        }
+
+        // NET/ROM relay: send data frames produced by sessionManager.sendData (e.g. C command)
+        txViewModel.onSendFrames = { [weak client] frames in
+            for frame in frames {
+                client?.send(frame: frame) { result in
+                    Task { @MainActor in
+                        if case .failure(let error) = result {
+                            TxLog.error(.session, "NET/ROM relay frame send failed", error: error, [
+                                "type": frame.frameType,
+                                "dest": frame.destination.display
+                            ])
+                        }
+                    }
+                }
+            }
+        }
+
+        // NET/ROM relay: update connect bar when relay is established or fails.
+        txViewModel.onNetRomRelayEstablished = { [weak connectBarViewModel, weak txViewModel] destination, nextHop in
+            connectBarViewModel?.markConnected(
+                sourceCall: txViewModel?.viewModel.sourceCall,
+                destination: destination,
+                via: [],
+                transportMode: .netrom,
+                forcedNextHop: nextHop
+            )
+        }
+        txViewModel.onNetRomRelayFailed = { [weak connectBarViewModel] detail in
+            connectBarViewModel?.markFailed(reason: .connectRejected, detail: detail)
         }
 
         // onSessionStateChanged is now handled inside txViewModel.setupSessionCallbacks()
@@ -2329,7 +2467,7 @@ struct TerminalView: View {
                 updateActiveSessionRecordState("Failed")
                 return .failed
             }
-            return executeNETROMAutoAttempt(intent: intent, override: nextHopOverride)
+            return await executeNETROMAutoAttempt(intent: intent, override: nextHopOverride)
         }
     }
 
@@ -2383,17 +2521,68 @@ struct TerminalView: View {
         }
     }
 
-    private func executeNETROMAutoAttempt(intent: ConnectIntent, override: String?) -> ConnectAttemptStepResult {
-        let message = "NET/ROM transport unavailable"
-        upsertSessionRecord(intent: intent, statusText: "Connecting")
-        connectBarViewModel.markConnecting()
-        connectBarViewModel.recordAttempt(intent: intent, result: .failed)
-        connectBarViewModel.markFailed(reason: .unknown, detail: message)
-        updateActiveSessionRecordState("Failed")
-        client.appendSystemNotification(
-            "NET/ROM connect requested to \(intent.normalizedTo) (next hop: \(override ?? "Auto")). \(message)."
-        )
-        return .unavailable(message: message)
+    private func executeNETROMAutoAttempt(intent: ConnectIntent, override: String?) async -> ConnectAttemptStepResult {
+        guard let nextHop = override ?? intent.routeHint?.nextHop, !nextHop.isEmpty else {
+            let message = "No NET/ROM route to \(intent.normalizedTo)"
+            upsertSessionRecord(intent: intent, statusText: "Failed")
+            connectBarViewModel.markConnecting()
+            connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+            connectBarViewModel.markFailed(reason: .noRoute, detail: message)
+            updateActiveSessionRecordState("Failed")
+            client.appendSystemNotification(message)
+            return .unavailable(message: message)
+        }
+
+        TxLog.outbound(.session, "NET/ROM relay auto-attempt", [
+            "destination": intent.normalizedTo, "nextHop": nextHop
+        ])
+
+        // Set relay phase so data interception is ready the moment UA arrives and data flows
+        txViewModel.netRomRelayPhase = .awaitingBanner(destination: intent.normalizedTo, nextHop: nextHop)
+
+        // Redirect connect bar to the next-hop node for the L2 connect
+        connectBarViewModel.setMode(.ax25, for: intent.sourceContext)
+        connectBarViewModel.applySuggestedTo(nextHop)
+        syncLegacyFieldsFromConnectBar()
+        let nodeIntent = connectBarViewModel.buildIntent(sourceContext: intent.sourceContext)
+        guard nodeIntent.validationErrors.isEmpty else {
+            txViewModel.netRomRelayPhase = nil
+            connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+            connectBarViewModel.markFailed(reason: .invalidDraft, detail: nodeIntent.validationErrors.joined(separator: "; "))
+            return .failed
+        }
+
+        // Establish the L2 connection to the next-hop node
+        let l2Result = await executeAX25AutoAttempt(intent: nodeIntent, digis: [])
+        guard case .success = l2Result else {
+            txViewModel.netRomRelayPhase = nil
+            return l2Result
+        }
+
+        updateActiveSessionRecordState("Relay handshake…")
+
+        // Wait for relay handshake: banner → C command → node "Connected" response
+        let relayResult = await waitForNetRomRelayOutcome(timeoutSeconds: 45)
+        switch relayResult {
+        case .success:
+            connectBarViewModel.recordAttempt(intent: intent, result: .success)
+            updateActiveSessionRecordState("Connected")
+            return .success
+        case .failed(let detail):
+            connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+            connectBarViewModel.markFailed(reason: .connectRejected, detail: detail)
+            updateActiveSessionRecordState("Failed")
+            return .failed
+        case .timeout:
+            txViewModel.netRomRelayPhase = nil
+            connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+            connectBarViewModel.markFailed(reason: .timeout, detail: "Relay handshake timed out.")
+            updateActiveSessionRecordState("Failed")
+            return .timeout
+        case .cancelled:
+            txViewModel.netRomRelayPhase = nil
+            return .cancelled
+        }
     }
 
     private enum AX25AutoWaitResult {
@@ -2439,6 +2628,27 @@ struct TerminalView: View {
             } catch {
                 return .cancelled
             }
+        }
+        return .timeout
+    }
+
+    /// Poll txViewModel.netRomRelayPhase until the relay is established or fails.
+    /// Returns .success when .established, .failed when phase goes nil (failure detected),
+    /// .timeout when deadline is reached, or .cancelled if the Task is cancelled.
+    private func waitForNetRomRelayOutcome(timeoutSeconds: TimeInterval) async -> AX25AutoWaitResult {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if Task.isCancelled { return .cancelled }
+            switch txViewModel.netRomRelayPhase {
+            case .established:
+                return .success
+            case .none:
+                return .failed(detail: "Relay handshake failed.")
+            default:
+                break
+            }
+            do { try await Task.sleep(nanoseconds: 250_000_000) }
+            catch { return .cancelled }
         }
         return .timeout
     }
@@ -2514,17 +2724,49 @@ struct TerminalView: View {
     }
 
     private func connectNETROM(intent: ConnectIntent, override: CallsignSSID?) {
-        let forced = override?.stringValue ?? "Auto"
-        let message = "NET/ROM transport unavailable"
-        connectBarViewModel.recordAttempt(intent: intent, result: .failed)
-        connectBarViewModel.markFailed(
-            reason: .unknown,
-            detail: message
-        )
-        updateActiveSessionRecordState("Failed")
-        client.appendSystemNotification(
-            "NET/ROM connect requested to \(intent.normalizedTo) (next hop: \(forced)). \(message)."
-        )
+        guard let nextHop = override?.stringValue ?? intent.routeHint?.nextHop, !nextHop.isEmpty else {
+            connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+            connectBarViewModel.markFailed(
+                reason: .noRoute,
+                detail: "No NET/ROM route to \(intent.normalizedTo). Try NET/ROM Auto or select a next hop."
+            )
+            updateActiveSessionRecordState("Failed")
+            return
+        }
+
+        // Set relay phase BEFORE sending SABM so data interception is active when UA arrives
+        txViewModel.netRomRelayPhase = .awaitingBanner(destination: intent.normalizedTo, nextHop: nextHop)
+
+        // Redirect connect bar to the next-hop node for the L2 connect
+        connectBarViewModel.setMode(.ax25, for: intent.sourceContext)
+        connectBarViewModel.applySuggestedTo(nextHop)
+        syncLegacyFieldsFromConnectBar()
+
+        guard let frame = txViewModel.connect() else {
+            txViewModel.netRomRelayPhase = nil
+            connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+            connectBarViewModel.markFailed(reason: .unknown, detail: "Unable to build SABM to \(nextHop)")
+            updateActiveSessionRecordState("Failed")
+            return
+        }
+
+        connectBarViewModel.markConnecting()
+        updateActiveSessionRecordState("Connecting via \(nextHop)")
+
+        client.send(frame: frame) { result in
+            Task { @MainActor in
+                if case .failure(let error) = result {
+                    self.txViewModel.netRomRelayPhase = nil
+                    self.connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+                    self.connectBarViewModel.markFailed(reason: .connectRejected, detail: error.localizedDescription)
+                    self.updateActiveSessionRecordState("Failed")
+                } else {
+                    TxLog.outbound(.session, "NET/ROM relay SABM sent", [
+                        "destination": intent.normalizedTo, "nextHop": nextHop
+                    ])
+                }
+            }
+        }
     }
 
     /// Disconnect from current session

@@ -81,6 +81,7 @@ final class KISSLinkBLETests: XCTestCase {
         )
     }
 
+
     // MARK: - BLEDiscoveredDevice Tests
 
     func testDiscoveredDeviceDisplayName() {

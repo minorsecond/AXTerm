@@ -38,7 +38,7 @@ struct BLEConfig: Equatable, Sendable {
 
 /// Well-known BLE serial service UUIDs used by KISS TNCs
 enum BLEServiceUUIDs {
-    /// Mobilinkd TNC4 KISS service
+    /// Mobilinkd TNC4 Bluetooth LE service
     static let mobilinkd = CBUUID(string: "00000001-BA2A-46C9-AE49-01B0961F68BB")
     /// Nordic UART Service (NUS) - used by many BLE serial devices
     static let nordicUART = CBUUID(string: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
@@ -49,13 +49,14 @@ enum BLEServiceUUIDs {
 
 /// Well-known BLE characteristic UUIDs
 enum BLECharacteristicUUIDs {
-    // Mobilinkd characteristics (TX/RX from peripheral's perspective)
+    // Mobilinkd characteristics (TX/RX from peripheral's perspective) - legacy
     static let mobilinkdTX = CBUUID(string: "00000002-BA2A-46C9-AE49-01B0961F68BB")
     static let mobilinkdRX = CBUUID(string: "00000003-BA2A-46C9-AE49-01B0961F68BB")
 
     // Nordic UART characteristics (TX/RX from peripheral's perspective)
     static let nordicUARTTX = CBUUID(string: "6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
     static let nordicUARTRX = CBUUID(string: "6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
+    
 }
 
 // MARK: - BLE Discovered Device
@@ -301,10 +302,21 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         return _totalBytesOut
     }
 
-    // MARK: - BLE MTU
+    // MARK: - Pending Write Queue (flow control for withoutResponse writes)
 
-    /// Maximum payload per BLE write. Updated after connection from peripheral's negotiated MTU.
-    private var bleMTU: Int = 20  // BLE 4.0 default
+    /// Queued data waiting to send when canSendWriteWithoutResponse becomes true.
+    private var pendingWriteData: Data?
+    private var pendingWriteCompletion: ((Error?) -> Void)?
+
+    // MARK: - KISS Init Guard
+
+    /// Prevents calling sendKISSInit more than once per connection (service discovery fires per service).
+    private var _kissInitDone = false
+
+    /// True once a known TNC service (Mobilinkd, Nordic) has been assigned to txCharacteristic.
+    /// Prevents later known-service discoveries from overriding, while still allowing the first
+    /// known-service discovery to override a heuristic assignment from an unknown service.
+    private var _txFromKnownService = false
 
     // MARK: - Init
 
@@ -329,6 +341,10 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         rxCharacteristic = nil
         centralManager = nil
         _state = .disconnected
+        pendingWriteData = nil
+        pendingWriteCompletion = nil
+        _kissInitDone = false
+        _txFromKnownService = false
         lock.unlock()
 
         timer?.cancel()
@@ -383,7 +399,6 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         lock.lock()
         let txChar = txCharacteristic
         let periph = peripheral
-        let mtu = bleMTU
         lock.unlock()
 
         guard let txChar, let periph else {
@@ -391,15 +406,62 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
             return
         }
 
-        // BLE has MTU limits; chunk data if needed
-        let writeType: CBCharacteristicWriteType = txChar.properties.contains(.writeWithoutResponse)
-            ? .withoutResponse
-            : .withResponse
+        // Prefer .withoutResponse for Mobilinkd TNC4 to avoid macOS BLE stack buffering delays.
+        // On macOS, .withResponse writes can be delayed/buffered, preventing timely PTT activation.
+        // Fall back to .withResponse only if .withoutResponse is not supported.
+        let supportsWithResponse = txChar.properties.contains(.write)
+        let supportsWithoutResponse = txChar.properties.contains(.writeWithoutResponse)
+        
+        let writeType: CBCharacteristicWriteType
+        if supportsWithoutResponse {
+            writeType = .withoutResponse
+        } else if supportsWithResponse {
+            writeType = .withResponse
+        } else {
+            // Default fallback if neither is explicitly flagged, though highly unusual.
+            writeType = .withResponse
+        }
+
+        // Use write-type-specific MTU queried directly from the peripheral (not a cached value).
+        // For .withResponse, CoreBluetooth returns up to 512 bytes (GATT Long Write support),
+        // allowing a full KISS DATA frame (typically 25 bytes) in a single writeValue() call.
+        // Splitting a KISS frame across multiple GATT Write Requests can cause the TNC4 firmware
+        // to discard the partial frame since each write may be processed independently.
+        // For .withoutResponse, bounded by ATT MTU - 3 (minimum 20 bytes).
+        let effectiveMTU = periph.maximumWriteValueLength(for: writeType)
+
+        let chunkCount = (data.count + effectiveMTU - 1) / effectiveMTU
+        KISSLinkLog.info(
+            endpointDescription,
+            message: "BLE TX: \(data.count)B, MTU=\(effectiveMTU), type=\(writeType == .withResponse ? "withResp" : "noResp"), chunks=\(chunkCount), hasWrite=\(supportsWithResponse), hasWriteNR=\(supportsWithoutResponse), canSend=\(periph.canSendWriteWithoutResponse)"
+        )
 
         var offset = 0
         while offset < data.count {
-            let chunkEnd = min(offset + mtu, data.count)
+            let chunkEnd = min(offset + effectiveMTU, data.count)
             let chunk = data[offset..<chunkEnd]
+
+            // For withoutResponse, check flow control. A false canSendWriteWithoutResponse means
+            // the BLE TX buffer is full — the write will be silently dropped by CoreBluetooth.
+            if writeType == .withoutResponse && !periph.canSendWriteWithoutResponse {
+                // Store the remaining data; peripheral(_:isReadyToSendWriteWithoutResponse:) will
+                // resume when the buffer has space.
+                KISSLinkLog.error(
+                    endpointDescription,
+                    message: "BLE TX: buffer full at offset \(offset)/\(data.count) — queuing \(data.count - offset) remaining bytes"
+                )
+                lock.lock()
+                pendingWriteData = data.subdata(in: offset..<data.count)
+                pendingWriteCompletion = completion
+                lock.unlock()
+                // Bytes already written are counted below; pending bytes will be counted on resume.
+                lock.lock()
+                _totalBytesOut += offset
+                lock.unlock()
+                KISSLinkLog.bytesOut(endpointDescription, count: offset)
+                return
+            }
+
             periph.writeValue(Data(chunk), for: txChar, type: writeType)
             offset = chunkEnd
         }
@@ -409,6 +471,21 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         lock.unlock()
         KISSLinkLog.bytesOut(endpointDescription, count: data.count)
         completion(nil)
+    }
+
+    /// Resume a pending write that was deferred due to a full BLE TX buffer.
+    /// MUST be called on bleQueue.
+    private func resumePendingWrite() {
+        lock.lock()
+        let data = pendingWriteData
+        let completion = pendingWriteCompletion
+        pendingWriteData = nil
+        pendingWriteCompletion = nil
+        lock.unlock()
+
+        guard let data, let completion else { return }
+        KISSLinkLog.info(endpointDescription, message: "BLE TX: resuming deferred write (\(data.count) bytes)")
+        writeBLE(data, completion: completion)
     }
 
     /// Update configuration. If connected, reconnects with new config.
@@ -464,7 +541,15 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         txCharacteristic = nil
         rxCharacteristic = nil
         centralManager = nil
+        let pendingCompletion = pendingWriteCompletion
+        pendingWriteData = nil
+        pendingWriteCompletion = nil
+        _kissInitDone = false
+        _txFromKnownService = false
         lock.unlock()
+
+        // Fail any deferred write that was waiting for buffer space
+        pendingCompletion?(KISSBLEError.notConnected)
 
         if let periph, let cm {
             cm.delegate = nil
@@ -584,28 +669,36 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
     // MARK: - Private: Characteristic Discovery Helpers
 
-    /// Match discovered characteristics to TX/RX roles based on service UUID
-    private func mapCharacteristics(for service: CBService) -> (tx: CBCharacteristic?, rx: CBCharacteristic?) {
-        guard let characteristics = service.characteristics else { return (nil, nil) }
+    /// Match discovered characteristics to TX/RX roles based on service UUID.
+    /// Returns `isKnownService: true` when the service is a recognized TNC service
+    /// (Mobilinkd, Nordic UART), meaning the mapping should take priority over
+    /// heuristic matches from unknown services.
+    private func mapCharacteristics(for service: CBService) -> (tx: CBCharacteristic?, rx: CBCharacteristic?, isKnownService: Bool) {
+        guard let characteristics = service.characteristics else { return (nil, nil, false) }
 
         var tx: CBCharacteristic?
         var rx: CBCharacteristic?
+        var isKnownService = false
 
         for char in characteristics {
             switch char.uuid {
             // Mobilinkd: "TX" (00000002) has Write property — we write TO the TNC here
             case BLECharacteristicUUIDs.mobilinkdTX:
                 tx = char
+                isKnownService = true
             // Mobilinkd: "RX" (00000003) has Notify property — we receive FROM the TNC here
             case BLECharacteristicUUIDs.mobilinkdRX:
                 rx = char
+                isKnownService = true
 
             // Nordic UART: "RX" (6E400002) has Write property — we write TO the peripheral
             case BLECharacteristicUUIDs.nordicUARTRX:
                 tx = char
+                isKnownService = true
             // Nordic UART: "TX" (6E400003) has Notify property — we receive FROM the peripheral
             case BLECharacteristicUUIDs.nordicUARTTX:
                 rx = char
+                isKnownService = true
 
             default:
                 // For unknown services, heuristic: writable = TX, notifiable = RX
@@ -618,7 +711,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
             }
         }
 
-        return (tx, rx)
+        return (tx, rx, isKnownService)
     }
 }
 
@@ -680,11 +773,12 @@ extension KISSLinkBLE: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        // Update MTU from negotiated value
-        let mtu = peripheral.maximumWriteValueLength(for: .withoutResponse)
-        lock.lock()
-        bleMTU = max(mtu, 20)
-        lock.unlock()
+        // Log both write-type MTUs for diagnostics.
+        // NOTE: MTU exchange may not have completed yet at this point; writeBLE() queries
+        // maximumWriteValueLength() at write time to always get the current negotiated value.
+        let mtuNR = peripheral.maximumWriteValueLength(for: .withoutResponse)
+        let mtuWR = peripheral.maximumWriteValueLength(for: .withResponse)
+        KISSLinkLog.info(endpointDescription, message: "BLE connected: MTU(withResp)=\(mtuWR) MTU(noResp)=\(mtuNR)")
 
         // Discover ALL services — the peripheral may use non-standard UUIDs
         peripheral.discoverServices(nil)
@@ -745,15 +839,30 @@ extension KISSLinkBLE: CBPeripheralDelegate {
             return
         }
 
+        var debugStr = "Svc \(service.uuid): "
+        for c in service.characteristics ?? [] {
+            debugStr += "[\(c.uuid) \(c.properties.rawValue)] "
+        }
+        KISSLinkLog.info(endpointDescription, message: "\n====== CHAR DUMP ======\n" + debugStr + "\n=======================\n")
+
         let mapped = mapCharacteristics(for: service)
+        KISSLinkLog.info(endpointDescription, message: "Mapped TX to: \(mapped.tx?.uuid.uuidString ?? "nil"), RX to: \(mapped.rx?.uuid.uuidString ?? "nil"), knownService=\(mapped.isKnownService)")
 
         lock.lock()
         let alreadyHaveTx = txCharacteristic != nil
         let alreadyHaveRx = rxCharacteristic != nil
-        if mapped.tx != nil && !alreadyHaveTx {
+        // Known services (Mobilinkd, Nordic UART) always override heuristic
+        // assignments from unknown services (e.g. Microchip Transparent UART).
+        // The TNC4 advertises both a default Microchip service and its custom
+        // Mobilinkd service; the Microchip service may be discovered first but
+        // its characteristics are a dead-end — actual UART data flows through
+        // the Mobilinkd service only.
+        let shouldOverride = mapped.isKnownService && !_txFromKnownService
+        if mapped.tx != nil && (!alreadyHaveTx || shouldOverride) {
             txCharacteristic = mapped.tx
+            if mapped.isKnownService { _txFromKnownService = true }
         }
-        if mapped.rx != nil && !alreadyHaveRx {
+        if mapped.rx != nil && (!alreadyHaveRx || shouldOverride) {
             rxCharacteristic = mapped.rx
         }
         let haveTx = txCharacteristic != nil
@@ -761,13 +870,22 @@ extension KISSLinkBLE: CBPeripheralDelegate {
         let rxChar = rxCharacteristic
         lock.unlock()
 
-        // Subscribe to RX notifications if we have it
-        if let rxChar, !alreadyHaveRx {
+        // Subscribe to RX notifications if we have a new or overridden RX characteristic
+        if let rxChar, (!alreadyHaveRx || shouldOverride) {
             peripheral.setNotifyValue(true, for: rxChar)
         }
 
         // If we have both characteristics, go to connected state.
+        // Guard against calling sendKISSInit twice — didDiscoverCharacteristicsFor fires once
+        // per service, and the TNC4 may have multiple services.
         if haveTx && haveRx {
+            lock.lock()
+            let shouldInit = !_kissInitDone
+            if shouldInit { _kissInitDone = true }
+            lock.unlock()
+
+            guard shouldInit else { return }
+
             reconnectAttempt = 0
             cancelReconnectTimer()
             sendKISSInit()
@@ -800,6 +918,24 @@ extension KISSLinkBLE: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error {
             KISSLinkLog.error(endpointDescription, message: "BLE TX error: \(error.localizedDescription)")
+        } else {
+            KISSLinkLog.info(endpointDescription, message: "BLE TX acknowledged (withResponse)")
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        if let error {
+            KISSLinkLog.error(endpointDescription, message: "BLE RX subscription failed for \(characteristic.uuid): \(error.localizedDescription)")
+        } else {
+            let state = characteristic.isNotifying ? "enabled" : "disabled"
+            KISSLinkLog.info(endpointDescription, message: "BLE RX notifications \(state) for \(characteristic.uuid)")
+        }
+    }
+
+    func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        // Buffer has space again — resume any write that was deferred due to flow control.
+        bleQueue.async { [weak self] in
+            self?.resumePendingWrite()
         }
     }
 }

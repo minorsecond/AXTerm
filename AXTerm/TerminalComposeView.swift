@@ -7,6 +7,8 @@
 //
 
 import SwiftUI
+import AppKit
+import Combine
 
 struct AutoPathSuggestionItem: Identifiable, Hashable {
     let id: String
@@ -250,16 +252,97 @@ struct SessionStatusBadge: View {
     }
 }
 
+// MARK: - Routing Popover Helpers
+
+/// Manages a manually-created NSPopover so we can set .applicationModal behavior,
+/// which prevents the popover from auto-dismissing when a TextField inside steals
+/// first-responder focus. An NSEvent local monitor handles outside-click dismissal.
+private final class RoutingPopoverManager: ObservableObject {
+    @Published private(set) var isShown = false
+    private var nsPopover: NSPopover?
+    private var eventMonitor: Any?
+
+    func open<Content: View>(content: Content, anchor: NSView) {
+        guard !isShown else { return }
+        let hostingController = NSHostingController(rootView: content)
+        let popover = NSPopover()
+        popover.contentViewController = hostingController
+        // applicationDefined: never auto-closes. We dismiss explicitly on outside clicks.
+        popover.behavior = .applicationDefined
+        popover.animates = true
+        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
+        nsPopover = popover
+        isShown = true
+
+        // Dismiss when the user clicks anywhere outside the popover's window.
+        eventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self, weak popover] event in
+            guard let self, let popover, popover.isShown else { return event }
+            if let popoverWindow = popover.contentViewController?.view.window,
+               event.window == popoverWindow {
+                return event   // Click is inside the popover — let it through.
+            }
+            DispatchQueue.main.async { self.close() }
+            return event
+        }
+    }
+
+    func close() {
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
+        }
+        nsPopover?.close()
+        nsPopover = nil
+        isShown = false
+    }
+
+    deinit { close() }
+}
+
+/// Embeds an invisible NSView so we have an AppKit anchor for NSPopover.show().
+private struct PopoverAnchorView: NSViewRepresentable {
+    let onAnchor: (NSView) -> Void
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        DispatchQueue.main.async { onAnchor(v) }
+        return v
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+// MARK: - RoutingCapsuleButton
+
 private struct RoutingCapsuleButton: View {
     @ObservedObject var viewModel: ConnectBarViewModel
     let onAutoConnect: () -> Void
     var isLocked: Bool = false
     var onRequestChange: (() -> Void)?
-    @State private var isPopoverPresented = false
+    @StateObject private var popoverManager = RoutingPopoverManager()
+    @State private var anchorView: NSView?
 
     var body: some View {
         Button {
-            isPopoverPresented.toggle()
+            if popoverManager.isShown {
+                popoverManager.close()
+            } else {
+                guard let anchor = anchorView else { return }
+                popoverManager.open(
+                    content: RoutingPopoverContent(
+                        viewModel: viewModel,
+                        onAutoConnect: onAutoConnect,
+                        isLocked: isLocked,
+                        onRequestChange: onRequestChange.map { action in
+                            { [weak popoverManager] in
+                                popoverManager?.close()
+                                action()
+                            }
+                        }
+                    ),
+                    anchor: anchor
+                )
+            }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "arrow.triangle.branch")
@@ -280,19 +363,7 @@ private struct RoutingCapsuleButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("connectBar.routingButton")
-        .popover(isPresented: $isPopoverPresented, arrowEdge: .top) {
-            RoutingPopoverContent(
-                viewModel: viewModel,
-                onAutoConnect: onAutoConnect,
-                isLocked: isLocked,
-                onRequestChange: onRequestChange.map { action in
-                    {
-                        isPopoverPresented = false
-                        action()
-                    }
-                }
-            )
-        }
+        .background(PopoverAnchorView { view in anchorView = view })
     }
 
     private var summaryText: String {
