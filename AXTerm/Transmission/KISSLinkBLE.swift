@@ -913,6 +913,16 @@ extension KISSLinkBLE: CBPeripheralDelegate {
 
         guard let data = characteristic.value, !data.isEmpty else { return }
 
+        // Only process data from the active RX characteristic.  The TNC4
+        // may keep notifying on a stale Microchip characteristic even after
+        // we attempt to unsubscribe (error 913), so discard those.
+        lock.lock()
+        let currentRx = rxCharacteristic
+        lock.unlock()
+        if let currentRx, characteristic.uuid != currentRx.uuid {
+            return  // Ignore data from overridden/stale characteristic
+        }
+
         lock.lock()
         _totalBytesIn += data.count
         lock.unlock()
