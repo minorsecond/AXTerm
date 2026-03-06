@@ -37,6 +37,29 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
 
     // MARK: - Display Helpers
 
+    /// Determines if this packet is a Command (AX.25 v2.0)
+    var isCommand: Bool {
+        // Command: Dest bit 7 = 1, Src bit 7 = 0
+        // Response: Dest bit 7 = 0, Src bit 7 = 1
+        // (In AX25Address, bit 7 is stored in the `repeated` property for src/dest)
+        if to?.repeated == true && from?.repeated == false {
+            return true
+        }
+        if to?.repeated == false && from?.repeated == true {
+            return false
+        }
+        
+        // V1.0 (both 0 or both 1), or unknown, guess based on frame type
+        let decoded = controlFieldDecoded
+        if decoded.frameClass == .I { return true }
+        if decoded.frameClass == .U {
+            if decoded.uType == .SABM || decoded.uType == .SABME || decoded.uType == .DISC || decoded.uType == .UI {
+                return true
+            }
+        }
+        return false // Defaults to response for RR, RNR, REJ, UA, DM, FRMR
+    }
+
     var fromDisplay: String {
         from?.display ?? "?"
     }

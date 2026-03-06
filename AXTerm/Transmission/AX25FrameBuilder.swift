@@ -99,7 +99,8 @@ nonisolated struct AX25FrameBuilder {
             frameType: "u",
             pid: nil,         // No PID for U-frames except UI
             controlByte: control,
-            displayInfo: extended ? "SABME" : "SABM"
+            displayInfo: extended ? "SABME" : "SABM",
+            isCommand: true
         )
     }
 
@@ -119,7 +120,8 @@ nonisolated struct AX25FrameBuilder {
             frameType: "u",
             pid: nil,
             controlByte: AX25Control.uFrame(base: AX25Control.ua, pf: pf),
-            displayInfo: "UA"
+            displayInfo: "UA",
+            isCommand: false
         )
     }
 
@@ -139,7 +141,8 @@ nonisolated struct AX25FrameBuilder {
             frameType: "u",
             pid: nil,
             controlByte: AX25Control.uFrame(base: AX25Control.dm, pf: pf),
-            displayInfo: "DM"
+            displayInfo: "DM",
+            isCommand: false
         )
     }
 
@@ -159,7 +162,8 @@ nonisolated struct AX25FrameBuilder {
             frameType: "u",
             pid: nil,
             controlByte: AX25Control.uFrame(base: AX25Control.disc, pf: pf),
-            displayInfo: "DISC"
+            displayInfo: "DISC",
+            isCommand: true
         )
     }
 
@@ -181,7 +185,8 @@ nonisolated struct AX25FrameBuilder {
             frameType: "ui",
             pid: pid,
             controlByte: AX25Control.ui,
-            displayInfo: displayInfo
+            displayInfo: displayInfo,
+            isCommand: true
         )
     }
 
@@ -193,7 +198,8 @@ nonisolated struct AX25FrameBuilder {
         to destination: AX25Address,
         via path: DigiPath = DigiPath(),
         nr: Int,
-        pf: Bool = false
+        pf: Bool = false,
+        isCommand: Bool = false
     ) -> OutboundFrame {
         return OutboundFrame(
             destination: destination,
@@ -205,7 +211,8 @@ nonisolated struct AX25FrameBuilder {
             pid: nil,
             controlByte: AX25Control.sFrame(base: AX25Control.rrBase, nr: nr, pf: pf),
             nr: nr,
-            displayInfo: "RR(\(nr))"
+            displayInfo: "RR(\(nr))",
+            isCommand: isCommand
         )
     }
 
@@ -215,7 +222,8 @@ nonisolated struct AX25FrameBuilder {
         to destination: AX25Address,
         via path: DigiPath = DigiPath(),
         nr: Int,
-        pf: Bool = false
+        pf: Bool = false,
+        isCommand: Bool = false
     ) -> OutboundFrame {
         return OutboundFrame(
             destination: destination,
@@ -227,7 +235,8 @@ nonisolated struct AX25FrameBuilder {
             pid: nil,
             controlByte: AX25Control.sFrame(base: AX25Control.rnrBase, nr: nr, pf: pf),
             nr: nr,
-            displayInfo: "RNR(\(nr))"
+            displayInfo: "RNR(\(nr))",
+            isCommand: isCommand
         )
     }
 
@@ -237,7 +246,8 @@ nonisolated struct AX25FrameBuilder {
         to destination: AX25Address,
         via path: DigiPath = DigiPath(),
         nr: Int,
-        pf: Bool = false
+        pf: Bool = false,
+        isCommand: Bool = false
     ) -> OutboundFrame {
         return OutboundFrame(
             destination: destination,
@@ -249,7 +259,8 @@ nonisolated struct AX25FrameBuilder {
             pid: nil,
             controlByte: AX25Control.sFrame(base: AX25Control.rejBase, nr: nr, pf: pf),
             nr: nr,
-            displayInfo: "REJ(\(nr))"
+            displayInfo: "REJ(\(nr))",
+            isCommand: isCommand
         )
     }
 
@@ -280,7 +291,8 @@ nonisolated struct AX25FrameBuilder {
             controlByte: AX25Control.iFrame(ns: ns, nr: nr, pf: pf),
             ns: ns,
             nr: nr,
-            displayInfo: displayInfo ?? "I(\(ns),\(nr))"
+            displayInfo: displayInfo ?? "I(\(ns),\(nr))",
+            isCommand: true
         )
     }
 }

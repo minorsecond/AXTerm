@@ -249,7 +249,7 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
     // MARK: - KISSLink State
 
-    private let lock = NSLock()
+    let lock = NSLock()
     private var _state: KISSLinkState = .disconnected
 
     var state: KISSLinkState {
@@ -270,8 +270,8 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
     private var centralManager: CBCentralManager?
     private var peripheral: CBPeripheral?
-    private var txCharacteristic: CBCharacteristic?  // Write to this (peripheral's RX)
-    private var rxCharacteristic: CBCharacteristic?  // Subscribe to this (peripheral's TX)
+    var txCharacteristic: CBCharacteristic?  // Write to this (peripheral's RX)
+    var rxCharacteristic: CBCharacteristic?  // Subscribe to this (peripheral's TX)
     private let bleQueue = DispatchQueue(label: "com.axterm.kisslink.ble")
 
     // MARK: - Reconnect State
@@ -287,8 +287,8 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
     // MARK: - Stats
 
-    private var _totalBytesIn = 0
-    private var _totalBytesOut = 0
+    var _totalBytesIn = 0
+    var _totalBytesOut = 0
 
     var totalBytesIn: Int {
         lock.lock()
@@ -317,6 +317,17 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     /// Prevents later known-service discoveries from overriding, while still allowing the first
     /// known-service discovery to override a heuristic assignment from an unknown service.
     private var _txFromKnownService = false
+    
+    // MARK: - Service Discovery State
+    
+    /// Services pending characteristic discovery
+    private var pendingServices: Set<CBUUID> = []
+    
+    /// All discovered services with their characteristics
+    var discoveredServiceCharacteristics: [CBUUID: [CBCharacteristic]] = [:]
+    
+    /// Whether we're waiting for all service discoveries to complete
+    private var waitingForAllServices = false
 
     // MARK: - Init
 
@@ -345,6 +356,9 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         pendingWriteCompletion = nil
         _kissInitDone = false
         _txFromKnownService = false
+        pendingServices.removeAll()
+        discoveredServiceCharacteristics.removeAll()
+        waitingForAllServices = false
         lock.unlock()
 
         timer?.cancel()
@@ -546,6 +560,9 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         pendingWriteCompletion = nil
         _kissInitDone = false
         _txFromKnownService = false
+        pendingServices.removeAll()
+        discoveredServiceCharacteristics.removeAll()
+        waitingForAllServices = false
         lock.unlock()
 
         // Fail any deferred write that was waiting for buffer space
@@ -600,23 +617,96 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     /// Send KISS parameter frames and Mobilinkd-specific config after BLE connection.
     /// Same init sequence as the serial transport.
     private func sendKISSInit() {
-        // TNC4 KISS Init Strategy — ZERO DISRUPTION:
+        // TNC4 KISS Init Strategy — MINIMAL DISRUPTION:
         //
         // The TNC4 auto-starts its demodulator on BLE connect. The EEPROM holds
-        // calibrated gain/twist/DC-offset from ADJUST_INPUT_LEVELS. We send NOTHING
-        // on connect — no RESET, no SET_MODEM_TYPE, no gain commands. Any command
-        // risks disrupting the already-running demodulator.
+        // calibrated gain/twist/DC-offset from ADJUST_INPUT_LEVELS.
         //
-        // Go straight to .connected and let the auto-started demodulator do its job.
+        // We send ONLY the transmit timing parameters (TXDELAY, PERSISTENCE, SLOTTIME, TXTAIL)
+        // to ensure proper TX operation. We do NOT send RESET or demodulator config commands
+        // that would disrupt the already-running receiver.
 
-        if config.mobilinkdConfig != nil {
-            KISSLinkLog.info(endpointDescription, message: "Mobilinkd BLE detected — sending NO init commands (EEPROM config + auto-start demodulator)")
-        } else {
-            KISSLinkLog.info(endpointDescription, message: "Non-Mobilinkd BLE device — no KISS init needed")
+        KISSLinkLog.info(endpointDescription, message: "Sending KISS transmit timing parameters")
+
+        // Standard KISS parameters for reliable transmission
+        // TXDELAY: 30 (300ms) - time to key PTT before data
+        // PERSISTENCE: 63 (p=0.25) - CSMA persistence parameter
+        // SLOTTIME: 10 (100ms) - CSMA slot time
+        // TXTAIL: 5 (50ms) - time to hold PTT after last byte
+        // FULLDUPLEX: 0 (half-duplex)
+        
+        let txDelay: UInt8 = 30      // 300ms
+        let persistence: UInt8 = 63  // p=0.25
+        let slotTime: UInt8 = 10     // 100ms
+        let txTail: UInt8 = 5        // 50ms
+        let fullDuplex: UInt8 = 0    // half-duplex
+        
+        var initFrames: [Data] = []
+        
+        // Build KISS parameter frames manually
+        // KISS frame format: FEND | CMD | DATA | FEND
+        // CMD byte: (port << 4) | command_type
+        let fend: UInt8 = 0xC0
+        let port: UInt8 = 0
+        
+        // TXDELAY (command 1)
+        initFrames.append(Data([fend, (port << 4) | 1, txDelay, fend]))
+        
+        // PERSISTENCE (command 2)
+        initFrames.append(Data([fend, (port << 4) | 2, persistence, fend]))
+        
+        // SLOTTIME (command 3)
+        initFrames.append(Data([fend, (port << 4) | 3, slotTime, fend]))
+        
+        // TXTAIL (command 4)
+        initFrames.append(Data([fend, (port << 4) | 4, txTail, fend]))
+        
+        // FULLDUPLEX (command 5)
+        initFrames.append(Data([fend, (port << 4) | 5, fullDuplex, fend]))
+        
+        // Send all init frames sequentially
+        sendInitFrames(initFrames, index: 0) { [weak self] error in
+            guard let self else { return }
+            
+            if let error {
+                KISSLinkLog.error(self.endpointDescription, message: "KISS init failed: \(error.localizedDescription)")
+                self.setState(.failed)
+                return
+            }
+            
+            self.setState(.connected)
+            KISSLinkLog.info(self.endpointDescription, message: "KISS init complete — BLE link ready")
+            
+            // Start battery polling if Mobilinkd config is present
+            if let mobiConfig = self.config.mobilinkdConfig, mobiConfig.isBatteryMonitoringEnabled {
+                self.startBatteryPolling()
+            }
         }
-
-        setState(.connected)
-        KISSLinkLog.info(endpointDescription, message: "KISS init complete — BLE link ready (no commands sent)")
+    }
+    
+    /// Recursively send init frames with a small delay between each
+    private func sendInitFrames(_ frames: [Data], index: Int, completion: @escaping (Error?) -> Void) {
+        guard index < frames.count else {
+            completion(nil)
+            return
+        }
+        
+        writeBLE(frames[index]) { [weak self] error in
+            guard let self else {
+                completion(KISSBLEError.notConnected)
+                return
+            }
+            
+            if let error {
+                completion(error)
+                return
+            }
+            
+            // Small delay before next frame (50ms)
+            self.bleQueue.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                self?.sendInitFrames(frames, index: index + 1, completion: completion)
+            }
+        }
     }
 
     private func startBatteryPolling() {
@@ -665,53 +755,6 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         Task { @MainActor [weak self] in
             self?.delegate?.linkDidError(message)
         }
-    }
-
-    // MARK: - Private: Characteristic Discovery Helpers
-
-    /// Match discovered characteristics to TX/RX roles based on service UUID.
-    /// Returns `isKnownService: true` when the service is a recognized TNC service
-    /// (Mobilinkd, Nordic UART), meaning the mapping should take priority over
-    /// heuristic matches from unknown services.
-    private func mapCharacteristics(for service: CBService) -> (tx: CBCharacteristic?, rx: CBCharacteristic?, isKnownService: Bool) {
-        guard let characteristics = service.characteristics else { return (nil, nil, false) }
-
-        var tx: CBCharacteristic?
-        var rx: CBCharacteristic?
-        var isKnownService = false
-
-        for char in characteristics {
-            switch char.uuid {
-            // Mobilinkd: "TX" (00000002) has Write property — we write TO the TNC here
-            case BLECharacteristicUUIDs.mobilinkdTX:
-                tx = char
-                isKnownService = true
-            // Mobilinkd: "RX" (00000003) has Notify property — we receive FROM the TNC here
-            case BLECharacteristicUUIDs.mobilinkdRX:
-                rx = char
-                isKnownService = true
-
-            // Nordic UART: "RX" (6E400002) has Write property — we write TO the peripheral
-            case BLECharacteristicUUIDs.nordicUARTRX:
-                tx = char
-                isKnownService = true
-            // Nordic UART: "TX" (6E400003) has Notify property — we receive FROM the peripheral
-            case BLECharacteristicUUIDs.nordicUARTTX:
-                rx = char
-                isKnownService = true
-
-            default:
-                // For unknown services, heuristic: writable = TX, notifiable = RX
-                if tx == nil && (char.properties.contains(.write) || char.properties.contains(.writeWithoutResponse)) {
-                    tx = char
-                }
-                if rx == nil && (char.properties.contains(.notify) || char.properties.contains(.indicate)) {
-                    rx = char
-                }
-            }
-        }
-
-        return (tx, rx, isKnownService)
     }
 }
 
@@ -826,6 +869,22 @@ extension KISSLinkBLE: CBPeripheralDelegate {
             return
         }
 
+        // NEW STRATEGY: Wait for ALL service characteristic discoveries to complete
+        // before selecting TX/RX characteristics. This prevents the race where
+        // an unknown service (Microchip) is discovered first and triggers init
+        // before the known service (Mobilinkd) is found.
+        
+        lock.lock()
+        waitingForAllServices = true
+        pendingServices.removeAll()
+        discoveredServiceCharacteristics.removeAll()
+        for service in services {
+            pendingServices.insert(service.uuid)
+        }
+        lock.unlock()
+        
+        KISSLinkLog.info(endpointDescription, message: "BLE discovered \(services.count) services: \(services.map { $0.uuid.uuidString }.joined(separator: ", "))")
+
         // Discover characteristics for ALL services
         for service in services {
             peripheral.discoverCharacteristics(nil, for: service)
@@ -839,70 +898,111 @@ extension KISSLinkBLE: CBPeripheralDelegate {
             return
         }
 
+        // Store discovered characteristics for this service
+        lock.lock()
+        if let characteristics = service.characteristics {
+            discoveredServiceCharacteristics[service.uuid] = characteristics
+        }
+        pendingServices.remove(service.uuid)
+        let allServicesDiscovered = pendingServices.isEmpty && waitingForAllServices
+        lock.unlock()
+
         var debugStr = "Svc \(service.uuid): "
         for c in service.characteristics ?? [] {
             debugStr += "[\(c.uuid) \(c.properties.rawValue)] "
         }
         KISSLinkLog.info(endpointDescription, message: "\n====== CHAR DUMP ======\n" + debugStr + "\n=======================\n")
 
-        let mapped = mapCharacteristics(for: service)
-        KISSLinkLog.info(endpointDescription, message: "Mapped TX to: \(mapped.tx?.uuid.uuidString ?? "nil"), RX to: \(mapped.rx?.uuid.uuidString ?? "nil"), knownService=\(mapped.isKnownService)")
-
+        // Wait for all services to complete characteristic discovery
+        guard allServicesDiscovered else {
+            KISSLinkLog.info(endpointDescription, message: "Waiting for more service discoveries (pending: \(pendingServices.count))")
+            return
+        }
+        
+        KISSLinkLog.info(endpointDescription, message: "All services discovered, selecting best characteristics")
+        
+        // Now select the best TX/RX characteristics from all available services
+        selectBestCharacteristics(peripheral: peripheral)
+    }
+    
+    /// Select the best TX/RX characteristics from all discovered services.
+    /// Prioritizes known TNC services (Mobilinkd, Nordic UART) over heuristic matches.
+    private func selectBestCharacteristics(peripheral: CBPeripheral) {
         lock.lock()
-        let alreadyHaveTx = txCharacteristic != nil
-        let alreadyHaveRx = rxCharacteristic != nil
-        let oldRxChar = rxCharacteristic  // Save for unsubscribing if overridden
-        // Known services (Mobilinkd, Nordic UART) always override heuristic
-        // assignments from unknown services (e.g. Microchip Transparent UART).
-        // The TNC4 advertises both a default Microchip service and its custom
-        // Mobilinkd service; the Microchip service may be discovered first but
-        // its characteristics are a dead-end — actual UART data flows through
-        // the Mobilinkd service only.
-        let shouldOverride = mapped.isKnownService && !_txFromKnownService
-        if mapped.tx != nil && (!alreadyHaveTx || shouldOverride) {
-            txCharacteristic = mapped.tx
-            if mapped.isKnownService { _txFromKnownService = true }
-        }
-        if mapped.rx != nil && (!alreadyHaveRx || shouldOverride) {
-            rxCharacteristic = mapped.rx
-        }
-        let haveTx = txCharacteristic != nil
-        let haveRx = rxCharacteristic != nil
-        let rxChar = rxCharacteristic
+        let allCharacteristics = discoveredServiceCharacteristics
+        waitingForAllServices = false
         lock.unlock()
-
-        // When overriding, unsubscribe from the old (heuristic) RX characteristic
-        // to prevent duplicate data delivery from both services.
-        if shouldOverride, let oldRxChar, oldRxChar.uuid != rxChar?.uuid {
-            peripheral.setNotifyValue(false, for: oldRxChar)
-            KISSLinkLog.info(endpointDescription, message: "Unsubscribed old RX: \(oldRxChar.uuid)")
-        }
-
-        // Subscribe to RX notifications if we have a new or overridden RX characteristic
-        if let rxChar, (!alreadyHaveRx || shouldOverride) {
-            peripheral.setNotifyValue(true, for: rxChar)
-        }
-
-        // If we have both characteristics, go to connected state.
-        // Guard against calling sendKISSInit twice — didDiscoverCharacteristicsFor fires once
-        // per service, and the TNC4 may have multiple services.
-        if haveTx && haveRx {
-            lock.lock()
-            let shouldInit = !_kissInitDone
-            if shouldInit { _kissInitDone = true }
-            lock.unlock()
-
-            guard shouldInit else { return }
-
-            reconnectAttempt = 0
-            cancelReconnectTimer()
-            sendKISSInit()
-
-            // Start battery polling if Mobilinkd config is present
-            if let mobiConfig = config.mobilinkdConfig, mobiConfig.isBatteryMonitoringEnabled {
-                startBatteryPolling()
+        
+        var bestTX: (char: CBCharacteristic, priority: Int)?
+        var bestRX: (char: CBCharacteristic, priority: Int)?
+        
+        // Priority levels:
+        // 3 = Known service with explicit UUID match
+        // 2 = Known service with heuristic match
+        // 1 = Unknown service with heuristic match
+        
+        for (serviceUUID, characteristics) in allCharacteristics {
+            let isKnownService = BLEServiceUUIDs.knownTNCServices.contains(serviceUUID)
+            
+            for char in characteristics {
+                // Check for explicit UUID matches in known services
+                switch char.uuid {
+                case BLECharacteristicUUIDs.mobilinkdTX,
+                     BLECharacteristicUUIDs.nordicUARTRX:
+                    // These are TX (writable) from our perspective
+                    if bestTX == nil || bestTX!.priority < 3 {
+                        bestTX = (char, 3)
+                        KISSLinkLog.info(endpointDescription, message: "Selected TX (priority 3): \(char.uuid) from service \(serviceUUID)")
+                    }
+                    
+                case BLECharacteristicUUIDs.mobilinkdRX,
+                     BLECharacteristicUUIDs.nordicUARTTX:
+                    // These are RX (notifiable) from our perspective
+                    if bestRX == nil || bestRX!.priority < 3 {
+                        bestRX = (char, 3)
+                        KISSLinkLog.info(endpointDescription, message: "Selected RX (priority 3): \(char.uuid) from service \(serviceUUID)")
+                    }
+                    
+                default:
+                    // Heuristic: writable = TX, notifiable = RX
+                    let isWritable = char.properties.contains(.write) || char.properties.contains(.writeWithoutResponse)
+                    let isNotifiable = char.properties.contains(.notify) || char.properties.contains(.indicate)
+                    
+                    let heuristicPriority = isKnownService ? 2 : 1
+                    
+                    if isWritable && (bestTX == nil || bestTX!.priority < heuristicPriority) {
+                        bestTX = (char, heuristicPriority)
+                        KISSLinkLog.info(endpointDescription, message: "Selected TX (priority \(heuristicPriority)): \(char.uuid) from service \(serviceUUID)")
+                    }
+                    
+                    if isNotifiable && (bestRX == nil || bestRX!.priority < heuristicPriority) {
+                        bestRX = (char, heuristicPriority)
+                        KISSLinkLog.info(endpointDescription, message: "Selected RX (priority \(heuristicPriority)): \(char.uuid) from service \(serviceUUID)")
+                    }
+                }
             }
         }
+        
+        guard let tx = bestTX?.char, let rx = bestRX?.char else {
+            setState(.failed)
+            notifyError("No suitable TX/RX characteristics found")
+            scheduleReconnectIfEnabled()
+            return
+        }
+        
+        lock.lock()
+        txCharacteristic = tx
+        rxCharacteristic = rx
+        _txFromKnownService = bestTX!.priority == 3
+        lock.unlock()
+        
+        KISSLinkLog.info(endpointDescription, message: "Final characteristic selection: TX=\(tx.uuid), RX=\(rx.uuid)")
+        
+        // Subscribe to RX notifications
+        peripheral.setNotifyValue(true, for: rx)
+        
+        // Wait for notification subscription to complete before sending KISS init
+        // (didUpdateNotificationStateFor will trigger init)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
@@ -913,14 +1013,19 @@ extension KISSLinkBLE: CBPeripheralDelegate {
 
         guard let data = characteristic.value, !data.isEmpty else { return }
 
-        // Only process data from the active RX characteristic.  The TNC4
-        // may keep notifying on a stale Microchip characteristic even after
-        // we attempt to unsubscribe (error 913), so discard those.
+        // Only process data from the active RX characteristic.
         lock.lock()
         let currentRx = rxCharacteristic
         lock.unlock()
+        
         if let currentRx, characteristic.uuid != currentRx.uuid {
-            return  // Ignore data from overridden/stale characteristic
+            // CRITICAL FIX: Log when we're filtering out data from a different characteristic
+            // This makes reception stoppage immediately visible in logs
+            KISSLinkLog.error(
+                endpointDescription,
+                message: "BLE RX: IGNORING \(data.count) bytes from unexpected characteristic \(characteristic.uuid) (expected: \(currentRx.uuid))"
+            )
+            return
         }
 
         lock.lock()
@@ -944,10 +1049,26 @@ extension KISSLinkBLE: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         if let error {
             KISSLinkLog.error(endpointDescription, message: "BLE RX subscription failed for \(characteristic.uuid): \(error.localizedDescription)")
+            // Don't fail the connection here; the characteristic might still work
         } else {
             let state = characteristic.isNotifying ? "enabled" : "disabled"
             KISSLinkLog.info(endpointDescription, message: "BLE RX notifications \(state) for \(characteristic.uuid)")
         }
+        
+        // Check if this is our selected RX characteristic and notifications are enabled
+        lock.lock()
+        let rxChar = rxCharacteristic
+        let txChar = txCharacteristic
+        let shouldInit = !_kissInitDone && characteristic.uuid == rxChar?.uuid && characteristic.isNotifying
+        if shouldInit { _kissInitDone = true }
+        lock.unlock()
+        
+        guard shouldInit, txChar != nil, rxChar != nil else { return }
+        
+        // Both TX and RX are ready and RX subscription is confirmed — send KISS init
+        reconnectAttempt = 0
+        cancelReconnectTimer()
+        sendKISSInit()
     }
 
     func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {

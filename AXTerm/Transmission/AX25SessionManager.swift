@@ -1783,35 +1783,38 @@ final class AX25SessionManager: ObservableObject {
                 debugTrace("TX DISC", ["frame": describeFrame(frame)])
                 frames.append(frame)
 
-            case .sendRR(let nr, let pf):
+            case .sendRR(let nr, let pf, let isCommand):
                 let frame = AX25FrameBuilder.buildRR(
                     from: session.localAddress,
                     to: session.remoteAddress,
                     via: session.path,
                     nr: nr,
-                    pf: pf
+                    pf: pf,
+                    isCommand: isCommand
                 )
                 debugTrace("TX RR", ["frame": describeFrame(frame)])
                 frames.append(frame)
 
-            case .sendRNR(let nr, let pf):
+            case .sendRNR(let nr, let pf, let isCommand):
                 let frame = AX25FrameBuilder.buildRNR(
                     from: session.localAddress,
                     to: session.remoteAddress,
                     via: session.path,
                     nr: nr,
-                    pf: pf
+                    pf: pf,
+                    isCommand: isCommand
                 )
                 debugTrace("TX RNR", ["frame": describeFrame(frame)])
                 frames.append(frame)
 
-            case .sendREJ(let nr, let pf):
+            case .sendREJ(let nr, let pf, let isCommand):
                 let frame = AX25FrameBuilder.buildREJ(
                     from: session.localAddress,
                     to: session.remoteAddress,
                     via: session.path,
                     nr: nr,
-                    pf: pf
+                    pf: pf,
+                    isCommand: isCommand
                 )
                 debugTrace("TX REJ", ["frame": describeFrame(frame)])
                 frames.append(frame)

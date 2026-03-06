@@ -478,7 +478,7 @@ final class IFrameReorderingTests: XCTestCase {
 
     private func containsREJ(_ actions: [AX25SessionAction], nr: Int) -> Bool {
         actions.contains { action in
-            if case .sendREJ(let n, _) = action {
+            if case .sendREJ(let n, _, _) = action {
                 return n == nr
             }
             return false
@@ -487,7 +487,7 @@ final class IFrameReorderingTests: XCTestCase {
 
     private func containsAnyREJ(_ actions: [AX25SessionAction]) -> Bool {
         actions.contains { action in
-            if case .sendREJ(_, _) = action {
+            if case .sendREJ(_, _, _) = action {
                 return true
             }
             return false
@@ -496,7 +496,7 @@ final class IFrameReorderingTests: XCTestCase {
 
     private func containsRR(_ actions: [AX25SessionAction], nr: Int) -> Bool {
         actions.contains { action in
-            if case .sendRR(let n, _) = action {
+            if case .sendRR(let n, _, _) = action {
                 return n == nr
             }
             return false
@@ -505,7 +505,7 @@ final class IFrameReorderingTests: XCTestCase {
 
     private func containsAnyRR(_ actions: [AX25SessionAction]) -> Bool {
         actions.contains { action in
-            if case .sendRR(_, _) = action {
+            if case .sendRR(_, _, _) = action {
                 return true
             }
             return false

@@ -6,6 +6,12 @@
 //  Copy the appropriate code to your AppDelegate or @main App struct.
 //
 
+// NOTE: This entire file is example/reference code.
+// It is wrapped in #if false to prevent compilation.
+// Copy snippets from here as needed.
+
+#if false
+
 import SwiftUI
 import AppKit
 
@@ -397,3 +403,5 @@ struct ConnectionDebugView: View {
  - Monitor performance
  
  */
+
+#endif // #if false

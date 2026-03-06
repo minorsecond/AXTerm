@@ -43,7 +43,7 @@ final class AX25SpecComplianceTests: XCTestCase {
 
     private func containsRR(_ actions: [AX25SessionAction], nr: Int, pf: Bool? = nil) -> Bool {
         actions.contains { action in
-            if case .sendRR(let n, let p) = action {
+            if case .sendRR(let n, let p, _) = action {
                 if let expectedPF = pf { return n == nr && p == expectedPF }
                 return n == nr
             }
@@ -53,7 +53,7 @@ final class AX25SpecComplianceTests: XCTestCase {
 
     private func containsREJ(_ actions: [AX25SessionAction], nr: Int, pf: Bool? = nil) -> Bool {
         actions.contains { action in
-            if case .sendREJ(let n, let p) = action {
+            if case .sendREJ(let n, let p, _) = action {
                 if let expectedPF = pf { return n == nr && p == expectedPF }
                 return n == nr
             }
@@ -893,23 +893,23 @@ final class AX25SpecComplianceTests: XCTestCase {
         let actions = sm.handle(event: .t1Timeout)
 
         let hasRRPoll = actions.contains { action in
-            if case .sendRR(_, let pf) = action { return pf == true }
+            if case .sendRR(_, let pf, _) = action { return pf == true }
             return false
         }
         XCTAssertTrue(hasRRPoll)
     }
 
-    /// §6.7: T1 timeout in connected with no outstanding does not send RR poll
-    func testT1TimeoutInConnectedWithNoOutstandingNoRRPoll() {
+    /// §6.7: T1 timeout in connected with no outstanding re-sends RR poll (e.g. lost T3 probe)
+    func testT1TimeoutInConnectedWithNoOutstandingSendsRRPoll() {
         var sm = makeConnectedStateMachine()
         XCTAssertEqual(sm.sequenceState.outstandingCount, 0)
 
         let actions = sm.handle(event: .t1Timeout)
 
-        XCTAssertFalse(actions.contains { action in
-            if case .sendRR(_, let pf) = action { return pf == true }
+        XCTAssertTrue(actions.contains { action in
+            if case .sendRR(_, let pf, _) = action { return pf == true }
             return false
-        }, "No RR poll should be sent when nothing outstanding")
+        }, "RR poll should be sent to verify link even when nothing outstanding")
     }
 
     /// §6.7: T1 timeout in disconnecting retries DISC
@@ -1593,7 +1593,7 @@ final class AX25SpecComplianceTests: XCTestCase {
 
     private func actions(_ actions: [AX25SessionAction], containRRPoll: Bool) -> Bool {
         let hasRRPoll = actions.contains { action in
-            if case .sendRR(_, let pf) = action { return pf == true }
+            if case .sendRR(_, let pf, _) = action { return pf == true }
             return false
         }
         return hasRRPoll == containRRPoll

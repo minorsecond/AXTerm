@@ -6,6 +6,7 @@
 //  Logs are written to Application Support directory for easy access.
 //
 
+import AppKit
 import Foundation
 import OSLog
 
@@ -315,11 +316,13 @@ extension AX25DiagnosticLogger {
         data: Data? = nil,
         metadata: [String: String] = [:]
     ) {
-        // Log to OSLog (existing implementation)
-        log(level, category: category, message: message, endpoint: endpoint, data: data, metadata: metadata)
+        // Log to OSLog via the public convenience method
+        let fullMessage = "[\(category)] \(message)"
+        AX25DiagnosticLogger.log(level, fullMessage, endpoint: endpoint)
         
         // Also write to file
-        var fileMessage = "[\(level.name)] [\(category)]"
+        let levelName = level.name
+        var fileMessage = "[\(levelName)] [\(category)]"
         if let endpoint {
             fileMessage += " [\(endpoint)]"
         }

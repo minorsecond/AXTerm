@@ -329,10 +329,23 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                     self?.updateCurrentSession()
                 }
                 
-                // When a session disconnects, clear per-peer state
+                // When a session disconnects, flush any remaining buffered text then clear per-peer state
                 if newState == .disconnected {
                     let peerKey = session.remoteAddress.display.uppercased()
                     self?.peersInAXDPReassembly.remove(peerKey)
+                    // Flush partial line buffer before clearing — don't silently discard
+                    // text that hasn't reached a CR/LF yet (e.g. BPQ node data split across frames)
+                    if let remainingData = self?.currentLineBuffers[peerKey], !remainingData.isEmpty {
+                        let line = String(data: remainingData, encoding: .utf8) ??
+                                   String(data: remainingData, encoding: .ascii) ??
+                                   remainingData.map { String(format: "%02X", $0) }.joined()
+                        TxLog.debug(.session, "Flushing partial line buffer on disconnect", [
+                            "peer": peerKey,
+                            "lineLength": line.count,
+                            "preview": String(line.prefix(50))
+                        ])
+                        self?.onPlainTextChatReceived?(session.remoteAddress, line, session.lastReceivedVia)
+                    }
                     self?.currentLineBuffers.removeValue(forKey: peerKey)
                 }
                 
