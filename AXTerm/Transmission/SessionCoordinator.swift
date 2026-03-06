@@ -1121,16 +1121,10 @@ final class SessionCoordinator: ObservableObject {
             return
         }
 
-        // Ignore packets from ourselves (TNC echo) - match both call AND SSID
-        // This allows same-base-callsign but different-SSID traffic (e.g., K0EPI-1 talking to K0EPI-7)
-        guard from.call.uppercased() != sessionManager.localCallsign.call || from.ssid != sessionManager.localCallsign.ssid else {
-            TxLog.debug(.session, "Ignoring echoed frame from local callsign", [
-                "from": from.display,
-                "to": to.display,
-                "localCallsign": sessionManager.localCallsign.display
-            ])
-            return
-        }
+        // Note: TNC echoes of frames sent to *other* stations are already dropped above 
+        // because `to != localCallsign`. If a frame reaches here with `from == localCallsign`,
+        // it must be a loopback frame (to: ME, from: ME), either genuine or echoed.
+        // We permit loopback frames so users can connect to local bbs/nodes using the same callsign.
 
         let channel: UInt8 = 0
 
