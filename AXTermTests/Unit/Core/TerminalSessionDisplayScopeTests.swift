@@ -7,16 +7,16 @@ import XCTest
 @testable import AXTerm
 
 final class TerminalSessionDisplayScopeTests: XCTestCase {
-    func testSelectedPeerReturnsNilWhenNotConnected() {
+    func testSelectedPeerReturnsActiveDestinationEvenWhenDisconnected() {
         let peer = TerminalSessionDisplayScope.selectedPeer(
             connectionMode: .connected,
             sessionState: .disconnected,
             activeSessionRecordID: "ax25|PEER1",
             destinationByRecordID: ["ax25|PEER1": "PEER1"],
-            connectedPeers: ["PEER1"]
+            connectedPeers: []
         )
 
-        XCTAssertNil(peer)
+        XCTAssertEqual(peer, "PEER1")
     }
 
     func testSelectedPeerReturnsActiveDestinationWhenConnected() {
@@ -43,13 +43,13 @@ final class TerminalSessionDisplayScopeTests: XCTestCase {
         XCTAssertNil(peer)
     }
 
-    func testSelectedPeerReturnsNilWhenRecordIsNotConnected() {
+    func testSelectedPeerReturnsNilWhenActiveSessionRecordIDIsNil() {
         let peer = TerminalSessionDisplayScope.selectedPeer(
             connectionMode: .connected,
             sessionState: .connected,
-            activeSessionRecordID: "ax25|PEER1",
+            activeSessionRecordID: nil,
             destinationByRecordID: ["ax25|PEER1": "PEER1"],
-            connectedPeers: ["PEER2"]
+            connectedPeers: ["PEER1"]
         )
 
         XCTAssertNil(peer)

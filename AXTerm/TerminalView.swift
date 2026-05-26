@@ -39,16 +39,20 @@ nonisolated enum TerminalSessionDisplayScope {
         destinationByRecordID: [String: String],
         connectedPeers: Set<String>
     ) -> String? {
-        guard connectionMode == .connected,
-              sessionState == .connected,
-              let activeSessionRecordID,
+        // Only filter in connected mode
+        guard connectionMode == .connected else {
+            return nil
+        }
+        
+        // If a specific session is selected, use it for filtering even if disconnected,
+        // so the user can review the session's history.
+        guard let activeSessionRecordID,
               let destination = destinationByRecordID[activeSessionRecordID] else {
             return nil
         }
 
         let normalizedDestination = CallsignValidator.normalize(destination)
-        guard !normalizedDestination.isEmpty,
-              connectedPeers.contains(normalizedDestination) else {
+        guard !normalizedDestination.isEmpty else {
             return nil
         }
 
@@ -135,6 +139,20 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
     /// Called to send data frames produced by sessionManager.sendData (e.g. relay C command).
     var onSendFrames: (([OutboundFrame]) -> Void)?
+
+    // MARK: - Manual Relay Detection
+
+    /// Tracks user-initiated NET/ROM relay commands and responses.
+    fileprivate var manualRelayDetector = ManualRelayDetector()
+
+    /// Published destination of the currently active manual relay, or nil when no relay is established.
+    @Published private(set) var manualRelayDestination: String?
+
+    /// Clear manual relay state (call on L2 session disconnect).
+    fileprivate func clearManualRelay() {
+        manualRelayDetector.clear()
+        manualRelayDestination = nil
+    }
 
     // MARK: - Filtering Pipeline
     
@@ -971,6 +989,17 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                         "bufferLenBeforeFlush": bufferLen
                     ])
                     onPlainTextChatReceived?(session.remoteAddress, line, session.lastReceivedVia)
+                    // Manual relay detection: inspect each received line for ###LINK MADE/FAILED / ENTER COMMAND
+                    let prevRelayState = manualRelayDetector.state
+                    manualRelayDetector.processIncoming(line)
+                    manualRelayDestination = manualRelayDetector.activeRelayDestination
+                    if manualRelayDetector.state != prevRelayState {
+                        TxLog.debug(.session, "Manual relay state transition (incoming)", [
+                            "from": "\(prevRelayState)",
+                            "to": "\(manualRelayDetector.state)",
+                            "trigger": String(line.prefix(80))
+                        ])
+                    }
                     // Keep transcript bounded for performance.
                     if sessionTranscriptLines.count > 1000 {
                         sessionTranscriptLines.removeFirst(sessionTranscriptLines.count - 1000)
@@ -1085,6 +1114,20 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     func sendConnected(payload: Data, displayInfo: String?) -> [OutboundFrame] {
         guard !viewModel.destinationCall.isEmpty else { return [] }
 
+        // Manual relay detection: watch for the user typing "C <callsign>" commands.
+        if let text = displayInfo {
+            let prevRelayState = manualRelayDetector.state
+            manualRelayDetector.processOutgoing(text)
+            manualRelayDestination = manualRelayDetector.activeRelayDestination
+            if manualRelayDetector.state != prevRelayState {
+                TxLog.debug(.session, "Manual relay state transition (outgoing)", [
+                    "from": "\(prevRelayState)",
+                    "to": "\(manualRelayDetector.state)",
+                    "trigger": String(text.prefix(80))
+                ])
+            }
+        }
+
         let dest = parseCallsign(viewModel.destinationCall)
         let path = parsePath(viewModel.digiPath)
 
@@ -1198,9 +1241,13 @@ private struct SessionRecord: Identifiable, Hashable {
     let mode: ConnectBarMode
     let via: [String]
     var statusText: String
+    var relayDestination: String?
 
     var label: String {
-        "\(destination) • \(statusText)"
+        if let relay = relayDestination {
+            return "\(destination) → \(relay) • \(statusText)"
+        }
+        return "\(destination) • \(statusText)"
     }
 }
 
@@ -1337,6 +1384,7 @@ struct TerminalView: View {
                 case .disconnected:
                     // If a relay was active, abandon it on disconnect
                     txViewModel.netRomRelayPhase = nil
+                    txViewModel.clearManualRelay()
                     connectBarViewModel.markDisconnected()
                     updateActiveSessionRecordState("Disconnected")
                     if sessionCoordinator.connectedSessions.isEmpty {
@@ -1351,6 +1399,7 @@ struct TerminalView: View {
                 case .error:
                     // If a relay was active, abandon it on error
                     txViewModel.netRomRelayPhase = nil
+                    txViewModel.clearManualRelay()
                     connectBarViewModel.markFailed(reason: .unknown, detail: "Session state entered error")
                     updateActiveSessionRecordState("Failed")
                     if sessionCoordinator.connectedSessions.isEmpty {
@@ -1375,6 +1424,9 @@ struct TerminalView: View {
                 if newValue != lastAutoFilledPath {
                     lastAutoFilledPath = ""
                 }
+            }
+            .onChange(of: txViewModel.manualRelayDestination) { _, newDest in
+                updateActiveSessionRelayDestination(newDest)
             }
             .onDisappear {
                 stopAutoConnectAttempts()
@@ -2853,7 +2905,8 @@ struct TerminalView: View {
                     destination: intent.normalizedTo,
                     mode: mode,
                     via: via,
-                    statusText: statusText
+                    statusText: statusText,
+                    relayDestination: nil
                 ),
                 at: 0
             )
@@ -2866,6 +2919,12 @@ struct TerminalView: View {
         guard let activeSessionRecordID,
               let idx = sessionRecords.firstIndex(where: { $0.id == activeSessionRecordID }) else { return }
         sessionRecords[idx].statusText = state
+    }
+
+    private func updateActiveSessionRelayDestination(_ destination: String?) {
+        guard let activeSessionRecordID,
+              let idx = sessionRecords.firstIndex(where: { $0.id == activeSessionRecordID }) else { return }
+        sessionRecords[idx].relayDestination = destination
     }
 
     private func focusSessionRecord(id: String) {
