@@ -593,22 +593,23 @@ final class PacketEngine: ObservableObject {
             timestamp: Date(), direction: .tx, rawBytes: kissData,
             frameType: frame.frameType, byteCount: kissData.count))
 
-        // Log the transmission: user payload as DATA (purple), protocol as SYS
-        let viaSuffix = formatViaPath(frame.path.digis)
+        // Log the transmission: user payload as DATA (purple), protocol as CMD
         let showAsData: Bool
         if let text = frame.displayInfo, !text.isEmpty {
             showAsData = frame.isUserPayload || (frame.frameType.lowercased() == "i" && !isProtocolDisplayInfo(text))
             if showAsData {
-                let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: text)
+                let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: text, via: frame.path.digis.map { $0.display })
                 appendConsoleLine(line, category: .packet, packetID: nil, byteCount: text.utf8.count)
             } else {
-                // Build a richer control frame description for TX SYS lines
+                // Build a richer control frame description for TX CMD lines
                 let txDesc = txControlFrameDescription(frame) ?? text
-                addSystemLine("TX: \(frame.source.display) → \(frame.destination.display)\(viaSuffix): \(txDesc)", category: .transmission)
+                let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: txDesc, via: frame.path.digis.map { $0.display }, messageType: .prompt)
+                appendConsoleLine(line, category: .packet, packetID: nil, byteCount: txDesc.utf8.count)
             }
         } else {
             let txDesc = txControlFrameDescription(frame) ?? frame.displayInfo ?? ""
-            addSystemLine("TX: \(frame.source.display) → \(frame.destination.display)\(viaSuffix): \(txDesc)", category: .transmission)
+            let line = ConsoleLine.packet(from: frame.source.display, to: frame.destination.display, text: txDesc, via: frame.path.digis.map { $0.display }, messageType: .prompt)
+            appendConsoleLine(line, category: .packet, packetID: nil, byteCount: txDesc.utf8.count)
         }
         eventLogger?.log(
             level: .info,
@@ -1016,8 +1017,14 @@ final class PacketEngine: ObservableObject {
     private func logRxControlFrame(_ packet: Packet, decoded: AX25ControlFieldDecoded) {
         guard let description = describeControlFrame(decoded),
               let from = packet.from, let to = packet.to else { return }
-        let via = formatViaPath(packet.via)
-        addSystemLine("RX: \(from.display) → \(to.display)\(via): \(description)", category: .transmission)
+        let line = ConsoleLine.packet(
+            from: from.display,
+            to: to.display,
+            text: description,
+            via: packet.via.map { $0.display },
+            messageType: .prompt
+        )
+        appendConsoleLine(line, category: .packet, packetID: nil, byteCount: description.utf8.count)
     }
 
     /// Build a richer control frame description for outbound frames.

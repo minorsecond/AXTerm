@@ -120,9 +120,10 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         text: String,
         timestamp: Date = Date(),
         via: [String] = [],
-        isDuplicate: Bool = false
+        isDuplicate: Bool = false,
+        messageType: MessageType? = nil
     ) -> ConsoleLine {
-        let messageType = detectMessageType(text: text, to: to)
+        let detectedType = messageType ?? detectMessageType(text: text, to: to)
         // Normalize via path for console display so repeated digis like
         // "W0ARP-7,W0ARP-7*" collapse to a single "W0ARP-7*" entry. This keeps
         // the console, tests, and packet model consistent.
@@ -134,7 +135,7 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
             to: to,
             text: text,
             via: normalizedVia,
-            messageType: messageType,
+            messageType: detectedType,
             isDuplicate: isDuplicate
         )
     }
@@ -147,6 +148,11 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         // ID messages: destination is "ID", or text starts with "ID", "ID ...", "ID:..."
         if normalizedTo == "ID" || normalizedText == "ID" || normalizedText.hasPrefix("ID ") || normalizedText.hasPrefix("ID:") {
             return .id
+        }
+
+        // CQ broadcasts: destination is usually "CQ", or text is CQ
+        if normalizedTo == "CQ" || normalizedText == "CQ" || normalizedText.hasPrefix("CQ ") {
+            return .data
         }
 
         // Beacon messages: destination is "BEACON" or text starts with "BEACON"
