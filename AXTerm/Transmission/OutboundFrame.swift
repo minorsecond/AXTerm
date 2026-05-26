@@ -116,6 +116,10 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
     /// N(R) - Receive sequence number for I-frames and S-frames
     let nr: Int?
 
+    /// Explicitly denotes if this frame is a Command (true) or Response (false).
+    /// If nil, the frame encoder will use a heuristic based on frameType.
+    let isCommand: Bool?
+
     init(
         id: UUID = UUID(),
         channel: UInt8 = 0,
@@ -133,7 +137,8 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
         ns: Int? = nil,
         nr: Int? = nil,
         displayInfo: String? = nil,
-        isUserPayload: Bool = false
+        isUserPayload: Bool = false,
+        isCommand: Bool? = nil
     ) {
         self.id = id
         self.channel = channel
@@ -152,12 +157,13 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
         self.nr = nr
         self.displayInfo = displayInfo
         self.isUserPayload = isUserPayload
+        self.isCommand = isCommand
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, channel, destination, source, path, createdAt, payload, priority
         case frameType, pid, sessionId, axdpMessageId, displayInfo, isUserPayload
-        case controlByte, ns, nr
+        case controlByte, ns, nr, isCommand
     }
 
     init(from decoder: Decoder) throws {
@@ -179,6 +185,7 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
         controlByte = try c.decodeIfPresent(UInt8.self, forKey: .controlByte)
         ns = try c.decodeIfPresent(Int.self, forKey: .ns)
         nr = try c.decodeIfPresent(Int.self, forKey: .nr)
+        isCommand = try c.decodeIfPresent(Bool.self, forKey: .isCommand)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -200,6 +207,7 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
         try c.encodeIfPresent(controlByte, forKey: .controlByte)
         try c.encodeIfPresent(ns, forKey: .ns)
         try c.encodeIfPresent(nr, forKey: .nr)
+        try c.encodeIfPresent(isCommand, forKey: .isCommand)
     }
 
     /// Create a copy of this I-frame with an updated N(R) and control byte.
@@ -225,7 +233,8 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
             ns: oldNS,
             nr: newNR,
             displayInfo: displayInfo,
-            isUserPayload: isUserPayload
+            isUserPayload: isUserPayload,
+            isCommand: isCommand
         )
     }
 
@@ -245,90 +254,46 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
         // - If we initiate (Poll), it's Command.
         // - If we respond (Final), it's Response.
         
-        var isCommand: Bool = true // Default to command
+        var isCommandFlag: Bool = true // Default to command
         
-        let ft = frameType.lowercased()
-        if let ctrl = controlByte {
-            // Check for UA/DM (Response)
-            if (ctrl & ~0x10) == AX25Control.ua || (ctrl & ~0x10) == AX25Control.dm {
-                isCommand = false
-            } 
-            // Check for S-frames response?
-            // If it's an S-frame and PF is set (Final), it's likely a response to a Poll.
-            // But if it's a Poll (P=1), it's a Command?
-            // For simplicity/compatibility:
-            // RR/RNR/REJ are usually Responses in normal flow (checking "I received X"), 
-            // but Commands if Polling "Are you there?".
-            else if ft == "s" {
-                // If PF bit is set, it could be Poll (Command) or Final (Response)
-                let pf = (ctrl & 0x10) != 0
-                // If we are RESPONDING to a poll (Final), isCommand = false
-                // If we are POLLING (Poll), isCommand = true
-                // We need more context.
-                
-                // Heuristic:
-                // If we are sending RR(F=1), it's a Response (to `I P=1` or `RR P=1`).
-                // If we are sending RR(P=1), it's a Command (query).
-                // If we are sending RR(P=0), it's usually a Response (acking I-frames).
-                
-                // Let's assume S-frames are Responses unless we explicitly know they are Commands.
-                // Exceptions: T1 timeout sends RR(P=1) -> Command.
-                // Acking I-frames -> Response.
-                
-                if pf {
-                    // P/F set.
-                    // If it was intended as Poll (Command), we should treat as Command.
-                    // If Final (Response), treat as Response.
-                    // In AX25FrameBuilder, we set 'pf'. We don't distinguish P vs F there.
-                    // But usually unsolicited = Command, solicited = Response.
-                    // For now, let's treat RR/RNR/REJ as Response by default unless P=1?
-                    // Actually, typical implementation:
-                    // I, SABM, DISC, UI -> Command
-                    // UA, DM, FRMR -> Response
-                    // RR, RNR, REJ -> Response (usually)
-                    
-                    // Let's refine based on Control constants if possible, or leave as Default=True (Command) 
-                    // and override for known Responses.
-                    
-                    isCommand = false 
-                } else {
-                    isCommand = false
+        if let explicitCommand = isCommand {
+            isCommandFlag = explicitCommand
+        } else {
+            let ft = frameType.lowercased()
+            if let ctrl = controlByte {
+                // Check for UA/DM (Response)
+                if (ctrl & ~0x10) == AX25Control.ua || (ctrl & ~0x10) == AX25Control.dm {
+                    isCommandFlag = false
+                } 
+                else if ft == "s" {
+                    isCommandFlag = false
                 }
-                
-                // Special case: Timer recovery (T1) sends RR P=1 (Command).
-                // We need to know if 'pf' meant Poll or Final.
-                // 'OutboundFrame' doesn't explicitly store "isPoll" vs "isFinal".
-                // Ideally we'd add 'isCommand' property to OutboundFrame, but that's a larger change.
-                
-                // Quick Fix:
-                // If we assume most traffic is Command (I-frames), we are okay.
-                // Direwolf output shows "I cmd", so our I-frames MUST be commands.
             }
-        }
-        
-        // Overrides based on known types
-        if ft == "u" {
-            // UA, DM are Responses
-            if displayInfo == "UA" || displayInfo == "DM" || displayInfo == "FRMR" {
-                isCommand = false
+            
+            // Overrides based on known types
+            if ft == "u" {
+                // UA, DM are Responses
+                if displayInfo == "UA" || displayInfo == "DM" || displayInfo == "FRMR" {
+                    isCommandFlag = false
+                }
+                // SABM, DISC are Commands
+                if displayInfo == "SABM" || displayInfo == "SABME" || displayInfo == "DISC" {
+                    isCommandFlag = true
+                }
+            } else if ft == "i" {
+                isCommandFlag = true
+            } else if ft == "ui" {
+                isCommandFlag = true
             }
-            // SABM, DISC are Commands
-            if displayInfo == "SABM" || displayInfo == "SABME" || displayInfo == "DISC" {
-                isCommand = true
-            }
-        } else if ft == "i" {
-            isCommand = true
-        } else if ft == "ui" {
-            isCommand = true
         }
         
         // Destination address (7 bytes)
         // Destination is never last - source always follows
-        data.append(destination.encodeForAX25(isLast: false, isDestination: true, isCommand: isCommand))
+        data.append(destination.encodeForAX25(isLast: false, isDestination: true, isCommand: isCommandFlag))
 
         // Source address (7 bytes)
         // Source has command/response bit set, last if no digipeaters
-        data.append(source.encodeForAX25(isLast: path.isEmpty, isDestination: false, isCommand: isCommand))
+        data.append(source.encodeForAX25(isLast: path.isEmpty, isDestination: false, isCommand: isCommandFlag))
 
         // Digipeater addresses (7 bytes each)
         for (index, digi) in path.digis.enumerated() {

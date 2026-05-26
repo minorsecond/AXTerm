@@ -309,6 +309,17 @@ final class ConnectBarViewModelTests: XCTestCase {
         XCTAssertEqual(vm.recommendedDigiPaths.first?.digis, ["DRL"])
     }
 
+    func testTacticalAliasValidAsAX25Destination() {
+        let vm = makeViewModel()
+        vm.setMode(.ax25, for: .terminal)
+
+        for alias in ["DRL", "DRLBBS", "DRLNOD", "K0EPI"] {
+            vm.applySuggestedTo(alias)
+            vm.validate()
+            XCTAssertTrue(vm.validationErrors.isEmpty, "\(alias) should be a valid AX.25 destination but got: \(vm.validationErrors)")
+        }
+    }
+
     func testSuggestedPathUnavailableWhenItSharesDigiWithCurrentPath() {
         let vm = makeViewModel()
         vm.viaDigipeaters = ["DRL"]

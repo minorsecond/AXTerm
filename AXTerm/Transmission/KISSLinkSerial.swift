@@ -798,6 +798,22 @@ final class KISSLinkSerial: KISSLink, @unchecked Sendable {
         }
 
         setState(.connected)
+        
+        // Prime the CDC data path. Some USB CDC stacks (or the TNC firmware itself)
+        // do not begin delivering unsolicited RX packets until the host writes at least one byte.
+        // We write a harmless poll or frame separator to wake up the receive pipe.
+        serialQueue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return }
+            let primeData: [UInt8]
+            if self.config.mobilinkdConfig != nil {
+                primeData = MobilinkdTNC.pollBatteryLevel()
+            } else {
+                primeData = [0xC0, 0xC0] // Harmless empty KISS frame
+            }
+            self.send(Data(primeData)) { _ in
+                KISSLinkLog.info(self.endpointDescription, message: "Sent connection priming write (\(primeData.count) bytes)")
+            }
+        }
         KISSLinkLog.info(endpointDescription, message: "KISS init complete — link ready (no commands sent)")
     }
 

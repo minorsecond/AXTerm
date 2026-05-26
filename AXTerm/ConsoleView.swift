@@ -156,12 +156,19 @@ struct ConsoleView: View {
                     }
                     .defaultScrollAnchor(.bottom)
                     .onChange(of: groupedLines.count) { _, _ in
-                        guard autoScroll, isUserNearBottom else { return }
+                        guard autoScroll else { return }
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
                     .onChange(of: scrollToBottomToken) { _, _ in
                         withAnimation(.easeOut(duration: 0.2)) {
                             proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    }
+                    .onChange(of: autoScroll) { _, newValue in
+                        if newValue {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo("bottom", anchor: .bottom)
+                            }
                         }
                     }
                     .onAppear {

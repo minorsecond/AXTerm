@@ -26,6 +26,8 @@ struct ContentView: View {
     @StateObject private var sessionCoordinator: SessionCoordinator
     @StateObject private var connectCoordinator = ConnectCoordinator()
 
+    @Environment(\.openSettings) private var openSettings
+
     @State private var selectedNav: NavigationItem = .terminal
     @StateObject private var searchModel = AppToolbarSearchModel()
     @State private var filters = PacketFilters()
@@ -214,6 +216,7 @@ struct ContentView: View {
             syncConnectContext(for: newValue)
         }
         .onAppear {
+            SettingsRouter.shared.openAction = { openSettings() }
             connectCoordinator.navigateToTerminal = {
                 selectedNav = .terminal
                 connectCoordinator.activeContext = .terminal

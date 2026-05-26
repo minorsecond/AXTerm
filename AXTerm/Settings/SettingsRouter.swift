@@ -13,6 +13,10 @@ import Combine
 class SettingsRouter: ObservableObject {
     /// Singleton for easy access from non-SwiftUI contexts (like AppDelegates or menu actions)
     static let shared = SettingsRouter()
+
+    /// Injected by the main window view via @Environment(\.openSettings).
+    /// Must be set before navigate(to:) is called.
+    var openAction: (() -> Void)?
     
     // MARK: - State
     
@@ -53,7 +57,7 @@ class SettingsRouter: ObservableObject {
         
         // 3. Bring Window to Front
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        openAction?()
     }
 }
 

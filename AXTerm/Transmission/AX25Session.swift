@@ -164,7 +164,7 @@ nonisolated struct AX25SessionTimers: Sendable {
     private(set) var rto: Double
 
     /// T3 idle timeout (seconds)
-    let t3Timeout: Double = 180.0
+    let t3Timeout: Double = 30.0
 
     /// Smoothing factor for SRTT (1/8 per RFC 6298)
     private let alpha: Double = 1.0 / 8.0
@@ -288,9 +288,9 @@ nonisolated enum AX25SessionAction: Sendable, Equatable {
     case sendUA
     case sendDM
     case sendDISC
-    case sendRR(nr: Int, pf: Bool = false)
-    case sendRNR(nr: Int, pf: Bool = false)
-    case sendREJ(nr: Int, pf: Bool = false)
+    case sendRR(nr: Int, pf: Bool = false, isCommand: Bool = false)
+    case sendRNR(nr: Int, pf: Bool = false, isCommand: Bool = false)
+    case sendREJ(nr: Int, pf: Bool = false, isCommand: Bool = false)
     case sendIFrame(ns: Int, nr: Int, payload: Data)
     case startT1
     case stopT1
@@ -518,21 +518,19 @@ nonisolated struct AX25StateMachine: Sendable {
                 ])
                 return [.stopT1, .stopT3, .notifyError("Link failure (retries exceeded)")]
             }
-            // Per AX.25 spec: on T1 timeout with outstanding frames, send RR
-            // with P=1 (poll) to force the peer to respond with its current
-            // state. This recovers from lost responses - if the peer already
-            // processed our I-frame but its RR was lost, the poll elicits a
-            // fresh RR(F=1) instead of wasting airtime on duplicate I-frames.
-            // The session manager also retransmits outstanding I-frames.
-            var actions: [AX25SessionAction] = [.startT1]
-            if sequenceState.outstandingCount > 0 {
-                actions.append(.sendRR(nr: sequenceState.vr, pf: true))
-            }
-            return actions
+            // Per AX.25 spec §6.4.1: on T1 timeout, always send RR with P=1
+            // (poll) to verify the link. This covers two cases:
+            // 1. Outstanding I-frames: poll elicits fresh RR(F=1) so we know
+            //    the peer's state without retransmitting possibly-received frames.
+            // 2. No outstanding I-frames (after T3 probe): re-poll to verify
+            //    the link is alive. Without this, AXTerm goes silent after a
+            //    single T3 probe that gets lost in RF.
+            // The session manager separately handles I-frame retransmission.
+            return [.sendRR(nr: sequenceState.vr, pf: true, isCommand: true), .startT1]
 
         case (.connected, .t3Timeout):
-            // Send RR as poll to check link
-            return [.sendRR(nr: sequenceState.vr), .startT1]
+            // Send RR as poll (P=1) to check link — peer must respond with F=1
+            return [.sendRR(nr: sequenceState.vr, pf: true, isCommand: true), .startT1]
 
         case (.connected, _):
             return []

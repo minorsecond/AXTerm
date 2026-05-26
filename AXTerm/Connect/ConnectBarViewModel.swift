@@ -739,8 +739,8 @@ final class ConnectBarViewModel: ObservableObject {
                     errors.append("Destination must be a valid callsign or routing node")
                 }
             case .ax25, .ax25ViaDigi:
-                if !CallsignValidator.isValidCallsign(normalizedTo) {
-                    errors.append("Destination must be a valid AX.25 callsign")
+                if !CallsignValidator.isValidRoutingNode(normalizedTo) {
+                    errors.append("Destination must be a valid callsign or tactical alias (e.g. DRL, DRLBBS)")
                 }
             }
         }
