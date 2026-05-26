@@ -1,6 +1,97 @@
 # Log Output Examples
 
-This document shows what the diagnostic logs look like in practice, so you know what to expect in Console.app.
+This document shows what the diagnostic logs look like in practice, so you know what to expect in Console.app and in log files.
+
+## ⚙️ Automatic Setup (Required First!)
+
+**The diagnostic logger is NOT enabled by default.** You must initialize it at app startup.
+
+### Option 1: Automatic Configuration (Recommended)
+
+Add this to your app's init/startup:
+
+```swift
+@main
+struct AXTermApp: App {
+    init() {
+        // Automatically configures based on build type:
+        // DEBUG: Comprehensive logging + file logging
+        // RELEASE: Standard logging, no file
+        DiagnosticLoggerSetup.configure()
+    }
+    
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+    }
+}
+```
+
+This automatically:
+- ✅ Enables comprehensive logging in DEBUG builds
+- ✅ Enables file logging in DEBUG builds  
+- ✅ Writes logs to `~/Library/Application Support/AXTerm/Logs/`
+- ✅ Keeps last 10 log files, auto-deletes older ones
+- ✅ Uses standard logging (OSLog only) in RELEASE builds
+
+### Option 2: Manual Configuration
+
+```swift
+@main
+struct AXTermApp: App {
+    init() {
+        #if DEBUG
+        Task {
+            // Comprehensive logging with file output
+            await AX25DiagnosticLogger.shared.updateConfig(.comprehensive)
+            try? await AX25DiagnosticLogger.shared.enableFileLogging()
+            
+            // Print log file location
+            if let logURL = await AX25DiagnosticLogger.shared.getLogFileURL() {
+                print("📝 Log file: \(logURL.path)")
+            }
+        }
+        #else
+        // Standard logging, no file
+        AX25DiagnosticLogger.enableStandardMode()
+        #endif
+    }
+}
+```
+
+### Log File Location
+
+Logs are written to:
+```
+~/Library/Application Support/AXTerm/Logs/ax25-diagnostic-YYYY-MM-DD_HHMMSS.log
+```
+
+You can open this in Console.app or any text editor.
+
+## 📂 Accessing Log Files
+
+### In Code
+```swift
+// Get current log file URL
+if let logURL = await AX25DiagnosticLogger.shared.getLogFileURL() {
+    print(logURL.path)
+}
+
+// Open log in default text editor
+await AX25DiagnosticLogger.shared.openLogFile()
+
+// Reveal in Finder
+await AX25DiagnosticLogger.shared.revealLogFile()
+```
+
+### In Finder
+1. Press `Cmd+Shift+G` in Finder
+2. Paste: `~/Library/Application Support/AXTerm/Logs/`
+3. Press Enter
+4. Your log files are there!
+
+---
 
 ## Normal Operation (No Issues)
 
