@@ -1,0 +1,4 @@
+[submodule "tnc4-firmware"]
+	path = tnc4-firmware
+	url = https://github.com/mobilinkd/tnc4-firmware.git
+	ignore = dirty
