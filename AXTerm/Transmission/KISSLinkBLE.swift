@@ -285,6 +285,20 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
 
     private var batteryPollTimer: DispatchSourceTimer?
 
+    // MARK: - Watchdog State
+
+    private var startupNoKISSRecoveryTimer: DispatchSourceTimer?
+    private var startupNoAX25RecoveryTimer: DispatchSourceTimer?
+    private var ongoingNoAX25RecoveryTimer: DispatchSourceTimer?
+    private let startupReceptionGuard = MobilinkdStartupReceptionGuard()
+    private var connectionOpenedAt: Date?
+    private var ongoingNoAX25RecoveryAttempts = 0
+    private static let startupNoKISSRecoveryDelay: TimeInterval = 30.0
+    private static let startupNoAX25RecoveryDelay: TimeInterval = 90.0
+    private static let ongoingNoAX25RecoveryDelay: TimeInterval = 180.0
+    private static let ongoingNoAX25RecoveryInterval: TimeInterval = 180.0
+    private static let maxOngoingNoAX25RecoveryAttempts = 3
+
     // MARK: - Stats
 
     var _totalBytesIn = 0
@@ -547,6 +561,9 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
     private func closeInternal(reason: String) {
         cancelReconnectTimer()
         cancelBatteryPolling()
+        cancelStartupRecoveryWatchdog()
+        connectionOpenedAt = nil
+        ongoingNoAX25RecoveryAttempts = 0
 
         lock.lock()
         let periph = peripheral
@@ -674,13 +691,19 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
                 return
             }
             
-            self.setState(.connected)
-            KISSLinkLog.info(self.endpointDescription, message: "KISS init complete — BLE link ready")
+            setState(.connected)
+            KISSLinkLog.info(endpointDescription, message: "KISS init complete — link ready")
+
+            startupReceptionGuard.resetForNewConnection()
+            connectionOpenedAt = Date()
+            ongoingNoAX25RecoveryAttempts = 0
             
             // Start battery polling if Mobilinkd config is present
             if let mobiConfig = self.config.mobilinkdConfig, mobiConfig.isBatteryMonitoringEnabled {
                 self.startBatteryPolling()
             }
+            
+            self.scheduleStartupRecoveryWatchdogIfNeeded()
         }
     }
     
@@ -731,6 +754,153 @@ final class KISSLinkBLE: NSObject, KISSLink, @unchecked Sendable {
         batteryPollTimer = nil
         lock.unlock()
         timer?.cancel()
+    }
+
+    private func scheduleStartupRecoveryWatchdogIfNeeded() {
+        cancelStartupRecoveryWatchdog()
+
+        guard config.mobilinkdConfig != nil else { return }
+
+        let noKISSTimer = DispatchSource.makeTimerSource(queue: bleQueue)
+        noKISSTimer.schedule(deadline: .now() + Self.startupNoKISSRecoveryDelay)
+        noKISSTimer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            self.startupNoKISSRecoveryTimer = nil
+            self.lock.unlock()
+            self.handleStartupRecovery(
+                trigger: .noInboundKISS,
+                watchdogLabel: "Startup RX watchdog (no inbound KISS)"
+            )
+        }
+
+        let noAX25Timer = DispatchSource.makeTimerSource(queue: bleQueue)
+        noAX25Timer.schedule(deadline: .now() + Self.startupNoAX25RecoveryDelay)
+        noAX25Timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            self.startupNoAX25RecoveryTimer = nil
+            self.lock.unlock()
+            self.handleStartupRecovery(
+                trigger: .noInboundAX25,
+                watchdogLabel: "Startup RX watchdog (no inbound AX.25)"
+            )
+        }
+
+        let ongoingNoAX25Timer = DispatchSource.makeTimerSource(queue: bleQueue)
+        ongoingNoAX25Timer.schedule(
+            deadline: .now() + Self.ongoingNoAX25RecoveryDelay,
+            repeating: Self.ongoingNoAX25RecoveryInterval
+        )
+        ongoingNoAX25Timer.setEventHandler { [weak self] in
+            self?.handleOngoingNoAX25Recovery()
+        }
+
+        lock.lock()
+        startupNoKISSRecoveryTimer = noKISSTimer
+        startupNoAX25RecoveryTimer = noAX25Timer
+        ongoingNoAX25RecoveryTimer = ongoingNoAX25Timer
+        lock.unlock()
+
+        noKISSTimer.resume()
+        noAX25Timer.resume()
+        ongoingNoAX25Timer.resume()
+    }
+
+    private func handleStartupRecovery(
+        trigger: MobilinkdStartupReceptionGuard.RecoveryTrigger,
+        watchdogLabel: String
+    ) {
+        lock.lock()
+        let connected = _state == .connected
+        lock.unlock()
+
+        let shouldSendReset = startupReceptionGuard.shouldIssueRecoveryReset(
+            isConnected: connected,
+            isMobilinkd: config.mobilinkdConfig != nil,
+            trigger: trigger
+        )
+
+        guard shouldSendReset else {
+            KISSLinkLog.info(
+                endpointDescription,
+                message: "\(watchdogLabel) skipped (inboundKISS=\(startupReceptionGuard.hasSeenInboundKISSFrame), inboundAX25=\(startupReceptionGuard.hasSeenInboundAX25), resetSent=\(startupReceptionGuard.didIssueRecoveryReset))"
+            )
+            return
+        }
+
+        KISSLinkLog.info(
+            endpointDescription,
+            message: "\(watchdogLabel): sending one-shot demodulator RESET"
+        )
+
+        let resetFrame = Data(MobilinkdTNC.reset())
+        send(resetFrame) { [weak self] error in
+            guard let self, let error else { return }
+            KISSLinkLog.error(
+                self.endpointDescription,
+                message: "\(watchdogLabel) RESET failed: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func handleOngoingNoAX25Recovery() {
+        lock.lock()
+        let connected = _state == .connected
+        lock.unlock()
+
+        guard connected, config.mobilinkdConfig != nil else { return }
+
+        if startupReceptionGuard.hasSeenInboundAX25 {
+            cancelOngoingNoAX25Recovery()
+            return
+        }
+
+        guard ongoingNoAX25RecoveryAttempts < Self.maxOngoingNoAX25RecoveryAttempts else {
+            KISSLinkLog.info(
+                endpointDescription,
+                message: "Ongoing no-AX.25 recovery stopped after \(Self.maxOngoingNoAX25RecoveryAttempts) attempts"
+            )
+            cancelOngoingNoAX25Recovery()
+            return
+        }
+
+        ongoingNoAX25RecoveryAttempts += 1
+        let elapsedSeconds = Int(Date().timeIntervalSince(connectionOpenedAt ?? Date()))
+        KISSLinkLog.info(
+            endpointDescription,
+            message: "No inbound AX.25 after \(elapsedSeconds)s — sending demodulator RESET attempt \(ongoingNoAX25RecoveryAttempts)/\(Self.maxOngoingNoAX25RecoveryAttempts)"
+        )
+
+        send(Data(MobilinkdTNC.reset())) { [weak self] error in
+            guard let self, let error else { return }
+            KISSLinkLog.error(
+                self.endpointDescription,
+                message: "Ongoing no-AX.25 RESET failed: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func cancelOngoingNoAX25Recovery() {
+        lock.lock()
+        let timer = ongoingNoAX25RecoveryTimer
+        ongoingNoAX25RecoveryTimer = nil
+        lock.unlock()
+        timer?.cancel()
+    }
+
+    private func cancelStartupRecoveryWatchdog() {
+        lock.lock()
+        let noKISSTimer = startupNoKISSRecoveryTimer
+        let noAX25Timer = startupNoAX25RecoveryTimer
+        let ongoingNoAX25Timer = ongoingNoAX25RecoveryTimer
+        startupNoKISSRecoveryTimer = nil
+        startupNoAX25RecoveryTimer = nil
+        ongoingNoAX25RecoveryTimer = nil
+        lock.unlock()
+        noKISSTimer?.cancel()
+        noAX25Timer?.cancel()
+        ongoingNoAX25Timer?.cancel()
     }
 
     // MARK: - Private: State Helpers
@@ -1032,6 +1202,11 @@ extension KISSLinkBLE: CBPeripheralDelegate {
         _totalBytesIn += data.count
         lock.unlock()
         KISSLinkLog.bytesIn(endpointDescription, count: data.count)
+
+        startupReceptionGuard.observeInboundChunk(data)
+        if startupReceptionGuard.hasSeenInboundAX25 {
+            cancelOngoingNoAX25Recovery()
+        }
 
         Task { @MainActor [weak self] in
             self?.delegate?.linkDidReceive(data)
