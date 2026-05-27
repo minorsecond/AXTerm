@@ -165,64 +165,12 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
             return .mail
         }
 
-        // Detect BBS/node prompts and session messages (not the interesting data)
-        if isPromptOrSessionMessage(normalizedText) {
-            return .prompt
-        }
-
-        // If it has substantial content and isn't a prompt, it's likely actual data
+        // If it has substantial content, it's likely actual data
         if text.trimmingCharacters(in: .whitespacesAndNewlines).count > 10 {
             return .data
         }
 
         return .message
-    }
-
-    /// Check if the text is a BBS/node prompt or session protocol message.
-    /// Conservative by design: when in doubt, let the line through as data.
-    /// Better to show a noisy prompt than to hide content the user needs to see.
-    private static func isPromptOrSessionMessage(_ text: String) -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-
-        // Bare callsign / node prompt: "DRLNOD>", "KB5YZB-7>", "BBS>", "NOS>"
-        // Prefix must be callsign-safe characters only (letters, digits, dashes — no spaces).
-        // Excludes "de KB5YZB>" (BBS sign-off), "73 de W6ABC>" (farewell), etc.
-        if trimmed.hasSuffix(">") {
-            let prefix = trimmed.dropLast()
-            if !prefix.isEmpty && prefix.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }) {
-                return true
-            }
-        }
-
-        // Exact-match known prompts only — heuristics are too risky.
-        // "From:", "To:", "Via:", "Date:", "DE", "73", "OK" are all valid BBS content
-        // and must not be swallowed. Add entries here as new systems are encountered.
-        let exactPrompts: Set<String> = [
-            // Colon-terminated command prompts (PBBS, AA4RE, W0RLI, FBB, etc.)
-            "CMD:", "BBS:", "[CMD]:", "[FBB]:",
-            // Bracket-wrapped node prompts (FBB / European systems)
-            "[FBB]>", "[CMD]>",
-        ]
-        if exactPrompts.contains(trimmed) {
-            return true
-        }
-
-        // NET/ROM and node session event lines (e.g. "###LINK MADE TO ...", "###DISCONNECTED")
-        if trimmed.hasPrefix("###") {
-            return true
-        }
-
-        // Known multi-word prompt prefixes
-        let promptPrefixes: [String] = [
-            "ENTER COMMAND",
-            "ENTER CMD",
-        ]
-        for pattern in promptPrefixes where trimmed.hasPrefix(pattern) {
-            return true
-        }
-
-        return false
     }
 
     /// Display string for the via path

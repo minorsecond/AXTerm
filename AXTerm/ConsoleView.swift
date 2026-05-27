@@ -247,7 +247,7 @@ struct ConsoleView: View {
                 label: "CMD",
                 isOn: $showPrompt,
                 color: .cyan,
-                tooltip: "Commands and prompts. Session control messages like connect/disconnect, BBS menus, and user commands."
+                tooltip: "AX.25 Link Control frames. Protocol-level session messages like SABM, DISC, RR, and UA."
             )
             FilterToggle(
                 label: "OTHER",
