@@ -1244,7 +1244,18 @@ final class AX25SessionManager: ObservableObject {
             $0.channel == channel &&
             $0.state == .disconnecting
         }
-        guard let session = findConnectedSession(from: source, channel: channel) ?? disconnecting else {
+        // Bug I fix: also match a session in .connecting state.
+        // Previously, if the remote peer refused the connection by sending DISC before we
+        // received their UA, findConnectedSession returned nil, no state transition occurred,
+        // and the session remained stuck in .connecting — continuing to retransmit SABM until
+        // T1 max-retries expired. Per AX.25 §6.3.4, a DISC received while connecting MUST
+        // cause an immediate disconnect: send DM and cancel the connect attempt.
+        let connecting = sessions.values.first {
+            $0.remoteAddress.display.uppercased() == source.display.uppercased() &&
+            $0.channel == channel &&
+            $0.state == .connecting
+        }
+        guard let session = findConnectedSession(from: source, channel: channel) ?? disconnecting ?? connecting else {
             debugTrace("DISC with no session -> DM", [
                 "from": source.display
             ])
@@ -1396,8 +1407,16 @@ final class AX25SessionManager: ObservableObject {
             onSessionStateChanged?(session, oldState, session.state)
         }
 
-        // Acknowledge received frames in our send buffer: remove [vaBefore, nr)
-        session.acknowledgeUpTo(from: vaBefore, to: nr)
+        // Acknowledge received frames in our send buffer: remove [vaBefore, vaAfter)
+        // Bug J fix: use state-machine-validated V(A) instead of raw N(R) from frame.
+        // If the state machine rejects the piggybacked N(R) (e.g., nr is outside the valid
+        // window [V(A), V(S)]), session.va stays at vaBefore so vaAfter == vaBefore and
+        // acknowledgeUpTo is a no-op — preventing spurious sendBuffer deletions that would
+        // corrupt the sendBuffer.count == outstandingCount invariant.
+        // Root cause: identical to Bug B3 (fixed in handleInboundRR) — raw nr was threaded
+        // directly into acknowledgeUpTo, bypassing the state machine's window validation.
+        let vaAfter = session.va
+        session.acknowledgeUpTo(from: vaBefore, to: vaAfter)
         session.statistics.recordReceived(bytes: payload.count)
         session.touch()
 

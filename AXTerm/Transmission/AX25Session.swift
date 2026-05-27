@@ -466,6 +466,17 @@ nonisolated struct AX25StateMachine: Sendable {
             TxLog.error(.ax25, "Connection refused", error: nil, ["reason": "DM received"])
             return [.stopT1, .notifyError("Connection refused (DM received)")]
 
+        case (.connecting, .receivedDISC):
+            // Remote explicitly refused our connection attempt by sending DISC before UA.
+            // Per AX.25 §6.3.4, acknowledge with UA and cancel the connect attempt.
+            // Bug I fix: previously, this case fell through to (.connecting, _) → [] which
+            // returned no actions and left state unchanged. The session then stayed in
+            // .connecting, retransmitting SABM on every T1 expiry until maxRetries, wasting
+            // RF bandwidth and masking the refusal from the local operator.
+            state = .disconnected
+            TxLog.error(.ax25, "Connection refused", error: nil, ["reason": "DISC received while connecting"])
+            return [.stopT1, .sendUA, .notifyError("Connection refused (DISC received)")]
+
         case (.connecting, .t1Timeout):
             retryCount += 1
             TxLog.warning(.ax25, "T1 timeout during connect", ["retry": retryCount, "maxRetries": config.maxRetries])
