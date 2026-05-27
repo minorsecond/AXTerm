@@ -61,13 +61,20 @@ nonisolated final class AX25Session: @unchecked Sendable {
     var pendingDataQueue: [(data: Data, pid: UInt8, displayInfo: String?)] = []
 
     /// T1 retransmit timer task
-    var t1TimerTask: Task<Void, Never>?
+    var t1TimerTask: AnyCancellableTask?
 
     /// Pending retransmit task (grace period after T1 fires); cancelled if RR arrives
-    var t1PendingRetransmitTask: Task<Void, Never>?
+    var t1PendingRetransmitTask: AnyCancellableTask?
 
     /// T3 idle timer task
-    var t3TimerTask: Task<Void, Never>?
+    var t3TimerTask: AnyCancellableTask?
+
+    /// N(R) at which we last triggered an immediate REJ retransmit.
+    /// Used to suppress duplicate REJ retransmission amplification (Bug A):
+    /// once we retransmit for REJ(nr), T1 owns the retry cycle until ack
+    /// progress or T1 fires. Cleared when T1 fires so next REJ after T1
+    /// timeout triggers a fresh immediate retransmit.
+    var lastREJRetransmitNR: Int? = nil
 
     /// Timestamp when SABM was sent (for RTT calculation)
     var sabmSentAt: Date?
@@ -249,8 +256,11 @@ final class AX25SessionManager: ObservableObject {
     /// All active sessions keyed by SessionKey
     @Published private(set) var sessions: [SessionKey: AX25Session] = [:]
 
-    /// Default session configuration
+    /// Configuration used when initiating sessions to unknown destinations
     var defaultConfig: AX25SessionConfig = AX25SessionConfig()
+
+    /// The clock used for all timer scheduling (T1, T3, backoffs). Inject VirtualClock for deterministic tests.
+    let clock: AX25TimerScheduler
 
     // MARK: - Debug Logging (Debug Builds Only)
     private func debugTrace(_ message: String, _ data: [String: Any] = [:]) {
@@ -290,7 +300,7 @@ final class AX25SessionManager: ObservableObject {
     }
 
     /// Local callsign (from settings)
-    var localCallsign: AX25Address = AX25Address(call: "NOCALL", ssid: 0)
+    var localCallsign: AX25Address
 
     /// Callback when frames need to be sent
     var onSendFrame: ((OutboundFrame) -> Void)?
@@ -315,6 +325,31 @@ final class AX25SessionManager: ObservableObject {
 
     /// When set, used to get session config per route (destination + path) so direct vs via-digi use separate learned params. If nil, use defaultConfig.
     var getConfigForDestination: ((String, String) -> AX25SessionConfig)?
+
+    // MARK: - Initialization
+
+    init(
+        localCallsign: AX25Address,
+        clock: AX25TimerScheduler = AX25SystemTimerScheduler()
+    ) {
+        self.localCallsign = localCallsign
+        self.clock = clock
+    }
+
+    // MARK: - Invariant Checking
+
+    /// Asserts core state machine and session invariants.
+    /// This prevents subtle bugs like queue desync, sequence number wrapping errors, and leaks.
+    func checkInvariants(session: AX25Session) {
+        #if DEBUG
+        session.stateMachine.sequenceState.assertInvariants(windowSize: session.stateMachine.config.windowSize)
+        
+        // sendBuffer.count must exactly match outstanding frames according to V(S) and V(A)
+        // If this fails, we have a memory leak (frames stuck in buffer) or a duplicate tracking bug.
+        assert(session.sendBuffer.count == session.stateMachine.sequenceState.outstandingCount,
+               "Invariant violation: sendBuffer.count (\(session.sendBuffer.count)) != outstandingCount (\(session.stateMachine.sequenceState.outstandingCount)). vs=\(session.vs) va=\(session.va)")
+        #endif
+    }
 
     // MARK: - Deep Session Debug (Debug Builds Only)
 
@@ -777,6 +812,10 @@ final class AX25SessionManager: ObservableObject {
                 session.touch()
 
                 if wasIdle {
+                    // Transition from idle to active: stop T3 keepalive, start T1 retransmit timer.
+                    // Per AX.25 spec, T3 and T1 are mutually exclusive — T1 takes over when
+                    // there are outstanding unacked frames.
+                    stopT3Timer(for: session)
                     startT1Timer(for: session)
                 }
             }
@@ -789,6 +828,8 @@ final class AX25SessionManager: ObservableObject {
                     "queueDepth": session.pendingDataQueue.count
                 ])
             }
+            
+            checkInvariants(session: session)
 
         case .disconnecting:
             TxLog.warning(.session, "Cannot send: session disconnecting")
@@ -1109,9 +1150,16 @@ final class AX25SessionManager: ObservableObject {
             "path": path.display.isEmpty ? "(empty)" : path.display,
             "channel": channel
         ])
-        // Use findConnectedSession instead of existingSession to match any connected
-        // session from this peer, even if return path differs (common with digipeaters)
-        guard let session = findConnectedSession(from: source, channel: channel) else {
+        // Use findConnectedSession to match a connected session from this peer (common
+        // with digipeaters where return path differs). Also check .disconnecting: per
+        // AX.25 §6.4.2, if we sent DISC and receive DISC back simultaneously, we must
+        // respond UA and finish teardown — not send DM as if no session existed.
+        let disconnecting = sessions.values.first {
+            $0.remoteAddress.display.uppercased() == source.display.uppercased() &&
+            $0.channel == channel &&
+            $0.state == .disconnecting
+        }
+        guard let session = findConnectedSession(from: source, channel: channel) ?? disconnecting else {
             debugTrace("DISC with no session -> DM", [
                 "from": source.display
             ])
@@ -1275,6 +1323,7 @@ final class AX25SessionManager: ObservableObject {
 
         // Deep debug snapshot whenever we successfully process an inbound I-frame.
         debugDumpSessionState(session, context: "inbound-I")
+        checkInvariants(session: session)
 
         return processActions(actions, for: session).first
     }
@@ -1369,7 +1418,7 @@ final class AX25SessionManager: ObservableObject {
         let drained = queueBeforeDrain - session.pendingDataQueue.count
         if drained > 0 {
             TxLog.debug(.session, "Drain completed", [
-                "peer": source.display,
+                "peer": session.remoteAddress.display,
                 "drained": drained,
                 "remaining": session.pendingDataQueue.count
             ])
@@ -1379,6 +1428,7 @@ final class AX25SessionManager: ObservableObject {
         debugDumpSessionState(session, context: isPoll ? "inbound-RR-poll" : "inbound-RR")
 
         _ = processActions(actions, for: session)
+        checkInvariants(session: session)
 
         // Feed link quality sample into adaptive settings (session-based learning)
         let framesSent = max(1, session.statistics.framesSent)
@@ -1444,7 +1494,12 @@ final class AX25SessionManager: ObservableObject {
             return []
         }
 
+        let vaBefore = session.va
         let oldState = session.state
+        // Bug D fix: validate N(R) before passing to state machine's ackUpTo.
+        // A stale nr (< V(A)) would wrap the modulo loop in acknowledgeUpTo and
+        // delete frames that are still outstanding, corrupting the send buffer.
+        let validNR = session.stateMachine.sequenceState.isValidNR(nr: nr)
         let actions = session.stateMachine.handle(event: .receivedREJ(nr: nr))
 
         if oldState != session.state {
@@ -1456,17 +1511,46 @@ final class AX25SessionManager: ObservableObject {
             onSessionStateChanged?(session, oldState, session.state)
         }
 
-        // REJ(nr) means "retransmit from nr" — do NOT clear send buffer (unlike RR which acks frames).
-        // Get frames to retransmit and update their N(R) to current V(R)
-        let retransmitFrames = session.framesToRetransmit(from: nr)
-        for frame in retransmitFrames {
-            session.statistics.recordRetransmit()
+        if !validNR {
+            // Stale or out-of-window REJ: ignore ack side-effects and retransmit.
+            // Still process state machine actions (e.g. startT1 guard).
+            debugTrace("Stale REJ discarded", [
+                "peer": source.display, "nr": nr, "va": session.va, "vs": session.vs
+            ])
+            session.touch()
+            checkInvariants(session: session)
+            return processActions(actions, for: session)
+        }
+
+        // REJ(nr) acknowledges all frames up to nr-1, so we MUST clear them from the send buffer.
+        // It then requests retransmission starting from nr.
+        session.acknowledgeUpTo(from: vaBefore, to: nr)
+
+        // Bug A fix: suppress retransmission amplification from duplicate REJ storms.
+        // After the first REJ(nr) triggers an immediate retransmit, T1 owns the retry
+        // cycle. A second REJ with the same nr and no ack progress must not retransmit
+        // again — T1 will handle it. Rate-limiting is reset when T1 fires.
+        let noAckProgress = session.va == vaBefore
+        let isDuplicateREJ = session.lastREJRetransmitNR == nr
+        let shouldRetransmit = !(noAckProgress && isDuplicateREJ)
+
+        let retransmitFrames: [OutboundFrame]
+        if shouldRetransmit {
+            retransmitFrames = session.framesToRetransmit(from: nr)
+            for _ in retransmitFrames { session.statistics.recordRetransmit() }
+            session.lastREJRetransmitNR = nr
+        } else {
+            retransmitFrames = []
+            debugTrace("Duplicate REJ suppressed (T1 owns retry cycle)", [
+                "peer": source.display, "nr": nr
+            ])
         }
 
         session.touch()
 
         // Deep debug snapshot when peer explicitly requests retransmit.
         debugDumpSessionState(session, context: "inbound-REJ")
+        checkInvariants(session: session)
 
         // Process actions first, then return retransmit frames with updated N(R)
         var frames = processActions(actions, for: session)
@@ -1488,12 +1572,15 @@ final class AX25SessionManager: ObservableObject {
             debugTrace("state change (T1 timeout)", [
                 "peer": session.remoteAddress.display,
                 "from": oldState.rawValue,
-                "to": session.state.rawValue
+                "to": oldState.rawValue
             ])
             onSessionStateChanged?(session, oldState, session.state)
         }
 
         session.timers.backoff()  // Exponential backoff
+        // T1 firing resets the REJ deduplication window: the next REJ after a T1
+        // retransmit should trigger a fresh immediate retransmit, not be suppressed.
+        session.lastREJRetransmitNR = nil
         session.touch()
 
         // Deep debug snapshot after every T1 timeout, to understand why we're retransmitting
@@ -1558,50 +1645,31 @@ final class AX25SessionManager: ObservableObject {
             "state": session.state.rawValue
         ])
 
-        session.t1TimerTask = Task { [weak self] in
-            do {
-                // Convert RTO from seconds to nanoseconds
-                try await Task.sleep(nanoseconds: UInt64(rto * 1_000_000_000))
+        session.t1TimerTask = clock.schedule(delay: rto) { [weak self] in
+            guard let self = self else { return }
+            // Find the session (it may have been removed)
+            guard let session = self.sessions.values.first(where: { $0.id == sessionId }) else {
+                TxLog.debug(.session, "T1 timeout but session gone", ["session": String(sessionId.uuidString.prefix(8))])
+                return
+            }
 
-                guard !Task.isCancelled else { return }
+            TxLog.warning(.session, "T1 timeout fired", [
+                "session": String(sessionId.uuidString.prefix(8)),
+                "state": session.state.rawValue,
+                "retryCount": session.stateMachine.retryCount
+            ])
 
-                await MainActor.run { [weak self] in
-                    guard let self = self else { return }
-                    // Find the session (it may have been removed)
-                    guard let session = self.sessions.values.first(where: { $0.id == sessionId }) else {
-                        TxLog.debug(.session, "T1 timeout but session gone", ["session": String(sessionId.uuidString.prefix(8))])
-                        return
-                    }
-
-                    TxLog.warning(.session, "T1 timeout fired", [
-                        "session": String(sessionId.uuidString.prefix(8)),
-                        "state": session.state.rawValue,
-                        "retryCount": session.stateMachine.retryCount
-                    ])
-
-                    // Grace period: delay retransmit so if RR is in flight we can cancel and avoid duplicate frames
-                    let graceNanoseconds: UInt64 = 200_000_000  // 200ms
-                    session.t1PendingRetransmitTask?.cancel()
-                    session.t1PendingRetransmitTask = Task { [weak self] in
-                        do {
-                            try await Task.sleep(nanoseconds: graceNanoseconds)
-                            guard !Task.isCancelled else { return }
-                            await MainActor.run { [weak self] in
-                                guard let self = self else { return }
-                                guard let session = self.sessions.values.first(where: { $0.id == sessionId }) else { return }
-                                session.t1PendingRetransmitTask = nil
-                                let frames = self.handleT1Timeout(session: session)
-                                for frame in frames {
-                                    self.onSendFrame?(frame)
-                                }
-                            }
-                        } catch {
-                            // Cancelled (RR arrived during grace) – nothing to do
-                        }
-                    }
+            // Grace period: delay retransmit so if RR is in flight we can cancel and avoid duplicate frames
+            let gracePeriod: TimeInterval = 0.2 // 200ms
+            session.t1PendingRetransmitTask?.cancel()
+            session.t1PendingRetransmitTask = self.clock.schedule(delay: gracePeriod) { [weak self] in
+                guard let self = self else { return }
+                guard let session = self.sessions.values.first(where: { $0.id == sessionId }) else { return }
+                session.t1PendingRetransmitTask = nil
+                let frames = self.handleT1Timeout(session: session)
+                for frame in frames {
+                    self.onSendFrame?(frame)
                 }
-            } catch {
-                // Task was cancelled, nothing to do
             }
         }
     }
@@ -1627,30 +1695,20 @@ final class AX25SessionManager: ObservableObject {
         let timeout = session.timers.t3Timeout
         let sessionId = session.id
 
-        session.t3TimerTask = Task { [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+        session.t3TimerTask = clock.schedule(delay: timeout) { [weak self] in
+            guard let self = self else { return }
+            guard let session = self.sessions.values.first(where: { $0.id == sessionId }) else {
+                return
+            }
 
-                guard !Task.isCancelled else { return }
+            TxLog.debug(.session, "T3 timeout fired", [
+                "session": String(sessionId.uuidString.prefix(8)),
+                "state": session.state.rawValue
+            ])
 
-                await MainActor.run { [weak self] in
-                    guard let self = self else { return }
-                    guard let session = self.sessions.values.first(where: { $0.id == sessionId }) else {
-                        return
-                    }
-
-                    TxLog.debug(.session, "T3 timeout fired", [
-                        "session": String(sessionId.uuidString.prefix(8)),
-                        "state": session.state.rawValue
-                    ])
-
-                    let frames = self.handleT3Timeout(session: session)
-                    for frame in frames {
-                        self.onSendFrame?(frame)
-                    }
-                }
-            } catch {
-                // Task was cancelled
+            let frames = self.handleT3Timeout(session: session)
+            for frame in frames {
+                self.onSendFrame?(frame)
             }
         }
     }
@@ -1712,6 +1770,7 @@ final class AX25SessionManager: ObservableObject {
             ])
         }
         session.touch()
+        checkInvariants(session: session)
     }
 
     /// Build an I-frame for the session with current sequence numbers
@@ -1880,6 +1939,13 @@ final class AX25SessionManager: ObservableObject {
 
             case .stopT3:
                 stopT3Timer(for: session)
+
+            case .clearSendBuffer:
+                // Full link reset: flush all unacknowledged outbound frames and RTT state.
+                // Used when a peer re-sends SABM on an active connection (AX.25 §4.3.3.1).
+                session.sendBuffer.removeAll()
+                session.clearSendTimes()
+                debugTrace("Send buffer cleared (link reset)", ["peer": session.remoteAddress.display])
             }
         }
 

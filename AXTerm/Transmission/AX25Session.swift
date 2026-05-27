@@ -132,14 +132,34 @@ nonisolated struct AX25SequenceState: Sendable {
         }
     }
 
+    /// Checks if a received N(R) is valid (between V(A) and V(S))
+    func isValidNR(nr: Int) -> Bool {
+        guard nr >= 0 && nr < modulo else { return false }
+        if vs >= va {
+            return nr >= va && nr <= vs
+        } else {
+            return nr >= va || nr <= vs
+        }
+    }
+
     /// Acknowledge frames up to (but not including) nr
     mutating func ackUpTo(nr: Int) {
+        assert(isValidNR(nr: nr), "Attempted to ackUpTo invalid N(R): \(nr)")
         va = nr % modulo
     }
 
     /// Check if we can send another frame (window not full)
     func canSend(windowSize: Int) -> Bool {
-        outstandingCount < windowSize
+        assert(windowSize > 0 && windowSize < modulo, "Window size must be > 0 and < modulo")
+        return outstandingCount < windowSize
+    }
+    
+    /// Asserts core invariants
+    func assertInvariants(windowSize: Int) {
+        assert(vs >= 0 && vs < modulo, "V(S) out of bounds: \(vs)")
+        assert(vr >= 0 && vr < modulo, "V(R) out of bounds: \(vr)")
+        assert(va >= 0 && va < modulo, "V(A) out of bounds: \(va)")
+        assert(outstandingCount >= 0 && outstandingCount <= windowSize, "outstandingCount \(outstandingCount) exceeds windowSize \(windowSize)")
     }
 
     /// Reset sequence numbers
@@ -300,6 +320,8 @@ nonisolated enum AX25SessionAction: Sendable, Equatable {
     case notifyConnected
     case notifyDisconnected
     case notifyError(String)
+    /// Clear the session's outbound send buffer (used on link reset, e.g. SABM while connected)
+    case clearSendBuffer
 }
 
 // MARK: - State Machine
@@ -468,23 +490,30 @@ nonisolated struct AX25StateMachine: Sendable {
 
         case (.connected, .receivedDISC):
             state = .disconnected
-            return [.sendUA, .stopT3, .notifyDisconnected]
+            // .stopT1 is required: T1 may be running for outstanding I-frames.
+            // Without it, the timer fires after disconnect and incorrectly triggers
+            // a retransmit or state-machine event against a dead session.
+            return [.sendUA, .stopT1, .stopT3, .notifyDisconnected]
 
         case (.connected, .receivedSABM):
-            // Remote is re-establishing - reset and ack
+            // Remote is re-establishing the link from scratch per AX.25 §4.3.3.1.
+            // Must fully reset: V(S)/V(R)/V(A) via resetSessionState(), plus flush the
+            // outer send buffer (clearSendBuffer action) so no stale frames remain.
             resetSessionState()
-            return [.sendUA, .startT3]
+            return [.clearSendBuffer, .stopT1, .sendUA, .startT3]
 
         case (.connected, .receivedIFrame(let ns, let nr, let pf, let payload)):
             TxLog.inbound(.ax25, "I-frame received", ["ns": ns, "nr": nr, "pf": pf, "size": payload.count])
             return handleIFrame(ns: ns, nr: nr, pf: pf, payload: payload)
 
         case (.connected, .receivedRR(let nr, let pf, let isCommand)):
-            return handleRR(nr: nr, pf: pf, isCommand: isCommand)
+            return sequenceState.isValidNR(nr: nr) ? handleRR(nr: nr, pf: pf, isCommand: isCommand) : []
 
         case (.connected, .receivedRNR(let nr, let pf, let isCommand)):
             // Remote is busy - ack frames but don't send more
-            sequenceState.ackUpTo(nr: nr)
+            if sequenceState.isValidNR(nr: nr) {
+                sequenceState.ackUpTo(nr: nr)
+            }
             var actions: [AX25SessionAction] = [.stopT1]
             if pf && isCommand {
                 actions.append(.sendRR(nr: sequenceState.vr, pf: true, isCommand: false))
@@ -493,7 +522,9 @@ nonisolated struct AX25StateMachine: Sendable {
 
         case (.connected, .receivedREJ(let nr, let pf, let isCommand)):
             // Remote requests retransmit from nr
-            sequenceState.ackUpTo(nr: nr)
+            if sequenceState.isValidNR(nr: nr) {
+                sequenceState.ackUpTo(nr: nr)
+            }
             var actions: [AX25SessionAction] = [.startT1]
             if pf && isCommand {
                 actions.append(.sendRR(nr: sequenceState.vr, pf: true, isCommand: false))
@@ -604,7 +635,7 @@ nonisolated struct AX25StateMachine: Sendable {
 
         // Process N(R) - acknowledge our sent frames
         let vaBeforeIFrameAck = sequenceState.va
-        if sequenceState.outstandingCount > 0 {
+        if sequenceState.outstandingCount > 0 && sequenceState.isValidNR(nr: nr) {
             sequenceState.ackUpTo(nr: nr)
         }
 
