@@ -1875,8 +1875,10 @@ struct TerminalView: View {
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(.primary)
                         Spacer()
-                        Button("Clear") {
+                        Button(action: {
                             client.selectedStationCall = nil
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
                         }
                         .buttonStyle(.plain)
                         .font(.subheadline)

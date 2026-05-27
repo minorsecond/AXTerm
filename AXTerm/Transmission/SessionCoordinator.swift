@@ -568,6 +568,8 @@ final class SessionCoordinator: ObservableObject {
                 if !isInitiator {
                     NSSound(named: "Glass")?.play()
                     self.packetEngine?.notificationScheduler?.scheduleConnectionNotification(callsign: peer)
+                } else {
+                    NSSound(named: "Ping")?.play()
                 }
 
                 if isInitiator && axdpEnabled && autoNegotiate {

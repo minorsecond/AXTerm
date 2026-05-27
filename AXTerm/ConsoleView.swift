@@ -114,10 +114,13 @@ struct ConsoleView: View {
                         .foregroundStyle(.secondary)
                         .font(.caption)
 
-                    Button("Clear") {
+                    Button(action: {
                         clearConsole()
+                    }) {
+                        Image(systemName: "trash")
                     }
                     .buttonStyle(.bordered)
+                    .help("Clear Console")
                     .controlSize(.small)
                 }
                 .padding(.horizontal)
