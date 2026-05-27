@@ -591,75 +591,74 @@ struct ContentView: View {
     /// TNC transport status menu — clickable pill with connect/disconnect actions
     @ViewBuilder
     private var tncToolbarMenu: some View {
-        Menu {
-            switch client.status {
-            case .connected:
-                Button("Disconnect TNC", role: .destructive) {
-                    client.disconnect(reason: "user disconnect")
-                }
-                Button("Reconnect TNC") {
-                    reconnectToTNC()
-                }
-            case .connecting:
-                Button("Cancel") {
-                    client.disconnect(reason: "user cancelled connect")
-                }
-            case .disconnected, .failed:
-                Button("Connect TNC") {
-                    client.connectUsingSettings()
-                }
-                Button("Reconnect TNC") {
-                    reconnectToTNC()
-                }
+        HStack(spacing: 8) {
+            // TX / RX Blinkenlights
+            HStack(spacing: 2) {
+                Blinkenlight(color: .green, trigger: client.lastRxTime)
+                    .help("RX Activity")
+                Blinkenlight(color: .red, trigger: client.lastTxTime)
+                    .help("TX Activity")
             }
+            
+            // Connection status dot
+            Circle()
+                .fill(tncLedColor)
+                .frame(width: 8, height: 8)
+                .help("TNC connection status")
 
-            Divider()
-
-            Section("Endpoint") {
-                Text(connectionEndpointLabel)
-            }
-
-            if let lastError = client.lastError {
-                Section("Last error") {
-                    Text(lastError)
+            Menu {
+                switch client.status {
+                case .connected:
+                    Button("Disconnect TNC", role: .destructive) {
+                        client.disconnect(reason: "user disconnect")
+                    }
+                    Button("Reconnect TNC") {
+                        reconnectToTNC()
+                    }
+                case .connecting:
+                    Button("Cancel") {
+                        client.disconnect(reason: "user cancelled connect")
+                    }
+                case .disconnected, .failed:
+                    Button("Connect TNC") {
+                        client.connectUsingSettings()
+                    }
+                    Button("Reconnect TNC") {
+                        reconnectToTNC()
+                    }
                 }
-            }
 
-            Divider()
+                Divider()
 
-            Button("TNC Settings\u{2026}") {
-                SettingsRouter.shared.navigate(to: .network)
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(tncLedColor)
-                    .frame(width: 8, height: 8)
+                Section("Endpoint") {
+                    Text(connectionEndpointLabel)
+                }
 
+                if let lastError = client.lastError {
+                    Section("Last error") {
+                        Text(lastError)
+                    }
+                }
+
+                Divider()
+
+                Button("TNC Settings\u{2026}") {
+                    SettingsRouter.shared.navigate(to: .network)
+                }
+            } label: {
                 Text(tncCapsuleLabel)
                     .font(.system(size: 11, weight: .medium))
-                    .lineLimit(1)
-                    .foregroundStyle(.secondary)
-                    
-                // TX / RX Blinkenlights
-                HStack(spacing: 2) {
-                    Blinkenlight(color: .green, trigger: client.lastRxTime)
-                        .help("RX Activity")
-                    Blinkenlight(color: .red, trigger: client.lastTxTime)
-                        .help("TX Activity")
-                }
-                .padding(.leading, 2)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(.thinMaterial, in: Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
-            )
+            .menuStyle(.borderlessButton)
+            .help("TNC connection actions")
         }
-        .menuStyle(.borderlessButton)
-        .help("TNC connection status and actions")
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(.thinMaterial, in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
+        )
     }
     
     private struct Blinkenlight: View {
