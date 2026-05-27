@@ -670,10 +670,11 @@ struct ContentView: View {
             Circle()
                 .fill(isActive ? color : Color.gray.opacity(0.2))
                 .frame(width: 5, height: 5)
+                .animation(isActive ? .easeIn(duration: 0.05) : .easeOut(duration: 0.4), value: isActive)
                 .onChange(of: trigger) { _, _ in
                     isActive = true
                     // Turn off after a short delay
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                         isActive = false
                     }
                 }
