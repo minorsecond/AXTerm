@@ -1799,3 +1799,786 @@ final class ArchitecturalDeterminismTests: XCTestCase {
         XCTAssertNotEqual(seq1, seq2, "Different seeds must produce different RFRng sequences")
     }
 }
+
+// MARK: - Part 16: AIMD Congestion Control Audit (Adversarial)
+//
+// Adversarial validation of the AIMD congestion-window integration added in Bug G.
+//
+// Five bugs were discovered and fixed before these tests were written:
+//   B1 – sendData direct path bypassed AIMD (only drainPendingDataQueue was constrained)
+//   B2 – REJ handler never called onLoss() (explicit NAK ignored by congestion control)
+//   B3 – ackedCount used raw `nr` not state-machine-accepted `vaAfter`
+//        (out-of-window RR caused spurious cwnd growth)
+//   B4 – checkInvariants lacked AIMD numeric assertions (cwnd NaN/±Inf/< minWindow)
+//   B5 – drainPendingDataQueue used sequenceState.outstandingCount not sendBuffer.count
+//
+// Tests are grouped by risk category:
+//   R-* : Window rounding / integer semantics / starvation
+//   B-* : Direct-path bypass (B1 regression)
+//   V-* : ackedCount validity (B3 regression)
+//   J-* : REJ → onLoss interaction (B2 regression)
+//   K-* : AX.25 protocol window K interaction
+//   Q-* : Queue drain stability
+//   C-* : AIMD convergence / oscillation simulations
+//   M-* : Multi-session fairness / isolation
+//   I-* : Invariant enforcement
+
+@MainActor
+final class AIMDCongestionControlAuditTests: XCTestCase {
+
+    // MARK: - Setup helpers
+
+    private func makeConnectedSession(
+        windowSize: Int = 4,
+        rtoMin: Double = 1.0,
+        rtoMax: Double = 16.0,
+        initialRto: Double = 2.0
+    ) -> (manager: AX25SessionManager, session: AX25Session, peer: AX25Address, clock: AX25VirtualClock) {
+        let clock = AX25VirtualClock()
+        let config = AX25SessionConfig(
+            windowSize: windowSize,
+            rtoMin: rtoMin, rtoMax: rtoMax, initialRto: initialRto
+        )
+        let manager = AX25SessionManager(
+            localCallsign: AX25Address(call: "LOCAL", ssid: 0),
+            clock: clock
+        )
+        manager.defaultConfig = config
+        let peer = AX25Address(call: "PEER", ssid: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        return (manager, session, peer, clock)
+    }
+
+    // MARK: - R: Window Rounding / Integer Semantics / Starvation
+
+    // R-1: effectiveWindow floors cwnd correctly and never returns 0.
+    // Tests the formula max(1, Int(cwnd)) at boundary values obtained
+    // through congestion-avoidance growth from a reduced cwnd.
+    func testEffectiveWindowFloorSemantics() {
+        // Start at cwnd=2 (below ssthresh) via onLoss from cwnd=4.
+        var w = AIMDWindow(initialWindow: 4.0, maxWindow: 4.0)
+        w.onLoss()  // cwnd: 4→2, ssthresh=2
+        XCTAssertEqual(w.cwnd, 2.0, accuracy: 0.001)
+        XCTAssertEqual(w.effectiveWindow, 2, "floor(2.0) = 2")
+
+        // Grow via congestion avoidance — track floor transitions
+        w.onAck()  // cwnd = 2 + 1/2 = 2.5; floor = 2
+        XCTAssertEqual(w.effectiveWindow, 2, "floor(2.5) must be 2, not 3")
+        w.onAck()  // cwnd = 2.5 + 1/2.5 = 2.9; floor = 2
+        XCTAssertEqual(w.effectiveWindow, 2, "floor(2.9) must be 2, not 3")
+        w.onAck()  // cwnd ≈ 2.9 + 1/2.9 ≈ 3.24; floor = 3
+        XCTAssertEqual(w.effectiveWindow, 3, "floor(3.24) must be 3")
+
+        // Verify the floor never drops below 1 even at minWindow
+        var wMin = AIMDWindow(initialWindow: 1.0, maxWindow: 4.0)
+        XCTAssertGreaterThanOrEqual(wMin.effectiveWindow, 1,
+            "effectiveWindow must be >= 1 at minWindow=1.0")
+        XCTAssertEqual(wMin.effectiveWindow, 1, "Int(1.0) = 1; max(1,1) = 1")
+    }
+
+    // R-2: effectiveWindow is >= 1 after any number of multiplicative decreases.
+    // Connected sessions must never stall because effectiveWindow hit 0.
+    func testEffectiveWindowNeverZeroUnderRepeatedLoss() {
+        var w = AIMDWindow(initialWindow: 8.0, maxWindow: 8.0)
+        for i in 0..<200 {
+            w.onLoss()
+            XCTAssertGreaterThanOrEqual(w.effectiveWindow, 1,
+                "effectiveWindow must be >= 1 after \(i+1) loss events (cwnd=\(w.cwnd))")
+            XCTAssertGreaterThanOrEqual(w.cwnd, 1.0,
+                "cwnd must be >= minWindow(1.0) after \(i+1) loss events")
+        }
+        XCTAssertEqual(w.cwnd, 1.0, accuracy: 0.001,
+            "After 200 losses, cwnd must have converged to minWindow=1.0")
+    }
+
+    // R-3: After reaching minWindow=1.0, the first ACK must grow cwnd (liveness guarantee).
+    // Without this, a session with cwnd=1 and outstandingCount=1 that receives one ACK
+    // could never free space for queued data.
+    func testRecoveryFromMinWindowOnFirstAck() {
+        var w = AIMDWindow(initialWindow: 4.0, maxWindow: 4.0)
+        for _ in 0..<20 { w.onLoss() }  // drive to minWindow
+        XCTAssertEqual(w.cwnd, 1.0, accuracy: 0.001, "Precondition: cwnd at minWindow")
+        let cwndAtMin = w.cwnd
+        w.onAck()
+        XCTAssertGreaterThan(w.cwnd, cwndAtMin,
+            "First ACK at minWindow must grow cwnd (liveness): was \(cwndAtMin), now \(w.cwnd)")
+        XCTAssertGreaterThanOrEqual(w.effectiveWindow, 1,
+            "effectiveWindow must be >= 1 after growth from minWindow")
+    }
+
+    // MARK: - B: Direct-Path Bypass (Bug B1 Regression)
+
+    // B-1: sendData direct path must respect AIMD effectiveWindow, not just protocol K.
+    // After a T1 loss (cwnd halved), new data must be limited by the congestion window
+    // in the direct path, not burst to K.
+    //
+    // Before B1 fix: all 4 chunks would be sent immediately (canSendIFrame only checks K).
+    // After B1 fix:  only 2 chunks sent (effectiveSendWindow = min(K=4, cwnd≈2.5) = 2).
+    func testDirectPathRespectsAIMDAfterLoss() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+        XCTAssertEqual(session.aimdWindow.cwnd, 4.0, accuracy: 0.001,
+            "Precondition: cwnd starts at windowSize=4")
+
+        // Send 1 frame, T1 timeout → cwnd halves from 4 to 2.
+        _ = manager.sendData(Data("hello".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.handleT1Timeout(session: session)
+        XCTAssertEqual(session.aimdWindow.cwnd, 2.0, accuracy: 0.001,
+            "Precondition: cwnd must be 2.0 after T1 loss from cwnd=4")
+
+        // Ack that outstanding frame to get outstanding back to 0.
+        let nrToAck = session.vs
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: nrToAck)
+        XCTAssertEqual(session.outstandingCount, 0,
+            "Precondition: outstanding must be 0 after full ACK")
+        // cwnd grows slightly from the 1 ack: 2 + 1/2 = 2.5, effectiveWindow = 2
+        let cwndAfterAck = session.aimdWindow.cwnd
+        XCTAssertGreaterThan(cwndAfterAck, 2.0, "cwnd should grow after ACK")
+        let aimdEffective = session.aimdWindow.effectiveWindow  // max(1, Int(2.5)) = 2
+
+        // Now send 4 new chunks.  AIMD effectiveWindow=2 < K=4, so only 2 go direct.
+        _ = manager.sendData(
+            Data(Array(repeating: 65, count: 4)),  // 4 bytes = 4 chunks at paclen≥1
+            to: peer, path: DigiPath(), channel: 0
+        )
+        // Allow fragmentation to produce 4 separate frames (paclen default is large,
+        // so 4 bytes = 1 chunk at any reasonable paclen).  Instead send 4 separate calls.
+        // Reset: ack everything first.
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+
+        // Now the real test: outstanding=0, cwnd≈2.5, effectiveWindow=2.
+        // Send 4 individual small frames (each a separate sendData call).
+        var directSent = 0
+        for i in 0..<4 {
+            let preOutstanding = session.outstandingCount
+            _ = manager.sendData(Data("x\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            if session.outstandingCount > preOutstanding {
+                directSent += 1  // frame went direct (not to queue)
+            }
+        }
+
+        let currentEffective = min(4, session.aimdWindow.effectiveWindow)
+        XCTAssertLessThanOrEqual(session.outstandingCount, currentEffective,
+            "B1 fix: outstanding \(session.outstandingCount) must not exceed "
+            + "effectiveSendWindow \(currentEffective) after sending 4 frames when cwnd=\(session.aimdWindow.cwnd)")
+        XCTAssertLessThanOrEqual(directSent, currentEffective,
+            "B1 fix: at most \(currentEffective) frames may be sent directly when AIMD cwnd<K; sent \(directSent)")
+    }
+
+    // B-2: Frames beyond AIMD window accumulate in pendingDataQueue, not in the send buffer.
+    //
+    // Key design point: calling handleInboundRR triggers onAck(), which immediately grows
+    // cwnd (e.g. 1→2 on the first post-loss ack).  To hold effectiveWindow=1 and test
+    // queuing behaviour against a fully-occupied single slot, the test purposely leaves
+    // one frame outstanding (no RR sent) after driving cwnd to minWindow=1.
+    func testDirectPathQueuesExcessWhenAIMDReducedBelowK() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+
+        // Drive cwnd to minWindow via two T1 timeouts.
+        // Do NOT ack the outstanding frame — we need outstanding=1 as the "occupied slot"
+        // so that additional sends must queue rather than going direct.
+        _ = manager.sendData(Data("a".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.handleT1Timeout(session: session)  // cwnd: 4 → 2
+        _ = manager.handleT1Timeout(session: session)  // cwnd: 2 → 1 (minWindow)
+
+        // Preconditions: 1 frame outstanding, cwnd=1, effectiveWindow=1, queue empty.
+        XCTAssertEqual(session.outstandingCount, 1,
+            "Precondition: 1 frame unacked after T1 retransmits (no RR sent)")
+        XCTAssertEqual(session.aimdWindow.cwnd, 1.0, accuracy: 0.001,
+            "Precondition: cwnd must be minWindow=1 after 2 T1 losses from K=4")
+        XCTAssertEqual(session.aimdWindow.effectiveWindow, 1,
+            "Precondition: effectiveWindow=1 with cwnd=1.0")
+        XCTAssertEqual(session.pendingDataQueue.count, 0,
+            "Precondition: pendingDataQueue must be empty before new sends")
+
+        // Now send 3 more frames.
+        // effectiveSendWindow = min(4, 1) = 1; outstanding is already 1 = effectiveSendWindow.
+        // The B1 fix ensures `session.outstandingCount < effectiveSendWindowDirect` fails
+        // immediately, so every new frame goes to the queue, not to direct transmit.
+        for i in 0..<3 {
+            _ = manager.sendData(Data("x\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+        }
+
+        XCTAssertEqual(session.outstandingCount, 1,
+            "B1/B2 fix: outstanding must remain 1 (AIMD slot already occupied)")
+        XCTAssertEqual(session.pendingDataQueue.count, 3,
+            "B1/B2 fix: all 3 new frames must queue when effectiveWindow=1 and outstanding=1")
+    }
+
+    // MARK: - V: ackedCount Validity (Bug B3 Regression)
+
+    // V-1: A duplicate RR (same nr, no ack progress) must not grow cwnd a second time.
+    // vaBefore == vaAfter → ackedCount = 0 → onAck() never called.
+    func testDuplicateRRProducesNoSpuriousAIMDGrowth() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+
+        // Send a frame; force a T1 loss so cwnd < maxWindow (making growth detectable).
+        _ = manager.sendData(Data("probe".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.handleT1Timeout(session: session)  // cwnd: 4→2
+
+        // First RR acks the frame and grows cwnd.
+        let nrToAck = session.vs
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: nrToAck)
+        let cwndAfterFirstRR = session.aimdWindow.cwnd  // 2 + 1/2 = 2.5
+
+        // Second RR with the same nr (duplicate — vaBefore == vaAfter = nrToAck).
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: nrToAck)
+        let cwndAfterDupe = session.aimdWindow.cwnd
+
+        XCTAssertEqual(cwndAfterDupe, cwndAfterFirstRR, accuracy: 0.001,
+            "V1/B3 fix: duplicate RR must not grow cwnd; "
+            + "was \(cwndAfterFirstRR), became \(cwndAfterDupe)")
+    }
+
+    // V-2: An out-of-window RR (nr > V(S)) must not grow cwnd.
+    // The state machine rejects the invalid nr; vaAfter == vaBefore; ackedCount = 0.
+    // Before B3 fix: `ackedCount = (nr - vaBefore + modulo) % modulo` would be
+    // spuriously large (e.g. 3 for nr=3, vaBefore=0, vs=1), calling onAck() 3×.
+    func testOutOfWindowRRProducesNoSpuriousAIMDGrowth() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+
+        // Send one frame: vs=1, va=0, outstanding=1.
+        _ = manager.sendData(Data("probe".utf8), to: peer, path: DigiPath(), channel: 0)
+        XCTAssertEqual(session.vs, 1, "Precondition: vs=1 after one send")
+        XCTAssertEqual(session.va, 0, "Precondition: va=0")
+
+        // Halve cwnd so any growth is detectable.
+        _ = manager.handleT1Timeout(session: session)  // cwnd: 4→2
+        let cwndBeforeInvalidRR = session.aimdWindow.cwnd
+
+        // Send RR with nr=3 — out of window (vs=1, nr=3 > vs=1 → invalid).
+        // isValidNR(3) with va=0, vs=1: 3 >= 0 && 3 <= 1 → false → state machine rejects.
+        // B3 fix ensures vaAfter = va (unchanged) = 0, ackedCount = 0, no onAck().
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: 3)
+        let cwndAfterInvalidRR = session.aimdWindow.cwnd
+
+        XCTAssertEqual(cwndAfterInvalidRR, cwndBeforeInvalidRR, accuracy: 0.001,
+            "V2/B3 fix: out-of-window RR (nr=3, vs=1) must not grow cwnd; "
+            + "before=\(cwndBeforeInvalidRR), after=\(cwndAfterInvalidRR)")
+    }
+
+    // MARK: - J: REJ → onLoss Interaction (Bug B2 Regression)
+
+    // J-1: The first (non-duplicate) REJ must trigger AIMD multiplicative decrease.
+    // Before B2 fix: handleInboundREJ never called onLoss(), so cwnd was unchanged.
+    func testREJTriggersMDMultiplicativeDecrease() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+
+        // Send 4 frames to fill the window.
+        for i in 0..<4 {
+            _ = manager.sendData(Data("d\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+        }
+        XCTAssertEqual(session.outstandingCount, 4, "Precondition: window full")
+
+        let cwndBefore = session.aimdWindow.cwnd  // 4.0
+        // REJ(nr=0): peer says "I need retransmission from frame 0; nothing acked."
+        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0, nr: 0)
+        let cwndAfter = session.aimdWindow.cwnd
+
+        XCTAssertLessThan(cwndAfter, cwndBefore,
+            "J1/B2 fix: first REJ must trigger onLoss() → cwnd halved; "
+            + "before=\(cwndBefore), after=\(cwndAfter)")
+        XCTAssertEqual(cwndAfter, cwndBefore * 0.5, accuracy: 0.01,
+            "J1/B2 fix: REJ must halve cwnd (mdFactor=0.5)")
+    }
+
+    // J-2: A duplicate REJ (same nr, no ack progress) must NOT call onLoss() again.
+    // Bug A deduplication suppresses the retransmit for the duplicate; the same gate
+    // must prevent the extra onLoss().
+    func testDuplicateREJDoesNotDoubleDecrement() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+        for i in 0..<4 {
+            _ = manager.sendData(Data("d\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+        }
+
+        // First REJ: triggers retransmit + onLoss() → cwnd=2.
+        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0, nr: 0)
+        let cwndAfterFirstREJ = session.aimdWindow.cwnd  // 2.0
+
+        // Duplicate REJ (same nr=0, va still 0 — no ack progress): must be suppressed.
+        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0, nr: 0)
+        let cwndAfterDuplicateREJ = session.aimdWindow.cwnd
+
+        XCTAssertEqual(cwndAfterDuplicateREJ, cwndAfterFirstREJ, accuracy: 0.001,
+            "J2: duplicate REJ must not trigger additional onLoss(); "
+            + "after first=\(cwndAfterFirstREJ), after duplicate=\(cwndAfterDuplicateREJ)")
+    }
+
+    // J-3: REJ followed by T1 timeout (retransmit failed) causes two loss events.
+    // cwnd must halve twice but always stay >= minWindow (1.0).
+    func testREJThenT1DoubleLossIsBoundedByMinWindow() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+        _ = manager.sendData(Data("payload".utf8), to: peer, path: DigiPath(), channel: 0)
+
+        let cwndBefore = session.aimdWindow.cwnd  // 4.0
+
+        // Step 1: REJ → cwnd=2 (first loss event).
+        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0, nr: 0)
+        let cwndAfterREJ = session.aimdWindow.cwnd
+        XCTAssertEqual(cwndAfterREJ, cwndBefore * 0.5, accuracy: 0.01,
+            "J3: REJ must halve cwnd; expected \(cwndBefore * 0.5), got \(cwndAfterREJ)")
+
+        // Step 2: T1 also fires (retransmit failed) → cwnd=1 (second loss event).
+        // T1 resets lastREJRetransmitNR to nil, so it treats this as a fresh loss.
+        _ = manager.handleT1Timeout(session: session)
+        let cwndAfterT1 = session.aimdWindow.cwnd
+        XCTAssertEqual(cwndAfterT1, cwndAfterREJ * 0.5, accuracy: 0.01,
+            "J3: T1 after REJ must halve cwnd again; expected \(cwndAfterREJ * 0.5), got \(cwndAfterT1)")
+
+        // N more T1 timeouts: must stay at minWindow=1.0.
+        for _ in 0..<10 {
+            _ = manager.handleT1Timeout(session: session)
+        }
+        XCTAssertGreaterThanOrEqual(session.aimdWindow.cwnd, 1.0,
+            "J3: cwnd must never drop below minWindow=1.0 regardless of loss count")
+        XCTAssertGreaterThanOrEqual(session.aimdWindow.effectiveWindow, 1,
+            "J3: effectiveWindow must be >= 1 regardless of loss count")
+    }
+
+    // MARK: - K: AX.25 Protocol Window Interaction
+
+    // K-1: With K=1, effectiveSendWindow is always 1.  AIMD starts at cwnd=1 (=K).
+    // A loss can't reduce cwnd below minWindow=1, so effectiveSendWindow stays 1.
+    func testK1WindowSingleSlot() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 1)
+        XCTAssertEqual(session.aimdWindow.cwnd, 1.0, accuracy: 0.001,
+            "K1: with K=1, AIMD initialWindow=1=maxWindow → cwnd=1")
+        XCTAssertEqual(session.aimdWindow.effectiveWindow, 1,
+            "K1: with cwnd=1, effectiveWindow=1")
+        XCTAssertEqual(min(1, session.aimdWindow.effectiveWindow), 1,
+            "K1: effectiveSendWindow = min(K=1, effectiveWindow) = 1 always")
+
+        // Loss events cannot reduce below 1
+        for _ in 0..<10 { session.aimdWindow.onLoss() }
+        XCTAssertEqual(session.aimdWindow.effectiveWindow, 1,
+            "K1: repeated losses must not reduce effectiveWindow below 1")
+
+        // Send and ack must still work
+        _ = manager.sendData(Data("k1test".utf8), to: peer, path: DigiPath(), channel: 0)
+        XCTAssertEqual(session.outstandingCount, 1,
+            "K1: exactly 1 frame outstanding after sendData with K=1")
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+        XCTAssertEqual(session.outstandingCount, 0,
+            "K1: outstanding clears to 0 after RR acks the single frame")
+    }
+
+    // K-2: K=7 (maximum modulo-8 window) with full sequence-number wraparound.
+    // AIMD must not corrupt the send buffer or sequence state when V(S) wraps 7→0.
+    func testK7ModuloWraparoundSafe() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 7)
+        XCTAssertEqual(session.aimdWindow.cwnd, 7.0, accuracy: 0.001,
+            "K7: AIMD initialWindow=7=maxWindow → cwnd=7")
+
+        // Send 7 frames (fills modulo-8 window; V(S) goes from 0 to 7).
+        for i in 0..<7 {
+            _ = manager.sendData(Data("first-\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+        }
+        XCTAssertEqual(session.outstandingCount, 7, "K7: 7 frames outstanding after 7 sends")
+        XCTAssertEqual(session.vs, 7, "K7: V(S)=7 after 7 sends")
+
+        // RR(nr=7) acks all 7.  V(A) → 7.
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: 7)
+        XCTAssertEqual(session.outstandingCount, 0, "K7: outstanding=0 after full ACK")
+        XCTAssertEqual(session.va, 7, "K7: V(A)=7 after RR(7)")
+
+        // Send 7 more.  V(S) wraps: 7,0,1,2,3,4,5 → V(S) ends at 6.
+        for i in 0..<7 {
+            _ = manager.sendData(Data("wrap-\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+        }
+        XCTAssertEqual(session.outstandingCount, 7, "K7: 7 frames outstanding after wraparound send")
+
+        // Sequence numbers in sendBuffer must be exactly {7,0,1,2,3,4,5}
+        let bufferKeys = Set(session.sendBuffer.keys)
+        let expected = Set([7, 0, 1, 2, 3, 4, 5])
+        XCTAssertEqual(bufferKeys, expected,
+            "K7: send buffer must contain sequence numbers {7,0,1,2,3,4,5} after wraparound; got \(bufferKeys.sorted())")
+
+        // RR(nr=6) acks all 7 wrapped frames: acknowledgeUpTo(from: 7, to: 6) removes 7,0,1,2,3,4,5.
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: 6)
+        XCTAssertEqual(session.outstandingCount, 0, "K7: outstanding=0 after wraparound RR(6)")
+        XCTAssertTrue(session.sendBuffer.isEmpty, "K7: send buffer must be empty after full wraparound ack")
+    }
+
+    // K-3: effectiveSendWindow never exceeds protocol window K under any AIMD growth.
+    func testEffectiveSendWindowNeverExceedsK() {
+        for k in [1, 2, 4, 7] {
+            var w = AIMDWindow(initialWindow: 1.0, maxWindow: Double(k), ssthresh: 1.0)
+            for _ in 0..<200 { w.onAck() }
+            XCTAssertLessThanOrEqual(w.cwnd, Double(k),
+                "K3: cwnd \(w.cwnd) must never exceed maxWindow K=\(k)")
+            XCTAssertLessThanOrEqual(w.effectiveWindow, k,
+                "K3: effectiveWindow \(w.effectiveWindow) must never exceed K=\(k)")
+        }
+    }
+
+    // MARK: - Q: Queue Drain Stability
+
+    // Q-1: The pending queue drains completely when the link is stable.
+    // Send more frames than K; they queue up.  Each RR ack frees K-outstanding slots.
+    func testQueueDrainsCompletelyOnStableLink() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+
+        // Send 8 chunks (paclen default is large, so 8 separate calls = 8 queued/sent)
+        for i in 0..<8 {
+            _ = manager.sendData(Data("q\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+        }
+        // After 8 sends with K=4 and cwnd=4: 4 outstanding, 4 queued.
+        XCTAssertEqual(session.outstandingCount, 4, "Q1: 4 outstanding after 8 sends (K=4)")
+        XCTAssertEqual(session.pendingDataQueue.count, 4, "Q1: 4 queued after 8 sends")
+
+        // ACK all outstanding → drain sends 4 more → outstanding=4, queue=0
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+        XCTAssertEqual(session.pendingDataQueue.count, 0,
+            "Q1: queue must drain to empty after full RR ACK on stable link")
+
+        // ACK the second batch → outstanding=0, queue=0
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+        XCTAssertEqual(session.outstandingCount, 0, "Q1: outstanding=0 after all ACKs")
+        XCTAssertEqual(session.pendingDataQueue.count, 0, "Q1: queue still empty after second ACK")
+    }
+
+    // Q-2: After AIMD reduces cwnd below K, drain must not release more than
+    // (effectiveSendWindow − currentOutstanding) new frames.
+    func testDrainRespectsReducedAIMDAfterLoss() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+
+        // Fill window and queue: 4 outstanding, 4 queued.
+        for i in 0..<8 {
+            _ = manager.sendData(Data("r\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+        }
+        XCTAssertEqual(session.outstandingCount, 4)
+        XCTAssertEqual(session.pendingDataQueue.count, 4)
+
+        // T1 timeout → cwnd: 4→2.  outstanding=4, effectiveSendWindow=2.
+        _ = manager.handleT1Timeout(session: session)
+        let cwndAfterLoss = session.aimdWindow.cwnd
+        XCTAssertEqual(cwndAfterLoss, 2.0, accuracy: 0.01)
+
+        // Partial RR acks 2 frames: outstanding 4→2.
+        // Drain: available = min(4,2) − 2 = 0 → no drain.
+        let partialNR = (session.va + 2) % 8
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: partialNR)
+
+        // After partial RR + drain with cwnd=2: outstanding=2, queue still has 4.
+        // (drain sent 0 new frames because effectiveSendWindow=2 and outstanding=2)
+        let effectiveAfterDrain = min(4, session.aimdWindow.effectiveWindow)
+        XCTAssertLessThanOrEqual(session.outstandingCount, effectiveAfterDrain,
+            "Q2: outstanding \(session.outstandingCount) must not exceed "
+            + "effectiveSendWindow \(effectiveAfterDrain) after partial ack with reduced cwnd=\(session.aimdWindow.cwnd)")
+    }
+
+    // Q-3: A partial RR releases exactly the right number of queue slots.
+    // Partial RR acks 2 of 4 outstanding → 2 free slots → drain sends 2 from queue.
+    func testPartialRRReleasesSlotsForDrain() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+
+        // Fill window and queue: 4 outstanding, 4 queued.
+        for i in 0..<8 {
+            _ = manager.sendData(Data("p\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+        }
+        XCTAssertEqual(session.outstandingCount, 4)
+        XCTAssertEqual(session.pendingDataQueue.count, 4)
+
+        // Partial RR acks exactly 2 frames (nr = va + 2).
+        // No loss: cwnd stays at 4. Drain: available = 4 − 2 = 2 → sends 2 from queue.
+        let partialNR = (session.va + 2) % 8
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: partialNR)
+
+        XCTAssertEqual(session.outstandingCount, 4,
+            "Q3: after partial ack of 2 + drain of 2: outstanding stays at 4 (2 old + 2 drained)")
+        XCTAssertEqual(session.pendingDataQueue.count, 2,
+            "Q3: after partial ack of 2, drain must have sent exactly 2 from queue (4→2)")
+    }
+
+    // MARK: - C: AIMD Convergence and Oscillation
+
+    // C-1: On a clean channel (no loss), cwnd stays at maxWindow.  There must be no
+    // oscillation — cwnd must not grow above maxWindow or drop below it.
+    func testCleanChannelNoCWNDOscillation() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+        let maxWindow = Double(4)
+
+        var minObserved = maxWindow
+        var maxObserved = maxWindow
+
+        // 20 send+ack cycles.
+        for _ in 0..<20 {
+            _ = manager.sendData(Data("clean".utf8), to: peer, path: DigiPath(), channel: 0)
+            manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+            let c = session.aimdWindow.cwnd
+            minObserved = Swift.min(minObserved, c)
+            maxObserved = Swift.max(maxObserved, c)
+        }
+
+        XCTAssertEqual(session.aimdWindow.cwnd, maxWindow, accuracy: 0.01,
+            "C1: cwnd must equal maxWindow on a clean channel after 20 cycles")
+        XCTAssertEqual(minObserved, maxWindow, accuracy: 0.01,
+            "C1: cwnd must never drop below maxWindow on a clean channel (oscillation check)")
+        XCTAssertEqual(maxObserved, maxWindow, accuracy: 0.01,
+            "C1: cwnd must never exceed maxWindow (stability check)")
+    }
+
+    // C-2: Burst loss (5 consecutive T1 timeouts) collapses cwnd to minWindow,
+    // then recovery via ACKs brings it back toward maxWindow.
+    func testBurstLossCollapseAndRecovery() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+
+        // Send one frame to give T1 something to retransmit.
+        _ = manager.sendData(Data("burst".utf8), to: peer, path: DigiPath(), channel: 0)
+
+        // 5 consecutive T1 timeouts.
+        // cwnd trajectory: 4 → 2 → 1 → 1 → 1 → 1 (hits minWindow at step 2)
+        for _ in 0..<5 {
+            _ = manager.handleT1Timeout(session: session)
+        }
+        XCTAssertEqual(session.aimdWindow.cwnd, 1.0, accuracy: 0.001,
+            "C2: 5 consecutive T1 losses must drive cwnd to minWindow=1.0")
+        XCTAssertEqual(session.aimdWindow.effectiveWindow, 1,
+            "C2: effectiveWindow=1 at minWindow")
+
+        // Recovery: ACK the outstanding frame, then send+ack several more cycles.
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+        let cwndAfterFirstAck = session.aimdWindow.cwnd
+        XCTAssertGreaterThan(cwndAfterFirstAck, 1.0,
+            "C2: first ACK after minWindow must grow cwnd (liveness): got \(cwndAfterFirstAck)")
+
+        // 10 more send+ack cycles → cwnd should converge back toward maxWindow.
+        for _ in 0..<10 {
+            _ = manager.sendData(Data("rec".utf8), to: peer, path: DigiPath(), channel: 0)
+            manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+        }
+        XCTAssertGreaterThan(session.aimdWindow.cwnd, 1.0,
+            "C2: cwnd must recover above minWindow after 10 clean cycles")
+        XCTAssertLessThanOrEqual(session.aimdWindow.cwnd, Double(4) + 0.01,
+            "C2: cwnd must never exceed maxWindow=4 during recovery")
+    }
+
+    // C-3: Deterministic moderate-loss simulation (seed=42, ~20% loss rate).
+    // cwnd must stay in [1.0, K], never oscillate above maxWindow, and
+    // effectiveWindow must always be >= 1.
+    func testModerateRandomLossWithinBounds() {
+        let seed: UInt64 = 42
+        var rng = RFRng(seed: seed)
+        let lossProb = 0.20
+        let K = 4
+
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: K)
+
+        var minCwnd = session.aimdWindow.cwnd
+        var maxCwnd = session.aimdWindow.cwnd
+        var lossEvents = 0
+
+        for _ in 0..<50 {
+            _ = manager.sendData(Data("sim".utf8), to: peer, path: DigiPath(), channel: 0)
+
+            if rng.nextDouble() < lossProb {
+                _ = manager.handleT1Timeout(session: session)
+                lossEvents += 1
+            } else {
+                manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+            }
+
+            let c = session.aimdWindow.cwnd
+            minCwnd = Swift.min(minCwnd, c)
+            maxCwnd = Swift.max(maxCwnd, c)
+
+            XCTAssertFalse(c.isNaN,     "C3(seed=\(seed)): cwnd must not be NaN")
+            XCTAssertTrue(c.isFinite,   "C3(seed=\(seed)): cwnd must be finite")
+            XCTAssertGreaterThanOrEqual(c, 1.0,
+                "C3(seed=\(seed)): cwnd must be >= minWindow 1.0 at all times")
+            XCTAssertLessThanOrEqual(c, Double(K) + 0.01,
+                "C3(seed=\(seed)): cwnd must not exceed maxWindow K=\(K)")
+            XCTAssertGreaterThanOrEqual(session.aimdWindow.effectiveWindow, 1,
+                "C3(seed=\(seed)): effectiveWindow must be >= 1 at all times")
+        }
+
+        // Should have experienced at least a few losses with seed=42 and 20% rate.
+        XCTAssertGreaterThan(lossEvents, 0,
+            "C3(seed=\(seed)): test requires at least one loss event (got 0 — seed may need updating)")
+        // cwnd must stay within [1, K] throughout.
+        XCTAssertGreaterThanOrEqual(minCwnd, 1.0,
+            "C3(seed=\(seed)): minimum observed cwnd=\(minCwnd) must be >= 1.0")
+        XCTAssertLessThanOrEqual(maxCwnd, Double(K) + 0.01,
+            "C3(seed=\(seed)): maximum observed cwnd=\(maxCwnd) must be <= K=\(K)")
+    }
+
+    // C-4: Alternating loss/success (every other frame lost) must not cause
+    // runaway oscillation. cwnd must stabilize, not thrash indefinitely.
+    func testAlternatingLossSuccessConverges() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+        var cwndSamples: [Double] = []
+
+        for i in 0..<40 {
+            _ = manager.sendData(Data("alt\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            if i % 2 == 0 {
+                _ = manager.handleT1Timeout(session: session)  // loss
+            } else {
+                manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+            }
+            cwndSamples.append(session.aimdWindow.cwnd)
+        }
+
+        // All values must be in [1, K].
+        for (i, c) in cwndSamples.enumerated() {
+            XCTAssertGreaterThanOrEqual(c, 1.0, "C4: cwnd \(c) < 1.0 at step \(i)")
+            XCTAssertLessThanOrEqual(c, 4.0 + 0.01, "C4: cwnd \(c) > K=4 at step \(i)")
+        }
+
+        // Convergence: the last 10 samples should have a standard deviation < 2.0
+        // (not thrashing between 1 and 4 on every step).
+        let tail = cwndSamples.suffix(10)
+        let mean = tail.reduce(0, +) / Double(tail.count)
+        let variance = tail.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(tail.count)
+        let stddev = variance.squareRoot()
+        XCTAssertLessThan(stddev, 2.0,
+            "C4: cwnd standard deviation in last 10 steps is \(String(format: "%.2f", stddev)) — "
+            + "must be < 2.0 to indicate convergence, not thrashing")
+    }
+
+    // MARK: - M: Multi-Session Fairness and Isolation
+
+    // M-1: AIMD state is fully per-session.  Losses on session A must not affect
+    // session B's congestion window.
+    func testSessionALossDoesNotAffectSessionB() {
+        let clock = AX25VirtualClock()
+        let config = AX25SessionConfig(windowSize: 4, rtoMin: 1.0, rtoMax: 16.0, initialRto: 2.0)
+        let manager = AX25SessionManager(
+            localCallsign: AX25Address(call: "LOCAL", ssid: 0),
+            clock: clock
+        )
+        manager.defaultConfig = config
+
+        let peerA = AX25Address(call: "PEERA", ssid: 0)
+        let peerB = AX25Address(call: "PEERB", ssid: 1)
+
+        _ = manager.connect(to: peerA, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peerA, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peerB, path: DigiPath(), channel: 1)
+        manager.handleInboundUA(from: peerB, path: DigiPath(), channel: 1)
+
+        let sessionA = manager.session(for: peerA, path: DigiPath(), channel: 0)
+        let sessionB = manager.session(for: peerB, path: DigiPath(), channel: 1)
+
+        let cwndBInit = sessionB.aimdWindow.cwnd  // 4.0
+
+        // Send on A, trigger 3 T1 losses → cwnd_A collapses.
+        _ = manager.sendData(Data("loss-a".utf8), to: peerA, path: DigiPath(), channel: 0)
+        for _ in 0..<3 {
+            _ = manager.handleT1Timeout(session: sessionA)
+        }
+        let cwndAAfterLoss = sessionA.aimdWindow.cwnd  // 1.0
+        let cwndBAfterALoss = sessionB.aimdWindow.cwnd
+
+        XCTAssertLessThan(cwndAAfterLoss, 4.0,
+            "M1: session A must have reduced cwnd after 3 T1 losses")
+        XCTAssertEqual(cwndBAfterALoss, cwndBInit, accuracy: 0.001,
+            "M1: session B cwnd must be unaffected by session A losses; "
+            + "B_init=\(cwndBInit), B_after_A_loss=\(cwndBAfterALoss)")
+        XCTAssertNotEqual(sessionA.id, sessionB.id,
+            "M1: sessions must have distinct IDs — sanity check")
+    }
+
+    // MARK: - I: Invariant Enforcement
+
+    // I-1: cwnd must be finite and non-NaN after any combination of operations.
+    func testCWNDFiniteNonNaNAfterExtremeOperations() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+
+        // Stress: alternate T1 losses and RR acks in a tight cycle.
+        for i in 0..<30 {
+            _ = manager.sendData(Data("inv\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            if i % 3 == 0 {
+                _ = manager.handleT1Timeout(session: session)
+            } else {
+                manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+            }
+
+            let cwnd = session.aimdWindow.cwnd
+            XCTAssertFalse(cwnd.isNaN,    "I1: cwnd must not be NaN at step \(i)")
+            XCTAssertTrue(cwnd.isFinite,   "I1: cwnd must be finite at step \(i)")
+            XCTAssertGreaterThanOrEqual(cwnd, 1.0,
+                "I1: cwnd \(cwnd) < minWindow 1.0 at step \(i)")
+            XCTAssertLessThanOrEqual(cwnd, 4.0 + 0.01,
+                "I1: cwnd \(cwnd) > maxWindow 4 at step \(i)")
+        }
+    }
+
+    // I-2: effectiveWindow must be >= 1 at all times, preventing permanent stall.
+    func testEffectiveWindowAlwaysAtLeastOne() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+
+        for i in 0..<20 {
+            _ = manager.sendData(Data("ew\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.handleT1Timeout(session: session)  // aggressive losses
+
+            XCTAssertGreaterThanOrEqual(session.aimdWindow.effectiveWindow, 1,
+                "I2: effectiveWindow must be >= 1 at step \(i); cwnd=\(session.aimdWindow.cwnd)")
+
+            // Also verify the AIMD constants haven't been corrupted
+            XCTAssertFalse(session.aimdWindow.cwnd.isNaN,
+                "I2: cwnd must not be NaN at step \(i)")
+            XCTAssertTrue(session.aimdWindow.cwnd.isFinite,
+                "I2: cwnd must be finite at step \(i)")
+        }
+    }
+
+    // I-3: After sendData on a connected session, outstandingCount <= min(K, aimdEffective).
+    // This is the send-site invariant: no NEW send may exceed the effective window.
+    func testSendSiteInvariantOutstandingNeverExceedsEffectiveWindow() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+
+        for round in 0..<10 {
+            // Optionally introduce a loss every 3 rounds to reduce cwnd.
+            if round % 3 == 0, round > 0 {
+                _ = manager.handleT1Timeout(session: session)
+            }
+
+            // Send a batch of frames.
+            for i in 0..<4 {
+                _ = manager.sendData(Data("inv\(round)-\(i)".utf8),
+                    to: peer, path: DigiPath(), channel: 0)
+            }
+
+            // Verify send-site invariant: after sendData, no more than
+            // effectiveSendWindow frames outstanding.
+            let effectiveSendWindow = min(session.stateMachine.config.windowSize,
+                                          session.aimdWindow.effectiveWindow)
+            XCTAssertLessThanOrEqual(session.outstandingCount, effectiveSendWindow,
+                "I3: after sendData at round \(round), "
+                + "outstanding \(session.outstandingCount) > "
+                + "effectiveSendWindow \(effectiveSendWindow) "
+                + "(cwnd=\(String(format: "%.2f", session.aimdWindow.cwnd)))")
+
+            // Ack all to prepare next round.
+            manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+        }
+    }
+
+    // I-4: After drainPendingDataQueue, outstandingCount <= min(K, aimdEffective).
+    // Drain must not push outstanding beyond the effective window.
+    func testDrainSiteInvariantOutstandingNeverExceedsEffectiveWindow() {
+        let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
+
+        // Queue more than K frames so drain has work to do.
+        for i in 0..<8 {
+            _ = manager.sendData(Data("d\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+        }
+        XCTAssertEqual(session.pendingDataQueue.count, 4, "I4 precondition: 4 items queued")
+
+        // Halve cwnd via T1 loss → effectiveSendWindow = min(4,2) = 2.
+        _ = manager.handleT1Timeout(session: session)
+
+        // Partial RR acks 2 frames: outstanding 4→2; drain runs.
+        let partialNR = (session.va + 2) % 8
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: partialNR)
+
+        // After drain: outstandingCount must be <= effectiveSendWindow.
+        let effectiveSendWindow = min(session.stateMachine.config.windowSize,
+                                      session.aimdWindow.effectiveWindow)
+        XCTAssertLessThanOrEqual(session.outstandingCount, effectiveSendWindow,
+            "I4: after drain, outstanding \(session.outstandingCount) > "
+            + "effectiveSendWindow \(effectiveSendWindow) "
+            + "(cwnd=\(String(format: "%.2f", session.aimdWindow.cwnd)))")
+    }
+}

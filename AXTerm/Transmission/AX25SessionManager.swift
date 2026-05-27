@@ -400,11 +400,29 @@ final class AX25SessionManager: ObservableObject {
     func checkInvariants(session: AX25Session) {
         #if DEBUG
         session.stateMachine.sequenceState.assertInvariants(windowSize: session.stateMachine.config.windowSize)
-        
+
         // sendBuffer.count must exactly match outstanding frames according to V(S) and V(A)
         // If this fails, we have a memory leak (frames stuck in buffer) or a duplicate tracking bug.
         assert(session.sendBuffer.count == session.stateMachine.sequenceState.outstandingCount,
                "Invariant violation: sendBuffer.count (\(session.sendBuffer.count)) != outstandingCount (\(session.stateMachine.sequenceState.outstandingCount)). vs=\(session.vs) va=\(session.va)")
+
+        // Audit B4: AIMD numeric invariants — must hold after every operation.
+        let cwnd = session.aimdWindow.cwnd
+        assert(!cwnd.isNaN,    "AIMD invariant violated: cwnd is NaN")
+        assert(cwnd.isFinite,  "AIMD invariant violated: cwnd is ±Infinity")
+        assert(cwnd >= 1.0,
+               "AIMD invariant violated: cwnd \(cwnd) < minWindow 1.0")
+        assert(session.aimdWindow.effectiveWindow >= 1,
+               "AIMD invariant violated: effectiveWindow \(session.aimdWindow.effectiveWindow) < 1")
+
+        // NOTE: We do NOT assert outstandingCount <= effectiveSendWindow here.
+        //
+        // After a loss event (T1 timeout or REJ) cwnd is halved, but frames already
+        // in flight cannot be "un-sent."  outstandingCount > effectiveSendWindow is a
+        // valid transient state; it resolves as ACKs arrive and new sends are constrained
+        // to the reduced window.  The send-site invariant (no NEW send exceeds the window)
+        // is enforced in sendData and drainPendingDataQueue at the point of transmission,
+        // and is tested explicitly in the audit test suite.
         #endif
     }
 
@@ -846,11 +864,21 @@ final class AX25SessionManager: ObservableObject {
             ])
 
         case .connected:
-            // Send chunks that fit in window; queue the rest
+            // Send chunks that fit in window; queue the rest.
+            //
+            // Audit B1 fix: AIMD window must be respected in the direct-send path, not only
+            // in drainPendingDataQueue.  Without this check, sendData bursts up to K frames
+            // regardless of the congestion window whenever outstandingCount < K — which
+            // happens every time a loss+recovery cycle empties the send buffer.
+            //
+            // effectiveSendWindow = min(K, aimdWindow.effectiveWindow).  canSendIFrame stays
+            // as the sequence-number gate; the outstandingCount check is the AIMD gate.
             var remaining: [(data: Data, pid: UInt8, displayInfo: String?)] = []
-            print("[DEBUG:AX25:SEND] sendData connected | dest=\(destination.display) totalChunks=\(chunks.count) paclen=\(paclen) canSend=\(session.canSendIFrame) va=\(session.va) vs=\(session.vs)")
+            let aimdEffectiveDirect = session.aimdWindow.effectiveWindow
+            let effectiveSendWindowDirect = min(session.stateMachine.config.windowSize, aimdEffectiveDirect)
+            print("[DEBUG:AX25:SEND] sendData connected | dest=\(destination.display) totalChunks=\(chunks.count) paclen=\(paclen) canSend=\(session.canSendIFrame) aimdEffective=\(aimdEffectiveDirect) effectiveWindow=\(effectiveSendWindowDirect) va=\(session.va) vs=\(session.vs)")
             for (i, chunk) in chunks.enumerated() {
-                guard session.canSendIFrame else {
+                guard session.canSendIFrame, session.outstandingCount < effectiveSendWindowDirect else {
                     let info = (i == 0) ? displayInfo : nil
                     remaining.append((data: chunk, pid: pid, displayInfo: info))
                     print("[DEBUG:AX25:SEND] window full, queue chunk \(i) | remaining=\(remaining.count)")
@@ -1458,17 +1486,24 @@ final class AX25SessionManager: ObservableObject {
         // Acknowledge received frames: remove only [vaBefore, nr) - not all ns < nr.
         // When N(S) wraps, ns=0,1,2 may be newer frames; RR(nr=4) acks the FIRST use
         // of 0,1,2,3 (PING/test/chunks), not the WRAPPED use (later chunks).
+        // Audit B3 fix: capture the VA the state machine actually accepted — not the raw nr
+        // field from the frame.  If the state machine rejects the RR (e.g. nr is outside the
+        // valid window), session.va stays at vaBefore and vaAfter == vaBefore, so ackedCount=0
+        // and acknowledgeUpTo is a no-op.  Previously the raw `nr` was used in both places,
+        // causing spurious sendBuffer removals and onAck() calls for out-of-window NRs.
+        let vaAfter = session.va
+
         let sendBufKeysBefore = session.sendBuffer.keys.sorted()
-        session.acknowledgeUpTo(from: vaBefore, to: nr)
+        session.acknowledgeUpTo(from: vaBefore, to: vaAfter)
         let sendBufKeysAfter = session.sendBuffer.keys.sorted()
 
         // Bug G fix: AIMD additive increase per acknowledged frame.
         // Call onAck() once for each frame that RR(nr) newly acknowledges so that
         // the congestion window grows proportionally to confirmed delivery.
-        // Only grow when frames were actually acked (nr != vaBefore) to avoid
-        // spurious growth from duplicate or no-progress RRs.
+        // Only grow when frames were actually acked (vaAfter != vaBefore) to avoid
+        // spurious growth from duplicate, no-progress, or state-machine-rejected RRs.
         let modulo = session.stateMachine.config.modulo
-        let ackedCount = (nr - vaBefore + modulo) % modulo
+        let ackedCount = (vaAfter - vaBefore + modulo) % modulo
         if ackedCount > 0 {
             for _ in 0..<ackedCount {
                 session.aimdWindow.onAck()
@@ -1612,6 +1647,22 @@ final class AX25SessionManager: ObservableObject {
 
         let retransmitFrames: [OutboundFrame]
         if shouldRetransmit {
+            // Audit B2 fix: REJ is an explicit negative acknowledgement — stronger evidence of
+            // loss than a T1 timeout.  Apply AIMD multiplicative decrease on the first (non-
+            // duplicate) REJ, matching the same reduction that handleT1Timeout applies.
+            //
+            // Duplicate REJ suppression (Bug A fix) already gates this block, so we will not
+            // double-count if the same loss triggers both a REJ and a later T1 timeout:
+            //   • First REJ → onLoss() here (cwnd halved)
+            //   • Retransmit succeeds → RR cancels T1 → no second loss event
+            //   • Retransmit fails  → T1 fires → onLoss() again (cwnd halved again, ≥ minWindow)
+            session.aimdWindow.onLoss()
+            TxLog.debug(.session, "AIMD loss event (REJ)", [
+                "peer": source.display,
+                "cwnd": String(format: "%.2f", session.aimdWindow.cwnd),
+                "effectiveWindow": session.aimdWindow.effectiveWindow
+            ])
+
             retransmitFrames = session.framesToRetransmit(from: nr)
             for frame in retransmitFrames {
                 session.statistics.recordRetransmit()
@@ -1838,7 +1889,12 @@ final class AX25SessionManager: ObservableObject {
         // Fix: compute the available window space ONCE from the current sequence state and limit
         // the drain to at most that many frames.
         let windowSize = session.stateMachine.config.windowSize
-        let currentOutstanding = session.stateMachine.sequenceState.outstandingCount
+        // Audit B5 fix: use sendBuffer.count (session.outstandingCount) as the canonical
+        // outstanding-frame count.  The design comment on outstandingCount says
+        // "use sendBuffer.count so it matches actual buffered frames after RR acks;
+        // (vs-va) can be wrong across wrap."  sequenceState.outstandingCount is the
+        // V(S)−V(A) view and can briefly diverge from sendBuffer.count during wrap.
+        let currentOutstanding = session.outstandingCount
         // Bug G fix: effective send window is the minimum of the AX.25 protocol
         // window K and the AIMD congestion window.  This ensures the congestion
         // window actually constrains transmit rate — not just bookkeeping.
