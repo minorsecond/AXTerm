@@ -39,16 +39,14 @@ final class AX25DuplicateTransmissionTests: XCTestCase {
     // MARK: - Bug 1: startT1Timer cancels pending retransmit task
 
     func testStartT1CancelsPendingRetransmitTask() async throws {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0TST", ssid: 0)
         let dest = AX25Address(call: "N0TST", ssid: 0)
         let session = connectSession(manager: manager, destination: dest, path: DigiPath())
 
         // Simulate a pending retransmit task (as if T1 fired and grace period started)
         var taskRan = false
-        session.t1PendingRetransmitTask = Task {
-            try? await Task.sleep(nanoseconds: 5_000_000_000) // 5s — should be cancelled
-            guard !Task.isCancelled else { return }
+        session.t1PendingRetransmitTask = manager.clock.schedule(delay: 5.0) {
             taskRan = true
         }
 
@@ -194,7 +192,7 @@ final class AX25DuplicateTransmissionTests: XCTestCase {
     // MARK: - Bug 4: onRetransmitFrame removed, onSendFrame used
 
     func testOnRetransmitFramePropertyDoesNotExist() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         // Verify onRetransmitFrame no longer exists by checking onSendFrame works
         var framesSent: [OutboundFrame] = []
         manager.onSendFrame = { frame in

@@ -1073,19 +1073,25 @@ final class AX25SpecComplianceTests: XCTestCase {
         XCTAssertEqual(seq.outstandingCount, 0)
     }
 
-    /// Progressive RR acks through full wrap
+    /// Progressive RR acks through full wrap without violating window size
     func testSendBufferAckWithFullWrap() {
         var seq = AX25SequenceState(modulo: 8)
 
-        // Send 8 frames (full wrap)
-        for _ in 0..<8 {
+        // Send 4 frames (valid window size)
+        for _ in 0..<4 {
+            seq.incrementVS()
+        }
+        seq.ackUpTo(nr: 4)
+
+        // Send 4 more frames, causing wrap to 0
+        for _ in 0..<4 {
             seq.incrementVS()
         }
         XCTAssertEqual(seq.vs, 0)  // wrapped
 
         // Ack progressively
-        seq.ackUpTo(nr: 4)
-        XCTAssertEqual(seq.va, 4)
+        seq.ackUpTo(nr: 6)
+        XCTAssertEqual(seq.va, 6)
 
         seq.ackUpTo(nr: 0)
         XCTAssertEqual(seq.va, 0)
@@ -1608,7 +1614,7 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
     // MARK: - Helpers
 
     private func makeManager() -> AX25SessionManager {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
         return manager
     }

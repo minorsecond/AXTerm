@@ -26,7 +26,7 @@ final class AX25RetryTests: XCTestCase {
 
     // Test that retryCount only resets when V(A) advances (progress made)
     func testRetryCountResetsOnlyOnProgress() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
         let destination = AX25Address(call: "N0HI", ssid: 7)
         let path = DigiPath.from(["W0ARP-7"])
@@ -64,7 +64,7 @@ final class AX25RetryTests: XCTestCase {
 
     // Test that retryCount increments on each T1 timeout
     func testRetryCountIncrementsOnTimeout() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
         let destination = AX25Address(call: "N0HI", ssid: 7)
         let path = DigiPath.from(["W0ARP-7"])
@@ -88,7 +88,7 @@ final class AX25RetryTests: XCTestCase {
     func testMaxRetriesTriggersError() {
         // Configure small N2 for testing
         let config = AX25SessionConfig(maxRetries: 3)
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.defaultConfig = config
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
         let destination = AX25Address(call: "N0HI", ssid: 7)
@@ -121,7 +121,7 @@ final class AX25RetryTests: XCTestCase {
     // Test that receiving a duplicate ACK (same NR) does not reset retry count
     // This is crucial for handling "stuck" peers that keep acking the same old frame
     func testDuplicateAckDoesNotResetRetry() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
         let destination = AX25Address(call: "N0HI", ssid: 7)
         let path = DigiPath.from(["W0ARP-7"])
@@ -151,7 +151,7 @@ final class AX25RetryTests: XCTestCase {
 
     // Test that receiving RNR stops sending
     func testRNRStopSending() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
         let destination = AX25Address(call: "N0HI", ssid: 7)
         let path = DigiPath.from(["W0ARP-7"])
@@ -173,7 +173,7 @@ final class AX25RetryTests: XCTestCase {
 
     // Test that correct frames are retransmitted on REJ
     func testREJRetransmissions() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
         let destination = AX25Address(call: "N0HI", ssid: 7)
         let path = DigiPath.from(["W0ARP-7"])

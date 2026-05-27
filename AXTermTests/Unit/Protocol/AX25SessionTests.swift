@@ -216,7 +216,7 @@ final class AX25SessionTests: XCTestCase {
     }
 
     func testSendDataUsesConnectedSessionWhenPathDiffers() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let destination = AX25Address(call: "N0HI", ssid: 7)
@@ -237,7 +237,7 @@ final class AX25SessionTests: XCTestCase {
     }
 
     func testT1TimeoutRetransmitsOutstandingFrames() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let destination = AX25Address(call: "N0HI", ssid: 7)
@@ -266,7 +266,7 @@ final class AX25SessionTests: XCTestCase {
     }
 
     func testRejRetransmitsWithConnectedSessionPathMismatch() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let destination = AX25Address(call: "N0HI", ssid: 7)
@@ -291,7 +291,7 @@ final class AX25SessionTests: XCTestCase {
     }
 
     func testHandleInboundUAWithSSIDMismatchCompletesConnect() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let destination = AX25Address(call: "N0HI", ssid: 7)
@@ -309,7 +309,7 @@ final class AX25SessionTests: XCTestCase {
     }
 
     func testHandleInboundIFrameWithSSIDMismatchReturnsRR() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let destination = AX25Address(call: "N0HI", ssid: 7)
@@ -336,7 +336,7 @@ final class AX25SessionTests: XCTestCase {
     }
 
     func testHandleInboundRRWithSSIDMismatchAcksOutstanding() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let destination = AX25Address(call: "N0HI", ssid: 7)
@@ -353,7 +353,7 @@ final class AX25SessionTests: XCTestCase {
     }
 
     func testHandleInboundREJWithSSIDMismatchRetransmits() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let destination = AX25Address(call: "N0HI", ssid: 7)
@@ -371,7 +371,7 @@ final class AX25SessionTests: XCTestCase {
     }
 
     func testHandleInboundDMWithSSIDMismatchDisconnectsSession() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let destination = AX25Address(call: "N0HI", ssid: 7)
@@ -403,7 +403,7 @@ final class AX25SessionTests: XCTestCase {
     }
 
     func testHandleInboundIFrameWhileConnectingDoesNotSendDM() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let destination = AX25Address(call: "N0HI", ssid: 7)
@@ -426,7 +426,7 @@ final class AX25SessionTests: XCTestCase {
     }
 
     func testHandleInboundIFrameWithNoSessionDoesNotRespondWithDM() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let source = AX25Address(call: "N0HI", ssid: 7)
@@ -449,7 +449,7 @@ final class AX25SessionTests: XCTestCase {
     }
 
     func testHandleInboundIFrameDuplicateForExistingSessionIsAcknowledgedNotDM() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let destination = AX25Address(call: "N0HI", ssid: 7)
@@ -501,7 +501,7 @@ final class AX25SessionTests: XCTestCase {
     // MARK: - Robustness & Safety Invariants
 
     func testHandleInboundRRWithNoSessionDoesNotCreateSessionOrRespond() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let source = AX25Address(call: "N0HI", ssid: 7)
@@ -522,7 +522,7 @@ final class AX25SessionTests: XCTestCase {
 
 
     func testHandleInboundREJWithNoSessionDoesNotCreateSessionOrRespond() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let source = AX25Address(call: "N0HI", ssid: 7)
@@ -541,7 +541,7 @@ final class AX25SessionTests: XCTestCase {
 
 
     func testT1TimeoutDoesNotRetransmitWhenNoOutstandingFrames() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let destination = AX25Address(call: "N0HI", ssid: 7)
@@ -893,7 +893,7 @@ final class AX25SessionTests: XCTestCase {
         //
         // Repro from Direwolf log: AXDP frame sent with N(R)=0 before welcome
         // frames are processed. If retransmitted later, should use current V(R).
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let destination = AX25Address(call: "KB5YZB", ssid: 7)
@@ -1034,7 +1034,7 @@ final class AX25SessionTests: XCTestCase {
         // 4. AXDP PING eventually ACKed
         // 5. Send "?" command
         // 6. T1 fires - must retransmit with current N(R) and poll
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let destination = AX25Address(call: "KB5YZB", ssid: 7)
@@ -1087,7 +1087,7 @@ final class AX25SessionTests: XCTestCase {
     func testRetransmitAfterPartialAckUpdatesNR() {
         // Test: send 3 frames, peer ACKs first 2, T1 fires for frame 3.
         // Frame 3's retransmit must use current V(R) not the original.
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let destination = AX25Address(call: "N0HI", ssid: 7)
@@ -1133,7 +1133,7 @@ final class AX25SessionTests: XCTestCase {
     /// The second call sees the I-frame as outside-window and generates a SECOND RR
     /// with the same N(R) — exactly the behavior observed in the KB5YZB-7 live session.
     func testDuplicateIFrameProcessingProducesDuplicateRR() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let peer = AX25Address(call: "KB5YZB", ssid: 7)
         let session = connectSession(manager: manager, destination: peer, path: DigiPath())
 
@@ -1165,7 +1165,7 @@ final class AX25SessionTests: XCTestCase {
     /// Verifies that only one data delivery occurs even if the same I-frame is processed twice.
     /// The second processing must NOT deliver duplicate payload to the application.
     func testDuplicateIFrameDoesNotDeliverDataTwice() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let peer = AX25Address(call: "KB5YZB", ssid: 7)
         _ = connectSession(manager: manager, destination: peer, path: DigiPath())
 
@@ -1198,7 +1198,7 @@ final class AX25SessionTests: XCTestCase {
     /// perceive the frame correctly. A missing N(R) in `OutboundFrame` was causing issues.
 
     func testImmediateRRIncludesNR() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
         
         let destination = AX25Address(call: "N0HI", ssid: 7)
@@ -1238,7 +1238,7 @@ final class AX25SessionTests: XCTestCase {
     /// instead of just RR after receiving I-frames.
     /// Suspected cause: Session not transitioning to connected properly or race condition.
     func testReproduction_KB5YZB_Scenario() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         // K0EPI-7
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
@@ -1335,7 +1335,7 @@ final class AX25SessionTests: XCTestCase {
         }
     }
     func testDISCWithPathMismatch() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
         let dest = AX25Address(call: "KB5YZB", ssid: 7)
@@ -1409,7 +1409,7 @@ final class AX25SessionTests: XCTestCase {
     }
 
     func testRRWithHBitMismatch() {
-        let sessionManager = AX25SessionManager()
+        let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "DEST", ssid: 0)
         let digi = AX25Address(call: "DIGI", ssid: 0, repeated: false)
         let digiRepeated = AX25Address(call: "DIGI", ssid: 0, repeated: true)
@@ -1504,7 +1504,7 @@ final class AX25SessionTests: XCTestCase {
     /// When a session disconnects, any partially buffered text (no trailing CR/LF)
     /// must be flushed to the console, not silently discarded.
     func testLineBufferFlushedOnDisconnect() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 6)
 
         let destination = AX25Address(call: "K0EPI", ssid: 7)

@@ -18,7 +18,7 @@ final class AX25SimulatorNode {
 
     init(callsign: String, ssid: UInt8 = 0) {
         self.callsign = AX25Address(call: callsign, ssid: Int(ssid))
-        self.manager = AX25SessionManager()
+        self.manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         self.manager.localCallsign = self.callsign
         
         self.manager.onSendFrame = { [weak self] frame in

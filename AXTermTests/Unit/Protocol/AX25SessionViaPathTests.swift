@@ -16,7 +16,7 @@ final class AX25SessionViaPathTests: XCTestCase {
     // MARK: - Helpers
 
     private func makeManager() -> AX25SessionManager {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
         return manager
     }

@@ -19,7 +19,7 @@ final class TerminalViewTests: XCTestCase {
     private func createViewModel(sourceCall: String = "N0CALL") -> ObservableTerminalTxViewModel {
         let settings = AppSettingsStore()
         let client = PacketEngine(settings: settings)
-        let sessionManager = AX25SessionManager()
+        let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         return ObservableTerminalTxViewModel(
             client: client,
             settings: settings,

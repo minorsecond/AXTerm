@@ -16,7 +16,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// RR(N(R)=4) means "I expect 4 next" = receiver has received 0,1,2,3. Remove 0,1,2,3; keep 4,5,6,7.
     func testAcknowledgeUpToRemovesAllAckedByNr() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
         _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
@@ -45,7 +45,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// When VA has wrapped and NR=7, only VA..NR-1 are acked (6 only); wrapped frames 0,1 remain.
     func testAcknowledgeUpToWrappedVaDoesNotClearEarlierWrappedFrames() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
         _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
@@ -73,7 +73,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// When VA has wrapped and NR=2, ack spans 6,7,0,1. Remaining should be only 2.. (here 2,3).
     func testAcknowledgeUpToWrapAcrossZeroRemovesWrappedAckRange() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
         _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
@@ -102,7 +102,7 @@ final class AX25TransmissionTests: XCTestCase {
     /// RR(0) means "I expect 0 next" = receiver has received through 7.
     /// With va=4, only frames 4,5,6,7 remain (0-3 already acked). RR(0) clears them all.
     func testAcknowledgeUpToWrapCaseNr0RemovesAll() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
         _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
@@ -131,7 +131,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// When va=0, nr=3: remove 0,1,2; keep 3,4,5,6,7.
     func testAcknowledgeUpToSimpleRange() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
         _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
@@ -158,7 +158,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// framesToRetransmit(from:) returns frames from nr onwards in sendBuffer.
     func testFramesToRetransmitReturnsCorrectFrames() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
         _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
@@ -178,7 +178,7 @@ final class AX25TransmissionTests: XCTestCase {
     }
 
     func testDisconnectWhileConnectingClearsQueuedStandardPayload() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "ME", ssid: 1)
 
         let dest = AX25Address(call: "PEER", ssid: 0)
@@ -196,7 +196,7 @@ final class AX25TransmissionTests: XCTestCase {
     }
 
     func testDisconnectWhileConnectingClearsQueuedAXDPPayload() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "ME", ssid: 1)
 
         let dest = AX25Address(call: "PEER", ssid: 0)
@@ -221,7 +221,7 @@ final class AX25TransmissionTests: XCTestCase {
     }
 
     func testDisconnectWhileConnectedClearsSendBufferAndQueue() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "ME", ssid: 1)
 
         let dest = AX25Address(call: "PEER", ssid: 0)
@@ -250,7 +250,7 @@ final class AX25TransmissionTests: XCTestCase {
     }
 
     func testForceDisconnectClearsQueueAndBufferWithoutFrame() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "ME", ssid: 1)
 
         let dest = AX25Address(call: "PEER", ssid: 0)
@@ -279,7 +279,7 @@ final class AX25TransmissionTests: XCTestCase {
     }
 
     func testDisconnectClearsSabmSentAtToPreventLateUA() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "ME", ssid: 1)
 
         let dest = AX25Address(call: "PEER", ssid: 0)
@@ -294,7 +294,7 @@ final class AX25TransmissionTests: XCTestCase {
     }
 
     func testForceDisconnectClearsSabmSentAtToPreventLateUA() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "ME", ssid: 1)
 
         let dest = AX25Address(call: "PEER", ssid: 0)
@@ -444,7 +444,7 @@ final class AX25TransmissionTests: XCTestCase {
     /// Exact scenario from logs: sendBuffer has 0..7, RR(4) arrives. Must remove 0,1,2,3;
     /// remaining {4,5,6,7} and outstandingCount == 4 so sender does not retransmit 0,1,2.
     func testExactLogScenarioRR4ClearsZeroThroughThreeAndOutstandingIsFour() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
         _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
@@ -473,7 +473,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// After RR(4) then RR(5), RR(6), RR(7), RR(0): sendBuffer empty, outstandingCount 0 so "sending" clears.
     func testExactLogScenarioSequenceOfRRsClearsBufferAndOutstandingZero() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
         _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
@@ -506,7 +506,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// T1 retransmit: with sendBuffer {4,5,6,7} only, framesToRetransmit(from: 4) returns exactly 4 frames (not 7).
     func testT1RetransmitOnlyUnackedFramesNotOldAcked() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
         _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
@@ -534,7 +534,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// outstandingCount always equals sendBuffer.count: empty -> 0.
     func testOutstandingCountEqualsSendBufferCountEmpty() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
         manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
@@ -547,7 +547,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// outstandingCount equals sendBuffer.count after RR(4) with 8 frames -> 4.
     func testOutstandingCountEqualsSendBufferCountAfterRR4() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
         _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
@@ -575,7 +575,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// RR(1), RR(2), RR(3): sequential RRs clear 0; then 0,1; then 0,1,2.
     func testEdgeSequentialRRsClearCorrectly() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
         _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
@@ -604,7 +604,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// sendBuffer only 0,1,2,3; receive RR(4): all cleared, empty.
     func testEdgeRR4WithOnlyZeroThroughThreeClearsAll() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
         _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
@@ -631,7 +631,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// sendBuffer 4,5,6,7 only; RR(0) clears all (wrap).
     func testEdgeRR0WithOnlyFourThroughSevenClearsAll() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
         _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
@@ -677,7 +677,7 @@ final class AX25TransmissionTests: XCTestCase {
     /// Send 5 I-frames rapidly, verify each is acknowledged immediately (no delay/coalescing).
     func testImmediateAckForMultipleIFrames() async throws {
 
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "ME", ssid: 0)
 
         var sentFrames: [OutboundFrame] = []
@@ -720,7 +720,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// I-frame with P=1 triggers immediate RR response (not delayed).
     func testPollResponseSentImmediately() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
 
         manager.localCallsign = AX25Address(call: "ME", ssid: 0)
 
@@ -759,7 +759,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// T1 timer is restarted when inbound I-frame received and we have outstanding frames.
     func testT1RestartedOnInboundIFrame() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "ME", ssid: 0)
 
         let dest = AX25Address(call: "PEER", ssid: 1)
@@ -808,7 +808,7 @@ final class AX25TransmissionTests: XCTestCase {
 
     /// T1 is NOT started when receiving I-frame with no outstanding frames.
     func testT1NotRestartedWhenNoOutstandingFrames() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "ME", ssid: 0)
 
         let dest = AX25Address(call: "PEER", ssid: 1)
@@ -899,7 +899,7 @@ final class AX25TransmissionTests: XCTestCase {
     /// This fixes the UX issue where disconnect commands like "bye" or "b" show as "sending"
     /// forever because BBS nodes send DISC immediately instead of RR acknowledgment.
     func testSendBufferClearedOnInboundDISC() {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "ME", ssid: 0)
 
         let dest = AX25Address(call: "BBS", ssid: 7)

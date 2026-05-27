@@ -237,7 +237,7 @@ final class FlagClearingRaceConditionTests: XCTestCase {
     /// Test that flag is cleared properly when AXDP chat is delivered
     func testFlagClearedOnAXDPChatDelivery() async {
         await MainActor.run {
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 2)
 
             let settings = AppSettingsStore()
@@ -283,7 +283,7 @@ final class FlagClearingRaceConditionTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
 
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 2)
 
             let settings = AppSettingsStore()
@@ -333,7 +333,7 @@ final class FlagClearingRaceConditionTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 2)
             
             let settings = AppSettingsStore()

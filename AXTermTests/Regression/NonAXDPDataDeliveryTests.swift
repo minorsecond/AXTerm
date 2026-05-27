@@ -54,7 +54,7 @@ final class SessionManagerBasicTests: XCTestCase {
     /// Verify session can be created and connected
     func testSessionCanBeConnected() async {
         await MainActor.run {
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let peer = AX25Address(call: "PEER", ssid: 1)
@@ -73,7 +73,7 @@ final class SessionManagerBasicTests: XCTestCase {
         await MainActor.run {
             var dataReceived: Data?
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             sessionManager.onDataReceived = { session, data in
@@ -102,7 +102,7 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
     /// Test that ObservableTerminalTxViewModel can be created
     func testViewModelCanBeCreated() async {
         await MainActor.run {
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -122,7 +122,7 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -158,7 +158,7 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -200,7 +200,7 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
 
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
 
             let settings = AppSettingsStore()
@@ -246,7 +246,7 @@ final class NonAXDPDataDeliveryTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -304,7 +304,7 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
     /// Test that the flag IS set when AXDP magic is detected
     func testFlagSetOnAXDPMagic() async {
         await MainActor.run {
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -338,7 +338,7 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
     /// The flag should only be cleared via clearAXDPReassemblyFlag() called from SessionCoordinator.
     func testFlagNotClearedByNonAXDPData() async {
         await MainActor.run {
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -387,7 +387,7 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
     func testFlagClearedOnDisconnect() async {
         // Create components that need to persist across await
         let sessionManager = await MainActor.run {
-            let sm = AX25SessionManager()
+            let sm = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sm.localCallsign = AX25Address(call: "TEST", ssid: 1)
             return sm
         }
@@ -442,7 +442,7 @@ final class AXDPReassemblyFlagManagementTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -504,7 +504,7 @@ final class ProtocolSwitchingTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -551,7 +551,7 @@ final class ProtocolSwitchingTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -598,7 +598,7 @@ final class ProtocolSwitchingTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -674,7 +674,7 @@ final class ProtocolSwitchingTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -749,7 +749,7 @@ final class ProtocolSwitchingTests: XCTestCase {
     /// Test flag state is correctly maintained through multiple switches via clearAXDPReassemblyFlag
     func testFlagStateAcrossMultipleSwitches() async {
         await MainActor.run {
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -808,7 +808,7 @@ final class ProtocolSwitchingTests: XCTestCase {
             var receivedFromPeerA: [String] = []
             var receivedFromPeerB: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -874,7 +874,7 @@ final class ProtocolSwitchingTests: XCTestCase {
             var receivedFromPeer2: [String] = []
             var receivedFromPeer3: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -939,7 +939,7 @@ final class ProtocolSwitchingTests: XCTestCase {
             var receivedFromPeerA: [String] = []
             var receivedFromPeerB: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -1008,7 +1008,7 @@ final class ProtocolSwitchingTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -1055,7 +1055,7 @@ final class NonAXDPDeliveryIntegrationTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -1098,7 +1098,7 @@ final class NonAXDPDeliveryIntegrationTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "USER", ssid: 0)
             
             let settings = AppSettingsStore()
@@ -1147,7 +1147,7 @@ final class SessionAutoSwitchTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -1190,7 +1190,7 @@ final class SessionAutoSwitchTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -1241,7 +1241,7 @@ final class SessionAutoSwitchTests: XCTestCase {
         await MainActor.run {
             var receivedLines: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()
@@ -1286,7 +1286,7 @@ final class SessionAutoSwitchTests: XCTestCase {
             var receivedFromPeer1: [String] = []
             var receivedFromPeer2: [String] = []
             
-            let sessionManager = AX25SessionManager()
+            let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
             sessionManager.localCallsign = AX25Address(call: "TEST", ssid: 1)
             
             let settings = AppSettingsStore()

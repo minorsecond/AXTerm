@@ -16,7 +16,7 @@ final class AX25SessionCallsignChangeTests: XCTestCase {
     private let peer = AX25Address(call: "N0BBS", ssid: 0)
 
     private func makeManager(callsign: AX25Address) -> AX25SessionManager {
-        let manager = AX25SessionManager()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = callsign
         return manager
     }

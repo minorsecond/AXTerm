@@ -41,7 +41,7 @@ final class SessionCoordinator: ObservableObject {
     /// This is assigned in `init` for the main `ContentView`-owned coordinator.
     static weak var shared: SessionCoordinator?
     /// The session manager for connected-mode operations
-    let sessionManager = AX25SessionManager()
+    let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
 
     /// Bulk transfers in progress
     @Published var transfers: [BulkTransfer] = []
