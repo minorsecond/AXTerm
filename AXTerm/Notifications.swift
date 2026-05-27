@@ -201,7 +201,7 @@ final class PacketInspectionRouter: ObservableObject {
     @Published private(set) var requestedPacketID: Packet.ID?
     @Published private(set) var shouldOpenMainWindow = false
 
-    private init() {
+    init() {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             Self.testRetainedInstances.append(self)
         }

@@ -268,9 +268,9 @@ nonisolated enum AX25SessionEvent: Sendable {
     case receivedFRMR
 
     // Received S-frames
-    case receivedRR(nr: Int)
-    case receivedRNR(nr: Int)
-    case receivedREJ(nr: Int)
+    case receivedRR(nr: Int, pf: Bool = false, isCommand: Bool = false)
+    case receivedRNR(nr: Int, pf: Bool = false, isCommand: Bool = false)
+    case receivedREJ(nr: Int, pf: Bool = false, isCommand: Bool = false)
 
     // Received I-frame
     case receivedIFrame(ns: Int, nr: Int, pf: Bool, payload: Data)
@@ -421,6 +421,13 @@ nonisolated struct AX25StateMachine: Sendable {
             TxLog.inbound(.ax25, "Connection established (UA received)")
             return [.stopT1, .startT3, .notifyConnected]
 
+        case (.connecting, .receivedSABM):
+            // SABM Collision (Section 6.3.3)
+            state = .connected
+            retryCount = 0
+            TxLog.inbound(.ax25, "SABM collision - Connection established")
+            return [.stopT1, .sendUA, .startT3, .notifyConnected]
+
         case (.connecting, .receivedDM):
             state = .disconnected
             TxLog.error(.ax25, "Connection refused", error: nil, ["reason": "DM received"])
@@ -472,19 +479,27 @@ nonisolated struct AX25StateMachine: Sendable {
             TxLog.inbound(.ax25, "I-frame received", ["ns": ns, "nr": nr, "pf": pf, "size": payload.count])
             return handleIFrame(ns: ns, nr: nr, pf: pf, payload: payload)
 
-        case (.connected, .receivedRR(let nr)):
-            return handleRR(nr: nr)
+        case (.connected, .receivedRR(let nr, let pf, let isCommand)):
+            return handleRR(nr: nr, pf: pf, isCommand: isCommand)
 
-        case (.connected, .receivedRNR(let nr)):
+        case (.connected, .receivedRNR(let nr, let pf, let isCommand)):
             // Remote is busy - ack frames but don't send more
             sequenceState.ackUpTo(nr: nr)
-            return [.stopT1]
+            var actions: [AX25SessionAction] = [.stopT1]
+            if pf && isCommand {
+                actions.append(.sendRR(nr: sequenceState.vr, pf: true, isCommand: false))
+            }
+            return actions
 
-        case (.connected, .receivedREJ(let nr)):
+        case (.connected, .receivedREJ(let nr, let pf, let isCommand)):
             // Remote requests retransmit from nr
             sequenceState.ackUpTo(nr: nr)
+            var actions: [AX25SessionAction] = [.startT1]
+            if pf && isCommand {
+                actions.append(.sendRR(nr: sequenceState.vr, pf: true, isCommand: false))
+            }
             // Note: actual retransmit logic would be handled by session manager
-            return [.startT1]
+            return actions
 
         case (.connected, .receivedFRMR):
             state = .error
@@ -540,6 +555,11 @@ nonisolated struct AX25StateMachine: Sendable {
         case (.disconnecting, .receivedUA):
             state = .disconnected
             return [.stopT1, .notifyDisconnected]
+
+        case (.disconnecting, .receivedDISC):
+            // DISC Collision (Section 6.4.2)
+            state = .disconnected
+            return [.stopT1, .sendUA, .notifyDisconnected]
 
         case (.disconnecting, .receivedDM):
             state = .disconnected
@@ -707,8 +727,12 @@ nonisolated struct AX25StateMachine: Sendable {
 
     // MARK: - RR Handling
 
-    private mutating func handleRR(nr: Int) -> [AX25SessionAction] {
+    private mutating func handleRR(nr: Int, pf: Bool = false, isCommand: Bool = false) -> [AX25SessionAction] {
         var actions: [AX25SessionAction] = []
+        
+        if pf && isCommand {
+            actions.append(.sendRR(nr: sequenceState.vr, pf: true, isCommand: false))
+        }
 
         // Reset retryCount when RR advances V(A) (peer acknowledged new frames).
         // This prevents retry counts from earlier T1 timeouts accumulating across

@@ -48,14 +48,14 @@ final class ConsoleLineGroupingTests: XCTestCase {
         XCTAssertEqual(groups[0].duplicates.first?.id, duplicate.id)
     }
 
-    func testDuplicateFlagRequiresSignature() {
+    func testSystemMessagesGroupConsecutively() {
         let lineA = ConsoleLine(kind: .system, text: "System event A", isDuplicate: true)
         let lineB = ConsoleLine(kind: .system, text: "System event A", isDuplicate: true)
 
         let groups = ConsoleLineGrouper.group([lineA, lineB])
 
-        XCTAssertEqual(groups.count, 2)
-        XCTAssertEqual(groups[0].duplicates.count, 0)
-        XCTAssertEqual(groups[1].duplicates.count, 0)
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].duplicates.count, 1)
+        XCTAssertEqual(groups[0].primary.id, lineA.id)
     }
 }

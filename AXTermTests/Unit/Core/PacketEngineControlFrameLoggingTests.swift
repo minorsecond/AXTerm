@@ -23,8 +23,8 @@ final class PacketEngineControlFrameLoggingTests: XCTestCase {
         engine.handleIncomingPacket(rrPacket)
 
         XCTAssertTrue(engine.consoleLines.contains { line in
-            line.kind == .system &&
-            line.text.contains("RX: PEER-1") &&
+            line.kind == .packet &&
+            line.from == "PEER-1" &&
             line.text.contains("RR(1)")
         })
     }
@@ -44,7 +44,7 @@ final class PacketEngineControlFrameLoggingTests: XCTestCase {
         engine.handleIncomingPacket(uiPacket)
 
         XCTAssertFalse(engine.consoleLines.contains { line in
-            line.kind == .system && line.text.contains("RX: PEER-1")
+            line.kind == .packet && line.text.contains("UI")
         })
     }
 
