@@ -16,6 +16,7 @@ struct AdaptiveToolbarControl: View {
                     .font(.system(size: 11, weight: .semibold))
 
                 if let effective = store.effectiveAdaptive {
+                    LinkQualityIcon(lossRate: effective.lossRate)
                     Text("· K\(effective.k) P\(effective.p) N2 \(effective.n2)")
                         .font(.system(size: 11))
                         .monospacedDigit()
@@ -56,8 +57,9 @@ private struct AdaptivePopoverContent: View {
     var onOpenAnalytics: (() -> Void)?
 
     private let gridColumns: [GridItem] = [
-        GridItem(.flexible(minimum: 160), spacing: 10),
-        GridItem(.flexible(minimum: 160), spacing: 10)
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8)
     ]
 
     var body: some View {
@@ -65,7 +67,7 @@ private struct AdaptivePopoverContent: View {
         VStack(alignment: .leading, spacing: 12) {
             header(adaptive: adaptive)
 
-            LazyVGrid(columns: gridColumns, spacing: 10) {
+            LazyVGrid(columns: gridColumns, spacing: 8) {
                 metricCard(label: "ETX", info: "Expected transmissions per successful frame. Lower is better.", value: adaptive.map { format($0.etx) } ?? "—", emphasized: true)
                 metricCard(label: "Loss", info: "Recent frame loss estimate for this context.", value: adaptive.map { formatPercent($0.lossRate) } ?? "—")
                 metricCard(label: "K", info: "Window size: outstanding frames allowed.", value: adaptive.map { "\($0.k)" } ?? "—")
@@ -93,7 +95,7 @@ private struct AdaptivePopoverContent: View {
             .font(.system(size: 11))
         }
         .padding(14)
-        .frame(width: 440)
+        .frame(width: 360)
     }
 
     @ViewBuilder
@@ -151,32 +153,33 @@ private struct AdaptivePopoverContent: View {
 
     @ViewBuilder
     private func metricCard(label: String, info: String, value: String, emphasized: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
                 Text(label)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
                 Image(systemName: "info.circle")
-                    .font(.system(size: 11))
+                    .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                     .help(info)
                 Spacer()
             }
             Text(value)
-                .font(.system(size: emphasized ? 16 : 14, weight: emphasized ? .semibold : .medium))
+                .font(.system(size: emphasized ? 15 : 13, weight: emphasized ? .semibold : .medium))
                 .monospacedDigit()
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .padding(10)
+        .padding(8)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color(nsColor: .controlBackgroundColor).opacity(0.55))
         )
     }
 
     private func contextChipText(adaptive: AdaptiveParams?) -> String {
+        // Session information moved to consolidated header - show only global/network status
         if let destination = adaptive?.destination {
-            return "Session: \(destination)"
+            return "\(destination)"  // Show just destination without "Session:" prefix
         }
         return "Global Network"
     }
@@ -218,5 +221,35 @@ private struct AdaptivePopoverContent: View {
         let summary = "\(scope) Adaptive K\(adaptive.k) P\(adaptive.p) N2 \(adaptive.n2) ETX \(format(adaptive.etx)) Loss \(formatPercent(adaptive.lossRate)) RTO \(formatSeconds(adaptive.currentRto))"
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(summary, forType: .string)
+    }
+}
+
+private struct LinkQualityIcon: View {
+    let lossRate: Double?
+    
+    var body: some View {
+        if let lossRate {
+            if lossRate <= 0.10 {
+                Image(systemName: "cellularbars")
+                    .foregroundStyle(.green)
+                    .font(.system(size: 11))
+            } else if lossRate <= 0.25 {
+                Image(systemName: "cellularbars")
+                    .foregroundStyle(.yellow)
+                    .font(.system(size: 11))
+            } else if lossRate <= 0.50 {
+                Image(systemName: "cellularbars")
+                    .foregroundStyle(.orange)
+                    .font(.system(size: 11))
+            } else {
+                Image(systemName: "cellularbars")
+                    .foregroundStyle(.red)
+                    .font(.system(size: 11))
+            }
+        } else {
+            Image(systemName: "cellularbars")
+                .foregroundStyle(.secondary.opacity(0.3))
+                .font(.system(size: 11))
+        }
     }
 }

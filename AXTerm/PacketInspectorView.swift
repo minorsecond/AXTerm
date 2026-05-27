@@ -103,13 +103,38 @@ struct PacketInspectorView: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    Text(packet.fromDisplay)
-                        .font(.title3.weight(.semibold))
+                    HStack(spacing: 4) {
+                        Text(packet.fromDisplay)
+                            .font(.title3.weight(.semibold))
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(packet.fromDisplay, forType: .string)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Copy source callsign")
+                    }
                     Image(systemName: "arrow.right")
                         .font(.body.weight(.medium))
                         .foregroundStyle(.secondary)
-                    Text(packet.toDisplay)
-                        .font(.title3.weight(.semibold))
+                        .padding(.horizontal, 2)
+                    HStack(spacing: 4) {
+                        Text(packet.toDisplay)
+                            .font(.title3.weight(.semibold))
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(packet.toDisplay, forType: .string)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Copy destination callsign")
+                    }
                 }
 
                 HStack(spacing: 10) {

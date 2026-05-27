@@ -421,8 +421,13 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     }
 
     private func setupConsoleSubscription(client: PacketEngine) {
+        // Throttle to at most 1 UI update per 80 ms (~12 fps for the terminal scroll).
+        // Without this, every incoming packet fires objectWillChange → full TerminalView
+        // body re-evaluation → 20-30 renders/second under active monitoring, which
+        // saturates the main thread and delays the sidebar checkmark by ~1 s.
         client.$consoleLines
             .receive(on: DispatchQueue.main)
+            .throttle(for: .milliseconds(80), scheduler: RunLoop.main, latest: true)
             .sink { [weak self] lines in
                 guard let self = self else { return }
                 self.allLines = lines
@@ -1245,9 +1250,9 @@ private struct SessionRecord: Identifiable, Hashable {
 
     var label: String {
         if let relay = relayDestination {
-            return "\(destination) → \(relay) • \(statusText)"
+            return "\(destination) → \(relay)"
         }
-        return "\(destination) • \(statusText)"
+        return destination
     }
 }
 
@@ -1274,15 +1279,14 @@ struct TerminalView: View {
     // Incoming transfer sheet - using item binding for .sheet(item:)
     @State private var currentIncomingRequest: IncomingTransferRequest?
 
-    @State private var showConnectionBanner = false
-    @State private var connectionBannerTask: Task<Void, Never>?
-    
     @State private var lastAutoFilledPath: String = ""
     @State private var lastObservedDestination: String = ""
+    @State private var cachedAutoPathSuggestions: [TerminalAutoPathCandidate] = []
     @State private var sessionRecords: [SessionRecord] = []
     @State private var activeSessionRecordID: String?
     @State private var autoAttemptTask: Task<Void, Never>?
     @State private var pendingRoutingReconnect = false
+    @State private var connectBarRefreshWorkItem: DispatchWorkItem?
 
     init(
         client: PacketEngine,
@@ -1314,6 +1318,7 @@ struct TerminalView: View {
             .onAppear {
                 txViewModel.updateSearchQuery(searchModel.query)
                 lastObservedDestination = txViewModel.viewModel.destinationCall
+                cachedAutoPathSuggestions = buildAutoPathCandidates(for: txViewModel.viewModel.destinationCall)
                 connectBarViewModel.toCall = txViewModel.viewModel.destinationCall
                 connectBarViewModel.viaDigipeaters = txViewModel.viewModel.digiPath
                     .split(separator: ",")
@@ -1329,10 +1334,10 @@ struct TerminalView: View {
                 }
             }
             .onReceive(client.$stations) { _ in
-                refreshConnectBarData()
+                scheduleConnectBarRefresh()
             }
             .onReceive(client.$packets) { _ in
-                refreshConnectBarData()
+                scheduleConnectBarRefresh()
             }
             .onReceive(connectCoordinator.$pendingRequest.compactMap { $0 }) { request in
                 // Defer request handling one run-loop turn to avoid publishing model
@@ -1413,6 +1418,7 @@ struct TerminalView: View {
             .onChange(of: txViewModel.viewModel.destinationCall) { _, newValue in
                 applyAutoPathSuggestionIfNeeded(previousDestination: lastObservedDestination, newDestination: newValue)
                 lastObservedDestination = newValue
+                cachedAutoPathSuggestions = buildAutoPathCandidates(for: newValue)
             }
             .onChange(of: connectBarViewModel.toCall) { _, _ in
                 syncLegacyFieldsFromConnectBar()
@@ -1442,8 +1448,6 @@ struct TerminalView: View {
                 settings: settings,
                 sessionCoordinator: sessionCoordinator,
                 txViewModel: txViewModel,
-                shouldShowConnectionBanner: shouldShowConnectionBanner,
-                showConnectionBannerTemporarily: showConnectionBannerTemporarily,
                 handlePendingIncomingTransfers: handlePendingIncomingTransfers,
                 handleFileDrop: handleFileDrop,
                 startTransfer: startTransfer,
@@ -1582,9 +1586,7 @@ struct TerminalView: View {
         // onSessionStateChanged is now handled inside txViewModel.setupSessionCallbacks()
     }
 
-    private var autoPathSuggestions: [TerminalAutoPathCandidate] {
-        buildAutoPathCandidates(for: txViewModel.viewModel.destinationCall)
-    }
+    private var autoPathSuggestions: [TerminalAutoPathCandidate] { cachedAutoPathSuggestions }
 
     private func refreshConnectBarData() {
         let neighbors = client.netRomIntegration?.currentNeighbors(forMode: .hybrid) ?? []
@@ -1596,6 +1598,16 @@ struct TerminalView: View {
             packets: client.packets,
             favorites: settings.watchCallsigns
         )
+    }
+
+    // Debounced entry point for packet/station stream handlers.
+    // rebuildObservedPaths iterates every packet — running it on every arrival
+    // (potentially 10+ times/second) stalls the main thread and delays rendering.
+    private func scheduleConnectBarRefresh() {
+        connectBarRefreshWorkItem?.cancel()
+        let item = DispatchWorkItem { refreshConnectBarData() }
+        connectBarRefreshWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
     }
 
     private func handleConnectRequest(_ request: ConnectRequest) {
@@ -1818,43 +1830,7 @@ struct TerminalView: View {
         )
     }
 
-    /// Determines if connection status change warrants showing a banner.
-    /// HIG: Success toasts should only appear for rare, user-initiated events.
-    /// TNC connection is expected on app launch, so we don't celebrate it.
-    /// We only show banners for unexpected disconnects or failures.
-    private func shouldShowConnectionBanner(oldValue: ConnectionStatus, newValue: ConnectionStatus) -> Bool {
-        guard oldValue != newValue else { return false }
-        switch newValue {
-        case .connected:
-            // TNC connected successfully - NO banner (expected success)
-            return false
-        case .disconnected:
-            // Unexpected disconnect - show banner
-            return oldValue == .connected
-        case .failed:
-            // Connection failed - show banner
-            return true
-        case .connecting:
-            return false
-        }
-    }
-
     // MARK: - View Components
-    
-    private func showConnectionBannerTemporarily() {
-        connectionBannerTask?.cancel()
-        withAnimation(.easeOut(duration: 0.2)) {
-            showConnectionBanner = true
-        }
-        connectionBannerTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
-            if !Task.isCancelled {
-                withAnimation(.easeIn(duration: 0.2)) {
-                    showConnectionBanner = false
-                }
-            }
-        }
-    }
 
     // MARK: - Session View
 
@@ -1869,13 +1845,6 @@ struct TerminalView: View {
                         .accessibilityIdentifier("connectionStatus")
                         .accessibilityLabel(connectionMessage)
                         .accessibilityHidden(false)
-                        .frame(width: 1, height: 1)
-                }
-
-                // Connection status banner
-                if showConnectionBanner {
-                    connectionBanner
-                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
                 // Session output (reuse console view for now, filtered by session)
@@ -1884,35 +1853,39 @@ struct TerminalView: View {
                 }
 
                 // Session status pill (shown during active session lifecycle)
-                if txViewModel.viewModel.connectionMode == .connected,
-                   let state = txViewModel.sessionState,
-                   state != .disconnected {
+                if txViewModel.viewModel.connectionMode == .connected {
+                    ConnectionStatusStripView(
+                        session: txViewModel.currentSession,
+                        sessionState: txViewModel.sessionState,
+                        destinationCall: connectBarViewModel.toCall,
+                        viaDigipeaters: connectBarViewModel.viaDigipeaters,
+                        connectionMode: connectBarViewModel.mode,
+                        isTNCConnected: client.status == .connected
+                    )
+                }
+
+                // Station filter indicator — shown whenever a sidebar station is selected.
+                // Makes the active filter visible so the user knows why output is narrowed.
+                if let stationFilter = client.selectedStationCall {
                     HStack(spacing: 8) {
-                        SessionStatusBadge(
-                            state: state,
-                            destinationCall: connectBarViewModel.toCall,
-                            onDisconnect: { disconnectFromDestination() },
-                            onForceDisconnect: { forceDisconnectFromDestination() },
-                            peerCapability: client.capabilityStore.capabilities(for: txViewModel.viewModel.destinationCall),
-                            capabilityStatus: sessionCoordinator.capabilityStatus(for: txViewModel.viewModel.destinationCall)
-                        )
-
-                        if !connectBarViewModel.viaDigipeaters.isEmpty,
-                           connectBarViewModel.mode == .ax25ViaDigi {
-                            Text("via \(connectBarViewModel.viaDigipeaters.joined(separator: " → "))")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        } else if connectBarViewModel.mode == .netrom {
-                            Text(connectBarViewModel.routePreview)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-
+                        Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                            .foregroundStyle(.blue)
+                            .font(.subheadline)
+                        Text("Filtered: \(stationFilter)")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.primary)
                         Spacer()
+                        Button("Clear") {
+                            client.selectedStationCall = nil
+                        }
+                        .buttonStyle(.plain)
+                        .font(.subheadline)
+                        .foregroundStyle(.blue)
                     }
                     .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 5)
+                    .background(Color.blue.opacity(0.08))
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
                 sessionOutputView
@@ -2079,50 +2052,6 @@ struct TerminalView: View {
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
     }
 
-    @ViewBuilder
-    private var connectionBanner: some View {
-        HStack {
-            Image(systemName: connectionIcon)
-                .foregroundStyle(connectionColor)
-
-            Text(connectionMessage)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("connectionStatus")
-
-            Spacer()
-
-            if client.status == .disconnected || client.status == .failed {
-                Button("Connect") {
-                    client.connectUsingSettings()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(connectionColor.opacity(0.1))
-    }
-
-    private var connectionIcon: String {
-        switch client.status {
-        case .connected: return "checkmark.circle.fill"
-        case .connecting: return "arrow.triangle.2.circlepath"
-        case .disconnected: return "circle"
-        case .failed: return "exclamationmark.triangle.fill"
-        }
-    }
-
-    private var connectionColor: Color {
-        switch client.status {
-        case .connected: return .green
-        case .connecting: return .orange
-        case .disconnected: return .secondary
-        case .failed: return .red
-        }
-    }
-
     private var connectionMessage: String {
         switch client.status {
         case .connected: return "Connected"
@@ -2150,6 +2079,17 @@ struct TerminalView: View {
     }
 
     private var displayedSessionLines: [TerminalLine] {
+        // Sidebar station filter overrides session-peer filter — clicking any station in the
+        // sidebar shows all console traffic involving that station, matching the Packets view.
+        if let stationCall = client.selectedStationCall, !stationCall.isEmpty {
+            let normalized = CallsignValidator.normalize(stationCall)
+            return txViewModel.filteredLines.filter { line in
+                CallsignValidator.normalize(line.from ?? "") == normalized ||
+                CallsignValidator.normalize(line.to ?? "") == normalized ||
+                line.via.contains { CallsignValidator.normalize($0) == normalized }
+            }
+        }
+
         let destinationByRecordID = Dictionary(uniqueKeysWithValues: sessionRecords.map { ($0.id, $0.destination) })
         let connectedPeers = Set(
             sessionCoordinator.connectedSessions
@@ -2168,11 +2108,12 @@ struct TerminalView: View {
 
     @ViewBuilder
     private var emptyStateView: some View {
+        let stationFilter = client.selectedStationCall
         VStack(spacing: 16) {
             Image(systemName: txViewModel.allLines.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
                 .font(.system(size: 48))
                 .foregroundStyle(.tertiary)
-            
+
             VStack(spacing: 8) {
                 if txViewModel.allLines.isEmpty {
                     Text("No messages yet")
@@ -2180,13 +2121,24 @@ struct TerminalView: View {
                     Text("Monitoring network traffic and active sessions.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                } else if let call = stationFilter {
+                    Text("No traffic for \(call)")
+                        .font(.headline)
+                    Text("No messages heard involving this station.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Button("Show All") {
+                        client.selectedStationCall = nil
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .padding(.top, 8)
                 } else {
                     Text("No Results")
                         .font(.headline)
                     Text("No messages matching \"\(searchModel.query)\"")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                    
                     Button("Clear Search") {
                         searchModel.clear()
                     }
@@ -3051,8 +3003,6 @@ struct TerminalViewModifiers: ViewModifier {
     let sessionCoordinator: SessionCoordinator
     let txViewModel: ObservableTerminalTxViewModel
     
-    let shouldShowConnectionBanner: (ConnectionStatus, ConnectionStatus) -> Bool
-    let showConnectionBannerTemporarily: () -> Void
     let handlePendingIncomingTransfers: ([IncomingTransferRequest]) -> Void
     let handleFileDrop: ([NSItemProvider]) -> Bool
     let startTransfer: (String, String, TransferProtocolType, TransferCompressionSettings) -> Void
@@ -3062,13 +3012,6 @@ struct TerminalViewModifiers: ViewModifier {
         content
             .onChange(of: settings.myCallsign) { _, newValue in
                 txViewModel.updateSourceCall(newValue)
-            }
-            .onChange(of: client.status) { oldValue, newValue in
-                // HIG: Only show banners for unexpected events (failures, disconnects).
-                // Don't celebrate expected success (TNC connection on app launch).
-                if shouldShowConnectionBanner(oldValue, newValue) {
-                    showConnectionBannerTemporarily()
-                }
             }
             .sheet(isPresented: $showingTransferSheet) {
                 SendFileSheet(

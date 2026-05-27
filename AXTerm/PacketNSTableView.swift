@@ -357,7 +357,8 @@ extension PacketNSTableView {
         @objc func handleDoubleClick(_ sender: Any?) {
             guard let tableView else { return }
             let row = tableView.clickedRow
-            activateRow(row)
+            guard packets.indices.contains(row) else { return }
+            onCopyInfo(packets[row])
         }
 
         @objc func inspectFromMenu(_ sender: Any?) {

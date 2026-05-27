@@ -40,6 +40,7 @@ struct ContentView: View {
     @State private var didLoadRawHistory = false
     @State private var selectionMutationScheduler = SelectionMutationScheduler()
     @StateObject private var analyticsViewModel: AnalyticsDashboardViewModel
+    @State private var lastTapTimes: [String: Date] = [:]
 
     nonisolated static func stationDefaultConnectMode() -> ConnectBarMode {
         .ax25
@@ -271,32 +272,60 @@ struct ContentView: View {
                 // "All" option
                 HStack {
                     Text("All Packets")
+                        .fontWeight(client.selectedStationCall == nil ? .semibold : .regular)
                     Spacer()
                     if client.selectedStationCall == nil {
                         Image(systemName: "checkmark")
                             .foregroundStyle(.secondary)
                     }
                 }
+                .padding(.vertical, 4)
+                .padding(.horizontal, 6)
+                .background(
+                    Group {
+                        if client.selectedStationCall == nil {
+                            Color.accentColor.opacity(0.15)
+                        } else {
+                            Color.clear
+                        }
+                    }
+                )
+                .cornerRadius(4)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     client.selectedStationCall = nil
                 }
 
                 if client.stations.isEmpty {
-                    Text("No stations heard")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
+                    VStack(spacing: 6) {
+                        Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                            .font(.system(size: 16))
+                        Text("No stations heard")
+                    }
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 16)
                 } else {
+                    // Precompute per-render constants outside the ForEach.
+                    // bestRouteTo() calls currentRoutes() which sorts and allocates the full route
+                    // array — calling it once per station row was O(stations × routes log routes).
+                    // hasRoute(to:) is an O(1) dict lookup; connectedCallsigns avoids an O(sessions)
+                    // scan per row.
+                    let integration = client.netRomIntegration
+                    let defaultStationMode = Self.stationDefaultConnectMode()
+                    let connectedCallsigns = Set(
+                        sessionCoordinator.connectedSessions
+                            .map { CallsignValidator.normalize($0.remoteAddress.display) }
+                    )
                     ForEach(client.stations) { station in
-                        let stationHasNetRomRoute = client.netRomIntegration?.bestRouteTo(CallsignValidator.normalize(station.call)) != nil
+                        let normalizedCall = CallsignValidator.normalize(station.call)
+                        let stationHasNetRomRoute = integration?.hasRoute(to: normalizedCall) ?? false
                         let preferredMode = connectCoordinator.preferredMode(
                             for: station.call,
                             hasNetRomRoute: stationHasNetRomRoute
                         )
-                        let defaultStationMode = Self.stationDefaultConnectMode()
-                        let isConnectedStation = sessionCoordinator.connectedSessions.contains {
-                            CallsignValidator.normalize($0.remoteAddress.display) == CallsignValidator.normalize(station.call)
-                        }
+                        let isConnectedStation = connectedCallsigns.contains(normalizedCall)
 
                         StationRowView(
                             station: station,
@@ -358,24 +387,35 @@ struct ContentView: View {
                                 ClipboardWriter.copy(CallsignValidator.normalize(station.call))
                             }
                         }
-                        .onTapGesture(count: 2) {
-                            issueStationConnectRequest(
-                                stationCall: station.call,
-                                mode: defaultStationMode,
-                                executeImmediately: true
-                            )
-                        }
                         .onTapGesture {
-                            if client.selectedStationCall == station.call {
-                                client.selectedStationCall = nil
+                            let now = Date()
+                            let previousTap = lastTapTimes[station.call] ?? .distantPast
+                            let isDoubleClick = now.timeIntervalSince(previousTap) < NSEvent.doubleClickInterval
+                            lastTapTimes[station.call] = now
+
+                            // Always apply the selection immediately (zero lag)
+                            client.selectedStationCall = station.call
+
+                            if isDoubleClick {
+                                issueStationConnectRequest(
+                                    stationCall: station.call,
+                                    mode: defaultStationMode,
+                                    executeImmediately: true
+                                )
                             } else {
-                                client.selectedStationCall = station.call
+                                let capturedCall = station.call
+                                let capturedMode = defaultStationMode
+                                // Double-async ensures the checkmark renders before connect-bar cascade begins
+                                DispatchQueue.main.async {
+                                    DispatchQueue.main.async {
+                                        issueStationConnectRequest(
+                                            stationCall: capturedCall,
+                                            mode: capturedMode,
+                                            executeImmediately: false
+                                        )
+                                    }
+                                }
                             }
-                            issueStationConnectRequest(
-                                stationCall: station.call,
-                                mode: defaultStationMode,
-                                executeImmediately: false
-                            )
                         }
                     }
                 }
@@ -396,9 +436,6 @@ struct ContentView: View {
     }
 
     private func issueStationConnectRequest(stationCall: String, mode: ConnectBarMode, executeImmediately: Bool) {
-        if !executeImmediately {
-            connectCoordinator.navigateToTerminal?()
-        }
         connectCoordinator.activeContext = .stations
         let normalized = CallsignValidator.normalize(stationCall)
         let intent: ConnectIntent
@@ -530,6 +567,23 @@ struct ContentView: View {
                     }
                 )
             }
+            if selectedNav == .packets {
+                if client.packetsClearedAt != nil {
+                    Button {
+                        client.restorePackets()
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                    }
+                    .help("Undo Clear Packets")
+                } else {
+                    Button {
+                        client.clearPackets()
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .help("Clear Packet Log")
+                }
+            }
             tncToolbarMenu
         }
     }
@@ -586,6 +640,15 @@ struct ContentView: View {
                     .font(.system(size: 11, weight: .medium))
                     .lineLimit(1)
                     .foregroundStyle(.secondary)
+                    
+                // TX / RX Blinkenlights
+                HStack(spacing: 2) {
+                    Blinkenlight(color: .green, trigger: client.lastRxTime)
+                        .help("RX Activity")
+                    Blinkenlight(color: .red, trigger: client.lastTxTime)
+                        .help("TX Activity")
+                }
+                .padding(.leading, 2)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
@@ -597,6 +660,25 @@ struct ContentView: View {
         }
         .menuStyle(.borderlessButton)
         .help("TNC connection status and actions")
+    }
+    
+    private struct Blinkenlight: View {
+        let color: Color
+        let trigger: Date
+        @State private var isActive = false
+        
+        var body: some View {
+            Circle()
+                .fill(isActive ? color : Color.gray.opacity(0.2))
+                .frame(width: 5, height: 5)
+                .onChange(of: trigger) { _, _ in
+                    isActive = true
+                    // Turn off after a short delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        isActive = false
+                    }
+                }
+        }
     }
 
     private var tncLedColor: Color {
@@ -770,6 +852,6 @@ struct ContentView: View {
     return ContentView(
         client: PacketEngine(settings: settings),
         settings: settings,
-        inspectionRouter: PacketInspectionRouter()
+        inspectionRouter: .shared
     )
 }

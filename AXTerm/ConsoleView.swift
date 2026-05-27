@@ -62,14 +62,14 @@ struct ConsoleView: View {
     @State private var previousClearedAt: Date?
     @State private var scrollToBottomToken = 0
 
-    // Message type filters
-    @State private var showID = true
-    @State private var showBeacon = true
-    @State private var showMail = true
-    @State private var showData = true
-    @State private var showPrompt = true
-    @State private var showOther = true
-    @State private var showSystem = true
+    // Message type filters — persisted across view switches and app restarts
+    @AppStorage("consoleFilter_showID") private var showID = true
+    @AppStorage("consoleFilter_showBeacon") private var showBeacon = true
+    @AppStorage("consoleFilter_showMail") private var showMail = true
+    @AppStorage("consoleFilter_showData") private var showData = true
+    @AppStorage("consoleFilter_showPrompt") private var showPrompt = true
+    @AppStorage("consoleFilter_showOther") private var showOther = true
+    @AppStorage("consoleFilter_showSystem") private var showSystem = true
 
     /// Lines filtered by clear timestamp and message type preferences
     private var typeFilteredLines: [ConsoleLine] {
@@ -327,7 +327,13 @@ nonisolated enum ConsoleLineGrouper {
         var signatureToIndex: [String: Int] = [:]
 
         for line in lines {
-            if line.isDuplicate,
+            // Consecutive grouping for system/error messages
+            if line.kind == .system || line.kind == .error {
+                if let lastGroup = groups.last, lastGroup.primary.kind == line.kind, lastGroup.primary.text == line.text {
+                    groups[groups.count - 1].duplicates.append(line)
+                    continue
+                }
+            } else if line.isDuplicate,
                let signature = line.contentSignature,
                let existingIndex = signatureToIndex[signature] {
                 groups[existingIndex].duplicates.append(line)
@@ -428,7 +434,7 @@ struct ConsoleLineGroupView: View {
                             Text(dup.viaDisplay)
                                 .foregroundStyle(.purple)
                                 .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        } else {
+                        } else if group.primary.kind == .packet {
                             Text("(no digi path recorded)")
                                 .foregroundStyle(.tertiary)
                                 .font(.system(size: 11, design: .monospaced))
@@ -464,11 +470,8 @@ struct ConsoleLineView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
-            // Category indicator (left border) - matches filter button colors
-            RoundedRectangle(cornerRadius: 1)
-                .fill(categoryBorderColor)
-                .frame(width: 3)
-                .help(categoryTooltip)
+            // Enhanced indicator bar with premium styling for system/error messages
+            indicatorBar
 
             // Timestamp
             Text(line.timestampString)
@@ -500,7 +503,7 @@ struct ConsoleLineView: View {
 
             // Duplicate count badge
             if duplicateCount > 0 {
-                DuplicateCountBadge(count: duplicateCount)
+                DuplicateCountBadge(count: duplicateCount, kind: line.kind)
             }
 
             // Message text (wraps to container width; no chopping)
@@ -511,10 +514,38 @@ struct ConsoleLineView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.system(size: 12, design: .monospaced))
-        .padding(.vertical, 2)
-        .padding(.horizontal, 4)
-        .background(rowBackground)
-        .cornerRadius(4)
+        .padding(.vertical, ConsoleTheme.rowPadding)
+        .padding(.horizontal, ConsoleTheme.rowPadding)
+        .background(premiumBackground)
+        .cornerRadius(ConsoleTheme.rowCornerRadius)
+    }
+    
+    // MARK: - Premium Styling Components
+    
+    /// Enhanced indicator bar with emphasis for system/error messages
+    @ViewBuilder
+    private var indicatorBar: some View {
+        RoundedRectangle(cornerRadius: 1)
+            .fill(indicatorBarColor)
+            .frame(width: ConsoleTheme.indicatorBarWidth)
+            .help(categoryTooltip)
+    }
+    
+    /// Premium indicator color that emphasizes system/error messages
+    private var indicatorBarColor: Color {
+        switch line.kind {
+        case .system:
+            return Color.gray.opacity(ConsoleTheme.systemIndicatorOpacity)
+        case .error:
+            return Color.red.opacity(ConsoleTheme.errorIndicatorOpacity)
+        case .packet:
+            return categoryBorderColor  // Keep existing packet colors
+        }
+    }
+    
+    /// Premium background with subtle tint for system/error messages
+    private var premiumBackground: Color {
+        return ConsoleTheme.backgroundColor(for: line.kind)
     }
 
     /// Left border color based on message category (matches filter buttons)
@@ -565,15 +596,10 @@ struct ConsoleLineView: View {
         }
     }
 
+    // Note: rowBackground is now handled by premiumBackground
+    // This property is kept for backward compatibility but should not be used
     private var rowBackground: Color {
-        switch line.kind {
-        case .system:
-            return Color.gray.opacity(0.05)
-        case .error:
-            return Color.red.opacity(0.08)
-        case .packet:
-            return .clear
-        }
+        return premiumBackground
     }
 
     private var messageColor: Color {
@@ -619,16 +645,17 @@ struct DigiPathIndicator: View {
 /// Badge showing number of duplicate receptions
 struct DuplicateCountBadge: View {
     let count: Int
+    let kind: ConsoleLine.Kind
 
     var body: some View {
         Text("+\(count)")
             .font(.system(size: 9, weight: .medium, design: .monospaced))
-            .foregroundStyle(.purple)
+            .foregroundStyle(kind == .error ? .red : .purple)
             .padding(.horizontal, 3)
             .padding(.vertical, 1)
-            .background(Color.purple.opacity(0.15))
+            .background((kind == .error ? Color.red : Color.purple).opacity(0.15))
             .clipShape(RoundedRectangle(cornerRadius: 3))
-            .help("Received \(count + 1) times via different paths (click to expand)")
+            .help(kind == .packet ? "Received \(count + 1) times via different paths (click to expand)" : "Occurred \(count + 1) times consecutively (click to expand)")
     }
 }
 

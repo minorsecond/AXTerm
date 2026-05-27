@@ -73,13 +73,24 @@ struct NetRomRoutesView: View {
 
             // Mode picker
             Picker("Mode", selection: $viewModel.routingMode) {
-                Text("Classic").tag(NetRomRoutingMode.classic)
-                Text("Inferred").tag(NetRomRoutingMode.inference)
-                Text("Hybrid").tag(NetRomRoutingMode.hybrid)
+                switch viewModel.selectedTab {
+                case .routes:
+                    Text("Classic Routes").tag(NetRomRoutingMode.classic)
+                    Text("Inferred Routes").tag(NetRomRoutingMode.inference)
+                    Text("All Routes").tag(NetRomRoutingMode.hybrid)
+                case .neighbors:
+                    Text("Classic Neighbors").tag(NetRomRoutingMode.classic)
+                    Text("Inferred Neighbors").tag(NetRomRoutingMode.inference)
+                    Text("All Neighbors").tag(NetRomRoutingMode.hybrid)
+                case .linkQuality:
+                    Text("Classic Links").tag(NetRomRoutingMode.classic)
+                    Text("Inferred Links").tag(NetRomRoutingMode.inference)
+                    Text("All Links").tag(NetRomRoutingMode.hybrid)
+                }
             }
             .pickerStyle(.menu)
-            .frame(width: 120)
-            .help("NET/ROM routing mode: Classic uses only explicit broadcasts, Inferred uses passive observation, Hybrid combines both")
+            .frame(width: 160)
+            .help(modePickerTooltip)
 
             // Hide expired toggle
             Toggle("Hide expired", isOn: $settings.hideExpiredRoutes)
@@ -146,6 +157,17 @@ struct NetRomRoutesView: View {
     }
 
     // MARK: - Actions
+
+    private var modePickerTooltip: String {
+        switch viewModel.selectedTab {
+        case .routes:
+            return "Filter routes: Classic (from explicit NET/ROM broadcasts), Inferred (deduced from packet observation), or All"
+        case .neighbors:
+            return "Filter neighbors: Classic (heard directly), Inferred (deduced from traffic), or All"
+        case .linkQuality:
+            return "Filter link quality stats by the type of neighbor they involve (Classic vs Inferred)"
+        }
+    }
 
     private func clearRoutes() {
         packetEngine?.clearNetRomData()

@@ -21,6 +21,13 @@ nonisolated enum CallsignValidator {
     /// Basic callsign pattern for user input validation
     nonisolated static let callsignPattern = "^[A-Z0-9]{1,6}(?:-[0-9]{1,2})?$"
 
+    // Compiled once; never reallocated. Previously these were created fresh on every
+    // isValidCallsign call, which blocked the main thread in rebuildObservedPaths.
+    private static let callsignForwardRegex =
+        try? NSRegularExpression(pattern: #"^[A-Z]{1,2}[0-9]{1,2}[A-Z]{1,4}$"#)
+    private static let callsignReverseRegex =
+        try? NSRegularExpression(pattern: #"^[0-9][A-Z]{1,2}[0-9]?[A-Z]{1,4}$"#)
+
     /// Normalizes a callsign string (trims whitespace and uppercases)
     nonisolated static func normalize(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -94,21 +101,14 @@ nonisolated enum CallsignValidator {
             return false
         }
 
-        // Check for valid callsign pattern: letters, then digit(s), then letters
-        // This catches most amateur callsigns while rejecting things like "123ABC"
-        let pattern = #"^[A-Z]{1,2}[0-9]{1,2}[A-Z]{1,4}$"#
-        let regex = try? NSRegularExpression(pattern: pattern, options: [])
         let range = NSRange(baseCall.startIndex..., in: baseCall)
 
-        if regex?.firstMatch(in: baseCall, options: [], range: range) != nil {
+        if callsignForwardRegex?.firstMatch(in: baseCall, options: [], range: range) != nil {
             return true
         }
 
         // Also allow reverse pattern for some international calls (e.g., 3DA0XYZ)
-        let reversePattern = #"^[0-9][A-Z]{1,2}[0-9]?[A-Z]{1,4}$"#
-        let reverseRegex = try? NSRegularExpression(pattern: reversePattern, options: [])
-
-        return reverseRegex?.firstMatch(in: baseCall, options: [], range: range) != nil
+        return callsignReverseRegex?.firstMatch(in: baseCall, options: [], range: range) != nil
     }
 
     /// Checks if a candidate is valid for routing/graph node identity.

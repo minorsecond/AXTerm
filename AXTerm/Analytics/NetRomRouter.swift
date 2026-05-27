@@ -296,6 +296,14 @@ nonisolated final class NetRomRouter {
             .map { NeighborInfo(call: $0.call, quality: $0.pathQuality, lastSeen: $0.lastUpdate, obsolescenceCount: $0.obsolescenceCount, sourceType: $0.sourceType, isOfficial: $0.isOfficial) }
     }
 
+    /// O(1) check — avoids the full route array construction of bestRouteTo().
+    /// Use this in list/sidebar rendering where only existence matters.
+    func hasRoute(to destination: String, currentDate: Date = Date()) -> Bool {
+        guard let normalized = normalize(destination) else { return false }
+        let cutoff = currentDate.addingTimeInterval(-config.routeTTLSeconds)
+        return routesByDestination[normalized]?.contains { $0.lastHeard >= cutoff } ?? false
+    }
+
     func currentRoutes() -> [RouteInfo] {
         let sortedDestinations = routesByDestination.keys.sorted()
         return sortedDestinations.flatMap { destination in
@@ -396,6 +404,14 @@ nonisolated final class NetRomRouter {
                 routesByDestination[destination] = refreshed.sorted(by: routeSort)
             }
         }
+    }
+
+    // MARK: - Reset
+
+    func reset() {
+        neighbors.removeAll()
+        routesByDestination.removeAll()
+        preferredRoutes.removeAll()
     }
 
     // MARK: - Import from Persistence

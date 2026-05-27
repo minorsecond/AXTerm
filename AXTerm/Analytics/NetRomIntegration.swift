@@ -344,6 +344,10 @@ final class NetRomIntegration {
         }
     }
 
+    func hasRoute(to destination: String) -> Bool {
+        router.hasRoute(to: destination)
+    }
+
     func bestRouteTo(_ destination: String) -> RouteInfo? {
         router.bestRouteTo(destination)
     }
@@ -437,10 +441,8 @@ final class NetRomIntegration {
     func reset(localCallsign: String? = nil) {
         let callsign = localCallsign ?? self.localCallsign
 
-        // Clear existing router data by importing empty arrays
-        // (router is `let`, so we reset in-place rather than replacing)
-        router.importNeighbors([])
-        router.importRoutes([])
+        // Clear existing router data
+        router.reset()
 
         // Create fresh link estimator
         linkEstimator = LinkQualityEstimator(config: linkConfig)

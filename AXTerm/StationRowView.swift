@@ -17,16 +17,16 @@ struct StationRowView: View {
 
     var body: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
                     Text(station.call)
-                        .font(.system(.body, design: .monospaced))
+                        .font(.system(.subheadline, design: .monospaced))
                         .fontWeight(isSelected ? .semibold : .regular)
                         .help("Station callsign")
 
                     if isConnected {
                         Image(systemName: "link.circle.fill")
-                            .font(.system(size: 11))
+                            .font(.system(size: 10))
                             .foregroundStyle(.green)
                             .help("Connected session")
                     }
@@ -38,13 +38,13 @@ struct StationRowView: View {
                 }
 
                 Text(station.subtitle)
-                    .font(.caption)
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .help("Packet count and last heard time")
 
                 if !station.lastViaDisplay.isEmpty {
                     Text("Via \(station.lastViaDisplay)")
-                        .font(.caption2)
+                        .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                         .help("Last heard digipeater path")
                 }
@@ -55,15 +55,17 @@ struct StationRowView: View {
             if isSelected {
                 Image(systemName: "checkmark")
                     .foregroundStyle(.secondary)
+                    .font(.system(size: 12))
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
+        .padding(.horizontal, 6)
         .background(
             Group {
                 if isConnected {
                     Color.green.opacity(0.10)
                 } else if isSelected {
-                    Color.accentColor.opacity(0.10)
+                    Color.accentColor.opacity(0.15)
                 } else {
                     Color.clear
                 }
