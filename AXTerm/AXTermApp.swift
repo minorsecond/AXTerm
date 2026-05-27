@@ -7,6 +7,7 @@
 
 import GRDB
 import SwiftUI
+import UserNotifications
 
 @main
 struct AXTermApp: App {
@@ -39,7 +40,7 @@ struct AXTermApp: App {
         }
         let settingsStore = AppSettingsStore(defaults: defaults)
         _settings = StateObject(wrappedValue: settingsStore)
-        let router = PacketInspectionRouter()
+        let router = PacketInspectionRouter.shared
         _inspectionRouter = StateObject(wrappedValue: router)
 
         TxLog.configure(wireDebugEnabled: WireDebugSettings.isEnabled)
@@ -86,7 +87,6 @@ struct AXTermApp: App {
         let appState = DefaultAppStateProvider()
         let notificationScheduler = UserNotificationScheduler(settings: settingsStore, appState: appState)
         let notificationManager = NotificationAuthorizationManager()
-        let notificationHandler = NotificationActionHandler(router: router)
         self.packetStore = packetStore
         self.consoleStore = consoleStore
         self.rawStore = rawStore
@@ -120,7 +120,6 @@ struct AXTermApp: App {
             }
         }
         appDelegate.settings = settingsStore
-        appDelegate.notificationDelegate = notificationHandler
     }
 
     var body: some Scene {

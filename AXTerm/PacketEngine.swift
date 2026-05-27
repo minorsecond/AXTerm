@@ -101,7 +101,7 @@ final class PacketEngine: ObservableObject {
     private let eventLogger: EventLogger?
     private let watchMatcher: WatchMatching
     private let watchRecorder: WatchEventRecording?
-    private let notificationScheduler: NotificationScheduling?
+    let notificationScheduler: NotificationScheduling?
     private var cancellables: Set<AnyCancellable> = []
     private let packetInsertSubject = PassthroughSubject<Packet, Never>()
 
@@ -179,10 +179,13 @@ final class PacketEngine: ObservableObject {
     @Published private(set) var lastError: String?
     private var previousLinkState: KISSLinkState = .disconnected
     @Published private(set) var bytesReceived: Int = 0
+    @Published private(set) var lastRxTime: Date = .distantPast
+    @Published private(set) var lastTxTime: Date = .distantPast
     @Published private(set) var connectedHost: String?
     @Published private(set) var connectedPort: UInt16?
 
     @Published private(set) var packets: [Packet] = []
+    @Published var packetsClearedAt: Date? = nil
     @Published private(set) var consoleLines: [ConsoleLine] = []
     @Published private(set) var rawChunks: [RawChunk] = []
     @Published private(set) var stations: [Station] = []
@@ -549,6 +552,7 @@ final class PacketEngine: ObservableObject {
     /// - Parameter frame: The frame to send
     /// - Parameter completion: Callback with success or error
     func send(frame: OutboundFrame, completion: ((Result<Void, Error>) -> Void)? = nil) {
+        lastTxTime = Date()
         let activeLink = link
         let activeConn = connection
         guard status == .connected, (activeLink != nil || activeConn != nil) else {
@@ -771,6 +775,7 @@ final class PacketEngine: ObservableObject {
 
     func handleIncomingData(_ data: Data) {
         bytesReceived += data.count
+        lastRxTime = Date()
         LinkDebugLog.shared.recordRxBytes(data.count)
 
         TxLog.kissReceive(size: data.count)
@@ -1155,8 +1160,14 @@ final class PacketEngine: ObservableObject {
     // MARK: - Filtering
 
     func filteredPackets(search: String, filters: PacketFilters, stationCall: String?) -> [Packet] {
-        PacketFilter.filter(
-            packets: packets,
+        let visiblePackets = packets.filter { packet in
+            if let clearedAt = packetsClearedAt, packet.timestamp < clearedAt {
+                return false
+            }
+            return true
+        }
+        return PacketFilter.filter(
+            packets: visiblePackets,
             search: search,
             filters: filters,
             stationCall: stationCall,
@@ -1192,8 +1203,11 @@ final class PacketEngine: ObservableObject {
     // MARK: - Clear Actions
 
     func clearPackets() {
-        packets.removeAll()
-        pinnedPacketIDs.removeAll()
+        packetsClearedAt = Date()
+    }
+    
+    func restorePackets() {
+        packetsClearedAt = nil
     }
 
     func clearConsole(clearPersisted: Bool = true) {
@@ -1277,6 +1291,24 @@ final class PacketEngine: ObservableObject {
             )
 
             appendConsoleLine(line, category: .packet, packetID: packet.id, byteCount: packet.info.count)
+            
+            // Handle Notification Triggers (Mail and Mentions)
+            if !isDuplicate {
+                let textUpper = text.uppercased()
+                let myCallUpper = settings.myCallsign.uppercased()
+                
+                if !myCallUpper.isEmpty {
+                    if line.messageType == .mail && textUpper.contains(myCallUpper) {
+                        notificationScheduler?.scheduleMailNotification(packet: packet)
+                    } else if settings.notifyOnMention {
+                        let toCallUpper = packet.toDisplay.uppercased()
+                        // Avoid spam if we are directly receiving this packet (we assume we're already engaged)
+                        if toCallUpper != myCallUpper && textUpper.contains(myCallUpper) {
+                            notificationScheduler?.scheduleMentionNotification(packet: packet)
+                        }
+                    }
+                }
+            }
         }
 
         persistPacket(packet)

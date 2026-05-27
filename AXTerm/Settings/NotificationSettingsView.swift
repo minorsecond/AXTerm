@@ -22,6 +22,13 @@ struct NotificationSettingsView: View {
         Form {
             PreferencesSection("General") {
                 Toggle("Notify on Watch List hits", isOn: $settings.notifyOnWatchHits)
+                    .onChange(of: settings.notifyOnWatchHits) { _, newValue in
+                        if newValue {
+                            Task {
+                                _ = await notificationManager.requestAuthorization()
+                            }
+                        }
+                    }
                 Toggle("Play sound", isOn: $settings.notifyPlaySound)
                 Toggle("Only notify when backgrounded", isOn: $settings.notifyOnlyWhenInactive)
                 
@@ -34,10 +41,23 @@ struct NotificationSettingsView: View {
                         }
                         
                         Button("Test Notification") {
-                            notificationManager.sendTestNotification()
+                            Task {
+                                let granted = await notificationManager.requestAuthorization()
+                                if granted {
+                                    notificationManager.sendTestNotification()
+                                } else {
+                                    TxLog.error(.settings, "Notification authorization not granted", error: nil)
+                                }
+                            }
                         }
                     }
                 }
+            }
+            
+            PreferencesSection("Triggers") {
+                Toggle("Notify when someone connects to me", isOn: $settings.notifyOnInboundConnection)
+                Toggle("Notify when a node broadcasts I have mail", isOn: $settings.notifyOnNodeMail)
+                Toggle("Notify when my callsign is mentioned", isOn: $settings.notifyOnMention)
             }
             
             PreferencesSection("Watch List") {

@@ -178,34 +178,48 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         return .message
     }
 
-    /// Check if the text is a BBS/node prompt or session protocol message
+    /// Check if the text is a BBS/node prompt or session protocol message.
+    /// Conservative by design: when in doubt, let the line through as data.
+    /// Better to show a noisy prompt than to hide content the user needs to see.
     private static func isPromptOrSessionMessage(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
 
-        // Lines ending with command prompts (the ">" at the end is the key indicator)
+        // Bare callsign / node prompt: "DRLNOD>", "KB5YZB-7>", "BBS>", "NOS>"
+        // Prefix must be callsign-safe characters only (letters, digits, dashes — no spaces).
+        // Excludes "de KB5YZB>" (BBS sign-off), "73 de W6ABC>" (farewell), etc.
         if trimmed.hasSuffix(">") {
+            let prefix = trimmed.dropLast()
+            if !prefix.isEmpty && prefix.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }) {
+                return true
+            }
+        }
+
+        // Exact-match known prompts only — heuristics are too risky.
+        // "From:", "To:", "Via:", "Date:", "DE", "73", "OK" are all valid BBS content
+        // and must not be swallowed. Add entries here as new systems are encountered.
+        let exactPrompts: Set<String> = [
+            // Colon-terminated command prompts (PBBS, AA4RE, W0RLI, FBB, etc.)
+            "CMD:", "BBS:", "[CMD]:", "[FBB]:",
+            // Bracket-wrapped node prompts (FBB / European systems)
+            "[FBB]>", "[CMD]>",
+        ]
+        if exactPrompts.contains(trimmed) {
             return true
         }
 
-        // Node session messages (typically start with ###)
+        // NET/ROM and node session event lines (e.g. "###LINK MADE TO ...", "###DISCONNECTED")
         if trimmed.hasPrefix("###") {
             return true
         }
 
-        // Very short messages that look like single commands (L, B, K, etc.)
-        if trimmed.count <= 3 && trimmed.allSatisfy({ $0.isLetter || $0.isNumber }) {
-            return true
-        }
-
-        // Lines that are primarily prompt text (starts with these patterns)
-        let promptStarts = [
+        // Known multi-word prompt prefixes
+        let promptPrefixes: [String] = [
             "ENTER COMMAND",
             "ENTER CMD",
         ]
-        for pattern in promptStarts {
-            if trimmed.hasPrefix(pattern) {
-                return true
-            }
+        for pattern in promptPrefixes where trimmed.hasPrefix(pattern) {
+            return true
         }
 
         return false

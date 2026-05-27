@@ -87,6 +87,50 @@ final class UserNotificationScheduler: NotificationScheduling {
 
         center.add(request)
     }
+
+    func scheduleMailNotification(packet: Packet) {
+        guard settings.notifyOnNodeMail else { return }
+        if settings.notifyOnlyWhenInactive && appState.isFrontmost { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "You have mail!"
+        content.body = "A node broadcasted a mail notification for you."
+        content.categoryIdentifier = NotificationAction.watchCategory
+        content.userInfo = [NotificationAction.packetIDKey: packet.id.uuidString]
+        if settings.notifyPlaySound { content.sound = .default }
+
+        let request = UNNotificationRequest(identifier: "mail-\(packet.id.uuidString)", content: content, trigger: nil)
+        center.add(request)
+    }
+
+    func scheduleMentionNotification(packet: Packet) {
+        guard settings.notifyOnMention else { return }
+        if settings.notifyOnlyWhenInactive && appState.isFrontmost { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Mentioned by \(packet.fromDisplay)"
+        content.body = packet.infoPreview.isEmpty ? "Your callsign was mentioned." : packet.infoPreview
+        content.categoryIdentifier = NotificationAction.watchCategory
+        content.userInfo = [NotificationAction.packetIDKey: packet.id.uuidString]
+        if settings.notifyPlaySound { content.sound = .default }
+
+        let request = UNNotificationRequest(identifier: "mention-\(packet.id.uuidString)", content: content, trigger: nil)
+        center.add(request)
+    }
+
+    func scheduleConnectionNotification(callsign: String) {
+        guard settings.notifyOnInboundConnection else { return }
+        if settings.notifyOnlyWhenInactive && appState.isFrontmost { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Incoming Connection"
+        content.body = "\(callsign) has connected to your station."
+        content.categoryIdentifier = NotificationAction.watchCategory
+        if settings.notifyPlaySound { content.sound = .default }
+
+        let request = UNNotificationRequest(identifier: "conn-\(callsign)-\(Date().timeIntervalSince1970)", content: content, trigger: nil)
+        center.add(request)
+    }
 }
 
 final class NotificationAuthorizationManager {
@@ -118,9 +162,15 @@ final class NotificationAuthorizationManager {
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
             content: content,
-            trigger: nil
+            trigger: UNTimeIntervalNotificationTrigger(timeInterval: 0.1, repeats: false)
         )
-        center.add(request) { _ in }
+        center.add(request) { error in
+            if let error = error {
+                TxLog.error(.settings, "Failed to send test notification", error: error)
+            } else {
+                TxLog.debug(.settings, "Test notification dispatched")
+            }
+        }
     }
 
     private func configureCategories() {
@@ -146,11 +196,12 @@ final class NotificationAuthorizationManager {
 
 @MainActor
 final class PacketInspectionRouter: ObservableObject {
+    static let shared = PacketInspectionRouter()
     private static var testRetainedInstances: [PacketInspectionRouter] = []
     @Published private(set) var requestedPacketID: Packet.ID?
     @Published private(set) var shouldOpenMainWindow = false
 
-    init() {
+    private init() {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             Self.testRetainedInstances.append(self)
         }
@@ -184,6 +235,15 @@ final class NotificationActionHandler: NSObject, UNUserNotificationCenterDelegat
     init(router: PacketInspectionRouter) {
         self.router = router
         super.init()
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        // This ensures the notification banner is shown even if the app is currently in the foreground.
+        completionHandler([.banner, .sound])
     }
 
     func userNotificationCenter(

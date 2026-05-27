@@ -123,4 +123,7 @@ final class EventLogWatchRecorder: WatchEventRecording {
 
 protocol NotificationScheduling {
     func scheduleWatchNotification(packet: Packet, match: WatchMatch)
+    func scheduleMailNotification(packet: Packet)
+    func scheduleMentionNotification(packet: Packet)
+    func scheduleConnectionNotification(callsign: String)
 }

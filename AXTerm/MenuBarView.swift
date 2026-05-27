@@ -130,6 +130,6 @@ struct MenuBarView: View {
     MenuBarView(
         client: PacketEngine(settings: AppSettingsStore()),
         settings: AppSettingsStore(),
-        inspectionRouter: PacketInspectionRouter()
+        inspectionRouter: .shared
     )
 }

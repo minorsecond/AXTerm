@@ -24,6 +24,9 @@ final class AppSettingsStore: ObservableObject {
     static let launchAtLoginKey = "launchAtLogin"
     static let autoConnectKey = "autoConnectOnLaunch"
     static let notifyOnWatchKey = "notifyOnWatchHits"
+    static let notifyOnNodeMailKey = "notifyOnNodeMail"
+    static let notifyOnInboundConnectionKey = "notifyOnInboundConnection"
+    static let notifyOnMentionKey = "notifyOnMention"
     static let notifyPlaySoundKey = "notifyPlaySound"
     static let notifyOnlyWhenInactiveKey = "notifyOnlyWhenInactive"
     static let myCallsignKey = "myCallsign"
@@ -168,6 +171,9 @@ final class AppSettingsStore: ObservableObject {
     static let defaultLaunchAtLogin = false
     static let defaultAutoConnect = false
     static let defaultNotifyOnWatch = true
+    static let defaultNotifyOnNodeMail = true
+    static let defaultNotifyOnInboundConnection = true
+    static let defaultNotifyOnMention = true
     static let defaultNotifyPlaySound = true
     static let defaultNotifyOnlyWhenInactive = true
     static let defaultIgnoredServiceEndpoints: [String] = []
@@ -426,6 +432,18 @@ final class AppSettingsStore: ObservableObject {
 
     @Published var notifyOnWatchHits: Bool {
         didSet { persistNotifyOnWatch() }
+    }
+
+    @Published var notifyOnNodeMail: Bool {
+        didSet { persistNotifyOnNodeMail() }
+    }
+
+    @Published var notifyOnInboundConnection: Bool {
+        didSet { persistNotifyOnInboundConnection() }
+    }
+
+    @Published var notifyOnMention: Bool {
+        didSet { persistNotifyOnMention() }
     }
 
     @Published var notifyPlaySound: Bool {
@@ -797,6 +815,9 @@ final class AppSettingsStore: ObservableObject {
         let storedMobilinkdInputGain = defaults.object(forKey: Self.mobilinkdInputGainKey) as? Int ?? Self.defaultMobilinkdInputGain
 
         let storedNotifyOnWatch = defaults.object(forKey: Self.notifyOnWatchKey) as? Bool ?? Self.defaultNotifyOnWatch
+        let storedNotifyOnNodeMail = defaults.object(forKey: Self.notifyOnNodeMailKey) as? Bool ?? Self.defaultNotifyOnNodeMail
+        let storedNotifyOnInboundConnection = defaults.object(forKey: Self.notifyOnInboundConnectionKey) as? Bool ?? Self.defaultNotifyOnInboundConnection
+        let storedNotifyOnMention = defaults.object(forKey: Self.notifyOnMentionKey) as? Bool ?? Self.defaultNotifyOnMention
         let storedNotifyPlaySound = defaults.object(forKey: Self.notifyPlaySoundKey) as? Bool ?? Self.defaultNotifyPlaySound
         let storedNotifyOnlyWhenInactive = defaults.object(forKey: Self.notifyOnlyWhenInactiveKey) as? Bool ?? Self.defaultNotifyOnlyWhenInactive
         let storedMyCallsign = defaults.string(forKey: Self.myCallsignKey) ?? ""
@@ -895,6 +916,9 @@ final class AppSettingsStore: ObservableObject {
         self.mobilinkdInputGain = storedMobilinkdInputGain
 
         self.notifyOnWatchHits = storedNotifyOnWatch
+        self.notifyOnNodeMail = storedNotifyOnNodeMail
+        self.notifyOnInboundConnection = storedNotifyOnInboundConnection
+        self.notifyOnMention = storedNotifyOnMention
         self.notifyPlaySound = storedNotifyPlaySound
         self.notifyOnlyWhenInactive = storedNotifyOnlyWhenInactive
         self.myCallsignStorage = CallsignValidator.normalize(storedMyCallsign)
@@ -1086,6 +1110,18 @@ final class AppSettingsStore: ObservableObject {
 
     private func persistNotifyOnWatch() {
         defaults.set(notifyOnWatchHits, forKey: Self.notifyOnWatchKey)
+    }
+
+    private func persistNotifyOnNodeMail() {
+        defaults.set(notifyOnNodeMail, forKey: Self.notifyOnNodeMailKey)
+    }
+
+    private func persistNotifyOnInboundConnection() {
+        defaults.set(notifyOnInboundConnection, forKey: Self.notifyOnInboundConnectionKey)
+    }
+
+    private func persistNotifyOnMention() {
+        defaults.set(notifyOnMention, forKey: Self.notifyOnMentionKey)
     }
 
     private func persistNotifyPlaySound() {

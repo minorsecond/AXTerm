@@ -10,10 +10,10 @@ import UserNotifications
 
 final class AXTermAppDelegate: NSObject, NSApplicationDelegate {
     var settings: AppSettingsStore?
-    var notificationDelegate: UNUserNotificationCenterDelegate? {
-        didSet {
-            UNUserNotificationCenter.current().delegate = notificationDelegate
-        }
+    let notificationHandler = NotificationActionHandler(router: .shared)
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().delegate = notificationHandler
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

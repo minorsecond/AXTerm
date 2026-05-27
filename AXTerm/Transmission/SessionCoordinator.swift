@@ -565,6 +565,11 @@ final class SessionCoordinator: ObservableObject {
                 let isInitiator = session.isInitiator
                 let peer = session.remoteAddress.display.uppercased()
 
+                if !isInitiator {
+                    NSSound(named: "Glass")?.play()
+                    self.packetEngine?.notificationScheduler?.scheduleConnectionNotification(callsign: peer)
+                }
+
                 if isInitiator && axdpEnabled && autoNegotiate {
                     if self.isAXDPNotSupported(for: peer) {
                         // Known non-AXDP peer — skip entirely
