@@ -53,6 +53,14 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// Key is N(S) sequence number
     var sendBuffer: [Int: OutboundFrame] = [:]
 
+    /// AIMD congestion window.
+    /// Starts in slow start (cwnd=1) and grows as ACKs arrive.  Halved on each
+    /// T1 timeout (loss event).  The effective send window is
+    /// min(config.windowSize, aimdWindow.effectiveWindow) so the congestion
+    /// window can never exceed the protocol window K, but can be reduced below K
+    /// when the link is lossy.
+    var aimdWindow: AIMDWindow
+
     /// Send timestamp per N(S) for RTT estimation when RR acks frames.
     /// Stored as monotonic TimeInterval from the injected clock so tests can
     /// use a virtual clock and get deterministic RTT measurements.
@@ -124,6 +132,16 @@ nonisolated final class AX25Session: @unchecked Sendable {
         self.statistics = AX25SessionStatistics()
         self.lastActivityAt = Date()
         self.isInitiator = isInitiator
+        // AIMD window: starts at windowSize (full protocol window) and shrinks
+        // on loss events.  We do NOT use slow-start (cwnd=1) because AX.25 has
+        // a very small protocol window (max 7) and the round-trip times are large
+        // (seconds, not milliseconds).  Starting at 1 would severely limit
+        // throughput until enough ACKs arrived.  Instead, the protocol window K
+        // acts as the initial burst limit; AIMD only reduces below K on loss.
+        self.aimdWindow = AIMDWindow(
+            initialWindow: Double(config.windowSize),
+            maxWindow: Double(config.windowSize)
+        )
     }
 
     deinit {
@@ -1443,6 +1461,20 @@ final class AX25SessionManager: ObservableObject {
         let sendBufKeysBefore = session.sendBuffer.keys.sorted()
         session.acknowledgeUpTo(from: vaBefore, to: nr)
         let sendBufKeysAfter = session.sendBuffer.keys.sorted()
+
+        // Bug G fix: AIMD additive increase per acknowledged frame.
+        // Call onAck() once for each frame that RR(nr) newly acknowledges so that
+        // the congestion window grows proportionally to confirmed delivery.
+        // Only grow when frames were actually acked (nr != vaBefore) to avoid
+        // spurious growth from duplicate or no-progress RRs.
+        let modulo = session.stateMachine.config.modulo
+        let ackedCount = (nr - vaBefore + modulo) % modulo
+        if ackedCount > 0 {
+            for _ in 0..<ackedCount {
+                session.aimdWindow.onAck()
+            }
+        }
+
         session.touch()
 
         print("[DEBUG:AX25:RR] rx | nr=\(nr) va=\(session.va) vs=\(session.vs) sendBufBefore=\(sendBufKeysBefore) sendBufAfter=\(sendBufKeysAfter) outstanding=\(session.outstandingCount)")
@@ -1641,6 +1673,15 @@ final class AX25SessionManager: ObservableObject {
         var frames = processActions(actions, for: session)
 
         if session.state == .connected, session.outstandingCount > 0 {
+            // Bug G fix: AIMD multiplicative decrease on T1 timeout (loss event).
+            // Called once per timeout event, not once per retransmitted frame.
+            session.aimdWindow.onLoss()
+            TxLog.debug(.session, "AIMD loss event (T1 timeout)", [
+                "peer": session.remoteAddress.display,
+                "cwnd": String(format: "%.2f", session.aimdWindow.cwnd),
+                "effectiveWindow": session.aimdWindow.effectiveWindow
+            ])
+
             let retransmitFrames = session.framesToRetransmit(from: session.va)
             let nsValues = retransmitFrames.compactMap { f -> Int? in
                 guard let ctrl = f.controlByte else { return nil }
@@ -1798,7 +1839,12 @@ final class AX25SessionManager: ObservableObject {
         // the drain to at most that many frames.
         let windowSize = session.stateMachine.config.windowSize
         let currentOutstanding = session.stateMachine.sequenceState.outstandingCount
-        let availableSlots = max(0, windowSize - currentOutstanding)
+        // Bug G fix: effective send window is the minimum of the AX.25 protocol
+        // window K and the AIMD congestion window.  This ensures the congestion
+        // window actually constrains transmit rate — not just bookkeeping.
+        let aimdEffective = session.aimdWindow.effectiveWindow
+        let effectiveSendWindow = min(windowSize, aimdEffective)
+        let availableSlots = max(0, effectiveSendWindow - currentOutstanding)
 
         var drained: [(data: Data, pid: UInt8, displayInfo: String?)] = []
         var remaining: [(data: Data, pid: UInt8, displayInfo: String?)] = []

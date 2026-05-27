@@ -1013,6 +1013,135 @@ final class WindowAdaptationTests: XCTestCase {
         XCTAssertLessThanOrEqual(session.outstandingCount, config.windowSize,
             "Outstanding frame count must not exceed configured window size")
     }
+
+    // W-7: T1 timeout fires AIMD multiplicative decrease on the session's congestion window.
+    // After a timeout the congestion window must be strictly smaller than it was before
+    // the timeout (it was ≥1 and onLoss() halves it, floor of 1).
+    func testT1TimeoutTriggersAIMDLoss() {
+        let clock = AX25VirtualClock()
+        let config = AX25SessionConfig(windowSize: 4, rtoMin: 1.0, rtoMax: 16.0, initialRto: 2.0)
+        let manager = AX25SessionManager(
+            localCallsign: AX25Address(call: "LOCAL", ssid: 0),
+            clock: clock
+        )
+        manager.defaultConfig = config
+        let peer = AX25Address(call: "PEER", ssid: 0)
+
+        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+
+        // Grow the AIMD window by sending and acking several frames so the pre-loss
+        // cwnd is well above 1 (otherwise halving from 1→1 would look like no change).
+        _ = manager.sendData(Data("hello".utf8), to: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+
+        // Send another frame so there is something outstanding before the timeout.
+        _ = manager.sendData(Data("world".utf8), to: peer, path: DigiPath(), channel: 0)
+
+        let cwndBefore = session.aimdWindow.cwnd
+        XCTAssertGreaterThan(cwndBefore, 1.0,
+            "AIMD window should have grown above 1 after an ACK; test precondition failed")
+
+        _ = manager.handleT1Timeout(session: session)
+
+        XCTAssertLessThan(session.aimdWindow.cwnd, cwndBefore,
+            "T1 timeout must trigger AIMD multiplicative decrease: cwnd \(session.aimdWindow.cwnd) should be < \(cwndBefore)")
+    }
+
+    // W-8: RR acknowledgement grows the AIMD congestion window.
+    // Each time an RR acks one or more frames, onAck() must be called and cwnd must grow.
+    // Strategy: first reduce cwnd below maxWindow via a T1 timeout loss event, then
+    // verify a subsequent RR ACK causes the window to grow back.
+    func testRRAckGrowsAIMDWindow() {
+        let clock = AX25VirtualClock()
+        // Use windowSize=4 — AIMD starts at cwnd=4 (maxWindow).
+        let config = AX25SessionConfig(windowSize: 4, rtoMin: 1.0, rtoMax: 16.0, initialRto: 2.0)
+        let manager = AX25SessionManager(
+            localCallsign: AX25Address(call: "LOCAL", ssid: 0),
+            clock: clock
+        )
+        manager.defaultConfig = config
+        let peer = AX25Address(call: "PEER", ssid: 0)
+
+        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+
+        // Send a frame and trigger a T1 timeout to REDUCE cwnd via multiplicative decrease.
+        _ = manager.sendData(Data("hello".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.handleT1Timeout(session: session)  // cwnd halves: 4→2
+        let cwndAfterLoss = session.aimdWindow.cwnd
+        XCTAssertLessThan(cwndAfterLoss, 4.0,
+            "T1 timeout must reduce cwnd below maxWindow; got \(cwndAfterLoss)")
+
+        // Now ack the frame with an RR — cwnd should grow from its reduced value.
+        let vsBeforeAck = session.vs
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: vsBeforeAck)
+
+        XCTAssertGreaterThan(session.aimdWindow.cwnd, cwndAfterLoss,
+            "RR ACK must grow AIMD cwnd after loss: was \(cwndAfterLoss), now \(session.aimdWindow.cwnd)")
+    }
+
+    // W-9: AIMD window constrains drainPendingDataQueue — after a loss event reduces
+    // cwnd below windowSize, subsequent RR ACKs must not let drain push outstanding
+    // above the current AIMD effectiveWindow.
+    //
+    // Setup:
+    //   1. Fill the protocol window (send 4 frames with cwnd=4)
+    //   2. Trigger T1 timeout → cwnd halves to 2 (multiplicative decrease)
+    //   3. A partial RR ack arrives (acks 2 of the 4 outstanding frames)
+    //   4. drainPendingDataQueue runs — it must not drain more than 0 new frames
+    //      because effectiveWindow=2 and outstanding is still 2 after the partial ack.
+    //   5. Verify outstanding ≤ min(windowSize, aimdEffective) = min(4, 2) = 2.
+    func testDrainRespectsAIMDWindow() {
+        let clock = AX25VirtualClock()
+        let config = AX25SessionConfig(windowSize: 4, rtoMin: 1.0, rtoMax: 16.0, initialRto: 2.0)
+        let manager = AX25SessionManager(
+            localCallsign: AX25Address(call: "LOCAL", ssid: 0),
+            clock: clock
+        )
+        manager.defaultConfig = config
+        let peer = AX25Address(call: "PEER", ssid: 0)
+
+        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+
+        // 1. Fill the protocol window: send 4 frames directly (cwnd=4=windowSize).
+        //    Also queue 4 more in pendingDataQueue for the drain test.
+        for i in 0..<8 {
+            _ = manager.sendData(Data("chunk\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+        }
+        XCTAssertEqual(session.outstandingCount, config.windowSize,
+            "Protocol window must be full after 8 sends (4 sent, 4 queued)")
+
+        // 2. Trigger T1 timeout to halve the AIMD window.
+        _ = manager.handleT1Timeout(session: session)
+        let cwndAfterLoss = session.aimdWindow.cwnd
+        XCTAssertLessThan(cwndAfterLoss, Double(config.windowSize),
+            "T1 timeout must reduce cwnd below windowSize")
+        let aimdEffectiveAfterLoss = session.aimdWindow.effectiveWindow
+        // aimdEffective should be 2 (half of 4, floor)
+        XCTAssertLessThanOrEqual(aimdEffectiveAfterLoss, config.windowSize / 2 + 1,
+            "AIMD effective window after loss should be ≤ half of protocol window")
+
+        // 3. Partial RR acks 2 of the 4 outstanding frames.
+        //    This triggers drainPendingDataQueue.  After drain, outstanding must not
+        //    exceed the current AIMD effectiveWindow.
+        let partialNR = (session.va + 2) % 8  // ack 2 frames from va
+        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: partialNR)
+
+        // 4. After the partial ack + drain, verify the AIMD bound holds.
+        //    outstanding after partial ack: was 4, acked 2, drained at most effectiveWindow-2.
+        //    effectiveWindow might have grown slightly from onAck() calls, but the
+        //    invariant is: outstanding ≤ min(windowSize, currentEffectiveWindow).
+        let currentEffective = min(config.windowSize, session.aimdWindow.effectiveWindow)
+        XCTAssertLessThanOrEqual(session.outstandingCount, currentEffective,
+            "After loss + partial ack, outstanding \(session.outstandingCount) must not exceed "
+            + "min(windowSize, aimdEffective)=\(currentEffective) "
+            + "(cwnd=\(String(format: "%.2f", session.aimdWindow.cwnd)))")
+    }
 }
 
 // MARK: - Part 10: Persistent Learning Validation
