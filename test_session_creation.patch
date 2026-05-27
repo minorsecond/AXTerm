@@ -1,0 +1,12 @@
+--- AXTerm/Transmission/AX25SessionManager.swift
++++ AXTerm/Transmission/AX25SessionManager.swift
+@@ -382,6 +382,8 @@
+         }
+ 
+         let pathSignature = path.display
+         let config = getConfigForDestination?(destination.display, pathSignature) ?? defaultConfig
++        
++        TxLog.debug(.session, "Session config trace", ["adaptiveTimeout": "\(config.adaptiveTimeout)", "hasGetConfig": "\(getConfigForDestination != nil)", "defaultAdaptive": "\(defaultConfig.adaptiveTimeout)", "session": destination.display])
++        
+         let session = AX25Session(
+             localAddress: localCallsign,

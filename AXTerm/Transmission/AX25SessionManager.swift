@@ -99,7 +99,8 @@ final class AX25Session: @unchecked Sendable {
         self.timers = AX25SessionTimers(
             rtoMin: config.rtoMin ?? 1.0,
             rtoMax: config.rtoMax ?? 30.0,
-            initialRto: config.initialRto ?? 4.0
+            initialRto: config.initialRto ?? 4.0,
+            adaptiveTimeout: config.adaptiveTimeout
         )
         self.statistics = AX25SessionStatistics()
         self.lastActivityAt = Date()
@@ -246,18 +247,14 @@ final class AX25SessionManager: ObservableObject {
     /// Default session configuration
     var defaultConfig: AX25SessionConfig = AX25SessionConfig()
 
-    // MARK: - Debug Logging (Debug Builds Only)
+    // MARK: - Debug Logging
     private func debugTrace(_ message: String, _ data: [String: Any] = [:]) {
-#if DEBUG
-        #if DEBUG
         if data.isEmpty {
             print("[AX25 TRACE] \(message)")
         } else {
             let details = data.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
             print("[AX25 TRACE] \(message) | \(details)")
         }
-        #endif
-#endif
     }
 
     private func describeFrame(_ frame: OutboundFrame) -> String {
@@ -389,6 +386,14 @@ final class AX25SessionManager: ObservableObject {
 
         let pathSignature = path.display
         let config = getConfigForDestination?(destination.display, pathSignature) ?? defaultConfig
+        
+        print("====== DEBUG TRACE: session(for:) ======")
+        print("adaptiveTimeout: \(config.adaptiveTimeout)")
+        print("hasGetConfig: \(getConfigForDestination != nil)")
+        print("defaultAdaptive: \(defaultConfig.adaptiveTimeout)")
+        print("session: \(destination.display)")
+        print("========================================")
+        
         let session = AX25Session(
             localAddress: localCallsign,
             remoteAddress: destination,
@@ -1410,7 +1415,7 @@ final class AX25SessionManager: ObservableObject {
 
         // REJ(nr) means "retransmit from nr" — do NOT clear send buffer (unlike RR which acks frames).
         // Get frames to retransmit
-        let retransmitFrames = session.framesToRetransmit(from: nr)
+        let retransmitFrames = session.framesToRetransmit(from: nr).map { $0.withUpdatedNR(session.vr) }
         for _ in retransmitFrames {
             session.statistics.recordRetransmit()
         }
@@ -1452,7 +1457,7 @@ final class AX25SessionManager: ObservableObject {
         var frames = processActions(actions, for: session)
 
         if session.state == .connected, session.outstandingCount > 0 {
-            let retransmitFrames = session.framesToRetransmit(from: session.va)
+            let retransmitFrames = session.framesToRetransmit(from: session.va).map { $0.withUpdatedNR(session.vr) }
             let nsValues = retransmitFrames.compactMap { f -> Int? in
                 guard let ctrl = f.controlByte else { return nil }
                 return Int((ctrl >> 1) & 0x07)  // N(S) from AX.25 control byte

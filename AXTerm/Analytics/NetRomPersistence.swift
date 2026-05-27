@@ -229,9 +229,7 @@ final class NetRomPersistence {
             // This ensures old data isn't treated as having zero observations
             try db.execute(sql: "ALTER TABLE link_stats ADD COLUMN obsCount INTEGER NOT NULL DEFAULT 1")
 
-            #if DEBUG
             print("[NETROM:PERSISTENCE] Migrated link_stats table: added obsCount column")
-            #endif
         }
     }
 
@@ -683,9 +681,7 @@ final class NetRomPersistence {
                     )
                     try updated.update(db)
 
-                    #if DEBUG
                     print("[NETROM:PERSISTENCE] Updated broadcast interval for \(normalizedOrigin): \(String(format: "%.0f", newEstimate))s (count: \(newCount))")
-                    #endif
                 } else {
                     // Just update the timestamp without changing interval estimate
                     try db.execute(
@@ -704,9 +700,7 @@ final class NetRomPersistence {
                 )
                 try record.insert(db)
 
-                #if DEBUG
                 print("[NETROM:PERSISTENCE] First broadcast recorded for \(normalizedOrigin)")
-                #endif
             }
         }
     }

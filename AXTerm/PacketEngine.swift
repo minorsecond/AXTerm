@@ -90,21 +90,18 @@ final class PacketEngine: ObservableObject {
     /// Parameter: payload byte count. Used for sender progress highlighting.
     var onUserFrameTransmitted: ((Int) -> Void)?
 
-    // MARK: - Debug Logging (Debug Builds Only)
+    // MARK: - Debug Logging
     private func debugTrace(_ message: String, _ data: [String: Any] = [:]) {
-        #if DEBUG
         if data.isEmpty {
             print("[KISS TRACE] \(message)")
         } else {
             let details = data.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
             print("[KISS TRACE] \(message) | \(details)")
         }
-        #endif
     }
 
     /// AXDP-specific debug logging for capability detection and routing.
     private func debugAXDP(_ message: String, _ data: [String: Any] = [:]) {
-        #if DEBUG
         if data.isEmpty {
             print("[AXDP TRACE][Packets] \(message)")
         } else {
@@ -114,7 +111,6 @@ final class PacketEngine: ObservableObject {
                 .joined(separator: " ")
             print("[AXDP TRACE][Packets] \(message) | \(details)")
         }
-        #endif
     }
 
     private func hexPrefix(_ data: Data, limit: Int = 32) -> String {
@@ -220,13 +216,11 @@ final class PacketEngine: ObservableObject {
         // Initialize NET/ROM persistence
         if let writer = databaseWriter {
             self.netRomPersistence = try? NetRomPersistence(database: writer)
-            #if DEBUG
             if netRomPersistence != nil {
                 print("[NETROM:ENGINE] ✅ NetRomPersistence initialized successfully")
             } else {
                 print("[NETROM:ENGINE] ❌ NetRomPersistence failed to initialize")
             }
-            #endif
         }
 
         // Initialize NET/ROM integration for passive route inference
@@ -237,9 +231,7 @@ final class PacketEngine: ObservableObject {
                 mode: .hybrid,  // Use hybrid mode for best passive inference
                 persistence: netRomPersistence  // Pass persistence for adaptive stale threshold tracking
             )
-            #if DEBUG
             print("[NETROM:ENGINE] ✅ NetRomIntegration initialized with persistence: \(netRomPersistence != nil ? "YES" : "NO")")
-            #endif
 
             // Load persisted NET/ROM state if available
             loadNetRomSnapshot()
@@ -1155,28 +1147,20 @@ final class PacketEngine: ObservableObject {
 
     /// Load NET/ROM snapshot on startup if valid.
     private func loadNetRomSnapshot() {
-        #if DEBUG
         print("[NETROM:STARTUP] ========== Loading NET/ROM Snapshot ==========")
-        #endif
 
         guard let persistence = netRomPersistence else {
-            #if DEBUG
             print("[NETROM:STARTUP] ❌ netRomPersistence is nil - persistence not initialized")
-            #endif
             return
         }
 
         guard let integration = netRomIntegration else {
-            #if DEBUG
             print("[NETROM:STARTUP] ❌ netRomIntegration is nil - integration not initialized")
-            #endif
             return
         }
 
-        #if DEBUG
         print("[NETROM:STARTUP] ✓ Persistence and Integration initialized")
         print("[NETROM:STARTUP] Local callsign: '\(settings.myCallsign)'")
-        #endif
 
         do {
             // Check snapshot metadata first
@@ -1205,18 +1189,14 @@ final class PacketEngine: ObservableObject {
             let routes = try persistence.loadRoutes()
             let linkStats = try persistence.loadLinkStats(now: now)
 
-            #if DEBUG
             print("[NETROM:STARTUP] Loaded raw data (no decay filtering):")
             print("[NETROM:STARTUP]   - Neighbors: \(neighbors.count)")
             print("[NETROM:STARTUP]   - Routes: \(routes.count)")
             print("[NETROM:STARTUP]   - Link stats: \(linkStats.count)")
-            #endif
 
             // If all tables are empty, nothing to import
             if neighbors.isEmpty && routes.isEmpty && linkStats.isEmpty {
-                #if DEBUG
                 print("[NETROM:STARTUP] No persisted data found, starting fresh")
-                #endif
                 return
             }
 
@@ -1273,9 +1253,7 @@ final class PacketEngine: ObservableObject {
                 ]
             )
         } catch {
-            #if DEBUG
             print("[NETROM:STARTUP] ❌ Error loading snapshot: \(error)")
-            #endif
             SentryManager.shared.capturePersistenceFailure("load netrom snapshot", errorDescription: error.localizedDescription)
         }
     }
@@ -1284,9 +1262,7 @@ final class PacketEngine: ObservableObject {
     private func saveNetRomSnapshot() {
         guard let persistence = netRomPersistence,
               let integration = netRomIntegration else {
-            #if DEBUG
             print("[NETROM:SAVE] ❌ Cannot save - persistence or integration is nil")
-            #endif
             return
         }
 
@@ -1328,9 +1304,7 @@ final class PacketEngine: ObservableObject {
                 #endif
             } catch {
                 await MainActor.run {
-                    #if DEBUG
                     print("[NETROM:SAVE] ❌ Error saving snapshot: \(error)")
-                    #endif
                     SentryManager.shared.capturePersistenceFailure("save netrom snapshot", errorDescription: error.localizedDescription)
                 }
             }

@@ -181,11 +181,9 @@ final class NetRomRouter {
 
     func broadcastRoutes(from origin: String, quality: Int, destinations: [RouteInfo], timestamp: Date) {
         guard let normalizedOrigin = normalize(origin) else {
-            #if DEBUG
             if !Self.hasLoggedBroadcast {
                 print("[NETROM:ROUTER] broadcastRoutes: origin '\(origin)' failed normalization")
             }
-            #endif
             return
         }
         guard let neighbor = neighbors[normalizedOrigin] else {
@@ -199,9 +197,7 @@ final class NetRomRouter {
             return
         }
 
-        #if DEBUG
         print("[NETROM:ROUTER] broadcastRoutes: processing \(destinations.count) destinations from \(normalizedOrigin)")
-        #endif
 
         for advertised in destinations {
             guard let normalizedDestination = normalize(advertised.destination) else { continue }
@@ -211,9 +207,7 @@ final class NetRomRouter {
 
             let combined = combinedQuality(broadcastQuality: advertised.quality, pathQuality: neighbor.pathQuality)
             guard combined >= config.minimumRouteQuality else {
-                #if DEBUG
                 print("[NETROM:ROUTER]   Route to \(normalizedDestination) rejected: quality \(combined) < min \(config.minimumRouteQuality)")
-                #endif
                 continue
             }
 
@@ -226,9 +220,7 @@ final class NetRomRouter {
             // Determine sourceType: use the advertised sourceType, but ensure inferred routes stay inferred
             let effectiveSourceType = advertised.sourceType.isEmpty ? "broadcast" : advertised.sourceType
 
-            #if DEBUG
             print("[NETROM:ROUTER]   ✓ Storing route: \(normalizedDestination) via \(normalizedOrigin) quality=\(combined) source=\(effectiveSourceType)")
-            #endif
 
             storeRoute(
                 destination: normalizedDestination,
@@ -357,9 +349,7 @@ final class NetRomRouter {
             routesByDestination[normalizedDest] = bucket
         }
 
-        #if DEBUG
         print("[NETROM:ROUTER] After import, routesByDestination has \(routesByDestination.count) destinations")
-        #endif
     }
 
     func purgeStaleRoutes(currentDate: Date) {

@@ -407,8 +407,15 @@ struct ConsoleLineView: View {
     var duplicateCount: Int = 0
     var allViaPaths: [[String]] = []
 
-    private let callsignSaturation: Double = 0.35
-    private let callsignBrightness: Double = 0.75
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var callsignSaturation: Double {
+        colorScheme == .dark ? 0.35 : 0.7
+    }
+    
+    private var callsignBrightness: Double {
+        colorScheme == .dark ? 0.9 : 0.4
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {

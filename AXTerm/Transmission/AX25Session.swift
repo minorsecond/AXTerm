@@ -65,6 +65,9 @@ struct AX25SessionConfig: Sendable {
     /// Initial RTO (seconds) before any RTT sample. When nil, session timers use default 4.0.
     let initialRto: Double?
 
+    /// Whether to use adaptive timeout (RTT updates and exponential backoff). When false, uses fixed initialRto.
+    let adaptiveTimeout: Bool
+
     /// Sequence number modulo (8 or 128)
     var modulo: Int { extended ? 128 : 8 }
 
@@ -76,7 +79,8 @@ struct AX25SessionConfig: Sendable {
         extended: Bool = false,
         rtoMin: Double? = nil,
         rtoMax: Double? = nil,
-        initialRto: Double? = nil
+        initialRto: Double? = nil,
+        adaptiveTimeout: Bool = true
     ) {
         // Clamp window size to valid range
         let maxWindow = extended ? 127 : 7
@@ -89,6 +93,7 @@ struct AX25SessionConfig: Sendable {
         self.rtoMin = rtoMin
         self.rtoMax = rtoMax
         self.initialRto = initialRto
+        self.adaptiveTimeout = adaptiveTimeout
     }
 }
 
@@ -181,14 +186,20 @@ struct AX25SessionTimers: Sendable {
     /// Default initial RTO (seconds)
     private static let defaultInitialRto: Double = 4.0
 
-    init(rtoMin: Double = 3.0, rtoMax: Double = 30.0, initialRto: Double = 4.0) {
+    /// Whether adaptive timeout (RTT tracking and backoff) is enabled
+    private let adaptiveTimeout: Bool
+
+    init(rtoMin: Double = 3.0, rtoMax: Double = 30.0, initialRto: Double = 4.0, adaptiveTimeout: Bool = true) {
         self.rtoMin = max(0.5, rtoMin)
         self.rtoMax = max(self.rtoMin, min(60.0, rtoMax))
         self.rto = max(self.rtoMin, min(self.rtoMax, initialRto))
+        self.adaptiveTimeout = adaptiveTimeout
     }
 
     /// Update RTT estimates with a new sample
     mutating func updateRTT(sample: Double) {
+        guard adaptiveTimeout else { return }
+
         if let s = srtt {
             // Update existing estimates (Jacobson/Karels algorithm)
             rttvar = (1 - beta) * rttvar + beta * abs(s - sample)
@@ -206,6 +217,7 @@ struct AX25SessionTimers: Sendable {
 
     /// Apply exponential backoff (double RTO)
     mutating func backoff() {
+        guard adaptiveTimeout else { return }
         rto = min(rto * 2, rtoMax)
     }
 

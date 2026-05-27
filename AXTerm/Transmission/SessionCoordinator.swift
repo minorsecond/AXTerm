@@ -187,7 +187,7 @@ final class SessionCoordinator: ObservableObject {
     /// Call after setting globalAdaptiveSettings (e.g. on launch or when user changes TX adaptive settings).
     func syncSessionManagerConfigFromAdaptive() {
         guard adaptiveTransmissionEnabled else {
-            sessionManager.defaultConfig = AX25SessionConfig()
+            sessionManager.defaultConfig = AX25SessionConfig(adaptiveTimeout: false)
             TxLog.adaptiveConfigSynced(window: 4, paclen: 128, rtoMin: 1, rtoMax: 30, maxRetries: 10, initialRto: 4.0)
             return
         }
@@ -200,7 +200,8 @@ final class SessionCoordinator: ObservableObject {
             extended: false,
             rtoMin: a.rtoMin.effectiveValue,
             rtoMax: a.rtoMax.effectiveValue,
-            initialRto: max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, 4.0))
+            initialRto: max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, 4.0)),
+            adaptiveTimeout: true
         )
         TxLog.adaptiveConfigSynced(
             window: a.windowSize.effectiveValue,
@@ -273,7 +274,8 @@ final class SessionCoordinator: ObservableObject {
             extended: false,
             rtoMin: a.rtoMin.effectiveValue,
             rtoMax: a.rtoMax.effectiveValue,
-            initialRto: max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, 4.0))
+            initialRto: max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, 4.0)),
+            adaptiveTimeout: adaptiveTransmissionEnabled
         )
     }
 
@@ -290,7 +292,7 @@ final class SessionCoordinator: ObservableObject {
         for (key, entry) in adaptiveCache where key.destination == canon && !isAdaptiveCacheEntryExpired(entry) {
             configs.append(configFromAdaptive(entry.settings))
         }
-        guard let first = configs.first else { return AX25SessionConfig() }
+        guard let first = configs.first else { return AX25SessionConfig(adaptiveTimeout: adaptiveTransmissionEnabled) }
         let windowSize = configs.map(\.windowSize).min() ?? first.windowSize
         let paclen = configs.map(\.paclen).min() ?? first.paclen
         let rtoMin = configs.compactMap(\.rtoMin).max() ?? first.rtoMin ?? 1.0
@@ -304,7 +306,8 @@ final class SessionCoordinator: ObservableObject {
             extended: false,
             rtoMin: rtoMin,
             rtoMax: rtoMax,
-            initialRto: max(rtoMin, min(rtoMax, 4.0))
+            initialRto: max(rtoMin, min(rtoMax, 4.0)),
+            adaptiveTimeout: adaptiveTransmissionEnabled
         )
     }
 
@@ -400,9 +403,15 @@ final class SessionCoordinator: ObservableObject {
         }
 
         sessionManager.getConfigForDestination = { [weak self] destination, pathSignature in
-            guard let self = self else { return AX25SessionConfig() }
-            if !self.adaptiveTransmissionEnabled { return AX25SessionConfig() }
-            if self.useDefaultConfigForDestinations.contains(where: { canonicalDestination($0) == canonicalDestination(destination) }) { return AX25SessionConfig() }
+            TxLog.debug(.session, "getConfigForDestination invoked", [
+                "dest": destination,
+                "hasSelf": "\(self != nil)",
+                "adaptiveTransmissionEnabled": "\(self?.adaptiveTransmissionEnabled ?? false)"
+            ])
+            
+            guard let self = self else { return AX25SessionConfig(adaptiveTimeout: true) }
+            if !self.adaptiveTransmissionEnabled { return AX25SessionConfig(adaptiveTimeout: false) }
+            if self.useDefaultConfigForDestinations.contains(where: { canonicalDestination($0) == canonicalDestination(destination) }) { return AX25SessionConfig(adaptiveTimeout: false) }
             // When multiple connections exist to the same destination, use a conservative merged config so we don't flip parameters between connections or change settings mid-transmission.
             if self.activeSessionCount(forDestination: destination) >= 1 {
                 return self.mergedConfigForDestination(destination)

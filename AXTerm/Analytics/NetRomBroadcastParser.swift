@@ -72,17 +72,13 @@ struct NetRomBroadcastParser {
         // Get the info field data
         let data = packet.info
         guard data.count >= minimumSize else {
-            #if DEBUG
             print("[NETROM:PARSER] Packet too small: \(data.count) bytes, need at least \(minimumSize)")
-            #endif
             return nil
         }
 
         // Verify signature byte
         guard data[0] == signatureByte else {
-            #if DEBUG
             print("[NETROM:PARSER] Invalid signature byte: 0x\(String(format: "%02X", data[0])), expected 0xFF")
-            #endif
             return nil
         }
 
@@ -117,9 +113,7 @@ struct NetRomBroadcastParser {
         }
 
         guard !entries.isEmpty else {
-            #if DEBUG
             print("[NETROM:PARSER] No valid entries parsed from broadcast")
-            #endif
             return nil
         }
 
@@ -321,9 +315,7 @@ struct NetRomBroadcastParser {
         // Bytes 6-12: Destination callsign (shifted AX.25)
         let destCallsignBytes = [UInt8](entryData[6..<13])
         guard let destCallsign = decodeShiftedCallsign(destCallsignBytes) else {
-            #if DEBUG
             print("[NETROM:PARSER] Failed to decode dest callsign in alias-first entry at offset \(offset)")
-            #endif
             return nil
         }
 
@@ -335,11 +327,9 @@ struct NetRomBroadcastParser {
         // Byte 19: Quality
         let quality = Int(entryData[19])
 
-        #if DEBUG
         if !neighborAlias.isEmpty {
             print("[NETROM:PARSER] Entry for \(destCallsign): neighbor alias '\(neighborAlias)', using origin '\(originCallsign)' as next hop")
         }
-        #endif
 
         return NetRomBroadcastEntry(
             destinationCallsign: destCallsign,

@@ -480,12 +480,11 @@ final class TxLog {
         let timestamp = dateFormatter.string(from: Date())
         let dataStr = formatData(data)
 
-        // Console output (DEBUG only, visually formatted)
+        // Console output (visually formatted)
+        let line = "\(timestamp) \(direction.color) \(direction.rawValue) \(category.emoji) [\(category.rawValue)] \(message)\(dataStr)"
+        print(line)
+
         #if DEBUG
-        if verboseConsole {
-            let line = "\(timestamp) \(direction.color) \(direction.rawValue) \(category.emoji) [\(category.rawValue)] \(message)\(dataStr)"
-            print(line)
-        }
         if captureWireEvents {
             WireLogStore.shared.append(
                 direction: direction,
@@ -526,10 +525,8 @@ final class TxLog {
         let errorStr = error.map { " | Error: \($0.localizedDescription)" } ?? ""
 
         // Console output
-        #if DEBUG
         let line = "❌ \(timestamp) [\(category.rawValue)] \(message)\(dataStr)\(errorStr)"
         print(line)
-        #endif
 
         // OSLog
         let osLogMessage = "[ERROR] [\(category.rawValue)] \(message)\(dataStr)\(errorStr)"
@@ -560,10 +557,8 @@ final class TxLog {
         let hex = data.prefix(bytesToShow).map { String(format: "%02X", $0) }.joined(separator: " ")
         let suffix = truncated ? "… (+\(data.count - maxBytes) more)" : ""
 
-        #if DEBUG
         print("   \(category.emoji) [\(category.rawValue)] \(label) (\(data.count) bytes):")
         print("      \(hex)\(suffix)")
-        #endif
 
         logger.debug("[\(category.rawValue)] \(label): \(hex)\(suffix)")
     }

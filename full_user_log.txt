@@ -1,0 +1,49 @@
+<USER_REQUEST>
+Sentry startIfEnabled: enabledByUser=true, dsnPresent=true, shouldStart=true, env=development
+Sentry DSN prefix: https://87147bb8450f…
+<truncated 45216 bytes>
+      88 A4 98 9C 9E 88 E0 96 60 8A A0 92 40 6F 00 F0 48 65 6C 70 0D
+[AX25] AX.25 frame: 88 A4 98 9C 9E 88 E0 96 60 8A A0 92 40 6F 00 F0 48 65 6C 70 0D
+15:34:34.910 🔵 TX 🔌 [KISS] Send frame | frameId=6D2A3E66 size=24
+[TX] [KISS] Send frame | frameId=6D2A3E66 size=24
+   🔌 [KISS] KISS frame (24 bytes):
+      C0 00 88 A4 98 9C 9E 88 E0 96 60 8A A0 92 40 6F 00 F0 48 65 6C 70 0D C0
+[KISS] KISS frame: C0 00 88 A4 98 9C 9E 88 E0 96 60 8A A0 92 40 6F 00 F0 48 65 6C 70 0D C0
+[TerminalSearch] query="" all=2615 visible=1000 filtered=4
+    category = "tx.axdp";
+    data =     {
+        capabilityStatus = unknown;
+        destination = DRLNOD;
+        useAXDP = 1;
+    };
+    level = debug;
+    message = "\U2500\U2500: AXDP send decision";
+    timestamp = "2026-05-27T21:34:34.944Z";
+}>
+    category = "tx.axdp";
+    data =     {
+        destination = DRLNOD;
+        status = unknown;
+    };
+    level = warning;
+    message = "\U2500\U2500: Cannot send AXDP message - capability not confirmed";
+    timestamp = "2026-05-27T21:34:34.944Z";
+}>
+    category = "tx.axdp";
+    data =     {
+        destination = DRLNOD;
+        hasMagic = 0;
+        payloadLen = 5;
+    };
+    level = debug;
+    message = "\U2500\U2500: AXDP fallback to plain text";
+    timestamp = "2026-05-27T21:34:34.944Z";
+}>
+    category = "tx.session";
+    data =     {
+        rto = "11.4s";
+        session = 2425C108;
+        state 
+<truncated 117132 bytes>
+
+NOTE: The output was truncated because it was too long. Use a more targeted query or a smaller range to get the information you need.

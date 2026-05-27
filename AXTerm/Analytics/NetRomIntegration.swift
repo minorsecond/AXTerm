@@ -184,26 +184,18 @@ final class NetRomIntegration {
         let normalizedOrigin = CallsignValidator.normalize(result.originCallsign)
         guard !normalizedOrigin.isEmpty else { return }
 
-        #if DEBUG
         print("[NETROM:INTEGRATION] Processing NET/ROM broadcast from \(normalizedOrigin) with \(result.entries.count) entries")
-        #endif
 
         // Record broadcast for adaptive stale threshold calculation
         if let persistence = persistence {
             do {
                 try persistence.recordBroadcast(from: normalizedOrigin, timestamp: result.timestamp)
-                #if DEBUG
                 print("[NETROM:INTEGRATION] ✅ Recorded broadcast from \(normalizedOrigin)")
-                #endif
             } catch {
-                #if DEBUG
                 print("[NETROM:INTEGRATION] ❌ Failed to record broadcast: \(error)")
-                #endif
             }
         } else {
-            #if DEBUG
             print("[NETROM:INTEGRATION] ⚠️ Cannot record broadcast - persistence is nil")
-            #endif
         }
 
         // First, ensure the broadcast sender is registered as a neighbor
@@ -260,11 +252,9 @@ final class NetRomIntegration {
 
     func currentNeighbors() -> [NeighborInfo] {
         let result = router.currentNeighbors()
-        #if DEBUG
         if !hasLoggedFirstQuery {
             print("[NETROM:INTEGRATION] currentNeighbors() returning \(result.count) neighbors")
         }
-        #endif
         return result
     }
 
@@ -356,9 +346,7 @@ final class NetRomIntegration {
     }
 
     func importLinkStats(_ records: [LinkStatRecord]) {
-        #if DEBUG
         print("[NETROM:INTEGRATION] importLinkStats called with \(records.count) records")
-        #endif
         linkEstimator.importLinkStats(records)
         #if DEBUG
         let exported = linkEstimator.exportLinkStats()
@@ -367,9 +355,7 @@ final class NetRomIntegration {
     }
 
     func importNeighbors(_ neighbors: [NeighborInfo]) {
-        #if DEBUG
         print("[NETROM:INTEGRATION] importNeighbors called with \(neighbors.count) neighbors")
-        #endif
         router.importNeighbors(neighbors)
         #if DEBUG
         let current = router.currentNeighbors()
@@ -378,9 +364,7 @@ final class NetRomIntegration {
     }
 
     func importRoutes(_ routes: [RouteInfo]) {
-        #if DEBUG
         print("[NETROM:INTEGRATION] importRoutes called with \(routes.count) routes")
-        #endif
         router.importRoutes(routes)
         #if DEBUG
         let current = router.currentRoutes()
@@ -410,9 +394,7 @@ final class NetRomIntegration {
     /// Get all tracked origin intervals.
     func getAllOriginIntervals() -> [OriginIntervalInfo] {
         guard let persistence = persistence else {
-            #if DEBUG
             print("[NETROM:INTEGRATION] ⚠️ getAllOriginIntervals() - persistence is nil!")
-            #endif
             return []
         }
         return (try? persistence.getAllOriginIntervals()) ?? []
@@ -451,9 +433,7 @@ final class NetRomIntegration {
             )
         }
 
-        #if DEBUG
         print("[NETROM:INTEGRATION] Reset complete - cleared all neighbors, routes, and link stats")
-        #endif
     }
 
     // MARK: - Private Helpers

@@ -44,14 +44,17 @@ struct ContentView: View {
         _inspectionRouter = ObservedObject(wrappedValue: inspectionRouter)
         // Initialize analytics view model with settings store for persistence
         _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(settingsStore: settings))
-        // Get or create the shared session coordinator so Settings can update the same instance
-        let coordinator: SessionCoordinator
-        if let existing = SessionCoordinator.shared {
-            coordinator = existing
-        } else {
-            coordinator = SessionCoordinator()
-        }
-        coordinator.localCallsign = settings.myCallsign
+        
+        // Use a lazy closure for StateObject so it safely acquires the shared instance
+        // or creates a new one exactly once per view lifecycle, avoiding the SwiftUI init discarding bug.
+        _sessionCoordinator = StateObject(wrappedValue: {
+            if let existing = SessionCoordinator.shared { return existing }
+            return SessionCoordinator()
+        }())
+    }
+
+    private func syncCoordinatorSettings() {
+        sessionCoordinator.localCallsign = settings.myCallsign
         // Seed AXDP / transmission adaptive settings from persisted settings
         var adaptive = TxAdaptiveSettings()
         adaptive.axdpExtensionsEnabled = settings.axdpExtensionsEnabled
@@ -62,16 +65,15 @@ struct ContentView: View {
         }
         adaptive.maxDecompressedPayload = UInt32(settings.axdpMaxDecompressedPayload)
         adaptive.showAXDPDecodeDetails = settings.axdpShowDecodeDetails
-        coordinator.globalAdaptiveSettings = adaptive
-        coordinator.adaptiveTransmissionEnabled = settings.adaptiveTransmissionEnabled
-        coordinator.syncSessionManagerConfigFromAdaptive()
+        sessionCoordinator.globalAdaptiveSettings = adaptive
+        sessionCoordinator.adaptiveTransmissionEnabled = settings.adaptiveTransmissionEnabled
+        sessionCoordinator.syncSessionManagerConfigFromAdaptive()
         if settings.adaptiveTransmissionEnabled {
             TxLog.adaptiveEnabled()
         } else {
             TxLog.adaptiveDisabled()
         }
-        coordinator.subscribeToPackets(from: client)
-        _sessionCoordinator = StateObject(wrappedValue: coordinator)
+        sessionCoordinator.subscribeToPackets(from: client)
     }
 
     var body: some View {
@@ -85,6 +87,12 @@ struct ContentView: View {
         .searchFocused($isSearchFocused)
         .toolbar {
             toolbarContent
+        }
+        .onAppear {
+            syncCoordinatorSettings()
+        }
+        .onChange(of: settings.adaptiveTransmissionEnabled) { _ in
+            syncCoordinatorSettings()
         }
         .overlay(alignment: .topLeading) {
             if TestModeConfiguration.shared.isTestMode {
