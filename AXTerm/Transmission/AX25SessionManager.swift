@@ -53,8 +53,16 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// Key is N(S) sequence number
     var sendBuffer: [Int: OutboundFrame] = [:]
 
-    /// Send timestamp per N(S) for RTT estimation when RR acks frames
-    private var sendTimeByNs: [Int: Date] = [:]
+    /// Send timestamp per N(S) for RTT estimation when RR acks frames.
+    /// Stored as monotonic TimeInterval from the injected clock so tests can
+    /// use a virtual clock and get deterministic RTT measurements.
+    private var sendTimeByNs: [Int: TimeInterval] = [:]
+
+    /// N(S) values that have been retransmitted at least once.
+    /// Karn's algorithm: RTT samples from retransmitted frames are excluded
+    /// because the ACK could belong to either the original or the retransmit,
+    /// making the sample ambiguous and potentially inflating SRTT/RTO.
+    private var retransmittedNS: Set<Int> = []
 
     /// Pending data queue: data waiting to be sent once connected
     /// Each entry is (data, pid, displayInfo)
@@ -76,8 +84,9 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// timeout triggers a fresh immediate retransmit.
     var lastREJRetransmitNR: Int? = nil
 
-    /// Timestamp when SABM was sent (for RTT calculation)
-    var sabmSentAt: Date?
+    /// Monotonic time when SABM was sent, from the injected clock (for RTT calculation).
+    /// Using TimeInterval keeps this compatible with the virtual clock in tests.
+    var sabmSentAt: TimeInterval?
 
     /// Timestamp when session was established
     var connectedAt: Date?
@@ -161,9 +170,20 @@ nonisolated final class AX25Session: @unchecked Sendable {
         sendBuffer[ns] = frame
     }
 
-    /// Record send time for N(S) so we can measure RTT when RR acks it
-    func recordSendTime(ns: Int, time: Date) {
+    /// Record send time for N(S) using the injected clock's monotonic time.
+    /// Using `TimeInterval` (not `Date`) ensures tests with a virtual clock get
+    /// deterministic RTT measurements instead of wall-clock noise.
+    func recordSendTime(ns: Int, time: TimeInterval) {
         sendTimeByNs[ns] = time
+        // Sending a frame fresh: it is no longer tainted by retransmit
+        retransmittedNS.remove(ns)
+    }
+
+    /// Mark a frame N(S) as retransmitted (Karn's algorithm).
+    /// Once marked, its send time will NOT be used for RTT estimation because
+    /// the ACK could correspond to either the original or the retransmitted copy.
+    func markRetransmitted(ns: Int) {
+        retransmittedNS.insert(ns)
     }
 
     /// Clear send times for sequence numbers acked by RR(nr) (nr = next expected)
@@ -173,15 +193,34 @@ nonisolated final class AX25Session: @unchecked Sendable {
             let diff = (nr - ns + modulo) % modulo
             return diff > modulo / 2 || diff == 0
         }
+        // Clean up Karn set for acked range
+        retransmittedNS = retransmittedNS.filter { ns in
+            let diff = (nr - ns + modulo) % modulo
+            return diff > modulo / 2 || diff == 0
+        }
     }
 
     /// Clear all send times (used when aborting or disconnecting)
     func clearSendTimes() {
         sendTimeByNs.removeAll()
+        retransmittedNS.removeAll()
     }
 
-    /// Get send time for the last frame acked by RR(nr), if any, for RTT sample
-    func sendTimeForAckedBy(nr: Int) -> Date? {
+    /// Get send time for the last frame acked by RR(nr), for RTT sampling.
+    /// Returns `nil` if the frame was retransmitted (Karn's algorithm: ambiguous
+    /// ACK would produce an inflated and potentially incorrect RTT sample).
+    func rttSendTime(ackedBy nr: Int) -> TimeInterval? {
+        let modulo = stateMachine.config.modulo
+        let ackedNs = (nr - 1 + modulo) % modulo
+        guard !retransmittedNS.contains(ackedNs) else {
+            return nil  // Karn: skip retransmitted frame
+        }
+        return sendTimeByNs[ackedNs]
+    }
+
+    /// Legacy: returns send time regardless of Karn status (used only for
+    /// compatibility during SABM RTT measurement where retransmit status is irrelevant).
+    func sendTimeForAckedBy(nr: Int) -> TimeInterval? {
         let modulo = stateMachine.config.modulo
         let ackedNs = (nr - 1 + modulo) % modulo
         return sendTimeByNs[ackedNs]
@@ -673,7 +712,7 @@ final class AX25SessionManager: ObservableObject {
             onSessionStateChanged?(session, oldState, session.state)
         }
 
-        session.sabmSentAt = Date()
+        session.sabmSentAt = clock.currentTime
         session.touch()
 
         debugTrace("sending SABM", [
@@ -807,7 +846,7 @@ final class AX25SessionManager: ObservableObject {
                 print("[DEBUG:AX25:SEND] immediate tx chunk \(i) | N(S)=\(ns) payload=\(chunk.count)")
 
                 session.bufferFrame(iFrame, ns: ns)  // ns, not vs-1 (avoids -1 when vs wraps 7->0)
-                session.recordSendTime(ns: ns, time: Date())
+                session.recordSendTime(ns: ns, time: clock.currentTime)
                 session.statistics.recordSent(bytes: chunk.count)
                 session.touch()
 
@@ -1022,7 +1061,7 @@ final class AX25SessionManager: ObservableObject {
         if session.state == .disconnected || session.state == .error {
             var allowLateUA = false
             if let sabmSent = session.sabmSentAt {
-                let elapsed = Date().timeIntervalSince(sabmSent)
+                let elapsed = clock.currentTime - sabmSent
                 if elapsed <= max(session.timers.rto * 2.0, 5.0) {
                     allowLateUA = true
                     TxLog.debug(.session, "Treating late UA as connect completion", [
@@ -1046,9 +1085,9 @@ final class AX25SessionManager: ObservableObject {
 
         let oldState = session.state
 
-        // Calculate RTT if we were connecting
+        // Calculate RTT if we were connecting (Bug F fix: use clock.currentTime not Date())
         if session.state == .connecting, let sabmSent = session.sabmSentAt {
-            let rtt = Date().timeIntervalSince(sabmSent)
+            let rtt = clock.currentTime - sabmSent
             session.timers.updateRTT(sample: rtt)
             TxLog.rttUpdate(
                 peer: source.display,
@@ -1365,9 +1404,14 @@ final class AX25SessionManager: ObservableObject {
             return nil
         }
 
-        // Measure RTT from last acked frame so T1 (RTO) adapts during transfer
-        if let sentAt = session.sendTimeForAckedBy(nr: nr) {
-            let rtt = Date().timeIntervalSince(sentAt)
+        // Measure RTT from last acked frame so T1 (RTO) adapts during transfer.
+        // Bug E fix (Karn's algorithm): rttSendTime(ackedBy:) returns nil for
+        // any frame that was retransmitted, because the ACK is ambiguous — it
+        // might correspond to the original or the retransmit. Using the original
+        // send time would overstate RTT by including the retransmit wait.
+        // Bug F fix: use clock.currentTime instead of Date() for determinism.
+        if let sentAt = session.rttSendTime(ackedBy: nr) {
+            let rtt = clock.currentTime - sentAt
             session.timers.updateRTT(sample: rtt)
             TxLog.rttUpdate(
                 peer: source.display,
@@ -1537,7 +1581,14 @@ final class AX25SessionManager: ObservableObject {
         let retransmitFrames: [OutboundFrame]
         if shouldRetransmit {
             retransmitFrames = session.framesToRetransmit(from: nr)
-            for _ in retransmitFrames { session.statistics.recordRetransmit() }
+            for frame in retransmitFrames {
+                session.statistics.recordRetransmit()
+                // Karn's algorithm: mark REJ-retransmitted frames so the ACK
+                // that follows doesn't generate an ambiguous RTT sample.
+                if let ctrl = frame.controlByte {
+                    session.markRetransmitted(ns: Int((ctrl >> 1) & 0x07))
+                }
+            }
             session.lastREJRetransmitNR = nr
         } else {
             retransmitFrames = []
@@ -1609,6 +1660,13 @@ final class AX25SessionManager: ObservableObject {
                 debugTrace("TX I (retransmit)", ["frame": describeFrame(updatedFrame)])
                 session.statistics.recordRetransmit()
                 frames.append(updatedFrame)
+                // Bug E fix (Karn's algorithm): mark this N(S) as retransmitted so
+                // the subsequent ACK does NOT generate an RTT sample. The ACK is
+                // ambiguous — it could be for the original or the retransmit.
+                if let ctrl = updatedFrame.controlByte {
+                    let ns = Int((ctrl >> 1) & 0x07)
+                    session.markRetransmitted(ns: ns)
+                }
             }
         }
 
@@ -1749,7 +1807,7 @@ final class AX25SessionManager: ObservableObject {
             print("[DEBUG:AX25:DRAIN] tx | N(S)=\(ns) payload=\(item.data.count) va=\(session.va) vs=\(session.vs)")
             // Use ns directly - (vs-1) wraps to -1 when vs goes 7->0, corrupting sendBuffer
             session.bufferFrame(iFrame, ns: ns)
-            session.recordSendTime(ns: ns, time: Date())
+            session.recordSendTime(ns: ns, time: clock.currentTime)
             session.statistics.recordSent(bytes: item.data.count)
 
             if wasIdle {

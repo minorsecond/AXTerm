@@ -207,8 +207,19 @@ nonisolated struct AX25SessionTimers: Sendable {
         self.rto = max(self.rtoMin, min(self.rtoMax, initialRto))
     }
 
-    /// Update RTT estimates with a new sample
+    /// Update RTT estimates with a new sample (Jacobson/Karels, RFC 6298).
+    ///
+    /// Bug H guard: malformed RTT samples (NaN, Inf, ≤0) are silently discarded
+    /// rather than poisoning the estimator. A single bad sample could set SRTT to
+    /// NaN which then contaminates every subsequent estimate.
     mutating func updateRTT(sample: Double) {
+        // Discard physically impossible samples before they corrupt state.
+        guard sample > 0, sample.isFinite else {
+            TxLog.debug(.session, "RTT sample discarded (invalid)", [
+                "sample": String(describing: sample)
+            ])
+            return
+        }
         if let s = srtt {
             // Update existing estimates (Jacobson/Karels algorithm)
             rttvar = (1 - beta) * rttvar + beta * abs(s - sample)

@@ -281,9 +281,14 @@ final class AX25TimerRaceTests: XCTestCase {
         XCTAssertEqual(session.outstandingCount, 1, "Only FrameB outstanding")
         XCTAssertEqual(session.stateMachine.retryCount, 0, "retryCount resets on V(A) advance")
 
-        // Advance past RTO again — only FrameB should be retransmitted
+        // Advance past the current (backed-off) RTO + grace period for the second T1 timeout.
+        // After the first T1 timeout, backoff() doubles RTO: 2.0 → 4.0.
+        // Karn's algorithm: no RTT update for retransmitted frames → RTO stays at 4.0.
+        // Use session.timers.rto (not the original 2.0) so the advance is correct regardless
+        // of how many backoffs have accumulated.
+        let rtoAfterBackoff = session.timers.rto
         let iCountBeforeSecondTimeout = retransmitFrames.filter { $0.frameType == "i" }.count
-        clock.advance(by: 2.21)
+        clock.advance(by: rtoAfterBackoff + 0.21)
 
         let newIFrames = retransmitFrames.filter { $0.frameType == "i" }.dropFirst(iCountBeforeSecondTimeout)
         XCTAssertEqual(newIFrames.count, 1, "Only one I-frame (FrameB) should be retransmitted")

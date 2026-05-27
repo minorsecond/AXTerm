@@ -25,11 +25,22 @@ public protocol AX25TimerScheduler: Sendable {
     ///   - action: The action to execute when the timer fires
     /// - Returns: A cancellable task token
     func schedule(delay: TimeInterval, action: @escaping @MainActor @Sendable () -> Void) -> AnyCancellableTask
+
+    /// Monotonic current time in seconds.
+    /// Used for RTT measurement so tests can substitute a deterministic virtual clock
+    /// instead of wall-clock `Date()`. Real implementations return seconds since an
+    /// arbitrary fixed epoch (e.g. `Date().timeIntervalSinceReferenceDate`).
+    var currentTime: TimeInterval { get }
 }
 
 /// A default clock that uses real wall-clock time via Swift Concurrency `Task.sleep`
 public struct AX25SystemTimerScheduler: AX25TimerScheduler {
     public init() {}
+
+    public var currentTime: TimeInterval {
+        // Use TimeInterval since reference date for a stable monotonic-ish wall clock.
+        Date().timeIntervalSinceReferenceDate
+    }
     
     public func schedule(delay: TimeInterval, action: @escaping @MainActor @Sendable () -> Void) -> AnyCancellableTask {
         let task = Task {
