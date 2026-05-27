@@ -1788,11 +1788,25 @@ final class AX25SessionManager: ObservableObject {
             "queueDepth": session.pendingDataQueue.count
         ])
 
+        // Bug I fix: the old loop checked canSendIFrame (which reads sequenceState.outstandingCount)
+        // against the *initial* V(S)/V(A) for every iteration.  buildIFrame only increments V(S)
+        // in the second (execution) loop, so the window check was stale for every item after the
+        // first.  A partial RR ack that frees 1 slot would therefore drain all pending frames,
+        // driving outstandingCount far past windowSize and firing assertInvariants.
+        //
+        // Fix: compute the available window space ONCE from the current sequence state and limit
+        // the drain to at most that many frames.
+        let windowSize = session.stateMachine.config.windowSize
+        let currentOutstanding = session.stateMachine.sequenceState.outstandingCount
+        let availableSlots = max(0, windowSize - currentOutstanding)
+
         var drained: [(data: Data, pid: UInt8, displayInfo: String?)] = []
         var remaining: [(data: Data, pid: UInt8, displayInfo: String?)] = []
+        var slotsConsumed = 0
         for item in session.pendingDataQueue {
-            if session.canSendIFrame {
+            if slotsConsumed < availableSlots {
                 drained.append(item)
+                slotsConsumed += 1
             } else {
                 remaining.append(item)
             }
