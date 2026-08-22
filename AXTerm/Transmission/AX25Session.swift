@@ -994,10 +994,16 @@ nonisolated struct AX25StateMachine: Sendable {
         // Calculate distance from V(R) in forward direction
         let distance = (ns - vr + modulo) % modulo
 
-        // Frame is within window if distance is less than window size
-        // Distance of 0 means it's the expected frame (handled separately)
-        // Distance > 0 but < windowSize means it's ahead but within window
-        return distance > 0 && distance <= config.windowSize
+        // Distance 0 is the expected frame (handled separately). A genuinely new
+        // frame can be at most k−1 ahead of V(R): the sender's window spans
+        // V(A)..V(A)+k−1 and V(A) never exceeds V(R), so distance == k is only
+        // reachable by a stale duplicate from the previous sequence lap. The old
+        // `<= windowSize` bound buffered such a duplicate as a "future" frame and
+        // delivered its lap-old payload when V(R) wrapped around to it, while the
+        // real frame carrying that N(S) was then discarded as a duplicate (caught
+        // by AX25FieldFuzzTests under retransmit churn). `< windowSize` restores
+        // the selective-repeat bound: receive span (k−1) + send window (k) ≤ M−1.
+        return distance > 0 && distance < config.windowSize
     }
 
     /// Calculate distance from V(R) for buffer management
