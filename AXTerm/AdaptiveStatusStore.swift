@@ -62,6 +62,53 @@ nonisolated struct AdaptiveParams: Sendable, Equatable {
     let updatedAt: Date
     let destination: String?
     let pathSignature: String?
+
+    // Learning state — what the controller decides on and what it has done,
+    // so the UI can show its work rather than bare verdicts.
+    /// EWMA loss the controller's thresholds actually compare against.
+    let smoothedLoss: Double?
+    /// EWMA ETX ditto.
+    let smoothedEtx: Double?
+    /// Clean frames toward the next upgrade probe.
+    let successStreak: Int
+    /// Clean frames REQUIRED for the next probe (rises after failed probes).
+    let upgradeStreakRequirement: Int
+    /// Frames left in the current upgrade's probation trial; nil = no trial.
+    let probationFramesRemaining: Int?
+    /// Counters: samples, evidence, upgrades attempted/confirmed/rolled back.
+    let metrics: AdaptiveLearningMetrics
+
+    /// Derive the display record from the controller plus the raw sample that
+    /// triggered the update.
+    init(
+        settings: TxAdaptiveSettings,
+        lossRate: Double?,
+        etx: Double?,
+        srtt: Double?,
+        updatedAt: Date,
+        destination: String?,
+        pathSignature: String?
+    ) {
+        self.k = settings.windowSize.effectiveValue
+        self.p = settings.paclen.effectiveValue
+        self.n2 = settings.maxRetries.effectiveValue
+        self.rtoMin = settings.rtoMin.effectiveValue
+        self.rtoMax = settings.rtoMax.effectiveValue
+        self.currentRto = settings.currentRto
+        self.lossRate = lossRate
+        self.etx = etx
+        self.srtt = srtt
+        self.qualityLabel = settings.windowSize.displayReason ?? settings.paclen.displayReason ?? "Adaptive"
+        self.updatedAt = updatedAt
+        self.destination = destination
+        self.pathSignature = pathSignature
+        self.smoothedLoss = settings.lossRateEWMA
+        self.smoothedEtx = settings.etxEWMA
+        self.successStreak = settings.successStreak
+        self.upgradeStreakRequirement = settings.upgradeStreakRequirement
+        self.probationFramesRemaining = settings.probation?.framesRemaining
+        self.metrics = settings.metrics
+    }
 }
 
 final class AdaptiveStatusStore: ObservableObject {
@@ -109,19 +156,10 @@ final class AdaptiveStatusStore: ObservableObject {
             return
         }
         globalAdaptive = AdaptiveParams(
-            k: settings.windowSize.effectiveValue,
-            p: settings.paclen.effectiveValue,
-            n2: settings.maxRetries.effectiveValue,
-            rtoMin: settings.rtoMin.effectiveValue,
-            rtoMax: settings.rtoMax.effectiveValue,
-            currentRto: settings.currentRto,
-            lossRate: lossRate,
-            etx: etx,
-            srtt: srtt,
-            qualityLabel: settings.windowSize.displayReason ?? settings.paclen.displayReason ?? "Adaptive",
+            settings: settings,
+            lossRate: lossRate, etx: etx, srtt: srtt,
             updatedAt: updatedAt,
-            destination: nil,
-            pathSignature: nil
+            destination: nil, pathSignature: nil
         )
         if let etx {
             appendSample(
@@ -140,19 +178,10 @@ final class AdaptiveStatusStore: ObservableObject {
             return
         }
         globalAdaptive = AdaptiveParams(
-            k: settings.windowSize.effectiveValue,
-            p: settings.paclen.effectiveValue,
-            n2: settings.maxRetries.effectiveValue,
-            rtoMin: settings.rtoMin.effectiveValue,
-            rtoMax: settings.rtoMax.effectiveValue,
-            currentRto: settings.currentRto,
-            lossRate: globalAdaptive?.lossRate,
-            etx: globalAdaptive?.etx,
-            srtt: globalAdaptive?.srtt,
-            qualityLabel: settings.windowSize.displayReason ?? settings.paclen.displayReason ?? "Adaptive",
+            settings: settings,
+            lossRate: globalAdaptive?.lossRate, etx: globalAdaptive?.etx, srtt: globalAdaptive?.srtt,
             updatedAt: updatedAt,
-            destination: nil,
-            pathSignature: nil
+            destination: nil, pathSignature: nil
         )
     }
 
@@ -182,19 +211,10 @@ final class AdaptiveStatusStore: ObservableObject {
             return
         }
         sessionAdaptiveByID[id] = AdaptiveParams(
-            k: settings.windowSize.effectiveValue,
-            p: settings.paclen.effectiveValue,
-            n2: settings.maxRetries.effectiveValue,
-            rtoMin: settings.rtoMin.effectiveValue,
-            rtoMax: settings.rtoMax.effectiveValue,
-            currentRto: settings.currentRto,
-            lossRate: lossRate,
-            etx: etx,
-            srtt: srtt,
-            qualityLabel: settings.windowSize.displayReason ?? settings.paclen.displayReason ?? "Adaptive",
+            settings: settings,
+            lossRate: lossRate, etx: etx, srtt: srtt,
             updatedAt: updatedAt,
-            destination: destination,
-            pathSignature: pathSignature
+            destination: destination, pathSignature: pathSignature
         )
 
         if let etx {

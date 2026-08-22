@@ -431,6 +431,18 @@ final class AdaptiveSettingsTests: XCTestCase {
                     XCTAssertGreaterThanOrEqual(rto, settings.rtoMin.effectiveValue, ctx)
                     XCTAssertLessThanOrEqual(rto, settings.rtoMax.effectiveValue, ctx)
                 }
+                XCTAssertTrue([10, 20, 40].contains(settings.upgradeStreakRequirement),
+                              "\(ctx): skepticism \(settings.upgradeStreakRequirement) off the ladder")
+                if let trial = settings.probation {
+                    XCTAssertTrue((1...10).contains(trial.framesRemaining),
+                                  "\(ctx): trial frames \(trial.framesRemaining) out of range")
+                    XCTAssertGreaterThanOrEqual(trial.priorWindow, 1, ctx)
+                    XCTAssertTrue([64, 128, 192, 256].contains(trial.priorPaclen), ctx)
+                }
+                XCTAssertGreaterThanOrEqual(settings.metrics.upgradesAttempted,
+                                            settings.metrics.upgradesConfirmed + settings.metrics.probeRollbacks
+                                            - (settings.probation == nil ? 0 : 1),
+                                            "\(ctx): every confirmation/rollback traces to an attempt")
             }
         }
     }

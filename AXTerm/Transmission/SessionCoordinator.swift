@@ -362,7 +362,19 @@ final class SessionCoordinator: ObservableObject {
             let normalizedKey = RouteAdaptiveKey(destination: canonicalDestination(key.destination), pathSignature: key.pathSignature)
             var entry = adaptiveCache[normalizedKey]?.settings ?? TxAdaptiveSettings()
             let before = AdaptiveSnapshot(from: entry)
+            let rollbacksBefore = entry.metrics.probeRollbacks
             entry.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits)
+            if entry.metrics.probeRollbacks > rollbacksBefore {
+                // A probe made the link worse and was rolled back — warning
+                // level so the crumb survives flood control and shows up
+                // attached to any later Sentry event for this session.
+                TxLog.warning(.adaptive, "Adaptive upgrade rolled back", [
+                    "destination": normalizedKey.destination,
+                    "path": normalizedKey.pathSignature.isEmpty ? "direct" : normalizedKey.pathSignature,
+                    "nextUpgradeNeeds": entry.upgradeStreakRequirement,
+                    "rollbacksTotal": entry.metrics.probeRollbacks
+                ])
+            }
             adaptiveCache[normalizedKey] = CachedAdaptiveEntry(settings: entry, lastUpdated: Date())
             adaptiveStatusStore.updateSession(
                 id: adaptiveSessionID(destination: normalizedKey.destination, path: normalizedKey.pathSignature),
