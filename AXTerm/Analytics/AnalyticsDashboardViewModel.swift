@@ -1972,7 +1972,12 @@ private enum AnalyticsInputHasher {
     }
 }
 
-private final class TelemetryRateLimiter {
+/// nonisolated: with SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor this class would
+/// otherwise get an implicitly isolated deinit, and releasing it synchronously
+/// from a @MainActor context aborts in the runtime's task-local teardown
+/// (swift_task_deinitOnExecutorImpl → StopLookupScope, malloc double-free).
+/// State is only touched from the owning main-actor view model.
+nonisolated private final class TelemetryRateLimiter {
     private let minimumInterval: TimeInterval
     private var lastFire: Date?
 

@@ -44,7 +44,7 @@ final class TemporaryShowAllOverrideTests: XCTestCase {
         )
     }
 
-    func testTemporaryShowAllDoesNotMutatePersistedIgnoreList() async {
+    func testTemporaryShowAllDoesNotMutatePersistedIgnoreList() {
         let settings = AppSettingsStore(defaults: defaults)
         settings.addIgnoredServiceEndpoint("K9SVC")
         XCTAssertFalse(CallsignValidator.isValidRoutingNode("K9SVC"),
@@ -59,17 +59,16 @@ final class TemporaryShowAllOverrideTests: XCTestCase {
         // …but the persisted list is untouched.
         XCTAssertTrue(settings.ignoredServiceEndpoints.contains("K9SVC"),
                       "Preview must never mutate the persisted ignore list")
-        await Task.yield()
-        _ = viewModel
     }
 
-    func testIgnoreListSurvivesRestartWhilePreviewActive() async {
+    func testIgnoreListSurvivesRestartWhilePreviewActive() {
         let settings = AppSettingsStore(defaults: defaults)
         settings.addIgnoredServiceEndpoint("K9SVC")
 
         let viewModel = makeViewModel(settings: settings)
         viewModel.setTemporarilyShowingIgnoredEndpoints(true)
         // Deliberately no exit: the app "crashes" here.
+        _ = viewModel
 
         // App restart: a fresh settings store over the same persisted defaults.
         let restarted = AppSettingsStore(defaults: defaults)
@@ -78,11 +77,9 @@ final class TemporaryShowAllOverrideTests: XCTestCase {
         // The restarted app filters again — the override was session state only.
         XCTAssertFalse(CallsignValidator.isValidRoutingNode("K9SVC"),
                        "After restart the ignore list is enforced again")
-        await Task.yield()
-        _ = viewModel
     }
 
-    func testDisablingOverrideRestoresFiltering() async {
+    func testDisablingOverrideRestoresFiltering() {
         let settings = AppSettingsStore(defaults: defaults)
         settings.addIgnoredServiceEndpoint("K9SVC")
 
@@ -94,8 +91,6 @@ final class TemporaryShowAllOverrideTests: XCTestCase {
         XCTAssertFalse(CallsignValidator.isValidRoutingNode("K9SVC"),
                        "Exiting the preview restores filtering from the untouched settings")
         XCTAssertTrue(settings.ignoredServiceEndpoints.contains("K9SVC"))
-        await Task.yield()
-        _ = viewModel
     }
 
     func testSettingsChangeDuringPreviewKeepsOverrideEffective() async {
