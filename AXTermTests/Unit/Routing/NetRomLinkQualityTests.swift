@@ -150,6 +150,69 @@ final class NetRomLinkQualityTests: XCTestCase {
         )
     }
 
+    func testAliasLinkAccumulatesQuality() {
+        // Tactical aliases (NET/ROM node idents like DRLNOD) are real stations;
+        // links to them must be tracked or their neighbor quality can never
+        // reflect observed link performance.
+        var estimator = makeEstimator()
+        let start = Date(timeIntervalSince1970: 1_700_002_070)
+        for offset in 0..<10 {
+            let ts = start.addingTimeInterval(Double(offset) * 5)
+            testClock = ts
+            estimator.observePacket(makePacket(from: "DRLNOD", to: "K0EPI-7", timestamp: ts), timestamp: ts)
+        }
+
+        XCTAssertGreaterThan(estimator.linkQuality(from: "DRLNOD", to: "K0EPI-7"), 0,
+                             "Alias link must accumulate quality evidence")
+        XCTAssertNotNil(estimator.linkStats(from: "DRLNOD", to: "K0EPI-7").dfEstimate)
+    }
+
+    func testServiceDestinationsRemainExcludedFromLinkQuality() {
+        // Beacons, IDs, and NET/ROM broadcasts are not station-to-station links.
+        var estimator = makeEstimator()
+        let start = Date(timeIntervalSince1970: 1_700_002_080)
+        for (index, destination) in ["ID", "BEACON", "NODES", "MAIL"].enumerated() {
+            for offset in 0..<5 {
+                let ts = start.addingTimeInterval(Double(index * 100 + offset))
+                testClock = ts
+                estimator.observePacket(
+                    makePacket(from: "DRLNOD", to: destination, frameType: .ui, timestamp: ts),
+                    timestamp: ts
+                )
+            }
+        }
+
+        for destination in ["ID", "BEACON", "NODES", "MAIL"] {
+            XCTAssertEqual(estimator.linkQuality(from: "DRLNOD", to: destination), 0,
+                           "\(destination) is a service destination, not a link partner")
+        }
+        XCTAssertTrue(estimator.exportLinkStats().isEmpty,
+                      "No link records may exist for service-destination traffic")
+    }
+
+    func testAliasNeighborQualityLearnsFromLinkEvidence() {
+        // End to end: with alias links tracked, NetRomIntegration's neighbor
+        // quality for an alias must move off the cold-start base on evidence
+        // instead of being frozen at neighborBaseQuality forever.
+        let integration = NetRomIntegration(localCallsign: "K0EPI-7", mode: .hybrid)
+        let start = Date(timeIntervalSince1970: 1_700_002_090)
+
+        for offset in 0..<20 {
+            let ts = start.addingTimeInterval(Double(offset) * 10)
+            integration.observePacket(makePacket(from: "DRLNOD", to: "K0EPI-7", timestamp: ts), timestamp: ts)
+        }
+
+        XCTAssertGreaterThan(integration.linkQuality(from: "DRLNOD", to: "K0EPI-7"), 0,
+                             "Integration must track the alias link")
+
+        let neighbor = integration.currentNeighbors().first { $0.call == "DRLNOD" }
+        XCTAssertNotNil(neighbor, "Alias heard directly must be a neighbor")
+        if let neighbor {
+            XCTAssertNotEqual(neighbor.quality, NetRomConfig.default.neighborBaseQuality,
+                              "Alias neighbor quality must reflect link evidence, not the frozen cold-start base")
+        }
+    }
+
     func testQualityIncreasesWithMorePackets() {
         var estimator = makeEstimator()
         let start = Date(timeIntervalSince1970: 1_700_002_100)

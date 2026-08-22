@@ -43,13 +43,16 @@ nonisolated enum CallsignValidator {
 
     // MARK: - Known Non-Callsign Patterns
 
-    /// Special APRS/AX.25 destinations and pseudo-callsigns to exclude
+    /// Special APRS/AX.25 destinations and pseudo-callsigns to exclude.
+    /// "NODES" is the standard NET/ROM routing-broadcast destination (PID 0xCF);
+    /// it matches the tactical-alias pattern and would otherwise become a phantom
+    /// station connected to every NET/ROM node on the channel.
     private static let nonCallsignPatterns: Set<String> = [
         "ID", "BEACON", "MAIL", "QST", "CQ", "SK", "TEST", "RELAY",
         "GATE", "ECHO", "TEMP", "TRACE", "ALL", "AP", "BLN", "NWS",
         "APRS", "GPS", "DGPS", "TCPIP", "TCPXX", "NOGATE", "RFONLY",
         "IGATE", "APRSD", "APRSM", "APRST", "APRSW", "SPCL", "DF",
-        "DRILL", "DX", "JAVA", "MAIL", "MICE", "SPACE", "SPC", "SYM",
+        "DRILL", "DX", "JAVA", "MICE", "NODES", "SPACE", "SPC", "SYM",
         "TEL", "TELEMETRY", "WX", "WXSVR"
     ]
 

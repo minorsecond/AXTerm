@@ -58,8 +58,10 @@ nonisolated struct LinkQualityConfig: Equatable, Sendable {
     /// Maximum observations to retain per directional link (ring buffer bound).
     let maxObservationsPerLink: Int
 
-    /// Whether to exclude service destinations (BEACON, ID, MAIL, etc.) from link quality edges.
-    /// Default is true - service destinations are not valid callsigns for routing purposes.
+    /// Whether to exclude service destinations (BEACON, ID, NODES, MAIL, etc.)
+    /// from link quality edges. Default is true. Endpoints are accepted per
+    /// `CallsignValidator.isValidRoutingNode`, so tactical aliases are tracked
+    /// while service names, pseudo-paths, and corrupt garbage are not.
     let excludeServiceDestinations: Bool
 
     /// Multiplier for inter-arrival time → adaptive TTL (e.g. 6.0 means 6× avg inter-arrival).
@@ -229,10 +231,14 @@ nonisolated struct LinkQualityEstimator {
         let to = CallsignValidator.normalize(rawTo)
         guard !from.isEmpty, !to.isEmpty else { return }
 
-        // Filter out service destinations (BEACON, ID, MAIL, etc.) if configured
+        // Filter out service destinations (BEACON, ID, NODES, MAIL, etc.) if
+        // configured. Endpoints are validated as routing nodes, not strict
+        // callsigns: tactical aliases (DRLNOD, EATON…) are real stations, and
+        // refusing them froze alias neighbor quality at the cold-start base
+        // because their links never accumulated df/dr evidence.
         if config.excludeServiceDestinations {
-            guard CallsignValidator.isValidCallsign(from),
-                  CallsignValidator.isValidCallsign(to) else {
+            guard CallsignValidator.isValidRoutingNode(from),
+                  CallsignValidator.isValidRoutingNode(to) else {
                 return
             }
         }
