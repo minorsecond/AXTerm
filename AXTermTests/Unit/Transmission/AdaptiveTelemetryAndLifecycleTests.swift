@@ -195,6 +195,122 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
                        "small-frame skepticism carries into the reconnect")
     }
 
+    // MARK: - Reconnect must not run through a dead session's carcass
+
+    /// connect() through a lingering .error session reused the object — with
+    /// the OLD config baked in at creation and timers still holding the
+    /// backed-off RTO the link died with (rtoMax). The retry — the moment the
+    /// operator most wants responsiveness — inherited maximum sluggishness.
+    /// A dead session must be replaced by a fresh one on reconnect.
+    func testReconnectAfterLinkFailureGetsFreshSessionAndTimers() {
+        let manager = AX25SessionManager(localCallsign: local)
+        let path = DigiPath()
+        let dead = connectSession(manager: manager, destination: remote, path: path)
+
+        _ = manager.sendData(Data("b\r".utf8), to: remote, path: path, channel: 0)
+        let maxRetries = dead.stateMachine.config.maxRetries
+        for _ in 0...(maxRetries + 1) {
+            _ = manager.handleT1Timeout(session: dead)
+            if dead.state == .error { break }
+        }
+        XCTAssertEqual(dead.state, .error, "precondition: N2 exhausted the link")
+        XCTAssertGreaterThan(dead.timers.rto, 4.0, "precondition: the dead session's RTO backed off")
+
+        let sabm = manager.connect(to: remote, path: path, channel: 0)
+        XCTAssertNotNil(sabm, "reconnect after failure must be possible")
+
+        let fresh = manager.session(for: remote, path: path, channel: 0)
+        XCTAssertNotIdentical(fresh, dead, "the reconnect gets a fresh session, not the carcass")
+        XCTAssertEqual(fresh.state, .connecting)
+        XCTAssertEqual(fresh.timers.rto, 4.0, accuracy: 0.01,
+                       "fresh timers seed from config, not the dead session's backed-off RTO")
+        XCTAssertEqual(fresh.statistics.framesSent, 0, "fresh evidence counters")
+    }
+
+    /// The full field chain the learned-RTO feature promises: learn on a
+    /// route, session ends, reconnect — the new session's connect timer runs
+    /// at the learned full-path RTO. This exercises retention (no eviction),
+    /// live-session counting (no merged config), and fresh-session creation
+    /// (no carcass reuse) end to end.
+    func testReconnectSeedsLearnedRtoEndToEnd() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+        coordinator.adaptiveTransmissionEnabled = true
+
+        let path = DigiPath.from(["DRLNOD"])
+        _ = connectSession(manager: coordinator.sessionManager, destination: remote, path: path)
+
+        let key = RouteAdaptiveKey(destination: "KB5YZB-7", pathSignature: path.display)
+        coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: 5.0,
+                                           source: "session", routeKey: key,
+                                           newFrames: 1, retransmits: 0)
+
+        _ = coordinator.sessionManager.handleInboundDISC(from: remote, path: path, channel: 0)
+
+        let sabm = coordinator.sessionManager.connect(to: remote, path: path, channel: 0)
+        XCTAssertNotNil(sabm)
+        let fresh = coordinator.sessionManager.session(for: remote, path: path, channel: 0)
+        XCTAssertEqual(fresh.state, .connecting)
+        XCTAssertEqual(fresh.timers.rto, 10.0, accuracy: 0.01,
+                       "the reconnect's SABM runs at the learned full-path RTO (2 x srtt 5s), not the 12s hop-scaled default")
+    }
+
+    /// A peer re-SABMing into our lingering dead session must likewise get a
+    /// fresh session — the (.error, .receivedSABM) pair has no state-machine
+    /// transition at all, so the old object was a dead end.
+    func testInboundSABMReplacesDeadSession() {
+        let manager = AX25SessionManager(localCallsign: local)
+        let path = DigiPath()
+        let dead = connectSession(manager: manager, destination: remote, path: path)
+
+        _ = manager.sendData(Data("b\r".utf8), to: remote, path: path, channel: 0)
+        let maxRetries = dead.stateMachine.config.maxRetries
+        for _ in 0...(maxRetries + 1) {
+            _ = manager.handleT1Timeout(session: dead)
+            if dead.state == .error { break }
+        }
+        XCTAssertEqual(dead.state, .error)
+
+        let ua = manager.handleInboundSABM(from: remote, to: local, path: path, channel: 0)
+        XCTAssertNotNil(ua, "the peer's fresh SABM deserves a UA, not silence")
+
+        let fresh = manager.session(for: remote, path: path, channel: 0)
+        XCTAssertNotIdentical(fresh, dead)
+        XCTAssertEqual(fresh.state, .connected)
+        XCTAssertFalse(fresh.isInitiator, "the peer initiated this one")
+    }
+
+    /// No data path through session replacement may drop bytes SILENTLY.
+    /// Every teardown path clears the pending queue deliberately, each with
+    /// its own logged reason ("Session error", "remote DISC", …) — so the
+    /// carcass a reconnect discards must already be empty, and whatever it
+    /// might hold (a future teardown path that forgets to clear) transfers to
+    /// the fresh session rather than vanishing.
+    func testReconnectNeverSilentlyDropsPendingData() {
+        let manager = AX25SessionManager(localCallsign: local)
+        let path = DigiPath()
+        let dead = connectSession(manager: manager, destination: remote, path: path)
+
+        // One frame in flight, one queued behind the window when the link dies.
+        let config = dead.stateMachine.config
+        for i in 0..<(config.windowSize + 1) {
+            _ = manager.sendData(Data("chunk-\(i)\r".utf8), to: remote, path: path, channel: 0)
+        }
+        for _ in 0...(config.maxRetries + 1) {
+            _ = manager.handleT1Timeout(session: dead)
+            if dead.state == .error { break }
+        }
+        XCTAssertEqual(dead.state, .error)
+        XCTAssertTrue(dead.pendingDataQueue.isEmpty,
+                      "teardown clears the queue DELIBERATELY (logged reason), not by discard")
+
+        _ = manager.connect(to: remote, path: path, channel: 0)
+        let fresh = manager.session(for: remote, path: path, channel: 0)
+        XCTAssertNotIdentical(fresh, dead)
+        XCTAssertEqual(fresh.pendingDataQueue.count, dead.pendingDataQueue.count,
+                       "the discard transfers whatever the carcass held — zero here, but never less")
+    }
+
     // MARK: - Collapse detection (drives the warning breadcrumb)
 
     func testCollapseToStopAndWaitDetectsTheTransitionEdgeOnly() {

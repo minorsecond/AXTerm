@@ -211,6 +211,14 @@ nonisolated final class AX25Session: @unchecked Sendable {
         stateMachine.state
     }
 
+    /// True once this session has reached .connected at least once — the
+    /// marker that separates an ENDED session (a reconnect must replace it)
+    /// from a fresh one still awaiting its first SABM (must be kept, along
+    /// with its queued data).
+    var hasEverConnected: Bool {
+        stateMachine.hasEverConnected
+    }
+
     /// Current send sequence number V(S)
     var vs: Int {
         stateMachine.sequenceState.vs
@@ -647,6 +655,34 @@ final class AX25SessionManager: ObservableObject {
     }
 
     /// Remove a session
+    /// Drop a session that has already ENDED so a reconnect under the same
+    /// key gets a fresh session — fresh config, fresh timers, fresh evidence
+    /// counters. "Ended" means it terminated after running (.error, from any
+    /// prior life) or completed a full connect/disconnect cycle — NOT a fresh
+    /// session still awaiting its first SABM, whose queued data must survive.
+    /// Live sessions are untouched. Returns any pending outbound data the
+    /// carcass was still holding so the caller can re-queue it on the fresh
+    /// session instead of silently dropping it.
+    @discardableResult
+    private func discardEndedSession(
+        for destination: AX25Address, path: DigiPath, channel: UInt8
+    ) -> [(data: Data, pid: UInt8, displayInfo: String?)] {
+        let key = SessionKey(destination: destination, path: path, channel: channel)
+        guard let stale = sessions[key],
+              stale.state == .error
+                || (stale.state == .disconnected && stale.hasEverConnected) else { return [] }
+        stopT1Timer(for: stale)
+        stopT3Timer(for: stale)
+        removeSession(stale)
+        TxLog.debug(.session, "Discarded ended session for reconnect", [
+            "peer": destination.display,
+            "state": stale.state.rawValue,
+            "session": String(stale.id.uuidString.prefix(8)),
+            "orphanedQueue": stale.pendingDataQueue.count
+        ])
+        return stale.pendingDataQueue
+    }
+
     func removeSession(_ session: AX25Session) {
         sessions.removeValue(forKey: session.key)
 
@@ -809,7 +845,17 @@ final class AX25SessionManager: ObservableObject {
             return nil
         }
 
+        // Never reconnect through a dead session's carcass: its config (and
+        // therefore the learned-RTO seed) was baked in at creation, and its
+        // timers still hold the backed-off RTO it died with — after N2
+        // exhaustion that is rtoMax, making the RETRY maximally sluggish.
+        // Drop it so session(for:) builds a fresh one through
+        // getConfigForDestination with current learned state; any data the
+        // carcass was still holding rides along.
+        let orphanedQueue = discardEndedSession(for: destination, path: path, channel: channel)
+
         let session = session(for: destination, path: path, channel: channel)
+        session.pendingDataQueue.append(contentsOf: orphanedQueue)
 
         guard session.state == .disconnected || session.state == .error else {
             TxLog.warning(.session, "Cannot connect: session not disconnected", [
@@ -1099,7 +1145,13 @@ final class AX25SessionManager: ObservableObject {
             "channel": channel
         ])
 
-        // Create session if it doesn't exist (we're the responder)
+        // Create session if it doesn't exist (we're the responder). A LIVE
+        // existing session is reused — SABM into a connected session is the
+        // spec's link reset and belongs to the state machine. A DEAD one is
+        // replaced: (.error, .receivedSABM) has no transition at all, so the
+        // carcass would answer the peer's fresh connect with silence, and its
+        // stale config/timers predate the route's current learned state.
+        discardEndedSession(for: source, path: path, channel: channel)
         let key = SessionKey(destination: source, path: path, channel: channel)
 
         let session: AX25Session

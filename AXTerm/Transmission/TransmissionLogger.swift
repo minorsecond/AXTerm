@@ -282,6 +282,23 @@ final class TxLog {
         ])
     }
 
+    /// AX.25 link failure (N2 exhausted). Ships a throttled Sentry EVENT, not
+    /// just a breadcrumb: breadcrumbs only reach Sentry attached to an event,
+    /// and a link failure is the moment the whole crumb trail (T1 timeouts,
+    /// adaptive collapse, retransmissions) is worth reading — without its own
+    /// event the entire episode is invisible in production.
+    nonisolated static func linkFailure(peer: String, path: String, retries: Int) {
+        warning(.session, "AX.25 link failure (N2 exhausted)", [
+            "peer": peer, "path": path, "retries": retries
+        ])
+        Task { @MainActor in SentryManager.shared.captureThrottled(
+            key: "ax25.linkFailure",
+            message: "AX.25 link failure (N2 exhausted)",
+            level: .warning,
+            extra: ["peer": peer, "path": path, "retries": retries]
+        ) }
+    }
+
     nonisolated static func axdpDecodeError(reason: String, data: Data) {
         // Breadcrumb via TxLog.warning; the single throttled event ships here.
         // (Previously TxLog.error + a second captureMessage = two events per

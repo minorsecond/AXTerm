@@ -740,6 +740,13 @@ final class SessionCoordinator: ObservableObject {
             // This ensures we re-discover on next connection (station might switch software)
             // and prevents stale partial AXDP messages from corrupting future communications.
             if (oldState == .connected || oldState == .disconnecting) && (newState == .disconnected || newState == .error) {
+                if newState == .error {
+                    TxLog.linkFailure(
+                        peer: session.remoteAddress.display,
+                        path: session.path.display.isEmpty ? "direct" : session.path.display,
+                        retries: session.stateMachine.retryCount
+                    )
+                }
                 self.invalidateCapability(for: session.remoteAddress.display)
 
                 // Clear reassembly buffer for this peer to prevent stale data corruption.
