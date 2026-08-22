@@ -890,8 +890,11 @@ struct AnalyticsDashboardView: View {
             }
 
             if structuralHiddenNodeCount > 0 {
-                Text("Min Edge / Max Nodes: \(structuralHiddenNodeCount)")
+                // The min-edge slider hides connections, never stations, so it is
+                // not part of this count — labeling it "Min Edge" overstated it.
+                Text("Not drawn (max nodes / no drawable link): \(structuralHiddenNodeCount)")
                     .font(.caption)
+                    .help("Valid stations observed in the timeframe that the graph doesn't draw: dropped by the Max nodes cap, or without a qualifying link to another valid station. The Min edge slider hides connections, not stations.")
             }
             if focusHiddenNodeCount > 0 {
                 Text("Focus Mode: \(focusHiddenNodeCount)")
@@ -1029,8 +1032,8 @@ extension AnalyticsDashboardView {
             })
         }
 
-        let simulated = endpointSimulationSet.sorted()
-        entries.append(contentsOf: simulated.map {
+        let breakdown = hiddenBreakdown
+        entries.append(contentsOf: breakdown.simulatedPresent.sorted().map {
             HiddenNodeEntry(
                 id: "sim:\($0)",
                 callsign: $0,
@@ -1040,11 +1043,7 @@ extension AnalyticsDashboardView {
             )
         })
 
-        let ignored = Set(settings.ignoredServiceEndpoints.map(CallsignValidator.normalize))
-            .subtracting(endpointSimulationSet)
-            .subtracting(temporarilyUnignoredEndpoints)
-            .sorted()
-        entries.append(contentsOf: ignored.map {
+        entries.append(contentsOf: breakdown.ignoredPresent.sorted().map {
             HiddenNodeEntry(
                 id: "ignore:\($0)",
                 callsign: $0,
@@ -1072,33 +1071,25 @@ extension AnalyticsDashboardView {
         return Array(snapshot.temporarilyUnhiddenCallsigns.prefix(8))
     }
 
-    private var structuralHiddenNodeCount: Int {
-        max(0, viewModel.viewState.classifiedGraphModel.droppedNodesCount)
+    /// Disjoint per-cause hidden sets from the view model: each hidden station
+    /// counts exactly once, min-edge-filtered nodes are included, and ignore-list
+    /// entries only count when the station is actually present in the timeframe.
+    private var hiddenBreakdown: AnalyticsDashboardViewModel.HiddenNodeBreakdown {
+        viewModel.hiddenNodeBreakdown(
+            simulatedEndpoints: endpointSimulationSet,
+            temporarilyUnignored: temporarilyUnignoredEndpoints
+        )
     }
 
-    private var focusHiddenNodeCount: Int {
-        guard viewModel.focusState.isFocusEnabled else { return 0 }
-        let total = viewModel.viewState.graphModel.nodes.count
-        let visible = viewModel.filteredGraph.visibleNodeIDs.count
-        return max(0, total - visible)
-    }
+    private var structuralHiddenNodeCount: Int { hiddenBreakdown.structuralCount }
 
-    private var simulatedHiddenNodeCount: Int {
-        let nodeCallsigns = Set(viewModel.viewState.graphModel.nodes.map { CallsignValidator.normalize($0.callsign) })
-        return endpointSimulationSet.filter { nodeCallsigns.contains($0) }.count
-    }
+    private var focusHiddenNodeCount: Int { hiddenBreakdown.focusHiddenIDs.count }
 
-    private var persistedIgnoredNodeCount: Int {
-        let ignored = Set(settings.ignoredServiceEndpoints.map(CallsignValidator.normalize))
-        return ignored
-            .subtracting(endpointSimulationSet)
-            .subtracting(temporarilyUnignoredEndpoints)
-            .count
-    }
+    private var simulatedHiddenNodeCount: Int { hiddenBreakdown.simulatedPresent.count }
 
-    private var totalHiddenNodesCount: Int {
-        structuralHiddenNodeCount + focusHiddenNodeCount + simulatedHiddenNodeCount + persistedIgnoredNodeCount
-    }
+    private var persistedIgnoredNodeCount: Int { hiddenBreakdown.ignoredPresent.count }
+
+    private var totalHiddenNodesCount: Int { hiddenBreakdown.totalCount }
 
     private func normalizedEndpoint(_ callsign: String) -> String {
         CallsignValidator.normalize(callsign)

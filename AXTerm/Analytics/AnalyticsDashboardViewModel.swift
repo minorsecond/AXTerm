@@ -742,6 +742,110 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         refreshForServiceEndpointFilterChange()
     }
 
+    // MARK: - Hidden Node Accounting
+
+    /// Which stations are hidden from the current graph, split into disjoint
+    /// causes so the "Hidden by filters" badge counts each station exactly once.
+    struct HiddenNodeBreakdown: Equatable {
+        /// Graph nodes outside the focus neighborhood (node identity keys).
+        let focusHiddenIDs: Set<String>
+        /// Valid stations observed in the timeframe that the classified graph
+        /// does not draw — removed by the min-edge threshold, the max-nodes cap,
+        /// or lacking a qualifying link. Disjoint from ignored/simulated because
+        /// those stations fail validation and never enter this universe.
+        let structuralHiddenKeys: Set<String>
+        /// NET/ROM source only: nodes truncated by the max-nodes cap (the NET/ROM
+        /// graph is not packet-derived, so no station universe exists to diff).
+        let maxNodesDroppedCount: Int
+        /// Simulated removals whose station actually appears in the timeframe.
+        let simulatedPresent: Set<String>
+        /// Persisted ignore-list entries whose station actually appears in the
+        /// timeframe. An ignored callsign that never transmits is not a hidden node.
+        let ignoredPresent: Set<String>
+
+        var structuralCount: Int { structuralHiddenKeys.count + maxNodesDroppedCount }
+        var totalCount: Int {
+            focusHiddenIDs.count + structuralCount + simulatedPresent.count + ignoredPresent.count
+        }
+
+        static let empty = HiddenNodeBreakdown(
+            focusHiddenIDs: [],
+            structuralHiddenKeys: [],
+            maxNodesDroppedCount: 0,
+            simulatedPresent: [],
+            ignoredPresent: []
+        )
+    }
+
+    /// Base callsigns observed in the current timeframe (senders, destinations,
+    /// repeating digipeaters), before any validity filtering.
+    private(set) var timeframePresentBaseCalls: Set<String> = []
+
+    /// Valid stations (effective validator) as identity keys — the universe the
+    /// classified graph could draw.
+    private(set) var timeframeValidStationKeys: Set<String> = []
+
+    private func updateTimeframeStationPresence(packets: [Packet], identityMode: StationIdentityMode) {
+        var baseCalls: Set<String> = []
+        var validKeys: Set<String> = []
+        for packet in packets {
+            var displays: [String] = []
+            if let from = packet.from?.display { displays.append(from) }
+            if let to = packet.to?.display { displays.append(to) }
+            for via in packet.via where via.repeated { displays.append(via.display) }
+            for display in displays {
+                let normalized = CallsignValidator.normalize(display)
+                guard !normalized.isEmpty else { continue }
+                baseCalls.insert(CallsignParser.parse(normalized).base)
+                if CallsignValidator.isValidRoutingNode(normalized) {
+                    validKeys.insert(CallsignParser.identityKey(for: normalized, mode: identityMode))
+                }
+            }
+        }
+        timeframePresentBaseCalls = baseCalls
+        timeframeValidStationKeys = validKeys
+    }
+
+    /// Computes the hidden-node breakdown for the current graph state.
+    /// `simulatedEndpoints` and `temporarilyUnignored` are view-session state.
+    func hiddenNodeBreakdown(
+        simulatedEndpoints: Set<String>,
+        temporarilyUnignored: Set<String>
+    ) -> HiddenNodeBreakdown {
+        let focusHidden: Set<String>
+        if focusState.isFocusEnabled {
+            focusHidden = Set(viewState.graphModel.nodes.map(\.id))
+                .subtracting(filteredGraph.visibleNodeIDs)
+        } else {
+            focusHidden = []
+        }
+
+        let structuralKeys: Set<String>
+        let maxNodesDropped: Int
+        if graphViewMode.isNetRomMode {
+            structuralKeys = []
+            maxNodesDropped = max(0, viewState.classifiedGraphModel.droppedNodesCount)
+        } else {
+            let drawnIDs = Set(viewState.classifiedGraphModel.nodes.map(\.id))
+            structuralKeys = timeframeValidStationKeys.subtracting(drawnIDs)
+            maxNodesDropped = 0
+        }
+
+        let simulatedPresent = simulatedEndpoints.intersection(timeframePresentBaseCalls)
+        let ignoredPresent = Set((settingsStore?.ignoredServiceEndpoints ?? []).map(CallsignValidator.normalize))
+            .subtracting(simulatedEndpoints)
+            .subtracting(temporarilyUnignored)
+            .intersection(timeframePresentBaseCalls)
+
+        return HiddenNodeBreakdown(
+            focusHiddenIDs: focusHidden,
+            structuralHiddenKeys: structuralKeys,
+            maxNodesDroppedCount: maxNodesDropped,
+            simulatedPresent: simulatedPresent,
+            ignoredPresent: ignoredPresent
+        )
+    }
+
     /// Pushes the effective ignore list (empty while the temporary preview is
     /// active, the persisted list otherwise) into the process-wide validator.
     private func applyEffectiveIgnoredServiceEndpoints() {
@@ -967,6 +1071,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         let timeframeInterval = currentDateRange(now: now)
         let packetSnapshot = await timeframePacketSnapshot(now: now)
         latestTimeframePackets = packetSnapshot
+        updateTimeframeStationPresence(packets: packetSnapshot, identityMode: stationIdentityMode)
         let includeViaSnapshot = includeViaDigipeaters
         let minEdgeSnapshot = minEdgeCount
         let maxNodesSnapshot = maxNodes
