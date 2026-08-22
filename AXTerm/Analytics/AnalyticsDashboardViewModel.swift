@@ -471,6 +471,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     func manualRefresh() {
         guard isActive else { return }
+        // An explicit refresh must recompute, not replay a cached window.
+        aggregationCache.removeAll()
+        graphCache.removeAll()
+        classifiedGraphCache.removeAll()
         isAggregationLoading = true
         isGraphLoading = true
         scheduleAggregation(reason: "manualRefresh")
@@ -734,6 +738,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             includeVia: includeViaSnapshot,
             packetCount: packetSnapshot.count,
             lastTimestamp: packetSnapshot.map { $0.timestamp }.max(),
+            windowStart: bucketSnapshot.normalizedStart(for: timeframeInterval.start, calendar: calendar),
             customStart: customRangeStart,
             customEnd: customRangeEnd,
             ignoredServiceEndpointsHash: ignoredServiceEndpointsHash()
@@ -900,7 +905,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func filteredPackets(now: Date) -> [Packet] {
         let range = currentDateRange(now: now)
-        return packets.filter { range.contains($0.timestamp) }
+        // Half-open [start, end) to match the SQLite path's `receivedAt >= ? AND < ?`;
+        // DateInterval.contains is closed and would admit a packet stamped exactly at end.
+        return packets.filter { $0.timestamp >= range.start && $0.timestamp < range.end }
     }
 
     private func timeframePacketSnapshot(now: Date) async -> [Packet] {
@@ -913,6 +920,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func rebuildGraph(reason: String, applyToViewState: Bool = true, showLoadingState: Bool = true) async {
         let now = Date()
+        let timeframeInterval = currentDateRange(now: now)
         let packetSnapshot = await timeframePacketSnapshot(now: now)
         latestTimeframePackets = packetSnapshot
         let includeViaSnapshot = includeViaDigipeaters
@@ -932,6 +940,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             packetCount: packetSnapshot.count,
             lastTimestamp: packetSnapshot.map { $0.timestamp }.max(),
             netRomUpdateCount: netRomUpdateCount,
+            windowStart: Date(timeIntervalSince1970: (timeframeInterval.start.timeIntervalSince1970 / 60).rounded(.down) * 60),
             customStart: customRangeStart,
             customEnd: customRangeEnd,
             ignoredServiceEndpointsHash: ignoredServiceEndpointsHash()
@@ -1690,6 +1699,10 @@ private struct AggregationCacheKey: Hashable {
     let includeVia: Bool
     let packetCount: Int
     let lastTimestamp: Date?
+    /// Resolved window start, quantized to the bucket stride. Rolling timeframes slide
+    /// with the clock; without this the cache would keep serving a window that ended
+    /// long ago whenever no new packets arrive.
+    let windowStart: Date
     let customStart: Date
     let customEnd: Date
     let ignoredServiceEndpointsHash: Int
@@ -1705,6 +1718,8 @@ private struct GraphCacheKey: Hashable {
     let packetCount: Int
     let lastTimestamp: Date?
     let netRomUpdateCount: Int
+    /// Resolved window start quantized to one minute — see AggregationCacheKey.windowStart.
+    let windowStart: Date
     let customStart: Date
     let customEnd: Date
     let ignoredServiceEndpointsHash: Int
