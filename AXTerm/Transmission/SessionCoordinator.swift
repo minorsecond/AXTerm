@@ -424,11 +424,22 @@ final class SessionCoordinator: ObservableObject {
         Date().timeIntervalSince(entry.lastUpdated) > Self.adaptiveCacheTTLSeconds
     }
 
+    /// Absolute floor for a learned connect seed: a freak fast sample must
+    /// never produce a hair-trigger SABM timer.
+    private static let learnedSeedFloorSeconds = 4.0
+
     /// Build session config from adaptive settings (shared by per-route and merged paths).
-    private func configFromAdaptive(_ a: TxAdaptiveSettings) -> AX25SessionConfig {
+    ///
+    /// `learnedPathRto` is passed ONLY by the per-route cache-hit branch — the
+    /// field's single writer. Merged configs and the global path leave it nil.
+    private func configFromAdaptive(_ a: TxAdaptiveSettings, learnedPathRto: Double? = nil) -> AX25SessionConfig {
         let userT1 = AppSettingsStore.sanitizeAX25T1TimeoutSeconds(
             appSettings?.ax25T1TimeoutSeconds ?? AppSettingsStore.defaultAX25T1TimeoutSeconds
         )
+        let clampedLearned = learnedPathRto.map { learned in
+            min(a.rtoMax.effectiveValue,
+                max(max(a.rtoMin.effectiveValue, Self.learnedSeedFloorSeconds), learned))
+        }
         return AX25SessionConfig(
             windowSize: a.windowSize.effectiveValue,
             paclen: a.paclen.effectiveValue,
@@ -438,7 +449,8 @@ final class SessionCoordinator: ObservableObject {
             rtoMin: a.rtoMin.effectiveValue,
             rtoMax: a.rtoMax.effectiveValue,
             initialRto: max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, userT1)),
-            adaptiveTimeout: adaptiveTransmissionEnabled
+            adaptiveTimeout: adaptiveTransmissionEnabled,
+            learnedPathRto: clampedLearned
         )
     }
 
@@ -600,7 +612,10 @@ final class SessionCoordinator: ObservableObject {
             }
             let key = RouteAdaptiveKey(destination: canonicalDestination(destination), pathSignature: pathSignature)
             if let cached = self.adaptiveCache[key], !self.isAdaptiveCacheEntryExpired(cached) {
-                return self.configFromAdaptive(cached.settings)
+                // Single writer of learnedPathRto: a fresh entry for THIS
+                // exact route seeds the connect timer with its measured
+                // full-path RTO (clamped; never hop-scaled downstream).
+                return self.configFromAdaptive(cached.settings, learnedPathRto: cached.settings.currentRto)
             }
             return self.configFromAdaptive(self.globalAdaptiveSettings)
         }

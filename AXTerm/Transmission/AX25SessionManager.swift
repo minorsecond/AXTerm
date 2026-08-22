@@ -171,11 +171,17 @@ nonisolated final class AX25Session: @unchecked Sendable {
         // (2m+1) for m digis. Only the pre-sample seed is scaled: in adaptive mode
         // the first RTT sample (SABM→UA) replaces it entirely, and the timers'
         // rtoMax clamp still bounds it.
+        //
+        // A learned full-path RTO for this exact route supersedes the scaled
+        // guess VERBATIM — it already includes the digipeater delay, so the
+        // hop multiplier must never apply on top (that would double-count the
+        // path). Strict either/or; no mixing of the two seed semantics.
         let hopMultiplier = Double(2 * path.digis.count + 1)
+        let seed = config.learnedPathRto ?? (config.initialRto ?? 4.0) * hopMultiplier
         self.timers = AX25SessionTimers(
             rtoMin: config.rtoMin ?? 1.0,
             rtoMax: config.rtoMax ?? 30.0,
-            initialRto: (config.initialRto ?? 4.0) * hopMultiplier,
+            initialRto: seed,
             adaptiveTimeout: config.adaptiveTimeout
         )
         self.statistics = AX25SessionStatistics()

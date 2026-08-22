@@ -68,6 +68,14 @@ nonisolated struct AX25SessionConfig: Sendable {
     /// Whether adaptive timeout estimation is enabled
     let adaptiveTimeout: Bool
 
+    /// A FULL-PATH initial RTO learned for one specific route (destination +
+    /// path). When present it IS the seed, verbatim — never hop-scaled,
+    /// because the learned value already includes digipeater delay. Exactly
+    /// one writer exists: the adaptive per-route cache-hit branch (adaptive
+    /// on, TTL-fresh entry). Nil everywhere else, including merged configs —
+    /// a route-specific RTO has no meaning across mixed routes.
+    let learnedPathRto: Double?
+
     /// Sequence number modulo (8 or 128)
     var modulo: Int { extended ? 128 : 8 }
 
@@ -80,7 +88,8 @@ nonisolated struct AX25SessionConfig: Sendable {
         rtoMin: Double? = nil,
         rtoMax: Double? = nil,
         initialRto: Double? = nil,
-        adaptiveTimeout: Bool = true
+        adaptiveTimeout: Bool = true,
+        learnedPathRto: Double? = nil
     ) {
         // Clamp window size to valid range
         let maxWindow = extended ? 127 : 7
@@ -94,6 +103,7 @@ nonisolated struct AX25SessionConfig: Sendable {
         self.rtoMax = rtoMax
         self.initialRto = initialRto
         self.adaptiveTimeout = adaptiveTimeout
+        self.learnedPathRto = learnedPathRto
     }
 }
 
