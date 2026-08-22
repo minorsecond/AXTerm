@@ -1836,6 +1836,9 @@ final class AX25SessionManager: ObservableObject {
                 ])
                 onSessionStateChanged?(session, .connected, session.state)
                 responseFrames.append(contentsOf: processActions(failureActions, for: session))
+                // Final evidence flush: the retransmissions that exhausted N2
+                // are the loss the next attempt on this route must know about.
+                emitLinkQualitySampleIfNeeded(for: session)
                 return responseFrames
             }
 
@@ -1882,9 +1885,16 @@ final class AX25SessionManager: ObservableObject {
     /// the previous one, so the EWMA in the link controller sees time-local
     /// evidence. An inbound frame that changed nothing emits nothing.
     private func emitLinkQualitySampleIfNeeded(for session: AX25Session) {
-        guard session.state == .connected, session.statistics.framesSent > 0 else { return }
-        let deltaSent = session.statistics.framesSent - session.lastSampledFramesSent
-        let deltaRetrans = session.statistics.retransmissions - session.lastSampledRetransmissions
+        // .error is included so a dying link's terminal retransmissions still
+        // reach the controller — that loss is exactly the evidence that should
+        // make the next attempt on this route skeptical.
+        guard session.state == .connected || session.state == .error,
+              session.statistics.framesSent > 0 else { return }
+        // The statistics counters are monotonic by design; clamp anyway so a
+        // broken invariant degrades to a missed sample, never to negative
+        // evidence or a loss rate above 1 handed to the controller.
+        let deltaSent = max(0, session.statistics.framesSent - session.lastSampledFramesSent)
+        let deltaRetrans = max(0, session.statistics.retransmissions - session.lastSampledRetransmissions)
         guard deltaSent > 0 || deltaRetrans > 0 else { return }
         session.lastSampledFramesSent = session.statistics.framesSent
         session.lastSampledRetransmissions = session.statistics.retransmissions
@@ -2231,6 +2241,12 @@ final class AX25SessionManager: ObservableObject {
             axDebugPrint("[DEBUG:AX25:T1] retransmit | va=\(session.va) vs=\(session.vs) vr=\(session.vr) outstanding=\(session.outstandingCount) sendBufKeys=\(session.sendBuffer.keys.sorted())")
             frames.append(contentsOf: retransmitOutstandingFrames(for: session, from: session.va, reason: "T1-timeout", preservePollFinal: false, forcePollOnFirst: true))
         }
+
+        // Loss evidence must be TIMELY: a T1 retransmission reaches the
+        // controller now, not when the next inbound frame happens to arrive —
+        // a degrading link is exactly the case where inbound traffic stops.
+        // On N2 exhaustion (state == .error) this is the final evidence flush.
+        emitLinkQualitySampleIfNeeded(for: session)
 
         return frames
     }
