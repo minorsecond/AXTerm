@@ -12,6 +12,9 @@ nonisolated struct PacketEvent: Hashable, Sendable {
     let from: String?
     let to: String?
     let via: [String]
+    /// Digipeaters whose has-been-repeated (H) bit is set — the hops that actually
+    /// retransmitted this frame, as opposed to merely being requested in the path.
+    let repeatedVia: [String]
     let frameType: FrameType
     let infoTextPresent: Bool
     let payloadBytes: Int
@@ -21,6 +24,7 @@ nonisolated struct PacketEvent: Hashable, Sendable {
         from = StationNormalizer.normalize(packet.fromDisplay)
         to = StationNormalizer.normalize(packet.toDisplay)
         via = packet.via.compactMap { StationNormalizer.normalize($0.display) }
+        repeatedVia = packet.via.filter(\.repeated).compactMap { StationNormalizer.normalize($0.display) }
         frameType = packet.frameType
         infoTextPresent = packet.infoText?.isEmpty == false
         payloadBytes = packet.info.count

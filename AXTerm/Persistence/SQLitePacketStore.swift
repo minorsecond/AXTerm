@@ -213,24 +213,28 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
                 let toDisplay = CallsignNormalizer.display(call: toCall, ssid: toSSID)
                 let from = StationNormalizer.normalize(fromDisplay)
                 let to = StationNormalizer.normalize(toDisplay)
-                let via = PacketEncoding.decodeViaPath(viaPath).compactMap { StationNormalizer.normalize($0.display) }
+                // Only digipeaters that actually repeated the frame (H bit set) count as
+                // observed stations — mirrors AnalyticsAggregator's in-memory semantics.
+                let repeatedVia = PacketEncoding.decodeViaPath(viaPath)
+                    .filter(\.repeated)
+                    .compactMap { StationNormalizer.normalize($0.display) }
 
-                if let from {
+                // Station-validity filtering must match AnalyticsAggregator so the
+                // "Unique stations" card and series read the same regardless of whether
+                // history persistence routes aggregation through SQLite or memory.
+                if let from, CallsignValidator.isValidRoutingNode(from) {
                     talkerCounts[from, default: 0] += 1
                     uniqueStations.insert(from)
                 }
-                if let to {
-                    talkerCounts[to, default: 0] += 1
+                if let to, CallsignValidator.isValidRoutingNode(to) {
                     destinationCounts[to, default: 0] += 1
                     uniqueStations.insert(to)
                 }
 
-                if options.includeViaDigipeaters {
-                    for station in via {
+                for station in repeatedVia where CallsignValidator.isValidRoutingNode(station) {
+                    if options.includeViaDigipeaters {
                         uniqueStations.insert(station)
                     }
-                }
-                for station in via {
                     digipeaterCounts[station, default: 0] += 1
                 }
 
@@ -239,10 +243,10 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
                 payloadBytes[seriesKey, default: 0] += payloadLength
 
                 var bucketStations = uniqueStationsByBucket[seriesKey, default: []]
-                if let from { bucketStations.insert(from) }
-                if let to { bucketStations.insert(to) }
+                if let from, CallsignValidator.isValidRoutingNode(from) { bucketStations.insert(from) }
+                if let to, CallsignValidator.isValidRoutingNode(to) { bucketStations.insert(to) }
                 if options.includeViaDigipeaters {
-                    for station in via {
+                    for station in repeatedVia where CallsignValidator.isValidRoutingNode(station) {
                         bucketStations.insert(station)
                     }
                 }

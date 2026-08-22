@@ -124,9 +124,9 @@ final class SQLitePacketStoreTests: XCTestCase {
 
         let packetA = Packet(
             timestamp: timeframe.start.addingTimeInterval(2 * 3600),
-            from: AX25Address(call: "A1"),
-            to: AX25Address(call: "B1"),
-            via: [AX25Address(call: "D1")],
+            from: AX25Address(call: "K1AAA"),
+            to: AX25Address(call: "K2BBB"),
+            via: [AX25Address(call: "K4DDD", repeated: true)],
             frameType: .ui,
             control: 0x03,
             info: Data(repeating: 0x41, count: 20),
@@ -135,8 +135,8 @@ final class SQLitePacketStoreTests: XCTestCase {
         )
         let packetB = Packet(
             timestamp: timeframe.end.addingTimeInterval(-3 * 3600),
-            from: AX25Address(call: "C1"),
-            to: AX25Address(call: "D1"),
+            from: AX25Address(call: "K3CCC"),
+            to: AX25Address(call: "K4DDD"),
             frameType: .i,
             control: 0x00,
             info: Data(repeating: 0x42, count: 40),
@@ -177,7 +177,7 @@ final class SQLitePacketStoreTests: XCTestCase {
         for index in 0..<total {
             let packet = Packet(
                 timestamp: base.addingTimeInterval(Double(index)),
-                from: AX25Address(call: "SRC"),
+                from: AX25Address(call: "K9SRC"),
                 to: AX25Address(call: "K9DST"),
                 frameType: .ui,
                 control: 0x03,
@@ -202,8 +202,10 @@ final class SQLitePacketStoreTests: XCTestCase {
 
         XCTAssertEqual(result.summary.totalPackets, total)
         XCTAssertEqual(result.summary.totalPayloadBytes, total)
-        XCTAssertEqual(result.topTalkers.first?.label, "K9DST")
+        // Talkers rank senders only; the destination must not top the list.
+        XCTAssertEqual(result.topTalkers.first?.label, "K9SRC")
         XCTAssertEqual(result.topTalkers.first?.count, total)
+        XCTAssertEqual(result.topDestinations.first?.label, "K9DST")
     }
 
     func testAggregateAnalyticsExcludesNonCallsignIdentifiersFromTopLists() throws {
@@ -217,7 +219,7 @@ final class SQLitePacketStoreTests: XCTestCase {
                 timestamp: base,
                 from: AX25Address(call: "K1ABC"),
                 to: AX25Address(call: "BEACON"),
-                via: [AX25Address(call: "WIDE1", ssid: 1)],
+                via: [AX25Address(call: "WIDE1", ssid: 1, repeated: true)],
                 frameType: .ui,
                 control: 0x03,
                 info: Data([0x41]),
@@ -228,7 +230,7 @@ final class SQLitePacketStoreTests: XCTestCase {
                 timestamp: base.addingTimeInterval(60),
                 from: AX25Address(call: "ID"),
                 to: AX25Address(call: "N2DEF"),
-                via: [AX25Address(call: "RELAY")],
+                via: [AX25Address(call: "RELAY", repeated: true)],
                 frameType: .ui,
                 control: 0x03,
                 info: Data([0x42]),
@@ -239,7 +241,7 @@ final class SQLitePacketStoreTests: XCTestCase {
                 timestamp: base.addingTimeInterval(120),
                 from: AX25Address(call: "K1ABC"),
                 to: AX25Address(call: "N2DEF"),
-                via: [AX25Address(call: "K8DIG")],
+                via: [AX25Address(call: "K8DIG", repeated: true)],
                 frameType: .ui,
                 control: 0x03,
                 info: Data([0x43]),
@@ -270,6 +272,48 @@ final class SQLitePacketStoreTests: XCTestCase {
         XCTAssertFalse(result.topDigipeaters.map(\.label).contains("WIDE1-1"))
         XCTAssertFalse(result.topDigipeaters.map(\.label).contains("RELAY"))
         XCTAssertTrue(result.topDigipeaters.map(\.label).contains("K8DIG"))
+        // Service endpoints and pseudo-paths must not count as unique stations either,
+        // matching the in-memory AnalyticsAggregator semantics.
+        XCTAssertEqual(result.summary.uniqueStations, 3) // K1ABC, N2DEF, K8DIG
+    }
+
+    func testAggregateAnalyticsIgnoresUnrepeatedViaEntries() throws {
+        let store = try makeStore()
+        let endpoint = try makeEndpoint()
+        let calendar = utcCalendar()
+        let base = Date(timeIntervalSince1970: 1_707_400_000)
+
+        let packet = Packet(
+            timestamp: base,
+            from: AX25Address(call: "K1ABC"),
+            to: AX25Address(call: "N2DEF"),
+            via: [
+                AX25Address(call: "K8DIG", repeated: true),
+                AX25Address(call: "K7REQ", repeated: false)
+            ],
+            frameType: .ui,
+            control: 0x03,
+            info: Data([0x41]),
+            rawAx25: Data([0x01]),
+            kissEndpoint: endpoint
+        )
+        try store.save(packet)
+
+        let timeframe = DateInterval(start: base.addingTimeInterval(-10), end: base.addingTimeInterval(60))
+        let result = try store.aggregateAnalytics(
+            in: timeframe,
+            bucket: .minute,
+            calendar: calendar,
+            options: AnalyticsAggregator.Options(
+                includeViaDigipeaters: true,
+                histogramBinCount: 4,
+                topLimit: 10
+            )
+        )
+
+        // K7REQ never repeated the frame (H bit clear) — it was requested, not observed.
+        XCTAssertEqual(result.topDigipeaters.map(\.label), ["K8DIG"])
+        XCTAssertEqual(result.summary.uniqueStations, 3) // K1ABC, N2DEF, K8DIG
     }
 
     func testLoadPacketsInTimeframeReturnsRangeOnly() throws {

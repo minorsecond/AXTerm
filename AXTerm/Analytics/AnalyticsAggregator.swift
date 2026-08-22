@@ -34,13 +34,14 @@ nonisolated struct AnalyticsAggregator {
         let heatmap = computeHeatmap(events: events, calendar: calendar, timeframeInterval: timeframeInterval)
         let histogram = computeHistogram(events: events, binCount: options.histogramBinCount)
 
-        let topTalkers = rankTop(
-            stations: events.compactMap { $0.from } + events.compactMap { $0.to },
-            limit: options.topLimit
-        )
+        // Talkers are ranked by frames *sent*. Counting destinations here would let a
+        // popular receive-only station top the "talkers" list.
+        let topTalkers = rankTop(stations: events.compactMap { $0.from }, limit: options.topLimit)
         let topDestinations = rankTop(stations: events.compactMap { $0.to }, limit: options.topLimit)
+        // Only digipeaters that actually repeated the frame (H bit set) earn credit;
+        // a requested-but-unused path entry is not evidence the station was on air.
         let topDigipeaters = rankTop(
-            stations: events.flatMap { $0.via },
+            stations: events.flatMap { $0.repeatedVia },
             limit: options.topLimit,
             allowRoutingAliases: true
         )
@@ -77,7 +78,7 @@ nonisolated struct AnalyticsAggregator {
                 }
             }
             if includeVia {
-                event.via.forEach { via in
+                event.repeatedVia.forEach { via in
                     if isStationIncludedInMetrics(via) {
                         uniqueStations.insert(via)
                     }
@@ -132,7 +133,7 @@ nonisolated struct AnalyticsAggregator {
                 }
             }
             if includeVia {
-                event.via.forEach { via in
+                event.repeatedVia.forEach { via in
                     if isStationIncludedInMetrics(via) {
                         uniqueStations[key, default: []].insert(via)
                     }
