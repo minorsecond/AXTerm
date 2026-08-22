@@ -258,12 +258,21 @@ nonisolated final class NetRomRouter {
             if advertised.path.contains(where: { normalize($0) == localCallsign }) { continue }
 
             let combined = combinedQuality(broadcastQuality: advertised.quality, pathQuality: neighbor.pathQuality)
-            guard combined >= config.minimumRouteQuality else {
-                #if DEBUG
-                print("[NETROM:ROUTER]   Route to \(normalizedDestination) rejected: quality \(combined) < min \(config.minimumRouteQuality)")
-                #endif
-                continue
+            // minimumRouteQuality is the classic NET/ROM acceptance rule for
+            // *broadcast* routes. Inferred routes are acceptance-gated by evidence
+            // in the inference layer (inferredMinimumQuality) and store the honest
+            // combined value even when it is small — promoting them to the floor
+            // made every weak route display the same fabricated number.
+            let isInferred = advertised.sourceType == "inferred"
+            if !isInferred {
+                guard combined >= config.minimumRouteQuality else {
+                    #if DEBUG
+                    print("[NETROM:ROUTER]   Route to \(normalizedDestination) rejected: quality \(combined) < min \(config.minimumRouteQuality)")
+                    #endif
+                    continue
+                }
             }
+            let storedQuality = max(1, combined)
 
             var normalizedPath = advertised.path.compactMap { normalize($0) }
             if normalizedPath.first != normalizedOrigin {
@@ -275,13 +284,13 @@ nonisolated final class NetRomRouter {
             let effectiveSourceType = advertised.sourceType.isEmpty ? "broadcast" : advertised.sourceType
 
             #if DEBUG
-            print("[NETROM:ROUTER]   ✓ Storing route: \(normalizedDestination) via \(normalizedOrigin) quality=\(combined) source=\(effectiveSourceType)")
+            print("[NETROM:ROUTER]   ✓ Storing route: \(normalizedDestination) via \(normalizedOrigin) quality=\(storedQuality) source=\(effectiveSourceType)")
             #endif
 
             storeRoute(
                 destination: normalizedDestination,
                 origin: normalizedOrigin,
-                quality: combined,
+                quality: storedQuality,
                 path: normalizedPath,
                 timestamp: timestamp,
                 sourceType: effectiveSourceType
