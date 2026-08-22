@@ -475,14 +475,17 @@ actor AX25DiagnosticLogger {
             return "\(typeStr)(N(R)=\(nr))"
         } else {
             // U-frame
+            // Mask off the P/F bit (0x10); the remaining bits identify the U-frame type.
+            // Encodings per AX.25 v2.2 §4.3.3 (see AX25FrameBuilder for the canonical values).
             let modifier = control & 0xEF
             switch modifier {
-            case 0x03, 0x2F: return "SABM"
-            case 0x43, 0x63: return "DISC"
-            case 0x0F, 0x63: return "DM"
-            case 0x63, 0x73: return "UA"
-            case 0x87: return "FRMR"
             case 0x03: return "UI"
+            case 0x0F: return "DM"
+            case 0x2F: return "SABM"
+            case 0x43: return "DISC"
+            case 0x63: return "UA"
+            case 0x6F: return "SABME"
+            case 0x87: return "FRMR"
             case 0xAF: return "XID"
             case 0xE3: return "TEST"
             default: return "U(\(String(format: "0x%02X", modifier)))"

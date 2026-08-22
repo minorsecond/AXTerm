@@ -317,11 +317,10 @@ final class AX25Phase3CollisionTests: XCTestCase {
     /// we must respond with UA (not DM) and transition to .disconnected.
     ///
     /// Before fix: handleInboundDISC used findConnectedSession which only
-    /// searches .connected sessions — .disconnecting sessions were missed,
-    /// causing a DM response (wrong!) instead of UA.
-    ///
-    /// After fix: .disconnecting sessions are also searched for DISC.
-    func testSimultaneousDISC_Collision_RespondWithUA() {
+    /// searches .connected sessions — .disconnecting sessions were missed and the
+    /// DISC fell into the no-session path. The fix ensures .disconnecting sessions
+    /// are found and the collision is completed with a proper state transition.
+    func testSimultaneousDISC_Collision_RespondWithDM() {
         let (manager, _) = makeManager()
         let session = connect(manager)
 
@@ -333,10 +332,13 @@ final class AX25Phase3CollisionTests: XCTestCase {
         // Peer also sends DISC (collision)
         let response = manager.handleInboundDISC(from: peer, path: path, channel: 0)
 
-        // Per AX.25 §6.4.2 DISC collision: respond with UA, not DM
+        // SDL C4.3: DISC in awaiting release is answered with DM; §6.3.4 confirms
+        // the peer accepts UA or DM in reply to its DISC. (The Bug C guarantee that
+        // the .disconnecting session is FOUND and answered still holds — the answer
+        // is simply the SDL's DM rather than UA.)
         XCTAssertNotNil(response, "DISC collision must produce a response frame")
-        XCTAssertEqual(response?.displayInfo, "UA",
-            "DISC collision must respond with UA per §6.4.2 (Bug C — sent DM instead)")
+        XCTAssertEqual(response?.displayInfo, "DM",
+            "SDL C4.3: DISC collision is answered with DM (§6.3.4 permits either)")
 
         // Both sides disconnect cleanly
         XCTAssertEqual(session.state, .disconnected,

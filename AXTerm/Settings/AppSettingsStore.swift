@@ -76,6 +76,7 @@ final class AppSettingsStore: ObservableObject {
     static let axdpMaxDecompressedPayloadKey = "axdpMaxDecompressedPayload"
     static let axdpShowDecodeDetailsKey = "axdpShowAXDPDecodeDetails"
     static let adaptiveTransmissionEnabledKey = "adaptiveTransmissionEnabled"
+    static let ax25T1TimeoutSecondsKey = "ax25T1TimeoutSeconds"
     static let tncCapabilitiesKey = "tncCapabilities"
 
     // NET/ROM route settings keys
@@ -199,6 +200,9 @@ final class AppSettingsStore: ObservableObject {
     static let defaultAXDPMaxDecompressedPayload = 4096
     static let defaultAXDPShowDecodeDetails = false
     static let defaultAdaptiveTransmissionEnabled = true
+    static let defaultAX25T1TimeoutSeconds = 4.0
+    static let minAX25T1TimeoutSeconds = 1.0
+    static let maxAX25T1TimeoutSeconds = 30.0
 
     // NET/ROM route defaults
     static let defaultHideExpiredRoutes = true  // Hide expired routes by default for clean UI
@@ -539,6 +543,22 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistAdaptiveTransmissionEnabled() }
     }
 
+    /// AX.25 T1 retransmit timeout (seconds), clamped to safe bounds.
+    @Published var ax25T1TimeoutSeconds: Double {
+        didSet {
+            let sanitized = Self.sanitizeAX25T1TimeoutSeconds(ax25T1TimeoutSeconds)
+            guard sanitized == ax25T1TimeoutSeconds else {
+                // Correct in place rather than deferring: this value feeds the AX.25 T1
+                // retransmit timer, so the store must never publish an out-of-range T1
+                // even transiently. Assigning here re-enters didSet exactly once — the
+                // sanitizer is idempotent, so that pass takes the persist branch and stops.
+                ax25T1TimeoutSeconds = sanitized
+                return
+            }
+            persistAX25T1TimeoutSeconds()
+        }
+    }
+
     /// TNC capability model — gates which link-layer settings AXTerm can control.
     @Published var tncCapabilities: TNCCapabilities {
         didSet { persistTNCCapabilities() }
@@ -857,6 +877,7 @@ final class AppSettingsStore: ObservableObject {
         let storedAXDPMaxDecompressedPayload = defaults.object(forKey: Self.axdpMaxDecompressedPayloadKey) as? Int ?? Self.defaultAXDPMaxDecompressedPayload
         let storedAXDPShowDecodeDetails = defaults.object(forKey: Self.axdpShowDecodeDetailsKey) as? Bool ?? Self.defaultAXDPShowDecodeDetails
         let storedAdaptiveTransmissionEnabled = defaults.object(forKey: Self.adaptiveTransmissionEnabledKey) as? Bool ?? Self.defaultAdaptiveTransmissionEnabled
+        let storedAX25T1TimeoutSeconds = defaults.object(forKey: Self.ax25T1TimeoutSecondsKey) as? Double ?? Self.defaultAX25T1TimeoutSeconds
 
         // TNC capabilities (JSON-encoded)
         let storedTNCCapabilities: TNCCapabilities
@@ -958,6 +979,7 @@ final class AppSettingsStore: ObservableObject {
         self.axdpMaxDecompressedPayload = storedAXDPMaxDecompressedPayload
         self.axdpShowDecodeDetails = storedAXDPShowDecodeDetails
         self.adaptiveTransmissionEnabled = storedAdaptiveTransmissionEnabled
+        self.ax25T1TimeoutSeconds = Self.sanitizeAX25T1TimeoutSeconds(storedAX25T1TimeoutSeconds)
         self.tncCapabilities = storedTNCCapabilities
 
         // Clear timestamps
@@ -1000,6 +1022,16 @@ final class AppSettingsStore: ObservableObject {
     static func sanitizeLogRetention(_ value: Int) -> Int {
         if value == Int.max { return value }
         return min(max(value, minLogRetention), maxLogRetention)
+    }
+
+    static func sanitizeAX25T1TimeoutSeconds(_ value: Double) -> Double {
+        // Reject non-finite input (a corrupt defaults plist or a bad binding can yield
+        // NaN/±Inf). min/max propagate NaN rather than clamping it, and because
+        // NaN != NaN the didSet correction below would never reach a fixed point —
+        // it would re-correct forever. Fall back to the default instead.
+        guard value.isFinite else { return defaultAX25T1TimeoutSeconds }
+        let clamped = min(max(value, minAX25T1TimeoutSeconds), maxAX25T1TimeoutSeconds)
+        return (clamped * 10).rounded() / 10
     }
 
     static func sanitizeWatchList(_ values: [String], normalize: (String) -> String) -> [String] {
@@ -1190,6 +1222,10 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(adaptiveTransmissionEnabled, forKey: Self.adaptiveTransmissionEnabledKey)
     }
 
+    private func persistAX25T1TimeoutSeconds() {
+        defaults.set(ax25T1TimeoutSeconds, forKey: Self.ax25T1TimeoutSecondsKey)
+    }
+
     private func persistTNCCapabilities() {
         if let data = try? JSONEncoder().encode(tncCapabilities) {
             defaults.set(data, forKey: Self.tncCapabilitiesKey)
@@ -1346,7 +1382,8 @@ final class AppSettingsStore: ObservableObject {
             Self.axdpCompressionAlgorithmKey: Self.defaultAXDPCompressionAlgorithm,
             Self.axdpMaxDecompressedPayloadKey: Self.defaultAXDPMaxDecompressedPayload,
             Self.axdpShowDecodeDetailsKey: Self.defaultAXDPShowDecodeDetails,
-            Self.adaptiveTransmissionEnabledKey: Self.defaultAdaptiveTransmissionEnabled
+            Self.adaptiveTransmissionEnabledKey: Self.defaultAdaptiveTransmissionEnabled,
+            Self.ax25T1TimeoutSecondsKey: Self.defaultAX25T1TimeoutSeconds
         ])
     }
 

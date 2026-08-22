@@ -2187,7 +2187,7 @@ final class PacketEngine: ObservableObject {
             )
         }
 
-        print("[DEBUG:REBUILD] Starting full NET/ROM rebuild from packets...")
+        axDebugPrint("[DEBUG:REBUILD] Starting full NET/ROM rebuild from packets...")
 
         // Step 1: Build replay set BEFORE mutating in-memory/persisted NET/ROM state.
         // Prefer persisted packets, but include current in-memory packets that may not yet
@@ -2195,7 +2195,7 @@ final class PacketEngine: ObservableObject {
         let packetRecords: [PacketRecord]
         do {
             packetRecords = try packetStore.loadAllChronological()
-            print("[DEBUG:REBUILD] ✓ Loaded \(packetRecords.count) packets from database")
+            axDebugPrint("[DEBUG:REBUILD] ✓ Loaded \(packetRecords.count) packets from database")
         } catch {
             return DebugRebuildResult(
                 success: false,
@@ -2212,14 +2212,14 @@ final class PacketEngine: ObservableObject {
 
         if replayPackets.isEmpty {
             replayPackets = livePacketsSnapshot.sorted(by: PacketOrdering.shouldPrecede)
-            print("[DEBUG:REBUILD] Using \(replayPackets.count) in-memory packets for rebuild")
+            axDebugPrint("[DEBUG:REBUILD] Using \(replayPackets.count) in-memory packets for rebuild")
         } else {
             let persistedIDs = Set(replayPackets.map(\.id))
             let unsavedLive = livePacketsSnapshot.filter { !persistedIDs.contains($0.id) }
             if !unsavedLive.isEmpty {
                 replayPackets.append(contentsOf: unsavedLive)
                 replayPackets.sort(by: PacketOrdering.shouldPrecede)
-                print("[DEBUG:REBUILD] Added \(unsavedLive.count) live packets not yet in persistence")
+                axDebugPrint("[DEBUG:REBUILD] Added \(unsavedLive.count) live packets not yet in persistence")
             }
         }
 
@@ -2241,7 +2241,7 @@ final class PacketEngine: ObservableObject {
         // Step 2: Clear persistence
         do {
             try persistence.clearAll()
-            print("[DEBUG:REBUILD] ✓ Cleared persistence tables")
+            axDebugPrint("[DEBUG:REBUILD] ✓ Cleared persistence tables")
         } catch {
             return DebugRebuildResult(
                 success: false,
@@ -2255,7 +2255,7 @@ final class PacketEngine: ObservableObject {
 
         // Step 3: Reset integration state
         integration.reset()
-        print("[DEBUG:REBUILD] ✓ Reset integration state")
+        axDebugPrint("[DEBUG:REBUILD] ✓ Reset integration state")
 
         // Step 4: Replay all packets through integration
         let total = replayPackets.count
@@ -2272,27 +2272,27 @@ final class PacketEngine: ObservableObject {
                 progress?(pct)
 
                 if processed % 500 == 0 {
-                    print("[DEBUG:REBUILD] Processed \(processed)/\(total) packets (\(Int(pct * 100))%)")
+                    axDebugPrint("[DEBUG:REBUILD] Processed \(processed)/\(total) packets (\(Int(pct * 100))%)")
                 }
             }
         }
 
-        print("[DEBUG:REBUILD] ✓ Replayed \(processed) packets")
+        axDebugPrint("[DEBUG:REBUILD] ✓ Replayed \(processed) packets")
 
         // Step 5: Purge stale entries relative to the replay horizon instead of wall-clock now.
         // This preserves snapshot semantics when replaying older captures.
         integration.purgeStaleData(currentDate: latestPacketTimestamp)
-        print("[DEBUG:REBUILD] ✓ Purged stale entries (anchor=\(latestPacketTimestamp))")
+        axDebugPrint("[DEBUG:REBUILD] ✓ Purged stale entries (anchor=\(latestPacketTimestamp))")
 
         // Step 6: Get results
         let neighbors = integration.currentNeighbors()
         let routes = integration.currentRoutes()
         let linkStats = integration.exportLinkStats()
 
-        print("[DEBUG:REBUILD] Results:")
-        print("[DEBUG:REBUILD]   - Neighbors: \(neighbors.count)")
-        print("[DEBUG:REBUILD]   - Routes: \(routes.count)")
-        print("[DEBUG:REBUILD]   - Link Stats: \(linkStats.count)")
+        axDebugPrint("[DEBUG:REBUILD] Results:")
+        axDebugPrint("[DEBUG:REBUILD]   - Neighbors: \(neighbors.count)")
+        axDebugPrint("[DEBUG:REBUILD]   - Routes: \(routes.count)")
+        axDebugPrint("[DEBUG:REBUILD]   - Link Stats: \(linkStats.count)")
 
         let previousTotal = previousNeighbors.count + previousRoutes.count + previousLinkStats.count
         let rebuiltTotal = neighbors.count + routes.count + linkStats.count
@@ -2309,7 +2309,7 @@ final class PacketEngine: ObservableObject {
                     configHash: nil
                 )
             } catch {
-                print("[DEBUG:REBUILD] ⚠️ Rollback snapshot save failed: \(error)")
+                axDebugPrint("[DEBUG:REBUILD] ⚠️ Rollback snapshot save failed: \(error)")
             }
             return DebugRebuildResult(
                 success: false,
@@ -2330,7 +2330,7 @@ final class PacketEngine: ObservableObject {
                 lastPacketID: Int64(total),
                 configHash: nil
             )
-            print("[DEBUG:REBUILD] ✓ Saved rebuilt state to persistence")
+            axDebugPrint("[DEBUG:REBUILD] ✓ Saved rebuilt state to persistence")
         } catch {
             return DebugRebuildResult(
                 success: false,
@@ -2342,7 +2342,7 @@ final class PacketEngine: ObservableObject {
             )
         }
 
-        print("[DEBUG:REBUILD] ✓ Rebuild complete!")
+        axDebugPrint("[DEBUG:REBUILD] ✓ Rebuild complete!")
 
         return DebugRebuildResult(
             success: true,

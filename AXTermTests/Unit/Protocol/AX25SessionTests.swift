@@ -236,7 +236,7 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(frames.first?.path, originalPath)
     }
 
-    func testT1TimeoutRetransmitsOutstandingFrames() {
+    func testFirstT1TimeoutPollsBeforeRetransmittingOutstandingFrames() {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
@@ -252,17 +252,88 @@ final class AX25SessionTests: XCTestCase {
         let frames = manager.sendData(Data([0x41]), to: destination, path: path, channel: 0)
         XCTAssertEqual(frames.count, 1)
 
-        let retransmitFrames = manager.handleT1Timeout(session: session)
+        let firstTimeoutFrames = manager.handleT1Timeout(session: session)
 
-        // Expect retransmitted I-frame
-        let iFrames = retransmitFrames.filter { $0.frameType == "i" }
-        
-        XCTAssertEqual(iFrames.count, 1, "Should retransmit the outstanding I-frame")
-        XCTAssertEqual(iFrames.first?.sessionId, session.id)
-        // Now check for S-frames (RR poll) in the retransmit response
-        let pollFrames = retransmitFrames.filter { $0.frameType == "s" }
-        XCTAssertEqual(pollFrames.count, 1, "Should include RR poll (P=1)")
+        let firstIFrames = firstTimeoutFrames.filter { $0.frameType == "i" }
+        XCTAssertEqual(firstIFrames.count, 1, "First T1 should immediately retransmit the outstanding I-frame with P=1")
+        XCTAssertEqual(firstIFrames.first?.controlByte.map { Int($0 & 0x10) }, 0x10, "Retransmitted frame must have P=1 set")
+        let firstPollFrames = firstTimeoutFrames.filter { $0.frameType == "s" }
+        XCTAssertEqual(firstPollFrames.count, 0, "First T1 should not send a separate RR poll command")
 
+        let secondTimeoutFrames = manager.handleT1Timeout(session: session)
+        let secondIFrames = secondTimeoutFrames.filter { $0.frameType == "i" }
+        XCTAssertEqual(secondIFrames.count, 1, "Second consecutive T1 should also retransmit the outstanding I-frame")
+        XCTAssertEqual(secondIFrames.first?.sessionId, session.id)
+
+    }
+
+    func testNonAdaptiveFirstT1TimeoutPollsBeforeRetransmit() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        manager.defaultConfig = AX25SessionConfig(adaptiveTimeout: false)
+
+        let destination = AX25Address(call: "DRLNOD", ssid: 0)
+        let path = DigiPath()
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        let frames = manager.sendData(Data("c kb5yzb-7\r".utf8), to: destination, path: path, channel: 0)
+        XCTAssertEqual(frames.count, 1)
+
+        let timeoutFrames = manager.handleT1Timeout(session: session)
+        let iFrames = timeoutFrames.filter { $0.frameType == "i" }
+        let pollFrames = timeoutFrames.filter { $0.frameType == "s" }
+
+        XCTAssertEqual(iFrames.count, 1, "Adaptive-off should immediately retransmit the outstanding I-frame with P=1")
+        XCTAssertEqual(iFrames.first?.controlByte.map { Int($0 & 0x10) }, 0x10, "Retransmitted frame must have P=1 set")
+        XCTAssertEqual(pollFrames.count, 0, "T1 recovery should not send a separate RR poll command")
+
+        let secondTimeoutFrames = manager.handleT1Timeout(session: session)
+        XCTAssertEqual(
+            secondTimeoutFrames.filter { $0.frameType == "i" }.count,
+            1,
+            "Second consecutive fixed-RTO T1 should also retransmit the outstanding I-frame"
+        )
+    }
+
+    func testNonAdaptiveT1TimeoutDoesNotBackoffRTO() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        manager.defaultConfig = AX25SessionConfig(initialRto: 4.0, adaptiveTimeout: false)
+
+        let destination = AX25Address(call: "DRLNOD", ssid: 0)
+        let path = DigiPath()
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        _ = manager.sendData(Data("Help\r".utf8), to: destination, path: path, channel: 0)
+        XCTAssertEqual(session.timers.rto, 4.0, accuracy: 0.01)
+
+        _ = manager.handleT1Timeout(session: session)
+
+        XCTAssertEqual(session.timers.rto, 4.0, accuracy: 0.01, "Adaptive-off should keep fixed FRACK/T1 rather than exponential RTO backoff")
+    }
+
+    func testSendDataQueuesWhileReceiveSequenceGapIsUnresolved() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        manager.defaultConfig = AX25SessionConfig(adaptiveTimeout: false)
+
+        let destination = AX25Address(call: "DRLNOD", ssid: 0)
+        let path = DigiPath()
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        _ = manager.handleInboundIFrame(
+            from: destination,
+            path: path,
+            channel: 0,
+            ns: 1,
+            nr: 0,
+            pf: false,
+            payload: Data("out of order".utf8)
+        )
+        XCTAssertTrue(session.hasReceiveSequenceGap)
+
+        let frames = manager.sendData(Data("c kb5yzb-7\r".utf8), to: destination, path: path, channel: 0)
+
+        XCTAssertTrue(frames.isEmpty, "Do not transmit new terminal data while waiting for a missing inbound I-frame")
+        XCTAssertEqual(session.pendingDataQueue.count, 1)
+        XCTAssertEqual(session.vs, 0, "Queued data must not consume an outbound sequence number")
     }
 
     func testRejRetransmitsWithConnectedSessionPathMismatch() {
@@ -386,6 +457,26 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(session.state, .disconnected)
     }
 
+    func testDMStopsOutstandingT1AndClearsSendBuffer() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        manager.defaultConfig = AX25SessionConfig(adaptiveTimeout: false)
+
+        let destination = AX25Address(call: "DRLNOD", ssid: 0)
+        let path = DigiPath()
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        _ = manager.sendData(Data("HELP\r".utf8), to: destination, path: path, channel: 0)
+        XCTAssertEqual(session.outstandingCount, 1)
+        XCTAssertNotNil(session.t1TimerTask)
+
+        manager.handleInboundDM(from: destination, path: path, channel: 0)
+
+        XCTAssertEqual(session.state, .disconnected)
+        XCTAssertEqual(session.outstandingCount, 0)
+        XCTAssertNil(session.t1TimerTask, "DM must stop T1 immediately")
+        XCTAssertNil(session.t1PendingRetransmitTask, "DM must cancel any pending grace retransmit")
+    }
+
     func testDigiPathFromStripsRepeatedMarkerAndParsesSSID() {
         let path = DigiPath.from(["W0ARP-7*", "WIDE1-1*", "DRL"])
 
@@ -402,7 +493,16 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(path.display, "W0ARP-7,WIDE1-1,DRL")
     }
 
-    func testHandleInboundIFrameWhileConnectingDoesNotSendDM() {
+    func testHandleInboundIFrameWhileConnectingIsIgnored() {
+        // §6.3.1: "The originating TNC sending a SABM(E) command ignores and discards
+        // any frames except SABM, DISC, UA and DM frames from the distant TNC."
+        //
+        // This test previously asserted the opposite — a DM reply to "reset a phantom
+        // session". Live capture against KB5YZB-7 (BPQ) showed why that is wrong: the
+        // peer had answered our SABM with UA plus its first I-frame, both lost on RF.
+        // It was legitimately connected, and our DM told it to tear the new link down.
+        // The spec's reset mechanism for a genuinely stale peer is the retransmitted
+        // SABM itself, whose UA zeroes V(S)/V(A)/V(R) on both ends.
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
 
@@ -417,12 +517,41 @@ final class AX25SessionTests: XCTestCase {
             channel: 0,
             ns: 0,
             nr: 0,
-            pf: false,
+            pf: true,
             payload: Data("INFO".utf8)
         )
 
-        XCTAssertNil(sentFrame)
+        XCTAssertNil(sentFrame, "§6.3.1: I-frame while our SABM is outstanding must be ignored — DM here tears down a freshly established peer")
+        let session = manager.session(for: destination, path: path, channel: 0)
+        XCTAssertEqual(session.state, .connecting, "Session must stay .connecting — SABM retransmit loop continues")
+    }
 
+    func testHandleInboundRRWhileConnectingIsIgnored() {
+        // §6.3.1: same rule for supervisory frames. The KB5YZB-7 field log showed the
+        // peer polling RR(P=1) right after its (lost) UA; answering DM destroyed the
+        // link it had just established. The RR must be discarded and the SABM
+        // retransmission loop left to complete the connection.
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
+        manager.localCallsign = AX25Address(call: "K0EPI", ssid: 7)
+
+        let destination = AX25Address(call: "KB5YZB", ssid: 7)
+        let path = DigiPath()
+
+        _ = manager.connect(to: destination, path: path, channel: 0)
+        let session = manager.session(for: destination, path: path, channel: 0)
+        XCTAssertEqual(session.state, .connecting)
+
+        // The exact frame from the field capture: RR(nr=0, P=1) command while connecting
+        let response = manager.handleInboundRR(
+            from: destination,
+            path: path,
+            channel: 0,
+            nr: 0,
+            isPoll: true
+        )
+
+        XCTAssertNil(response, "§6.3.1: RR while our SABM is outstanding must be ignored, not answered with DM")
+        XCTAssertEqual(session.state, .connecting, "Session must stay .connecting — SABM retransmit loop must not be interrupted")
     }
 
     func testHandleInboundIFrameWithNoSessionDoesNotRespondWithDM() {
@@ -519,6 +648,28 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertTrue(manager.sessions.isEmpty, "RR with no session must not implicitly create a session")
     }
 
+    func testRRFinalResponseDoesNotTriggerPollReply() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let destination = AX25Address(call: "DRLNOD", ssid: 0)
+        let path = DigiPath()
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        _ = manager.sendData(Data("Help\r".utf8), to: destination, path: path, channel: 0)
+        XCTAssertEqual(session.outstandingCount, 1)
+
+        let response = manager.handleInboundRR(
+            from: destination,
+            path: path,
+            channel: 0,
+            nr: 1,
+            pf: true,
+            isCommand: false
+        )
+
+        XCTAssertNil(response, "RR(F=1) response must not be treated as a poll requiring our RR reply")
+        XCTAssertEqual(session.outstandingCount, 0)
+    }
+
 
 
     func testHandleInboundREJWithNoSessionDoesNotCreateSessionOrRespond() {
@@ -537,6 +688,148 @@ final class AX25SessionTests: XCTestCase {
 
         XCTAssertTrue(retransmitFrames.isEmpty, "REJ with no session should not produce retransmits")
         XCTAssertTrue(manager.sessions.isEmpty, "REJ with no session must not implicitly create a session")
+    }
+
+    // MARK: - §6.3.5: DM Responses to Unknown-Session Polls
+
+    // §6.3.5: "Any TNC receiving a command frame other than a SABM(E) or UI frame
+    // with the P bit set to '1' responds with a DM frame with the F bit set to '1'.
+    // The offending frame is ignored."  With no session, we are in the disconnected
+    // state for that peer. This is what lets a peer holding a stale session (e.g.
+    // after we crashed or restarted) clear it promptly instead of polling until its
+    // own N2 expires. P=0 frames stay ignored — the tests above lock that in, and
+    // it is the spec's own guard against DM storms from digipeated duplicates.
+
+    private func assertIsDM(_ frame: OutboundFrame?, file: StaticString = #filePath, line: UInt = #line) {
+        guard let frame else {
+            XCTFail("expected a DM frame, got nil", file: file, line: line)
+            return
+        }
+        let decoded = AX25ControlFieldDecoder.decode(control: frame.controlByte ?? 0)
+        XCTAssertEqual(decoded.uType, .DM, "expected DM, got \(String(describing: decoded.uType))", file: file, line: line)
+        XCTAssertNotEqual((frame.controlByte ?? 0) & 0x10, 0, "§6.3.5: the DM must carry F=1", file: file, line: line)
+    }
+
+    /// §6.3.5: RR command poll for an unknown session → DM(F=1).
+    func testUnknownSessionRRPollAnsweredWithDM() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let stranger = AX25Address(call: "N0HI", ssid: 7)
+
+        let frames = manager.handleInboundRRFrames(
+            from: stranger, path: DigiPath(), channel: 0,
+            nr: 0, pf: true, isCommand: true
+        )
+
+        XCTAssertEqual(frames.count, 1)
+        assertIsDM(frames.first)
+        XCTAssertTrue(manager.sessions.isEmpty, "the offending frame is ignored — no session is created")
+    }
+
+    /// §6.3.5: RNR and REJ command polls for an unknown session → DM(F=1).
+    func testUnknownSessionRNRAndREJPollsAnsweredWithDM() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let stranger = AX25Address(call: "N0HI", ssid: 7)
+
+        let rnrFrames = manager.handleInboundRNR(
+            from: stranger, path: DigiPath(), channel: 0,
+            nr: 0, pf: true, isCommand: true
+        )
+        XCTAssertEqual(rnrFrames.count, 1)
+        assertIsDM(rnrFrames.first)
+
+        let rejFrames = manager.handleInboundREJ(
+            from: stranger, path: DigiPath(), channel: 0,
+            nr: 0, pf: true, isCommand: true
+        )
+        XCTAssertEqual(rejFrames.count, 1)
+        assertIsDM(rejFrames.first)
+
+        XCTAssertTrue(manager.sessions.isEmpty)
+    }
+
+    /// §6.3.5: I-frame poll (P=1) for an unknown session → DM(F=1). I frames are
+    /// always commands in AX.25 v2.2.
+    func testUnknownSessionIFramePollAnsweredWithDM() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let stranger = AX25Address(call: "N0HI", ssid: 7)
+
+        let frame = manager.handleInboundIFrame(
+            from: stranger, path: DigiPath(), channel: 0,
+            ns: 0, nr: 0, pf: true, payload: Data("INFO".utf8)
+        )
+
+        assertIsDM(frame)
+        XCTAssertTrue(manager.sessions.isEmpty)
+    }
+
+    /// §6.3.5: a supervisory *response* frame for an unknown session is never
+    /// answered — the rule covers command frames only.
+    func testUnknownSessionRRResponseIsIgnored() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let stranger = AX25Address(call: "N0HI", ssid: 7)
+
+        let frames = manager.handleInboundRRFrames(
+            from: stranger, path: DigiPath(), channel: 0,
+            nr: 0, pf: true, isCommand: false
+        )
+        XCTAssertTrue(frames.isEmpty, "§6.3.5 covers command frames; responses are discarded silently")
+    }
+
+    // MARK: - §6.2: REJ Command Poll Must Receive F=1 Reply
+
+    /// §6.2: "The next response frame returned to a supervisory command frame with
+    /// the P bit set to '1', received during the information transfer state, is an
+    /// RR, RNR or REJ response frame with the F bit set to '1'."
+    ///
+    /// Regression: the manager previously dropped pf/isCommand on the floor when
+    /// dispatching REJ, so an REJ poll never got its mandatory Final — the polling
+    /// peer sat in its own T1 recovery waiting for an F=1 that never came.
+    func testREJCommandPollReceivesRRFinalReply() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let destination = AX25Address(call: "N0HI", ssid: 7)
+        let path = DigiPath()
+
+        _ = manager.connect(to: destination, path: path, channel: 0)
+        manager.handleInboundUA(from: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("DATA".utf8), to: destination, path: path, channel: 0)
+
+        let frames = manager.handleInboundREJ(
+            from: destination, path: path, channel: 0,
+            nr: 0, pf: true, isCommand: true
+        )
+
+        let finalReplies = frames.filter { frame in
+            frame.frameType == "s" && frame.isCommand != true && ((frame.controlByte ?? 0) & 0x10) != 0
+        }
+        XCTAssertEqual(finalReplies.count, 1,
+            "§6.2: an REJ command with P=1 must be answered by exactly one supervisory response with F=1")
+    }
+
+    // MARK: - §6.3.1/§6.4.1: No I Frames Before the Link Is Up
+
+    /// Data queued while still awaiting UA must not be drained onto the air by an
+    /// inbound RR — I frames may only flow in the information-transfer state.
+    func testRRWhileConnectingDoesNotDrainQueuedData() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let destination = AX25Address(call: "N0HI", ssid: 7)
+        let path = DigiPath()
+
+        _ = manager.connect(to: destination, path: path, channel: 0)
+        let session = manager.session(for: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("EARLY".utf8), to: destination, path: path, channel: 0)
+        XCTAssertEqual(session.pendingDataQueue.count, 1, "precondition: data queued while connecting")
+
+        var emitted: [OutboundFrame] = []
+        manager.onSendFrame = { emitted.append($0) }
+        let returned = manager.handleInboundRRFrames(
+            from: destination, path: path, channel: 0,
+            nr: 0, pf: true, isCommand: true
+        )
+
+        XCTAssertTrue((emitted + returned).allSatisfy { $0.frameType != "i" },
+            "no I-frame may be transmitted before UA establishes the link")
+        XCTAssertEqual(session.pendingDataQueue.count, 1, "queued data must remain queued until connected")
+        XCTAssertEqual(session.state, .connecting)
     }
 
 
@@ -851,12 +1144,15 @@ final class AX25SessionTests: XCTestCase {
 
         let actions = sm.handle(event: .t3Timeout)
 
-        // T3 timeout should send RR as poll to keep link alive
+        // §4.4.5.2: "When T3 times out, an RR or RNR frame is transmitted as a
+        // command with the P bit set, and then T1 is started."
         XCTAssertTrue(actions.contains { action in
-            if case .sendRR(_, _, _) = action { return true }
+            if case .sendRR(_, let pf, let isCommand) = action { return pf == true && isCommand == true }
             return false
-        })
-        XCTAssertTrue(actions.contains(.startT1))
+        }, "T3 expiry must transmit an RR command with P=1 (§4.4.5.2)")
+        XCTAssertTrue(actions.contains(.startT1), "T1 times the enquiry (§4.4.5.2)")
+        XCTAssertFalse(actions.contains(.startT3),
+            "T3 restarts only when the enquiry is answered — not passively at expiry")
     }
 
     func testStateMachineSequenceStateReset() {
@@ -920,8 +1216,9 @@ final class AX25SessionTests: XCTestCase {
         )
         XCTAssertEqual(session.vr, 2, "V(R) should advance to 2 after receiving 2 I-frames")
 
-        // T1 fires - retransmit the outstanding I-frame.
+        // First T1 polls; second consecutive T1 retransmits the outstanding I-frame.
         // The retransmitted frame MUST have N(R)=2 (current V(R)), not N(R)=0 (stale).
+        _ = manager.handleT1Timeout(session: session)
         let retransmitFrames = manager.handleT1Timeout(session: session)
 
         let iFrameRetransmits = retransmitFrames.filter { $0.frameType == "i" }
@@ -936,13 +1233,10 @@ final class AX25SessionTests: XCTestCase {
     // MARK: - Bug Fix: T1 Timeout Must Send RR Poll P=1 (KB5YZB-7)
 
     func testT1TimeoutInConnectedStateSendsRRPoll() {
-        // BUG: When T1 fires in connected state with outstanding frames,
-        // AXTerm only retransmits I-frames but never sends an RR poll (P=1).
-        // Per AX.25 spec, the station should send a supervisory command with
-        // P=1 to force the peer to respond with its current state.
-        //
-        // This is critical when our I-frame was received but the response was
-        // lost - polling lets us discover the peer already processed our command.
+        // T1 fires in connected state with outstanding frames.
+        // Under our new design, the state machine does not emit a separate S-frame RR poll command
+        // because standard AX.25 dictates we retransmit the oldest outstanding I-frame with P=1 instead
+        // (handled at the SessionManager level).
         var sm = AX25StateMachine(config: AX25SessionConfig())
         _ = sm.handle(event: .connectRequest)
         _ = sm.handle(event: .receivedUA)
@@ -957,15 +1251,13 @@ final class AX25SessionTests: XCTestCase {
         // T1 fires
         let actions = sm.handle(event: .t1Timeout)
 
-        // Must include an RR poll (P=1) with current V(R)
+        // Must NOT include a separate RR poll
         let rrPollActions = actions.filter { action in
-            if case .sendRR(let nr, let pf, _) = action {
-                return pf == true && nr == 1
-            }
+            if case .sendRR = action { return true }
             return false
         }
-        XCTAssertFalse(rrPollActions.isEmpty,
-            "T1 timeout with outstanding frames must send RR poll (P=1) with current V(R)")
+        XCTAssertTrue(rrPollActions.isEmpty,
+            "T1 timeout with outstanding frames must not send a separate S-frame RR poll command")
     }
 
     // MARK: - Bug Fix: retryCount Not Reset on RR ACK (KB5YZB-7)
@@ -1072,7 +1364,8 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(cmdFrame.nr, 2, "Command should carry current V(R)=2")
         XCTAssertEqual(cmdFrame.ns, 1, "Command should be at N(S)=1")
 
-        // Step 5: T1 fires (remote didn't respond)
+        // Step 5: First T1 polls; second consecutive T1 retransmits (remote didn't respond)
+        _ = manager.handleT1Timeout(session: session)
         let retransmitFrames = manager.handleT1Timeout(session: session)
 
         // Verify retransmit carries updated N(R) and there's an RR poll
@@ -1117,7 +1410,8 @@ final class AX25SessionTests: XCTestCase {
         // Peer ACKed our first 2 frames (piggybacked nr=2 in I-frames above)
         XCTAssertEqual(session.outstandingCount, 1, "Only frame C outstanding")
 
-        // T1 fires for frame C
+        // First T1 polls for frame C; second consecutive T1 retransmits
+        _ = manager.handleT1Timeout(session: session)
         let retransmitFrames = manager.handleT1Timeout(session: session)
 
         let iRetransmits = retransmitFrames.filter { $0.frameType == "i" }
@@ -1226,12 +1520,81 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(sentFrame?.nr, 1)
     }
 
-    /// Tests that the first I-frame in a transmission burst has the Poll (P) bit set,
-    /// while subsequent frames do not. This ensures we force an immediate response
-    /// from the peer (improving interactivity and preventing timeouts), matching
-    /// behaviors of other TNCs like Direwolf.
-    func testFirstIFrameHasPollBit() {
-        // ... (existing test)
+    /// The first outbound user I-frame after SABM/UA carries P=1 to solicit an
+    /// immediate ACK from conservative NET/ROM nodes.
+    func testFirstSessionIFrameHasPollBit() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let destination = AX25Address(call: "DRLNOD", ssid: 0)
+        let path = DigiPath()
+        _ = connectSession(manager: manager, destination: destination, path: path)
+
+        let twoChunks = Data(repeating: 0x41, count: AX25Constants.defaultPacketLength + 1)
+        let multiFrameBurst = manager.sendData(twoChunks, to: destination, path: path, channel: 0)
+        let iFrames = multiFrameBurst.filter { $0.frameType == "i" }
+
+        XCTAssertEqual(iFrames.count, 2)
+        XCTAssertEqual(iFrames[0].controlByte.map { Int($0 & 0x10) }, 0x10, "First session I-frame must poll")
+        XCTAssertEqual(iFrames[1].controlByte.map { Int($0 & 0x10) }, 0x00, "Only the first frame in the burst should carry P=1")
+    }
+
+    /// Later idle user commands must not carry P=1 just because the send buffer
+    /// was empty. DRLNOD live testing shows repeated idle-line polls can provoke DM.
+    func testSecondIdleCommandDoesNotCarryPollBit() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let destination = AX25Address(call: "DRLNOD", ssid: 0)
+        let path = DigiPath()
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        let helpFrames = manager.sendData(Data("Help\r".utf8), to: destination, path: path, channel: 0)
+        XCTAssertEqual(helpFrames.first?.controlByte.map { Int($0 & 0x10) }, 0x10)
+
+        _ = manager.handleInboundRR(from: destination, path: path, channel: 0, nr: session.vs, isPoll: false)
+        XCTAssertEqual(session.outstandingCount, 0)
+
+        let commandFrames = manager.sendData(Data("c kb5yzb-7\r".utf8), to: destination, path: path, channel: 0)
+        let commandIFrame = commandFrames.first { $0.frameType == "i" }
+
+        XCTAssertEqual(commandIFrame?.ns, 1)
+        XCTAssertEqual(commandIFrame?.controlByte.map { Int($0 & 0x10) }, 0x00, "Second idle command must not poll")
+    }
+
+    func testInboundRRPollWithoutAckRetransmitsOutstandingFrame() {
+        let clock = AX25VirtualClock()
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7), clock: clock)
+        manager.defaultConfig = AX25SessionConfig(initialRto: 4.0, adaptiveTimeout: false)
+
+        let destination = AX25Address(call: "DRLNOD", ssid: 0)
+        let path = DigiPath()
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        var timerDrivenFrames: [OutboundFrame] = []
+        manager.onSendFrame = { timerDrivenFrames.append($0) }
+
+        let helpFrames = manager.sendData(Data("Help\r".utf8), to: destination, path: path, channel: 0)
+        let originalIFrame = helpFrames.first { $0.frameType == "i" }
+        XCTAssertEqual(originalIFrame?.controlByte.map { Int($0 & 0x10) }, 0x10)
+
+        clock.advance(by: 3.0)
+        let responses = manager.handleInboundRRFrames(
+            from: destination,
+            path: path,
+            channel: 0,
+            nr: 0,
+            pf: true,
+            isCommand: true
+        )
+
+        let rrFinals = responses.filter { $0.frameType == "s" }
+        let retransmittedIFrames = responses.filter { $0.frameType == "i" }
+
+        XCTAssertEqual(rrFinals.count, 1, "RR(P=1) requires an RR(F=1) response")
+        XCTAssertEqual(retransmittedIFrames.count, 1, "No-progress RR poll should retransmit the outstanding I-frame")
+        XCTAssertEqual(retransmittedIFrames.first?.payload, Data("Help\r".utf8))
+        XCTAssertEqual(retransmittedIFrames.first?.controlByte.map { Int($0 & 0x10) }, 0x10, "Peer-poll recovery preserves the original I-frame P bit")
+
+        clock.advance(by: 1.21)
+        XCTAssertTrue(timerDrivenFrames.isEmpty, "Inbound RR poll recovery must restart T1 and cancel the original timer")
+        XCTAssertEqual(session.outstandingCount, 1)
     }
 
     /// Reproduction of the KB5YZB scenario where AXTerm sent SABM -> RR -> DM
@@ -1466,8 +1829,9 @@ final class AX25SessionTests: XCTestCase {
 
     // MARK: - T3 Timer Bug Regression Tests
 
-    /// T3 timeout must send RR with P=1 (poll) per AX.25 §6.4.1.
-    /// Without P=1, the peer ignores the RR and the link silently dies.
+    /// §4.4.5.2: T3 expiry transmits an RR command with P=1 and starts T1.
+    /// Without P=1 the peer owes no answer, so the "keepalive" could never
+    /// actually confirm the link was alive.
     func testT3TimeoutSendsRRPoll() {
         var sm = AX25StateMachine(config: AX25SessionConfig())
         _ = sm.handle(event: .connectRequest)
@@ -1481,14 +1845,18 @@ final class AX25SessionTests: XCTestCase {
         // Fire T3 timeout
         let actions = sm.handle(event: .t3Timeout)
 
-        // Must contain sendRR with pf=true (poll)
-        let rrActions = actions.compactMap { action -> (Int, Bool)? in
-            if case .sendRR(let nr, let pf, _) = action { return (nr, pf) }
+        // §4.4.5.2: exactly one RR, sent as a command with P=1, carrying current V(R)
+        let rrActions = actions.compactMap { action -> (Int, Bool, Bool)? in
+            if case .sendRR(let nr, let pf, let isCommand) = action { return (nr, pf, isCommand) }
             return nil
         }
         XCTAssertEqual(rrActions.count, 1, "T3 timeout must produce exactly one RR")
         XCTAssertEqual(rrActions.first?.0, 1, "RR N(R) should equal current V(R)")
-        XCTAssertTrue(rrActions.first?.1 ?? false, "T3 timeout RR must have P=1 (poll) to elicit a response from the peer")
+        XCTAssertTrue(rrActions.first?.1 ?? false, "§4.4.5.2: the enquiry carries P=1")
+        XCTAssertTrue(rrActions.first?.2 ?? false, "§4.4.5.2: the enquiry is a command frame")
+        XCTAssertTrue(actions.contains(.startT1), "§4.4.5.2: T1 is started to time the enquiry")
+        XCTAssertFalse(actions.contains(.startT3),
+            "T3 restarts when the response arrives — not passively at expiry")
     }
 
     /// T3 timeout should be reasonable for VHF packet (not 180s which is longer

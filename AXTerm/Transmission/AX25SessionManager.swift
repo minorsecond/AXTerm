@@ -92,6 +92,14 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// timeout triggers a fresh immediate retransmit.
     var lastREJRetransmitNR: Int? = nil
 
+    /// Consecutive T1 expirations while outbound I-frames remain unacknowledged.
+    ///
+    /// The first expiry is used as an AX.25 RR(P=1) status poll. Retransmitting
+    /// immediately on that same expiry can duplicate interactive NET/ROM node
+    /// commands when the peer has already received the I-frame but its RR is
+    /// merely delayed. A second consecutive expiry is stronger loss evidence.
+    var consecutiveT1PollsWithoutAck: Int = 0
+
     /// Monotonic time when SABM was sent, from the injected clock (for RTT calculation).
     /// Using TimeInterval keeps this compatible with the virtual clock in tests.
     var sabmSentAt: TimeInterval?
@@ -108,6 +116,12 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// Via path from the most recently received inbound I-frame (for display only).
     /// Updated each time handleInboundIFrame delivers data.
     var lastReceivedVia: [String] = []
+
+    /// True when the receive side has buffered out-of-sequence I-frames and is
+    /// waiting for the missing N(S) to arrive before delivering data.
+    var hasReceiveSequenceGap: Bool {
+        !stateMachine.receiveBuffer.isEmpty
+    }
 
     init(
         localAddress: AX25Address,
@@ -127,7 +141,8 @@ nonisolated final class AX25Session: @unchecked Sendable {
         self.timers = AX25SessionTimers(
             rtoMin: config.rtoMin ?? 1.0,
             rtoMax: config.rtoMax ?? 30.0,
-            initialRto: config.initialRto ?? 4.0
+            initialRto: config.initialRto ?? 4.0,
+            adaptiveTimeout: config.adaptiveTimeout
         )
         self.statistics = AX25SessionStatistics()
         self.lastActivityAt = Date()
@@ -186,6 +201,7 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// Add frame to send buffer for retransmission
     func bufferFrame(_ frame: OutboundFrame, ns: Int) {
         sendBuffer[ns] = frame
+        consecutiveT1PollsWithoutAck = 0
     }
 
     /// Record send time for N(S) using the injected clock's monotonic time.
@@ -251,11 +267,17 @@ nonisolated final class AX25Session: @unchecked Sendable {
     func acknowledgeUpTo(from va: Int, to nr: Int) {
         let modulo = stateMachine.config.modulo
         var current = va
+        var removedAny = false
         
         // Loop from va up to (but not including) nr, acknowledging each frame
         while current != nr {
-            sendBuffer.removeValue(forKey: current)
+            if sendBuffer.removeValue(forKey: current) != nil {
+                removedAny = true
+            }
             current = (current + 1) % modulo
+        }
+        if removedAny {
+            consecutiveT1PollsWithoutAck = 0
         }
     }
 
@@ -296,6 +318,7 @@ nonisolated final class AX25Session: @unchecked Sendable {
         pendingDataQueue.removeAll()
         sendBuffer.removeAll()
         clearSendTimes()
+        consecutiveT1PollsWithoutAck = 0
         TxLog.debug(.session, "Cleared pending transmission state", [
             "session": String(id.uuidString.prefix(8)),
             "peer": remoteAddress.display,
@@ -502,6 +525,14 @@ final class AX25SessionManager: ObservableObject {
 
         let pathSignature = path.display
         let config = getConfigForDestination?(destination.display, pathSignature) ?? defaultConfig
+
+        axDebugPrint("====== DEBUG TRACE: session(for:) ======")
+        axDebugPrint("adaptiveTimeout: \(config.adaptiveTimeout)")
+        axDebugPrint("hasGetConfig: \(getConfigForDestination != nil)")
+        axDebugPrint("defaultAdaptive: \(defaultConfig.adaptiveTimeout)")
+        axDebugPrint("session: \(destination.display)")
+        axDebugPrint("========================================")
+
         let session = AX25Session(
             localAddress: localCallsign,
             remoteAddress: destination,
@@ -864,6 +895,21 @@ final class AX25SessionManager: ObservableObject {
             ])
 
         case .connected:
+            guard !session.hasReceiveSequenceGap else {
+                for (i, chunk) in chunks.enumerated() {
+                    let info = (i == 0) ? displayInfo : nil
+                    session.pendingDataQueue.append((data: chunk, pid: pid, displayInfo: info))
+                }
+                TxLog.debug(.session, "Queued data while receive sequence gap is unresolved", [
+                    "peer": destination.display,
+                    "size": data.count,
+                    "chunks": chunks.count,
+                    "receiveBufferCount": session.stateMachine.receiveBuffer.count,
+                    "vr": session.vr
+                ])
+                return frames
+            }
+
             // Send chunks that fit in window; queue the rest.
             //
             // Audit B1 fix: AIMD window must be respected in the direct-send path, not only
@@ -876,20 +922,26 @@ final class AX25SessionManager: ObservableObject {
             var remaining: [(data: Data, pid: UInt8, displayInfo: String?)] = []
             let aimdEffectiveDirect = session.aimdWindow.effectiveWindow
             let effectiveSendWindowDirect = min(session.stateMachine.config.windowSize, aimdEffectiveDirect)
-            print("[DEBUG:AX25:SEND] sendData connected | dest=\(destination.display) totalChunks=\(chunks.count) paclen=\(paclen) canSend=\(session.canSendIFrame) aimdEffective=\(aimdEffectiveDirect) effectiveWindow=\(effectiveSendWindowDirect) va=\(session.va) vs=\(session.vs)")
+            axDebugPrint("[DEBUG:AX25:SEND] sendData connected | dest=\(destination.display) totalChunks=\(chunks.count) paclen=\(paclen) canSend=\(session.canSendIFrame) aimdEffective=\(aimdEffectiveDirect) effectiveWindow=\(effectiveSendWindowDirect) va=\(session.va) vs=\(session.vs)")
             for (i, chunk) in chunks.enumerated() {
                 guard session.canSendIFrame, session.outstandingCount < effectiveSendWindowDirect else {
                     let info = (i == 0) ? displayInfo : nil
                     remaining.append((data: chunk, pid: pid, displayInfo: info))
-                    print("[DEBUG:AX25:SEND] window full, queue chunk \(i) | remaining=\(remaining.count)")
+                    axDebugPrint("[DEBUG:AX25:SEND] window full, queue chunk \(i) | remaining=\(remaining.count)")
                     continue
                 }
                 let info = (i == 0) ? displayInfo : nil
                 let wasIdle = session.outstandingCount == 0
                 let ns = session.vs  // Capture before buildIFrame increments vs
-                let iFrame = buildIFrame(for: session, payload: chunk, pid: pid, displayInfo: info)
+                let iFrame = buildIFrame(
+                    for: session,
+                    payload: chunk,
+                    pid: pid,
+                    displayInfo: info,
+                    pf: shouldPollFirstOutboundIFrame(for: session, wasIdle: wasIdle)
+                )
                 frames.append(iFrame)
-                print("[DEBUG:AX25:SEND] immediate tx chunk \(i) | N(S)=\(ns) payload=\(chunk.count)")
+                axDebugPrint("[DEBUG:AX25:SEND] immediate tx chunk \(i) | N(S)=\(ns) payload=\(chunk.count)")
 
                 session.bufferFrame(iFrame, ns: ns)  // ns, not vs-1 (avoids -1 when vs wraps 7->0)
                 session.recordSendTime(ns: ns, time: clock.currentTime)
@@ -906,7 +958,7 @@ final class AX25SessionManager: ObservableObject {
             }
             session.pendingDataQueue.insert(contentsOf: remaining, at: 0)
             if !remaining.isEmpty {
-                print("[DEBUG:AX25:SEND] queued remaining | count=\(remaining.count) queueDepth=\(session.pendingDataQueue.count)")
+                axDebugPrint("[DEBUG:AX25:SEND] queued remaining | count=\(remaining.count) queueDepth=\(session.pendingDataQueue.count)")
                 TxLog.debug(.session, "Window filled, queued remaining chunks", [
                     "peer": destination.display,
                     "remaining": remaining.count,
@@ -1270,10 +1322,16 @@ final class AX25SessionManager: ObservableObject {
         let oldState = session.state
         let actions = session.stateMachine.handle(event: .receivedDISC)
 
+        // A DISC no longer always ends the session: per SDL C4.2, a DISC received
+        // while our SABM is outstanding is answered with DM and the connect attempt
+        // continues. Only perform teardown bookkeeping when the state machine
+        // actually left the link.
+        let sessionEnded = session.state == .disconnected
+
         // Clear send buffer and notify UI that frames are acknowledged.
         // When remote sends DISC in response to our I-frame (e.g., "bye" command),
         // they clearly received it. Mark as delivered for UX purposes.
-        if !session.sendBuffer.isEmpty {
+        if sessionEnded && !session.sendBuffer.isEmpty {
             let bufferedFrames = session.sendBuffer.keys.sorted()
             TxLog.debug(.session, "Clearing send buffer on DISC", [
                 "peer": source.display,
@@ -1293,11 +1351,13 @@ final class AX25SessionManager: ObservableObject {
             onSessionStateChanged?(session, oldState, session.state)
         }
 
-        TxLog.sessionClose(
-            sessionId: session.id,
-            peer: source.display,
-            reason: "Remote DISC"
-        )
+        if sessionEnded {
+            TxLog.sessionClose(
+                sessionId: session.id,
+                peer: source.display,
+                reason: "Remote DISC"
+            )
+        }
 
         session.touch()
         return processActions(actions, for: session).first
@@ -1367,10 +1427,16 @@ final class AX25SessionManager: ObservableObject {
                 return nil
             }
 
-            // Robust behavior per AX.25 guidance: if we receive an I-frame that we
-            // can't associate with any session, we **ignore** it rather than sending
-            // DM. Sending DM here can erroneously tear down a valid remote session,
-            // especially when duplicate decodes or path mismatches occur via digipeaters.
+            // §6.3.5: with no session at all we are in the disconnected state for
+            // this peer, and a command frame with P=1 must be answered with DM(F=1).
+            // I frames are always commands in AX.25 v2.2. The P=1 gate is the spec's
+            // own protection against DM storms: digipeated duplicates carry P=0 and
+            // are ignored, while a deliberate poll gets the answer that lets the
+            // peer clear its stale session instead of retrying until N2.
+            if pf {
+                debugTrace("I-frame poll with no session -> DM", ["from": source.display])
+                return AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path)
+            }
             TxLog.warning(.session, "I-frame received with no matching session; ignoring", [
                 "from": source.display,
                 "path": path.display.isEmpty ? "(empty)" : path.display,
@@ -1385,9 +1451,25 @@ final class AX25SessionManager: ObservableObject {
             return nil
         }
 
-        guard let session = session, session.state == .connected else {
+        guard let session = session else {
+            TxLog.warning(.session, "I-frame received but no session after lookup", [
+                "from": source.display
+            ])
+            return nil
+        }
+
+        if session.state == .connecting {
+            // Stale remote state: the peer is sending numbered traffic before
+            // accepting our SABM. Let the state machine emit DM to reset the
+            // remote phantom session while our connect attempt continues.
+            let actions = session.stateMachine.handle(event: .receivedIFrame(ns: ns, nr: nr, pf: pf, payload: payload))
+            session.touch()
+            return processActions(actions, for: session).first
+        }
+
+        guard session.state == .connected else {
             TxLog.warning(.session, "I-frame received but not connected", [
-                "state": session?.state.rawValue ?? "unknown"
+                "state": session.state.rawValue
             ])
             return nil
         }
@@ -1425,6 +1507,19 @@ final class AX25SessionManager: ObservableObject {
 
         onOutboundAckReceived?(session, session.va)
 
+        if session.state == .connected && !session.hasReceiveSequenceGap && !session.pendingDataQueue.isEmpty {
+            let queueBeforeDrain = session.pendingDataQueue.count
+            drainPendingDataQueue(for: session)
+            let drained = queueBeforeDrain - session.pendingDataQueue.count
+            if drained > 0 {
+                TxLog.debug(.session, "Drain completed after receive gap cleared", [
+                    "peer": session.remoteAddress.display,
+                    "drained": drained,
+                    "remaining": session.pendingDataQueue.count
+                ])
+            }
+        }
+
         // Deep debug snapshot whenever we successfully process an inbound I-frame.
         debugDumpSessionState(session, context: "inbound-I")
         checkInvariants(session: session)
@@ -1438,20 +1533,25 @@ final class AX25SessionManager: ObservableObject {
     ///   - path: Digipeater path
     ///   - channel: KISS channel
     ///   - nr: N(R) from the frame
-    ///   - isPoll: Whether this is a poll (P=1) requiring a response
+    ///   - pf: Whether the P/F bit is set
+    ///   - isCommand: Whether the S-frame is an AX.25 command. Only command
+    ///     frames with P/F set are polls; response frames with F set are not.
     /// - Returns: Response frame (RR with F=1) if this was a poll, nil otherwise
-    func handleInboundRR(
+    func handleInboundRRFrames(
         from source: AX25Address,
         path: DigiPath,
         channel: UInt8,
         nr: Int,
-        isPoll: Bool = false
-    ) -> OutboundFrame? {
+        pf: Bool = false,
+        isCommand: Bool = false
+    ) -> [OutboundFrame] {
+        let isPoll = pf && isCommand
         debugTrace("RR received", [
             "from": source.display,
             "path": path.display.isEmpty ? "(empty)" : path.display,
             "nr": nr,
-            "pf": isPoll ? 1 : 0
+            "pf": pf ? 1 : 0,
+            "isCommand": isCommand ? 1 : 0
         ])
         // Try exact path match first, then fall back to address-only lookup
         var session = existingSession(for: source, path: path, channel: channel)
@@ -1464,9 +1564,20 @@ final class AX25SessionManager: ObservableObject {
 
         guard let session = session else {
             debugTrace("RR for unknown session", [
-                "from": source.display
+                "from": source.display,
+                "pf": pf ? 1 : 0,
+                "isCommand": isCommand ? 1 : 0
             ])
-            return nil
+            // §6.3.5: with no session we are in the disconnected state for this peer.
+            // "Any TNC receiving a command frame other than a SABM(E) or UI frame with
+            // the P bit set to '1' responds with a DM frame with the F bit set to '1'."
+            // This is what lets a peer holding a stale session (e.g. after we crashed
+            // or restarted) clear it promptly instead of polling until its N2 expires.
+            // P=0 frames and response frames are ignored per the same sentence.
+            if pf && isCommand {
+                return [AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path)]
+            }
+            return []
         }
 
         // Measure RTT from last acked frame so T1 (RTO) adapts during transfer.
@@ -1491,7 +1602,7 @@ final class AX25SessionManager: ObservableObject {
         let vaBefore = session.va
 
         let oldState = session.state
-        let actions = session.stateMachine.handle(event: .receivedRR(nr: nr))
+        let actions = session.stateMachine.handle(event: .receivedRR(nr: nr, pf: pf, isCommand: isCommand))
 
         if oldState != session.state {
             debugTrace("state change (RR)", [
@@ -1531,7 +1642,7 @@ final class AX25SessionManager: ObservableObject {
 
         session.touch()
 
-        print("[DEBUG:AX25:RR] rx | nr=\(nr) va=\(session.va) vs=\(session.vs) sendBufBefore=\(sendBufKeysBefore) sendBufAfter=\(sendBufKeysAfter) outstanding=\(session.outstandingCount)")
+        axDebugPrint("[DEBUG:AX25:RR] rx | nr=\(nr) va=\(session.va) vs=\(session.vs) sendBufBefore=\(sendBufKeysBefore) sendBufAfter=\(sendBufKeysAfter) outstanding=\(session.outstandingCount)")
         onOutboundAckReceived?(session, session.va)
 
         TxLog.debug(.session, "RR ACK state", [
@@ -1541,6 +1652,12 @@ final class AX25SessionManager: ObservableObject {
             "outstanding": session.outstandingCount,
             "queueDepth": session.pendingDataQueue.count
         ])
+
+        // Outstanding count BEFORE the drain. The no-ACK-progress retransmit below must
+        // only consider frames the peer has actually had a chance to see — the drain can
+        // put brand-new I-frames on the air microseconds earlier, and retransmitting those
+        // immediately sends every freshly drained frame twice.
+        let outstandingBeforeDrain = session.outstandingCount
 
         // Drain pending queue now that window space freed (paclen-fragmented chunks)
         let queueBeforeDrain = session.pendingDataQueue.count
@@ -1557,7 +1674,25 @@ final class AX25SessionManager: ObservableObject {
         // Deep debug snapshot whenever we advance ACK state from RR.
         debugDumpSessionState(session, context: isPoll ? "inbound-RR-poll" : "inbound-RR")
 
-        _ = processActions(actions, for: session)
+        let actionFrames = processActions(actions, for: session)
+        var responseFrames = actionFrames
+
+        if isPoll && session.state == .connected && outstandingBeforeDrain > 0 && vaAfter == vaBefore {
+            TxLog.debug(.session, "RR poll made no ACK progress; retransmitting outstanding frames", [
+                "peer": session.remoteAddress.display,
+                "va": session.va,
+                "vs": session.vs,
+                "vr": session.vr,
+                "outstanding": session.outstandingCount
+            ])
+
+            responseFrames.append(contentsOf: retransmitOutstandingFrames(for: session, from: session.va, reason: "inbound-RR-poll-no-ack"))
+            if responseFrames.contains(where: { $0.frameType == "i" }) {
+                session.consecutiveT1PollsWithoutAck = 0
+                startT1Timer(for: session)
+            }
+        }
+
         checkInvariants(session: session)
 
         // Feed link quality sample into adaptive settings (session-based learning)
@@ -1567,27 +1702,142 @@ final class AX25SessionManager: ObservableObject {
         let etx = 1.0 / (delivery * delivery)
         onLinkQualitySample?(session, lossRate, etx, session.timers.srtt)
 
-        // If this was a poll (P=1), respond with RR F=1
-        if isPoll && session.state == .connected {
-            let currentVR = session.vr
-            debugTrace("RR poll -> response", [
-                "peer": source.display,
-                "nr": currentVR
-            ])
-            TxLog.debug(.session, "Responding to RR poll", [
-                "from": source.display,
-                "nr": currentVR
-            ])
-            return AX25FrameBuilder.buildRR(
-                from: session.localAddress,
-                to: session.remoteAddress,
-                via: session.path,
-                nr: currentVR,
-                pf: true
-            )
+        return responseFrames
+    }
+
+    func handleInboundRR(
+        from source: AX25Address,
+        path: DigiPath,
+        channel: UInt8,
+        nr: Int,
+        pf: Bool = false,
+        isCommand: Bool = false
+    ) -> OutboundFrame? {
+        handleInboundRRFrames(
+            from: source,
+            path: path,
+            channel: channel,
+            nr: nr,
+            pf: pf,
+            isCommand: isCommand
+        ).first
+    }
+
+    /// Compatibility entry point for tests and older call sites that only
+    /// distinguished "poll" from ordinary RR. A poll implies P/F set on a
+    /// command frame; an ordinary RR has neither.
+    func handleInboundRR(
+        from source: AX25Address,
+        path: DigiPath,
+        channel: UInt8,
+        nr: Int,
+        isPoll: Bool
+    ) -> OutboundFrame? {
+        handleInboundRR(
+            from: source,
+            path: path,
+            channel: channel,
+            nr: nr,
+            pf: isPoll,
+            isCommand: isPoll
+        )
+    }
+
+    /// Handle an inbound RNR (receiver not ready — peer buffer full).
+    ///
+    /// RNR was previously dropped at both S-frame dispatch sites, which meant the
+    /// acknowledgement carried in its N(R) field was never applied. V(A) stalled, T1
+    /// kept retransmitting frames the peer had already taken, and the retry counter
+    /// climbed until the link failed with "retries exceeded" — even though the peer
+    /// was healthy and merely busy.
+    func handleInboundRNR(
+        from source: AX25Address,
+        path: DigiPath,
+        channel: UInt8,
+        nr: Int,
+        pf: Bool = false,
+        isCommand: Bool = false
+    ) -> [OutboundFrame] {
+        debugTrace("RNR received", [
+            "from": source.display,
+            "path": path.display.isEmpty ? "(empty)" : path.display,
+            "nr": nr,
+            "pf": pf ? 1 : 0,
+            "isCommand": isCommand ? 1 : 0
+        ])
+
+        // Same three-tier lookup as RR: exact path, then address-only fallbacks.
+        var session = existingSession(for: source, path: path, channel: channel)
+        if session == nil {
+            session = findConnectedSession(from: source, channel: channel)
+        }
+        if session == nil {
+            session = findConnectedSessionByCallsign(from: source, channel: channel)
         }
 
-        return nil
+        guard let session = session else {
+            debugTrace("RNR for unknown session", ["from": source.display])
+            // §6.3.5: DM(F=1) to a P=1 command with no session (see RR handler).
+            if pf && isCommand {
+                return [AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path)]
+            }
+            return []
+        }
+
+        // The N(R) in an RNR is a real acknowledgement, so it yields a valid RTT
+        // sample under the same Karn's-algorithm rules used for RR.
+        if let sentAt = session.rttSendTime(ackedBy: nr) {
+            let rtt = clock.currentTime - sentAt
+            session.timers.updateRTT(sample: rtt)
+        }
+        session.clearSendTimesAcked(by: nr)
+
+        let vaBefore = session.va
+        let oldState = session.state
+        let actions = session.stateMachine.handle(
+            event: .receivedRNR(nr: nr, pf: pf, isCommand: isCommand)
+        )
+
+        if oldState != session.state {
+            debugTrace("state change (RNR)", [
+                "peer": source.display,
+                "from": oldState.rawValue,
+                "to": session.state.rawValue
+            ])
+            onSessionStateChanged?(session, oldState, session.state)
+        }
+
+        // Retire the frames this RNR acknowledged, using the V(A) the state machine
+        // actually accepted rather than the raw nr field (see the RR handler).
+        let vaAfter = session.va
+        session.acknowledgeUpTo(from: vaBefore, to: vaAfter)
+
+        let modulo = session.stateMachine.config.modulo
+        let ackedCount = (vaAfter - vaBefore + modulo) % modulo
+        if ackedCount > 0 {
+            for _ in 0..<ackedCount {
+                session.aimdWindow.onAck()
+            }
+        }
+
+        session.touch()
+        onOutboundAckReceived?(session, session.va)
+
+        TxLog.debug(.session, "RNR ACK state (peer busy)", [
+            "peer": source.display,
+            "va": session.va,
+            "vs": session.vs,
+            "outstanding": session.outstandingCount,
+            "queueDepth": session.pendingDataQueue.count
+        ])
+
+        // Deliberately no drainPendingDataQueue here: the peer has told us its receive
+        // buffer is full, so queued data stays queued until it clears the condition.
+        debugDumpSessionState(session, context: "inbound-RNR")
+
+        let frames = processActions(actions, for: session)
+        checkInvariants(session: session)
+        return frames
     }
 
     /// Handle an inbound REJ (reject - request retransmit)
@@ -1595,13 +1845,17 @@ final class AX25SessionManager: ObservableObject {
         from source: AX25Address,
         path: DigiPath,
         channel: UInt8,
-        nr: Int
+        nr: Int,
+        pf: Bool = false,
+        isCommand: Bool = false
     ) -> [OutboundFrame] {
         debugTrace("REJ received", [
             "from": source.display,
             "path": path.display.isEmpty ? "(empty)" : path.display,
             "nr": nr,
-            "channel": channel
+            "channel": channel,
+            "pf": pf ? 1 : 0,
+            "isCommand": isCommand ? 1 : 0
         ])
         var session = existingSession(for: source, path: path, channel: channel)
         if session == nil {
@@ -1621,6 +1875,10 @@ final class AX25SessionManager: ObservableObject {
             debugTrace("REJ for unknown session", [
                 "from": source.display
             ])
+            // §6.3.5: DM(F=1) to a P=1 command with no session (see RR handler).
+            if pf && isCommand {
+                return [AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path)]
+            }
             return []
         }
 
@@ -1630,7 +1888,13 @@ final class AX25SessionManager: ObservableObject {
         // A stale nr (< V(A)) would wrap the modulo loop in acknowledgeUpTo and
         // delete frames that are still outstanding, corrupting the send buffer.
         let validNR = session.stateMachine.sequenceState.isValidNR(nr: nr)
-        let actions = session.stateMachine.handle(event: .receivedREJ(nr: nr))
+        // §6.2: "The next response frame returned to a supervisory command frame with
+        // the P bit set to '1', received during the information transfer state, is an
+        // RR, RNR or REJ response frame with the F bit set to '1'."  The pf/isCommand
+        // flags were previously not forwarded here at all, so an REJ command poll
+        // never received its mandatory F=1 reply — the polling peer would hit its own
+        // T1 timeout waiting for a Final that never came.
+        let actions = session.stateMachine.handle(event: .receivedREJ(nr: nr, pf: pf, isCommand: isCommand))
 
         if oldState != session.state {
             debugTrace("state change (REJ)", [
@@ -1666,21 +1930,16 @@ final class AX25SessionManager: ObservableObject {
 
         let retransmitFrames: [OutboundFrame]
         if shouldRetransmit {
-            // Audit B2 fix: REJ is an explicit negative acknowledgement — stronger evidence of
-            // loss than a T1 timeout.  Apply AIMD multiplicative decrease on the first (non-
-            // duplicate) REJ, matching the same reduction that handleT1Timeout applies.
-            //
-            // Duplicate REJ suppression (Bug A fix) already gates this block, so we will not
-            // double-count if the same loss triggers both a REJ and a later T1 timeout:
-            //   • First REJ → onLoss() here (cwnd halved)
-            //   • Retransmit succeeds → RR cancels T1 → no second loss event
-            //   • Retransmit fails  → T1 fires → onLoss() again (cwnd halved again, ≥ minWindow)
-            session.aimdWindow.onLoss()
-            TxLog.debug(.session, "AIMD loss event (REJ)", [
-                "peer": source.display,
-                "cwnd": String(format: "%.2f", session.aimdWindow.cwnd),
-                "effectiveWindow": session.aimdWindow.effectiveWindow
-            ])
+            if session.timers.adaptiveTimeout {
+                // AIMD is adaptive-mode behavior. In fixed AX.25 mode, REJ still
+                // triggers retransmission but must not mutate the configured window.
+                session.aimdWindow.onLoss()
+                TxLog.debug(.session, "AIMD loss event (REJ)", [
+                    "peer": source.display,
+                    "cwnd": String(format: "%.2f", session.aimdWindow.cwnd),
+                    "effectiveWindow": session.aimdWindow.effectiveWindow
+                ])
+            }
 
             retransmitFrames = session.framesToRetransmit(from: nr)
             for frame in retransmitFrames {
@@ -1742,43 +2001,22 @@ final class AX25SessionManager: ObservableObject {
 
         var frames = processActions(actions, for: session)
 
-        if session.state == .connected, session.outstandingCount > 0 {
-            // Bug G fix: AIMD multiplicative decrease on T1 timeout (loss event).
-            // Called once per timeout event, not once per retransmitted frame.
-            session.aimdWindow.onLoss()
-            TxLog.debug(.session, "AIMD loss event (T1 timeout)", [
-                "peer": session.remoteAddress.display,
-                "cwnd": String(format: "%.2f", session.aimdWindow.cwnd),
-                "effectiveWindow": session.aimdWindow.effectiveWindow
-            ])
+        if session.state == .connected, session.outstandingCount > 0, !session.stateMachine.peerBusy {
+            if session.timers.adaptiveTimeout {
+                session.aimdWindow.onLoss()
+                TxLog.debug(.session, "AIMD loss event (T1 timeout)", [
+                    "peer": session.remoteAddress.display,
+                    "cwnd": String(format: "%.2f", session.aimdWindow.cwnd),
+                    "effectiveWindow": session.aimdWindow.effectiveWindow
+                ])
+            }
 
-            let retransmitFrames = session.framesToRetransmit(from: session.va)
-            let nsValues = retransmitFrames.compactMap { f -> Int? in
-                guard let ctrl = f.controlByte else { return nil }
-                return Int((ctrl >> 1) & 0x07)  // N(S) from AX.25 control byte
-            }
-            print("[DEBUG:AX25:T1] retransmit | va=\(session.va) vs=\(session.vs) vr=\(session.vr) outstanding=\(session.outstandingCount) sendBufKeys=\(session.sendBuffer.keys.sorted()) retransmitNS=\(nsValues) retransmitCount=\(retransmitFrames.count)")
-            TxLog.debug(.session, "T1 retransmit", [
-                "peer": session.remoteAddress.display,
-                "va": session.va,
-                "outstanding": session.outstandingCount,
-                "retransmitCount": retransmitFrames.count,
-                "retransmitNS": nsValues.map { String($0) }.joined(separator: ",")
-            ])
-            for frame in retransmitFrames {
-                // Update N(R) to current V(R) so the peer sees our latest receive state
-                let updatedFrame = frame.withUpdatedNR(session.vr)
-                debugTrace("TX I (retransmit)", ["frame": describeFrame(updatedFrame)])
-                session.statistics.recordRetransmit()
-                frames.append(updatedFrame)
-                // Bug E fix (Karn's algorithm): mark this N(S) as retransmitted so
-                // the subsequent ACK does NOT generate an RTT sample. The ACK is
-                // ambiguous — it could be for the original or the retransmit.
-                if let ctrl = updatedFrame.controlByte {
-                    let ns = Int((ctrl >> 1) & 0x07)
-                    session.markRetransmitted(ns: ns)
-                }
-            }
+            // Filter out any S-frame RR poll command returned by processActions,
+            // as the retransmitted oldest I-frame with P=1 acts as the poll per §6.4.4.1.
+            frames.removeAll(where: { $0.frameType == "s" && $0.isCommand == true })
+
+            axDebugPrint("[DEBUG:AX25:T1] retransmit | va=\(session.va) vs=\(session.vs) vr=\(session.vr) outstanding=\(session.outstandingCount) sendBufKeys=\(session.sendBuffer.keys.sorted())")
+            frames.append(contentsOf: retransmitOutstandingFrames(for: session, from: session.va, reason: "T1-timeout", preservePollFinal: false, forcePollOnFirst: true))
         }
 
         return frames
@@ -1894,6 +2132,29 @@ final class AX25SessionManager: ObservableObject {
     private func drainPendingDataQueue(for session: AX25Session) {
         guard !session.pendingDataQueue.isEmpty else { return }
 
+        // I frames may only flow in the information-transfer state. Data queued while
+        // still connecting must wait for UA — draining early would put numbered frames
+        // on the air before the link exists (§6.3.1/§6.4.1). This guard matters because
+        // the RR handler calls drain unconditionally, and RR can arrive in any state.
+        guard session.state == .connected else {
+            TxLog.debug(.session, "Drain suppressed (not connected)", [
+                "peer": session.remoteAddress.display,
+                "state": session.state.rawValue,
+                "queueDepth": session.pendingDataQueue.count
+            ])
+            return
+        }
+
+        // The peer has signalled RNR: its receive buffer is full. Hold queued data until
+        // it clears the condition with RR/REJ, otherwise we simply generate drops.
+        guard !session.stateMachine.peerBusy else {
+            TxLog.debug(.session, "Drain suppressed (peer busy)", [
+                "peer": session.remoteAddress.display,
+                "queueDepth": session.pendingDataQueue.count
+            ])
+            return
+        }
+
         TxLog.debug(.session, "Draining pending data queue", [
             "peer": session.remoteAddress.display,
             "queueDepth": session.pendingDataQueue.count
@@ -1937,9 +2198,15 @@ final class AX25SessionManager: ObservableObject {
         var wasIdle = session.outstandingCount == 0
         for item in drained {
             let ns = session.vs  // Capture before buildIFrame increments vs
-            let iFrame = buildIFrame(for: session, payload: item.data, pid: item.pid, displayInfo: item.displayInfo)
+            let iFrame = buildIFrame(
+                for: session,
+                payload: item.data,
+                pid: item.pid,
+                displayInfo: item.displayInfo,
+                pf: shouldPollFirstOutboundIFrame(for: session, wasIdle: wasIdle)
+            )
             debugTrace("TX I (drain queue)", ["frame": describeFrame(iFrame)])
-            print("[DEBUG:AX25:DRAIN] tx | N(S)=\(ns) payload=\(item.data.count) va=\(session.va) vs=\(session.vs)")
+            axDebugPrint("[DEBUG:AX25:DRAIN] tx | N(S)=\(ns) payload=\(item.data.count) va=\(session.va) vs=\(session.vs)")
             // Use ns directly - (vs-1) wraps to -1 when vs goes 7->0, corrupting sendBuffer
             session.bufferFrame(iFrame, ns: ns)
             session.recordSendTime(ns: ns, time: clock.currentTime)
@@ -1967,11 +2234,21 @@ final class AX25SessionManager: ObservableObject {
     }
 
     /// Build an I-frame for the session with current sequence numbers
+    private func shouldPollFirstOutboundIFrame(for session: AX25Session, wasIdle: Bool) -> Bool {
+        // Some NET/ROM node stacks (including DRLNOD in live testing) need a poll
+        // on the first user I-frame after SABM/UA so they ACK promptly, but will
+        // DM if every later idle line is also sent as a poll.  Keep the compatibility
+        // nudge scoped to the first outbound numbered I-frame of an initiated session.
+        wasIdle && session.isInitiator && session.va == 0 && session.vs == 0
+    }
+
+    /// Build an I-frame for the session with current sequence numbers
     private func buildIFrame(
         for session: AX25Session,
         payload: Data,
         pid: UInt8,
-        displayInfo: String?
+        displayInfo: String?,
+        pf: Bool = false
     ) -> OutboundFrame {
         let ns = session.vs
         let nr = session.vr
@@ -1987,9 +2264,43 @@ final class AX25SessionManager: ObservableObject {
             nr: nr,
             pid: pid,
             payload: payload,
+            pf: pf,
             sessionId: session.id,
             displayInfo: displayInfo
         )
+    }
+
+    private func retransmitOutstandingFrames(
+        for session: AX25Session,
+        from nr: Int,
+        reason: String,
+        preservePollFinal: Bool = true,
+        forcePollOnFirst: Bool = false
+    ) -> [OutboundFrame] {
+        let retransmitFrames = session.framesToRetransmit(from: nr)
+        let nsValues = retransmitFrames.compactMap { frame -> Int? in
+            guard let ctrl = frame.controlByte else { return nil }
+            return Int((ctrl >> 1) & 0x07)
+        }
+
+        TxLog.debug(.session, "Retransmitting outstanding I-frames", [
+            "peer": session.remoteAddress.display,
+            "reason": reason,
+            "fromNR": nr,
+            "count": retransmitFrames.count,
+            "ns": nsValues.map { String($0) }.joined(separator: ",")
+        ])
+
+        return retransmitFrames.enumerated().map { index, frame in
+            let shouldForcePoll = forcePollOnFirst && (index == 0)
+            let updatedFrame = frame.withUpdatedNR(session.vr, preservePollFinal: preservePollFinal, forcePoll: shouldForcePoll)
+            debugTrace("TX I (retransmit)", ["reason": reason, "frame": describeFrame(updatedFrame)])
+            session.statistics.recordRetransmit()
+            if let ctrl = updatedFrame.controlByte {
+                session.markRetransmitted(ns: Int((ctrl >> 1) & 0x07))
+            }
+            return updatedFrame
+        }
     }
 
     /// Process actions from the state machine and return frames to send
@@ -2087,7 +2398,7 @@ final class AX25SessionManager: ObservableObject {
             case .deliverData(let data):
                 let prefixHex = data.prefix(8).map { String(format: "%02X", $0) }.joined()
                 let hasMagic = AXDP.hasMagic(data)
-                print("[DEBUG:AX25:DELIVER] I-frame payload to reassembly | from=\(session.remoteAddress.display) size=\(data.count) hasMagic=\(hasMagic) prefix=\(prefixHex)")
+                axDebugPrint("[DEBUG:AX25:DELIVER] I-frame payload to reassembly | from=\(session.remoteAddress.display) size=\(data.count) hasMagic=\(hasMagic) prefix=\(prefixHex)")
                 TxLog.debug(.axdp, "I-frame payload delivered to reassembly", [
                     "peer": session.remoteAddress.display,
                     "size": data.count,

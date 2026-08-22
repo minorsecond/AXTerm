@@ -79,12 +79,17 @@ final class AX25TimerRaceTests: XCTestCase {
         clock.advance(by: 2.21)
         print("[TEST] After advance: retransmitCount=\(retransmitFrames.count) retryCount=\(session.stateMachine.retryCount) outstanding=\(session.outstandingCount) clockTime=\(clock.currentTime)")
 
-        // T1 fires: sends RR(P=1) poll + retransmits I-frame. Only count I-frames.
-        // (The RR poll is also emitted via onSendFrame but is not a "retransmission".)
+        // First T1 fires: immediately retransmit the outstanding I-frame with P=1
         let iFramesRetransmitted = retransmitFrames.filter { $0.frameType == "i" }.count
-        XCTAssertEqual(iFramesRetransmitted, 1, "T1 should have retransmitted 1 I-frame")
+        XCTAssertEqual(iFramesRetransmitted, 1, "First T1 should immediately retransmit the outstanding I-frame with P=1")
+        XCTAssertEqual(retransmitFrames.filter { $0.frameType == "i" }.first?.controlByte.map { Int($0 & 0x10) }, 0x10, "Retransmitted frame must have P=1 set")
         XCTAssertEqual(session.stateMachine.retryCount, 1, "retryCount should be 1 after one T1 timeout")
         XCTAssertEqual(session.outstandingCount, 1, "Frame should still be outstanding until RR received")
+
+        retransmitFrames.removeAll()
+        clock.advance(by: session.timers.rto + 0.21)
+        let secondIFramesRetransmitted = retransmitFrames.filter { $0.frameType == "i" }.count
+        XCTAssertEqual(secondIFramesRetransmitted, 1, "Second consecutive T1 should also retransmit 1 I-frame")
     }
 
     /// Retransmission does NOT fire if RR arrives before grace period expires.
@@ -113,6 +118,47 @@ final class AX25TimerRaceTests: XCTestCase {
         XCTAssertEqual(retransmitCount, 0, "RR in grace period should suppress retransmission")
         XCTAssertEqual(session.outstandingCount, 0, "Frame should be acked by RR(1)")
         XCTAssertEqual(session.stateMachine.retryCount, 0, "retryCount resets on V(A) advance")
+    }
+
+    /// DM arriving before T1 fires cancels the timer and prevents late retransmit.
+    func testDMStopsT1BeforeItFires() {
+        let (manager, clock) = makeManager(rto: 1.0)
+        let session = connect(manager)
+
+        var txFrames: [OutboundFrame] = []
+        manager.onSendFrame = { txFrames.append($0) }
+
+        _ = manager.sendData(Data("HELP\r".utf8), to: peer, path: path, channel: 0)
+        XCTAssertEqual(session.outstandingCount, 1)
+        XCTAssertNotNil(session.t1TimerTask)
+
+        manager.handleInboundDM(from: peer, path: path, channel: 0)
+        clock.advance(by: 2.0)
+
+        XCTAssertEqual(session.state, .disconnected)
+        XCTAssertTrue(txFrames.isEmpty, "No timer-driven frames should be emitted after DM")
+        XCTAssertNil(session.t1TimerTask)
+        XCTAssertNil(session.t1PendingRetransmitTask)
+    }
+
+    /// DM arriving during the 200 ms T1 grace period cancels the pending callback.
+    func testDMDuringT1GraceCancelsPendingRetransmit() {
+        let (manager, clock) = makeManager(rto: 1.0)
+        let session = connect(manager)
+
+        var txFrames: [OutboundFrame] = []
+        manager.onSendFrame = { txFrames.append($0) }
+
+        _ = manager.sendData(Data("HELP\r".utf8), to: peer, path: path, channel: 0)
+        clock.advance(by: 1.05)
+        XCTAssertNotNil(session.t1PendingRetransmitTask)
+
+        manager.handleInboundDM(from: peer, path: path, channel: 0)
+        clock.advance(by: 0.5)
+
+        XCTAssertEqual(session.state, .disconnected)
+        XCTAssertTrue(txFrames.isEmpty, "Grace-period retransmit must be canceled by DM")
+        XCTAssertNil(session.t1PendingRetransmitTask)
     }
 
     // MARK: - T1: Exponential Backoff
@@ -269,27 +315,20 @@ final class AX25TimerRaceTests: XCTestCase {
         _ = manager.sendData(Data("FrameB".utf8), to: peer, path: path, channel: 0)
         XCTAssertEqual(session.outstandingCount, 2)
 
-        // Advance past RTO + grace — T1 fires, both frames retransmitted.
-        // T1 also sends RR(P=1); count only I-frames.
+        // Advance past RTO + grace — first T1 fires and immediately retransmits both outstanding frames.
         clock.advance(by: 2.21)
         XCTAssertEqual(session.stateMachine.retryCount, 1)
         let iFramesAfterFirst = retransmitFrames.filter { $0.frameType == "i" }
-        XCTAssertEqual(iFramesAfterFirst.count, 2, "Both frames should be retransmitted on T1")
+        XCTAssertEqual(iFramesAfterFirst.count, 2, "First T1 should immediately retransmit both unacked I-frames")
 
         // Peer now acks FrameA (N(R)=1)
         _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 1, isPoll: false)
         XCTAssertEqual(session.outstandingCount, 1, "Only FrameB outstanding")
         XCTAssertEqual(session.stateMachine.retryCount, 0, "retryCount resets on V(A) advance")
 
-        // Advance past the current (backed-off) RTO + grace period for the second T1 timeout.
-        // After the first T1 timeout, backoff() doubles RTO: 2.0 → 4.0.
-        // Karn's algorithm: no RTT update for retransmitted frames → RTO stays at 4.0.
-        // Use session.timers.rto (not the original 2.0) so the advance is correct regardless
-        // of how many backoffs have accumulated.
-        let rtoAfterBackoff = session.timers.rto
+        // Advance past another T1 cycle for FrameB: immediately retransmits FrameB.
         let iCountBeforeSecondTimeout = retransmitFrames.filter { $0.frameType == "i" }.count
-        clock.advance(by: rtoAfterBackoff + 0.21)
-
+        clock.advance(by: session.timers.rto + 0.21)
         let newIFrames = retransmitFrames.filter { $0.frameType == "i" }.dropFirst(iCountBeforeSecondTimeout)
         XCTAssertEqual(newIFrames.count, 1, "Only one I-frame (FrameB) should be retransmitted")
 

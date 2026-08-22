@@ -207,17 +207,20 @@ final class ConnectionTransportViewModel: ObservableObject {
     private func startSerialGraceTimer() {
         guard serialGraceTimer == nil else { return }
         serialGraceTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self = self, let missingSince = self.missingSerialDeviceDate else { return }
-            
-            if Date().timeIntervalSince(missingSince) > 10 {
+            // Every property this closure touches is @MainActor-isolated, so hop onto the
+            // main actor explicitly rather than relying on the timer's run loop happening
+            // to be the main one. Reading and mutating them from the nonisolated Sendable
+            // closure is a data race (and an error under the Swift 6 language mode).
+            Task { @MainActor in
+                guard let self, let missingSince = self.missingSerialDeviceDate else { return }
+                guard Date().timeIntervalSince(missingSince) > 10 else { return }
+
                 // Grace period expired
                 self.selectedSerialDevicePath = ""
                 self.stopSerialGraceTimer()
                 self.missingSerialDeviceDate = nil
                 // Refresh list to remove the unavailable item
-                 Task { @MainActor in
-                     self.handleSerialDevicesUpdate(self.serialDiscovery.devices)
-                 }
+                self.handleSerialDevicesUpdate(self.serialDiscovery.devices)
             }
         }
     }

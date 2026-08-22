@@ -49,6 +49,13 @@ final class AppSettingsStoreTests: XCTestCase {
         XCTAssertEqual(AppSettingsStore.sanitizeLogRetention(10_000), 10_000)
     }
 
+    func testAX25T1TimeoutValidationClamps() {
+        XCTAssertEqual(AppSettingsStore.sanitizeAX25T1TimeoutSeconds(0.1), AppSettingsStore.minAX25T1TimeoutSeconds)
+        XCTAssertEqual(AppSettingsStore.sanitizeAX25T1TimeoutSeconds(45.0), AppSettingsStore.maxAX25T1TimeoutSeconds)
+        XCTAssertEqual(AppSettingsStore.sanitizeAX25T1TimeoutSeconds(4.04), 4.0)
+        XCTAssertEqual(AppSettingsStore.sanitizeAX25T1TimeoutSeconds(4.06), 4.1)
+    }
+
     func testWatchListSanitizesAndDedupes() {
         let input = [" n0call ", "N0CALL", "DEST-1", ""]
         let result = AppSettingsStore.sanitizeWatchList(input, normalize: CallsignValidator.normalize)
@@ -60,6 +67,19 @@ final class AppSettingsStoreTests: XCTestCase {
             let store = AppSettingsStore(defaults: defaults)
             store.myCallsign = "n0call-7"
             XCTAssertEqual(store.myCallsign, "N0CALL-7")
+        }
+    }
+
+    func testAX25T1TimeoutPersistsSanitizedValue() {
+        withIsolatedDefaults { defaults in
+            let store = AppSettingsStore(defaults: defaults)
+            store.ax25T1TimeoutSeconds = 0.2
+            XCTAssertEqual(store.ax25T1TimeoutSeconds, AppSettingsStore.minAX25T1TimeoutSeconds)
+            XCTAssertEqual(
+                defaults.double(forKey: AppSettingsStore.ax25T1TimeoutSecondsKey),
+                AppSettingsStore.minAX25T1TimeoutSeconds,
+                accuracy: 0.0001
+            )
         }
     }
 

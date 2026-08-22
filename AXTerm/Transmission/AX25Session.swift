@@ -65,6 +65,9 @@ nonisolated struct AX25SessionConfig: Sendable {
     /// Initial RTO (seconds) before any RTT sample. When nil, session timers use default 4.0.
     let initialRto: Double?
 
+    /// Whether adaptive timeout estimation is enabled
+    let adaptiveTimeout: Bool
+
     /// Sequence number modulo (8 or 128)
     var modulo: Int { extended ? 128 : 8 }
 
@@ -76,7 +79,8 @@ nonisolated struct AX25SessionConfig: Sendable {
         extended: Bool = false,
         rtoMin: Double? = nil,
         rtoMax: Double? = nil,
-        initialRto: Double? = nil
+        initialRto: Double? = nil,
+        adaptiveTimeout: Bool = true
     ) {
         // Clamp window size to valid range
         let maxWindow = extended ? 127 : 7
@@ -89,6 +93,7 @@ nonisolated struct AX25SessionConfig: Sendable {
         self.rtoMin = rtoMin
         self.rtoMax = rtoMax
         self.initialRto = initialRto
+        self.adaptiveTimeout = adaptiveTimeout
     }
 }
 
@@ -183,6 +188,9 @@ nonisolated struct AX25SessionTimers: Sendable {
     /// Current RTO (retransmission timeout)
     private(set) var rto: Double
 
+    /// Whether adaptive timeout estimation is enabled
+    let adaptiveTimeout: Bool
+
     /// T3 idle timeout (seconds)
     let t3Timeout: Double = 30.0
 
@@ -201,10 +209,17 @@ nonisolated struct AX25SessionTimers: Sendable {
     /// Default initial RTO (seconds)
     private static let defaultInitialRto: Double = 4.0
 
-    init(rtoMin: Double = 3.0, rtoMax: Double = 30.0, initialRto: Double = 4.0) {
+    /// The clamped initial RTO this session was configured with, so `reset()` can
+    /// restore it. Without it, reset() fell back to the hardcoded 4 s default and
+    /// silently discarded the operator's configured T1.
+    private let initialRto: Double
+
+    init(rtoMin: Double = 3.0, rtoMax: Double = 30.0, initialRto: Double = AX25SessionTimers.defaultInitialRto, adaptiveTimeout: Bool = true) {
         self.rtoMin = max(0.5, rtoMin)
         self.rtoMax = max(self.rtoMin, min(60.0, rtoMax))
-        self.rto = max(self.rtoMin, min(self.rtoMax, initialRto))
+        self.initialRto = max(self.rtoMin, min(self.rtoMax, initialRto))
+        self.rto = self.initialRto
+        self.adaptiveTimeout = adaptiveTimeout
     }
 
     /// Update RTT estimates with a new sample (Jacobson/Karels, RFC 6298).
@@ -213,6 +228,11 @@ nonisolated struct AX25SessionTimers: Sendable {
     /// rather than poisoning the estimator. A single bad sample could set SRTT to
     /// NaN which then contaminates every subsequent estimate.
     mutating func updateRTT(sample: Double) {
+        guard adaptiveTimeout else {
+            TxLog.debug(.session, "RTT sample discarded (adaptive disabled)")
+            return
+        }
+
         // Discard physically impossible samples before they corrupt state.
         guard sample > 0, sample.isFinite else {
             TxLog.debug(.session, "RTT sample discarded (invalid)", [
@@ -237,6 +257,10 @@ nonisolated struct AX25SessionTimers: Sendable {
 
     /// Apply exponential backoff (double RTO)
     mutating func backoff() {
+        guard adaptiveTimeout else {
+            TxLog.debug(.session, "T1 backoff skipped (adaptive disabled)")
+            return
+        }
         rto = min(rto * 2, rtoMax)
     }
 
@@ -244,7 +268,7 @@ nonisolated struct AX25SessionTimers: Sendable {
     mutating func reset() {
         srtt = nil
         rttvar = 0.0
-        rto = max(rtoMin, min(rtoMax, Self.defaultInitialRto))
+        rto = initialRto
     }
 }
 
@@ -367,6 +391,12 @@ nonisolated struct AX25StateMachine: Sendable {
     /// This prevents sending multiple REJs for the same gap
     private(set) var rejSent: Bool = false
 
+    /// Peer receiver-busy condition (AX.25 §4.3.2.3).
+    /// Set when the remote sends RNR; cleared when it answers RR/REJ or the link is
+    /// re-established. While set, no new I-frames may be sent — the peer has told us
+    /// its receive buffer is full — but T1 keeps running so we can poll it.
+    private(set) var peerBusy: Bool = false
+
     init(config: AX25SessionConfig) {
         self.config = config
         self.sequenceState = AX25SequenceState(modulo: config.modulo)
@@ -377,6 +407,7 @@ nonisolated struct AX25StateMachine: Sendable {
         sequenceState.reset()
         receiveBuffer.removeAll()
         rejSent = false
+        peerBusy = false
     }
 
     /// Force recovery from late UA. Called by session manager only when it determines
@@ -439,8 +470,29 @@ nonisolated struct AX25StateMachine: Sendable {
             return [.sendUA, .startT3, .notifyConnected]
 
         case (.disconnected, .receivedDISC):
-            // Respond with DM (not connected)
+            // §6.3.5: "In the disconnected state, a TNC ... transmits a DM frame in
+            // response to a DISC command."
             return [.sendDM]
+
+        case (.disconnected, .receivedIFrame(_, _, let pf, _)):
+            // §6.3.5: "Any TNC receiving a command frame other than a SABM(E) or UI
+            // frame with the P bit set to '1' responds with a DM frame with the F bit
+            // set to '1'. The offending frame is ignored."  I frames are always
+            // commands in AX.25 v2.2 (an I *response* is itself a protocol error,
+            // Annex C error code S). Without this DM, a peer holding a stale session
+            // keeps polling us until its own N2 expires instead of clearing promptly.
+            // P=0 frames are ignored per the same sentence — this also protects
+            // against DM storms from digipeated duplicates, which carry P=0.
+            return pf ? [.sendDM] : []
+
+        case (.disconnected, .receivedRR(_, let pf, let isCommand)),
+             (.disconnected, .receivedRNR(_, let pf, let isCommand)),
+             (.disconnected, .receivedREJ(_, let pf, let isCommand)):
+            // §6.3.5 / §6.2: "The next response frame returned to a S or I command
+            // frame with the P bit set to '1', received in the disconnected state, is
+            // a DM response frame with the F bit set to '1'."  Response frames and
+            // P=0 commands are ignored.
+            return (pf && isCommand) ? [.sendDM] : []
 
         case (.disconnected, _):
             // Ignore other events in disconnected state
@@ -467,15 +519,38 @@ nonisolated struct AX25StateMachine: Sendable {
             return [.stopT1, .notifyError("Connection refused (DM received)")]
 
         case (.connecting, .receivedDISC):
-            // Remote explicitly refused our connection attempt by sending DISC before UA.
-            // Per AX.25 §6.3.4, acknowledge with UA and cancel the connect attempt.
-            // Bug I fix: previously, this case fell through to (.connecting, _) → [] which
-            // returned no actions and left state unchanged. The session then stayed in
-            // .connecting, retransmitting SABM on every T1 expiry until maxRetries, wasting
-            // RF bandwidth and masking the refusal from the local operator.
-            state = .disconnected
-            TxLog.error(.ax25, "Connection refused", error: nil, ["reason": "DISC received while connecting"])
-            return [.stopT1, .sendUA, .notifyError("Connection refused (DISC received)")]
+            // SDL C4.2 (awaiting connection): a DISC is answered with DM — not UA,
+            // because UA would acknowledge a mode-setting command for a link that is
+            // not up — and the state machine REMAINS in awaiting-connection with the
+            // SABM retry cycle running.
+            //
+            // Why stay: DISC crossing our SABM usually means the peer is tearing down
+            // an old session, not refusing a new one. Once its teardown completes,
+            // our next SABM retry establishes the fresh link. A peer that is actually
+            // refusing answers the SABM itself with DM (§6.3.1), which the
+            // (.connecting, .receivedDM) case turns into an immediate, clean abort.
+            // Either way termination is bounded: refusal aborts on DM, and silence
+            // exhausts N2 via the T1 path. (This replaces the earlier Bug I behavior
+            // of aborting on DISC, which misread crossed teardown frames as refusal.)
+            TxLog.warning(.ax25, "DISC while connecting — answered DM, SABM retry continues")
+            return [.sendDM]
+
+        case (.connecting, .receivedIFrame),
+             (.connecting, .receivedRR),
+             (.connecting, .receivedRNR),
+             (.connecting, .receivedREJ):
+            // §6.3.1: "The originating TNC sending a SABM(E) command ignores and
+            // discards any frames except SABM, DISC, UA and DM frames from the
+            // distant TNC."
+            //
+            // This case previously answered with DM to "reset a phantom session".
+            // That was a spec violation with real consequences (seen live against
+            // KB5YZB-7, a BPQ node): the peer had answered our SABM with UA and its
+            // first I-frame, both lost on RF. It was legitimately connected — and DM
+            // told it to tear the fresh link down. §6.3.1 already provides the reset
+            // mechanism for a genuinely stale peer: our retransmitted SABM forces it
+            // to re-establish and zero its state variables. No DM is needed.
+            return []
 
         case (.connecting, .t1Timeout):
             retryCount += 1
@@ -532,20 +607,57 @@ nonisolated struct AX25StateMachine: Sendable {
             return sequenceState.isValidNR(nr: nr) ? handleRR(nr: nr, pf: pf, isCommand: isCommand) : []
 
         case (.connected, .receivedRNR(let nr, let pf, let isCommand)):
-            // Remote is busy - ack frames but don't send more
+            // Peer receiver busy (§4.3.2.3). The N(R) field still carries a valid
+            // acknowledgement, so process it before entering the busy condition.
+            let vaBeforeRNR = sequenceState.va
             if sequenceState.isValidNR(nr: nr) {
                 sequenceState.ackUpTo(nr: nr)
             }
-            var actions: [AX25SessionAction] = [.stopT1]
-            if pf && isCommand {
-                actions.append(.sendRR(nr: sequenceState.vr, pf: true, isCommand: false))
+            if sequenceState.va != vaBeforeRNR {
+                // The peer acknowledged new frames, so the link is alive. Clear the retry
+                // counter exactly as handleRR does — otherwise retries accumulated before
+                // the busy condition persist and trip a premature "retries exceeded".
+                retryCount = 0
             }
-            return actions
+            if pf && !isCommand {
+                // F=1 RNR answers a poll we sent: the peer is alive, merely busy
+                // (§4.4.5.2 names RNR as a valid enquiry answer). Exit timer recovery.
+                retryCount = 0
+            }
+            peerBusy = true
+
+            // Keep T1 running. §6.4.9 clears a busy peer by polling it until it answers
+            // RR or REJ. The previous [.stopT1] left the link with no timer running at
+            // all (T3 is not started here either), so a busy peer stalled the session
+            // indefinitely unless it spoke first.
+            // AX.25 v2.2 "check I frame acknowledged", peer_receiver_busy branch:
+            //   V(A) <- N(R); start T3; if T1 is not running, start T1.
+            // T3 is the link-validity backstop while no I-frame exchange can happen;
+            // T1 drives the poll that eventually clears the busy condition.
+            var rnrActions: [AX25SessionAction] = [.startT3, .startT1]
+            if pf && isCommand {
+                rnrActions.append(.sendRR(nr: sequenceState.vr, pf: true, isCommand: false))
+            }
+            return rnrActions
 
         case (.connected, .receivedREJ(let nr, let pf, let isCommand)):
-            // Remote requests retransmit from nr
+            // Remote requests retransmit from nr. An REJ also clears a peer-busy
+            // condition (§4.3.2.3) — the peer is asking for data again.
+            peerBusy = false
+            let vaBeforeREJ = sequenceState.va
             if sequenceState.isValidNR(nr: nr) {
                 sequenceState.ackUpTo(nr: nr)
+            }
+            if sequenceState.va != vaBeforeREJ {
+                // Ack progress means the link is alive; reset retries for the same
+                // reason handleRR does. Without this, an REJ-heavy exchange kept the
+                // retry count from earlier T1 timeouts and failed the link early.
+                retryCount = 0
+            }
+            if pf && !isCommand {
+                // §6.2 lists REJ among the valid F=1 answers to a poll — the peer is
+                // alive and asking for retransmission. Exit timer recovery.
+                retryCount = 0
             }
             var actions: [AX25SessionAction] = [.startT1]
             if pf && isCommand {
@@ -562,7 +674,10 @@ nonisolated struct AX25StateMachine: Sendable {
         case (.connected, .receivedDM):
             state = .disconnected
             TxLog.warning(.ax25, "Remote disconnected (DM received)")
-            return [.stopT3, .notifyError("Remote disconnected (DM received)")]
+            // Stop T1 too: a DM can arrive while outbound I-frames are outstanding
+            // or while the T1 grace retransmit task is pending. Leaving T1 alive
+            // causes a spurious timeout/retransmit after the session is already dead.
+            return [.stopT1, .stopT3, .notifyError("Remote disconnected (DM received)")]
 
         case (.connected, .t1Timeout):
             retryCount += 1
@@ -572,7 +687,8 @@ nonisolated struct AX25StateMachine: Sendable {
                 "windowSize": config.windowSize,
                 "vs": sequenceState.vs,
                 "va": sequenceState.va,
-                "vr": sequenceState.vr
+                "vr": sequenceState.vr,
+                "receiveBufferCount": receiveBuffer.count
             ])
             if retryCount > config.maxRetries {
                 state = .error
@@ -586,18 +702,73 @@ nonisolated struct AX25StateMachine: Sendable {
                 ])
                 return [.stopT1, .stopT3, .notifyError("Link failure (retries exceeded)")]
             }
-            // Per AX.25 spec §6.4.1: on T1 timeout, always send RR with P=1
-            // (poll) to verify the link. This covers two cases:
-            // 1. Outstanding I-frames: poll elicits fresh RR(F=1) so we know
-            //    the peer's state without retransmitting possibly-received frames.
-            // 2. No outstanding I-frames (after T3 probe): re-poll to verify
-            //    the link is alive. Without this, AXTerm goes silent after a
-            //    single T3 probe that gets lost in RF.
-            // The session manager separately handles I-frame retransmission.
-            return [.sendRR(nr: sequenceState.vr, pf: true, isCommand: true), .startT1]
+
+            // RECEIVE BUFFER FLUSH HEURISTIC:
+            // After 2+ T1 timeouts with buffered out-of-sequence frames, the remote node
+            // is clearly not going to retransmit the missing frame(s) that created the gap.
+            // Skip V(R) past the gap and deliver buffered frames to prevent session death.
+            //
+            // Real-world scenario from DRLNOD: it sends ns=0,3,1 but never retransmits ns=2.
+            // We get stuck at V(R)=2 with ns=3 buffered, polling forever until DRLNOD sends DM.
+            // This flush lets us deliver ns=3 from the buffer, advance V(R) to 4, and keep going.
+            var actions: [AX25SessionAction] = []
+            if retryCount >= 2 && !receiveBuffer.isEmpty {
+                // Find the lowest buffered sequence number (closest gap to fill)
+                if let lowestBuffered = receiveBuffer.keys.min(by: { distanceFromVR($0) < distanceFromVR($1) }) {
+                    let skippedCount = (lowestBuffered - sequenceState.vr + config.modulo) % config.modulo
+                    TxLog.warning(.session, "Flushing receive buffer: skipping lost frame(s)", [
+                        "currentVR": sequenceState.vr,
+                        "jumpingTo": lowestBuffered,
+                        "skippedFrames": skippedCount,
+                        "bufferedCount": receiveBuffer.count
+                    ])
+
+                    // Advance V(R) to the lowest buffered frame
+                    sequenceState.vr = lowestBuffered
+
+                    // Deliver consecutive buffered frames starting from the new V(R)
+                    while let buffered = receiveBuffer.removeValue(forKey: sequenceState.vr) {
+                        sequenceState.incrementVR()
+                        actions.append(.deliverData(buffered.payload))
+                    }
+
+                    rejSent = false
+                    retryCount = 0  // Reset retries since we made progress
+                }
+            }
+
+            // Per AX.25 spec §6.4.1: on T1 timeout, send RR with P=1 (poll)
+            // to verify the link only if there are no outstanding I-frames.
+            // If outstanding I-frames exist, standard protocol dictates we
+            // immediately retransmit the oldest outstanding I-frame with P=1
+            // (handled at the SessionManager level).
+            // When the peer is busy we must not retransmit I-frames into its full
+            // buffer; poll it with RR(P=1) instead until it clears the condition.
+            if sequenceState.outstandingCount == 0 || peerBusy {
+                actions.append(.sendRR(nr: sequenceState.vr, pf: true, isCommand: true))
+            }
+            actions.append(.startT1)
+            return actions
 
         case (.connected, .t3Timeout):
-            // Send RR as poll (P=1) to check link — peer must respond with F=1
+            // §4.4.5.2: "When T3 times out, an RR or RNR frame is transmitted as a
+            // command with the P bit set, and then T1 is started. When a response to
+            // this command is received, T1 is stopped and T3 is started. If T1
+            // expires before a response is received, then the waiting acknowledgement
+            // procedure (Section 6.4.11) is executed."
+            //
+            // This previously sent a response-mode RR(F=0) and passively restarted T3
+            // as a DRLNOD compatibility measure. That keepalive was decorative: an
+            // unsolicited response demands no answer, so it could never actually
+            // confirm the link was alive. The spec enquiry can — and a peer that
+            // answers a live-link poll with DM is telling us the session is genuinely
+            // gone (its §6.3.5 disconnected-state response), in which case tearing
+            // down is correct, not flakiness.
+            //
+            // retryCount starts at 0 for the enquiry cycle (SDL: RC←0 on T3 expiry);
+            // unanswered polls then escalate through the T1 path until N2 declares
+            // link failure.
+            retryCount = 0
             return [.sendRR(nr: sequenceState.vr, pf: true, isCommand: true), .startT1]
 
         case (.connected, _):
@@ -610,9 +781,14 @@ nonisolated struct AX25StateMachine: Sendable {
             return [.stopT1, .notifyDisconnected]
 
         case (.disconnecting, .receivedDISC):
-            // DISC Collision (Section 6.4.2)
+            // DISC collision — both sides sent DISC. SDL C4.3 (awaiting release)
+            // answers a DISC with DM, and §6.3.4 confirms the peer accepts it:
+            // "After receiving a UA or DM response to a sent DISC command, the TNC
+            // cancels timer T1 and enters the disconnected state." UA is the reply
+            // for a DISC received on an established link (§6.3.4); with our own DISC
+            // outstanding the link is already half-down, so DM is the accurate answer.
             state = .disconnected
-            return [.stopT1, .sendUA, .notifyDisconnected]
+            return [.stopT1, .sendDM, .notifyDisconnected]
 
         case (.disconnecting, .receivedDM):
             state = .disconnected
@@ -621,6 +797,25 @@ nonisolated struct AX25StateMachine: Sendable {
         case (.disconnecting, .forceDisconnect):
             state = .disconnected
             return [.stopT1, .notifyDisconnected]
+
+        case (.disconnecting, .receivedSABM):
+            // SDL awaiting-release state (Annex C, Figure C4.3): a SABM arriving while
+            // our DISC is outstanding is refused with DM. We are tearing the link
+            // down; the peer may retry SABM once teardown completes.
+            return [.sendDM]
+
+        case (.disconnecting, .receivedIFrame(_, _, let pf, _)):
+            // SDL awaiting-release (Figure C4.3): command frames with P=1 received
+            // while a DISC is outstanding are answered with DM (F=1); everything
+            // else is discarded. Mirrors the §6.3.5 disconnected-state rule.
+            return pf ? [.sendDM] : []
+
+        case (.disconnecting, .receivedRR(_, let pf, let isCommand)),
+             (.disconnecting, .receivedRNR(_, let pf, let isCommand)),
+             (.disconnecting, .receivedREJ(_, let pf, let isCommand)):
+            // SDL awaiting-release (Figure C4.3): same DM(F=1) rule for supervisory
+            // command polls.
+            return (pf && isCommand) ? [.sendDM] : []
 
         case (.disconnecting, .t1Timeout):
             retryCount += 1
@@ -668,15 +863,23 @@ nonisolated struct AX25StateMachine: Sendable {
             actions.append(contentsOf: deliverInSequenceFrame(ns: ns, nr: nr, pf: pf, payload: payload))
         } else if isWithinReceiveWindow(ns: ns) {
             // Out of sequence but within window - buffer for later delivery
+
             bufferOutOfSequenceFrame(ns: ns, nr: nr, payload: payload)
 
-            // Send REJ only once per gap (with F=1 if remote sent P=1)
+            // Send REJ only once per gap (with F=1 if remote sent P=1).
+            //
+            // .startT1 is essential, not decoration: T1 is what eventually rescues a gap the
+            // peer never fills. The T1-timeout handler above flushes the receive buffer past
+            // a lost frame after 2 expiries, but that can only run if T1 is actually ticking.
+            // With no outbound I-frames outstanding T1 is stopped, so a peer that opens the
+            // link and then sends a wrong N(S) left the gap — and everything gated on it —
+            // stuck until the peer happened to poll. Starting T1 here matches AX.25 REJ
+            // recovery, where the rejecting station times the awaited retransmission.
             if !rejSent {
-
                 actions.append(.sendREJ(nr: sequenceState.vr, pf: pf))
+                actions.append(.startT1)
                 rejSent = true
             } else {
-
                 // Still need to respond if P=1, even if REJ already sent
                 if pf {
                     actions.append(.sendRR(nr: sequenceState.vr, pf: true))
@@ -782,6 +985,18 @@ nonisolated struct AX25StateMachine: Sendable {
 
     private mutating func handleRR(nr: Int, pf: Bool = false, isCommand: Bool = false) -> [AX25SessionAction] {
         var actions: [AX25SessionAction] = []
+
+        // An RR clears any peer receiver-busy condition (§4.3.2.3).
+        peerBusy = false
+
+        // An F=1 *response* is the answer to a P=1 poll we sent (T3 enquiry or T1
+        // recovery). It proves the link is alive, so the retry counter resets even
+        // when no new frames are acknowledged — this is the SDL's exit from the
+        // timer-recovery condition. Without it, retries accumulated during one
+        // enquiry cycle would leak into the next and trip a premature N2 failure.
+        if pf && !isCommand {
+            retryCount = 0
+        }
         
         if pf && isCommand {
             actions.append(.sendRR(nr: sequenceState.vr, pf: true, isCommand: false))

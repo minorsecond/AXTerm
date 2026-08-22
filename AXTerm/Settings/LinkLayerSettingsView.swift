@@ -15,11 +15,50 @@ struct LinkLayerSettingsView: View {
     let syncToCoordinator: () -> Void
 
     var body: some View {
-        if settings.tncCapabilities.supportsLinkTuning {
-            supportedContent
-        } else {
-            unsupportedContent
+        VStack(alignment: .leading, spacing: 14) {
+            t1TimeoutContent
+            if settings.tncCapabilities.supportsLinkTuning {
+                supportedContent
+            } else {
+                unsupportedContent
+            }
         }
+    }
+
+    @ViewBuilder
+    private var t1TimeoutContent: some View {
+        LabeledContent("T1 Retransmit Timeout") {
+            HStack(spacing: 8) {
+                TextField(
+                    "",
+                    value: $settings.ax25T1TimeoutSeconds,
+                    format: .number.precision(.fractionLength(1))
+                )
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 64)
+                .onChange(of: settings.ax25T1TimeoutSeconds) { _, _ in
+                    syncToCoordinator()
+                }
+
+                Text("s")
+                    .foregroundStyle(.secondary)
+
+                Stepper(
+                    "",
+                    value: $settings.ax25T1TimeoutSeconds,
+                    in: AppSettingsStore.minAX25T1TimeoutSeconds...AppSettingsStore.maxAX25T1TimeoutSeconds,
+                    step: 0.5
+                )
+                .labelsHidden()
+                .onChange(of: settings.ax25T1TimeoutSeconds) { _, _ in
+                    syncToCoordinator()
+                }
+            }
+        }
+
+        Text("Guardrails: \(Int(AppSettingsStore.minAX25T1TimeoutSeconds))-\(Int(AppSettingsStore.maxAX25T1TimeoutSeconds)) seconds. Larger values reduce premature retransmits on slow links; smaller values retry faster.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 
     @ViewBuilder

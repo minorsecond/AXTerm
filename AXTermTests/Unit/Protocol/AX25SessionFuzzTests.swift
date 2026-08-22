@@ -1043,7 +1043,9 @@ extension AX25SessionFuzzTests {
     }
 
     // F-E3: DISC received while in connecting state (before UA arrives).
-    // The session must not get stuck and must not send a UA without an established connection.
+    // SDL C4.2: the DISC is answered with DM and the SABM retry cycle continues —
+    // the session must not get stuck, must not send UA, and must still terminate
+    // via the two bounded exits (peer DM, or N2 exhaustion).
     func testDISCDuringConnectingState() {
         let clock = AX25VirtualClock()
         let config = AX25SessionConfig(windowSize: 4, rtoMin: 1.0, rtoMax: 16.0, initialRto: 2.0)
@@ -1063,11 +1065,16 @@ extension AX25SessionFuzzTests {
         // Peer sends DISC before UA
         let response = manager.handleInboundDISC(from: peer, path: path, channel: 0)
 
-        // Must not crash; session should be disconnected or error
-        let validStates: [AX25SessionState] = [.disconnected, .error, .disconnecting]
-        XCTAssert(validStates.contains(session.state),
-            "DISC during connecting must lead to disconnected/error; got \(session.state.rawValue) (seed: F-E3)")
-        _ = response
+        // SDL C4.2: answered with DM, connect attempt continues
+        XCTAssertEqual(session.state, .connecting,
+            "SDL C4.2: DISC while connecting is answered with DM and SABM retries continue (seed: F-E3)")
+        XCTAssertEqual(response?.displayInfo, "DM",
+            "the DISC must be answered with DM, never UA (seed: F-E3)")
+
+        // The peer then refuses the retried SABM with DM — attempt aborts cleanly.
+        manager.handleInboundDM(from: peer, path: path, channel: 0)
+        XCTAssertEqual(session.state, .disconnected,
+            "peer DM must abort the connect attempt (seed: F-E3)")
     }
 
     // F-E4: SABM received while already fully connected (reconnect request).
@@ -1447,7 +1454,9 @@ extension AX25SessionFuzzTests {
         assertAllInvariants(session, context: "F-R5 post-inject")
     }
 
-    // F-R6: Regression — DISC received while in .connecting state must terminate the session.
+    // F-R6: Regression — a DISC received while .connecting must never leave the session
+    // stuck forever (Bug I). Per SDL C4.2 the DISC itself no longer aborts; the guarantee
+    // is bounded termination: peer DM aborts immediately, silence exhausts N2.
     //
     // Bug I root cause:
     //   handleInboundDISC searched for the session using findConnectedSession() (which only
@@ -1486,17 +1495,24 @@ extension AX25SessionFuzzTests {
         XCTAssertEqual(session.state, .connecting,
             "Precondition: session must be in .connecting before DISC injection (Bug I regression)")
 
-        // Peer explicitly refuses the connection by sending DISC before UA
+        // Peer sends DISC before UA. SDL C4.2: answered with DM, SABM retries
+        // continue — the original Bug I concern (stuck forever) is prevented not by
+        // aborting, but by the guarantee that termination is still bounded below.
         _ = manager.handleInboundDISC(from: peer, path: path, channel: 0)
+        XCTAssertEqual(session.state, .connecting,
+            "SDL C4.2: DISC while connecting must not abort the attempt")
+        XCTAssertGreaterThan(clock.activeTaskCount, 0,
+            "T1 must still be running to drive SABM retries after the DISC")
 
-        // Session must not remain in .connecting — any terminal or transitional state is valid
-        let validStates: [AX25SessionState] = [.disconnected, .error, .disconnecting]
-        XCTAssert(validStates.contains(session.state),
-            "DISC during connecting must terminate session; got \(session.state.rawValue) (Bug I regression)")
-
-        // The timer that was running for T1/SABM retransmit must be cancelled —
-        // no orphaned tasks after the session terminates.
+        // Bounded termination: with the peer silent, T1 exhausts N2 and the
+        // session reaches a terminal state with every timer cancelled.
+        for _ in 0...(config.maxRetries + 1) {
+            clock.advance(by: config.rtoMax ?? 16.0)
+        }
+        let terminal: [AX25SessionState] = [.disconnected, .error]
+        XCTAssert(terminal.contains(session.state),
+            "silent peer must still terminate via N2; got \(session.state.rawValue) (Bug I regression)")
         XCTAssertEqual(clock.activeTaskCount, 0,
-            "No active timers must remain after DISC terminates a .connecting session (Bug I regression)")
+            "No active timers must remain after the connect attempt terminates (Bug I regression)")
     }
 }

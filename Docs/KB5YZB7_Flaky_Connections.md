@@ -190,6 +190,33 @@ zero I-frames with response data.
 - `testAXDPToggleOffOnPreservesCapabilityCache` — toggling AXDP off/on doesn't invalidate cache
 - `testDisconnectInvalidatesCapabilityForReNegotiation` — disconnect forces fresh re-negotiation
 
+## Bug #6: Repeated idle command polls provoke DRLNOD DM
+
+### Problem
+Live DRLNOD testing reproduced a disconnect when the operator sequence was:
+
+1. Connect to `DRLNOD`
+2. Send `Help\r`
+3. Send `c kb5yzb-7\r`
+
+AXTerm was setting the P/F bit on every user I-frame sent from an idle send
+buffer. `Help` was accepted, but the later idle command could be sent as another
+poll I-frame. DRLNOD acknowledged slowly, then sent `DM`, tearing the session down.
+
+### Fix
+- Keep the compatibility poll only on the first outbound numbered user I-frame
+  after SABM/UA for an initiated session.
+- Do not set P/F merely because later user input is sent while the send buffer is
+  empty.
+- Continue to use RR(P=1) for T1 link-state polling and recovery.
+
+### Tests
+- `AX25SessionTests.testFirstSessionIFrameHasPollBit`
+- `AX25SessionTests.testSecondIdleCommandDoesNotCarryPollBit`
+- `DRLNODDisconnectRegressionTests`
+- `DRLNODLiveTest.testConnectHelpThenConnectKB5YZB7` gated by
+  `/tmp/axterm_net_tests_enabled`
+
 ## Next Steps
 - Test live on-air with KB5YZB-7 via DRL to confirm all fixes resolve the flaky connection behavior
 - Investigate the 4 pre-existing integration test failures (Direwolf simulation setup issues)

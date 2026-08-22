@@ -674,25 +674,90 @@ final class AX25SpecComplianceTests: XCTestCase {
         XCTAssertEqual(sm.sequenceState.va, 1, "RNR should advance V(A)")
     }
 
-    /// §6.4.2: RNR stops T1
-    func testRNRStopsT1() {
+    /// RNR must leave T1 running.
+    ///
+    /// This previously asserted the opposite (`.stopT1`). That contradicts the AX.25 v2.2
+    /// "check I frame acknowledged" routine, whose peer_receiver_busy branch is
+    /// `V(A) <- N(R); start T3; if T1 not running, start T1`. Stopping T1 here left the
+    /// link with no timer running at all — the busy condition could never be polled, so
+    /// the session stalled until the peer happened to speak first.
+    func testRNRKeepsT1Running() {
         var sm = makeConnectedStateMachine()
         sm.sequenceState.incrementVS()
 
         let actions = sm.handle(event: .receivedRNR(nr: 1))
 
-        XCTAssertTrue(actions.contains(.stopT1))
+        XCTAssertTrue(actions.contains(.startT1),
+            "RNR must keep T1 running so the busy peer gets polled")
+        XCTAssertFalse(actions.contains(.stopT1),
+            "Stopping T1 on RNR strands the link with no running timer")
     }
 
-    /// §6.4.2: RNR does not start T3 (peer is busy, not idle)
-    func testRNRDoesNotStartT3() {
+    /// RNR starts T3, the link-validity backstop while the peer is busy.
+    func testRNRStartsT3() {
         var sm = makeConnectedStateMachine()
         sm.sequenceState.incrementVS()
 
         let actions = sm.handle(event: .receivedRNR(nr: 1))
 
-        XCTAssertFalse(actions.contains(.startT3),
-            "RNR should not start T3 — peer is busy, not idle")
+        XCTAssertTrue(actions.contains(.startT3),
+            "AX.25 v2.2 starts T3 on the peer-busy branch of check-I-frame-acknowledged")
+    }
+
+    /// RNR sets the peer-busy condition; RR clears it.
+    func testRNRSetsPeerBusyAndRRClearsIt() {
+        var sm = makeConnectedStateMachine()
+        sm.sequenceState.incrementVS()
+        XCTAssertFalse(sm.peerBusy)
+
+        _ = sm.handle(event: .receivedRNR(nr: 0))
+        XCTAssertTrue(sm.peerBusy, "RNR must set the peer receiver-busy condition")
+
+        _ = sm.handle(event: .receivedRR(nr: 1))
+        XCTAssertFalse(sm.peerBusy, "RR clears the peer receiver-busy condition (§4.3.2.3)")
+    }
+
+    /// REJ also clears the peer-busy condition — the peer is asking for data again.
+    func testREJClearsPeerBusy() {
+        var sm = makeConnectedStateMachine()
+        sm.sequenceState.incrementVS()
+
+        _ = sm.handle(event: .receivedRNR(nr: 0))
+        XCTAssertTrue(sm.peerBusy)
+
+        _ = sm.handle(event: .receivedREJ(nr: 0))
+        XCTAssertFalse(sm.peerBusy, "REJ clears the peer receiver-busy condition")
+    }
+
+    /// While the peer is busy, T1 expiry must poll with RR(P=1) rather than rely on
+    /// the manager retransmitting I-frames into a receive buffer we know is full.
+    func testT1TimeoutWhilePeerBusyPolls() {
+        var sm = makeConnectedStateMachine()
+        sm.sequenceState.incrementVS()
+
+        _ = sm.handle(event: .receivedRNR(nr: 0))
+        let actions = sm.handle(event: .t1Timeout)
+
+        XCTAssertTrue(
+            actions.contains(.sendRR(nr: sm.sequenceState.vr, pf: true, isCommand: true)),
+            "T1 expiry while the peer is busy must emit an RR(P=1) poll"
+        )
+    }
+
+    /// An RNR that acknowledges new frames proves the link is alive, so it must clear
+    /// the retry counter the same way RR does. Otherwise retries accumulated before the
+    /// busy condition persist and trip a premature "retries exceeded" link failure.
+    func testRNRWithAckProgressResetsRetryCount() {
+        var sm = makeConnectedStateMachine()
+        sm.sequenceState.incrementVS()
+        sm.sequenceState.incrementVS()
+
+        _ = sm.handle(event: .t1Timeout)
+        XCTAssertGreaterThan(sm.retryCount, 0, "precondition: a retry was recorded")
+
+        _ = sm.handle(event: .receivedRNR(nr: 1))
+
+        XCTAssertEqual(sm.retryCount, 0, "RNR that advances V(A) must reset the retry count")
     }
 
     /// §6.4.2: RNR followed by RR resumes normal operation
@@ -851,25 +916,29 @@ final class AX25SpecComplianceTests: XCTestCase {
         XCTAssertFalse(containsAnyREJ(actions))
     }
 
-    /// §6.7.1.2: T3 timeout sends RR for link check
+    /// §4.4.5.2: "When T3 times out, an RR or RNR frame is transmitted as a
+    /// command with the P bit set, and then T1 is started."
     func testT3TimeoutSendsRR() {
         var sm = makeConnectedStateMachine()
 
         let actions = sm.handle(event: .t3Timeout)
 
-        XCTAssertTrue(containsAnyRR(actions), "T3 timeout should send RR for link check")
-        XCTAssertTrue(actions.contains(.startT1))
+        XCTAssertTrue(actions.contains(.sendRR(nr: sm.sequenceState.vr, pf: true, isCommand: true)),
+            "§4.4.5.2: the T3 enquiry is an RR command with P=1")
+        XCTAssertTrue(actions.contains(.startT1), "§4.4.5.2: T1 times the enquiry")
+        XCTAssertFalse(actions.contains(.startT3),
+            "§4.4.5.2: T3 restarts only when a response to the enquiry is received")
     }
 
-    /// §6.4.11: T1 timeout in connected sends RR poll (P=1) when outstanding > 0
+    /// §6.4.11: T1 timeout in connected does not send S-frame RR poll command when outstanding > 0
     func testT1TimeoutInConnectedSendsRRPoll() {
         var sm = makeConnectedStateMachine()
         sm.sequenceState.incrementVS()  // outstanding = 1
 
         let actions = sm.handle(event: .t1Timeout)
 
-        XCTAssertTrue(containsRR(actions, nr: sm.sequenceState.vr, pf: true),
-            "T1 timeout with outstanding frames must send RR poll (P=1)")
+        XCTAssertFalse(containsAnyRR(actions),
+            "T1 timeout with outstanding frames must not send S-frame RR poll command")
     }
 
     // MARK: - Section 10: Timer Behavior (AX.25 §6.7)
@@ -885,7 +954,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         XCTAssertTrue(actions.contains(.startT1))
     }
 
-    /// §6.7: T1 timeout in connected with outstanding sends RR poll
+    /// §6.7: T1 timeout in connected with outstanding does not send S-frame RR poll command
     func testT1TimeoutInConnectedWithOutstandingSendsRRPoll() {
         var sm = makeConnectedStateMachine()
         sm.sequenceState.incrementVS()
@@ -893,10 +962,10 @@ final class AX25SpecComplianceTests: XCTestCase {
         let actions = sm.handle(event: .t1Timeout)
 
         let hasRRPoll = actions.contains { action in
-            if case .sendRR(_, let pf, _) = action { return pf == true }
+            if case .sendRR = action { return true }
             return false
         }
-        XCTAssertTrue(hasRRPoll)
+        XCTAssertFalse(hasRRPoll)
     }
 
     /// §6.7: T1 timeout in connected with no outstanding re-sends RR poll (e.g. lost T3 probe)
@@ -963,13 +1032,64 @@ final class AX25SpecComplianceTests: XCTestCase {
         XCTAssertTrue(actions.contains(.notifyDisconnected))
     }
 
-    /// §6.7: T3 timeout starts T1
+    /// §4.4.5.2: T3 expiry starts T1 to time the enquiry.
     func testT3TimeoutStartsT1() {
         var sm = makeConnectedStateMachine()
 
         let actions = sm.handle(event: .t3Timeout)
 
         XCTAssertTrue(actions.contains(.startT1))
+    }
+
+    /// §4.4.5.2: "When a response to this command is received, T1 is stopped and
+    /// T3 is started." A full enquiry round-trip returns the machine to idle
+    /// supervision with the retry counter cleared.
+    func testT3EnquiryAnsweredStopsT1AndRestartsT3() {
+        var sm = makeConnectedStateMachine()
+
+        _ = sm.handle(event: .t3Timeout)
+        let actions = sm.handle(event: .receivedRR(nr: 0, pf: true, isCommand: false))
+
+        XCTAssertTrue(actions.contains(.stopT1), "§4.4.5.2: response to the enquiry stops T1")
+        XCTAssertTrue(actions.contains(.startT3), "§4.4.5.2: ... and starts T3")
+        XCTAssertEqual(sm.retryCount, 0, "a confirmed link exits timer recovery")
+        XCTAssertEqual(sm.state, .connected)
+    }
+
+    /// §4.4.5.2 + §6.4.11: an unanswered enquiry escalates through T1 — each expiry
+    /// re-polls — and N2 exhaustion declares link failure.
+    func testUnansweredT3EnquiryEscalatesToLinkFailure() {
+        var sm = AX25StateMachine(config: AX25SessionConfig(maxRetries: 3))
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+
+        var actions = sm.handle(event: .t3Timeout)
+        XCTAssertTrue(actions.contains(.startT1))
+
+        // Each T1 expiry re-polls; after maxRetries the link is declared dead.
+        for _ in 0..<3 {
+            actions = sm.handle(event: .t1Timeout)
+            XCTAssertTrue(actions.contains(.sendRR(nr: 0, pf: true, isCommand: true)),
+                "T1 recovery re-polls with RR(P=1) while nothing is outstanding")
+        }
+        actions = sm.handle(event: .t1Timeout)
+        XCTAssertEqual(sm.state, .error, "N2 unanswered enquiries must declare link failure")
+        XCTAssertTrue(actions.contains(.stopT1))
+    }
+
+    /// An F=1 response answering our poll exits timer recovery even when it
+    /// acknowledges nothing new — otherwise retries leak across enquiry cycles
+    /// and a later cycle fails prematurely.
+    func testFinalResponseResetsRetryCountWithoutAckProgress() {
+        var sm = makeConnectedStateMachine()
+
+        _ = sm.handle(event: .t3Timeout)
+        _ = sm.handle(event: .t1Timeout)
+        _ = sm.handle(event: .t1Timeout)
+        XCTAssertEqual(sm.retryCount, 2, "precondition: retries accumulated during the enquiry cycle")
+
+        _ = sm.handle(event: .receivedRR(nr: 0, pf: true, isCommand: false))
+        XCTAssertEqual(sm.retryCount, 0, "the F=1 answer proves the link; the counter must clear")
     }
 
     /// §6.7: Timer backoff doubles RTO
@@ -1213,40 +1333,152 @@ final class AX25SpecComplianceTests: XCTestCase {
         XCTAssertEqual(sm.state, .disconnected)
     }
 
-    /// Connecting state ignores I-frame
+    // §6.3.1: "The originating TNC sending a SABM(E) command ignores and discards
+    // any frames except SABM, DISC, UA and DM frames from the distant TNC."
+    //
+    // These four tests previously asserted the opposite — a DM reply to "reset a
+    // phantom session". That was a spec violation with a live failure: against
+    // KB5YZB-7 (BPQ), the peer's UA and first I-frame were lost on RF, it was
+    // legitimately connected, and our DM told it to tear the fresh link down.
+    // The spec's reset mechanism for a genuinely stale peer is the retransmitted
+    // SABM itself (§6.3.1: UA reception zeroes V(S)/V(A)/V(R)).
+
+    /// §6.3.1: I-frame received while awaiting UA is ignored and discarded.
     func testConnectingIgnoresIFrame() {
         var sm = AX25StateMachine(config: AX25SessionConfig())
         _ = sm.handle(event: .connectRequest)
-        let actions = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, pf: false, payload: Data("x".utf8)))
-        XCTAssertTrue(actions.isEmpty)
-        XCTAssertEqual(sm.state, .connecting)
+        let actions = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, pf: true, payload: Data("x".utf8)))
+        XCTAssertTrue(actions.isEmpty, "§6.3.1: I-frame while SABM outstanding must be ignored — not answered with DM")
+        XCTAssertEqual(sm.state, .connecting, "SABM retransmission loop must continue")
     }
 
-    /// Connecting state ignores RR
+    /// §6.3.1: RR received while awaiting UA is ignored and discarded.
     func testConnectingIgnoresRR() {
         var sm = AX25StateMachine(config: AX25SessionConfig())
         _ = sm.handle(event: .connectRequest)
-        let actions = sm.handle(event: .receivedRR(nr: 0))
-        XCTAssertTrue(actions.isEmpty)
-        XCTAssertEqual(sm.state, .connecting)
+        let actions = sm.handle(event: .receivedRR(nr: 0, pf: true, isCommand: true))
+        XCTAssertTrue(actions.isEmpty, "§6.3.1: RR while SABM outstanding must be ignored — not answered with DM")
+        XCTAssertEqual(sm.state, .connecting, "SABM retransmission loop must continue")
     }
 
-    /// Connecting state ignores RNR
+    /// §6.3.1: RNR received while awaiting UA is ignored and discarded.
     func testConnectingIgnoresRNR() {
         var sm = AX25StateMachine(config: AX25SessionConfig())
         _ = sm.handle(event: .connectRequest)
-        let actions = sm.handle(event: .receivedRNR(nr: 0))
-        XCTAssertTrue(actions.isEmpty)
-        XCTAssertEqual(sm.state, .connecting)
+        let actions = sm.handle(event: .receivedRNR(nr: 0, pf: true, isCommand: true))
+        XCTAssertTrue(actions.isEmpty, "§6.3.1: RNR while SABM outstanding must be ignored — not answered with DM")
+        XCTAssertEqual(sm.state, .connecting, "SABM retransmission loop must continue")
     }
 
-    /// Connecting state ignores REJ
+    /// §6.3.1: REJ received while awaiting UA is ignored and discarded.
     func testConnectingIgnoresREJ() {
         var sm = AX25StateMachine(config: AX25SessionConfig())
         _ = sm.handle(event: .connectRequest)
-        let actions = sm.handle(event: .receivedREJ(nr: 0))
-        XCTAssertTrue(actions.isEmpty)
+        let actions = sm.handle(event: .receivedREJ(nr: 0, pf: true, isCommand: true))
+        XCTAssertTrue(actions.isEmpty, "§6.3.1: REJ while SABM outstanding must be ignored — not answered with DM")
+        XCTAssertEqual(sm.state, .connecting, "SABM retransmission loop must continue")
+    }
+
+    /// §6.3.1: FRMR received while awaiting UA is ignored and discarded.
+    func testConnectingIgnoresFRMR() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        let actions = sm.handle(event: .receivedFRMR)
+        XCTAssertTrue(actions.isEmpty, "§6.3.1: FRMR is not among SABM/DISC/UA/DM and must be ignored")
         XCTAssertEqual(sm.state, .connecting)
+    }
+
+    /// SDL C4.2: DISC while awaiting UA is answered with DM and the machine STAYS
+    /// in awaiting-connection — the SABM retry cycle continues. A DISC crossing our
+    /// SABM usually means the peer is tearing down an old session; once done, the
+    /// next SABM retry establishes the fresh link. A peer actually refusing answers
+    /// the SABM itself with DM, which aborts us cleanly.
+    func testConnectingDISCAnsweredWithDMAndStaysConnecting() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        let actions = sm.handle(event: .receivedDISC)
+        XCTAssertEqual(actions, [.sendDM],
+            "SDL C4.2: DISC in awaiting-connection is answered with DM — UA would acknowledge a link that is not up")
+        XCTAssertEqual(sm.state, .connecting, "SDL C4.2: the connect attempt continues")
+
+        // The two bounded exits still work: a DM aborts immediately...
+        var refused = sm
+        let dmActions = refused.handle(event: .receivedDM)
+        XCTAssertEqual(refused.state, .disconnected, "peer's DM to our SABM aborts the attempt")
+        XCTAssertTrue(dmActions.contains(.stopT1))
+
+        // ...and continued silence exhausts N2 via T1.
+        for _ in 0...sm.config.maxRetries {
+            _ = sm.handle(event: .t1Timeout)
+        }
+        XCTAssertEqual(sm.state, .error, "silence after DISC still terminates via N2")
+    }
+
+    // MARK: - §6.3.5: Disconnected-State DM Responses
+
+    // §6.3.5: "Any TNC receiving a command frame other than a SABM(E) or UI frame
+    // with the P bit set to '1' responds with a DM frame with the F bit set to '1'.
+    // The offending frame is ignored."  §6.2 restates it: "The next response frame
+    // returned to a S or I command frame with the P bit set to '1', received in the
+    // disconnected state, is a DM response frame with the F bit set to '1'."
+
+    /// §6.3.5: I command with P=1 in disconnected state → DM.
+    func testDisconnectedIFramePollAnsweredWithDM() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        let actions = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, pf: true, payload: Data("x".utf8)))
+        XCTAssertEqual(actions, [.sendDM], "§6.3.5: P=1 command in disconnected state must be answered with DM(F=1)")
+        XCTAssertEqual(sm.state, .disconnected, "the offending frame is ignored — no state change")
+    }
+
+    /// §6.3.5: I frame with P=0 in disconnected state is ignored (also the guard
+    /// against DM storms from digipeated duplicates, which carry P=0).
+    func testDisconnectedIFrameWithoutPollIsIgnored() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        let actions = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, pf: false, payload: Data("x".utf8)))
+        XCTAssertTrue(actions.isEmpty, "§6.3.5 gates the DM response on P=1; P=0 frames are discarded silently")
+    }
+
+    /// §6.3.5: RR command with P=1 in disconnected state → DM.
+    func testDisconnectedRRCommandPollAnsweredWithDM() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        let actions = sm.handle(event: .receivedRR(nr: 0, pf: true, isCommand: true))
+        XCTAssertEqual(actions, [.sendDM], "§6.2: S command with P=1 in disconnected state → DM(F=1)")
+    }
+
+    /// §6.3.5 applies to command frames only: an RR *response* is never answered.
+    func testDisconnectedRRResponseIsIgnored() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        let actions = sm.handle(event: .receivedRR(nr: 0, pf: true, isCommand: false))
+        XCTAssertTrue(actions.isEmpty, "§6.3.5 covers command frames; responses are discarded")
+    }
+
+    /// §6.3.5: RNR and REJ command polls in disconnected state → DM.
+    func testDisconnectedRNRAndREJCommandPollsAnsweredWithDM() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        XCTAssertEqual(sm.handle(event: .receivedRNR(nr: 0, pf: true, isCommand: true)), [.sendDM])
+        XCTAssertEqual(sm.handle(event: .receivedREJ(nr: 0, pf: true, isCommand: true)), [.sendDM])
+    }
+
+    // MARK: - Awaiting-Release DM Responses (Annex C, Figure C4.3)
+
+    /// SDL C4.3: SABM arriving while our DISC is outstanding is refused with DM.
+    func testDisconnectingSABMAnsweredWithDM() {
+        var sm = makeConnectedStateMachine()
+        _ = sm.handle(event: .disconnectRequest)
+        XCTAssertEqual(sm.state, .disconnecting)
+        let actions = sm.handle(event: .receivedSABM)
+        XCTAssertEqual(actions, [.sendDM], "SDL C4.3: SABM during teardown is refused with DM")
+        XCTAssertEqual(sm.state, .disconnecting, "teardown continues; the peer may retry SABM after it completes")
+    }
+
+    /// SDL C4.3: command frames with P=1 during teardown are answered with DM.
+    func testDisconnectingCommandPollsAnsweredWithDM() {
+        var sm = makeConnectedStateMachine()
+        _ = sm.handle(event: .disconnectRequest)
+        XCTAssertEqual(sm.handle(event: .receivedIFrame(ns: 0, nr: 0, pf: true, payload: Data("x".utf8))), [.sendDM])
+        XCTAssertEqual(sm.handle(event: .receivedRR(nr: 0, pf: true, isCommand: true)), [.sendDM])
+        XCTAssertTrue(sm.handle(event: .receivedRR(nr: 0, pf: false, isCommand: true)).isEmpty,
+            "P=0 frames during teardown are discarded, not answered")
     }
 
     /// Connecting state ignores T3 timeout
@@ -1276,12 +1508,15 @@ final class AX25SpecComplianceTests: XCTestCase {
         XCTAssertEqual(sm.state, .disconnecting)
     }
 
-    /// Disconnecting state ignores SABM
-    func testDisconnectingIgnoresSABM() {
+    /// SDL C4.3: SABM while our DISC is outstanding is refused with DM, and the
+    /// teardown continues. (This test previously asserted silence; ignoring a SABM
+    /// leaves the caller retrying until its N2 expires instead of learning
+    /// immediately that no connection is available right now.)
+    func testDisconnectingRefusesSABMWithDM() {
         var sm = makeConnectedStateMachine()
         _ = sm.handle(event: .disconnectRequest)
         let actions = sm.handle(event: .receivedSABM)
-        XCTAssertTrue(actions.isEmpty)
+        XCTAssertEqual(actions, [.sendDM], "SDL C4.3: SABM during teardown is refused with DM")
         XCTAssertEqual(sm.state, .disconnecting)
     }
 
@@ -1389,7 +1624,7 @@ final class AX25SpecComplianceTests: XCTestCase {
         // T1 fires (frame lost in transit)
         let t1Actions = sm.handle(event: .t1Timeout)
         XCTAssertEqual(sm.retryCount, 1)
-        XCTAssertTrue(self.actions(t1Actions, containRRPoll: true))
+        XCTAssertTrue(self.actions(t1Actions, containRRPoll: false))
 
         // Peer responds to poll with RR(F=1) acking our frame
         let rrActions = sm.handle(event: .receivedRR(nr: 1))

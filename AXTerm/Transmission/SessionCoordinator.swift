@@ -251,19 +251,24 @@ final class SessionCoordinator: ObservableObject {
     /// Sync AX.25 session config from global adaptive settings so both messaging and file transfer use the same window size, RTO bounds, and retries.
     /// Call after setting globalAdaptiveSettings (e.g. on launch or when user changes TX adaptive settings).
     func syncSessionManagerConfigFromAdaptive() {
+        let userT1 = AppSettingsStore.sanitizeAX25T1TimeoutSeconds(
+            appSettings?.ax25T1TimeoutSeconds ?? AppSettingsStore.defaultAX25T1TimeoutSeconds
+        )
+
         // When TNC manages the link layer, always use protocol defaults
         if let caps = appSettings?.tncCapabilities, !caps.supportsLinkTuning {
-            sessionManager.defaultConfig = AX25SessionConfig()
-            TxLog.adaptiveConfigSynced(window: 4, paclen: 128, rtoMin: 1, rtoMax: 30, maxRetries: 10, initialRto: 4.0)
+            sessionManager.defaultConfig = AX25SessionConfig(initialRto: userT1)
+            TxLog.adaptiveConfigSynced(window: 4, paclen: 128, rtoMin: 1, rtoMax: 30, maxRetries: 10, initialRto: userT1)
             return
         }
 
         guard adaptiveTransmissionEnabled else {
-            sessionManager.defaultConfig = AX25SessionConfig()
-            TxLog.adaptiveConfigSynced(window: 4, paclen: 128, rtoMin: 1, rtoMax: 30, maxRetries: 10, initialRto: 4.0)
+            sessionManager.defaultConfig = AX25SessionConfig(initialRto: userT1, adaptiveTimeout: false)
+            TxLog.adaptiveConfigSynced(window: 4, paclen: 128, rtoMin: 1, rtoMax: 30, maxRetries: 10, initialRto: userT1)
             return
         }
         let a = globalAdaptiveSettings
+        let initialRto = max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, userT1))
         sessionManager.defaultConfig = AX25SessionConfig(
             windowSize: a.windowSize.effectiveValue,
             paclen: a.paclen.effectiveValue,
@@ -272,7 +277,8 @@ final class SessionCoordinator: ObservableObject {
             extended: false,
             rtoMin: a.rtoMin.effectiveValue,
             rtoMax: a.rtoMax.effectiveValue,
-            initialRto: max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, 4.0))
+            initialRto: initialRto,
+            adaptiveTimeout: adaptiveTransmissionEnabled
         )
         TxLog.adaptiveConfigSynced(
             window: a.windowSize.effectiveValue,
@@ -280,7 +286,7 @@ final class SessionCoordinator: ObservableObject {
             rtoMin: a.rtoMin.effectiveValue,
             rtoMax: a.rtoMax.effectiveValue,
             maxRetries: a.maxRetries.effectiveValue,
-            initialRto: max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, 4.0))
+            initialRto: initialRto
         )
     }
 
@@ -408,7 +414,10 @@ final class SessionCoordinator: ObservableObject {
 
     /// Build session config from adaptive settings (shared by per-route and merged paths).
     private func configFromAdaptive(_ a: TxAdaptiveSettings) -> AX25SessionConfig {
-        AX25SessionConfig(
+        let userT1 = AppSettingsStore.sanitizeAX25T1TimeoutSeconds(
+            appSettings?.ax25T1TimeoutSeconds ?? AppSettingsStore.defaultAX25T1TimeoutSeconds
+        )
+        return AX25SessionConfig(
             windowSize: a.windowSize.effectiveValue,
             paclen: a.paclen.effectiveValue,
             maxReceiveBufferSize: nil,
@@ -416,7 +425,8 @@ final class SessionCoordinator: ObservableObject {
             extended: false,
             rtoMin: a.rtoMin.effectiveValue,
             rtoMax: a.rtoMax.effectiveValue,
-            initialRto: max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, 4.0))
+            initialRto: max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, userT1)),
+            adaptiveTimeout: adaptiveTransmissionEnabled
         )
     }
 
@@ -439,6 +449,9 @@ final class SessionCoordinator: ObservableObject {
         let rtoMin = configs.compactMap(\.rtoMin).max() ?? first.rtoMin ?? 1.0
         let rtoMax = configs.compactMap(\.rtoMax).max() ?? first.rtoMax ?? 30.0
         let maxRetries = configs.map(\.maxRetries).max() ?? first.maxRetries
+        let userT1 = AppSettingsStore.sanitizeAX25T1TimeoutSeconds(
+            appSettings?.ax25T1TimeoutSeconds ?? AppSettingsStore.defaultAX25T1TimeoutSeconds
+        )
         return AX25SessionConfig(
             windowSize: windowSize,
             paclen: paclen,
@@ -447,7 +460,8 @@ final class SessionCoordinator: ObservableObject {
             extended: false,
             rtoMin: rtoMin,
             rtoMax: rtoMax,
-            initialRto: max(rtoMin, min(rtoMax, 4.0))
+            initialRto: max(rtoMin, min(rtoMax, userT1)),
+            adaptiveTimeout: adaptiveTransmissionEnabled
         )
     }
 
@@ -520,7 +534,7 @@ final class SessionCoordinator: ObservableObject {
         // Out-of-window or buffered frames are discarded/buffered by AX.25; appending them
         // would corrupt reassembly (chunks arrive out of order over KISS relay).
         sessionManager.onDataDeliveredForReassembly = { [weak self] session, data in
-            print("[DEBUG:DELIVERY] Data delivered for reassembly | from=\(session.remoteAddress.display) size=\(data.count) hex=\(data.prefix(16).map { String(format: "%02X", $0) }.joined())")
+            axDebugPrint("[DEBUG:DELIVERY] Data delivered for reassembly | from=\(session.remoteAddress.display) size=\(data.count) hex=\(data.prefix(16).map { String(format: "%02X", $0) }.joined())")
             self?.appendToReassemblyAndExtract(from: session.remoteAddress, path: session.path, data: data)
 
             // Send our text probe (UI frame) after receiving first inbound I-frame (if pending).
@@ -538,9 +552,19 @@ final class SessionCoordinator: ObservableObject {
         }
 
         sessionManager.getConfigForDestination = { [weak self] destination, pathSignature in
-            guard let self = self else { return AX25SessionConfig() }
-            if !self.adaptiveTransmissionEnabled { return AX25SessionConfig() }
-            if self.useDefaultConfigForDestinations.contains(where: { canonicalDestination($0) == canonicalDestination(destination) }) { return AX25SessionConfig() }
+            TxLog.debug(.session, "getConfigForDestination invoked", [
+                "dest": destination,
+                "hasSelf": "\(self != nil)",
+                "adaptiveTransmissionEnabled": "\(self?.adaptiveTransmissionEnabled ?? false)"
+            ])
+
+            guard let self = self else { return AX25SessionConfig(adaptiveTimeout: true) }
+            if !self.adaptiveTransmissionEnabled {
+                return AX25SessionConfig(adaptiveTimeout: false)
+            }
+            if self.useDefaultConfigForDestinations.contains(where: { canonicalDestination($0) == canonicalDestination(destination) }) {
+                return AX25SessionConfig(adaptiveTimeout: false)
+            }
             // When multiple connections exist to the same destination, use a conservative merged config so we don't flip parameters between connections or change settings mid-transmission.
             if self.activeSessionCount(forDestination: destination) >= 1 {
                 return self.mergedConfigForDestination(destination)
@@ -1216,7 +1240,7 @@ final class SessionCoordinator: ObservableObject {
         if buf.isEmpty {
             // Empty buffer: only start buffering if data is AXDP (starts with magic)
             if !AXDP.hasMagic(data) {
-                print("[DEBUG:REASSEMBLY] skip non-AXDP | from=\(from.display) size=\(data.count) prefix=\(data.prefix(4).map { String(format: "%02X", $0) }.joined()) ascii=\(dataPrefixAscii)")
+                axDebugPrint("[DEBUG:REASSEMBLY] skip non-AXDP | from=\(from.display) size=\(data.count) prefix=\(data.prefix(4).map { String(format: "%02X", $0) }.joined()) ascii=\(dataPrefixAscii)")
                 TxLog.debug(.axdp, "Skipping non-AXDP data (no magic header)", [
                     "from": from.display,
                     "size": data.count,
@@ -1229,7 +1253,7 @@ final class SessionCoordinator: ObservableObject {
             // Buffer has garbage that doesn't start with magic.
             // Attempt a resync if magic appears later (e.g., previous decode left extra bytes).
             if let magicOffset = magicOffset(in: buf), magicOffset > 0 {
-                print("[DEBUG:REASSEMBLY] resync to magic | from=\(from.display) offset=\(magicOffset) bufLen=\(buf.count)")
+                axDebugPrint("[DEBUG:REASSEMBLY] resync to magic | from=\(from.display) offset=\(magicOffset) bufLen=\(buf.count)")
                 TxLog.debug(.axdp, "Resyncing reassembly buffer to magic header", [
                     "from": from.display,
                     "offset": magicOffset,
@@ -1237,7 +1261,7 @@ final class SessionCoordinator: ObservableObject {
                 ])
                 buf = buf.subdata(in: magicOffset..<buf.count)
             } else {
-                print("[DEBUG:REASSEMBLY] clear garbage | from=\(from.display) garbageLen=\(buf.count)")
+                axDebugPrint("[DEBUG:REASSEMBLY] clear garbage | from=\(from.display) garbageLen=\(buf.count)")
                 TxLog.debug(.axdp, "Clearing garbage from reassembly buffer", [
                     "from": from.display,
                     "garbageLen": buf.count
@@ -1246,7 +1270,7 @@ final class SessionCoordinator: ObservableObject {
 
                 // Now check if new data is AXDP
                 if !AXDP.hasMagic(data) {
-                    print("[DEBUG:REASSEMBLY] skip non-AXDP after clear | from=\(from.display) size=\(data.count) ascii=\(dataPrefixAscii)")
+                    axDebugPrint("[DEBUG:REASSEMBLY] skip non-AXDP after clear | from=\(from.display) size=\(data.count) ascii=\(dataPrefixAscii)")
                     inboundReassemblyBuffer.removeValue(forKey: key)
                     return  // Don't buffer non-AXDP data
                 }
@@ -1261,7 +1285,7 @@ final class SessionCoordinator: ObservableObject {
         buf.append(data)
         inboundReassemblyBuffer[key] = buf
 
-        print("[DEBUG:REASSEMBLY] append | from=\(from.display) chunkLen=\(data.count) before=\(beforeLen) after=\(buf.count)")
+        axDebugPrint("[DEBUG:REASSEMBLY] append | from=\(from.display) chunkLen=\(data.count) before=\(beforeLen) after=\(buf.count)")
         TxLog.debug(.axdp, "Reassembly append chunk", [
             "from": from.display,
             "key": key,
@@ -1274,7 +1298,7 @@ final class SessionCoordinator: ObservableObject {
         #endif
 
         while let (message, consumed) = extractOneAXDPMessage(from: buf), consumed > 0, consumed <= buf.count {
-            print("[DEBUG:REASSEMBLY] extracted complete | from=\(from.display) type=\(message.type) consumed=\(consumed) payloadLen=\(message.payload?.count ?? 0)")
+            axDebugPrint("[DEBUG:REASSEMBLY] extracted complete | from=\(from.display) type=\(message.type) consumed=\(consumed) payloadLen=\(message.payload?.count ?? 0)")
             TxLog.debug(.axdp, "Reassembly extracted complete message", [
                 "from": from.display,
                 "type": String(describing: message.type),
@@ -1295,7 +1319,7 @@ final class SessionCoordinator: ObservableObject {
             let canExtract = extractOneAXDPMessage(from: buf) != nil
             if !canExtract {
                 let magicOffset = magicOffset(in: buf) ?? -1
-                print("[DEBUG:REASSEMBLY] incomplete | from=\(from.display) bufLen=\(buf.count) hasMagic=\(AXDP.hasMagic(buf)) magicOffset=\(magicOffset)")
+                axDebugPrint("[DEBUG:REASSEMBLY] incomplete | from=\(from.display) bufLen=\(buf.count) hasMagic=\(AXDP.hasMagic(buf)) magicOffset=\(magicOffset)")
                 TxLog.debug(.axdp, "Reassembly incomplete", [
                     "from": from.display,
                     "bufLen": buf.count,
@@ -1305,7 +1329,7 @@ final class SessionCoordinator: ObservableObject {
             }
         }
         if buf.count > 65_536 {
-            print("[DEBUG:REASSEMBLY] overflow discard | from=\(from.display) bufLen=\(buf.count)")
+            axDebugPrint("[DEBUG:REASSEMBLY] overflow discard | from=\(from.display) bufLen=\(buf.count)")
             inboundReassemblyBuffer.removeValue(forKey: key)
         } else if buf.isEmpty {
             inboundReassemblyBuffer.removeValue(forKey: key)
@@ -1329,7 +1353,7 @@ final class SessionCoordinator: ObservableObject {
                 "peer": peer.display,
                 "bufferSize": removed.count
             ])
-            print("[DEBUG:REASSEMBLY] cleared on disconnect | peer=\(peer.display) size=\(removed.count)")
+            axDebugPrint("[DEBUG:REASSEMBLY] cleared on disconnect | peer=\(peer.display) size=\(removed.count)")
         }
     }
     
@@ -1344,7 +1368,7 @@ final class SessionCoordinator: ObservableObject {
                     "key": key,
                     "bufferSize": removed.count
                 ])
-                print("[DEBUG:REASSEMBLY] cleared all paths | key=\(key) size=\(removed.count)")
+                axDebugPrint("[DEBUG:REASSEMBLY] cleared all paths | key=\(key) size=\(removed.count)")
             }
         }
     }
@@ -1353,14 +1377,14 @@ final class SessionCoordinator: ObservableObject {
     /// When decode succeeds, only the bytes actually consumed by the decoded message are returned.
     private func extractOneAXDPMessage(from buffer: Data) -> (AXDP.Message, Int)? {
         guard AXDP.hasMagic(buffer) else {
-            print("[DEBUG:REASSEMBLY:EXTRACT] nil | bufLen=\(buffer.count) reason=noMagic")
+            axDebugPrint("[DEBUG:REASSEMBLY:EXTRACT] nil | bufLen=\(buffer.count) reason=noMagic")
             return nil
         }
         guard let (message, consumedBytes) = AXDP.Message.decode(from: buffer) else {
-            print("[DEBUG:REASSEMBLY:EXTRACT] nil | bufLen=\(buffer.count) reason=decodeFailed")
+            axDebugPrint("[DEBUG:REASSEMBLY:EXTRACT] nil | bufLen=\(buffer.count) reason=decodeFailed")
             return nil
         }
-        print("[DEBUG:REASSEMBLY:EXTRACT] ok | bufLen=\(buffer.count) consumed=\(consumedBytes) type=\(message.type) payloadLen=\(message.payload?.count ?? 0)")
+        axDebugPrint("[DEBUG:REASSEMBLY:EXTRACT] ok | bufLen=\(buffer.count) consumed=\(consumedBytes) type=\(message.type) payloadLen=\(message.payload?.count ?? 0)")
         return (message, consumedBytes)
     }
 
@@ -2427,19 +2451,45 @@ final class SessionCoordinator: ObservableObject {
     private func handleSFrame(packet: Packet, from: AX25Address, sType: AX25SType?, nr: Int, pf: Int, channel: UInt8) {
         guard let sType = sType else { return }
         let path = DigiPath.from(packet.via.map { $0.display })
-        let isPoll = pf == 1
+        let pfSet = pf == 1
 
         switch sType {
         case .RR:
-            if let response = sessionManager.handleInboundRR(from: from, path: path, channel: channel, nr: nr, isPoll: isPoll) {
+            let responses = sessionManager.handleInboundRRFrames(
+                from: from,
+                path: path,
+                channel: channel,
+                nr: nr,
+                pf: pfSet,
+                isCommand: packet.isCommand
+            )
+            for response in responses {
                 sendFrame(response)
             }
         case .REJ:
-            let retransmits = sessionManager.handleInboundREJ(from: from, path: path, channel: channel, nr: nr)
+            let retransmits = sessionManager.handleInboundREJ(
+                from: from, path: path, channel: channel, nr: nr,
+                pf: pfSet, isCommand: packet.isCommand
+            )
             for frame in retransmits {
                 sendFrame(frame)
             }
-        case .RNR, .SREJ:
+        case .RNR:
+            // Peer receiver busy: apply the ack it carries and enter the busy condition.
+            let responses = sessionManager.handleInboundRNR(
+                from: from,
+                path: path,
+                channel: channel,
+                nr: nr,
+                pf: pfSet,
+                isCommand: packet.isCommand
+            )
+            for response in responses {
+                sendFrame(response)
+            }
+        case .SREJ:
+            // SREJ is optional in AX.25 2.2 and AXTerm never negotiates it, so a peer
+            // should not send one. Ignore rather than guess at selective-reject state.
             break
         }
     }

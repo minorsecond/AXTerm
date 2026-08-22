@@ -210,12 +210,10 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
         try c.encodeIfPresent(isCommand, forKey: .isCommand)
     }
 
-    /// Create a copy of this I-frame with an updated N(R) and control byte.
-    /// Used during retransmission so the peer sees our current receive state
-    /// instead of the stale N(R) from the original transmission.
-    func withUpdatedNR(_ newNR: Int) -> OutboundFrame {
+    func withUpdatedNR(_ newNR: Int, preservePollFinal: Bool = true, forcePoll: Bool = false) -> OutboundFrame {
         guard frameType == "i", let oldNS = ns else { return self }
-        let newControl = AX25Control.iFrame(ns: oldNS, nr: newNR, pf: false)
+        let oldPollFinal = forcePoll || (preservePollFinal && ((controlByte ?? 0) & 0x10 != 0))
+        let newControl = AX25Control.iFrame(ns: oldNS, nr: newNR, pf: oldPollFinal)
         return OutboundFrame(
             id: UUID(),  // New ID for retransmit tracking
             channel: channel,

@@ -365,6 +365,15 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                         self?.onPlainTextChatReceived?(session.remoteAddress, line, session.lastReceivedVia)
                     }
                     self?.currentLineBuffers.removeValue(forKey: peerKey)
+
+                    // Clear any in-progress send indicator for this peer.
+                    // If the session drops while an I-frame is in-flight (DM received, T1
+                    // exhausted, etc.) the ACK that would normally advance bytesAcked and
+                    // trigger clearOutboundProgressAfterDelay() never arrives, leaving the
+                    // "Sending…" badge stuck indefinitely.
+                    if self?.currentOutboundProgress?.destination.uppercased() == peerKey {
+                        self?.clearOutboundProgress()
+                    }
                 }
                 
                 // Show notification for significant state changes
@@ -415,7 +424,9 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             .dropFirst()
             .debounce(for: .milliseconds(200), scheduler: RunLoop.main)
             .sink { [weak self] _ in
-                self?.applyFiltering()
+                DispatchQueue.main.async {
+                    self?.applyFiltering()
+                }
             }
             .store(in: &cancellables)
     }
@@ -430,8 +441,10 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             .throttle(for: .milliseconds(80), scheduler: RunLoop.main, latest: true)
             .sink { [weak self] lines in
                 guard let self = self else { return }
-                self.allLines = lines
-                self.applyFiltering()
+                DispatchQueue.main.async {
+                    self.allLines = lines
+                    self.applyFiltering()
+                }
             }
             .store(in: &cancellables)
     }
@@ -473,9 +486,6 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         #if DEBUG
         print("[TerminalSearch] query=\"\(debouncedQuery)\" all=\(totalCount) visible=\(visibleLines.count) filtered=\(filteredLines.count)")
         #endif
-        
-        // Ensure UI updates reliably
-        objectWillChange.send()
     }
 
     /// Start tracking an outbound message for progressive highlighting
@@ -747,24 +757,48 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     private func handleSFrame(packet: Packet, from: AX25Address, sType: AX25SType?, nr: Int, pf: Int, channel: UInt8) {
         guard let sType = sType else { return }
         let path = DigiPath.from(packet.via.map { $0.display })
-        let isPoll = pf == 1
+        let pfSet = pf == 1
 
         switch sType {
         case .RR:
-            // Handle RR - if it's a poll (P=1), we need to respond
-            if let responseFrame = sessionManager.handleInboundRR(from: from, path: path, channel: channel, nr: nr, isPoll: isPoll) {
+            // Handle RR. A poll can require an RR(F=1) response and, if the
+            // peer reports no ACK progress while we have outstanding I-frames,
+            // a retransmission before T1 expires.
+            let responseFrames = sessionManager.handleInboundRRFrames(
+                from: from,
+                path: path,
+                channel: channel,
+                nr: nr,
+                pf: pfSet,
+                isCommand: packet.isCommand
+            )
+            for responseFrame in responseFrames {
                 sendResponseFrame(responseFrame)
             }
         case .REJ:
             // REJ returns frames that need to be retransmitted
-            let retransmitFrames = sessionManager.handleInboundREJ(from: from, path: path, channel: channel, nr: nr)
+            let retransmitFrames = sessionManager.handleInboundREJ(
+                from: from, path: path, channel: channel, nr: nr,
+                pf: pfSet, isCommand: packet.isCommand
+            )
             for frame in retransmitFrames {
                 sendResponseFrame(frame)
             }
         case .RNR:
-            // RNR handling could be added to session manager
-            break
+            // Peer receiver busy: apply the ack it carries and enter the busy condition.
+            let responseFrames = sessionManager.handleInboundRNR(
+                from: from,
+                path: path,
+                channel: channel,
+                nr: nr,
+                pf: pfSet,
+                isCommand: packet.isCommand
+            )
+            for frame in responseFrames {
+                sendResponseFrame(frame)
+            }
         case .SREJ:
+            // SREJ is optional in AX.25 2.2 and AXTerm never negotiates it.
             break
         }
     }
