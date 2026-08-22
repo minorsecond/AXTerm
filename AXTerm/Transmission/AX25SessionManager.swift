@@ -1940,6 +1940,14 @@ final class AX25SessionManager: ObservableObject {
         // It then requests retransmission starting from nr.
         session.acknowledgeUpTo(from: vaBefore, to: nr)
 
+        // REJ carries a valid N(R) acknowledgement just like RR/RNR do, so the
+        // outbound-progress UI must hear about it. Without this, a message whose
+        // final ack arrives via REJ (e.g. the peer REJs a duplicate retransmission
+        // that crossed its ack in flight) stays stuck at "Sending…" forever.
+        if session.va != vaBefore {
+            onOutboundAckReceived?(session, session.va)
+        }
+
         // Bug A fix: suppress retransmission amplification from duplicate REJ storms.
         // After the first REJ(nr) triggers an immediate retransmit, T1 owns the retry
         // cycle. A second REJ with the same nr and no ack progress must not retransmit

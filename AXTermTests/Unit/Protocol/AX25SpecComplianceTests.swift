@@ -813,6 +813,48 @@ final class AX25SpecComplianceTests: XCTestCase {
         XCTAssertTrue(actions.contains(.startT1))
     }
 
+    /// An REJ whose N(R) acknowledges every outstanding frame leaves nothing to
+    /// retransmit, so it must stop T1 and start T3 — exactly like an RR that acks
+    /// everything. Field capture 2026-08-22 (KB5YZB-7 via DRLNOD): a T1 retransmit
+    /// crossed the peer's ack in flight; the duplicate raised the peer's reject
+    /// condition, and its REJ(nr) acked our only outstanding frame. The old
+    /// unconditional .startT1 then guaranteed a spurious T1 timeout with nothing
+    /// outstanding.
+    func testREJAckingAllOutstandingStopsT1StartsT3() {
+        var sm = makeConnectedStateMachine()
+        sm.sequenceState.incrementVS()  // vs=1, one frame outstanding
+
+        let actions = sm.handle(event: .receivedREJ(nr: 1))
+
+        XCTAssertEqual(sm.sequenceState.va, 1)
+        XCTAssertEqual(sm.sequenceState.outstandingCount, 0)
+        XCTAssertFalse(actions.contains(.startT1),
+            "Nothing to retransmit — starting T1 creates a spurious timeout")
+        XCTAssertTrue(actions.contains(.stopT1))
+        XCTAssertTrue(actions.contains(.startT3))
+    }
+
+    /// The infinite enquiry loop from the same field capture: with everything
+    /// acked, each RR(P=1) poll we send is lawfully answered REJ(F=1) as long as
+    /// the peer's reject condition persists (it clears only on the next NEW
+    /// I-frame). That F=1 answer must terminate the poll cycle (stop T1, start
+    /// T3), not restart T1 — otherwise poll and REJ ping-pong forever.
+    func testREJPollAnswerWithNothingOutstandingEndsEnquiryCycle() {
+        var sm = makeConnectedStateMachine()
+        sm.sequenceState.incrementVS()                  // vs=1
+        _ = sm.handle(event: .receivedRR(nr: 1))        // all acked, va=1
+        _ = sm.handle(event: .t1Timeout)                // enter timer recovery, poll sent
+        XCTAssertGreaterThan(sm.retryCount, 0, "precondition: in timer recovery")
+
+        let actions = sm.handle(event: .receivedREJ(nr: 1, pf: true, isCommand: false))
+
+        XCTAssertEqual(sm.retryCount, 0, "F=1 REJ answers the poll and exits timer recovery")
+        XCTAssertFalse(actions.contains(.startT1),
+            "Restarting T1 with nothing outstanding loops the enquiry forever")
+        XCTAssertTrue(actions.contains(.stopT1))
+        XCTAssertTrue(actions.contains(.startT3))
+    }
+
     // MARK: - Section 8: FRMR Frame Reject (AX.25 §6.4.5)
 
     /// §6.4.5: FRMR while connected goes error state

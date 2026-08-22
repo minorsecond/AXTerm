@@ -659,7 +659,22 @@ nonisolated struct AX25StateMachine: Sendable {
                 // alive and asking for retransmission. Exit timer recovery.
                 retryCount = 0
             }
-            var actions: [AX25SessionAction] = [.startT1]
+            var actions: [AX25SessionAction] = []
+            if sequenceState.outstandingCount > 0 {
+                // Frames remain unacked: the session manager will retransmit from nr,
+                // and T1 must protect those retransmissions.
+                actions.append(.startT1)
+            } else {
+                // The REJ acknowledged everything we sent, so there is nothing to
+                // retransmit (the peer's reject condition was raised by a duplicate,
+                // e.g. a T1 retransmission that crossed its ack in flight). Running
+                // T1 here creates an infinite enquiry loop: T1 fires with nothing
+                // outstanding, we poll RR(P=1), the peer answers REJ(F=1) because
+                // its reject condition only clears on the next NEW I-frame, and we
+                // start T1 again — forever. Mirror handleRR: stop T1, start T3.
+                actions.append(.stopT1)
+                actions.append(.startT3)
+            }
             if pf && isCommand {
                 actions.append(.sendRR(nr: sequenceState.vr, pf: true, isCommand: false))
             }
