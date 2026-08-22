@@ -1157,6 +1157,19 @@ final class SessionCoordinator: ObservableObject {
         // it must be a loopback frame (to: ME, from: ME), either genuine or echoed.
         // We permit loopback frames so users can connect to local bbs/nodes using the same callsign.
 
+        // A digipeated frame is not ours until every digi has repeated it. On a
+        // shared-audio KISS attachment we hear the in-transit copy (H=0) as well as
+        // the delivered copy (H=1); processing the former acts on a frame still in
+        // the digipeater's custody and double-processes everything.
+        guard packet.isFullyDigipeated else {
+            TxLog.debug(.session, "Frame in transit via digipeater; awaiting repeated copy", [
+                "from": from.display,
+                "to": to.display,
+                "via": packet.viaDisplay
+            ])
+            return
+        }
+
         let channel: UInt8 = 0
 
         switch decoded.frameClass {

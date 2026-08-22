@@ -674,6 +674,17 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
         print("[TerminalView.handleIncomingPacket] Packet addressed to us: from=\(from.display), frameClass=\(decoded.frameClass.rawValue), uType=\(decoded.uType?.rawValue ?? "nil")")
 
+        // Ignore frames still in transit through a digipeater (H bit not yet set on
+        // every via) — see Packet.isFullyDigipeated.
+        guard packet.isFullyDigipeated else {
+            TxLog.debug(.session, "Frame in transit via digipeater; awaiting repeated copy", [
+                "from": from.display,
+                "to": to.display,
+                "via": packet.viaDisplay
+            ])
+            return
+        }
+
         // Use channel 0 for default KISS port
         let channel: UInt8 = 0
 
