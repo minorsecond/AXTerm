@@ -1105,6 +1105,36 @@ final class SessionCoordinator: ObservableObject {
             }
     }
 
+    /// Send DISC for every live session before the app exits, so peers can
+    /// tear their side down instead of T1-polling a zombie until N2 exhausts.
+    ///
+    /// Field capture 2026-08-22: quitting with a session up left KB5YZB-7's
+    /// node retransmitting old session data and command-polling us for minutes
+    /// against a link that no longer existed on our side. On a healthy path
+    /// this DISC clears the peer immediately; on a broken one it costs nothing.
+    /// Best-effort: we do not wait for UA — the process is exiting.
+    ///
+    /// - Returns: the number of DISC frames put on the air.
+    @discardableResult
+    func prepareForTermination() -> Int {
+        let live = sessionManager.sessions.values.filter {
+            $0.state == .connected || $0.state == .connecting
+        }
+        var sent = 0
+        for session in live {
+            if let disc = sessionManager.disconnect(session: session) {
+                sendFrame(disc)
+                sent += 1
+            }
+        }
+        if sent > 0 {
+            TxLog.warning(.session, "Sent DISC to live sessions before app termination", [
+                "count": sent
+            ])
+        }
+        return sent
+    }
+
     /// Send a frame via PacketEngine
     private func sendFrame(_ frame: OutboundFrame) {
         // Guard: don't send if packetEngine is not set (e.g., in tests)
