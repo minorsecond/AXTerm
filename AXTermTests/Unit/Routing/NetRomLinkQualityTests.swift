@@ -101,6 +101,55 @@ final class NetRomLinkQualityTests: XCTestCase {
         XCTAssertLessThanOrEqual(quality, 255)
     }
 
+    func testSinglePacketDoesNotClaimNearPerfectQuality() {
+        // Cold start blends the first observation with the 0.5 prior: one I-frame
+        // must not instantly assert df = 1.0 (the old behavior yielded ~252/255
+        // from a single packet, indistinguishable from a proven link).
+        var estimator = makeEstimator()
+        let now = Date(timeIntervalSince1970: 1_700_002_050)
+        testClock = now
+
+        estimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: now), timestamp: now)
+
+        let quality = estimator.linkQuality(from: "W0ABC", to: "N0CALL")
+        XCTAssertGreaterThan(quality, 0)
+        XCTAssertLessThan(quality, 220, "One packet of evidence must not read as near-certainty")
+
+        let stats = estimator.linkStats(from: "W0ABC", to: "N0CALL")
+        XCTAssertEqual(stats.dfEstimate ?? 0, 0.75, accuracy: 0.01,
+                       "First sample is the running mean of the 0.5 prior and the observation")
+    }
+
+    func testDuplicatesDoNotAdvanceAdaptiveTTLArrivals() {
+        // Retries are not fresh arrivals: a link with 2 real arrivals plus a burst
+        // of retry duplicates must keep the base sliding-window TTL (the adaptive
+        // TTL needs >= 3 genuine arrivals).
+        var estimator = makeEstimator()
+        let start = Date(timeIntervalSince1970: 1_700_002_060)
+        testClock = start
+
+        estimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: start), timestamp: start)
+        let second = start.addingTimeInterval(30)
+        testClock = second
+        estimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: second), timestamp: second)
+
+        for i in 0..<5 {
+            let ts = second.addingTimeInterval(Double(i + 1) * 3)
+            testClock = ts
+            estimator.observePacket(
+                makePacket(from: "W0ABC", to: "N0CALL", timestamp: ts),
+                timestamp: ts,
+                isDuplicate: true
+            )
+        }
+
+        XCTAssertEqual(
+            estimator.effectiveTTL(from: "W0ABC", to: "N0CALL"),
+            estimator.config.slidingWindowSeconds,
+            "Duplicates must not unlock the adaptive TTL"
+        )
+    }
+
     func testQualityIncreasesWithMorePackets() {
         var estimator = makeEstimator()
         let start = Date(timeIntervalSince1970: 1_700_002_100)
