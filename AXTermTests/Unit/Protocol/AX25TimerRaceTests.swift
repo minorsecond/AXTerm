@@ -440,4 +440,84 @@ final class AX25TimerRaceTests: XCTestCase {
             "RR delivered during grace period must suppress retransmit")
         XCTAssertEqual(session.outstandingCount, 0, "Frame should be acked by RR(1)")
     }
+
+    // MARK: - T1: Stale Fire After Stop (Generation Guard)
+
+    /// Regression (field capture 2026-08-22, KB5YZB-7 via DRLNOD): a T1 fire already
+    /// in flight when stopT1 ran must be ignored. cancel() cannot recall a closure the
+    /// dispatch queue has begun delivering, so twice in one session "T1 timeout fired"
+    /// landed 40–60 ms after "Stopping T1 timer" and spent airtime on a needless RR
+    /// poll. The generation guard must swallow such stale fires — while still letting
+    /// legitimate fires through.
+    func testStaleT1FireAfterStopIsIgnored() {
+        let clock = RacyScheduler()
+        let manager = AX25SessionManager(localCallsign: local, clock: clock)
+        manager.defaultConfig = AX25SessionConfig(maxRetries: 4, rtoMin: 2.0, rtoMax: 16.0, initialRto: 2.0)
+
+        var timerDrivenFrames: [OutboundFrame] = []
+        manager.onSendFrame = { timerDrivenFrames.append($0) }
+
+        // Connect: SABM schedules T1; UA stops it, but the racy cancel is a no-op.
+        _ = manager.connect(to: peer, path: path, channel: 0)
+        manager.handleInboundUA(from: peer, path: path, channel: 0)
+        let session = manager.session(for: peer, path: path, channel: 0)
+        XCTAssertEqual(session.state, .connected)
+
+        // The connect-phase T1 closure now delivers anyway — it must be swallowed.
+        clock.fireInFlight(matchingDelay: 2.0)
+        XCTAssertEqual(session.stateMachine.retryCount, 0,
+                       "stale connect-phase T1 must not count as a retry")
+        XCTAssertTrue(timerDrivenFrames.isEmpty,
+                      "stale connect-phase T1 must not put an RR poll on the air")
+
+        // Data phase: I-frame starts T1; the ack stops it; the fire was already in flight.
+        _ = manager.sendData(Data("Hello".utf8), to: peer, path: path, channel: 0)
+        _ = manager.handleInboundRRFrames(from: peer, path: path, channel: 0,
+                                          nr: 1, pf: false, isCommand: false)
+        XCTAssertEqual(session.outstandingCount, 0)
+        clock.fireInFlight(matchingDelay: 2.0)
+        XCTAssertEqual(session.stateMachine.retryCount, 0,
+                       "stale data-phase T1 must not count as a retry")
+        XCTAssertTrue(timerDrivenFrames.isEmpty,
+                      "stale data-phase T1 must not retransmit or poll")
+        XCTAssertNil(session.t1TimerTask,
+                     "a stale fire must not restart T1 on an idle session")
+
+        // Positive control: a T1 that was NOT stopped must still work end to end.
+        _ = manager.sendData(Data("World".utf8), to: peer, path: path, channel: 0)
+        clock.fireInFlight(matchingDelay: 2.0)   // live T1 fires, schedules grace
+        clock.fireInFlight(matchingDelay: 0.2)   // grace period elapses → retransmit
+        XCTAssertEqual(session.stateMachine.retryCount, 1,
+                       "a legitimate T1 fire must still be processed")
+        XCTAssertEqual(timerDrivenFrames.filter { $0.frameType == "i" }.count, 1,
+                       "the outstanding I-frame must be retransmitted by the live T1")
+    }
+}
+
+/// A scheduler whose cancel() is deliberately a no-op: models the production race
+/// where stopT1's cancel() arrives after the dispatch queue has already begun
+/// delivering the timeout closure. `fireInFlight` then delivers what a real queue
+/// would have delivered anyway.
+@MainActor
+private final class RacyScheduler: AX25TimerScheduler {
+    var currentTime: TimeInterval = 0.0
+    private var pending: [(delay: TimeInterval, action: @MainActor @Sendable () -> Void)] = []
+
+    func schedule(delay: TimeInterval, action: @escaping @MainActor @Sendable () -> Void) -> AnyCancellableTask {
+        pending.append((delay, action))
+        return UncancellableToken()
+    }
+
+    /// Deliver every held closure scheduled with the given delay (T1 = rto,
+    /// grace = 0.2, T3 = 30.0 — distinct in these tests). Closures scheduled
+    /// during delivery are held for a later call.
+    func fireInFlight(matchingDelay: TimeInterval) {
+        let inFlight = pending.filter { abs($0.delay - matchingDelay) < 0.001 }
+        pending.removeAll { abs($0.delay - matchingDelay) < 0.001 }
+        for entry in inFlight { entry.action() }
+    }
+
+    private struct UncancellableToken: AnyCancellableTask {
+        func cancel() {}
+    }
 }

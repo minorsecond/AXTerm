@@ -82,6 +82,13 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// Pending retransmit task (grace period after T1 fires); cancelled if RR arrives
     var t1PendingRetransmitTask: AnyCancellableTask?
 
+    /// Bumped on every T1 start/stop. A fired T1 closure whose captured generation
+    /// no longer matches is stale: cancel() cannot recall a closure the scheduler
+    /// already began dispatching, so stopT1 can lose the race against a fire that
+    /// is in flight (field capture 2026-08-22: "T1 timeout fired" 60 ms after
+    /// "Stopping T1 timer", spending airtime on a needless RR poll).
+    var t1Generation: UInt64 = 0
+
     /// T3 idle timer task
     var t3TimerTask: AnyCancellableTask?
 
@@ -2078,6 +2085,8 @@ final class AX25SessionManager: ObservableObject {
         session.t1TimerTask?.cancel()
         session.t1PendingRetransmitTask?.cancel()
         session.t1PendingRetransmitTask = nil
+        session.t1Generation &+= 1
+        let generation = session.t1Generation
 
         let rto = session.timers.rto
         let sessionId = session.id
@@ -2095,6 +2104,12 @@ final class AX25SessionManager: ObservableObject {
                 TxLog.debug(.session, "T1 timeout but session gone", ["session": String(sessionId.uuidString.prefix(8))])
                 return
             }
+            guard session.t1Generation == generation else {
+                TxLog.debug(.session, "Stale T1 timeout ignored", [
+                    "session": String(sessionId.uuidString.prefix(8))
+                ])
+                return
+            }
 
             TxLog.warning(.session, "T1 timeout fired", [
                 "session": String(sessionId.uuidString.prefix(8)),
@@ -2108,6 +2123,7 @@ final class AX25SessionManager: ObservableObject {
             session.t1PendingRetransmitTask = self.clock.schedule(delay: gracePeriod) { [weak self] in
                 guard let self = self else { return }
                 guard let session = self.sessions.values.first(where: { $0.id == sessionId }) else { return }
+                guard session.t1Generation == generation else { return }
                 session.t1PendingRetransmitTask = nil
                 let frames = self.handleT1Timeout(session: session)
                 for frame in frames {
@@ -2119,6 +2135,7 @@ final class AX25SessionManager: ObservableObject {
 
     /// Stop T1 timer for a session
     private func stopT1Timer(for session: AX25Session) {
+        session.t1Generation &+= 1
         if session.t1TimerTask != nil {
             TxLog.debug(.session, "Stopping T1 timer", [
                 "session": String(session.id.uuidString.prefix(8))
