@@ -87,6 +87,13 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         via.contains { $0.hasSuffix("*") }
     }
 
+    /// The digipeaters that actually repeated this frame (H-bit set), without
+    /// the `*` marker — e.g. ["DRLNOD"] for a copy heard off DRLNOD's
+    /// transmitter. Empty for TX-time lines and direct frames.
+    var repeatedDigis: [String] {
+        via.filter { $0.hasSuffix("*") }.map { String($0.dropLast()) }
+    }
+
     /// True when this line is a digipeated copy of the local station's own
     /// transmission — the digi repeating our frame back at us. These carry no
     /// new content (the TX-time line already shows the frame), but seeing them

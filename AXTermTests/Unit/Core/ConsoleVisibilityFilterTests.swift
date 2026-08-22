@@ -119,6 +119,17 @@ final class ConsoleVisibilityFilterTests: XCTestCase {
                        "a via without the H-bit star is our own TX log, not a heard copy")
     }
 
+    func testRepeatedDigisNamesOnlyTheStationsThatTransmitted() {
+        let twoHop = ConsoleLine.packet(from: "K0EPI-7", to: "KB5YZB-7", text: "RR(3)",
+                                        via: ["DRLNOD*", "FNKTWN"], messageType: .prompt)
+        XCTAssertEqual(twoHop.repeatedDigis, ["DRLNOD"],
+                       "only the digi whose H-bit is set has actually transmitted this copy")
+
+        let txLine = ConsoleLine.packet(from: "K0EPI-7", to: "KB5YZB-7", text: "RR(3)",
+                                        via: ["DRLNOD"], messageType: .prompt)
+        XCTAssertTrue(txLine.repeatedDigis.isEmpty, "TX-time lines have no repeated digis")
+    }
+
     private func sampleLines() -> [ConsoleLine] {
         [
             .packet(from: "N0CALL", to: "ID", text: "N0CALL ID"),

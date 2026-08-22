@@ -514,13 +514,18 @@ struct ConsoleLineView: View {
                 .foregroundStyle(.tertiary)
                 .font(.system(size: 11, design: .monospaced))
 
-            // Digipeat-echo marker: this row is the digi re-transmitting our frame
+            // Digipeat-echo marker: this row is the digi re-transmitting our
+            // frame, so name the digi inline — that's the interesting fact.
             if isDigipeatEcho {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.indigo)
-                    .help("Digipeated copy — \(line.viaDisplay) repeated your transmission")
-                    .accessibilityLabel("Digipeated copy")
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(line.repeatedDigis.joined(separator: ","))
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                }
+                .foregroundStyle(.indigo)
+                .help("Digipeated copy — repeated by \(line.repeatedDigis.joined(separator: ", "))")
+                .accessibilityLabel("Digipeated copy via \(line.repeatedDigis.joined(separator: ", "))")
             }
 
             // Callsigns
