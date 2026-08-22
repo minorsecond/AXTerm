@@ -1454,11 +1454,37 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             reconcileSelectionAfterLayout()
             maintainPinnedSelectionViewportIfNeeded()
             consumeQueuedViewportFitIfNeeded()
+            // Layout-cycle breadcrumb (CLAUDE.md observability mandate) —
+            // rate-limited; cache hits matter for diagnosing layout churn.
+            telemetryLimiter.breadcrumb(
+                category: "analytics.graph.layout",
+                message: "Layout cache hit",
+                data: ["reason": reason, "nodes": model.nodes.count]
+            )
             return
         }
 
+        let layoutStart = Date()
         let positions = RadialGraphLayout.layout(model: model, myCallsign: myCallsignForLayout)
-        assert(positions.count == model.nodes.count, "Layout dropped nodes: \(positions.count)/\(model.nodes.count)")
+        telemetryLimiter.breadcrumb(
+            category: "analytics.graph.layout",
+            message: "Layout computed",
+            data: [
+                "reason": reason,
+                "nodes": model.nodes.count,
+                "edges": model.edges.count,
+                "durationMs": Int(Date().timeIntervalSince(layoutStart) * 1000)
+            ]
+        )
+        if positions.count != model.nodes.count {
+            // Report in ALL builds before the debug trap: a release layout
+            // that drops nodes previously produced no signal of any kind.
+            Telemetry.capture(
+                message: "Graph layout dropped nodes",
+                data: ["positions": positions.count, "nodes": model.nodes.count, "reason": reason]
+            )
+            assertionFailure("Layout dropped nodes: \(positions.count)/\(model.nodes.count)")
+        }
         layoutKey = key
         layoutCache[key] = positions
         viewState.nodePositions = positions
