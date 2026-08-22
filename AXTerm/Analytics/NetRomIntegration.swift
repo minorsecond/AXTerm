@@ -102,6 +102,13 @@ final class NetRomIntegration {
 
     func setMode(_ newMode: NetRomRoutingMode) {
         guard mode != newMode else { return }
+        // A mode switch changes routing semantics wholesale — always crumb it.
+        Telemetry.breadcrumb(
+            category: "netrom.routing",
+            message: "Routing mode changed",
+            data: ["from": String(describing: mode), "to": String(describing: newMode)],
+            level: .info
+        )
         mode = newMode
 
         if newMode == .inference || newMode == .hybrid {

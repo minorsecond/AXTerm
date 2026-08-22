@@ -516,6 +516,20 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         objectWillChange.send()
     }
 
+    /// Record a heard digipeat echo of one of our outbound I-frames.
+    /// Advances the delivery indicator to "relayed" (never to "delivered" —
+    /// digipeating is fire-and-forget; only the peer's ack proves receipt).
+    func recordOutboundRelay(destination: String, digis: [String]) {
+        guard var prog = currentOutboundProgress,
+              destination.uppercased() == prog.destination.uppercased(),
+              !(prog.hasAcks && prog.isComplete),
+              digis.contains(where: { !prog.relayedDigis.contains($0) })
+        else { return }
+        prog.recordRelay(digis: digis, at: Date())
+        currentOutboundProgress = prog
+        objectWillChange.send()
+    }
+
     /// Update bytes-sent count when a chunk is transmitted
     func updateOutboundBytesSent(additionalBytes: Int) {
         guard var prog = currentOutboundProgress else { return }
@@ -666,6 +680,16 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         }
 
         guard CallsignNormalizer.addressesMatch(to, localAddress) else {
+            // A digipeat echo of our own I-frame (H-bit set on a via) is
+            // evidence the frame cleared that hop — feed the outbound
+            // delivery indicator's "relayed" phase. Not delivery: only the
+            // peer's ack proves receipt.
+            if CallsignNormalizer.addressesMatch(from, localAddress), decoded.frameClass == .I {
+                let repeatedBy = packet.via.filter { $0.repeated }.map { $0.display }
+                if !repeatedBy.isEmpty {
+                    recordOutboundRelay(destination: to.display, digis: repeatedBy)
+                }
+            }
             if decoded.frameClass == .U && (decoded.uType == .SABM || decoded.uType == .SABME) {
                 print("[TerminalView.handleIncomingPacket] SABM filtered: to=\(to.display) local=\(localAddress.display)")
             }
@@ -712,6 +736,9 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             updateCurrentSession()
         case .DM:
             sessionManager.handleInboundDM(from: from, path: path, channel: channel)
+            updateCurrentSession()
+        case .FRMR:
+            sessionManager.handleInboundFRMR(from: from, path: path, channel: channel)
             updateCurrentSession()
         case .DISC:
             if let responseFrame = sessionManager.handleInboundDISC(from: from, path: path, channel: channel) {

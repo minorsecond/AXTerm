@@ -371,6 +371,20 @@ nonisolated final class NetRomRouter {
             if Double(absoluteBest.quality) > marginThreshold && holdTimeElapsed {
                 // Switch to the new best route
                 preferredRoutes[normalized] = PreferredRoute(origin: absoluteBest.origin, selectedAt: currentDate)
+                // Routing decision (CLAUDE.md observability mandate): next-hop
+                // switches are the moments that explain traffic path changes.
+                Telemetry.breadcrumb(
+                    category: "netrom.routing",
+                    message: "Next hop switched",
+                    data: [
+                        "destination": normalized,
+                        "from": preferredRoute.origin,
+                        "to": absoluteBest.origin,
+                        "quality": absoluteBest.quality,
+                        "previousQuality": preferredRoute.quality
+                    ],
+                    level: .info
+                )
                 return absoluteBest
             }
 
@@ -380,6 +394,17 @@ nonisolated final class NetRomRouter {
 
         // No preferred route exists (or it expired) — select the best
         preferredRoutes[normalized] = PreferredRoute(origin: absoluteBest.origin, selectedAt: currentDate)
+        Telemetry.breadcrumb(
+            category: "netrom.routing",
+            message: "Next hop selected",
+            data: [
+                "destination": normalized,
+                "origin": absoluteBest.origin,
+                "quality": absoluteBest.quality,
+                "candidates": candidates.count
+            ],
+            level: .info
+        )
         return absoluteBest
     }
 
@@ -485,6 +510,14 @@ nonisolated final class NetRomRouter {
         for destination in stalePreferred {
             preferredRoutes.removeValue(forKey: destination)
         }
+        if !stalePreferred.isEmpty {
+            Telemetry.breadcrumb(
+                category: "netrom.routing",
+                message: "Purged stale preferred routes",
+                data: ["count": stalePreferred.count],
+                level: .info
+            )
+        }
     }
 
     // MARK: - Private helpers
@@ -561,6 +594,20 @@ nonisolated final class NetRomRouter {
                 sourceType: sourceType
             )
             bucket.append(newRoute)
+            // New routes are topology changes worth a crumb; refreshes of
+            // existing routes are per-broadcast noise and stay unlogged.
+            Telemetry.breadcrumb(
+                category: "netrom.routing",
+                message: "Route stored",
+                data: [
+                    "destination": destination,
+                    "origin": origin,
+                    "quality": quality,
+                    "hops": path.count,
+                    "source": sourceType
+                ],
+                level: .debug
+            )
         }
         bucket.sort(by: routeSort)
         if bucket.count > config.maxRoutesPerDestination {

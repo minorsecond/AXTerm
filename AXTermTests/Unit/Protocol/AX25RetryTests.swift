@@ -272,6 +272,102 @@ final class AX25RetryTests: XCTestCase {
         XCTAssertEqual(iFrames.first?.payload, Data("bbs\r".utf8))
     }
 
+    /// Regression (field capture 2026-08-22, direct KB5YZB-7 session): a peer
+    /// that cannot hear us but keeps command-polling must not be able to poll
+    /// us into an infinite retransmission loop.
+    ///
+    /// The peer's RR(P=1) polls arrived every ~10 s — always inside our RTO —
+    /// and each poll-driven retransmit restarted T1, so T1 never expired,
+    /// retryCount froze at 0, and N2 link failure could never trigger. The
+    /// same I-frame was retransmitted forever. Poll-driven retransmissions now
+    /// climb the same N2 ladder as T1 expiries.
+    func testPeerPollingWithoutAckExhaustsN2InsteadOfLivelocking() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let destination = AX25Address(call: "KB5YZB", ssid: 7)
+        let path = DigiPath()
+        let session = connectSession(manager: manager, destination: destination, path: path)
+        let maxRetries = session.stateMachine.config.maxRetries
+
+        _ = manager.sendData(Data("b\r".utf8), to: destination, path: path, channel: 0)
+        XCTAssertEqual(session.outstandingCount, 1)
+
+        // The peer keeps polling with nr that acks nothing.
+        var sawLinkFailure = false
+        for poll in 1...(maxRetries + 2) {
+            let frames = manager.handleInboundRRFrames(
+                from: destination, path: path, channel: 0,
+                nr: 0, pf: true, isCommand: true
+            )
+            if session.state == .error {
+                sawLinkFailure = true
+                XCTAssertTrue(frames.filter { $0.frameType == "i" }.isEmpty,
+                              "no retransmit may accompany the link-failure declaration")
+                XCTAssertLessThanOrEqual(poll, maxRetries + 1,
+                                         "N2 must trip after maxRetries no-progress cycles")
+                break
+            }
+            XCTAssertEqual(frames.filter { $0.frameType == "i" }.count, 1,
+                           "poll \(poll): each no-progress poll retransmits the outstanding frame")
+        }
+        XCTAssertTrue(sawLinkFailure,
+                      "the retry ladder must reach link failure — the old code looped forever")
+        XCTAssertNil(session.t1TimerTask, "timers must be stopped on link failure")
+    }
+
+    /// Regression (field capture 2026-08-22): RR polls from a peer's stale
+    /// session, arriving while we were still CONNECTING with four unanswered
+    /// SABMs on the air, produced vacuous loss=0 samples — adaptive announced
+    /// "Good link quality" for a station we could not reach at all. Samples
+    /// require a connected session with at least one I-frame of real evidence.
+    func testLinkQualitySamplesRequireConnectedSessionWithIFrameEvidence() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let destination = AX25Address(call: "KB5YZB", ssid: 7)
+        let path = DigiPath()
+        var samples = 0
+        manager.onLinkQualitySample = { _, _ in samples += 1 }
+
+        // Still connecting (SABM unanswered) — the peer's zombie session polls us.
+        _ = manager.connect(to: destination, path: path, channel: 0)
+        _ = manager.handleInboundRRFrames(from: destination, path: path, channel: 0,
+                                          nr: 0, pf: true, isCommand: true)
+        XCTAssertEqual(samples, 0, "no link-quality sample while connecting")
+
+        // Connected but no I-frame ever sent: still no evidence to learn from.
+        manager.handleInboundUA(from: destination, path: path, channel: 0)
+        _ = manager.handleInboundRRFrames(from: destination, path: path, channel: 0,
+                                          nr: 0, pf: true, isCommand: true)
+        XCTAssertEqual(samples, 0, "SABMs and polls alone are not loss evidence")
+
+        // Real I-frame traffic: now samples flow.
+        _ = manager.sendData(Data("info\r".utf8), to: destination, path: path, channel: 0)
+        _ = manager.handleInboundRRFrames(from: destination, path: path, channel: 0,
+                                          nr: 1, pf: false, isCommand: false)
+        XCTAssertEqual(samples, 1, "an acked I-frame is genuine link-quality evidence")
+    }
+
+    /// Ack progress must reset the poll-retransmission ladder: a slow peer that
+    /// DOES make progress, however marginal, is never declared failed.
+    func testPollLadderResetsOnAckProgress() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let destination = AX25Address(call: "KB5YZB", ssid: 7)
+        let path = DigiPath()
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        _ = manager.sendData(Data("A".utf8), to: destination, path: path, channel: 0)
+        for _ in 1...3 {
+            _ = manager.handleInboundRRFrames(from: destination, path: path, channel: 0,
+                                              nr: 0, pf: true, isCommand: true)
+        }
+        XCTAssertEqual(session.stateMachine.retryCount, 3)
+
+        // The frame finally lands: ack advances V(A) and resets the ladder.
+        _ = manager.handleInboundRRFrames(from: destination, path: path, channel: 0,
+                                          nr: 1, pf: false, isCommand: false)
+        XCTAssertEqual(session.stateMachine.retryCount, 0,
+                       "genuine ack progress must clear the no-progress ladder")
+        XCTAssertEqual(session.state, .connected)
+    }
+
     /// Regression (field capture, KB5YZB-7): a receive gap must be able to heal on its own.
     ///
     /// After UA, T1 is stopped. If the peer then sends a wrong N(S), the receive buffer holds

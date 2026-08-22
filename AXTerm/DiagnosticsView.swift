@@ -59,7 +59,9 @@ final class DiagnosticsViewModel: ObservableObject {
                 do {
                     try json.write(to: url, atomically: true, encoding: .utf8)
                 } catch {
-                    return
+                    // The user explicitly asked for this export — a silent
+                    // failure looked like a successful save.
+                    Telemetry.capture(error: error, message: "Diagnostics export write failed")
                 }
             }
         }

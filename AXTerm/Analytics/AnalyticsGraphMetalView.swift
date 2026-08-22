@@ -1199,6 +1199,13 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         } catch {
             self.nodePipeline = nil
             self.edgePipeline = nil
+            // Total feature failure — the graph silently renders nothing.
+            // This previously produced no log, no print, and no Sentry event.
+            Telemetry.capture(
+                error: error,
+                message: "Metal render pipeline creation failed — graph will not render",
+                data: ["device": device.name]
+            )
         }
     }
 

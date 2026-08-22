@@ -115,7 +115,7 @@ final class EventLogWatchRecorder: WatchEventRecording {
                 try store.append(entry)
                 try store.pruneIfNeeded(retentionLimit: retentionLimit)
             } catch {
-                return
+                Telemetry.capture(error: error, message: "Watch-rule event append/prune failed")
             }
         }
     }

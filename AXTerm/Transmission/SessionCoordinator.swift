@@ -340,7 +340,19 @@ final class SessionCoordinator: ObservableObject {
 
     /// Apply a link quality sample to adaptive settings (per-route when session, global when network).
     /// Session samples update the per-route cache so multiple connections (e.g. same peer direct vs via digi) don't overwrite each other.
-    func applyLinkQualitySample(lossRate: Double, etx: Double, srtt: Double?, source: String = "session", routeKey: RouteAdaptiveKey? = nil) {
+    ///
+    /// `newFrames`/`retransmits` carry per-sample evidence for the spec 4.2
+    /// streak machinery. Aggregate sources (network inference) pass
+    /// `retransmits: nil` — they influence the EWMAs but never the streaks.
+    func applyLinkQualitySample(
+        lossRate: Double,
+        etx: Double,
+        srtt: Double?,
+        source: String = "session",
+        routeKey: RouteAdaptiveKey? = nil,
+        newFrames: Int = 1,
+        retransmits: Int? = nil
+    ) {
         guard adaptiveTransmissionEnabled else {
             TxLog.adaptiveSampleIgnored(reason: "adaptive disabled", lossRate: lossRate, etx: etx)
             return
@@ -350,7 +362,7 @@ final class SessionCoordinator: ObservableObject {
             let normalizedKey = RouteAdaptiveKey(destination: canonicalDestination(key.destination), pathSignature: key.pathSignature)
             var entry = adaptiveCache[normalizedKey]?.settings ?? TxAdaptiveSettings()
             let before = AdaptiveSnapshot(from: entry)
-            entry.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt)
+            entry.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits)
             adaptiveCache[normalizedKey] = CachedAdaptiveEntry(settings: entry, lastUpdated: Date())
             adaptiveStatusStore.updateSession(
                 id: adaptiveSessionID(destination: normalizedKey.destination, path: normalizedKey.pathSignature),
@@ -379,7 +391,7 @@ final class SessionCoordinator: ObservableObject {
             }
         } else {
             let before = AdaptiveSnapshot(from: globalAdaptiveSettings)
-            globalAdaptiveSettings.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt)
+            globalAdaptiveSettings.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits)
             adaptiveStatusStore.updateGlobal(
                 settings: globalAdaptiveSettings,
                 lossRate: lossRate,
@@ -543,12 +555,20 @@ final class SessionCoordinator: ObservableObject {
             self?.sendTextProbeIfNeeded(for: session)
         }
 
-        sessionManager.onLinkQualitySample = { [weak self] session, lossRate, etx, srtt in
+        sessionManager.onLinkQualitySample = { [weak self] session, sample in
             let routeKey = RouteAdaptiveKey(
                 destination: session.remoteAddress.display.uppercased(),
                 pathSignature: session.path.display
             )
-            self?.applyLinkQualitySample(lossRate: lossRate, etx: etx, srtt: srtt, source: "session", routeKey: routeKey)
+            self?.applyLinkQualitySample(
+                lossRate: sample.lossRate,
+                etx: sample.etx,
+                srtt: sample.srtt,
+                source: "session",
+                routeKey: routeKey,
+                newFrames: sample.newFrames,
+                retransmits: sample.retransmits
+            )
         }
 
         sessionManager.getConfigForDestination = { [weak self] destination, pathSignature in
@@ -1105,6 +1125,36 @@ final class SessionCoordinator: ObservableObject {
             }
     }
 
+    /// Send DISC for every live session before the app exits, so peers can
+    /// tear their side down instead of T1-polling a zombie until N2 exhausts.
+    ///
+    /// Field capture 2026-08-22: quitting with a session up left KB5YZB-7's
+    /// node retransmitting old session data and command-polling us for minutes
+    /// against a link that no longer existed on our side. On a healthy path
+    /// this DISC clears the peer immediately; on a broken one it costs nothing.
+    /// Best-effort: we do not wait for UA — the process is exiting.
+    ///
+    /// - Returns: the number of DISC frames put on the air.
+    @discardableResult
+    func prepareForTermination() -> Int {
+        let live = sessionManager.sessions.values.filter {
+            $0.state == .connected || $0.state == .connecting
+        }
+        var sent = 0
+        for session in live {
+            if let disc = sessionManager.disconnect(session: session) {
+                sendFrame(disc)
+                sent += 1
+            }
+        }
+        if sent > 0 {
+            TxLog.warning(.session, "Sent DISC to live sessions before app termination", [
+                "count": sent
+            ])
+        }
+        return sent
+    }
+
     /// Send a frame via PacketEngine
     private func sendFrame(_ frame: OutboundFrame) {
         // Guard: don't send if packetEngine is not set (e.g., in tests)
@@ -1203,6 +1253,8 @@ final class SessionCoordinator: ObservableObject {
             sessionManager.handleInboundUA(from: from, path: path, channel: channel)
         case .DM:
             sessionManager.handleInboundDM(from: from, path: path, channel: channel)
+        case .FRMR:
+            sessionManager.handleInboundFRMR(from: from, path: path, channel: channel)
         case .DISC:
             if let response = sessionManager.handleInboundDISC(from: from, path: path, channel: channel) {
                 sendFrame(response)

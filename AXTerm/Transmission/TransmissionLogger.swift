@@ -159,6 +159,35 @@ final class TxLog {
         }
     }
 
+    /// Report an event that permanently discarded received user data.
+    ///
+    /// Always a captured Sentry EVENT, never just a breadcrumb: paths like the
+    /// receive-gap flush deliberately keep the link alive (resetting the retry
+    /// counter), which suppresses the link-failure event that would otherwise
+    /// have shipped the surrounding breadcrumbs — so data loss must carry its
+    /// own event or it is invisible in production.
+    nonisolated static func dataLoss(_ category: TxLogCategory, _ message: String, _ data: [String: Any]? = nil) {
+        warning(category, message, data)  // local log + breadcrumb
+        Task { @MainActor in
+            var extra = data ?? [:]
+            extra["category"] = category.rawValue
+            SentryManager.shared.captureDataLoss(message, extra: extra)
+        }
+    }
+
+    /// Report a protocol/state invariant violation.
+    ///
+    /// Ships a non-fatal Sentry event in ALL builds (throttled per message).
+    /// Call this immediately before the debug `assertionFailure` so release
+    /// builds — where asserts compile out — still produce a signal instead of
+    /// silently corrupting protocol state.
+    nonisolated static func invariantViolation(_ message: String, _ data: [String: Any]? = nil) {
+        warning(.session, "INVARIANT VIOLATION: \(message)", data)
+        Task { @MainActor in
+            SentryManager.shared.captureInvariantViolation(message, extra: data)
+        }
+    }
+
     /// Log frame hex dump (DEBUG only, truncated)
     nonisolated static func hexDump(_ category: TxLogCategory, _ label: String, data: Data, maxBytes: Int = 64) {
         #if DEBUG
@@ -227,12 +256,12 @@ final class TxLog {
     }
 
     nonisolated static func ax25DecodeError(reason: String, size: Int) {
-        error(.ax25, "Decode failed: \(reason)", error: nil, ["size": size])
-        Task { @MainActor in SentryManager.shared.captureMessage(
-            "AX.25 decode failed: \(reason)",
-            level: .warning,
-            extra: ["size": size]
-        ) }
+        // Warning breadcrumb only. The single Sentry EVENT for a decode
+        // failure is SentryManager.captureDecodeFailure (throttled, with
+        // reason) at the PacketEngine call site — this used to be reported
+        // three times per bad frame, which turned a noisy channel into a
+        // quota incident.
+        warning(.ax25, "Decode failed: \(reason)", ["size": size])
     }
 
     // MARK: - AXDP-specific logging
@@ -254,9 +283,13 @@ final class TxLog {
     }
 
     nonisolated static func axdpDecodeError(reason: String, data: Data) {
-        error(.axdp, "Decode failed: \(reason)", error: nil, ["size": data.count])
-        Task { @MainActor in SentryManager.shared.captureMessage(
-            "AXDP decode failed: \(reason)",
+        // Breadcrumb via TxLog.warning; the single throttled event ships here.
+        // (Previously TxLog.error + a second captureMessage = two events per
+        // malformed AXDP frame, unthrottled.)
+        warning(.axdp, "Decode failed: \(reason)", ["size": data.count])
+        Task { @MainActor in SentryManager.shared.captureThrottled(
+            key: "decode.axdp.\(reason)",
+            message: "AXDP decode failed: \(reason)",
             level: .warning,
             extra: ["size": data.count]
         ) }
@@ -293,9 +326,12 @@ final class TxLog {
     }
 
     nonisolated static func compressionError(operation: String, reason: String) {
-        error(.compression, "\(operation) failed: \(reason)")
-        Task { @MainActor in SentryManager.shared.captureMessage(
-            "Compression \(operation) failed: \(reason)",
+        // Breadcrumb + one throttled event (was TxLog.error + captureMessage =
+        // two unthrottled events per failure).
+        warning(.compression, "\(operation) failed: \(reason)")
+        Task { @MainActor in SentryManager.shared.captureThrottled(
+            key: "compression.\(operation).\(reason)",
+            message: "Compression \(operation) failed: \(reason)",
             level: .warning,
             extra: nil
         ) }
@@ -510,7 +546,10 @@ final class TxLog {
             logger.error("\(osLogMessage)")
         }
 
-        // Sentry breadcrumb (all builds, sampling for high-volume)
+        // Sentry breadcrumb (all builds). Flood control lives centrally in
+        // SentryManager.addBreadcrumb: per-category budgets with suppressed-
+        // count summaries, plus content redaction honoring the operator's
+        // "send packet contents" setting.
         let sentryCategory = "tx.\(category.rawValue.lowercased())"
         Task { @MainActor in SentryManager.shared.addBreadcrumb(
             category: sentryCategory,

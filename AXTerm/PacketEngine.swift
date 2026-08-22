@@ -855,17 +855,19 @@ final class PacketEngine: ObservableObject {
         ])
 
         guard let decoded = AX25.decodeFrame(ax25: ax25Data) else {
+            let reason = AX25.decodeFailureReason(ax25: ax25Data)
             LinkDebugLog.shared.recordParseError(
                 message: "AX.25 decode failed (\(ax25Data.count) bytes)",
                 rawBytes: ax25Data)
-            TxLog.ax25DecodeError(reason: "Invalid frame structure", size: ax25Data.count)
+            TxLog.ax25DecodeError(reason: reason, size: ax25Data.count)
             eventLogger?.log(
                 level: .warning,
                 category: .parser,
                 message: "Failed to decode AX.25 frame",
-                metadata: ["byteCount": "\(ax25Data.count)"]
+                metadata: ["byteCount": "\(ax25Data.count)", "reason": reason]
             )
-            SentryManager.shared.captureDecodeFailure(byteCount: ax25Data.count)
+            // The single Sentry event for this failure (throttled per reason).
+            SentryManager.shared.captureDecodeFailure(byteCount: ax25Data.count, reason: reason)
             return
         }
 
@@ -2313,6 +2315,9 @@ final class PacketEngine: ObservableObject {
                 )
             } catch {
                 axDebugPrint("[DEBUG:REBUILD] ⚠️ Rollback snapshot save failed: \(error)")
+                // A failed rollback leaves the persisted routing state
+                // inconsistent with memory — that is a data-integrity event.
+                SentryManager.shared.capturePersistenceFailure("rebuild rollback snapshot", error: error)
             }
             return DebugRebuildResult(
                 success: false,
@@ -2404,6 +2409,10 @@ extension PacketEngine: KISSLinkDelegate {
             let endpoint = link?.endpointDescription ?? "unknown"
             addErrorLine("Connection to \(endpoint) failed", category: .connection)
             eventLogger?.log(level: .error, category: .connection, message: "Connection failed: \(endpoint)", metadata: nil)
+            // All modern link transports (TCP, BLE, serial) fail through this
+            // path; it previously emitted no Sentry event at all, so only the
+            // legacy NWConnection path reported connection failures.
+            SentryManager.shared.captureConnectionFailure("KISS link failed: \(endpoint)")
 
         case .connecting:
             break

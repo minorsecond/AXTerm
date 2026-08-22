@@ -29,6 +29,17 @@ nonisolated struct SessionKey: Hashable, Sendable {
 // MARK: - Session
 
 /// Represents an AX.25 connected-mode session
+/// One evidence-bearing link-quality observation from a connected session.
+/// `newFrames` and `retransmits` are DELTAS since the previous sample, so the
+/// link controller's EWMA sees time-local evidence (spec 4.2).
+nonisolated struct LinkQualitySample: Sendable {
+    let lossRate: Double
+    let etx: Double
+    let srtt: Double?
+    let newFrames: Int
+    let retransmits: Int
+}
+
 nonisolated final class AX25Session: @unchecked Sendable {
     let id: UUID
     let key: SessionKey
@@ -81,6 +92,14 @@ nonisolated final class AX25Session: @unchecked Sendable {
 
     /// Pending retransmit task (grace period after T1 fires); cancelled if RR arrives
     var t1PendingRetransmitTask: AnyCancellableTask?
+
+    /// Statistics watermarks from the previous link-quality sample, so each
+    /// sample reports fresh evidence (deltas) rather than a session-lifetime
+    /// average. Spec 4.2 requires time-local, EWMA-able samples; a cumulative
+    /// ratio both dilutes new loss on long sessions and never forgives an old
+    /// bad patch.
+    var lastSampledFramesSent: Int = 0
+    var lastSampledRetransmissions: Int = 0
 
     /// Bumped on every T1 start/stop. A fired T1 closure whose captured generation
     /// no longer matches is stale: cancel() cannot recall a closure the scheduler
@@ -412,7 +431,7 @@ final class AX25SessionManager: ObservableObject {
     var onSessionStateChanged: ((AX25Session, AX25SessionState, AX25SessionState) -> Void)?
 
     /// Callback when we have a link quality sample (e.g. after RR with RTT) for adaptive tuning. Parameters: session, lossRate, etx, srtt.
-    var onLinkQualitySample: ((AX25Session, Double, Double, Double?) -> Void)?
+    var onLinkQualitySample: ((AX25Session, LinkQualitySample) -> Void)?
 
     /// Callback when peer ACKs frames (RR received). Parameters: session, newVa (V(A) after ack).
     /// Used for sender UI to show progressive send/ack highlighting.
@@ -435,23 +454,35 @@ final class AX25SessionManager: ObservableObject {
 
     /// Asserts core state machine and session invariants.
     /// This prevents subtle bugs like queue desync, sequence number wrapping errors, and leaks.
+    /// Runs in ALL builds. Violations report a non-fatal Sentry event (so a
+    /// release build with corrupted window state is diagnosable — previously
+    /// this whole body was compiled out) and then trap in debug so tests fail
+    /// loudly. The checks are a handful of comparisons per call: negligible.
     func checkInvariants(session: AX25Session) {
-        #if DEBUG
         session.stateMachine.sequenceState.assertInvariants(windowSize: session.stateMachine.config.windowSize)
 
         // sendBuffer.count must exactly match outstanding frames according to V(S) and V(A)
         // If this fails, we have a memory leak (frames stuck in buffer) or a duplicate tracking bug.
-        assert(session.sendBuffer.count == session.stateMachine.sequenceState.outstandingCount,
-               "Invariant violation: sendBuffer.count (\(session.sendBuffer.count)) != outstandingCount (\(session.stateMachine.sequenceState.outstandingCount)). vs=\(session.vs) va=\(session.va)")
+        if session.sendBuffer.count != session.stateMachine.sequenceState.outstandingCount {
+            TxLog.invariantViolation("sendBuffer count desynced from outstandingCount", [
+                "sendBufferCount": session.sendBuffer.count,
+                "outstandingCount": session.stateMachine.sequenceState.outstandingCount,
+                "vs": session.vs, "va": session.va,
+                "peer": session.remoteAddress.display
+            ])
+            assertionFailure("Invariant violation: sendBuffer.count (\(session.sendBuffer.count)) != outstandingCount (\(session.stateMachine.sequenceState.outstandingCount)). vs=\(session.vs) va=\(session.va)")
+        }
 
         // Audit B4: AIMD numeric invariants — must hold after every operation.
         let cwnd = session.aimdWindow.cwnd
-        assert(!cwnd.isNaN,    "AIMD invariant violated: cwnd is NaN")
-        assert(cwnd.isFinite,  "AIMD invariant violated: cwnd is ±Infinity")
-        assert(cwnd >= 1.0,
-               "AIMD invariant violated: cwnd \(cwnd) < minWindow 1.0")
-        assert(session.aimdWindow.effectiveWindow >= 1,
-               "AIMD invariant violated: effectiveWindow \(session.aimdWindow.effectiveWindow) < 1")
+        if cwnd.isNaN || !cwnd.isFinite || cwnd < 1.0 || session.aimdWindow.effectiveWindow < 1 {
+            TxLog.invariantViolation("AIMD window out of bounds", [
+                "cwnd": cwnd.isFinite ? String(cwnd) : String(describing: cwnd),
+                "effectiveWindow": session.aimdWindow.effectiveWindow,
+                "peer": session.remoteAddress.display
+            ])
+            assertionFailure("AIMD invariant violated: cwnd=\(cwnd) effectiveWindow=\(session.aimdWindow.effectiveWindow)")
+        }
 
         // NOTE: We do NOT assert outstandingCount <= effectiveSendWindow here.
         //
@@ -461,7 +492,6 @@ final class AX25SessionManager: ObservableObject {
         // to the reduced window.  The send-site invariant (no NEW send exceeds the window)
         // is enforced in sendData and drainPendingDataQueue at the point of transmission,
         // and is tested explicitly in the audit test suite.
-        #endif
     }
 
     // MARK: - Deep Session Debug (Debug Builds Only)
@@ -1300,7 +1330,10 @@ final class AX25SessionManager: ObservableObject {
             debugTrace("DM for unknown session", [
                 "from": source.display
             ])
-            TxLog.debug(.session, "DM received for unknown session", ["from": source.display])
+            // Warning: this is the classic desync signature — the peer thinks
+            // we are disconnected while we hold no matching session. Debug
+            // level made it invisible in the field.
+            TxLog.warning(.session, "DM received for unknown session (state desync?)", ["from": source.display])
             return
         }
 
@@ -1309,6 +1342,51 @@ final class AX25SessionManager: ObservableObject {
 
         if oldState != session.state {
             debugTrace("state change (DM)", [
+                "peer": source.display,
+                "from": oldState.rawValue,
+                "to": session.state.rawValue
+            ])
+            onSessionStateChanged?(session, oldState, session.state)
+        }
+        session.touch()
+        _ = processActions(actions, for: session)
+    }
+
+    /// Handle an inbound FRMR (frame reject).
+    ///
+    /// FRMR means the peer received something it considers an unrecoverable
+    /// protocol violation from us. Until this entry point existed, inbound
+    /// FRMR was decoded and displayed but silently ignored by the session
+    /// layer — the state machine's handler was dead code. The session moves to
+    /// .error and the operator is notified; reconnecting issues a fresh SABM,
+    /// which is the §6.4.10-sanctioned recovery for v2.0 peers.
+    func handleInboundFRMR(
+        from source: AX25Address,
+        path: DigiPath,
+        channel: UInt8
+    ) {
+        debugTrace("FRMR received", [
+            "from": source.display,
+            "path": path.display.isEmpty ? "(empty)" : path.display,
+            "channel": channel
+        ])
+        var session = existingSession(for: source, path: path, channel: channel)
+        if session == nil {
+            session = findAnySession(from: source, channel: channel)
+        }
+        if session == nil {
+            session = findAnySessionByCallsign(from: source, channel: channel)
+        }
+        guard let session = session else {
+            TxLog.warning(.session, "FRMR received for unknown session", ["from": source.display])
+            return
+        }
+
+        let oldState = session.state
+        let actions = session.stateMachine.handle(event: .receivedFRMR)
+
+        if oldState != session.state {
+            debugTrace("state change (FRMR)", [
                 "peer": source.display,
                 "from": oldState.rawValue,
                 "to": session.state.rawValue
@@ -1733,12 +1811,30 @@ final class AX25SessionManager: ObservableObject {
         debugDumpSessionState(session, context: isPoll ? "inbound-RR-poll" : "inbound-RR")
 
         if isPoll && session.state == .connected && outstandingBeforeDrain > 0 && vaAfter == vaBefore {
+            // Every poll-driven retransmit must climb the N2 ladder. The peer's
+            // polls arrive inside our RTO, so each one used to restart T1 before
+            // it could expire — retryCount froze at 0 and the session
+            // retransmitted the same frame forever (livelock, field capture
+            // 2026-08-22). Now a peer that polls without ever acking exhausts
+            // N2 exactly like unanswered T1 expiries would.
+            let failureActions = session.stateMachine.noteRetransmissionWithoutProgress()
+            guard failureActions.isEmpty else {
+                TxLog.warning(.session, "RR poll retransmission ladder exhausted N2", [
+                    "peer": session.remoteAddress.display,
+                    "retries": session.stateMachine.retryCount
+                ])
+                onSessionStateChanged?(session, .connected, session.state)
+                responseFrames.append(contentsOf: processActions(failureActions, for: session))
+                return responseFrames
+            }
+
             TxLog.debug(.session, "RR poll made no ACK progress; retransmitting outstanding frames", [
                 "peer": session.remoteAddress.display,
                 "va": session.va,
                 "vs": session.vs,
                 "vr": session.vr,
-                "outstanding": session.outstandingCount
+                "outstanding": session.outstandingCount,
+                "retryCount": session.stateMachine.retryCount
             ])
 
             responseFrames.append(contentsOf: retransmitOutstandingFrames(for: session, from: session.va, reason: "inbound-RR-poll-no-ack"))
@@ -1750,12 +1846,42 @@ final class AX25SessionManager: ObservableObject {
 
         checkInvariants(session: session)
 
-        // Feed link quality sample into adaptive settings (session-based learning)
-        let framesSent = max(1, session.statistics.framesSent)
-        let lossRate = Double(session.statistics.retransmissions) / Double(framesSent)
-        let delivery = max(0.05, 1.0 - lossRate)
-        let etx = 1.0 / (delivery * delivery)
-        onLinkQualitySample?(session, lossRate, etx, session.timers.srtt)
+        // Feed link quality sample into adaptive settings (session-based learning).
+        //
+        // Only with real evidence: the session must be connected and must have
+        // put at least one I-frame on the air. Without the gate, RR polls from
+        // a peer's stale session arriving while we were still CONNECTING (four
+        // unanswered SABMs deep) produced loss=0/0 → "Good link quality" —
+        // adaptive announcing a great link to a station we could not reach at
+        // all (field capture 2026-08-22). SABMs are not part of the loss
+        // metric, so a session with no I-frame history has no data to learn from.
+        //
+        // Delta-based (spec 4.2): each sample covers only what happened since
+        // the previous one, so the EWMA in the link controller sees time-local
+        // evidence. A poll that changed nothing emits nothing — previously
+        // every RR produced a sample from the same session-lifetime ratio.
+        if session.state == .connected, session.statistics.framesSent > 0 {
+            let deltaSent = session.statistics.framesSent - session.lastSampledFramesSent
+            let deltaRetrans = session.statistics.retransmissions - session.lastSampledRetransmissions
+            if deltaSent > 0 || deltaRetrans > 0 {
+                session.lastSampledFramesSent = session.statistics.framesSent
+                session.lastSampledRetransmissions = session.statistics.retransmissions
+                // Fraction of this sample's transmissions that were repeats —
+                // bounded [0, 1), unlike the old retransmissions/framesSent
+                // which exceeded 1.0 whenever a frame needed several tries.
+                let transmissions = deltaSent + deltaRetrans
+                let lossRate = Double(deltaRetrans) / Double(max(1, transmissions))
+                let delivery = max(0.05, 1.0 - lossRate)
+                let etx = 1.0 / (delivery * delivery)
+                onLinkQualitySample?(session, LinkQualitySample(
+                    lossRate: lossRate,
+                    etx: etx,
+                    srtt: session.timers.srtt,
+                    newFrames: deltaSent,
+                    retransmits: deltaRetrans
+                ))
+            }
+        }
 
         return responseFrames
     }

@@ -754,8 +754,11 @@ final class SessionCoordinatorTests: XCTestCase {
         defer { SessionCoordinator.shared = nil }
 
         coordinator.adaptiveTransmissionEnabled = true
-        coordinator.applyLinkQualitySample(lossRate: 0.05, etx: 1.1, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""))
-        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.5, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: "DIGI-1"))
+        // Spec 4.2: upgrades need a sustained success streak, not one sample.
+        for _ in 0..<10 {
+            coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""), newFrames: 1, retransmits: 0)
+        }
+        coordinator.applyLinkQualitySample(lossRate: 0.35, etx: 3.5, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: "DIGI-1"), newFrames: 1, retransmits: 1)
 
         let configDirect = coordinator.sessionManager.getConfigForDestination?("PEER-0", "") ?? AX25SessionConfig()
         let configVia = coordinator.sessionManager.getConfigForDestination?("PEER-0", "DIGI-1") ?? AX25SessionConfig()
@@ -1370,9 +1373,12 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.adaptiveTransmissionEnabled = true
         coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 2
 
-        // Session learner caches with uppercase path (from session.path.display)
+        // Session learner caches with uppercase path (from session.path.display).
+        // Spec 4.2: the upgrade needs a sustained success streak.
         let routeKey = RouteAdaptiveKey(destination: "KB5YZB-7", pathSignature: "DRL")
-        coordinator.applyLinkQualitySample(lossRate: 0.05, etx: 1.1, srtt: nil, source: "session", routeKey: routeKey)
+        for _ in 0..<10 {
+            coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: nil, source: "session", routeKey: routeKey, newFrames: 1, retransmits: 0)
+        }
 
         // UI passes lowercase path (raw user input from compose field)
         let effective = coordinator.effectiveAdaptiveSettings(destination: "kb5yzb-7", path: "drl")

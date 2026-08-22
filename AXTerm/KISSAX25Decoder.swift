@@ -171,7 +171,10 @@ nonisolated struct KISSFrameParser {
             // A valid AX.25 frame requires at minimum 15 bytes (src + dst + control).
             // An empty payload means we got a bare command byte with no data — discard it.
             guard !payload.isEmpty else {
-                TxLog.debug(.kiss, "Discarding DATA frame with empty payload")
+                // Malformed frames MUST be logged, not dropped silently
+                // (CLAUDE.md §4). Warning level so the crumb survives flood
+                // control and reaches Sentry attached to any later event.
+                TxLog.warning(.kiss, "Discarding DATA frame with empty payload")
                 return nil
             }
             return .ax25(payload)
@@ -189,7 +192,8 @@ nonisolated struct KISSFrameParser {
         // Unrecognized command type — log and discard.
         // This catches noise bytes between valid frames and non-standard TNC commands.
         // Per CLAUDE.md: "Malformed frames MUST be logged, not dropped silently."
-        TxLog.debug(.kiss, "Discarding unrecognized KISS command", [
+        // Warning level so the crumb survives flood control and reaches Sentry.
+        TxLog.warning(.kiss, "Discarding unrecognized KISS command", [
             "command": String(format: "0x%02X", command),
             "cmdType": String(format: "0x%02X", cmdType),
             "payloadLen": payload.count
@@ -271,6 +275,17 @@ nonisolated enum AX25 {
 
         let address = AX25Address(call: callsign, ssid: ssid, repeated: repeated)
         return AddressDecodeResult(address: address, nextOffset: offset + 7, isLast: isLast)
+    }
+
+    /// Explain why decodeFrame returned nil for the given bytes, so decode
+    /// failures reach Sentry differentiated by cause instead of as one
+    /// undifferentiated bucket. Only called on the failure path, so
+    /// re-examining the bytes costs nothing in the common case.
+    static func decodeFailureReason(ax25 data: Data) -> String {
+        if data.count < 15 { return "frame shorter than 15-byte minimum" }
+        if decodeAddress(data: data, offset: 0) == nil { return "invalid destination address" }
+        if decodeAddress(data: data, offset: 7) == nil { return "invalid source address" }
+        return "unrecognized structure"
     }
 
     /// Decode an AX.25 frame from raw data

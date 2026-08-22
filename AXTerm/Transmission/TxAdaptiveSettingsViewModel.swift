@@ -68,7 +68,16 @@ nonisolated struct TxAdaptiveSettingsViewModel: Sendable {
     // MARK: - Link Quality Updates
 
     /// Update adaptive values based on link quality metrics
-    mutating func updateFromLinkQuality(lossRate: Double, etx: Double, srtt: Double?) {
-        settings.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt)
+    mutating func updateFromLinkQuality(
+        lossRate: Double,
+        etx: Double,
+        srtt: Double?,
+        newFrames: Int = 1,
+        retransmits: Int? = nil
+    ) {
+        settings.updateFromLinkQuality(
+            lossRate: lossRate, etx: etx, srtt: srtt,
+            newFrames: newFrames, retransmits: retransmits
+        )
     }
 }
