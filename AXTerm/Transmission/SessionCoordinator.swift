@@ -483,6 +483,28 @@ final class SessionCoordinator: ObservableObject {
         beforeK > 1 && afterK == 1
     }
 
+    // MARK: - Link-failure escalation
+
+    /// An established link dying is normal packet-radio life (drove out of
+    /// range, node rebooted) — a Sentry EVENT for every one would be a
+    /// barrage under ordinary use. Escalate only on rapid repetition, which
+    /// is the pattern that smells like a defect worth reading a trail for.
+    private static let linkFailureStormCount = 3
+    private static let linkFailureStormWindow: TimeInterval = 10 * 60
+    private var recentLinkFailureTimes: [Date] = []
+
+    /// Record one established-link failure; returns true when the failure
+    /// pattern (3 within 10 minutes) warrants a single Sentry event.
+    /// Escalating clears the counter so a sustained bad evening produces a
+    /// trickle of events, never a stream.
+    func noteLinkFailureForEscalation(at now: Date = Date()) -> Bool {
+        recentLinkFailureTimes.removeAll { now.timeIntervalSince($0) > Self.linkFailureStormWindow }
+        recentLinkFailureTimes.append(now)
+        guard recentLinkFailureTimes.count >= Self.linkFailureStormCount else { return false }
+        recentLinkFailureTimes.removeAll()
+        return true
+    }
+
     /// Absolute floor for a learned connect seed: a freak fast sample must
     /// never produce a hair-trigger SABM timer.
     private static let learnedSeedFloorSeconds = 4.0
@@ -744,7 +766,8 @@ final class SessionCoordinator: ObservableObject {
                     TxLog.linkFailure(
                         peer: session.remoteAddress.display,
                         path: session.path.display.isEmpty ? "direct" : session.path.display,
-                        retries: session.stateMachine.retryCount
+                        retries: session.stateMachine.retryCount,
+                        escalated: self.noteLinkFailureForEscalation()
                     )
                 }
                 self.invalidateCapability(for: session.remoteAddress.display)

@@ -311,6 +311,41 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
                        "the discard transfers whatever the carcass held — zero here, but never less")
     }
 
+    // MARK: - Link-failure escalation (keeps Sentry quiet for normal RF life)
+
+    /// A single link failure is normal packet-radio life (out of range, node
+    /// rebooted) and must stay a breadcrumb. Only RAPID REPETITION — the
+    /// pattern that smells like a defect — escalates to a Sentry event, and
+    /// escalating resets the counter so a sustained bad evening produces a
+    /// trickle, not a barrage.
+    func testLinkFailureEscalatesOnlyOnRapidRepetition() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+        let t0 = Date()
+
+        XCTAssertFalse(coordinator.noteLinkFailureForEscalation(at: t0),
+                       "one failure: normal radio life, no event")
+        XCTAssertFalse(coordinator.noteLinkFailureForEscalation(at: t0.addingTimeInterval(60)),
+                       "two failures: still no event")
+        XCTAssertTrue(coordinator.noteLinkFailureForEscalation(at: t0.addingTimeInterval(120)),
+                      "third failure inside the window: this pattern is worth one event")
+        XCTAssertFalse(coordinator.noteLinkFailureForEscalation(at: t0.addingTimeInterval(180)),
+                       "escalation resets the counter — no immediate repeat")
+    }
+
+    func testLinkFailureEscalationWindowForgetsOldFailures() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+        let t0 = Date()
+
+        XCTAssertFalse(coordinator.noteLinkFailureForEscalation(at: t0))
+        XCTAssertFalse(coordinator.noteLinkFailureForEscalation(at: t0.addingTimeInterval(5 * 60)))
+        // The third failure arrives after the first has aged out of the
+        // 10-minute window: two-in-window is not a storm.
+        XCTAssertFalse(coordinator.noteLinkFailureForEscalation(at: t0.addingTimeInterval(11 * 60)),
+                       "failures spread over a long session never escalate")
+    }
+
     // MARK: - Collapse detection (drives the warning breadcrumb)
 
     func testCollapseToStopAndWaitDetectsTheTransitionEdgeOnly() {
