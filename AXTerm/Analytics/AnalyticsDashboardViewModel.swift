@@ -778,6 +778,44 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         )
     }
 
+    // MARK: - Activity insights (roles, hourly profile, airtime, sessions)
+
+    @Published private(set) var activityByHourProfile: ActivityByHourProfile = .empty
+    @Published private(set) var airtimeRanking: [AirtimeEntry] = []
+    @Published private(set) var observedSessions: [SessionObservation] = []
+    @Published private(set) var stationDirectory: [StationDirectoryEntry] = []
+    @Published private(set) var stationRoles: [String: Set<StationRole>] = [:]
+
+    private func updateActivityInsights(
+        packets: [Packet],
+        identityMode: StationIdentityMode,
+        windowEnd: Date
+    ) {
+        let roles = StationRoleInference.inferRoles(packets: packets, identityMode: identityMode)
+        stationRoles = roles
+        activityByHourProfile = ActivityByHourCalculator.profile(
+            packets: packets,
+            roles: roles,
+            identityMode: identityMode,
+            calendar: calendar
+        )
+        airtimeRanking = AirtimeRanking.rank(
+            packets: packets,
+            identityMode: identityMode,
+            limit: AnalyticsStyle.Tables.topLimit
+        )
+        observedSessions = SessionObservationCalculator.sessions(
+            packets: packets,
+            identityMode: identityMode,
+            windowEnd: windowEnd
+        )
+        stationDirectory = StationDirectoryBuilder.build(
+            packets: packets,
+            roles: roles,
+            identityMode: identityMode
+        )
+    }
+
     /// Base callsigns observed in the current timeframe (senders, destinations,
     /// repeating digipeaters), before any validity filtering.
     private(set) var timeframePresentBaseCalls: Set<String> = []
@@ -1072,6 +1110,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         let packetSnapshot = await timeframePacketSnapshot(now: now)
         latestTimeframePackets = packetSnapshot
         updateTimeframeStationPresence(packets: packetSnapshot, identityMode: stationIdentityMode)
+        updateActivityInsights(packets: packetSnapshot, identityMode: stationIdentityMode, windowEnd: timeframeInterval.end)
         let includeViaSnapshot = includeViaDigipeaters
         let minEdgeSnapshot = minEdgeCount
         let maxNodesSnapshot = maxNodes

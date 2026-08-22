@@ -318,6 +318,30 @@ struct AnalyticsDashboardView: View {
         }
     }
 
+    private var stationsSection: some View {
+        AnalyticsCard(title: "Stations & Sessions") {
+            LazyVGrid(columns: chartColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
+                ChartCard(title: "Station directory", height: 260) {
+                    if viewModel.hasLoadedGraph {
+                        StationDirectoryCard(entries: viewModel.stationDirectory)
+                            .help("Every valid station heard in the selected timeframe, newest first, with inferred roles: Node (sends NET/ROM broadcasts), BBS (mail announcements or SID software banners), Digi (observed repeating frames), Keyboarder (connected-mode data), Beacon (transmits but none of the above).")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading stations")
+                    }
+                }
+
+                ChartCard(title: "Observed sessions", height: 260) {
+                    if viewModel.hasLoadedGraph {
+                        ObservedSessionsCard(sessions: viewModel.observedSessions)
+                            .help("Connected-mode AX.25 sessions reconstructed from SABM/DISC control frames, data flow, and sustained polling. Shows who actually uses the network, not just who beacons.")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading sessions")
+                    }
+                }
+            }
+        }
+    }
+
     /// Airtime estimate per bucket from the packet and payload-byte series.
     /// Assumptions documented in the card tooltip (1200 baud, 32 framing bytes,
     /// 300 ms fixed per-frame overhead).
@@ -476,6 +500,24 @@ struct AnalyticsDashboardView: View {
                         .help("REJ and SREJ supervisory frames per interval — peers asking for retransmits. Sustained nonzero values indicate RF loss on connected links.")
                     } else {
                         ChartLoadingPlaceholder(label: "Loading link stress")
+                    }
+                }
+
+                ChartCard(title: "Activity by hour") {
+                    if viewModel.hasLoadedGraph {
+                        ActivityByHourChart(profile: viewModel.activityByHourProfile)
+                            .help("When your network is alive, by local hour over the selected timeframe, split by traffic kind. Chat = connected data between regular stations; BBS/Node = connected data touching an inferred Node or BBS (role-based inference from routing broadcasts, mail announcements, and SID software banners — not message content); Beacons = unconnected UI frames; Routing = NET/ROM broadcasts; Control = supervisory frames.")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading hourly profile")
+                    }
+                }
+
+                ChartCard(title: "Top airtime consumers") {
+                    if viewModel.hasLoadedGraph {
+                        AirtimeListView(entries: viewModel.airtimeRanking)
+                            .help("Estimated transmit airtime per station over the selected timeframe (sender plus every digipeater that repeated the frame; 1200 baud, ~300 ms per-frame overhead). Airtime is the honest measure of channel load — long data frames cost far more than short polls.")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading airtime")
                     }
                 }
 
@@ -1904,6 +1946,247 @@ private struct GraphViewportHeightPreferenceKey: PreferenceKey {
     }
 }
 
+
+private struct StationDirectoryCard: View {
+    let entries: [StationDirectoryEntry]
+    private let maxRows = 10
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    var body: some View {
+        if entries.isEmpty {
+            EmptyChartPlaceholder(text: "No stations heard")
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(entries.prefix(maxRows)) { entry in
+                    HStack(spacing: 8) {
+                        Text(entry.callsign)
+                            .font(.caption.monospaced())
+                            .frame(minWidth: 84, alignment: .leading)
+                        ForEach(entry.roleBadges, id: \.self) { badge in
+                            Text(badge)
+                                .font(.system(size: 9, weight: .semibold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(badgeColor(badge).opacity(0.18), in: Capsule())
+                                .foregroundStyle(badgeColor(badge))
+                        }
+                        Spacer()
+                        Text("\(entry.frameCount) frames")
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        Text("Last \(Self.timeFormatter.string(from: entry.lastHeard))")
+                            .font(.caption2)
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            .frame(minWidth: 76, alignment: .trailing)
+                    }
+                    .help("\(entry.callsign): \(entry.roleBadges.joined(separator: ", ")). First heard \(entry.firstHeard.formatted()), last heard \(entry.lastHeard.formatted()), \(entry.frameCount) frames, ~\(String(format: "%.0f", entry.airtimeSeconds)) s of airtime in this timeframe.")
+                }
+                if entries.count > maxRows {
+                    Text("+ \(entries.count - maxRows) more stations")
+                        .font(.caption2)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func badgeColor(_ badge: String) -> Color {
+        switch badge {
+        case "Node": return Color(nsColor: .systemOrange)
+        case "BBS": return Color(nsColor: .systemPurple)
+        case "Digi": return Color(nsColor: .systemTeal)
+        case "Keyboarder": return AnalyticsStyle.Colors.accent
+        default: return Color(nsColor: .systemGray)
+        }
+    }
+}
+
+private struct ObservedSessionsCard: View {
+    let sessions: [SessionObservation]
+    private let maxRows = 8
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    var body: some View {
+        if sessions.isEmpty {
+            EmptyChartPlaceholder(text: "No connected sessions observed")
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(sessions.prefix(maxRows)) { session in
+                    HStack(spacing: 8) {
+                        Text("\(session.stationA) \u{2194} \(session.stationB)")
+                            .font(.caption.monospaced())
+                            .lineLimit(1)
+                        if session.end == nil {
+                            Text("ACTIVE")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color(nsColor: .systemGreen).opacity(0.18), in: Capsule())
+                                .foregroundStyle(Color(nsColor: .systemGreen))
+                        }
+                        Spacer()
+                        Text(sessionSummary(session))
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            .lineLimit(1)
+                    }
+                    .help(sessionTooltip(session))
+                }
+                if sessions.count > maxRows {
+                    Text("+ \(sessions.count - maxRows) more sessions")
+                        .font(.caption2)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func sessionSummary(_ session: SessionObservation) -> String {
+        var parts: [String] = [Self.timeFormatter.string(from: session.start)]
+        if let duration = session.duration {
+            parts.append(durationText(duration))
+        }
+        if session.byteCount > 0 {
+            parts.append(ByteCountFormatter.string(fromByteCount: Int64(session.byteCount), countStyle: .file))
+        }
+        if !session.viaDigipeaters.isEmpty {
+            parts.append("via \(session.viaDigipeaters.joined(separator: ","))")
+        }
+        return parts.joined(separator: " \u{00B7} ")
+    }
+
+    private func sessionTooltip(_ session: SessionObservation) -> String {
+        let endText = session.end.map { "ended \($0.formatted())" } ?? "still active at the end of the window"
+        return "AX.25 session observed on channel between \(session.stationA) and \(session.stationB): started \(session.start.formatted()), \(endText). \(session.frameCount) frames (\(session.iFrameCount) data), \(session.byteCount) payload bytes."
+    }
+
+    private func durationText(_ duration: TimeInterval) -> String {
+        if duration < 60 { return String(format: "%.0f s", duration) }
+        let minutes = Int(duration) / 60
+        if minutes < 60 { return "\(minutes) min" }
+        return String(format: "%dh %02dm", minutes / 60, minutes % 60)
+    }
+}
+
+private struct AirtimeListView: View {
+    let entries: [AirtimeEntry]
+
+    var body: some View {
+        if entries.isEmpty {
+            EmptyChartPlaceholder(text: "No data")
+        } else {
+            let maxAirtime = max(0.001, entries.map(\.airtimeSeconds).max() ?? 0.001)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(entries) { entry in
+                    HStack(spacing: 8) {
+                        Text(entry.callsign)
+                            .frame(minWidth: 84, alignment: .leading)
+                        GeometryReader { proxy in
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(AnalyticsStyle.Colors.accent.opacity(0.35))
+                                .frame(
+                                    width: max(2, proxy.size.width * CGFloat(entry.airtimeSeconds / maxAirtime)),
+                                    height: 8
+                                )
+                                .frame(maxHeight: .infinity, alignment: .center)
+                        }
+                        Text(airtimeText(entry.airtimeSeconds))
+                            .monospacedDigit()
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            .frame(minWidth: 56, alignment: .trailing)
+                    }
+                    .font(.caption)
+                    .frame(height: 16)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func airtimeText(_ seconds: Double) -> String {
+        if seconds < 60 { return String(format: "%.1f s", seconds) }
+        let minutes = Int(seconds) / 60
+        let remainder = Int(seconds) % 60
+        return "\(minutes)m \(String(format: "%02d", remainder))s"
+    }
+}
+
+private struct ActivityByHourChart: View {
+    let profile: ActivityByHourProfile
+
+    private struct HourClassPoint: Identifiable {
+        let hour: Int
+        let className: String
+        let value: Int
+        var id: String { "\(hour)-\(className)" }
+    }
+
+    private var points: [HourClassPoint] {
+        var result: [HourClassPoint] = []
+        for (hour, counts) in profile.hours.enumerated() {
+            for trafficClass in TrafficClass.allCases {
+                if let value = counts[trafficClass], value > 0 {
+                    result.append(HourClassPoint(hour: hour, className: trafficClass.displayName, value: value))
+                }
+            }
+        }
+        return result
+    }
+
+    var body: some View {
+        if profile.totalCount == 0 {
+            EmptyChartPlaceholder(text: "No data")
+        } else {
+            Chart(points) { point in
+                BarMark(
+                    x: .value("Hour", point.hour),
+                    y: .value("Frames", point.value)
+                )
+                .foregroundStyle(by: .value("Type", point.className))
+            }
+            .chartForegroundStyleScale([
+                "Chat": AnalyticsStyle.Colors.accent,
+                "BBS/Node": Color(nsColor: .systemPurple),
+                "Beacons": Color(nsColor: .systemTeal),
+                "Routing": Color(nsColor: .systemOrange),
+                "Control": Color(nsColor: .systemGray).opacity(0.5)
+            ])
+            .chartXScale(domain: -0.5...23.5)
+            .chartXAxis {
+                AxisMarks(values: [0, 4, 8, 12, 16, 20]) { value in
+                    AxisGridLine()
+                        .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                    AxisValueLabel {
+                        if let hour = value.as(Int.self) {
+                            Text(String(format: "%02d", hour))
+                        }
+                    }
+                    .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                }
+            }
+            .chartLegend(position: .top, alignment: .leading, spacing: 4)
+            .chartPlotStyle { plotArea in
+                plotArea.background(AnalyticsStyle.Colors.chartPlotBackground)
+            }
+        }
+    }
+}
 
 private struct ChartCard<Content: View>: View {
     let title: String
