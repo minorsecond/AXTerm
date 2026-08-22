@@ -81,6 +81,36 @@ nonisolated struct AdaptiveSetting<T: Comparable & Sendable>: Sendable {
     }
 }
 
+// MARK: - Probation & Metrics
+
+/// An in-flight upgrade probe. Every parameter upgrade is provisional until
+/// `framesRemaining` clean evidence frames confirm it; a failure during the
+/// trial rolls the parameters back and doubles the skepticism.
+nonisolated struct AdaptiveProbation: Equatable, Sendable {
+    let priorWindow: Int
+    let priorPaclen: Int
+    var framesRemaining: Int
+}
+
+/// User-visible counters describing what the adaptive controller has done and
+/// on what evidence — the raw material for "show your work" UI.
+nonisolated struct AdaptiveLearningMetrics: Equatable, Sendable {
+    /// Every sample seen (evidence-bearing and aggregate).
+    var samplesSeen: Int = 0
+    /// I-frames delivered cleanly (evidence weight accumulated).
+    var evidenceFrames: Int = 0
+    /// Retransmissions observed.
+    var retransmitsSeen: Int = 0
+    /// Parameter upgrades attempted (each opens a probation trial).
+    var upgradesAttempted: Int = 0
+    /// Upgrades that survived their probation trial.
+    var upgradesConfirmed: Int = 0
+    /// Upgrades rolled back because the link degraded during the trial.
+    var probeRollbacks: Int = 0
+    /// Times loss forced parameters down (outside of probation rollbacks).
+    var lossDowngrades: Int = 0
+}
+
 // MARK: - TX Adaptive Settings
 
 /// All adaptive parameters for transmission
@@ -194,11 +224,28 @@ nonisolated struct TxAdaptiveSettings: Sendable {
     /// Consecutive samples that included at least one retransmission.
     var failStreak: Int = 0
 
+    /// The upgrade currently on trial, if any. One probe at a time.
+    var probation: AdaptiveProbation? = nil
+
+    /// Clean frames required before the next upgrade probe. Baseline 10
+    /// (spec N=10); doubles each time a probe fails its trial (cap 40) and
+    /// resets to baseline when a probe is confirmed.
+    var upgradeStreakRequirement: Int = TxAdaptiveSettings.baselineStreakRequirement
+
+    /// What the controller has done, on what evidence — for UI and telemetry.
+    var metrics = AdaptiveLearningMetrics()
+
     /// EWMA smoothing factor (weight of the newest sample).
     private static let ewmaLambda = 0.3
 
     /// Successes required before probing a parameter upward (spec: N=10).
-    private static let successesForUpgrade = 10
+    private static let baselineStreakRequirement = 10
+
+    /// Skepticism cap after repeated failed probes.
+    private static let maxStreakRequirement = 40
+
+    /// Clean evidence frames an upgrade must survive to be confirmed.
+    private static let probationTrialFrames = 10
 
     /// Streak value after an upgrade (spec: "reset to something like 5 so it
     /// doesn't rocket upward").
@@ -237,27 +284,47 @@ nonisolated struct TxAdaptiveSettings: Sendable {
         let loss = min(max(lossRate, 0.0), 1.0)
         let sampleEtx = min(max(etx, 1.0), 100.0)
 
+        metrics.samplesSeen += 1
+
         // EWMA update (spec 4.2: "Keep an EWMA of loss_rate …").
         lossRateEWMA = Self.blend(lossRateEWMA, sample: loss)
         etxEWMA = Self.blend(etxEWMA, sample: sampleEtx)
         let smoothedLoss = lossRateEWMA ?? loss
         let smoothedEtx = etxEWMA ?? sampleEtx
 
-        // Streaks (spec 4.2): only evidence-bearing samples move them.
+        // Streaks (spec 4.2) and the probation trial: only evidence-bearing
+        // samples move either. Aggregate sources can neither pass nor fail a
+        // probe — no evidence, no verdict.
         var freshFailure = false
+        let wasProbing = probation != nil
         if let retransmits {
+            metrics.retransmitsSeen += retransmits
             if retransmits > 0 {
                 failStreak += 1
                 successStreak = 0
                 freshFailure = true
             } else if newFrames > 0 {
+                metrics.evidenceFrames += newFrames
                 successStreak += newFrames
                 failStreak = 0
+                if var trial = probation {
+                    trial.framesRemaining -= newFrames
+                    if trial.framesRemaining <= 0 {
+                        // The probe survived: the upgrade is confirmed and
+                        // skepticism returns to baseline.
+                        probation = nil
+                        upgradeStreakRequirement = Self.baselineStreakRequirement
+                        metrics.upgradesConfirmed += 1
+                    } else {
+                        probation = trial
+                    }
+                }
             }
         }
 
         // Paclen (spec 4.2): degrade immediately, recover only on sustained
         // evidence. Between triggers the value HOLDS — no per-sample rewrite.
+        let paclenBefore = paclen.currentAdaptive
         if smoothedLoss >= 0.2 || smoothedEtx > 2.0 {
             paclen.currentAdaptive = Self.paclenLadder[0]
             paclen.adaptiveReason = "Loss \(Int(smoothedLoss * 100))%, ETX \(String(format: "%.1f", smoothedEtx))"
@@ -267,33 +334,66 @@ nonisolated struct TxAdaptiveSettings: Sendable {
         } else if smoothedLoss > 0.1 {
             paclen.currentAdaptive = min(paclen.currentAdaptive, 128)
             paclen.adaptiveReason = "Moderate loss (\(Int(smoothedLoss * 100))%)"
-        } else if successStreak >= Self.successesForUpgrade {
-            let raised = Self.stepUp(paclen.currentAdaptive, ladder: Self.paclenLadder)
-            if raised != paclen.currentAdaptive {
-                paclen.currentAdaptive = raised
-                paclen.adaptiveReason = "Stable link — probing larger frames"
-            }
         }
 
         // Window size K (spec 4.4 Dynamic K, link level): multiplicative
-        // decrease on loss, additive increase only after a sustained clean
-        // streak. A single good sample never raises K (the old behavior
-        // flapped K on every threshold crossing).
+        // decrease on loss. A single good sample never raises K.
+        let windowBefore = windowSize.currentAdaptive
         if smoothedLoss >= 0.2 {
             windowSize.currentAdaptive = 1
             windowSize.adaptiveReason = "High loss - stop-and-wait"
         } else if freshFailure {
             windowSize.currentAdaptive = max(1, windowSize.currentAdaptive / 2)
             windowSize.adaptiveReason = "Retransmission — halving window"
-        } else if successStreak >= Self.successesForUpgrade, smoothedEtx <= 1.5 {
-            if windowSize.currentAdaptive < Self.autoWindowCap {
-                windowSize.currentAdaptive += 1
-                windowSize.adaptiveReason = "Good link quality"
-            }
         }
 
-        // Consume the streak after any upgrade attempt (spec's anti-rocket).
-        if successStreak >= Self.successesForUpgrade {
+        if freshFailure {
+            if let failed = probation {
+                // The upgrade made things worse: roll back to at-or-below the
+                // pre-upgrade values and double the skepticism for next time.
+                windowSize.currentAdaptive = min(windowSize.currentAdaptive, failed.priorWindow)
+                paclen.currentAdaptive = min(paclen.currentAdaptive, failed.priorPaclen)
+                windowSize.adaptiveReason = "Upgrade made things worse — rolled back"
+                paclen.adaptiveReason = "Upgrade made things worse — rolled back"
+                probation = nil
+                upgradeStreakRequirement = min(Self.maxStreakRequirement, upgradeStreakRequirement * 2)
+                metrics.probeRollbacks += 1
+            } else if windowSize.currentAdaptive < windowBefore || paclen.currentAdaptive < paclenBefore {
+                metrics.lossDowngrades += 1
+            }
+        } else if windowSize.currentAdaptive < windowBefore || paclen.currentAdaptive < paclenBefore {
+            metrics.lossDowngrades += 1
+        }
+
+        // Upgrades (spec 4.2/4.4): only after the required clean streak, only
+        // one probe at a time, and never in the same sample a trial ended —
+        // a confirmation call must not immediately stack the next probe.
+        if !freshFailure, !wasProbing, successStreak >= upgradeStreakRequirement,
+           smoothedLoss <= 0.1 {
+            let priorWindow = windowSize.currentAdaptive
+            let priorPaclen = paclen.currentAdaptive
+            var upgraded = false
+
+            let raisedPaclen = Self.stepUp(priorPaclen, ladder: Self.paclenLadder)
+            if raisedPaclen != priorPaclen {
+                paclen.currentAdaptive = raisedPaclen
+                paclen.adaptiveReason = "Stable link — probing larger frames"
+                upgraded = true
+            }
+            if smoothedEtx <= 1.5, priorWindow < Self.autoWindowCap {
+                windowSize.currentAdaptive = priorWindow + 1
+                windowSize.adaptiveReason = "Good link quality"
+                upgraded = true
+            }
+            if upgraded {
+                probation = AdaptiveProbation(
+                    priorWindow: priorWindow,
+                    priorPaclen: priorPaclen,
+                    framesRemaining: Self.probationTrialFrames
+                )
+                metrics.upgradesAttempted += 1
+            }
+            // Consume the streak after any upgrade attempt (spec's anti-rocket).
             successStreak = Self.streakAfterUpgrade
         }
 
@@ -349,5 +449,8 @@ nonisolated struct TxAdaptiveSettings: Sendable {
         etxEWMA = nil
         successStreak = 0
         failStreak = 0
+        probation = nil
+        upgradeStreakRequirement = Self.baselineStreakRequirement
+        metrics = AdaptiveLearningMetrics()
     }
 }
