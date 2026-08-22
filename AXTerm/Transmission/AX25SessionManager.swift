@@ -1792,12 +1792,30 @@ final class AX25SessionManager: ObservableObject {
         debugDumpSessionState(session, context: isPoll ? "inbound-RR-poll" : "inbound-RR")
 
         if isPoll && session.state == .connected && outstandingBeforeDrain > 0 && vaAfter == vaBefore {
+            // Every poll-driven retransmit must climb the N2 ladder. The peer's
+            // polls arrive inside our RTO, so each one used to restart T1 before
+            // it could expire — retryCount froze at 0 and the session
+            // retransmitted the same frame forever (livelock, field capture
+            // 2026-08-22). Now a peer that polls without ever acking exhausts
+            // N2 exactly like unanswered T1 expiries would.
+            let failureActions = session.stateMachine.noteRetransmissionWithoutProgress()
+            guard failureActions.isEmpty else {
+                TxLog.warning(.session, "RR poll retransmission ladder exhausted N2", [
+                    "peer": session.remoteAddress.display,
+                    "retries": session.stateMachine.retryCount
+                ])
+                onSessionStateChanged?(session, .connected, session.state)
+                responseFrames.append(contentsOf: processActions(failureActions, for: session))
+                return responseFrames
+            }
+
             TxLog.debug(.session, "RR poll made no ACK progress; retransmitting outstanding frames", [
                 "peer": session.remoteAddress.display,
                 "va": session.va,
                 "vs": session.vs,
                 "vr": session.vr,
-                "outstanding": session.outstandingCount
+                "outstanding": session.outstandingCount,
+                "retryCount": session.stateMachine.retryCount
             ])
 
             responseFrames.append(contentsOf: retransmitOutstandingFrames(for: session, from: session.va, reason: "inbound-RR-poll-no-ack"))

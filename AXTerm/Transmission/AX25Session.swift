@@ -400,6 +400,31 @@ nonisolated struct AX25StateMachine: Sendable {
     /// Retry counter for current operation
     private(set) var retryCount: Int = 0
 
+    /// Record a retransmission cycle that produced no ack progress — e.g. the
+    /// peer's RR command poll arrived with V(A) frozen and we are about to
+    /// retransmit in response. Climbs the same N2 ladder as T1 expiry.
+    ///
+    /// Without this, a peer that cannot hear us but keeps command-polling
+    /// (each poll arriving inside our RTO and restarting T1) froze retryCount
+    /// at 0 forever: T1 never expired, N2 never tripped, and the session
+    /// retransmitted the same I-frame indefinitely (field capture 2026-08-22:
+    /// ns=2 "b" resent every ~10 s with va pinned, no escalation, no failure).
+    /// Returns the link-failure actions when N2 is exhausted; empty otherwise.
+    /// Any genuine ack progress resets the ladder via the usual paths.
+    mutating func noteRetransmissionWithoutProgress() -> [AX25SessionAction] {
+        retryCount += 1
+        guard retryCount > config.maxRetries else { return [] }
+        state = .error
+        TxLog.error(.ax25, "Link failure", error: nil, [
+            "reason": "no ACK progress after \(config.maxRetries) retransmissions",
+            "retries": retryCount,
+            "vs": sequenceState.vs,
+            "va": sequenceState.va,
+            "vr": sequenceState.vr
+        ])
+        return [.stopT1, .stopT3, .notifyError("Link failure (no ACK progress after \(config.maxRetries) retries)")]
+    }
+
     /// Receive buffer for out-of-sequence I-frames
     /// Key is N(S) sequence number
     var receiveBuffer: [Int: BufferedIFrame] = [:]
