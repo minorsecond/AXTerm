@@ -72,8 +72,17 @@ final class AdaptiveTransmissionIntegrationTests: XCTestCase {
         }
         coordinator.applyLinkQualitySample(lossRate: 0.4, etx: 4.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: "DIGI-1"), newFrames: 1, retransmits: 1)
 
+        // Live sessions: the merged branch counts only sessions that are
+        // actually up — ended ones lingering in the dictionary must not force
+        // merged config onto reconnects (audit 2026-08-22). The direct session
+        // connects FIRST so its config is captured from its own route cache;
+        // the via session then sees one live peer session and merges.
+        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath(), channel: 0)
         let sessionDirect = coordinator.sessionManager.session(for: peer, path: DigiPath())
+        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath.from(["DIGI-1"]), channel: 0)
         let sessionVia = coordinator.sessionManager.session(for: peer, path: DigiPath.from(["DIGI-1"]))
+        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath.from(["DIGI-1"]), channel: 0)
 
         let merged = coordinator.sessionManager.getConfigForDestination?("PEER-0", "other") ?? AX25SessionConfig()
         XCTAssertEqual(merged.windowSize, 1, "Merged uses min(window) across routes")

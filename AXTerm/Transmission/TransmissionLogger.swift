@@ -282,6 +282,26 @@ final class TxLog {
         ])
     }
 
+    /// AX.25 link failure (N2 exhausted). A SINGLE failure is normal radio
+    /// life and stays a warning breadcrumb — no event, no barrage under
+    /// ordinary use. Only when the coordinator's escalation logic flags rapid
+    /// repetition (3 failures in 10 minutes — the pattern that smells like a
+    /// defect) does one throttled Sentry EVENT ship, carrying the whole crumb
+    /// trail (T1 timeouts, adaptive collapse, retransmissions) that is
+    /// otherwise invisible in production.
+    nonisolated static func linkFailure(peer: String, path: String, retries: Int, escalated: Bool) {
+        warning(.session, "AX.25 link failure (N2 exhausted)", [
+            "peer": peer, "path": path, "retries": retries
+        ])
+        guard escalated else { return }
+        Task { @MainActor in SentryManager.shared.captureThrottled(
+            key: "ax25.linkFailure.repeated",
+            message: "Repeated AX.25 link failures (3 in 10 min)",
+            level: .warning,
+            extra: ["peer": peer, "path": path, "retries": retries]
+        ) }
+    }
+
     nonisolated static func axdpDecodeError(reason: String, data: Data) {
         // Breadcrumb via TxLog.warning; the single throttled event ships here.
         // (Previously TxLog.error + a second captureMessage = two events per

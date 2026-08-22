@@ -693,8 +693,13 @@ final class SessionCoordinatorTests: XCTestCase {
         coordinator.applyLinkQualitySample(lossRate: 0.05, etx: 1.1, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: "DIGI-1"))
         coordinator.globalAdaptiveSettings.windowSize.currentAdaptive = 2
 
-        _ = coordinator.sessionManager.session(for: peer, path: DigiPath())
-        _ = coordinator.sessionManager.session(for: peer, path: DigiPath.from(["DIGI-1"]))
+        // The merged branch requires LIVE sessions: ended sessions linger in
+        // the manager's dictionary and must not force merged config onto a
+        // reconnect (audit 2026-08-22), so connect both for real.
+        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath(), channel: 0)
+        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath.from(["DIGI-1"]), channel: 0)
+        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath.from(["DIGI-1"]), channel: 0)
 
         let mergedConfig = coordinator.sessionManager.getConfigForDestination?("PEER-0", "other") ?? AX25SessionConfig()
         XCTAssertEqual(mergedConfig.windowSize, 1, "Merged config should use min(window) when multiple sessions to same destination")

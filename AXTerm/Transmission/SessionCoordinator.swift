@@ -20,6 +20,14 @@ nonisolated struct RouteAdaptiveKey: Hashable, Sendable {
     let pathSignature: String
 }
 
+/// Digipeater hop count encoded in a route's path signature
+/// (DigiPath.display: "" for direct, "DRLNOD" for one hop, "DRLNOD,FNKTWN" …).
+private func hopCount(inPathSignature signature: String) -> Int {
+    let trimmed = signature.trimmingCharacters(in: .whitespaces)
+    guard !trimmed.isEmpty else { return 0 }
+    return trimmed.split(separator: ",").count
+}
+
 /// Normalizes destination so "PEER" and "PEER-0" match (SSID 0 display form).
 private func canonicalDestination(_ destination: String) -> String {
     let u = destination.uppercased().trimmingCharacters(in: .whitespaces)
@@ -361,8 +369,44 @@ final class SessionCoordinator: ObservableObject {
             // Normalize destination for consistent cache lookups (PEER-0 and PEER map to same key)
             let normalizedKey = RouteAdaptiveKey(destination: canonicalDestination(key.destination), pathSignature: key.pathSignature)
             var entry = adaptiveCache[normalizedKey]?.settings ?? TxAdaptiveSettings()
+            // Hop-scaled paclen ceiling for this route: applied before every
+            // update so both fresh entries and inherited state respect it.
+            let paclenBeforeCeiling = entry.paclen.currentAdaptive
+            entry.applyPaclenCeiling(forHops: hopCount(inPathSignature: normalizedKey.pathSignature))
+            if entry.paclen.currentAdaptive < paclenBeforeCeiling {
+                TxLog.debug(.adaptive, "Hop ceiling clamped paclen", [
+                    "destination": normalizedKey.destination,
+                    "path": normalizedKey.pathSignature.isEmpty ? "direct" : normalizedKey.pathSignature,
+                    "from": paclenBeforeCeiling,
+                    "to": entry.paclen.currentAdaptive
+                ])
+            }
             let before = AdaptiveSnapshot(from: entry)
+            let rollbacksBefore = entry.metrics.probeRollbacks
             entry.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits)
+            if Self.didCollapseToStopAndWait(beforeK: before.k, afterK: entry.windowSize.currentAdaptive) {
+                // Warning level: the collapse is the headline event of a
+                // degrading link, and debug-level Learning crumbs are exactly
+                // what flood control drops first. Transition edge only — a
+                // route already at K=1 never repeats the warning.
+                TxLog.warning(.adaptive, "Adaptive collapsed to stop-and-wait", [
+                    "destination": normalizedKey.destination,
+                    "path": normalizedKey.pathSignature.isEmpty ? "direct" : normalizedKey.pathSignature,
+                    "smoothedLoss": String(format: "%.2f", entry.lossRateEWMA ?? lossRate),
+                    "paclen": entry.paclen.currentAdaptive
+                ])
+            }
+            if entry.metrics.probeRollbacks > rollbacksBefore {
+                // A probe made the link worse and was rolled back — warning
+                // level so the crumb survives flood control and shows up
+                // attached to any later Sentry event for this session.
+                TxLog.warning(.adaptive, "Adaptive upgrade rolled back", [
+                    "destination": normalizedKey.destination,
+                    "path": normalizedKey.pathSignature.isEmpty ? "direct" : normalizedKey.pathSignature,
+                    "nextUpgradeNeeds": entry.upgradeStreakRequirement,
+                    "rollbacksTotal": entry.metrics.probeRollbacks
+                ])
+            }
             adaptiveCache[normalizedKey] = CachedAdaptiveEntry(settings: entry, lastUpdated: Date())
             adaptiveStatusStore.updateSession(
                 id: adaptiveSessionID(destination: normalizedKey.destination, path: normalizedKey.pathSignature),
@@ -392,6 +436,13 @@ final class SessionCoordinator: ObservableObject {
         } else {
             let before = AdaptiveSnapshot(from: globalAdaptiveSettings)
             globalAdaptiveSettings.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits)
+            if Self.didCollapseToStopAndWait(beforeK: before.k, afterK: globalAdaptiveSettings.windowSize.currentAdaptive) {
+                TxLog.warning(.adaptive, "Adaptive collapsed to stop-and-wait", [
+                    "scope": "global",
+                    "smoothedLoss": String(format: "%.2f", globalAdaptiveSettings.lossRateEWMA ?? lossRate),
+                    "paclen": globalAdaptiveSettings.paclen.currentAdaptive
+                ])
+            }
             adaptiveStatusStore.updateGlobal(
                 settings: globalAdaptiveSettings,
                 lossRate: lossRate,
@@ -424,11 +475,52 @@ final class SessionCoordinator: ObservableObject {
         Date().timeIntervalSince(entry.lastUpdated) > Self.adaptiveCacheTTLSeconds
     }
 
+    /// True only on the transition edge into stop-and-wait — the headline
+    /// degradation event worth a warning-level breadcrumb. A route already
+    /// collapsed must not repeat it, and a halving that stops above K=1 is
+    /// an ordinary downgrade.
+    static func didCollapseToStopAndWait(beforeK: Int, afterK: Int) -> Bool {
+        beforeK > 1 && afterK == 1
+    }
+
+    // MARK: - Link-failure escalation
+
+    /// An established link dying is normal packet-radio life (drove out of
+    /// range, node rebooted) — a Sentry EVENT for every one would be a
+    /// barrage under ordinary use. Escalate only on rapid repetition, which
+    /// is the pattern that smells like a defect worth reading a trail for.
+    private static let linkFailureStormCount = 3
+    private static let linkFailureStormWindow: TimeInterval = 10 * 60
+    private var recentLinkFailureTimes: [Date] = []
+
+    /// Record one established-link failure; returns true when the failure
+    /// pattern (3 within 10 minutes) warrants a single Sentry event.
+    /// Escalating clears the counter so a sustained bad evening produces a
+    /// trickle of events, never a stream.
+    func noteLinkFailureForEscalation(at now: Date = Date()) -> Bool {
+        recentLinkFailureTimes.removeAll { now.timeIntervalSince($0) > Self.linkFailureStormWindow }
+        recentLinkFailureTimes.append(now)
+        guard recentLinkFailureTimes.count >= Self.linkFailureStormCount else { return false }
+        recentLinkFailureTimes.removeAll()
+        return true
+    }
+
+    /// Absolute floor for a learned connect seed: a freak fast sample must
+    /// never produce a hair-trigger SABM timer.
+    private static let learnedSeedFloorSeconds = 4.0
+
     /// Build session config from adaptive settings (shared by per-route and merged paths).
-    private func configFromAdaptive(_ a: TxAdaptiveSettings) -> AX25SessionConfig {
+    ///
+    /// `learnedPathRto` is passed ONLY by the per-route cache-hit branch — the
+    /// field's single writer. Merged configs and the global path leave it nil.
+    private func configFromAdaptive(_ a: TxAdaptiveSettings, learnedPathRto: Double? = nil) -> AX25SessionConfig {
         let userT1 = AppSettingsStore.sanitizeAX25T1TimeoutSeconds(
             appSettings?.ax25T1TimeoutSeconds ?? AppSettingsStore.defaultAX25T1TimeoutSeconds
         )
+        let clampedLearned = learnedPathRto.map { learned in
+            min(a.rtoMax.effectiveValue,
+                max(max(a.rtoMin.effectiveValue, Self.learnedSeedFloorSeconds), learned))
+        }
         return AX25SessionConfig(
             windowSize: a.windowSize.effectiveValue,
             paclen: a.paclen.effectiveValue,
@@ -438,14 +530,22 @@ final class SessionCoordinator: ObservableObject {
             rtoMin: a.rtoMin.effectiveValue,
             rtoMax: a.rtoMax.effectiveValue,
             initialRto: max(a.rtoMin.effectiveValue, min(a.rtoMax.effectiveValue, userT1)),
-            adaptiveTimeout: adaptiveTransmissionEnabled
+            adaptiveTimeout: adaptiveTransmissionEnabled,
+            learnedPathRto: clampedLearned
         )
     }
 
     /// Number of active sessions (any state) to the given destination. Used to stabilize config when multiple connections exist.
     private func activeSessionCount(forDestination destination: String) -> Int {
         let canon = canonicalDestination(destination)
-        return sessionManager.sessions.values.filter { canonicalDestination($0.remoteAddress.display) == canon }.count
+        // Live sessions only. Ended sessions linger in the manager's dictionary,
+        // and counting them forced every RECONNECT into the conservative merged
+        // config — which never carries learned per-route state, silently
+        // defeating learned-RTO seeding a second way (audit 2026-08-22).
+        return sessionManager.sessions.values.filter {
+            canonicalDestination($0.remoteAddress.display) == canon
+                && $0.state != .disconnected && $0.state != .error
+        }.count
     }
 
     /// Conservative merge of configs for a destination: min window, max RTO, max retries. Used when 2+ sessions exist to same peer so we don't flip parameters between connections or corrupt transmissions.
@@ -600,7 +700,10 @@ final class SessionCoordinator: ObservableObject {
             }
             let key = RouteAdaptiveKey(destination: canonicalDestination(destination), pathSignature: pathSignature)
             if let cached = self.adaptiveCache[key], !self.isAdaptiveCacheEntryExpired(cached) {
-                return self.configFromAdaptive(cached.settings)
+                // Single writer of learnedPathRto: a fresh entry for THIS
+                // exact route seeds the connect timer with its measured
+                // full-path RTO (clamped; never hop-scaled downstream).
+                return self.configFromAdaptive(cached.settings, learnedPathRto: cached.settings.currentRto)
             }
             return self.configFromAdaptive(self.globalAdaptiveSettings)
         }
@@ -659,6 +762,14 @@ final class SessionCoordinator: ObservableObject {
             // This ensures we re-discover on next connection (station might switch software)
             // and prevents stale partial AXDP messages from corrupting future communications.
             if (oldState == .connected || oldState == .disconnecting) && (newState == .disconnected || newState == .error) {
+                if newState == .error {
+                    TxLog.linkFailure(
+                        peer: session.remoteAddress.display,
+                        path: session.path.display.isEmpty ? "direct" : session.path.display,
+                        retries: session.stateMachine.retryCount,
+                        escalated: self.noteLinkFailureForEscalation()
+                    )
+                }
                 self.invalidateCapability(for: session.remoteAddress.display)
 
                 // Clear reassembly buffer for this peer to prevent stale data corruption.
@@ -666,28 +777,34 @@ final class SessionCoordinator: ObservableObject {
                 // and the peer reconnects, the old fragments could corrupt the new message.
                 self.clearAllReassemblyBuffers(for: session.remoteAddress)
 
-                // Evict per-route adaptive cache for the disconnected session and
-                // notify. This prevents stale session-learned values from silently
-                // carrying over to the next connection.
+                // RETAIN the per-route adaptive cache across session teardown:
+                // the 30-minute TTL (isAdaptiveCacheEntryExpired) is the
+                // staleness authority, not the disconnect. Learned-RTO seeding
+                // exists precisely so a reconnect benefits from the last
+                // session's measurements — evicting here silently defeated it
+                // for every reconnect. This also carries EARNED SKEPTICISM: a
+                // route that collapsed to K=1/paclen=64 stays remembered as
+                // marginal instead of resetting to optimism on retry, which is
+                // the safe direction for a link that just failed.
                 let dest = session.remoteAddress.display.uppercased()
                 let pathSig = session.path.display
                 let routeKey = RouteAdaptiveKey(
                     destination: canonicalDestination(dest),
                     pathSignature: pathSig
                 )
-                if let cached = self.adaptiveCache.removeValue(forKey: routeKey) {
-                    let sessionID = self.adaptiveSessionID(destination: routeKey.destination, path: routeKey.pathSignature)
-                    self.adaptiveStatusStore.removeSession(id: sessionID)
+                let sessionID = self.adaptiveSessionID(destination: routeKey.destination, path: routeKey.pathSignature)
+                self.adaptiveStatusStore.removeSession(id: sessionID)
+                let pathDesc = pathSig.isEmpty ? "direct" : "via \(pathSig)"
+                if let cached = self.adaptiveCache[routeKey] {
                     let cachedSnap = AdaptiveSnapshot(from: cached.settings)
-                    let defaults = TxAdaptiveSettings()
-                    let defaultSnap = AdaptiveSnapshot(from: defaults)
-                    let pathDesc = pathSig.isEmpty ? "direct" : "via \(pathSig)"
+                    let defaultSnap = AdaptiveSnapshot(from: TxAdaptiveSettings())
                     if cachedSnap.k != defaultSnap.k || cachedSnap.p != defaultSnap.p
                         || cachedSnap.n2 != defaultSnap.n2
                         || (cachedSnap.rto != nil && cachedSnap.rto != defaultSnap.rto)
                     {
+                        let ttlMinutes = Int(Self.adaptiveCacheTTLSeconds / 60)
                         self.packetEngine?.appendSystemNotification(
-                            "Adaptive: Reset to defaults (session disconnected: \(dest) \(pathDesc))"
+                            "Adaptive: Session ended — learned parameters kept \(ttlMinutes) min for reconnect (\(dest) \(pathDesc))"
                         )
                     } else {
                         self.packetEngine?.appendSystemNotification(
@@ -695,9 +812,6 @@ final class SessionCoordinator: ObservableObject {
                         )
                     }
                 } else {
-                    let sessionID = self.adaptiveSessionID(destination: routeKey.destination, path: routeKey.pathSignature)
-                    self.adaptiveStatusStore.removeSession(id: sessionID)
-                    let pathDesc = pathSig.isEmpty ? "direct" : "via \(pathSig)"
                     self.packetEngine?.appendSystemNotification(
                         "Adaptive: Session ended (\(dest) \(pathDesc))"
                     )

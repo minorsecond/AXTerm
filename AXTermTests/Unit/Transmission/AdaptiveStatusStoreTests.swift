@@ -38,6 +38,103 @@ final class AdaptiveStatusStoreTests: XCTestCase {
         XCTAssertEqual(store.effectiveAdaptive?.n2, 15)
     }
 
+    /// The store must surface the controller's learning state — the smoothed
+    /// metrics decisions are actually made on, the streak progress toward the
+    /// next upgrade, the probation trial, and the what-happened counters —
+    /// so the UI can show its work (CLAUDE.md: tooltips must explain WHY).
+    func testSessionParamsCarryLearningStateAndMetrics() {
+        let store = AdaptiveStatusStore()
+        var settings = TxAdaptiveSettings()
+        // Earn an upgrade (opens probation) then take a hit (rollback).
+        for _ in 0..<10 {
+            settings.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: 2.0, newFrames: 1, retransmits: 0)
+        }
+        let probationRemaining = settings.probation?.framesRemaining
+        XCTAssertNotNil(probationRemaining, "precondition: upgrade opened a trial")
+
+        store.updateSession(
+            id: "KB5YZB-7|DRLNOD", destination: "KB5YZB-7", pathSignature: "DRLNOD",
+            settings: settings, lossRate: 0.0, etx: 1.0, srtt: 2.0, updatedAt: Date()
+        )
+
+        let params = store.sessionAdaptiveByID["KB5YZB-7|DRLNOD"]
+        XCTAssertEqual(params?.smoothedLoss ?? -1, settings.lossRateEWMA ?? -2, accuracy: 0.0001,
+                       "the store carries the EWMA the controller decides on")
+        XCTAssertEqual(params?.smoothedEtx ?? -1, settings.etxEWMA ?? -2, accuracy: 0.0001)
+        XCTAssertEqual(params?.successStreak, settings.successStreak)
+        XCTAssertEqual(params?.upgradeStreakRequirement, settings.upgradeStreakRequirement)
+        XCTAssertEqual(params?.probationFramesRemaining, probationRemaining,
+                       "an upgrade on trial is visible to the user")
+        XCTAssertEqual(params?.metrics, settings.metrics)
+        XCTAssertEqual(params?.metrics.upgradesAttempted, 1)
+    }
+
+    func testGlobalParamsCarryLearningStateAndMetrics() {
+        let store = AdaptiveStatusStore()
+        var settings = TxAdaptiveSettings()
+        settings.updateFromLinkQuality(lossRate: 0.4, etx: 3.0, srtt: nil, newFrames: 0, retransmits: 2)
+        store.updateGlobal(settings: settings, lossRate: 0.4, etx: 3.0, srtt: nil, updatedAt: Date())
+
+        let params = store.globalAdaptive
+        XCTAssertEqual(params?.smoothedLoss ?? -1, 0.4, accuracy: 0.0001)
+        XCTAssertNil(params?.probationFramesRemaining, "no trial open")
+        XCTAssertEqual(params?.metrics.retransmitsSeen, 2)
+    }
+
+    // MARK: - Learning narrative (the user-facing "show your work" strings)
+
+    private func params(from settings: TxAdaptiveSettings) -> AdaptiveParams {
+        AdaptiveParams(settings: settings, lossRate: nil, etx: nil, srtt: nil,
+                       updatedAt: Date(), destination: nil, pathSignature: nil)
+    }
+
+    func testNarrativeDuringProbationExplainsTheTrial() {
+        var settings = TxAdaptiveSettings()
+        for _ in 0..<10 {
+            settings.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: nil, newFrames: 1, retransmits: 0)
+        }
+        let narrative = params(from: settings).learningNarrative
+        XCTAssertTrue(narrative.contains("trial"),
+                      "an upgrade on trial must say so: \(narrative)")
+        XCTAssertTrue(narrative.contains("10"),
+                      "and say how many clean frames confirm it: \(narrative)")
+    }
+
+    func testNarrativeShowsStreakProgressTowardUpgrade() {
+        var settings = TxAdaptiveSettings()
+        for _ in 0..<4 {
+            settings.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: nil, newFrames: 1, retransmits: 0)
+        }
+        let narrative = params(from: settings).learningNarrative
+        XCTAssertTrue(narrative.contains("4") && narrative.contains("10"),
+                      "streak progress reads as N of M: \(narrative)")
+    }
+
+    func testNarrativeWithNoEvidenceSaysSo() {
+        let narrative = params(from: TxAdaptiveSettings()).learningNarrative
+        XCTAssertTrue(narrative.lowercased().contains("no") || narrative.lowercased().contains("waiting"),
+                      "no evidence must never read as a verdict: \(narrative)")
+    }
+
+    func testActivitySummaryCountsWhatHappened() {
+        var settings = TxAdaptiveSettings()
+        // Upgrade (attempt 1) then failure during trial (rollback 1).
+        for _ in 0..<10 {
+            settings.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: nil, newFrames: 1, retransmits: 0)
+        }
+        settings.updateFromLinkQuality(lossRate: 0.5, etx: 4.0, srtt: nil, newFrames: 0, retransmits: 1)
+
+        let summary = params(from: settings).activitySummary
+        XCTAssertTrue(summary.contains("1 upgrade"), summary)
+        XCTAssertTrue(summary.contains("1 rolled back"), summary)
+    }
+
+    func testActivitySummaryQuietWhenNothingHappened() {
+        let summary = params(from: TxAdaptiveSettings()).activitySummary
+        XCTAssertTrue(summary.lowercased().contains("no"),
+                      "an idle controller reports idleness, not zeros: \(summary)")
+    }
+
     func testSessionHistoryIsCappedToTenMinutes() {
         let store = AdaptiveStatusStore()
         let now = Date()

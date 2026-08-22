@@ -68,6 +68,14 @@ nonisolated struct AX25SessionConfig: Sendable {
     /// Whether adaptive timeout estimation is enabled
     let adaptiveTimeout: Bool
 
+    /// A FULL-PATH initial RTO learned for one specific route (destination +
+    /// path). When present it IS the seed, verbatim — never hop-scaled,
+    /// because the learned value already includes digipeater delay. Exactly
+    /// one writer exists: the adaptive per-route cache-hit branch (adaptive
+    /// on, TTL-fresh entry). Nil everywhere else, including merged configs —
+    /// a route-specific RTO has no meaning across mixed routes.
+    let learnedPathRto: Double?
+
     /// Sequence number modulo (8 or 128)
     var modulo: Int { extended ? 128 : 8 }
 
@@ -80,7 +88,8 @@ nonisolated struct AX25SessionConfig: Sendable {
         rtoMin: Double? = nil,
         rtoMax: Double? = nil,
         initialRto: Double? = nil,
-        adaptiveTimeout: Bool = true
+        adaptiveTimeout: Bool = true,
+        learnedPathRto: Double? = nil
     ) {
         // Clamp window size to valid range
         let maxWindow = extended ? 127 : 7
@@ -94,6 +103,7 @@ nonisolated struct AX25SessionConfig: Sendable {
         self.rtoMax = rtoMax
         self.initialRto = initialRto
         self.adaptiveTimeout = adaptiveTimeout
+        self.learnedPathRto = learnedPathRto
     }
 }
 
@@ -389,7 +399,16 @@ nonisolated struct BufferedIFrame: Sendable {
 /// Handles state transitions and generates actions in response to events
 nonisolated struct AX25StateMachine: Sendable {
     /// Current session state
-    private(set) var state: AX25SessionState = .disconnected
+    private(set) var state: AX25SessionState = .disconnected {
+        didSet { if state == .connected { hasEverConnected = true } }
+    }
+
+    /// Distinguishes a session that ENDED (connected once, now
+    /// disconnected/error) from one that merely hasn't started yet — both
+    /// read .disconnected, but only the former is a stale carcass that a
+    /// reconnect must replace. A fresh session with queued data awaiting its
+    /// first SABM must never be discarded.
+    private(set) var hasEverConnected = false
 
     /// Session configuration (fixed at connection start; never changed mid-session to avoid corrupting in-flight data).
     let config: AX25SessionConfig

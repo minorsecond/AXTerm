@@ -171,11 +171,17 @@ nonisolated final class AX25Session: @unchecked Sendable {
         // (2m+1) for m digis. Only the pre-sample seed is scaled: in adaptive mode
         // the first RTT sample (SABM→UA) replaces it entirely, and the timers'
         // rtoMax clamp still bounds it.
+        //
+        // A learned full-path RTO for this exact route supersedes the scaled
+        // guess VERBATIM — it already includes the digipeater delay, so the
+        // hop multiplier must never apply on top (that would double-count the
+        // path). Strict either/or; no mixing of the two seed semantics.
         let hopMultiplier = Double(2 * path.digis.count + 1)
+        let seed = config.learnedPathRto ?? (config.initialRto ?? 4.0) * hopMultiplier
         self.timers = AX25SessionTimers(
             rtoMin: config.rtoMin ?? 1.0,
             rtoMax: config.rtoMax ?? 30.0,
-            initialRto: (config.initialRto ?? 4.0) * hopMultiplier,
+            initialRto: seed,
             adaptiveTimeout: config.adaptiveTimeout
         )
         self.statistics = AX25SessionStatistics()
@@ -203,6 +209,14 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// Current session state
     var state: AX25SessionState {
         stateMachine.state
+    }
+
+    /// True once this session has reached .connected at least once — the
+    /// marker that separates an ENDED session (a reconnect must replace it)
+    /// from a fresh one still awaiting its first SABM (must be kept, along
+    /// with its queued data).
+    var hasEverConnected: Bool {
+        stateMachine.hasEverConnected
     }
 
     /// Current send sequence number V(S)
@@ -641,6 +655,34 @@ final class AX25SessionManager: ObservableObject {
     }
 
     /// Remove a session
+    /// Drop a session that has already ENDED so a reconnect under the same
+    /// key gets a fresh session — fresh config, fresh timers, fresh evidence
+    /// counters. "Ended" means it terminated after running (.error, from any
+    /// prior life) or completed a full connect/disconnect cycle — NOT a fresh
+    /// session still awaiting its first SABM, whose queued data must survive.
+    /// Live sessions are untouched. Returns any pending outbound data the
+    /// carcass was still holding so the caller can re-queue it on the fresh
+    /// session instead of silently dropping it.
+    @discardableResult
+    private func discardEndedSession(
+        for destination: AX25Address, path: DigiPath, channel: UInt8
+    ) -> [(data: Data, pid: UInt8, displayInfo: String?)] {
+        let key = SessionKey(destination: destination, path: path, channel: channel)
+        guard let stale = sessions[key],
+              stale.state == .error
+                || (stale.state == .disconnected && stale.hasEverConnected) else { return [] }
+        stopT1Timer(for: stale)
+        stopT3Timer(for: stale)
+        removeSession(stale)
+        TxLog.debug(.session, "Discarded ended session for reconnect", [
+            "peer": destination.display,
+            "state": stale.state.rawValue,
+            "session": String(stale.id.uuidString.prefix(8)),
+            "orphanedQueue": stale.pendingDataQueue.count
+        ])
+        return stale.pendingDataQueue
+    }
+
     func removeSession(_ session: AX25Session) {
         sessions.removeValue(forKey: session.key)
 
@@ -803,7 +845,17 @@ final class AX25SessionManager: ObservableObject {
             return nil
         }
 
+        // Never reconnect through a dead session's carcass: its config (and
+        // therefore the learned-RTO seed) was baked in at creation, and its
+        // timers still hold the backed-off RTO it died with — after N2
+        // exhaustion that is rtoMax, making the RETRY maximally sluggish.
+        // Drop it so session(for:) builds a fresh one through
+        // getConfigForDestination with current learned state; any data the
+        // carcass was still holding rides along.
+        let orphanedQueue = discardEndedSession(for: destination, path: path, channel: channel)
+
         let session = session(for: destination, path: path, channel: channel)
+        session.pendingDataQueue.append(contentsOf: orphanedQueue)
 
         guard session.state == .disconnected || session.state == .error else {
             TxLog.warning(.session, "Cannot connect: session not disconnected", [
@@ -1093,7 +1145,13 @@ final class AX25SessionManager: ObservableObject {
             "channel": channel
         ])
 
-        // Create session if it doesn't exist (we're the responder)
+        // Create session if it doesn't exist (we're the responder). A LIVE
+        // existing session is reused — SABM into a connected session is the
+        // spec's link reset and belongs to the state machine. A DEAD one is
+        // replaced: (.error, .receivedSABM) has no transition at all, so the
+        // carcass would answer the peer's fresh connect with silence, and its
+        // stale config/timers predate the route's current learned state.
+        discardEndedSession(for: source, path: path, channel: channel)
         let key = SessionKey(destination: source, path: path, channel: channel)
 
         let session: AX25Session
@@ -1651,6 +1709,11 @@ final class AX25SessionManager: ObservableObject {
         debugDumpSessionState(session, context: "inbound-I")
         checkInvariants(session: session)
 
+        // The piggybacked N(R) is an acknowledgement like any other — without
+        // this, a peer that never sends standalone RRs (the BBS pattern)
+        // starves the adaptive controller of evidence entirely.
+        emitLinkQualitySampleIfNeeded(for: session)
+
         return responseFrame
     }
 
@@ -1825,6 +1888,9 @@ final class AX25SessionManager: ObservableObject {
                 ])
                 onSessionStateChanged?(session, .connected, session.state)
                 responseFrames.append(contentsOf: processActions(failureActions, for: session))
+                // Final evidence flush: the retransmissions that exhausted N2
+                // are the loss the next attempt on this route must know about.
+                emitLinkQualitySampleIfNeeded(for: session)
                 return responseFrames
             }
 
@@ -1846,44 +1912,58 @@ final class AX25SessionManager: ObservableObject {
 
         checkInvariants(session: session)
 
-        // Feed link quality sample into adaptive settings (session-based learning).
-        //
-        // Only with real evidence: the session must be connected and must have
-        // put at least one I-frame on the air. Without the gate, RR polls from
-        // a peer's stale session arriving while we were still CONNECTING (four
-        // unanswered SABMs deep) produced loss=0/0 → "Good link quality" —
-        // adaptive announcing a great link to a station we could not reach at
-        // all (field capture 2026-08-22). SABMs are not part of the loss
-        // metric, so a session with no I-frame history has no data to learn from.
-        //
-        // Delta-based (spec 4.2): each sample covers only what happened since
-        // the previous one, so the EWMA in the link controller sees time-local
-        // evidence. A poll that changed nothing emits nothing — previously
-        // every RR produced a sample from the same session-lifetime ratio.
-        if session.state == .connected, session.statistics.framesSent > 0 {
-            let deltaSent = session.statistics.framesSent - session.lastSampledFramesSent
-            let deltaRetrans = session.statistics.retransmissions - session.lastSampledRetransmissions
-            if deltaSent > 0 || deltaRetrans > 0 {
-                session.lastSampledFramesSent = session.statistics.framesSent
-                session.lastSampledRetransmissions = session.statistics.retransmissions
-                // Fraction of this sample's transmissions that were repeats —
-                // bounded [0, 1), unlike the old retransmissions/framesSent
-                // which exceeded 1.0 whenever a frame needed several tries.
-                let transmissions = deltaSent + deltaRetrans
-                let lossRate = Double(deltaRetrans) / Double(max(1, transmissions))
-                let delivery = max(0.05, 1.0 - lossRate)
-                let etx = 1.0 / (delivery * delivery)
-                onLinkQualitySample?(session, LinkQualitySample(
-                    lossRate: lossRate,
-                    etx: etx,
-                    srtt: session.timers.srtt,
-                    newFrames: deltaSent,
-                    retransmits: deltaRetrans
-                ))
-            }
-        }
+        emitLinkQualitySampleIfNeeded(for: session)
 
         return responseFrames
+    }
+
+    /// Feed link-quality evidence into the adaptive settings (session-based
+    /// learning). Called from EVERY inbound path that can advance V(A) or
+    /// trigger retransmission — I-frames (piggybacked N(R)), RR, RNR and REJ.
+    ///
+    /// A chatty peer such as a BBS acks almost exclusively by piggybacking
+    /// N(R) on its own I-frames; sampling only in the RR handler starved the
+    /// controller for whole sessions (field capture 2026-08-22, YZBBPQ).
+    ///
+    /// Only with real evidence: the session must be connected and must have
+    /// put at least one I-frame on the air. Without the gate, RR polls from
+    /// a peer's stale session arriving while we were still CONNECTING (four
+    /// unanswered SABMs deep) produced loss=0/0 → "Good link quality" —
+    /// adaptive announcing a great link to a station we could not reach at
+    /// all (field capture 2026-08-22). SABMs are not part of the loss
+    /// metric, so a session with no I-frame history has no data to learn from.
+    ///
+    /// Delta-based (spec 4.2): each sample covers only what happened since
+    /// the previous one, so the EWMA in the link controller sees time-local
+    /// evidence. An inbound frame that changed nothing emits nothing.
+    private func emitLinkQualitySampleIfNeeded(for session: AX25Session) {
+        // .error is included so a dying link's terminal retransmissions still
+        // reach the controller — that loss is exactly the evidence that should
+        // make the next attempt on this route skeptical.
+        guard session.state == .connected || session.state == .error,
+              session.statistics.framesSent > 0 else { return }
+        // The statistics counters are monotonic by design; clamp anyway so a
+        // broken invariant degrades to a missed sample, never to negative
+        // evidence or a loss rate above 1 handed to the controller.
+        let deltaSent = max(0, session.statistics.framesSent - session.lastSampledFramesSent)
+        let deltaRetrans = max(0, session.statistics.retransmissions - session.lastSampledRetransmissions)
+        guard deltaSent > 0 || deltaRetrans > 0 else { return }
+        session.lastSampledFramesSent = session.statistics.framesSent
+        session.lastSampledRetransmissions = session.statistics.retransmissions
+        // Fraction of this sample's transmissions that were repeats —
+        // bounded [0, 1), unlike the old retransmissions/framesSent
+        // which exceeded 1.0 whenever a frame needed several tries.
+        let transmissions = deltaSent + deltaRetrans
+        let lossRate = Double(deltaRetrans) / Double(max(1, transmissions))
+        let delivery = max(0.05, 1.0 - lossRate)
+        let etx = 1.0 / (delivery * delivery)
+        onLinkQualitySample?(session, LinkQualitySample(
+            lossRate: lossRate,
+            etx: etx,
+            srtt: session.timers.srtt,
+            newFrames: deltaSent,
+            retransmits: deltaRetrans
+        ))
     }
 
     func handleInboundRR(
@@ -2018,6 +2098,7 @@ final class AX25SessionManager: ObservableObject {
 
         let frames = processActions(actions, for: session)
         checkInvariants(session: session)
+        emitLinkQualitySampleIfNeeded(for: session)
         return frames
     }
 
@@ -2159,6 +2240,11 @@ final class AX25SessionManager: ObservableObject {
             let updatedFrame = frame.withUpdatedNR(session.vr)
             frames.append(updatedFrame)
         }
+
+        // REJ-driven retransmission is loss evidence the controller must hear
+        // even when the peer never sends a standalone RR afterwards.
+        emitLinkQualitySampleIfNeeded(for: session)
+
         return frames
     }
 
@@ -2207,6 +2293,12 @@ final class AX25SessionManager: ObservableObject {
             axDebugPrint("[DEBUG:AX25:T1] retransmit | va=\(session.va) vs=\(session.vs) vr=\(session.vr) outstanding=\(session.outstandingCount) sendBufKeys=\(session.sendBuffer.keys.sorted())")
             frames.append(contentsOf: retransmitOutstandingFrames(for: session, from: session.va, reason: "T1-timeout", preservePollFinal: false, forcePollOnFirst: true))
         }
+
+        // Loss evidence must be TIMELY: a T1 retransmission reaches the
+        // controller now, not when the next inbound frame happens to arrive —
+        // a degrading link is exactly the case where inbound traffic stops.
+        // On N2 exhaustion (state == .error) this is the final evidence flush.
+        emitLinkQualitySampleIfNeeded(for: session)
 
         return frames
     }

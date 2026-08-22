@@ -265,16 +265,23 @@ final class AdaptiveSettingsTests: XCTestCase {
         XCTAssertEqual(settings.windowSize.adaptiveReason, "Good link quality")
         XCTAssertEqual(settings.successStreak, 5, "anti-rocket: streak resets to 5 after an upgrade")
 
-        // The very next clean sample must NOT upgrade again (streak is 6).
+        // The very next clean sample must NOT upgrade again (streak is 6, and
+        // the first upgrade's probation trial is still running).
         settings.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: nil, newFrames: 1, retransmits: 0)
         XCTAssertEqual(settings.windowSize.currentAdaptive, 3)
         XCTAssertEqual(settings.paclen.currentAdaptive, 192)
 
-        // Four more clean frames complete the half-streak → next notch.
-        for _ in 0..<4 {
+        // Nine more clean frames finish the 10-frame probation trial (streak
+        // is also ≥ 10 again); the NEXT sample may then open the second probe.
+        for _ in 0..<9 {
             settings.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: nil, newFrames: 1, retransmits: 0)
         }
-        XCTAssertEqual(settings.windowSize.currentAdaptive, 4, "second upgrade after the reset streak refills")
+        XCTAssertNil(settings.probation, "first upgrade confirmed")
+        XCTAssertEqual(settings.windowSize.currentAdaptive, 3,
+                       "a confirmation sample must not immediately stack the next probe")
+
+        settings.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: nil, newFrames: 1, retransmits: 0)
+        XCTAssertEqual(settings.windowSize.currentAdaptive, 4, "second upgrade after trial + streak")
         XCTAssertEqual(settings.paclen.currentAdaptive, 256)
 
         // K caps at 4 and paclen at 256 no matter how long the streak runs.
@@ -424,6 +431,18 @@ final class AdaptiveSettingsTests: XCTestCase {
                     XCTAssertGreaterThanOrEqual(rto, settings.rtoMin.effectiveValue, ctx)
                     XCTAssertLessThanOrEqual(rto, settings.rtoMax.effectiveValue, ctx)
                 }
+                XCTAssertTrue([10, 20, 40].contains(settings.upgradeStreakRequirement),
+                              "\(ctx): skepticism \(settings.upgradeStreakRequirement) off the ladder")
+                if let trial = settings.probation {
+                    XCTAssertTrue((1...10).contains(trial.framesRemaining),
+                                  "\(ctx): trial frames \(trial.framesRemaining) out of range")
+                    XCTAssertGreaterThanOrEqual(trial.priorWindow, 1, ctx)
+                    XCTAssertTrue([64, 128, 192, 256].contains(trial.priorPaclen), ctx)
+                }
+                XCTAssertGreaterThanOrEqual(settings.metrics.upgradesAttempted,
+                                            settings.metrics.upgradesConfirmed + settings.metrics.probeRollbacks
+                                            - (settings.probation == nil ? 0 : 1),
+                                            "\(ctx): every confirmation/rollback traces to an attempt")
             }
         }
     }
