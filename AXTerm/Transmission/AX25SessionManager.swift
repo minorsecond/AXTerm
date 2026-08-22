@@ -1657,6 +1657,11 @@ final class AX25SessionManager: ObservableObject {
         debugDumpSessionState(session, context: "inbound-I")
         checkInvariants(session: session)
 
+        // The piggybacked N(R) is an acknowledgement like any other — without
+        // this, a peer that never sends standalone RRs (the BBS pattern)
+        // starves the adaptive controller of evidence entirely.
+        emitLinkQualitySampleIfNeeded(for: session)
+
         return responseFrame
     }
 
@@ -1852,44 +1857,51 @@ final class AX25SessionManager: ObservableObject {
 
         checkInvariants(session: session)
 
-        // Feed link quality sample into adaptive settings (session-based learning).
-        //
-        // Only with real evidence: the session must be connected and must have
-        // put at least one I-frame on the air. Without the gate, RR polls from
-        // a peer's stale session arriving while we were still CONNECTING (four
-        // unanswered SABMs deep) produced loss=0/0 → "Good link quality" —
-        // adaptive announcing a great link to a station we could not reach at
-        // all (field capture 2026-08-22). SABMs are not part of the loss
-        // metric, so a session with no I-frame history has no data to learn from.
-        //
-        // Delta-based (spec 4.2): each sample covers only what happened since
-        // the previous one, so the EWMA in the link controller sees time-local
-        // evidence. A poll that changed nothing emits nothing — previously
-        // every RR produced a sample from the same session-lifetime ratio.
-        if session.state == .connected, session.statistics.framesSent > 0 {
-            let deltaSent = session.statistics.framesSent - session.lastSampledFramesSent
-            let deltaRetrans = session.statistics.retransmissions - session.lastSampledRetransmissions
-            if deltaSent > 0 || deltaRetrans > 0 {
-                session.lastSampledFramesSent = session.statistics.framesSent
-                session.lastSampledRetransmissions = session.statistics.retransmissions
-                // Fraction of this sample's transmissions that were repeats —
-                // bounded [0, 1), unlike the old retransmissions/framesSent
-                // which exceeded 1.0 whenever a frame needed several tries.
-                let transmissions = deltaSent + deltaRetrans
-                let lossRate = Double(deltaRetrans) / Double(max(1, transmissions))
-                let delivery = max(0.05, 1.0 - lossRate)
-                let etx = 1.0 / (delivery * delivery)
-                onLinkQualitySample?(session, LinkQualitySample(
-                    lossRate: lossRate,
-                    etx: etx,
-                    srtt: session.timers.srtt,
-                    newFrames: deltaSent,
-                    retransmits: deltaRetrans
-                ))
-            }
-        }
+        emitLinkQualitySampleIfNeeded(for: session)
 
         return responseFrames
+    }
+
+    /// Feed link-quality evidence into the adaptive settings (session-based
+    /// learning). Called from EVERY inbound path that can advance V(A) or
+    /// trigger retransmission — I-frames (piggybacked N(R)), RR, RNR and REJ.
+    ///
+    /// A chatty peer such as a BBS acks almost exclusively by piggybacking
+    /// N(R) on its own I-frames; sampling only in the RR handler starved the
+    /// controller for whole sessions (field capture 2026-08-22, YZBBPQ).
+    ///
+    /// Only with real evidence: the session must be connected and must have
+    /// put at least one I-frame on the air. Without the gate, RR polls from
+    /// a peer's stale session arriving while we were still CONNECTING (four
+    /// unanswered SABMs deep) produced loss=0/0 → "Good link quality" —
+    /// adaptive announcing a great link to a station we could not reach at
+    /// all (field capture 2026-08-22). SABMs are not part of the loss
+    /// metric, so a session with no I-frame history has no data to learn from.
+    ///
+    /// Delta-based (spec 4.2): each sample covers only what happened since
+    /// the previous one, so the EWMA in the link controller sees time-local
+    /// evidence. An inbound frame that changed nothing emits nothing.
+    private func emitLinkQualitySampleIfNeeded(for session: AX25Session) {
+        guard session.state == .connected, session.statistics.framesSent > 0 else { return }
+        let deltaSent = session.statistics.framesSent - session.lastSampledFramesSent
+        let deltaRetrans = session.statistics.retransmissions - session.lastSampledRetransmissions
+        guard deltaSent > 0 || deltaRetrans > 0 else { return }
+        session.lastSampledFramesSent = session.statistics.framesSent
+        session.lastSampledRetransmissions = session.statistics.retransmissions
+        // Fraction of this sample's transmissions that were repeats —
+        // bounded [0, 1), unlike the old retransmissions/framesSent
+        // which exceeded 1.0 whenever a frame needed several tries.
+        let transmissions = deltaSent + deltaRetrans
+        let lossRate = Double(deltaRetrans) / Double(max(1, transmissions))
+        let delivery = max(0.05, 1.0 - lossRate)
+        let etx = 1.0 / (delivery * delivery)
+        onLinkQualitySample?(session, LinkQualitySample(
+            lossRate: lossRate,
+            etx: etx,
+            srtt: session.timers.srtt,
+            newFrames: deltaSent,
+            retransmits: deltaRetrans
+        ))
     }
 
     func handleInboundRR(
@@ -2024,6 +2036,7 @@ final class AX25SessionManager: ObservableObject {
 
         let frames = processActions(actions, for: session)
         checkInvariants(session: session)
+        emitLinkQualitySampleIfNeeded(for: session)
         return frames
     }
 
@@ -2165,6 +2178,11 @@ final class AX25SessionManager: ObservableObject {
             let updatedFrame = frame.withUpdatedNR(session.vr)
             frames.append(updatedFrame)
         }
+
+        // REJ-driven retransmission is loss evidence the controller must hear
+        // even when the peer never sends a standalone RR afterwards.
+        emitLinkQualitySampleIfNeeded(for: session)
+
         return frames
     }
 

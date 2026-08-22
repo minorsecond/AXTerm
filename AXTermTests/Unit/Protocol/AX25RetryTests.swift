@@ -345,6 +345,73 @@ final class AX25RetryTests: XCTestCase {
         XCTAssertEqual(samples, 1, "an acked I-frame is genuine link-quality evidence")
     }
 
+    /// Regression (field capture 2026-08-22, YZBBPQ BBS session): a chatty peer
+    /// acks almost exclusively by PIGGYBACKING N(R) on its own I-frames — a
+    /// standalone RR only appears when a T3 keepalive happens to elicit one.
+    /// The sample emitter lived only in the RR handler, so the adaptive
+    /// controller literally starved ("Waiting for evidence — no traffic
+    /// observed yet" with a live session flowing). Every path that advances
+    /// V(A) is link-quality evidence and must emit a sample.
+    func testPiggybackedAckOnInboundIFrameEmitsLinkQualitySample() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let destination = AX25Address(call: "KB5YZB", ssid: 7)
+        let path = DigiPath()
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        var samples: [LinkQualitySample] = []
+        manager.onLinkQualitySample = { _, sample in samples.append(sample) }
+
+        _ = manager.sendData(Data("mh 3\r".utf8), to: destination, path: path, channel: 0)
+        XCTAssertEqual(session.outstandingCount, 1)
+
+        // The peer's data frame carries nr=1 — our frame is acked by piggyback,
+        // no standalone RR ever arrives (the BBS pattern from the field log).
+        _ = manager.handleInboundIFrame(
+            from: destination, path: path, channel: 0,
+            ns: 0, nr: 1, pf: false, payload: Data("Welcome\r".utf8)
+        )
+
+        XCTAssertEqual(session.outstandingCount, 0, "precondition: the piggybacked N(R) acked our frame")
+        XCTAssertEqual(samples.count, 1,
+                       "a piggybacked ack is exactly as much evidence as a standalone RR")
+        XCTAssertEqual(samples.first?.newFrames, 1)
+        XCTAssertEqual(samples.first?.retransmits, 0)
+
+        // Further inbound I-frames with no new outbound evidence must NOT spam
+        // the controller — the delta gate still applies on this path.
+        _ = manager.handleInboundIFrame(
+            from: destination, path: path, channel: 0,
+            ns: 1, nr: 1, pf: false, payload: Data("Commands:\r".utf8)
+        )
+        XCTAssertEqual(samples.count, 1, "no new sent frames, no retransmits → no sample")
+    }
+
+    /// A REJ that triggers retransmission is LOSS evidence; the controller must
+    /// hear about it even when no standalone RR ever follows.
+    func testREJRetransmissionEmitsLossEvidenceSample() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let destination = AX25Address(call: "KB5YZB", ssid: 7)
+        let path = DigiPath()
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        var samples: [LinkQualitySample] = []
+        manager.onLinkQualitySample = { _, sample in samples.append(sample) }
+
+        _ = manager.sendData(Data("A".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("B".utf8), to: destination, path: path, channel: 0)
+        XCTAssertEqual(session.outstandingCount, 2)
+
+        // Peer rejects from 0: both frames retransmit — that is real loss evidence.
+        let frames = manager.handleInboundREJ(from: destination, path: path, channel: 0,
+                                              nr: 0, pf: false, isCommand: false)
+        XCTAssertFalse(frames.filter { $0.frameType == "i" }.isEmpty,
+                       "precondition: REJ triggered retransmission")
+        XCTAssertEqual(samples.count, 1, "REJ-driven retransmission is loss evidence")
+        XCTAssertGreaterThanOrEqual(samples.first?.retransmits ?? 0, 1)
+        XCTAssertGreaterThan(samples.first?.lossRate ?? 0, 0,
+                             "the sample must carry the loss the REJ revealed")
+    }
+
     /// Ack progress must reset the poll-retransmission ladder: a slow peer that
     /// DOES make progress, however marginal, is never declared failed.
     func testPollLadderResetsOnAckProgress() {
