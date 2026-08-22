@@ -713,6 +713,9 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         case .DM:
             sessionManager.handleInboundDM(from: from, path: path, channel: channel)
             updateCurrentSession()
+        case .FRMR:
+            sessionManager.handleInboundFRMR(from: from, path: path, channel: channel)
+            updateCurrentSession()
         case .DISC:
             if let responseFrame = sessionManager.handleInboundDISC(from: from, path: path, channel: channel) {
                 sendResponseFrame(responseFrame)

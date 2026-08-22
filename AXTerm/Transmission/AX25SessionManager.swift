@@ -1333,6 +1333,51 @@ final class AX25SessionManager: ObservableObject {
         _ = processActions(actions, for: session)
     }
 
+    /// Handle an inbound FRMR (frame reject).
+    ///
+    /// FRMR means the peer received something it considers an unrecoverable
+    /// protocol violation from us. Until this entry point existed, inbound
+    /// FRMR was decoded and displayed but silently ignored by the session
+    /// layer — the state machine's handler was dead code. The session moves to
+    /// .error and the operator is notified; reconnecting issues a fresh SABM,
+    /// which is the §6.4.10-sanctioned recovery for v2.0 peers.
+    func handleInboundFRMR(
+        from source: AX25Address,
+        path: DigiPath,
+        channel: UInt8
+    ) {
+        debugTrace("FRMR received", [
+            "from": source.display,
+            "path": path.display.isEmpty ? "(empty)" : path.display,
+            "channel": channel
+        ])
+        var session = existingSession(for: source, path: path, channel: channel)
+        if session == nil {
+            session = findAnySession(from: source, channel: channel)
+        }
+        if session == nil {
+            session = findAnySessionByCallsign(from: source, channel: channel)
+        }
+        guard let session = session else {
+            TxLog.warning(.session, "FRMR received for unknown session", ["from": source.display])
+            return
+        }
+
+        let oldState = session.state
+        let actions = session.stateMachine.handle(event: .receivedFRMR)
+
+        if oldState != session.state {
+            debugTrace("state change (FRMR)", [
+                "peer": source.display,
+                "from": oldState.rawValue,
+                "to": session.state.rawValue
+            ])
+            onSessionStateChanged?(session, oldState, session.state)
+        }
+        session.touch()
+        _ = processActions(actions, for: session)
+    }
+
     /// Handle an inbound DISC (disconnect request)
     func handleInboundDISC(
         from source: AX25Address,

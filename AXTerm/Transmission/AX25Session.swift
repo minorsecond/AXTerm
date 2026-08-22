@@ -719,7 +719,10 @@ nonisolated struct AX25StateMachine: Sendable {
         case (.connected, .receivedFRMR):
             state = .error
             TxLog.error(.ax25, "Protocol error", error: nil, ["reason": "FRMR received"])
-            return [.stopT3, .notifyError("Protocol error (FRMR received)")]
+            // Stop T1 as well: the session is dead, and a live T1 would fire a
+            // spurious retransmit/poll into the error state (same class of bug
+            // as the stale-timer fixes elsewhere).
+            return [.stopT1, .stopT3, .notifyError("Protocol error (FRMR received)")]
 
         case (.connected, .receivedDM):
             state = .disconnected

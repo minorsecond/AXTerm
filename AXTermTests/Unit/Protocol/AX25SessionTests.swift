@@ -336,6 +336,26 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(twoDigi.timers.rto, 20.0, accuracy: 0.01, "two digis: T1 × (2·2+1)")
     }
 
+    /// Inbound FRMR must reach the session layer. Until the manager grew
+    /// handleInboundFRMR, the state machine's FRMR handler was dead code: a
+    /// peer's frame-reject was decoded, displayed, and silently ignored while
+    /// we kept transmitting into a session the peer had declared broken.
+    func testInboundFRMRMovesSessionToErrorAndStopsTimers() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let destination = AX25Address(call: "KB5YZB", ssid: 7)
+        let path = DigiPath.from(["DRLNOD"])
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        // Outstanding I-frame so T1 is running when the FRMR lands.
+        _ = manager.sendData(Data("hello\r".utf8), to: destination, path: path, channel: 0)
+        XCTAssertNotNil(session.t1TimerTask, "precondition: T1 armed")
+
+        manager.handleInboundFRMR(from: destination, path: path, channel: 0)
+
+        XCTAssertEqual(session.state, .error, "FRMR is an unrecoverable protocol error")
+        XCTAssertNil(session.t1TimerTask, "a dead session must not keep retransmitting")
+    }
+
     /// The hop-scaled seed must respect rtoMax, and must only be a seed: the first
     /// RTT sample in adaptive mode replaces it with the measured estimate.
     func testHopScaledInitialRTOClampsAndYieldsToMeasuredRTT() {

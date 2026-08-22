@@ -1203,6 +1203,8 @@ final class SessionCoordinator: ObservableObject {
             sessionManager.handleInboundUA(from: from, path: path, channel: channel)
         case .DM:
             sessionManager.handleInboundDM(from: from, path: path, channel: channel)
+        case .FRMR:
+            sessionManager.handleInboundFRMR(from: from, path: path, channel: channel)
         case .DISC:
             if let response = sessionManager.handleInboundDISC(from: from, path: path, channel: channel) {
                 sendFrame(response)
