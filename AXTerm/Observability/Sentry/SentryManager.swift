@@ -52,8 +52,22 @@ final class SentryManager {
     /// Light sampling to avoid breadcrumb spam for decode successes.
     private var decodeSuccessCounter: Int = 0
 
+    /// Per-category breadcrumb flood control. Without it, per-packet crumbs on
+    /// a busy channel churn the ring buffer and evict the history a failure
+    /// event needs (measured ~7 crumbs/s on an ordinary session). Shared with
+    /// the nonisolated Telemetry backend so all crumbs draw from one pool.
+    private let breadcrumbBudget = SharedBreadcrumbBudget.shared
+
+    /// Collapses bursts of identical events (a garbled stream can otherwise
+    /// produce a capture per frame — a quota incident, not a diagnosis).
+    private var eventThrottle = EventThrottle()
+
     /// Session tracking interval (default: 30 seconds).
     private static let sessionTrackingIntervalMillis: UInt = 30_000
+
+    /// Breadcrumb ring buffer size. The SDK default (100) holds ~14 s of
+    /// history at measured packet-session crumb rates even after budgeting.
+    private static let maxBreadcrumbs: UInt = 300
 
     /// Keys to redact from events (case-insensitive partial match).
     private static let sensitiveKeys: Set<String> = [
@@ -78,6 +92,8 @@ final class SentryManager {
         }
         let config = SentryConfiguration.load(settings: settings)
         self.config = config
+        // Mirror the privacy opt-in for nonisolated telemetry paths.
+        TelemetryPrivacy.shared.allowPacketContents = config.sendPacketContents
         
     #if DEBUG
     logger.debug("Sentry startIfEnabled: enabledByUser=\(config.enabledByUser), dsnPresent=\(config.dsn != nil), shouldStart=\(config.shouldStart), env=\(config.environment)")
@@ -138,6 +154,11 @@ final class SentryManager {
         // Session tracking
         options.enableAutoSessionTracking = true
         options.sessionTrackingIntervalMillis = Self.sessionTrackingIntervalMillis
+
+        // Breadcrumb history: enough to cover the protocol sequence that led
+        // to a failure (T1 timeouts, REJ recovery, RNR stalls), not just the
+        // last fraction of a second.
+        options.maxBreadcrumbs = Self.maxBreadcrumbs
 
         // Stack traces for all events
         options.attachStacktrace = true
@@ -240,13 +261,33 @@ final class SentryManager {
     ) {
         guard started else { return }
         #if canImport(Sentry)
+        switch breadcrumbBudget.admit(category: category, level: level) {
+        case .drop:
+            return
+        case .allowAfterSuppressing(let suppressed):
+            let summary = Breadcrumb()
+            summary.level = mapBreadcrumbLevel(.warning)
+            summary.category = category
+            summary.message = "…\(suppressed) \(category) breadcrumb(s) suppressed by flood control"
+            SentrySDK.addBreadcrumb(summary)
+        case .allow:
+            break
+        }
+
         let crumb = Breadcrumb()
         crumb.level = mapBreadcrumbLevel(level)
         crumb.category = category
         crumb.message = message
-        crumb.data = data
+        crumb.data = redactContents(data)
         SentrySDK.addBreadcrumb(crumb)
         #endif
+    }
+
+    /// Strip over-the-air content unless the operator opted in via the
+    /// "send packet contents" setting. Applied to every breadcrumb and event
+    /// extra at this single chokepoint so no call site can leak by accident.
+    private func redactContents(_ data: [String: Any]?) -> [String: Any]? {
+        TelemetryContentRedactor.redact(data, allowContents: config?.sendPacketContents == true)
     }
 
     // MARK: - Error Capture
@@ -254,11 +295,12 @@ final class SentryManager {
     func capture(error: Error, context: String, level: SentryEventLevel = .error, extra: [String: Any]? = nil) {
         guard started else { return }
         #if canImport(Sentry)
+        let redacted = redactContents(extra)
         SentrySDK.capture(error: error) { scope in
             scope.setLevel(self.mapEventLevel(level))
             scope.setContext(value: ["context": context], key: "error_context")
-            if let extra {
-                for (key, value) in extra {
+            if let redacted {
+                for (key, value) in redacted {
                     scope.setExtra(value: value, key: key)
                 }
             }
@@ -269,15 +311,38 @@ final class SentryManager {
     func captureMessage(_ message: String, level: SentryEventLevel = .warning, extra: [String: Any]? = nil) {
         guard started else { return }
         #if canImport(Sentry)
+        let redacted = redactContents(extra)
         SentrySDK.capture(message: message) { scope in
             scope.setLevel(self.mapEventLevel(level))
-            if let extra {
-                for (key, value) in extra {
+            if let redacted {
+                for (key, value) in redacted {
                     scope.setExtra(value: value, key: key)
                 }
             }
         }
         #endif
+    }
+
+    /// Capture a repeatable event, collapsing identical bursts into one event
+    /// per window with a suppressed count. Use for anything a hostile input
+    /// stream can trigger per-frame.
+    func captureThrottled(
+        key: String,
+        message: String,
+        level: SentryEventLevel = .warning,
+        extra: [String: Any]? = nil
+    ) {
+        guard started else { return }
+        switch eventThrottle.admit(key: key, now: Date().timeIntervalSinceReferenceDate) {
+        case .drop:
+            return
+        case .allowAfterSuppressing(let suppressed):
+            var merged = extra ?? [:]
+            merged["suppressedSinceLastReport"] = suppressed
+            captureMessage(message, level: level, extra: merged)
+        case .allow:
+            captureMessage(message, level: level, extra: extra)
+        }
     }
 
     // MARK: - Performance Tracing
@@ -351,7 +416,37 @@ final class SentryManager {
         if let reason {
             extra["reason"] = reason
         }
-        captureMessage("Failed to decode AX.25 frame", level: .warning, extra: extra)
+        // Throttled per reason: a garbled stream fails once per frame, and one
+        // Sentry issue with a suppressed count diagnoses that better than a
+        // thousand identical events.
+        captureThrottled(
+            key: "decode.ax25.\(reason ?? "unknown")",
+            message: "Failed to decode AX.25 frame",
+            level: .warning,
+            extra: extra
+        )
+    }
+
+    /// Report a protocol/state invariant violation as a non-fatal event.
+    ///
+    /// In debug builds the adjacent assertion still traps so tests fail loudly;
+    /// in release this event is the ONLY signal that sequence state went bad —
+    /// previously the checks were compiled out and corruption was silent.
+    func captureInvariantViolation(_ message: String, extra: [String: Any]? = nil) {
+        captureThrottled(
+            key: "invariant.\(message)",
+            message: "Invariant violation: \(message)",
+            level: .error,
+            extra: extra
+        )
+    }
+
+    /// Report an event that permanently discarded received user data (e.g. the
+    /// receive-gap flush). These must be first-class events: the flush resets
+    /// the retry counter to keep the link alive, which suppresses the very
+    /// link-failure event that would otherwise have shipped the breadcrumbs.
+    func captureDataLoss(_ message: String, extra: [String: Any]? = nil) {
+        captureMessage("Data loss: \(message)", level: .error, extra: extra)
     }
 
     // MARK: - Database Helpers
