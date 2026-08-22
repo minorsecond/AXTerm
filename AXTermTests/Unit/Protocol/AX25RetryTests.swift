@@ -304,6 +304,62 @@ final class AX25RetryTests: XCTestCase {
         XCTAssertEqual(sm.sequenceState.vr, 2, "V(R) must advance past the lost frame")
     }
 
+    /// Regression (field capture 2026-08-22, KB5YZB-7): an RR that acknowledges
+    /// everything outstanding must not strip T1 from the I-frame the same call just
+    /// drained onto the air.
+    ///
+    /// The state machine's [stopT1, startT3] is computed while nothing is
+    /// outstanding, but the handler drained the queue (transmitting "bbs" and
+    /// starting T1) BEFORE executing those actions — so the stale stopT1 cancelled
+    /// the fresh frame's timer. Had the peer's ack been lost, the frame would have
+    /// hung unprotected until the 30 s T3 enquiry.
+    func testRRDrainedFrameKeepsItsT1Timer() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let destination = AX25Address(call: "KB5YZB", ssid: 7)
+        let path = DigiPath()
+
+        let session = connectSession(manager: manager, destination: destination, path: path)
+
+        // Fill the window so one chunk queues behind it.
+        let windowSize = session.stateMachine.config.windowSize
+        for i in 0...windowSize {
+            _ = manager.sendData(Data("F\(i)".utf8), to: destination, path: path, channel: 0)
+        }
+        XCTAssertEqual(session.pendingDataQueue.count, 1, "precondition: one chunk queued")
+
+        // Peer acks the whole window. The state machine sees outstanding == 0 and
+        // emits stopT1/startT3 — but the drain then transmits the queued chunk.
+        _ = manager.handleInboundRRFrames(
+            from: destination, path: path, channel: 0,
+            nr: windowSize, pf: true, isCommand: false
+        )
+
+        XCTAssertEqual(session.outstandingCount, 1, "the drained chunk is now outstanding")
+        XCTAssertNotNil(session.t1TimerTask,
+            "T1 must be running for the freshly drained frame — the pre-drain stopT1 is stale")
+    }
+
+    /// Same hazard on the UA path: data queued while connecting is drained on UA,
+    /// and the UA's stopT1 (aimed at the SABM timer) must not cancel the T1 that
+    /// the drain starts for the transmitted data.
+    func testUADrainedFrameKeepsItsT1Timer() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let destination = AX25Address(call: "N0HI", ssid: 7)
+        let path = DigiPath()
+
+        _ = manager.connect(to: destination, path: path, channel: 0)
+        let session = manager.session(for: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("EARLY".utf8), to: destination, path: path, channel: 0)
+        XCTAssertEqual(session.pendingDataQueue.count, 1, "precondition: data queued while connecting")
+
+        manager.handleInboundUA(from: destination, path: path, channel: 0)
+
+        XCTAssertEqual(session.state, .connected)
+        XCTAssertEqual(session.outstandingCount, 1, "queued data must be transmitted on connect")
+        XCTAssertNotNil(session.t1TimerTask,
+            "T1 must survive the UA's stale stopT1 — it now protects the drained frame")
+    }
+
     // Test that correct frames are retransmitted on REJ
     func testREJRetransmissions() {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))

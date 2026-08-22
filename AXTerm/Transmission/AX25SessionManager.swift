@@ -1206,6 +1206,15 @@ final class AX25SessionManager: ObservableObject {
             onSessionStateChanged?(session, oldState, session.state)
         }
 
+        // Execute the state machine's actions BEFORE draining. The UA actions
+        // include .stopT1 (cancelling the SABM timer) — computed when nothing was
+        // outstanding. The drain below can put fresh I-frames on the air and start
+        // T1 for them; running the stale stopT1 afterwards would cancel that timer
+        // and leave unacknowledged frames with no retransmit protection (field
+        // capture 2026-08-22: "Starting T1 timer" from the drain immediately
+        // followed by "Stopping T1 timer" from the stale action).
+        _ = processActions(actions, for: session)
+
         if session.state == .connected {
             session.connectedAt = Date()
             TxLog.sessionOpen(
@@ -1225,7 +1234,6 @@ final class AX25SessionManager: ObservableObject {
         }
 
         session.touch()
-        _ = processActions(actions, for: session)
     }
 
     /// Handle an inbound DM (disconnected mode)
@@ -1507,6 +1515,12 @@ final class AX25SessionManager: ObservableObject {
 
         onOutboundAckReceived?(session, session.va)
 
+        // Execute the state machine's actions BEFORE draining: the actions can carry
+        // .stopT1 (computed while nothing was outstanding), and the drain below may
+        // transmit fresh I-frames and start T1 for them. Running the stale stopT1
+        // after the drain cancels the timer protecting the new frames.
+        let responseFrame = processActions(actions, for: session).first
+
         if session.state == .connected && !session.hasReceiveSequenceGap && !session.pendingDataQueue.isEmpty {
             let queueBeforeDrain = session.pendingDataQueue.count
             drainPendingDataQueue(for: session)
@@ -1524,7 +1538,7 @@ final class AX25SessionManager: ObservableObject {
         debugDumpSessionState(session, context: "inbound-I")
         checkInvariants(session: session)
 
-        return processActions(actions, for: session).first
+        return responseFrame
     }
 
     /// Handle an inbound RR (receive ready)
@@ -1659,6 +1673,15 @@ final class AX25SessionManager: ObservableObject {
         // immediately sends every freshly drained frame twice.
         let outstandingBeforeDrain = session.outstandingCount
 
+        // Execute the state machine's actions BEFORE draining. The RR actions can
+        // carry .stopT1 (all frames acked at handle time); the drain below may put a
+        // fresh I-frame on the air and start T1 for it. Running the stale stopT1
+        // afterwards cancelled that timer and left the new frame with no retransmit
+        // protection until the T3 enquiry — observed live on 2026-08-22 when "bbs"
+        // was drained by an RR(F=1) and immediately stripped of its T1.
+        let actionFrames = processActions(actions, for: session)
+        var responseFrames = actionFrames
+
         // Drain pending queue now that window space freed (paclen-fragmented chunks)
         let queueBeforeDrain = session.pendingDataQueue.count
         drainPendingDataQueue(for: session)
@@ -1673,9 +1696,6 @@ final class AX25SessionManager: ObservableObject {
 
         // Deep debug snapshot whenever we advance ACK state from RR.
         debugDumpSessionState(session, context: isPoll ? "inbound-RR-poll" : "inbound-RR")
-
-        let actionFrames = processActions(actions, for: session)
-        var responseFrames = actionFrames
 
         if isPoll && session.state == .connected && outstandingBeforeDrain > 0 && vaAfter == vaBefore {
             TxLog.debug(.session, "RR poll made no ACK progress; retransmitting outstanding frames", [
