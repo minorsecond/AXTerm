@@ -85,10 +85,12 @@ nonisolated enum DatabaseManager {
             do {
                 let queue = try DatabaseQueue(path: urlPath)
                 try configureDatabase(queue)
-                breadcrumbOpenSuccess()
-                
-                // Run migrations first
+
+                // Run migrations BEFORE declaring the open successful: emitting
+                // the success crumb first produced the contradictory pair
+                // "open: success" → "open: failure" whenever a migration threw.
                 try migrator.migrate(queue)
+                breadcrumbOpenSuccess()
                 
                 // Enable incremental vacuum mode for automatic space reclamation
                 // Check if we need to enable it
@@ -326,64 +328,55 @@ nonisolated enum DatabaseManager {
         try db.create(index: "idx_events_level_category", on: AppEventRecord.databaseTableName, columns: ["level", "category"])
     }
 
+    /// Register a migration with full Sentry lifecycle reporting: a start
+    /// breadcrumb, then either a success breadcrumb or — previously impossible —
+    /// a failure breadcrumb plus a captured event naming the migration and
+    /// version. Before this, every call site hardcoded `success: true` and a
+    /// throwing migration surfaced only as a mislabeled "database open" failure.
+    private static func registerReportedMigration(
+        _ migrator: inout DatabaseMigrator,
+        version: Int,
+        name: String,
+        body: @escaping @Sendable (Database) throws -> Void
+    ) {
+        migrator.registerMigration(name) { db in
+            Task { @MainActor in
+                SentryManager.shared.addBreadcrumb(
+                    category: "db.migration",
+                    message: "Running migration v\(version) (\(name))",
+                    level: .info,
+                    data: nil
+                )
+            }
+            do {
+                try body(db)
+            } catch {
+                Task { @MainActor in
+                    SentryManager.shared.breadcrumbDatabaseMigration(version: version, success: false)
+                    SentryManager.shared.capturePersistenceFailure("migration v\(version) (\(name))", error: error)
+                }
+                throw error
+            }
+            Task { @MainActor in
+                SentryManager.shared.breadcrumbDatabaseMigration(version: version, success: true)
+            }
+        }
+    }
+
     /// Migrator with Sentry breadcrumbs dispatched asynchronously.
     static let migrator: DatabaseMigrator = {
         var migrator = DatabaseMigrator()
-        migrator.registerMigration("createPackets") { db in
-            Task { @MainActor in
-                SentryManager.shared.addBreadcrumb(
-                    category: "db.migration",
-                    message: "Running migration v1 (createPackets)",
-                    level: .info,
-                    data: nil
-                )
-            }
+        registerReportedMigration(&migrator, version: 1, name: "createPackets") { db in
             try createPacketsTable(db)
-            Task { @MainActor in
-                SentryManager.shared.breadcrumbDatabaseMigration(version: 1, success: true)
-            }
         }
-        migrator.registerMigration("createConsoleRawEvents") { db in
-            Task { @MainActor in
-                SentryManager.shared.addBreadcrumb(
-                    category: "db.migration",
-                    message: "Running migration v2 (createConsoleRawEvents)",
-                    level: .info,
-                    data: nil
-                )
-            }
+        registerReportedMigration(&migrator, version: 2, name: "createConsoleRawEvents") { db in
             try createConsoleRawEventsTables(db)
-            Task { @MainActor in
-                SentryManager.shared.breadcrumbDatabaseMigration(version: 2, success: true)
-            }
         }
-        migrator.registerMigration("addControlFieldColumns") { db in
-            Task { @MainActor in
-                SentryManager.shared.addBreadcrumb(
-                    category: "db.migration",
-                    message: "Running migration v3 (addControlFieldColumns)",
-                    level: .info,
-                    data: nil
-                )
-            }
+        registerReportedMigration(&migrator, version: 3, name: "addControlFieldColumns") { db in
             try addControlFieldColumns(db)
-            Task { @MainActor in
-                SentryManager.shared.breadcrumbDatabaseMigration(version: 3, success: true)
-            }
         }
-        migrator.registerMigration("fixControlFieldDecoding") { db in
-            Task { @MainActor in
-                SentryManager.shared.addBreadcrumb(
-                    category: "db.migration",
-                    message: "Running migration v4 (fixControlFieldDecoding)",
-                    level: .info,
-                    data: nil
-                )
-            }
+        registerReportedMigration(&migrator, version: 4, name: "fixControlFieldDecoding") { db in
             try fixControlFieldDecoding(db)
-            Task { @MainActor in
-                SentryManager.shared.breadcrumbDatabaseMigration(version: 4, success: true)
-            }
         }
         return migrator
     }()
