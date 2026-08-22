@@ -925,6 +925,22 @@ final class AX25SessionManager: ObservableObject {
                 return frames
             }
 
+            // FIFO discipline: if older data is already queued, new chunks must go
+            // behind it — transmitting them now would put newer bytes on the air
+            // ahead of older ones and reorder the stream at the peer. (Caught by
+            // AX25FieldFuzzTests: 12 queued messages arrived as 0,1,2,3,11,10,9,8,…)
+            // Append and drain instead, so the oldest data claims the free window
+            // slots; drained frames go out via onSendFrame.
+            guard session.pendingDataQueue.isEmpty else {
+                for (i, chunk) in chunks.enumerated() {
+                    let info = (i == 0) ? displayInfo : nil
+                    session.pendingDataQueue.append((data: chunk, pid: pid, displayInfo: info))
+                }
+                drainPendingDataQueue(for: session)
+                checkInvariants(session: session)
+                return frames
+            }
+
             // Send chunks that fit in window; queue the rest.
             //
             // Audit B1 fix: AIMD window must be respected in the direct-send path, not only
@@ -971,7 +987,11 @@ final class AX25SessionManager: ObservableObject {
                     startT1Timer(for: session)
                 }
             }
-            session.pendingDataQueue.insert(contentsOf: remaining, at: 0)
+            // Append, never prepend: the queue was empty when this call started
+            // (guard above), and any chunks another path queues concurrently are
+            // older than these. insert(at: 0) here reversed message order across
+            // successive sendData calls once the window filled.
+            session.pendingDataQueue.append(contentsOf: remaining)
             if !remaining.isEmpty {
                 axDebugPrint("[DEBUG:AX25:SEND] queued remaining | count=\(remaining.count) queueDepth=\(session.pendingDataQueue.count)")
                 TxLog.debug(.session, "Window filled, queued remaining chunks", [
