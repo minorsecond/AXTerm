@@ -56,7 +56,6 @@ struct AnalyticsDashboardView: View {
         let minEdgeCount: Int
         let maxNodes: Int
         let focusState: GraphFocusState
-        let ignoredServiceEndpoints: [String]
         let simulationSet: Set<String>
         let temporarilyUnignoredEndpoints: Set<String>
         let temporarilyUnhiddenCallsigns: [String]
@@ -1189,7 +1188,6 @@ extension AnalyticsDashboardView {
             minEdgeCount: viewModel.minEdgeCount,
             maxNodes: viewModel.maxNodes,
             focusState: viewModel.focusState,
-            ignoredServiceEndpoints: settings.ignoredServiceEndpoints,
             simulationSet: endpointSimulationSet,
             temporarilyUnignoredEndpoints: temporarilyUnignoredEndpoints,
             temporarilyUnhiddenCallsigns: hiddenAtEntry,
@@ -1202,7 +1200,9 @@ extension AnalyticsDashboardView {
         viewModel.maxNodes = 300
         endpointSimulationSet.removeAll()
         temporarilyUnignoredEndpoints.removeAll()
-        settings.ignoredServiceEndpoints = []
+        // Session-only override: the persisted ignore list is never touched, so a
+        // crash or quit during the preview cannot lose it.
+        viewModel.setTemporarilyShowingIgnoredEndpoints(true)
     }
 
     private func exitTemporaryShowAll() {
@@ -1215,13 +1215,18 @@ extension AnalyticsDashboardView {
         viewModel.focusState = snapshot.focusState
         endpointSimulationSet = snapshot.simulationSet
         temporarilyUnignoredEndpoints = snapshot.temporarilyUnignoredEndpoints
-        settings.ignoredServiceEndpoints = snapshot.ignoredServiceEndpoints
+        viewModel.setTemporarilyShowingIgnoredEndpoints(false)
     }
 
     private func endTemporaryShowAllWithoutRestore() {
         guard temporaryShowAllActive else { return }
         temporaryShowAllActive = false
         temporaryShowAllSnapshot = nil
+        // "Keep Current View" is the one explicit, user-chosen path that makes the
+        // shown-all state permanent: persist the cleared list, then drop the
+        // session override.
+        settings.ignoredServiceEndpoints = []
+        viewModel.setTemporarilyShowingIgnoredEndpoints(false)
     }
 
     private func showHiddenNode(_ entry: HiddenNodeEntry) {

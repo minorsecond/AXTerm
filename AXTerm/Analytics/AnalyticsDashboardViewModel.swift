@@ -669,7 +669,14 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             .dropFirst()
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.refreshForServiceEndpointFilterChange()
+                guard let self else { return }
+                // The settings didSet just reconfigured the validator with the
+                // persisted list; while the temporary preview is active the
+                // override must win again.
+                if self.temporarilyShowingIgnoredEndpoints {
+                    self.applyEffectiveIgnoredServiceEndpoints()
+                }
+                self.refreshForServiceEndpointFilterChange()
             }
             .store(in: &cancellables)
     }
@@ -719,6 +726,29 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         graphScheduler.schedule { [weak self] in
             await self?.rebuildGraph(reason: reason)
         }
+    }
+
+    /// When true, analytics treat the service-endpoint ignore list as empty for
+    /// this session only. This is the "Show All (Temporary)" preview: it swaps the
+    /// validator's *effective* list and never touches persisted settings — the old
+    /// implementation wrote `ignoredServiceEndpoints = []` and a crash mid-preview
+    /// permanently destroyed the user's list.
+    @Published private(set) var temporarilyShowingIgnoredEndpoints = false
+
+    func setTemporarilyShowingIgnoredEndpoints(_ active: Bool) {
+        guard temporarilyShowingIgnoredEndpoints != active else { return }
+        temporarilyShowingIgnoredEndpoints = active
+        applyEffectiveIgnoredServiceEndpoints()
+        refreshForServiceEndpointFilterChange()
+    }
+
+    /// Pushes the effective ignore list (empty while the temporary preview is
+    /// active, the persisted list otherwise) into the process-wide validator.
+    private func applyEffectiveIgnoredServiceEndpoints() {
+        let effective = temporarilyShowingIgnoredEndpoints
+            ? []
+            : (settingsStore?.ignoredServiceEndpoints ?? [])
+        CallsignValidator.configureIgnoredServiceEndpoints(effective)
     }
 
     /// Rebuilds analytics outputs when service-endpoint ignore filters change.
@@ -904,7 +934,12 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     private func ignoredServiceEndpointsHash() -> Int {
-        let ignored = settingsStore?.ignoredServiceEndpoints ?? []
+        // Cache keys must track the *effective* list: while the temporary preview
+        // is active, classification runs with no ignores, and serving a cached
+        // filtered result would defeat the preview (and vice versa on exit).
+        let ignored = temporarilyShowingIgnoredEndpoints
+            ? []
+            : (settingsStore?.ignoredServiceEndpoints ?? [])
         var hasher = Hasher()
         for endpoint in ignored.sorted() {
             endpoint.hash(into: &hasher)
