@@ -149,7 +149,12 @@ nonisolated struct AX25SequenceState: Sendable {
 
     /// Acknowledge frames up to (but not including) nr
     mutating func ackUpTo(nr: Int) {
-        assert(isValidNR(nr: nr), "Attempted to ackUpTo invalid N(R): \(nr)")
+        if !isValidNR(nr: nr) {
+            // Report before trapping: the assert compiles out in release, and
+            // this used to make an invalid ack silently corrupt V(A).
+            TxLog.invariantViolation("ackUpTo invalid N(R)", ["nr": nr, "va": va, "vs": vs])
+            assertionFailure("Attempted to ackUpTo invalid N(R): \(nr)")
+        }
         va = nr % modulo
     }
 
@@ -159,12 +164,24 @@ nonisolated struct AX25SequenceState: Sendable {
         return outstandingCount < windowSize
     }
     
-    /// Asserts core invariants
+    /// Verifies core invariants. Violations are reported to Sentry in ALL
+    /// builds (previously bare asserts: SIGTRAP with no report in debug,
+    /// compiled out entirely — silent corruption — in release), then trap in
+    /// debug so tests still fail loudly.
     func assertInvariants(windowSize: Int) {
-        assert(vs >= 0 && vs < modulo, "V(S) out of bounds: \(vs)")
-        assert(vr >= 0 && vr < modulo, "V(R) out of bounds: \(vr)")
-        assert(va >= 0 && va < modulo, "V(A) out of bounds: \(va)")
-        assert(outstandingCount >= 0 && outstandingCount <= windowSize, "outstandingCount \(outstandingCount) exceeds windowSize \(windowSize)")
+        var violations: [String] = []
+        if !(vs >= 0 && vs < modulo) { violations.append("V(S) out of bounds: \(vs)") }
+        if !(vr >= 0 && vr < modulo) { violations.append("V(R) out of bounds: \(vr)") }
+        if !(va >= 0 && va < modulo) { violations.append("V(A) out of bounds: \(va)") }
+        if !(outstandingCount >= 0 && outstandingCount <= windowSize) {
+            violations.append("outstandingCount \(outstandingCount) exceeds windowSize \(windowSize)")
+        }
+        guard !violations.isEmpty else { return }
+        TxLog.invariantViolation(
+            "sequence state: \(violations.joined(separator: "; "))",
+            ["vs": vs, "vr": vr, "va": va, "windowSize": windowSize, "modulo": modulo]
+        )
+        assertionFailure("Sequence invariants violated: \(violations.joined(separator: "; "))")
     }
 
     /// Reset sequence numbers
@@ -426,17 +443,24 @@ nonisolated struct AX25StateMachine: Sendable {
         let oldState = state
         let actions = handleInternal(event: event)
 
-        // Log state transitions and key actions in DEBUG builds; this is intentionally
-        // verbose trace data to help diagnose retry / timeout behavior.
-#if DEBUG
+        // State transitions are logged in ALL builds: they are rare (a handful
+        // per session) and are exactly the breadcrumbs a link-failure event
+        // needs. Entering .error is a warning so it survives flood control.
         if oldState != state {
-            TxLog.debug(.session, "AX25 state transition", [
+            let fields: [String: Any] = [
                 "from": oldState.rawValue,
                 "to": state.rawValue,
-                "event": String(describing: event).prefix(80)
-            ])
+                "event": String(String(describing: event).prefix(80))
+            ]
+            if state == .error {
+                TxLog.warning(.session, "AX25 state transition", fields)
+            } else {
+                TxLog.debug(.session, "AX25 state transition", fields)
+            }
         }
 
+        // The per-event action dump is genuinely verbose trace data — DEBUG only.
+#if DEBUG
         if !actions.isEmpty {
             TxLog.debug(.ax25, "AX25 actions", [
                 "state": state.rawValue,
@@ -624,6 +648,14 @@ nonisolated struct AX25StateMachine: Sendable {
                 // (§4.4.5.2 names RNR as a valid enquiry answer). Exit timer recovery.
                 retryCount = 0
             }
+            if !peerBusy {
+                // Warning so the busy period is visible in Sentry: a peer stuck
+                // in RNR stalls all outbound data, and this transition used to
+                // be logged nowhere at all.
+                TxLog.warning(.ax25, "Peer busy (RNR received) — outbound data held", [
+                    "nr": nr, "pf": pf, "isCommand": isCommand
+                ])
+            }
             peerBusy = true
 
             // Keep T1 running. §6.4.9 clears a busy peer by polling it until it answers
@@ -643,6 +675,9 @@ nonisolated struct AX25StateMachine: Sendable {
         case (.connected, .receivedREJ(let nr, let pf, let isCommand)):
             // Remote requests retransmit from nr. An REJ also clears a peer-busy
             // condition (§4.3.2.3) — the peer is asking for data again.
+            if peerBusy {
+                TxLog.warning(.ax25, "Peer busy condition cleared (REJ received)", ["nr": nr])
+            }
             peerBusy = false
             let vaBeforeREJ = sequenceState.va
             if sequenceState.isValidNR(nr: nr) {
@@ -741,7 +776,12 @@ nonisolated struct AX25StateMachine: Sendable {
                 // Find the lowest buffered sequence number (closest gap to fill)
                 if let lowestBuffered = receiveBuffer.keys.min(by: { distanceFromVR($0) < distanceFromVR($1) }) {
                     let skippedCount = (lowestBuffered - sequenceState.vr + config.modulo) % config.modulo
-                    TxLog.warning(.session, "Flushing receive buffer: skipping lost frame(s)", [
+                    // First-class Sentry event, not just a breadcrumb: this is
+                    // the one path that permanently discards received user
+                    // data, and it resets retryCount below — which prevents
+                    // the N2 link-failure event that would otherwise have been
+                    // the only thing to ship the surrounding breadcrumbs.
+                    TxLog.dataLoss(.session, "Receive-gap flush skipped lost frame(s)", [
                         "currentVR": sequenceState.vr,
                         "jumpingTo": lowestBuffered,
                         "skippedFrames": skippedCount,
@@ -1018,6 +1058,9 @@ nonisolated struct AX25StateMachine: Sendable {
         var actions: [AX25SessionAction] = []
 
         // An RR clears any peer receiver-busy condition (§4.3.2.3).
+        if peerBusy {
+            TxLog.warning(.ax25, "Peer busy condition cleared (RR received)", ["nr": nr])
+        }
         peerBusy = false
 
         // An F=1 *response* is the answer to a P=1 poll we sent (T3 enquiry or T1

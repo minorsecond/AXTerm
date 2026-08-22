@@ -435,23 +435,35 @@ final class AX25SessionManager: ObservableObject {
 
     /// Asserts core state machine and session invariants.
     /// This prevents subtle bugs like queue desync, sequence number wrapping errors, and leaks.
+    /// Runs in ALL builds. Violations report a non-fatal Sentry event (so a
+    /// release build with corrupted window state is diagnosable — previously
+    /// this whole body was compiled out) and then trap in debug so tests fail
+    /// loudly. The checks are a handful of comparisons per call: negligible.
     func checkInvariants(session: AX25Session) {
-        #if DEBUG
         session.stateMachine.sequenceState.assertInvariants(windowSize: session.stateMachine.config.windowSize)
 
         // sendBuffer.count must exactly match outstanding frames according to V(S) and V(A)
         // If this fails, we have a memory leak (frames stuck in buffer) or a duplicate tracking bug.
-        assert(session.sendBuffer.count == session.stateMachine.sequenceState.outstandingCount,
-               "Invariant violation: sendBuffer.count (\(session.sendBuffer.count)) != outstandingCount (\(session.stateMachine.sequenceState.outstandingCount)). vs=\(session.vs) va=\(session.va)")
+        if session.sendBuffer.count != session.stateMachine.sequenceState.outstandingCount {
+            TxLog.invariantViolation("sendBuffer count desynced from outstandingCount", [
+                "sendBufferCount": session.sendBuffer.count,
+                "outstandingCount": session.stateMachine.sequenceState.outstandingCount,
+                "vs": session.vs, "va": session.va,
+                "peer": session.remoteAddress.display
+            ])
+            assertionFailure("Invariant violation: sendBuffer.count (\(session.sendBuffer.count)) != outstandingCount (\(session.stateMachine.sequenceState.outstandingCount)). vs=\(session.vs) va=\(session.va)")
+        }
 
         // Audit B4: AIMD numeric invariants — must hold after every operation.
         let cwnd = session.aimdWindow.cwnd
-        assert(!cwnd.isNaN,    "AIMD invariant violated: cwnd is NaN")
-        assert(cwnd.isFinite,  "AIMD invariant violated: cwnd is ±Infinity")
-        assert(cwnd >= 1.0,
-               "AIMD invariant violated: cwnd \(cwnd) < minWindow 1.0")
-        assert(session.aimdWindow.effectiveWindow >= 1,
-               "AIMD invariant violated: effectiveWindow \(session.aimdWindow.effectiveWindow) < 1")
+        if cwnd.isNaN || !cwnd.isFinite || cwnd < 1.0 || session.aimdWindow.effectiveWindow < 1 {
+            TxLog.invariantViolation("AIMD window out of bounds", [
+                "cwnd": cwnd.isFinite ? String(cwnd) : String(describing: cwnd),
+                "effectiveWindow": session.aimdWindow.effectiveWindow,
+                "peer": session.remoteAddress.display
+            ])
+            assertionFailure("AIMD invariant violated: cwnd=\(cwnd) effectiveWindow=\(session.aimdWindow.effectiveWindow)")
+        }
 
         // NOTE: We do NOT assert outstandingCount <= effectiveSendWindow here.
         //
@@ -461,7 +473,6 @@ final class AX25SessionManager: ObservableObject {
         // to the reduced window.  The send-site invariant (no NEW send exceeds the window)
         // is enforced in sendData and drainPendingDataQueue at the point of transmission,
         // and is tested explicitly in the audit test suite.
-        #endif
     }
 
     // MARK: - Deep Session Debug (Debug Builds Only)
@@ -1300,7 +1311,10 @@ final class AX25SessionManager: ObservableObject {
             debugTrace("DM for unknown session", [
                 "from": source.display
             ])
-            TxLog.debug(.session, "DM received for unknown session", ["from": source.display])
+            // Warning: this is the classic desync signature — the peer thinks
+            // we are disconnected while we hold no matching session. Debug
+            // level made it invisible in the field.
+            TxLog.warning(.session, "DM received for unknown session (state desync?)", ["from": source.display])
             return
         }
 
