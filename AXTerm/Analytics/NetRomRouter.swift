@@ -537,11 +537,14 @@ nonisolated final class NetRomRouter {
         // EWMA blend: 70% current + 30% observed
         // This allows quality to both increase AND decrease based on observed link quality.
         // The old formula (max + increment) could only increase, causing all neighbors to hit 255.
-        let blendedQuality = Int(0.7 * Double(candidate.pathQuality) + 0.3 * Double(normalizedQuality))
-
-        // Small bonus for being recently heard (capped at 255)
-        let heardBonus = 5
-        let finalQuality = min(NetRomConfig.maximumRouteQuality, blendedQuality + heardBonus)
+        // No "recently heard" bonus: a flat per-observation increment biased every
+        // neighbor upward regardless of link quality (a chatty bad neighbor would
+        // outrank a quiet good one) and set a floor the blend could never escape.
+        let blendedQuality = min(
+            NetRomConfig.maximumRouteQuality,
+            Int((0.7 * Double(candidate.pathQuality) + 0.3 * Double(normalizedQuality)).rounded())
+        )
+        let finalQuality = blendedQuality
 
         candidate.pathQuality = finalQuality
         candidate.lastUpdate = timestamp
@@ -574,7 +577,16 @@ nonisolated final class NetRomRouter {
         var bucket = routesByDestination[destination] ?? []
         if let existingIndex = bucket.firstIndex(where: { $0.origin == origin }) {
             var existing = bucket[existingIndex]
-            existing.quality = max(existing.quality, quality)
+            // Classic NET/ROM: each broadcast carries the node's *current* quality,
+            // so a fresh update replaces the figure — max() made route quality a
+            // high-water mark that could never decrease. Inferred evidence may only
+            // corroborate (raise) a broadcast-sourced figure, never degrade it.
+            let existingIsBroadcastClass = existing.sourceType != "inferred"
+            if existingIsBroadcastClass && sourceType == "inferred" {
+                existing.quality = max(existing.quality, quality)
+            } else {
+                existing.quality = quality
+            }
             existing.path = path
             existing.lastHeard = timestamp
             existing.obsolescenceCount = 1

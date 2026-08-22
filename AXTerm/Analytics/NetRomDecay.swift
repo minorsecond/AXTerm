@@ -555,19 +555,23 @@ nonisolated enum FreshnessTooltips {
     /// Tooltip for the Neighbors freshness column.
     static let neighbors = """
         Freshness indicates how recently this neighbor was heard.
-        100% = just seen; drops to 0% after 30 minutes of silence.
+        100% = just seen; declines toward 0% as the neighbor approaches its
+        stale TTL (configurable in Settings, 6 hours by default).
         """
 
     /// Tooltip for the Routes freshness column.
     static let routes = """
-        Route freshness shows how recently this path was reinforced.
-        Newer routes appear fresher; stale routes fade toward 0%.
+        Route freshness shows how recently this path was advertised or reinforced.
+        It declines toward 0% at the route's TTL — adaptive per origin once the
+        broadcast interval is learned, otherwise the global stale TTL from Settings.
         """
 
     /// Tooltip for the Link Stats freshness column.
     static let linkStats = """
         Link freshness reflects how recently traffic was observed on this link.
-        Fresher stats are more reliable for routing decisions.
+        It declines toward 0% at the link-stat stale TTL (configurable in
+        Settings, 12 hours by default). Fresher stats are more reliable for
+        routing decisions.
         """
 
     /// Short tooltip for freshness column header.
@@ -576,7 +580,7 @@ nonisolated enum FreshnessTooltips {
     /// Detailed tooltip explaining the freshness curve.
     static let detailed = """
         Freshness uses a gentle curve that stays near 100% for the first 5 minutes,
-        then smoothly declines to 0% at 30 minutes. This reflects typical packet radio
+        then smoothly declines to 0% at the entry's TTL. This reflects typical packet radio
         activity patterns where periodic beacons keep links fresh.
         """
 }

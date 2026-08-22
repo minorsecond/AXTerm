@@ -338,6 +338,37 @@ final class NetRomPersistenceDecayTests: XCTestCase {
         XCTAssertEqual(displayAtTTL, "0%", "At TTL, display should be '0%'")
     }
 
+    // MARK: - Quality Decay On Load
+
+    /// A neighbor just past its TTL must keep most of its quality on load.
+    /// The old linear formula (1 - age/TTL) only ran when age > TTL, so it was
+    /// always <= 0 and every restart zeroed any neighbor older than the TTL while
+    /// the Freshness column still read high.
+    func testNeighborQualityDecaysGraduallyPastTTLOnLoad() throws {
+        let persistenceTTL: TimeInterval = 30 * 60 // NetRomPersistence config default
+
+        let neighbor = makeNeighbor(call: "W1TEST", quality: 200, lastSeen: baseTime)
+        try persistence.saveNeighbors([neighbor], lastPacketID: 100, snapshotTimestamp: baseTime)
+
+        // Load one minute past the TTL: exponential decay, half-life = TTL
+        let justPast = baseTime.addingTimeInterval(persistenceTTL + 60)
+        let stateJustPast = try persistence.load(now: justPast)
+        let loadedJustPast = stateJustPast?.neighbors.first
+        XCTAssertNotNil(loadedJustPast)
+        XCTAssertGreaterThan(loadedJustPast!.quality, 180,
+            "One minute past TTL must not crater the quality")
+
+        // Load one full TTL past expiry: quality should be roughly halved
+        let onePastTTL = baseTime.addingTimeInterval(persistenceTTL * 2)
+        let stateHalved = try persistence.load(now: onePastTTL)
+        let loadedHalved = stateHalved?.neighbors.first
+        XCTAssertNotNil(loadedHalved)
+        XCTAssertEqual(Double(loadedHalved!.quality), 100, accuracy: 5,
+            "One TTL past expiry should halve the quality (exponential, half-life = TTL)")
+        XCTAssertGreaterThan(loadedHalved!.quality, 0,
+            "Quality must decay gradually, not zero out at load")
+    }
+
     // MARK: - Legacy Decay Tests (Deprecated API Compatibility)
 
     /// Test that deprecated decay methods still work for backwards compatibility.

@@ -588,6 +588,15 @@ nonisolated private struct DirectionalLinkStats {
         self.restoredObservationCount = restoredObservationCount
         self.restoredDuplicateCount = restoredDuplicateCount
         self.restoredQuality = restoredQuality
+        // Restored evidence counts toward the EWMA warm-up (plus the prior), so an
+        // imported link continues where it left off instead of re-warming from
+        // scratch — and incremental replay matches a full recompute exactly.
+        if restoredForwardEstimate != nil {
+            self.forwardSampleCount = restoredObservationCount + 1
+        }
+        if restoredReverseEstimate != nil {
+            self.reverseSampleCount = restoredObservationCount + 1
+        }
     }
 
     var hasEvidence: Bool {
@@ -607,6 +616,16 @@ nonisolated private struct DirectionalLinkStats {
 
         // Revive from tombstone if new evidence arrives
         tombstonedAt = nil
+
+        // Seed the live EWMA from persisted state before clearing it — otherwise the
+        // first observation after an import throws away everything the link had
+        // learned and restarts from the cold-start prior.
+        if forwardEstimate == nil, let restoredForwardEstimate {
+            forwardEstimate = clamp01(restoredForwardEstimate)
+        }
+        if reverseEstimate == nil, let restoredReverseEstimate {
+            reverseEstimate = clamp01(restoredReverseEstimate)
+        }
 
         // Clear restored values once we have real observations
         restoredForwardEstimate = nil
