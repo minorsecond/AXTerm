@@ -316,6 +316,56 @@ final class SQLitePacketStoreTests: XCTestCase {
         XCTAssertEqual(result.summary.uniqueStations, 3) // K1ABC, N2DEF, K8DIG
     }
 
+    func testAggregateAnalyticsGroupsByStationIdentityMode() throws {
+        let store = try makeStore()
+        let endpoint = try makeEndpoint()
+        let calendar = utcCalendar()
+        let base = Date(timeIntervalSince1970: 1_707_500_000)
+
+        for (offset, ssid) in [(0, 1), (60, 10), (120, 1)] {
+            let packet = Packet(
+                timestamp: base.addingTimeInterval(Double(offset)),
+                from: AX25Address(call: "K0NTS", ssid: ssid),
+                to: AX25Address(call: "W1AAA"),
+                frameType: .ui,
+                control: 0x03,
+                info: Data([0x41]),
+                rawAx25: Data([0x01]),
+                kissEndpoint: endpoint
+            )
+            try store.save(packet)
+        }
+
+        let timeframe = DateInterval(start: base.addingTimeInterval(-10), end: base.addingTimeInterval(180))
+        let station = try store.aggregateAnalytics(
+            in: timeframe,
+            bucket: .minute,
+            calendar: calendar,
+            options: AnalyticsAggregator.Options(
+                includeViaDigipeaters: false,
+                histogramBinCount: 4,
+                topLimit: 5,
+                stationIdentityMode: .station
+            )
+        )
+        XCTAssertEqual(station.summary.uniqueStations, 2, "SSIDs collapse in station mode")
+        XCTAssertEqual(station.topTalkers.map(\.label), ["K0NTS"])
+
+        let ssidMode = try store.aggregateAnalytics(
+            in: timeframe,
+            bucket: .minute,
+            calendar: calendar,
+            options: AnalyticsAggregator.Options(
+                includeViaDigipeaters: false,
+                histogramBinCount: 4,
+                topLimit: 5,
+                stationIdentityMode: .ssid
+            )
+        )
+        XCTAssertEqual(ssidMode.summary.uniqueStations, 3)
+        XCTAssertEqual(Set(ssidMode.topTalkers.map(\.label)), ["K0NTS-1", "K0NTS-10"])
+    }
+
     func testLoadPacketsInTimeframeReturnsRangeOnly() throws {
         let store = try makeStore()
         let endpoint = try makeEndpoint()

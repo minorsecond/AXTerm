@@ -36,8 +36,6 @@ struct AnalyticsDashboardView: View {
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 
-    @State private var scrollOffset: CGFloat = 0
-    @State private var controlBarHeight: CGFloat = 56
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private enum EndpointBannerMode {
@@ -63,48 +61,32 @@ struct AnalyticsDashboardView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            // Main scrollable content
-            ScrollView {
-                VStack(alignment: .leading, spacing: AnalyticsStyle.Layout.sectionSpacing) {
-                    // Spacer for the floating header
-                    Color.clear
-                        .frame(height: controlBarHeight + 12)
-
-                    summarySection
-                    chartsSection
-                    graphSection
-                }
-                .padding(AnalyticsStyle.Layout.pagePadding)
-                .background(
-                    GeometryReader { geo in
-                        Color.clear.preference(
-                            key: ScrollOffsetPreferenceKey.self,
-                            value: geo.frame(in: .named("scroll")).minY
-                        )
-                    }
-                )
-            }
-            .scrollDisabled(false)
-            .defaultScrollAnchor(.top)  // Prevent scroll jumping on layout changes
-            .coordinateSpace(name: "scroll")
-            .onPreferenceChange(ScrollOffsetPreferenceKey.self) { value in
-                scrollOffset = -value
-            }
-
-            // Floating glass control bar
-            FloatingControlBar(
-                scrollOffset: scrollOffset,
-                reduceTransparency: reduceTransparency
-            ) {
+        ZStack(alignment: .bottom) {
+            // Pinned filter bar above the scrollable content (HIG: full-width bar
+            // with bar material, never a floating overlay that covers content).
+            VStack(spacing: 0) {
                 filterSection
-            }
-            .background(
-                GeometryReader { geo in
-                    Color.clear
-                        .preference(key: FloatingControlBarHeightPreferenceKey.self, value: geo.size.height)
+                    .padding(.horizontal, AnalyticsStyle.Layout.pagePadding)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        reduceTransparency
+                            ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor))
+                            : AnyShapeStyle(.bar)
+                    )
+
+                Divider()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: AnalyticsStyle.Layout.sectionSpacing) {
+                        summarySection
+                        chartsSection
+                        graphSection
+                    }
+                    .padding(AnalyticsStyle.Layout.pagePadding)
                 }
-            )
+                .defaultScrollAnchor(.top)  // Prevent scroll jumping on layout changes
+            }
 
             // Export toast notification
             if showExportToast {
@@ -162,13 +144,6 @@ struct AnalyticsDashboardView: View {
             let normalized = Set(newValue.map(CallsignValidator.normalize))
             endpointSimulationSet = endpointSimulationSet.intersection(normalized)
             temporarilyUnignoredEndpoints.subtract(normalized)
-        }
-        .onPreferenceChange(FloatingControlBarHeightPreferenceKey.self) { value in
-            // Keep height stable and avoid tiny oscillations from fractional layout updates.
-            let rounded = ceil(value)
-            if abs(controlBarHeight - rounded) > 1 {
-                controlBarHeight = rounded
-            }
         }
     }
 
@@ -231,19 +206,17 @@ struct AnalyticsDashboardView: View {
 
     private var filterSection: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .bottom, spacing: 12) {
-                FilterControlGroup(title: "Timeframe") {
-                    Picker("Timeframe", selection: $viewModel.timeframe) {
-                        ForEach(AnalyticsTimeframe.allCases, id: \.self) { timeframe in
-                            Text(timeframe.displayName)
-                                .lineLimit(1)
-                                .tag(timeframe)
-                        }
+            HStack(alignment: .center, spacing: 12) {
+                Picker("Timeframe", selection: $viewModel.timeframe) {
+                    ForEach(AnalyticsTimeframe.allCases, id: \.self) { timeframe in
+                        Text(timeframe.displayName)
+                            .lineLimit(1)
+                            .tag(timeframe)
                     }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .controlSize(.small)
                 }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .controlSize(.small)
 
                 if viewModel.timeframe == .custom {
                     Button {
@@ -266,18 +239,16 @@ struct AnalyticsDashboardView: View {
                     }
                 }
 
-                FilterControlGroup(title: "Bucket") {
-                    Picker("Bucket", selection: $viewModel.bucketSelection) {
-                        ForEach(AnalyticsBucketSelection.allCases, id: \.self) { bucket in
-                            Text(bucket.displayName)
-                                .lineLimit(1)
-                                .tag(bucket)
-                        }
+                Picker("Bucket", selection: $viewModel.bucketSelection) {
+                    ForEach(AnalyticsBucketSelection.allCases, id: \.self) { bucket in
+                        Text(bucket.displayName)
+                            .lineLimit(1)
+                            .tag(bucket)
                     }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .controlSize(.small)
                 }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .controlSize(.small)
 
                 Toggle("Auto-update", isOn: $viewModel.autoUpdateEnabled)
                     .toggleStyle(.switch)
@@ -347,6 +318,26 @@ struct AnalyticsDashboardView: View {
         }
     }
 
+    /// Airtime estimate per bucket from the packet and payload-byte series.
+    /// Assumptions documented in the card tooltip (1200 baud, 32 framing bytes,
+    /// 300 ms fixed per-frame overhead).
+    private var channelUtilizationPoints: [AnalyticsSeriesPoint] {
+        let series = viewModel.viewState.series
+        let bucketSeconds = viewModel.resolvedBucket.durationSeconds
+        guard bucketSeconds > 0 else { return [] }
+        let bytesByBucket = Dictionary(uniqueKeysWithValues: series.bytesPerBucket.map { ($0.bucket, $0.value) })
+        return series.packetsPerBucket.map { point in
+            AnalyticsSeriesPoint(
+                bucket: point.bucket,
+                value: AnalyticsStyle.Channel.utilizationPercent(
+                    packets: point.value,
+                    payloadBytes: bytesByBucket[point.bucket] ?? 0,
+                    bucketSeconds: bucketSeconds
+                )
+            )
+        }
+    }
+
     private var summarySection: some View {
         AnalyticsCard(title: "Summary") {
             if let summary = viewModel.viewState.summary, viewModel.hasLoadedAggregation {
@@ -359,7 +350,7 @@ struct AnalyticsDashboardView: View {
                     SummaryMetricCard(
                         title: "Unique stations",
                         value: summary.uniqueStations.formatted(),
-                        tooltip: "Distinct valid stations observed as sender, destination, or repeating digipeater. Service endpoints (BEACON, ID, WIDE…) are excluded."
+                        tooltip: "Distinct valid stations observed as sender, destination, or repeating digipeater. Service endpoints (BEACON, ID, WIDE…) are excluded. Grouping follows the graph’s Identity setting (Station merges SSIDs)."
                     )
                     SummaryMetricCard(
                         title: "Payload bytes",
@@ -413,7 +404,12 @@ struct AnalyticsDashboardView: View {
 
                 ChartCard(title: "Payload bytes over time") {
                     if viewModel.hasLoadedAggregation {
-                        TimeSeriesChart(points: viewModel.viewState.series.bytesPerBucket, valueLabel: "Bytes", bucket: viewModel.resolvedBucket)
+                        TimeSeriesChart(
+                            points: viewModel.viewState.series.bytesPerBucket,
+                            valueLabel: "Bytes",
+                            bucket: viewModel.resolvedBucket,
+                            valueFormatter: { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) }
+                        )
                     } else {
                         ChartLoadingPlaceholder(label: "Loading bytes")
                     }
@@ -430,6 +426,10 @@ struct AnalyticsDashboardView: View {
                 ChartCard(title: "Traffic intensity (hour vs day)", height: AnalyticsStyle.Layout.heatmapHeight) {
                     if viewModel.hasLoadedAggregation {
                         HeatmapView(data: viewModel.viewState.heatmap)
+                            .overlay(alignment: .topTrailing) {
+                                HeatmapIntensityLegend()
+                                    .padding(.trailing, 4)
+                            }
                     } else {
                         ChartLoadingPlaceholder(label: "Loading heatmap")
                     }
@@ -440,6 +440,42 @@ struct AnalyticsDashboardView: View {
                         HistogramChart(data: viewModel.viewState.histogram)
                     } else {
                         ChartLoadingPlaceholder(label: "Loading distribution")
+                    }
+                }
+
+                ChartCard(title: "Channel utilization") {
+                    if viewModel.hasLoadedAggregation {
+                        TimeSeriesChart(
+                            points: channelUtilizationPoints,
+                            valueLabel: "Utilization",
+                            bucket: viewModel.resolvedBucket,
+                            valueFormatter: { "\($0)%" }
+                        )
+                        .help("Estimated share of channel airtime in use, assuming 1200 baud, ~32 framing bytes, and ~300 ms of TXDelay/flags per frame. Above roughly 30% a shared CSMA channel sees growing collision rates.")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading utilization")
+                    }
+                }
+
+                ChartCard(title: "Frame types over time") {
+                    if viewModel.hasLoadedAggregation {
+                        FrameTypeStackChart(series: viewModel.viewState.series)
+                            .help("Stacked frame mix per interval: I = connected-mode data, UI = beacons and unconnected traffic, Other = supervisory and control frames (RR, SABM, UA…).")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading frame types")
+                    }
+                }
+
+                ChartCard(title: "Retransmit requests (REJ/SREJ)") {
+                    if viewModel.hasLoadedAggregation {
+                        TimeSeriesChart(
+                            points: viewModel.viewState.series.rejectFramesPerBucket,
+                            valueLabel: "REJ/SREJ",
+                            bucket: viewModel.resolvedBucket
+                        )
+                        .help("REJ and SREJ supervisory frames per interval — peers asking for retransmits. Sustained nonzero values indicate RF loss on connected links.")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading link stress")
                     }
                 }
 
@@ -1510,9 +1546,9 @@ extension AnalyticsDashboardView {
 
     private var nodeSizeSmallTooltip: String {
         if viewModel.graphViewMode.isNetRomMode {
-            return "Smaller node: lower relative route centrality in the current NET/ROM view."
+            return "Smaller node: lower relative route centrality in the current NET/ROM view. Low-priority nodes hide their labels until you zoom in."
         }
-        return "Smaller node: lower relative traffic/connection weight in the current packet view."
+        return "Smaller node: lower relative traffic/connection weight in the current packet view. Low-priority nodes hide their labels until you zoom in."
     }
 
     private var nodeSizeLargeTooltip: String {
@@ -1903,6 +1939,8 @@ private struct TimeSeriesChart: View {
     let points: [AnalyticsSeriesPoint]
     let valueLabel: String
     let bucket: TimeBucket
+    /// Formats axis and tooltip values (e.g. byte counts). Defaults to plain numbers.
+    var valueFormatter: ((Int) -> String)? = nil
     @State private var selectedPoint: AnalyticsSeriesPoint?
     @State private var hoverLocation: CGPoint?
 
@@ -2007,13 +2045,17 @@ private struct TimeSeriesChart: View {
                 }
             }
             .chartYAxis {
-                AxisMarks(position: .trailing, values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount)) { _ in
+                AxisMarks(position: .trailing, values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount)) { value in
                     AxisGridLine()
                         .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
                     AxisTick()
                         .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
-                    AxisValueLabel()
-                        .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                    AxisValueLabel {
+                        if let intValue = value.as(Int.self) {
+                            Text(valueFormatter?(intValue) ?? intValue.formatted())
+                        }
+                    }
+                    .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
                 }
             }
             .chartPlotStyle { plotArea in
@@ -2048,7 +2090,8 @@ private struct TimeSeriesChart: View {
                                 TimeSeriesChartTooltip(
                                     point: selectedPoint,
                                     valueLabel: valueLabel,
-                                    bucket: bucket
+                                    bucket: bucket,
+                                    valueFormatter: valueFormatter
                                 )
                                 .position(
                                     x: min(max(hoverLocation.x, 60), geometry.size.width - 60),
@@ -2118,6 +2161,7 @@ private struct TimeSeriesChartTooltip: View {
     let point: AnalyticsSeriesPoint
     let valueLabel: String
     let bucket: TimeBucket
+    var valueFormatter: ((Int) -> String)? = nil
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -2145,7 +2189,7 @@ private struct TimeSeriesChartTooltip: View {
             Text(formattedTime)
                 .font(.caption2)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-            Text("\(valueLabel): \(point.value)")
+            Text("\(valueLabel): \(valueFormatter?(point.value) ?? point.value.formatted())")
                 .font(.caption.weight(.medium))
         }
         .padding(6)
@@ -2268,6 +2312,48 @@ private struct HistogramChartTooltip: View {
     }
 }
 
+private struct FrameTypeStackChart: View {
+    let series: AnalyticsSeries
+
+    private struct FrameTypePoint: Identifiable {
+        let bucket: Date
+        let type: String
+        let value: Int
+        var id: String { "\(type)-\(bucket.timeIntervalSinceReferenceDate)" }
+    }
+
+    private var points: [FrameTypePoint] {
+        let i = series.iFramesPerBucket.map { FrameTypePoint(bucket: $0.bucket, type: "I", value: $0.value) }
+        let ui = series.uiFramesPerBucket.map { FrameTypePoint(bucket: $0.bucket, type: "UI", value: $0.value) }
+        let other = series.otherFramesPerBucket.map { FrameTypePoint(bucket: $0.bucket, type: "Other", value: $0.value) }
+        return i + ui + other
+    }
+
+    var body: some View {
+        if series.iFramesPerBucket.isEmpty && series.uiFramesPerBucket.isEmpty && series.otherFramesPerBucket.isEmpty {
+            EmptyChartPlaceholder(text: "No data")
+        } else {
+            Chart(points) { point in
+                BarMark(
+                    x: .value("Time", point.bucket),
+                    y: .value("Frames", point.value)
+                )
+                .foregroundStyle(by: .value("Type", point.type))
+            }
+            .chartForegroundStyleScale([
+                "I": AnalyticsStyle.Colors.accent,
+                "UI": AnalyticsStyle.Colors.accent.opacity(0.55),
+                "Other": Color(nsColor: .systemGray).opacity(0.5)
+            ])
+            .chartYScale(domain: .automatic(includesZero: true))
+            .chartLegend(position: .top, alignment: .leading, spacing: 4)
+            .chartPlotStyle { plotArea in
+                plotArea.background(AnalyticsStyle.Colors.chartPlotBackground)
+            }
+        }
+    }
+}
+
 private struct TopListView: View {
     let rows: [RankRow]
 
@@ -2275,17 +2361,34 @@ private struct TopListView: View {
         if rows.isEmpty {
             EmptyChartPlaceholder(text: "No data")
         } else {
+            let maxCount = max(1, rows.map(\.count).max() ?? 1)
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(rows) { row in
-                    HStack {
+                    HStack(spacing: 8) {
                         Text(row.label)
-                        Spacer()
+                            .frame(minWidth: 84, alignment: .leading)
+                        // Proportional bar makes rankings scannable at a glance.
+                        GeometryReader { proxy in
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(AnalyticsStyle.Colors.accent.opacity(0.35))
+                                .frame(
+                                    width: max(2, proxy.size.width * CGFloat(row.count) / CGFloat(maxCount)),
+                                    height: 8
+                                )
+                                .frame(maxHeight: .infinity, alignment: .center)
+                        }
                         Text("\(row.count)")
+                            .monospacedDigit()
                             .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            .frame(minWidth: 40, alignment: .trailing)
                     }
                     .font(.caption)
+                    .frame(height: 16)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(row.label), \(row.count)")
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 }
@@ -2330,12 +2433,13 @@ private struct HeatmapView: View {
                                 let alpha = value == 0
                                     ? 0
                                     : AnalyticsStyle.Heatmap.minAlpha + (AnalyticsStyle.Heatmap.maxAlpha - AnalyticsStyle.Heatmap.minAlpha) * (Double(value) / Double(maxValue))
+                                // 1pt gap keeps adjacent nonzero hours visually distinct.
                                 let rect = CGRect(
                                     x: labelWidth + CGFloat(col) * cellWidth,
                                     y: CGFloat(row) * cellHeight,
                                     width: cellWidth,
                                     height: cellHeight
-                                )
+                                ).insetBy(dx: 1, dy: 1)
                                 let path = Path(roundedRect: rect, cornerRadius: AnalyticsStyle.Heatmap.cellCornerRadius)
                                 context.fill(path, with: .color(AnalyticsStyle.Colors.accent.opacity(alpha)))
 
@@ -2428,6 +2532,29 @@ private struct HeatmapView: View {
     }
 }
 
+private struct HeatmapIntensityLegend: View {
+    var body: some View {
+        HStack(spacing: 4) {
+            Text("less")
+            HStack(spacing: 1) {
+                ForEach(0..<5, id: \.self) { step in
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(AnalyticsStyle.Colors.accent.opacity(
+                            AnalyticsStyle.Heatmap.minAlpha
+                                + (AnalyticsStyle.Heatmap.maxAlpha - AnalyticsStyle.Heatmap.minAlpha) * Double(step) / 4
+                        ))
+                        .frame(width: 10, height: 8)
+                }
+            }
+            Text("more")
+        }
+        .font(.caption2)
+        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Heatmap intensity legend, lighter cells mean fewer packets")
+    }
+}
+
 private struct HeatmapTooltip: View {
     let xLabel: String
     let yLabel: String
@@ -2481,25 +2608,6 @@ private struct ChartTooltip: View {
 
 // Old GraphInspectorView, NodeDetailsView, and MetricRow removed
 // Now using GraphSidebar component with tabbed Overview/Inspector
-
-private struct FilterControlGroup<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-
-    init(title: String, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-            content
-        }
-    }
-}
 
 private struct ChartWidthReader: View {
     let onChange: (CGFloat) -> Void
@@ -2574,67 +2682,3 @@ nonisolated private struct FlowLayout: Layout {
     }
 }
 
-// MARK: - Floating Control Bar
-
-/// Preference key for tracking scroll offset
-nonisolated private struct ScrollOffsetPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-nonisolated private struct FloatingControlBarHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 56
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-/// Floating glass control bar that sticks to the top of the scroll view.
-/// Uses material blur when available, falls back to solid background for accessibility.
-private struct FloatingControlBar<Content: View>: View {
-    let scrollOffset: CGFloat
-    let reduceTransparency: Bool
-    @ViewBuilder let content: Content
-
-    /// Threshold in points before the bar transitions to "scrolled" state
-    private let scrollThreshold: CGFloat = 12
-    /// Corner radius for the pill-shaped bar
-    private let cornerRadius: CGFloat = 12
-
-    private var isScrolled: Bool {
-        scrollOffset > scrollThreshold
-    }
-
-    var body: some View {
-        content
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .frame(maxWidth: AnalyticsStyle.Layout.floatingBarMaxWidth, alignment: .leading)
-        .background(
-            Group {
-                if reduceTransparency {
-                    // Solid background for accessibility
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(Color(nsColor: .windowBackgroundColor))
-                } else {
-                    // Glass effect with material blur - more opaque for better readability
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(.regularMaterial)
-                        .opacity(isScrolled ? 1 : 0.92)
-                }
-            }
-        )
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(isScrolled ? 0.10 : 0.05), radius: isScrolled ? 6 : 3, y: 1)
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, AnalyticsStyle.Layout.floatingBarOuterPadding)
-        .padding(.top, 8)
-        .animation(.easeOut(duration: 0.2), value: isScrolled)
-    }
-}

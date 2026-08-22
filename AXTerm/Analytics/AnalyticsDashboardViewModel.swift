@@ -16,9 +16,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         DateInterval,
         TimeBucket,
         Calendar,
-        Bool,
-        Int,
-        Int
+        AnalyticsAggregator.Options
     ) async -> AnalyticsAggregationResult?
     typealias TimeframePacketsProvider = @Sendable (DateInterval) async -> [Packet]?
 
@@ -118,6 +116,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             layoutKey = nil
             layoutCache.removeAll()
             scheduleGraphBuild(reason: "stationIdentityMode")
+            // Summary, unique-station series, and top lists group by the same
+            // identity mode as the graph, so they must recompute as well.
+            scheduleAggregation(reason: "stationIdentityMode")
             persistStationIdentityMode()
         }
     }
@@ -879,6 +880,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             timeframe: timeframe,
             bucket: bucketSnapshot,
             includeVia: includeViaSnapshot,
+            stationIdentityMode: stationIdentityMode,
             packetCount: packetSnapshot.count,
             lastTimestamp: packetSnapshot.map { $0.timestamp }.max(),
             windowStart: bucketSnapshot.normalizedStart(for: timeframeInterval.start, calendar: calendar),
@@ -939,8 +941,12 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             ]
         )
 
-        let histogramBinCount = AnalyticsStyle.Histogram.binCount
-        let topLimit = AnalyticsStyle.Tables.topLimit
+        let aggregationOptions = AnalyticsAggregator.Options(
+            includeViaDigipeaters: includeViaSnapshot,
+            histogramBinCount: AnalyticsStyle.Histogram.binCount,
+            topLimit: AnalyticsStyle.Tables.topLimit,
+            stationIdentityMode: stationIdentityMode
+        )
         let provider = databaseAggregationProvider
         if showLoadingState {
             isAggregationLoading = true
@@ -954,9 +960,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                 timeframeInterval,
                 bucketSnapshot,
                 calendar,
-                includeViaSnapshot,
-                histogramBinCount,
-                topLimit
+                aggregationOptions
             ) {
                 result = providerResult
             } else {
@@ -964,11 +968,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                     packets: packetSnapshot,
                     bucket: bucketSnapshot,
                     calendar: calendar,
-                    options: AnalyticsAggregator.Options(
-                        includeViaDigipeaters: includeViaSnapshot,
-                        histogramBinCount: histogramBinCount,
-                        topLimit: topLimit
-                    ),
+                    options: aggregationOptions,
                     timeframeInterval: timeframeInterval
                 )
             }
@@ -1348,6 +1348,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             allRecentPackets: packets,
             timeframeDisplayName: timeframe.displayName,
             includeViaDigipeaters: includeViaDigipeaters,
+            stationIdentityMode: stationIdentityMode,
             timeframeDuration: currentDateRange(now: now).duration,
             now: now
         )
@@ -1851,6 +1852,7 @@ private struct AggregationCacheKey: Hashable {
     let timeframe: AnalyticsTimeframe
     let bucket: TimeBucket
     let includeVia: Bool
+    let stationIdentityMode: StationIdentityMode
     let packetCount: Int
     let lastTimestamp: Date?
     /// Resolved window start, quantized to the bucket stride. Rolling timeframes slide

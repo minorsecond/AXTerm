@@ -298,11 +298,17 @@ private struct NodeLabelsOverlay: View {
 
             var drawnRects: [CGRect] = []
 
+            // Suffix labels ("EPI", "TX") save space when zoomed out, but carry
+            // almost no information; once the user zooms in, show full callsigns.
+            let useFullCallsigns = cameraState.scale >= 1.15
+
             for node in sortedNodes.prefix(maxLabels) {
                 guard let position = positionMap[node.id] else { continue }
                 guard CallsignValidator.isValidRoutingNode(node.callsign) else { continue }
 
-                let suffix = CallsignValidator.extractSuffix(node.callsign)
+                let suffix = useFullCallsigns
+                    ? node.callsign
+                    : CallsignValidator.extractSuffix(node.callsign)
 
                 // Calculate screen position
                 let screenPos = normalizedToScreen(

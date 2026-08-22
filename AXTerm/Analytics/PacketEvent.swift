@@ -18,6 +18,8 @@ nonisolated struct PacketEvent: Hashable, Sendable {
     let frameType: FrameType
     let infoTextPresent: Bool
     let payloadBytes: Int
+    /// REJ or SREJ supervisory frame — the peer asked for a retransmit.
+    let isRejectFrame: Bool
 
     init(packet: Packet) {
         timestamp = packet.timestamp
@@ -28,5 +30,7 @@ nonisolated struct PacketEvent: Hashable, Sendable {
         frameType = packet.frameType
         infoTextPresent = packet.infoText?.isEmpty == false
         payloadBytes = packet.info.count
+        let sType = packet.controlFieldDecoded.sType
+        isRejectFrame = sType == .REJ || sType == .SREJ
     }
 }

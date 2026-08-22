@@ -125,7 +125,7 @@ nonisolated enum GraphCopy {
             tf.isEmpty ? "Stations Heard" : "Stations (\(tf))"
         }
         static func stationsHeardTooltip(_ tf: String) -> String {
-            "Unique valid stations heard during the \(tf.isEmpty ? "selected timeframe" : tf) window (senders, destinations, and repeating digipeaters). View filters are ignored."
+            "Unique valid stations heard during the \(tf.isEmpty ? "selected timeframe" : tf) window (senders, destinations, and repeating digipeaters). Grouping follows the Identity setting; view filters are ignored."
         }
 
         static let totalPacketsLabel = "Packets"

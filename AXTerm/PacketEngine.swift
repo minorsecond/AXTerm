@@ -1399,16 +1399,9 @@ final class PacketEngine: ObservableObject {
         in timeframe: DateInterval,
         bucket: TimeBucket,
         calendar: Calendar,
-        includeViaDigipeaters: Bool,
-        histogramBinCount: Int,
-        topLimit: Int
+        options: AnalyticsAggregator.Options
     ) async -> AnalyticsAggregationResult? {
         guard settings.persistHistory, let persistenceWorker else { return nil }
-        let options = AnalyticsAggregator.Options(
-            includeViaDigipeaters: includeViaDigipeaters,
-            histogramBinCount: histogramBinCount,
-            topLimit: topLimit
-        )
         do {
             return try await persistenceWorker.aggregateAnalytics(
                 in: timeframe,

@@ -54,14 +54,12 @@ struct ContentView: View {
         _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(
             settingsStore: settings,
             netRomIntegration: client.netRomIntegration,
-            databaseAggregationProvider: { interval, bucket, calendar, includeVia, histogramBinCount, topLimit in
+            databaseAggregationProvider: { interval, bucket, calendar, options in
                 await client.aggregateAnalytics(
                     in: interval,
                     bucket: bucket,
                     calendar: calendar,
-                    includeViaDigipeaters: includeVia,
-                    histogramBinCount: histogramBinCount,
-                    topLimit: topLimit
+                    options: options
                 )
             },
             timeframePacketsProvider: { interval in

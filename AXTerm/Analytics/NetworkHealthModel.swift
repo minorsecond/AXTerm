@@ -286,6 +286,7 @@ nonisolated enum NetworkHealthCalculator {
         allRecentPackets: [Packet],
         timeframeDisplayName: String,
         includeViaDigipeaters: Bool,
+        stationIdentityMode: StationIdentityMode = .station,
         timeframeDuration: TimeInterval? = nil,
         trendWindowMinutes: Int = 60,
         trendBucketMinutes: Int = 5,
@@ -296,6 +297,7 @@ nonisolated enum NetworkHealthCalculator {
             timeframePackets: timeframePackets,
             allRecentPackets: allRecentPackets,
             includeViaDigipeaters: includeViaDigipeaters,
+            stationIdentityMode: stationIdentityMode,
             timeframeDuration: timeframeDuration,
             now: now
         )
@@ -355,6 +357,7 @@ nonisolated enum NetworkHealthCalculator {
         allRecentPackets: [Packet],
         timeframeDisplayName: String,
         includeViaDigipeaters: Bool = true,
+        stationIdentityMode: StationIdentityMode = .station,
         timeframeDuration: TimeInterval? = nil,
         trendWindowMinutes: Int = 60,
         trendBucketMinutes: Int = 5,
@@ -372,6 +375,7 @@ nonisolated enum NetworkHealthCalculator {
             allRecentPackets: allRecentPackets,
             timeframeDisplayName: timeframeDisplayName,
             includeViaDigipeaters: includeViaDigipeaters,
+            stationIdentityMode: stationIdentityMode,
             timeframeDuration: timeframeDuration,
             trendWindowMinutes: trendWindowMinutes,
             trendBucketMinutes: trendBucketMinutes,
@@ -398,13 +402,15 @@ nonisolated enum NetworkHealthCalculator {
         timeframePackets: [Packet],
         allRecentPackets: [Packet],
         includeViaDigipeaters: Bool,
+        stationIdentityMode: StationIdentityMode,
         timeframeDuration: TimeInterval?,
         now: Date
     ) -> NetworkHealthMetrics {
         // TOPOLOGY METRICS (from canonical graph)
         let countedStations = calculateTotalStations(
             packets: timeframePackets,
-            includeViaDigipeaters: includeViaDigipeaters
+            includeViaDigipeaters: includeViaDigipeaters,
+            identityMode: stationIdentityMode
         )
         // Keep denominator aligned with canonical graph membership.
         // Graph may include routing aliases (e.g., DRL/DRLNOD) that strict callsign-only
@@ -452,7 +458,8 @@ nonisolated enum NetworkHealthCalculator {
         // This keeps percentages stable when SSIDs are grouped into station identities.
         let activeStationsRaw = calculateTotalStations(
             packets: recentPackets,
-            includeViaDigipeaters: includeViaDigipeaters
+            includeViaDigipeaters: includeViaDigipeaters,
+            identityMode: stationIdentityMode
         )
         let activeStations = min(activeStationsRaw, totalNodes)
 
@@ -586,24 +593,24 @@ nonisolated enum NetworkHealthCalculator {
 
     private static func calculateTotalStations(
         packets: [Packet],
-        includeViaDigipeaters: Bool
+        includeViaDigipeaters: Bool,
+        identityMode: StationIdentityMode = .station
     ) -> Int {
         guard !packets.isEmpty else { return 0 }
 
         var stations: Set<String> = []
 
         for packet in packets {
-            if let from = packet.from?.call, CallsignValidator.isValidRoutingNode(from) {
-                stations.insert(CallsignParser.identityKey(for: from, mode: .station))
+            if let from = packet.from?.display, CallsignValidator.isValidRoutingNode(from) {
+                stations.insert(CallsignParser.identityKey(for: from, mode: identityMode))
             }
-            if let to = packet.to?.call, CallsignValidator.isValidRoutingNode(to) {
-                stations.insert(CallsignParser.identityKey(for: to, mode: .station))
+            if let to = packet.to?.display, CallsignValidator.isValidRoutingNode(to) {
+                stations.insert(CallsignParser.identityKey(for: to, mode: identityMode))
             }
             if includeViaDigipeaters {
-                for via in packet.via {
-                    let call = via.call
-                    if CallsignValidator.isValidRoutingNode(call) {
-                        stations.insert(CallsignParser.identityKey(for: call, mode: .station))
+                for via in packet.via where via.repeated {
+                    if CallsignValidator.isValidRoutingNode(via.display) {
+                        stations.insert(CallsignParser.identityKey(for: via.display, mode: identityMode))
                     }
                 }
             }

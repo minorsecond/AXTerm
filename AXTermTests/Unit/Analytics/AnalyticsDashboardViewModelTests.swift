@@ -216,7 +216,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
 
         let viewModel = AnalyticsDashboardViewModel(
             settingsStore: settings,
-            databaseAggregationProvider: { _, _, _, _, _, _ in expected },
+            databaseAggregationProvider: { _, _, _, _ in expected },
             calendar: calendar,
             packetDebounce: 0,
             graphDebounce: 0,
@@ -268,7 +268,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
 
         let viewModel = AnalyticsDashboardViewModel(
             settingsStore: settings,
-            databaseAggregationProvider: { _, _, _, _, _, _ in
+            databaseAggregationProvider: { _, _, _, _ in
                 counter.increment()
                 return result
             },
@@ -450,7 +450,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
 
         let viewModel = AnalyticsDashboardViewModel(
             settingsStore: settings,
-            databaseAggregationProvider: { _, _, _, _, _, _ in
+            databaseAggregationProvider: { _, _, _, _ in
                 try? await Task.sleep(for: .milliseconds(80))
                 return expected
             },

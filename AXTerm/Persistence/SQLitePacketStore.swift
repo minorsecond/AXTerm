@@ -151,7 +151,7 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
             }
 
             let baseSQL = """
-                SELECT receivedAt, fromCall, fromSSID, toCall, toSSID, viaPath, frameType, infoText, infoLen
+                SELECT receivedAt, fromCall, fromSSID, toCall, toSSID, viaPath, frameType, controlHex, infoText, infoLen
                 FROM \(PacketRecord.databaseTableName)
                 WHERE receivedAt >= ? AND receivedAt < ?
             """
@@ -168,6 +168,10 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
             var packetCounts: [BucketKey: Int] = [:]
             var payloadBytes: [BucketKey: Int] = [:]
             var uniqueStationsByBucket: [BucketKey: Set<String>] = [:]
+            var uiCountsByBucket: [BucketKey: Int] = [:]
+            var iCountsByBucket: [BucketKey: Int] = [:]
+            var otherCountsByBucket: [BucketKey: Int] = [:]
+            var rejectCountsByBucket: [BucketKey: Int] = [:]
             var heatmapCounts: [Date: [Int]] = [:]
             var talkerCounts: [String: Int] = [:]
             var destinationCounts: [String: Int] = [:]
@@ -194,6 +198,7 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
                 let toSSID: Int = row["toSSID"]
                 let viaPath: String = row["viaPath"]
                 let frameTypeRaw: String = row["frameType"]
+                let controlHex: String = row["controlHex"]
                 let infoText: String? = row["infoText"]
                 let payloadLength: Int = row["infoLen"]
 
@@ -213,6 +218,7 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
                 let toDisplay = CallsignNormalizer.display(call: toCall, ssid: toSSID)
                 let from = StationNormalizer.normalize(fromDisplay)
                 let to = StationNormalizer.normalize(toDisplay)
+                let identityMode = options.stationIdentityMode
                 // Only digipeaters that actually repeated the frame (H bit set) count as
                 // observed stations — mirrors AnalyticsAggregator's in-memory semantics.
                 let repeatedVia = PacketEncoding.decodeViaPath(viaPath)
@@ -223,31 +229,54 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
                 // "Unique stations" card and series read the same regardless of whether
                 // history persistence routes aggregation through SQLite or memory.
                 if let from, CallsignValidator.isValidRoutingNode(from) {
-                    talkerCounts[from, default: 0] += 1
-                    uniqueStations.insert(from)
+                    let key = CallsignParser.identityKey(for: from, mode: identityMode)
+                    talkerCounts[key, default: 0] += 1
+                    uniqueStations.insert(key)
                 }
                 if let to, CallsignValidator.isValidRoutingNode(to) {
-                    destinationCounts[to, default: 0] += 1
-                    uniqueStations.insert(to)
+                    let key = CallsignParser.identityKey(for: to, mode: identityMode)
+                    destinationCounts[key, default: 0] += 1
+                    uniqueStations.insert(key)
                 }
 
                 for station in repeatedVia where CallsignValidator.isValidRoutingNode(station) {
+                    let key = CallsignParser.identityKey(for: station, mode: identityMode)
                     if options.includeViaDigipeaters {
-                        uniqueStations.insert(station)
+                        uniqueStations.insert(key)
                     }
-                    digipeaterCounts[station, default: 0] += 1
+                    digipeaterCounts[key, default: 0] += 1
                 }
 
                 let seriesKey = BucketKey(date: timestamp, bucket: bucket, calendar: calendar)
                 packetCounts[seriesKey, default: 0] += 1
                 payloadBytes[seriesKey, default: 0] += payloadLength
+                if frameTypeRaw == FrameType.ui.rawValue {
+                    uiCountsByBucket[seriesKey, default: 0] += 1
+                } else if frameTypeRaw == FrameType.i.rawValue {
+                    iCountsByBucket[seriesKey, default: 0] += 1
+                } else {
+                    otherCountsByBucket[seriesKey, default: 0] += 1
+                }
+                // REJ (sType 2) / SREJ (sType 3) from the mod-8 S-frame control byte:
+                // the peer asked for a retransmit — a direct RF-loss indicator.
+                if frameTypeRaw == FrameType.s.rawValue {
+                    let control = PacketEncoding.decodeControl(controlHex)
+                    let sType = (control >> 2) & 0x03
+                    if sType >= 2 {
+                        rejectCountsByBucket[seriesKey, default: 0] += 1
+                    }
+                }
 
                 var bucketStations = uniqueStationsByBucket[seriesKey, default: []]
-                if let from, CallsignValidator.isValidRoutingNode(from) { bucketStations.insert(from) }
-                if let to, CallsignValidator.isValidRoutingNode(to) { bucketStations.insert(to) }
+                if let from, CallsignValidator.isValidRoutingNode(from) {
+                    bucketStations.insert(CallsignParser.identityKey(for: from, mode: identityMode))
+                }
+                if let to, CallsignValidator.isValidRoutingNode(to) {
+                    bucketStations.insert(CallsignParser.identityKey(for: to, mode: identityMode))
+                }
                 if options.includeViaDigipeaters {
                     for station in repeatedVia where CallsignValidator.isValidRoutingNode(station) {
-                        bucketStations.insert(station)
+                        bucketStations.insert(CallsignParser.identityKey(for: station, mode: identityMode))
                     }
                 }
                 uniqueStationsByBucket[seriesKey] = bucketStations
@@ -273,7 +302,11 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
             let series = AnalyticsSeries(
                 packetsPerBucket: seriesBucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: packetCounts[$0, default: 0]) },
                 bytesPerBucket: seriesBucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: payloadBytes[$0, default: 0]) },
-                uniqueStationsPerBucket: seriesBucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: uniqueStationsByBucket[$0]?.count ?? 0) }
+                uniqueStationsPerBucket: seriesBucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: uniqueStationsByBucket[$0]?.count ?? 0) },
+                uiFramesPerBucket: seriesBucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: uiCountsByBucket[$0, default: 0]) },
+                iFramesPerBucket: seriesBucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: iCountsByBucket[$0, default: 0]) },
+                otherFramesPerBucket: seriesBucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: otherCountsByBucket[$0, default: 0]) },
+                rejectFramesPerBucket: seriesBucketKeys.map { AnalyticsSeriesPoint(bucket: $0.date, value: rejectCountsByBucket[$0, default: 0]) }
             )
 
             let days = Self.dayRange(startDay: heatmapStartDay, endDay: heatmapEndDay, calendar: calendar)
@@ -300,7 +333,7 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
                 histogram: histogram,
                 topTalkers: Self.rankRows(from: talkerCounts, limit: options.topLimit),
                 topDestinations: Self.rankRows(from: destinationCounts, limit: options.topLimit),
-                topDigipeaters: Self.rankRows(from: digipeaterCounts, limit: options.topLimit, allowRoutingAliases: true)
+                topDigipeaters: Self.rankRows(from: digipeaterCounts, limit: options.topLimit)
             )
         }
     }
@@ -389,12 +422,12 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
 
     private static func rankRows(
         from counts: [String: Int],
-        limit: Int,
-        allowRoutingAliases: Bool = false
+        limit: Int
     ) -> [RankRow] {
         guard limit > 0 else { return [] }
+        // Entries were validated (isValidRoutingNode) and identity-grouped at
+        // insertion time; tactical aliases rank like callsigns.
         return counts
-            .filter { allowRoutingAliases ? CallsignValidator.isValidRoutingNode($0.key) : CallsignValidator.isValidCallsign($0.key) }
             .map { RankRow(label: $0.key, count: $0.value) }
             .sorted { lhs, rhs in
                 if lhs.count == rhs.count {
@@ -412,10 +445,15 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
         calendar: Calendar
     ) -> AnalyticsAggregationResult {
         let keys = bucketKeys(interval: interval, bucket: bucket, calendar: calendar)
+        let zeroPoints = keys.map { AnalyticsSeriesPoint(bucket: $0.date, value: 0) }
         let emptySeries = AnalyticsSeries(
-            packetsPerBucket: keys.map { AnalyticsSeriesPoint(bucket: $0.date, value: 0) },
-            bytesPerBucket: keys.map { AnalyticsSeriesPoint(bucket: $0.date, value: 0) },
-            uniqueStationsPerBucket: keys.map { AnalyticsSeriesPoint(bucket: $0.date, value: 0) }
+            packetsPerBucket: zeroPoints,
+            bytesPerBucket: zeroPoints,
+            uniqueStationsPerBucket: zeroPoints,
+            uiFramesPerBucket: zeroPoints,
+            iFramesPerBucket: zeroPoints,
+            otherFramesPerBucket: zeroPoints,
+            rejectFramesPerBucket: zeroPoints
         )
         return AnalyticsAggregationResult(
             summary: AnalyticsSummaryMetrics(
