@@ -278,8 +278,15 @@ final class AX25RetryTests: XCTestCase {
     /// a gap that gates outbound data — but with T1 stopped, the T1-timeout flush that exists
     /// to skip past an unrecoverable gap could never run, so the session stalled until the
     /// peer happened to speak. Sending REJ must therefore start T1.
-    func testREJStartsT1SoReceiveGapCanHeal() {
-        var sm = AX25StateMachine(config: AX25SessionConfig(windowSize: 4))
+    ///
+    /// Second field capture (2026-08-22, KB5YZB-7 via DRLNOD): the flush itself must be a
+    /// last resort. The old retryCount>=2 threshold skipped V(R) past frames the peer was
+    /// still actively retransmitting (~8 s into REJ recovery on a 4–8 s RTT path), silently
+    /// losing their data. §6.4.4.1 forbids delivering across a gap, so the flush may only
+    /// fire on the retry just before N2 would tear the link down.
+    func testREJStartsT1SoReceiveGapCanHealOnlyAsLastResort() {
+        let config = AX25SessionConfig(windowSize: 4)
+        var sm = AX25StateMachine(config: config)
         _ = sm.handle(event: .connectRequest)
         _ = sm.handle(event: .receivedUA)
         XCTAssertEqual(sm.state, .connected)
@@ -293,8 +300,21 @@ final class AX25RetryTests: XCTestCase {
                       "REJ must start T1 — it is what drives the gap-flush recovery")
         XCTAssertFalse(sm.receiveBuffer.isEmpty, "precondition: the frame is buffered")
 
-        // The peer never retransmits N(S)=0. Two T1 expiries must flush past the gap.
-        _ = sm.handle(event: .t1Timeout)
+        // While retries remain, the gap must NOT be skipped: the peer may still be
+        // retransmitting the missing frame (REJ recovery in progress).
+        let flushThreshold = config.maxRetries - 1
+        for retry in 1..<flushThreshold {
+            let early = sm.handle(event: .t1Timeout)
+            XCTAssertFalse(early.contains(.deliverData(Data("HELLO".utf8))),
+                           "retry \(retry): buffered data must not be delivered across the gap")
+            XCTAssertFalse(sm.receiveBuffer.isEmpty,
+                           "retry \(retry): the gap must be held while REJ recovery can still succeed")
+            XCTAssertEqual(sm.sequenceState.vr, 0,
+                           "retry \(retry): V(R) must not advance past the missing frame")
+        }
+
+        // The peer never retransmits N(S)=0. On the retry before N2 link failure,
+        // flushing past the gap beats tearing the whole link down.
         let flushed = sm.handle(event: .t1Timeout)
 
         XCTAssertTrue(sm.receiveBuffer.isEmpty,

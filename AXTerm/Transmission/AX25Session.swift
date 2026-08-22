@@ -718,16 +718,26 @@ nonisolated struct AX25StateMachine: Sendable {
                 return [.stopT1, .stopT3, .notifyError("Link failure (retries exceeded)")]
             }
 
-            // RECEIVE BUFFER FLUSH HEURISTIC:
-            // After 2+ T1 timeouts with buffered out-of-sequence frames, the remote node
-            // is clearly not going to retransmit the missing frame(s) that created the gap.
-            // Skip V(R) past the gap and deliver buffered frames to prevent session death.
+            // RECEIVE BUFFER FLUSH — LAST DITCH ONLY (deliberate spec deviation):
+            // §6.4.4.1 (implicit reject) forbids delivering data across a missing
+            // N(S): out-of-sequence I frames are discarded and the gap must heal
+            // via REJ retransmission. (Buffering them at all is already an
+            // SREJ-style extension.) Skipping V(R) past the gap permanently loses whatever the
+            // missing frame carried, so it may only happen when the alternative is
+            // worse — N2 exhaustion tearing the whole link down (which loses all
+            // subsequent data too). That is the one scenario this flush exists for:
+            // a peer that truly never retransmits the missing frame (observed once
+            // with DRLNOD: it sent ns=0,3,1 and never resent ns=2, leaving V(R)
+            // stuck until it DM'd us).
             //
-            // Real-world scenario from DRLNOD: it sends ns=0,3,1 but never retransmits ns=2.
-            // We get stuck at V(R)=2 with ns=3 buffered, polling forever until DRLNOD sends DM.
-            // This flush lets us deliver ns=3 from the buffer, advance V(R) to 4, and keep going.
+            // The threshold is therefore the retry just before link failure, not a
+            // small constant. Field capture 2026-08-22 (KB5YZB-7 via DRLNOD): a
+            // retryCount>=2 threshold with a 4 s RTO flushed after ~8 s on a path
+            // whose measured RTT was 4–8 s, and silently dropped two 128-byte
+            // frames the peer was still actively retransmitting.
             var actions: [AX25SessionAction] = []
-            if retryCount >= 2 && !receiveBuffer.isEmpty {
+            let flushThreshold = max(2, config.maxRetries - 1)
+            if retryCount >= flushThreshold && !receiveBuffer.isEmpty {
                 // Find the lowest buffered sequence number (closest gap to fill)
                 if let lowestBuffered = receiveBuffer.keys.min(by: { distanceFromVR($0) < distanceFromVR($1) }) {
                     let skippedCount = (lowestBuffered - sequenceState.vr + config.modulo) % config.modulo
