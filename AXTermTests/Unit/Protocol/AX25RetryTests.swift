@@ -324,7 +324,7 @@ final class AX25RetryTests: XCTestCase {
         let destination = AX25Address(call: "KB5YZB", ssid: 7)
         let path = DigiPath()
         var samples = 0
-        manager.onLinkQualitySample = { _, _, _, _ in samples += 1 }
+        manager.onLinkQualitySample = { _, _ in samples += 1 }
 
         // Still connecting (SABM unanswered) — the peer's zombie session polls us.
         _ = manager.connect(to: destination, path: path, channel: 0)

@@ -1234,18 +1234,31 @@ final class PersistentLearningTests: XCTestCase {
     }
 
     // L-5: TxAdaptiveSettings recovers from extreme loss to stable settings.
+    // Recovery is deliberately gradual (spec 4.2: EWMA + success streaks) —
+    // one clean sample after a collapse proves nothing; a sustained clean run
+    // must pull the EWMA down and earn the upgrade streak.
     func testAdaptiveSettingsRecoveryFromExtremeLoss() {
         var settings = TxAdaptiveSettings()
 
         // Drive to extreme degraded state
-        settings.updateFromLinkQuality(lossRate: 1.0, etx: 20.0, srtt: nil)
+        settings.updateFromLinkQuality(lossRate: 1.0, etx: 20.0, srtt: nil, newFrames: 0, retransmits: 3)
         XCTAssertEqual(settings.paclen.currentAdaptive, 64)
         XCTAssertEqual(settings.windowSize.currentAdaptive, 1)
 
-        // Recovery
-        settings.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: 0.5)
+        // One clean sample: EWMA still poisoned, no recovery yet.
+        settings.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: 0.5, newFrames: 1, retransmits: 0)
+        XCTAssertEqual(settings.paclen.currentAdaptive, 64,
+            "a single clean sample after a collapse is not recovery evidence")
+
+        // Sustained clean traffic: EWMA decays below the thresholds and the
+        // success streak earns the way back up the ladder.
+        for _ in 0..<20 {
+            settings.updateFromLinkQuality(lossRate: 0.0, etx: 1.0, srtt: 0.5, newFrames: 1, retransmits: 0)
+        }
         XCTAssertGreaterThan(settings.paclen.currentAdaptive, 64,
-            "PACLEN should recover after loss drops to zero")
+            "PACLEN must recover after sustained clean traffic")
+        XCTAssertGreaterThan(settings.windowSize.currentAdaptive, 1,
+            "window must leave stop-and-wait after sustained clean traffic")
     }
 }
 

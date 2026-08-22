@@ -66,8 +66,11 @@ final class AdaptiveTransmissionIntegrationTests: XCTestCase {
         coordinator.localCallsign = "LOCAL-0"
         let peer = AX25Address(call: "PEER", ssid: 0)
 
-        coordinator.applyLinkQualitySample(lossRate: 0.1, etx: 1.5, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""))
-        coordinator.applyLinkQualitySample(lossRate: 0.4, etx: 4.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: "DIGI-1"))
+        // Spec 4.2: the direct route earns its larger window with a streak.
+        for _ in 0..<10 {
+            coordinator.applyLinkQualitySample(lossRate: 0.0, etx: 1.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""), newFrames: 1, retransmits: 0)
+        }
+        coordinator.applyLinkQualitySample(lossRate: 0.4, etx: 4.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: "DIGI-1"), newFrames: 1, retransmits: 1)
 
         let sessionDirect = coordinator.sessionManager.session(for: peer, path: DigiPath())
         let sessionVia = coordinator.sessionManager.session(for: peer, path: DigiPath.from(["DIGI-1"]))
@@ -78,7 +81,7 @@ final class AdaptiveTransmissionIntegrationTests: XCTestCase {
         XCTAssertEqual(sessionDirect.stateMachine.config.windowSize, 3, "Direct had good link at creation")
         XCTAssertEqual(sessionVia.stateMachine.config.windowSize, 1, "Via had high loss at creation")
 
-        coordinator.applyLinkQualitySample(lossRate: 0.02, etx: 1.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""))
+        coordinator.applyLinkQualitySample(lossRate: 0.02, etx: 1.0, srtt: nil, source: "session", routeKey: RouteAdaptiveKey(destination: "PEER-0", pathSignature: ""), newFrames: 1, retransmits: 0)
         let sameDirect = coordinator.sessionManager.existingSession(for: peer, path: DigiPath())
         XCTAssertNotNil(sameDirect)
         XCTAssertEqual(sameDirect!.stateMachine.config.windowSize, 3, "Existing session config must not change after new samples")

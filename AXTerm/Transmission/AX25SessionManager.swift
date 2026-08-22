@@ -29,6 +29,17 @@ nonisolated struct SessionKey: Hashable, Sendable {
 // MARK: - Session
 
 /// Represents an AX.25 connected-mode session
+/// One evidence-bearing link-quality observation from a connected session.
+/// `newFrames` and `retransmits` are DELTAS since the previous sample, so the
+/// link controller's EWMA sees time-local evidence (spec 4.2).
+nonisolated struct LinkQualitySample: Sendable {
+    let lossRate: Double
+    let etx: Double
+    let srtt: Double?
+    let newFrames: Int
+    let retransmits: Int
+}
+
 nonisolated final class AX25Session: @unchecked Sendable {
     let id: UUID
     let key: SessionKey
@@ -81,6 +92,14 @@ nonisolated final class AX25Session: @unchecked Sendable {
 
     /// Pending retransmit task (grace period after T1 fires); cancelled if RR arrives
     var t1PendingRetransmitTask: AnyCancellableTask?
+
+    /// Statistics watermarks from the previous link-quality sample, so each
+    /// sample reports fresh evidence (deltas) rather than a session-lifetime
+    /// average. Spec 4.2 requires time-local, EWMA-able samples; a cumulative
+    /// ratio both dilutes new loss on long sessions and never forgives an old
+    /// bad patch.
+    var lastSampledFramesSent: Int = 0
+    var lastSampledRetransmissions: Int = 0
 
     /// Bumped on every T1 start/stop. A fired T1 closure whose captured generation
     /// no longer matches is stale: cancel() cannot recall a closure the scheduler
@@ -412,7 +431,7 @@ final class AX25SessionManager: ObservableObject {
     var onSessionStateChanged: ((AX25Session, AX25SessionState, AX25SessionState) -> Void)?
 
     /// Callback when we have a link quality sample (e.g. after RR with RTT) for adaptive tuning. Parameters: session, lossRate, etx, srtt.
-    var onLinkQualitySample: ((AX25Session, Double, Double, Double?) -> Void)?
+    var onLinkQualitySample: ((AX25Session, LinkQualitySample) -> Void)?
 
     /// Callback when peer ACKs frames (RR received). Parameters: session, newVa (V(A) after ack).
     /// Used for sender UI to show progressive send/ack highlighting.
@@ -1836,12 +1855,32 @@ final class AX25SessionManager: ObservableObject {
         // adaptive announcing a great link to a station we could not reach at
         // all (field capture 2026-08-22). SABMs are not part of the loss
         // metric, so a session with no I-frame history has no data to learn from.
+        //
+        // Delta-based (spec 4.2): each sample covers only what happened since
+        // the previous one, so the EWMA in the link controller sees time-local
+        // evidence. A poll that changed nothing emits nothing — previously
+        // every RR produced a sample from the same session-lifetime ratio.
         if session.state == .connected, session.statistics.framesSent > 0 {
-            let framesSent = session.statistics.framesSent
-            let lossRate = Double(session.statistics.retransmissions) / Double(framesSent)
-            let delivery = max(0.05, 1.0 - lossRate)
-            let etx = 1.0 / (delivery * delivery)
-            onLinkQualitySample?(session, lossRate, etx, session.timers.srtt)
+            let deltaSent = session.statistics.framesSent - session.lastSampledFramesSent
+            let deltaRetrans = session.statistics.retransmissions - session.lastSampledRetransmissions
+            if deltaSent > 0 || deltaRetrans > 0 {
+                session.lastSampledFramesSent = session.statistics.framesSent
+                session.lastSampledRetransmissions = session.statistics.retransmissions
+                // Fraction of this sample's transmissions that were repeats —
+                // bounded [0, 1), unlike the old retransmissions/framesSent
+                // which exceeded 1.0 whenever a frame needed several tries.
+                let transmissions = deltaSent + deltaRetrans
+                let lossRate = Double(deltaRetrans) / Double(max(1, transmissions))
+                let delivery = max(0.05, 1.0 - lossRate)
+                let etx = 1.0 / (delivery * delivery)
+                onLinkQualitySample?(session, LinkQualitySample(
+                    lossRate: lossRate,
+                    etx: etx,
+                    srtt: session.timers.srtt,
+                    newFrames: deltaSent,
+                    retransmits: deltaRetrans
+                ))
+            }
         }
 
         return responseFrames
