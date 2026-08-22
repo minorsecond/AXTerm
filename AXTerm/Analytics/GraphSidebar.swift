@@ -273,7 +273,7 @@ private struct SidebarOverviewContent: View {
                 )
                 MetricCell(
                     label: Copy.Health.packetRateLabel,
-                    value: String(format: "%.1f", health.metrics.packetRate),
+                    value: formatPacketRate(health.metrics.packetRate),
                     tooltip: Copy.Health.packetRateTooltip
                 )
                 MetricCell(
@@ -288,6 +288,14 @@ private struct SidebarOverviewContent: View {
                 )
             }
         }
+    }
+
+    /// Packets per minute with a unit and enough precision that a quiet band
+    /// (e.g. 0.04/min) doesn't render as "0.0".
+    private func formatPacketRate(_ rate: Double) -> String {
+        if rate <= 0 { return "0/min" }
+        if rate < 1 { return String(format: "%.2f/min", rate) }
+        return String(format: "%.1f/min", rate)
     }
 
     /// Dynamic percentage formatting per HIG:
@@ -312,9 +320,9 @@ private struct SidebarOverviewContent: View {
 
             ForEach(health.warnings) { warning in
                 HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: warning.severity == .warning ? "exclamationmark.triangle.fill" : "info.circle.fill")
+                    Image(systemName: warning.severity == .info ? "info.circle.fill" : "exclamationmark.triangle.fill")
                         .font(.caption)
-                        .foregroundStyle(warning.severity == .warning ? Color(nsColor: .systemOrange) : Color(nsColor: .systemBlue))
+                        .foregroundStyle(severityColor(for: warning.severity))
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(warning.title)
@@ -328,12 +336,18 @@ private struct SidebarOverviewContent: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(warning.severity == .warning
-                              ? Color(nsColor: .systemOrange).opacity(0.1)
-                              : Color(nsColor: .systemBlue).opacity(0.1))
+                        .fill(severityColor(for: warning.severity).opacity(0.1))
                 )
                 .help("\(warning.title): \(warning.detail)")
             }
+        }
+    }
+
+    private func severityColor(for severity: NetworkWarning.WarningSeverity) -> Color {
+        switch severity {
+        case .info: return Color(nsColor: .systemBlue)
+        case .caution: return Color(nsColor: .systemYellow)
+        case .warning: return Color(nsColor: .systemOrange)
         }
     }
 

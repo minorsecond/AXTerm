@@ -284,7 +284,6 @@ final class NetworkHealthCalculationTests: XCTestCase {
     
     override func setUp() {
         super.setUp()
-        NetworkHealthCalculator.resetEMAState()
     }
     
     private func makePacket(timestamp: Date, from: String, to: String, via: [String] = []) -> Packet {
@@ -305,7 +304,6 @@ final class NetworkHealthCalculationTests: XCTestCase {
         
         // Empty packets
         let emptyHealth = NetworkHealthCalculator.calculate(
-            graphModel: .empty,
             timeframePackets: [],
             allRecentPackets: [],
             timeframeDisplayName: "1h",
@@ -471,7 +469,6 @@ final class NetworkHealthCalculationTests: XCTestCase {
             makePacket(timestamp: now.addingTimeInterval(-300), from: "N3GHI", to: "W4JKL")
         ]
         
-        NetworkHealthCalculator.resetEMAState()
         let canonicalGraph1 = NetworkHealthCalculator.buildCanonicalGraph(packets: packets, includeViaDigipeaters: false)
         let health1 = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalGraph1,
@@ -482,7 +479,6 @@ final class NetworkHealthCalculationTests: XCTestCase {
             now: now
         )
         
-        NetworkHealthCalculator.resetEMAState()
         let canonicalGraph2 = NetworkHealthCalculator.buildCanonicalGraph(packets: packets, includeViaDigipeaters: false)
         let health2 = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalGraph2,
@@ -846,9 +842,7 @@ final class ActivityTrendTests: XCTestCase {
             makePacket(timestamp: now.addingTimeInterval(-45 * 60), from: "W5MNO", to: "K6PQR")   // 45 min ago
         ]
         
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
-            graphModel: .empty,
             timeframePackets: packets,
             allRecentPackets: packets,
             timeframeDisplayName: "1h",
@@ -868,9 +862,7 @@ final class ActivityTrendTests: XCTestCase {
     func testActivityTrendEmptyPackets() {
         let now = Date()
         
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
-            graphModel: .empty,
             timeframePackets: [],
             allRecentPackets: [],
             timeframeDisplayName: "1h",
@@ -1035,18 +1027,14 @@ final class AnalysisPageRegressionTests: XCTestCase {
         )
         
         // Health should use canonical graph, not view graph
-        NetworkHealthCalculator.resetEMAState()
         let health1 = NetworkHealthCalculator.calculate(
-            graphModel: viewGraph1,
             timeframePackets: packets,
             allRecentPackets: packets,
             timeframeDisplayName: "1h",
             now: now
         )
         
-        NetworkHealthCalculator.resetEMAState()
         let health2 = NetworkHealthCalculator.calculate(
-            graphModel: viewGraph2,
             timeframePackets: packets,
             allRecentPackets: packets,
             timeframeDisplayName: "1h",

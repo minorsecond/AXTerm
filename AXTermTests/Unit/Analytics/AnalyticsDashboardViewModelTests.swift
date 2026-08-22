@@ -606,7 +606,6 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
     }
 
     func testNetworkHealthIsInvariantToViewFilters() async {
-        NetworkHealthCalculator.resetEMAState()
 
         let now = Date()
         let packets = [
