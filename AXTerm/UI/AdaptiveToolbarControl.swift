@@ -68,12 +68,25 @@ private struct AdaptivePopoverContent: View {
             header(adaptive: adaptive)
 
             LazyVGrid(columns: gridColumns, spacing: 8) {
-                metricCard(label: "ETX", info: "Expected transmissions per successful frame. Lower is better.", value: adaptive.map { format($0.etx) } ?? "—", emphasized: true)
-                metricCard(label: "Loss", info: "Recent frame loss estimate for this context.", value: adaptive.map { formatPercent($0.lossRate) } ?? "—")
-                metricCard(label: "K", info: "Window size: outstanding frames allowed.", value: adaptive.map { "\($0.k)" } ?? "—")
-                metricCard(label: "P", info: "Packet size in bytes.", value: adaptive.map { "\($0.p)" } ?? "—")
+                metricCard(
+                    label: "ETX",
+                    info: "Expected transmissions per successful frame, smoothed (EWMA, newest sample weighted 0.3). This is the value the controller's thresholds compare against — ≤1.5 allows window upgrades, >2.0 forces 64-byte frames. Lower is better.",
+                    value: adaptive.map { format($0.smoothedEtx ?? $0.etx) } ?? "—",
+                    emphasized: true
+                )
+                metricCard(
+                    label: "Loss",
+                    info: "Frame-loss estimate, smoothed (EWMA of retransmits ÷ transmissions per sample). ≥20% forces stop-and-wait; ≤10% sustained allows recovery.",
+                    value: adaptive.map { formatPercent($0.smoothedLoss ?? $0.lossRate) } ?? "—"
+                )
+                metricCard(label: "K", info: "Window size: outstanding frames allowed. Earned +1 per confirmed 10-clean-frame streak, halved on retransmission.", value: adaptive.map { "\($0.k)" } ?? "—")
+                metricCard(label: "P", info: "Packet size in bytes. Steps 64 → 128 → 192 → 256 on sustained stability; drops immediately on loss.", value: adaptive.map { "\($0.p)" } ?? "—")
                 metricCard(label: "N2", info: "Maximum retries before fail.", value: adaptive.map { "\($0.n2)" } ?? "—")
-                metricCard(label: "RTO", info: "Current retransmission timeout.", value: adaptive.map { formatSeconds($0.currentRto) } ?? "—")
+                metricCard(label: "RTO", info: "Current retransmission timeout (2 × smoothed RTT, clamped). Also seeds the connect timer for this route.", value: adaptive.map { formatSeconds($0.currentRto) } ?? "—")
+            }
+
+            if let adaptive {
+                learningStatus(adaptive: adaptive)
             }
 
             etxChart
@@ -120,6 +133,34 @@ private struct AdaptivePopoverContent: View {
                 .padding(.vertical, 4)
                 .background(Color(nsColor: .quaternaryLabelColor).opacity(0.1), in: Capsule())
         }
+    }
+
+    /// The controller's "show your work" row: what it is doing right now
+    /// (trial / streak / waiting) and a running count of what it has done.
+    @ViewBuilder
+    private func learningStatus(adaptive: AdaptiveParams) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: adaptive.probationFramesRemaining != nil
+                      ? "testtube.2" : "chart.line.uptrend.xyaxis")
+                    .font(.system(size: 10))
+                    .foregroundStyle(adaptive.probationFramesRemaining != nil ? Color.orange : .secondary)
+                Text(adaptive.learningNarrative)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.primary)
+            }
+            Text(adaptive.activitySummary)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+        )
+        .help("The adaptive controller only upgrades after a sustained clean streak, and every upgrade runs a trial: a retransmission during the trial rolls it back and doubles the streak required next time.")
     }
 
     @ViewBuilder
@@ -218,7 +259,14 @@ private struct AdaptivePopoverContent: View {
         } else {
             scope = "Global"
         }
-        let summary = "\(scope) Adaptive K\(adaptive.k) P\(adaptive.p) N2 \(adaptive.n2) ETX \(format(adaptive.etx)) Loss \(formatPercent(adaptive.lossRate)) RTO \(formatSeconds(adaptive.currentRto))"
+        let summary = """
+        \(scope) Adaptive K\(adaptive.k) P\(adaptive.p) N2 \(adaptive.n2) \
+        ETX \(format(adaptive.smoothedEtx ?? adaptive.etx)) \
+        Loss \(formatPercent(adaptive.smoothedLoss ?? adaptive.lossRate)) \
+        RTO \(formatSeconds(adaptive.currentRto))
+        \(adaptive.learningNarrative)
+        \(adaptive.activitySummary)
+        """
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(summary, forType: .string)
     }

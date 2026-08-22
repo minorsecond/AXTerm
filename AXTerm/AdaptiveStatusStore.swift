@@ -111,6 +111,44 @@ nonisolated struct AdaptiveParams: Sendable, Equatable {
     }
 }
 
+extension AdaptiveParams {
+    /// One-line, plain-language account of what the controller is doing right
+    /// now — trial in progress, streak building, or waiting for evidence.
+    var learningNarrative: String {
+        if let remaining = probationFramesRemaining {
+            return "Upgrade on trial — \(remaining) clean frame\(remaining == 1 ? "" : "s") to confirm (any retransmit rolls it back)"
+        }
+        if successStreak > 0 {
+            return "\(successStreak) of \(upgradeStreakRequirement) clean frames toward the next upgrade"
+        }
+        if metrics.samplesSeen == 0 {
+            return "Waiting for evidence — no traffic observed yet"
+        }
+        return qualityLabel
+    }
+
+    /// One-line count of the controller's actions, for the popover footer.
+    var activitySummary: String {
+        var parts: [String] = []
+        if metrics.upgradesAttempted > 0 {
+            let confirmed = metrics.upgradesConfirmed
+            parts.append("\(metrics.upgradesAttempted) upgrade\(metrics.upgradesAttempted == 1 ? "" : "s") (\(confirmed) confirmed)")
+        }
+        if metrics.probeRollbacks > 0 {
+            parts.append("\(metrics.probeRollbacks) rolled back")
+        }
+        if metrics.lossDowngrades > 0 {
+            parts.append("\(metrics.lossDowngrades) loss downgrade\(metrics.lossDowngrades == 1 ? "" : "s")")
+        }
+        guard !parts.isEmpty else {
+            return metrics.samplesSeen == 0
+                ? "No activity yet"
+                : "No parameter changes over \(metrics.evidenceFrames) observed frame\(metrics.evidenceFrames == 1 ? "" : "s")"
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
 final class AdaptiveStatusStore: ObservableObject {
     @Published var globalAdaptive: AdaptiveParams?
     @Published var sessionAdaptiveByID: [AdaptiveSessionID: AdaptiveParams] = [:]
