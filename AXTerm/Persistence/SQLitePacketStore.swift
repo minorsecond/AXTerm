@@ -316,12 +316,14 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
         let bucketSize = max(1, Int(ceil(Double(maxPayload + 1) / Double(binCount))))
         var bins = Array(repeating: 0, count: binCount)
 
+        // Zero-payload frames are excluded to match AnalyticsAggregator: they would
+        // flood the first bin and hide the distribution of actual data frames.
         let payloadRows = try Row.fetchCursor(
             db,
             sql: """
                 SELECT infoLen
                 FROM \(PacketRecord.databaseTableName)
-                WHERE receivedAt >= ? AND receivedAt < ?
+                WHERE receivedAt >= ? AND receivedAt < ? AND infoLen > 0
             """,
             arguments: [start, end]
         )

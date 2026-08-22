@@ -517,10 +517,13 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
         let neighbors = viewState.graphModel.adjacency[selectedNodeID] ?? []
 
-        // Get classified relationships from the classified graph model
+        // Get classified relationships from the classified graph model.
+        // heardMutual counts as direct-decode evidence — without it a station whose
+        // only links are mutual showed an edge on the canvas but "No neighbors
+        // found" in the inspector.
         let relationships = viewState.classifiedGraphModel.relationships(for: selectedNodeID)
         let directPeers = relationships.filter { $0.linkType == .directPeer }
-        let heardDirect = relationships.filter { $0.linkType == .heardDirect }
+        let heardDirect = relationships.filter { $0.linkType == .heardDirect || $0.linkType == .heardMutual }
         let seenVia = relationships.filter { $0.linkType == .heardVia }
 
         return GraphInspectorDetails(
@@ -563,8 +566,14 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
         let internalPacketCount = internalLinks.reduce(0) { $0 + $1.packetCount }
         let internalByteCount = internalLinks.reduce(0) { $0 + $1.bytes }
-        let selectedNodeTotalBytes = selectedNodes.reduce(0) { $0 + $1.inBytes + $1.outBytes }
-        let touchingByteCount = max(0, selectedNodeTotalBytes - internalByteCount)
+        // "Total" = payload bytes on any link with at least one selected endpoint,
+        // summed over the same edge set as the internal figure. The old computation
+        // subtracted single-counted link bytes from double-counted per-node totals
+        // (every internal packet is one node's out-bytes AND the other's in-bytes),
+        // over-reporting by exactly the internal byte volume.
+        let touchingByteCount = viewState.graphModel.edges
+            .filter { selectedIDSet.contains($0.sourceID) || selectedIDSet.contains($0.targetID) }
+            .reduce(0) { $0 + $1.bytes }
 
         var externalAggregate: [String: GraphMultiInspectorDetails.SharedExternalConnection] = [:]
         for selectedID in selectedIDSet {
@@ -1218,13 +1227,18 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     func activeNodeIDs() -> Set<String> {
         let recentCutoff = Date().addingTimeInterval(-600) // 10 minutes
         let recentPackets = packets.filter { $0.timestamp >= recentCutoff }
-        var activeCallsigns: Set<String> = []
+        // Node IDs are identity keys ("W1ABC-7" in SSID mode, "W1ABC" in station
+        // mode). Matching on the bare base call selected nothing in SSID mode.
+        var activeKeys: Set<String> = []
         for packet in recentPackets {
-            if let from = packet.from?.call { activeCallsigns.insert(from) }
-            if let to = packet.to?.call { activeCallsigns.insert(to) }
+            if let from = packet.from?.display {
+                activeKeys.insert(CallsignParser.identityKey(for: from, mode: stationIdentityMode))
+            }
+            if let to = packet.to?.display {
+                activeKeys.insert(CallsignParser.identityKey(for: to, mode: stationIdentityMode))
+            }
         }
-        // Map callsigns to node IDs
-        return Set(viewState.graphModel.nodes.filter { activeCallsigns.contains($0.callsign) }.map { $0.id })
+        return Set(viewState.graphModel.nodes.filter { activeKeys.contains($0.id) }.map { $0.id })
     }
 
     // MARK: - Focus Mode Actions

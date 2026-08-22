@@ -274,7 +274,11 @@ nonisolated struct AnalyticsAggregator {
     private static func computeHistogram(events: [PacketEvent], binCount: Int) -> HistogramData {
         guard !events.isEmpty, binCount > 0 else { return .empty }
 
-        let payloads = events.map { $0.payloadBytes }
+        // Zero-payload frames (RR/UA/SABM/DISC and friends) are the majority of
+        // connected-mode traffic and would flood the first bin, collapsing the
+        // distribution of actual data frames into one bar.
+        let payloads = events.map { $0.payloadBytes }.filter { $0 > 0 }
+        guard !payloads.isEmpty else { return .empty }
         let maxValue = payloads.max() ?? 0
         let bucketSize = max(1, Int(ceil(Double(maxValue + 1) / Double(binCount))))
 

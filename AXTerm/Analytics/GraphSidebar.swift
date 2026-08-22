@@ -800,7 +800,10 @@ private struct SidebarInspectorContent: View {
                     tooltip: Copy.Inspector.directPeersSectionTooltip
                 )
             }
-            if let heardDirect = breakdown[.heardDirect] {
+            // heardMutual is direct-decode evidence in both directions; fold it in
+            // so the breakdown sums to the internal-link count.
+            if breakdown[.heardDirect] != nil || breakdown[.heardMutual] != nil {
+                let heardDirect = (breakdown[.heardDirect] ?? 0) + (breakdown[.heardMutual] ?? 0)
                 InspectorMetricStringRow(
                     title: Copy.Inspector.heardDirectSection,
                     value: heardDirect.formatted(),

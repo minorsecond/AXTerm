@@ -26,14 +26,21 @@ dr_t = (1 - α) × dr_{t-1} + α × s_rev
 where:
 
 ```
-α = 1 - exp(-Δt / H)
+α = max(1 - exp(-Δt / H), 1 / (n + 1))
 ```
 
-- **H** (half-life): 30 minutes (default for both forward and reverse)
+- **H**: 30 minutes (default for both forward and reverse; note this is the
+  e-folding time constant of the exponential — the strict half-life is H·ln2)
 - **Δt**: time since previous observation
+- **n**: samples so far, including one pseudo-sample for the cold-start prior
 
-This time-based EWMA adapts smoothing to observation frequency — frequent
-observations blend slowly (small α), while sparse observations cause larger updates.
+The time-based term adapts smoothing to observation frequency — frequent
+observations blend slowly (small α), sparse observations cause larger updates.
+The count-based term is the standard EWMA warm-up correction: early estimates
+behave like a running mean seeded by `initialDeliveryRatio` (0.5), so a single
+packet yields df = 0.75 rather than instantly claiming df = 1.0. On import from
+persistence the estimate and sample count are restored, so a rehydrated link
+continues where it left off and incremental replay matches a full recompute.
 
 ### ETX Calculation
 
@@ -200,6 +207,11 @@ for evidence), the entry is fully removed from memory.
 is cleared and normal tracking resumes. This prevents unnecessary re-learning
 of link characteristics.
 
+**Persisted neighbor decay on load**: neighbors older than the persistence TTL
+load with exponentially decayed quality — `q × 2^(−(age−TTL)/TTL)` — instead of
+being zeroed, so the Quality and Freshness columns stay consistent after a
+restart.
+
 ### Comparison with Other Protocols
 
 | Protocol | Expiry Model |
@@ -262,3 +274,19 @@ of link characteristics.
 | `inferredBaseQuality` | 60 | 0–255 | Initial quality for inferred routes |
 | `reinforcementIncrement` | 20 | 0–100 | Quality boost per reinforcement |
 | `retryPenaltyMultiplier` | 0.7 | 0.0–1.0 | Score multiplier on retry detection |
+
+
+---
+
+## 8. Neighbor and Route Quality Semantics
+
+- **Neighbor observed quality** is the average of the observed link-quality
+  directions (forward and reverse when both exist, the observed one otherwise);
+  `neighborBaseQuality` (80) is only the cold-start default, not a floor.
+- **Neighbor path quality** updates by EWMA blend (70% current, 30% observed).
+  There is no per-observation "heard bonus": quality moves only on evidence, in
+  both directions.
+- **Route quality** follows classic NET/ROM semantics: each broadcast carries the
+  origin's current figure and *replaces* the stored quality (it can decrease).
+  Passively inferred evidence may only corroborate (raise) a broadcast-sourced
+  figure, never degrade it.

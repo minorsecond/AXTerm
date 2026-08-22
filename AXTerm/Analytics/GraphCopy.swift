@@ -421,6 +421,7 @@ nonisolated enum GraphCopy {
 
         static let minEdgeCountLabel = "Min edge"
         static let minEdgeCountTooltip = "Minimum packets required to display a connection in the graph (view only)."
+        static let minEdgeCountNetRomTooltip = "NET/ROM source: minimum route quality required to display a connection. Each slider step raises the threshold by 25 (of 255). View only."
 
         static let maxNodesLabel = "Max"
         static let maxNodesTooltip = "Limits visible nodes to keep the graph readable (view only)."

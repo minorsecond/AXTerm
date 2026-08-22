@@ -325,6 +325,9 @@ struct AnalyticsDashboardView: View {
                                     .frame(width: 20, alignment: .trailing)
                             }
                         }
+                        .help(viewModel.graphViewMode.isNetRomMode
+                              ? GraphCopy.GraphControls.minEdgeCountNetRomTooltip
+                              : GraphCopy.GraphControls.minEdgeCountTooltip)
 
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Max nodes")
@@ -349,16 +352,45 @@ struct AnalyticsDashboardView: View {
         AnalyticsCard(title: "Summary") {
             if let summary = viewModel.viewState.summary, viewModel.hasLoadedAggregation {
                 LazyVGrid(columns: metricColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
-                    SummaryMetricCard(title: "Total packets", value: summary.totalPackets.formatted())
-                    SummaryMetricCard(title: "Unique stations", value: summary.uniqueStations.formatted())
-                    SummaryMetricCard(title: "Payload bytes", value: ByteCountFormatter.string(fromByteCount: Int64(summary.totalPayloadBytes), countStyle: .file))
-                    SummaryMetricCard(title: "UI frames", value: summary.uiFrames.formatted())
-                    SummaryMetricCard(title: "I frames", value: summary.iFrames.formatted())
-                    SummaryMetricCard(title: "Info-text ratio", value: String(format: "%.0f%%", summary.infoTextRatio * 100))
+                    SummaryMetricCard(
+                        title: "Total packets",
+                        value: summary.totalPackets.formatted(),
+                        tooltip: "AX.25 frames received during the selected timeframe."
+                    )
+                    SummaryMetricCard(
+                        title: "Unique stations",
+                        value: summary.uniqueStations.formatted(),
+                        tooltip: "Distinct valid stations observed as sender, destination, or repeating digipeater. Service endpoints (BEACON, ID, WIDE…) are excluded."
+                    )
+                    SummaryMetricCard(
+                        title: "Payload bytes",
+                        value: ByteCountFormatter.string(fromByteCount: Int64(summary.totalPayloadBytes), countStyle: .file),
+                        tooltip: "Sum of AX.25 information-field bytes. Headers, control fields, and FCS are not counted; supervisory frames carry 0."
+                    )
+                    SummaryMetricCard(
+                        title: "UI frames",
+                        value: summary.uiFrames.formatted(),
+                        tooltip: "Unnumbered Information frames (beacons, APRS, unconnected traffic)."
+                    )
+                    SummaryMetricCard(
+                        title: "I frames",
+                        value: summary.iFrames.formatted(),
+                        tooltip: "Numbered Information frames (connected-mode data)."
+                    )
+                    SummaryMetricCard(
+                        title: "Other frames",
+                        value: max(0, summary.totalPackets - summary.uiFrames - summary.iFrames).formatted(),
+                        tooltip: "Supervisory and unnumbered control frames (RR, RNR, REJ, SABM, UA, DISC…). Without this card, UI + I appeared to lose packets against the total."
+                    )
+                    SummaryMetricCard(
+                        title: "Info-text ratio",
+                        value: String(format: "%.0f%%", summary.infoTextRatio * 100),
+                        tooltip: "Share of frames carrying printable info text."
+                    )
                 }
             } else {
                 LazyVGrid(columns: metricColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
-                    ForEach(0..<6, id: \.self) { _ in
+                    ForEach(0..<7, id: \.self) { _ in
                         SummaryMetricPlaceholderCard()
                     }
                 }
@@ -380,7 +412,7 @@ struct AnalyticsDashboardView: View {
                     }
                 }
 
-                ChartCard(title: "Bytes over time") {
+                ChartCard(title: "Payload bytes over time") {
                     if viewModel.hasLoadedAggregation {
                         TimeSeriesChart(points: viewModel.viewState.series.bytesPerBucket, valueLabel: "Bytes", bucket: viewModel.resolvedBucket)
                     } else {
@@ -404,7 +436,7 @@ struct AnalyticsDashboardView: View {
                     }
                 }
 
-                ChartCard(title: "Payload size distribution") {
+                ChartCard(title: "Payload size distribution (non-empty frames)") {
                     if viewModel.hasLoadedAggregation {
                         HistogramChart(data: viewModel.viewState.histogram)
                     } else {
@@ -515,6 +547,7 @@ struct AnalyticsDashboardView: View {
                     ZStack {
                         AnalyticsGraphView(
                             graphModel: viewModel.viewState.graphModel,
+                            isNetRomSource: viewModel.graphViewMode.isNetRomMode,
                             nodePositions: viewModel.viewState.nodePositions,
                             selectedNodeIDs: viewModel.viewState.selectedNodeIDs,
                             hoveredNodeID: viewModel.viewState.hoveredNodeID,
@@ -1725,6 +1758,7 @@ private struct ChartLoadingPlaceholder: View {
 private struct SummaryMetricCard: View {
     let title: String
     let value: String
+    var tooltip: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1739,6 +1773,7 @@ private struct SummaryMetricCard: View {
         .padding(12)
         .background(AnalyticsStyle.Colors.neutralFill)
         .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
+        .help(tooltip ?? title)
     }
 }
 
@@ -1882,6 +1917,13 @@ private struct TimeSeriesChart: View {
         return f
     }()
 
+    private static let secondsFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .medium
+        return f
+    }()
+
     private static let dateTimeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .short
@@ -1925,8 +1967,7 @@ private struct TimeSeriesChart: View {
                     .symbolSize(60)
                 }
             }
-            .chartYScale(domain: .automatic(includesZero: true))
-            .chartYScale(range: .plotDimension(startPadding: 8, endPadding: 8))
+            .chartYScale(domain: .automatic(includesZero: true), range: .plotDimension(startPadding: 8, endPadding: 8))
             .chartXScale(range: .plotDimension(startPadding: 6, endPadding: 6))
             .chartXAxis {
                 if shortRangeSpansBoundary {
@@ -2064,7 +2105,10 @@ private struct TimeSeriesChart: View {
 
     private func xAxisLabel(for date: Date) -> String {
         switch bucket {
-        case .tenSeconds, .minute, .fiveMinutes, .fifteenMinutes:
+        case .tenSeconds:
+            // Without seconds, six consecutive 10s buckets would share one label.
+            return Self.secondsFormatter.string(from: date)
+        case .minute, .fiveMinutes, .fifteenMinutes:
             return Self.timeFormatter.string(from: date)
         case .hour:
             return Self.timeFormatter.string(from: date)
@@ -2083,6 +2127,13 @@ private struct TimeSeriesChartTooltip: View {
         let f = DateFormatter()
         f.dateStyle = .none
         f.timeStyle = .short
+        return f
+    }()
+
+    private static let secondsFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .medium
         return f
     }()
 
@@ -2111,6 +2162,9 @@ private struct TimeSeriesChartTooltip: View {
 
     private var formattedTime: String {
         switch bucket {
+        case .tenSeconds:
+            // Seconds precision — otherwise six consecutive buckets share a header.
+            return Self.secondsFormatter.string(from: point.bucket)
         case .minute, .fiveMinutes, .fifteenMinutes:
             return Self.timeFormatter.string(from: point.bucket)
         default:
@@ -2275,7 +2329,11 @@ private struct HeatmapView: View {
                         for row in 0..<rows {
                             for col in 0..<cols {
                                 let value = data.matrix[row][col]
-                                let alpha = AnalyticsStyle.Heatmap.minAlpha + (AnalyticsStyle.Heatmap.maxAlpha - AnalyticsStyle.Heatmap.minAlpha) * (Double(value) / Double(maxValue))
+                                // Zero traffic renders unfilled; the minimum tint is
+                                // reserved for cells with at least one packet.
+                                let alpha = value == 0
+                                    ? 0
+                                    : AnalyticsStyle.Heatmap.minAlpha + (AnalyticsStyle.Heatmap.maxAlpha - AnalyticsStyle.Heatmap.minAlpha) * (Double(value) / Double(maxValue))
                                 let rect = CGRect(
                                     x: labelWidth + CGFloat(col) * cellWidth,
                                     y: CGFloat(row) * cellHeight,
@@ -2381,7 +2439,7 @@ private struct HeatmapTooltip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("\(yLabel), \(xLabel)")
+            Text("\(yLabel), \(xLabel):00–\(xLabel):59")
                 .font(.caption2)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
             Text("\(value) packets")
