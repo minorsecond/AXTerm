@@ -11,6 +11,14 @@ nonisolated struct StationTracker {
     private(set) var stations: [Station] = []
     private var stationIndex: [String: Int] = [:]
 
+    /// The path a packet was actually HEARD over: the digipeaters whose H-bit
+    /// is set, i.e. whose transmitter produced the copy that reached our
+    /// antenna. Empty means we heard the station's own transmitter directly —
+    /// even when a via path is listed but not yet acted on.
+    static func heardVia(_ packet: Packet) -> [String] {
+        packet.via.filter { $0.repeated }.map { $0.display }
+    }
+
     mutating func update(with packet: Packet) {
         guard let from = packet.from else { return }
         let call = from.display
@@ -18,15 +26,18 @@ nonisolated struct StationTracker {
         if let index = stationIndex[call] {
             stations[index].lastHeard = packet.timestamp
             stations[index].heardCount += 1
-            if !packet.via.isEmpty {
-                stations[index].lastVia = packet.via.map { $0.display }
-            }
+            // Always overwrite — including with empty. The old code only wrote
+            // non-empty paths, so a station once heard via a digi showed
+            // "Via DRLNOD, FNKTWN" forever, even while an entire direct
+            // session was proving we hear its own transmitter (sidebar said
+            // via-digi while the session correctly said direct).
+            stations[index].lastVia = Self.heardVia(packet)
         } else {
             let station = Station(
                 call: call,
                 lastHeard: packet.timestamp,
                 heardCount: 1,
-                lastVia: packet.via.map { $0.display }
+                lastVia: Self.heardVia(packet)
             )
             stations.append(station)
             stationIndex[call] = stations.count - 1
@@ -60,13 +71,11 @@ nonisolated struct StationTracker {
             if let currentLastHeard = aggregate.lastHeard {
                 if packet.timestamp >= currentLastHeard {
                     aggregate.lastHeard = packet.timestamp
-                    if !packet.via.isEmpty {
-                        aggregate.lastVia = packet.via.map { $0.display }
-                    }
+                    aggregate.lastVia = Self.heardVia(packet)
                 }
             } else {
                 aggregate.lastHeard = packet.timestamp
-                aggregate.lastVia = packet.via.map { $0.display }
+                aggregate.lastVia = Self.heardVia(packet)
             }
             aggregates[call] = aggregate
         }
