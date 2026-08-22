@@ -15,13 +15,17 @@ nonisolated struct ConsoleTypeFilterFlags: Equatable, Sendable {
     var showPrompt: Bool = true
     var showOther: Bool = true
     var showSystem: Bool = true
+    /// Show digipeated copies of the local station's own frames (off by default —
+    /// they carry no new content, but confirm the digi is actually relaying us).
+    var showDigipeats: Bool = false
 }
 
 nonisolated enum ConsoleVisibilityFilter {
     static func apply(
         lines: [ConsoleLine],
         clearedAt: Date?,
-        flags: ConsoleTypeFilterFlags
+        flags: ConsoleTypeFilterFlags,
+        localCallsign: String = ""
     ) -> [ConsoleLine] {
         let timeFiltered: [ConsoleLine]
         if let cutoff = clearedAt {
@@ -31,6 +35,12 @@ nonisolated enum ConsoleVisibilityFilter {
         }
 
         return timeFiltered.filter { line in
+            // Digipeated echoes of our own frames are copies, not content — hidden
+            // unless the operator opts in. Frames FROM other stations heard via a
+            // digi are the session content itself and are never hidden here.
+            if !flags.showDigipeats, line.isDigipeatEcho(localCallsign: localCallsign) {
+                return false
+            }
             switch line.kind {
             case .system, .error:
                 return flags.showSystem
@@ -53,6 +63,9 @@ struct ConsoleView: View {
     let lines: [ConsoleLine]
     let showDaySeparators: Bool
     @Binding var clearedAt: Date?
+    /// Local station callsign, used to recognize digipeated copies of our own
+    /// frames. Empty disables digipeat-echo handling (nothing is hidden).
+    var localCallsign: String = ""
 
     @State private var autoScroll = true
     @State private var isUserNearBottom = true
@@ -70,6 +83,7 @@ struct ConsoleView: View {
     @AppStorage("consoleFilter_showPrompt") private var showPrompt = true
     @AppStorage("consoleFilter_showOther") private var showOther = true
     @AppStorage("consoleFilter_showSystem") private var showSystem = true
+    @AppStorage("consoleFilter_showDigipeats") private var showDigipeats = false
 
     /// Lines filtered by clear timestamp and message type preferences
     private var typeFilteredLines: [ConsoleLine] {
@@ -83,8 +97,10 @@ struct ConsoleView: View {
                 showData: showData,
                 showPrompt: showPrompt,
                 showOther: showOther,
-                showSystem: showSystem
-            )
+                showSystem: showSystem,
+                showDigipeats: showDigipeats
+            ),
+            localCallsign: localCallsign
         )
     }
 
@@ -138,13 +154,13 @@ struct ConsoleView: View {
                                         .padding(.vertical, 4)
 
                                     ForEach(section.items) { group in
-                                        ConsoleLineGroupView(group: group)
+                                        ConsoleLineGroupView(group: group, localCallsign: localCallsign)
                                             .id(group.id)
                                     }
                                 }
                             } else {
                                 ForEach(groupedLines) { group in
-                                    ConsoleLineGroupView(group: group)
+                                    ConsoleLineGroupView(group: group, localCallsign: localCallsign)
                                         .id(group.id)
                                 }
                             }
@@ -264,6 +280,14 @@ struct ConsoleView: View {
                 color: .gray,
                 tooltip: "System messages. Connection status, errors, and internal application notifications."
             )
+            if !localCallsign.isEmpty {
+                FilterToggle(
+                    label: "DIGI",
+                    isOn: $showDigipeats,
+                    color: .indigo,
+                    tooltip: "Digipeater transmissions. Off-air copies of your own frames as repeated by a digipeater (marked ↻). They carry no new content, but seeing them confirms the digi is actually relaying you."
+                )
+            }
         }
     }
 
@@ -390,6 +414,7 @@ nonisolated struct ConsoleLineGroup: Identifiable {
 /// View for a grouped console line (primary + collapsed duplicates)
 struct ConsoleLineGroupView: View {
     let group: ConsoleLineGroup
+    var localCallsign: String = ""
     @State private var isExpanded = false
 
     var body: some View {
@@ -397,7 +422,8 @@ struct ConsoleLineGroupView: View {
             ConsoleLineView(
                 line: group.primary,
                 duplicateCount: group.duplicateCount,
-                allViaPaths: group.allViaPaths
+                allViaPaths: group.allViaPaths,
+                localCallsign: localCallsign
             )
 
             // Expanded duplicates (if any and expanded)
@@ -467,9 +493,16 @@ struct ConsoleLineView: View {
     let line: ConsoleLine
     var duplicateCount: Int = 0
     var allViaPaths: [[String]] = []
+    var localCallsign: String = ""
 
     private let callsignSaturation: Double = 0.35
     private let callsignBrightness: Double = 0.75
+
+    /// A digipeated copy of our own frame — shown dimmed with a repeat marker
+    /// so it reads as the digi's transmission, not new traffic.
+    private var isDigipeatEcho: Bool {
+        line.isDigipeatEcho(localCallsign: localCallsign)
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
@@ -480,6 +513,15 @@ struct ConsoleLineView: View {
             Text(line.timestampString)
                 .foregroundStyle(.tertiary)
                 .font(.system(size: 11, design: .monospaced))
+
+            // Digipeat-echo marker: this row is the digi re-transmitting our frame
+            if isDigipeatEcho {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.indigo)
+                    .help("Digipeated copy — \(line.viaDisplay) repeated your transmission")
+                    .accessibilityLabel("Digipeated copy")
+            }
 
             // Callsigns
             if let from = line.from {
@@ -521,6 +563,7 @@ struct ConsoleLineView: View {
         .padding(.horizontal, ConsoleTheme.rowPadding)
         .background(premiumBackground)
         .cornerRadius(ConsoleTheme.rowCornerRadius)
+        .opacity(isDigipeatEcho ? 0.6 : 1.0)
     }
     
     // MARK: - Premium Styling Components

@@ -1022,11 +1022,14 @@ final class PacketEngine: ObservableObject {
     private func logRxControlFrame(_ packet: Packet, decoded: AX25ControlFieldDecoded) {
         guard let description = describeControlFrame(decoded),
               let from = packet.from, let to = packet.to else { return }
+        // Preserve H-bit markers (`DRLNOD*`) so the console can tell a digipeated
+        // copy from the original — plain `.display` drops the star, which made a
+        // digi's repeat of our own frame indistinguishable from our TX-time line.
         let line = ConsoleLine.packet(
             from: from.display,
             to: to.display,
             text: description,
-            via: packet.via.map { $0.display },
+            via: Packet.normalizedViaItems(from: packet.via),
             messageType: .prompt
         )
         appendConsoleLine(line, category: .packet, packetID: nil, byteCount: description.utf8.count)

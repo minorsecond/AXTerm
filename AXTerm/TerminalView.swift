@@ -2115,7 +2115,8 @@ struct TerminalView: View {
             ConsoleView(
                 lines: lines,
                 showDaySeparators: settings.showConsoleDaySeparators,
-                clearedAt: $settings.terminalClearedAt
+                clearedAt: $settings.terminalClearedAt,
+                localCallsign: settings.myCallsign
             )
             .opacity(lines.isEmpty ? 0 : 1)
             
