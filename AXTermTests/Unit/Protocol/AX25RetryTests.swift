@@ -314,6 +314,37 @@ final class AX25RetryTests: XCTestCase {
         XCTAssertNil(session.t1TimerTask, "timers must be stopped on link failure")
     }
 
+    /// Regression (field capture 2026-08-22): RR polls from a peer's stale
+    /// session, arriving while we were still CONNECTING with four unanswered
+    /// SABMs on the air, produced vacuous loss=0 samples — adaptive announced
+    /// "Good link quality" for a station we could not reach at all. Samples
+    /// require a connected session with at least one I-frame of real evidence.
+    func testLinkQualitySamplesRequireConnectedSessionWithIFrameEvidence() {
+        let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
+        let destination = AX25Address(call: "KB5YZB", ssid: 7)
+        let path = DigiPath()
+        var samples = 0
+        manager.onLinkQualitySample = { _, _, _, _ in samples += 1 }
+
+        // Still connecting (SABM unanswered) — the peer's zombie session polls us.
+        _ = manager.connect(to: destination, path: path, channel: 0)
+        _ = manager.handleInboundRRFrames(from: destination, path: path, channel: 0,
+                                          nr: 0, pf: true, isCommand: true)
+        XCTAssertEqual(samples, 0, "no link-quality sample while connecting")
+
+        // Connected but no I-frame ever sent: still no evidence to learn from.
+        manager.handleInboundUA(from: destination, path: path, channel: 0)
+        _ = manager.handleInboundRRFrames(from: destination, path: path, channel: 0,
+                                          nr: 0, pf: true, isCommand: true)
+        XCTAssertEqual(samples, 0, "SABMs and polls alone are not loss evidence")
+
+        // Real I-frame traffic: now samples flow.
+        _ = manager.sendData(Data("info\r".utf8), to: destination, path: path, channel: 0)
+        _ = manager.handleInboundRRFrames(from: destination, path: path, channel: 0,
+                                          nr: 1, pf: false, isCommand: false)
+        XCTAssertEqual(samples, 1, "an acked I-frame is genuine link-quality evidence")
+    }
+
     /// Ack progress must reset the poll-retransmission ladder: a slow peer that
     /// DOES make progress, however marginal, is never declared failed.
     func testPollLadderResetsOnAckProgress() {

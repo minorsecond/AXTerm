@@ -1827,12 +1827,22 @@ final class AX25SessionManager: ObservableObject {
 
         checkInvariants(session: session)
 
-        // Feed link quality sample into adaptive settings (session-based learning)
-        let framesSent = max(1, session.statistics.framesSent)
-        let lossRate = Double(session.statistics.retransmissions) / Double(framesSent)
-        let delivery = max(0.05, 1.0 - lossRate)
-        let etx = 1.0 / (delivery * delivery)
-        onLinkQualitySample?(session, lossRate, etx, session.timers.srtt)
+        // Feed link quality sample into adaptive settings (session-based learning).
+        //
+        // Only with real evidence: the session must be connected and must have
+        // put at least one I-frame on the air. Without the gate, RR polls from
+        // a peer's stale session arriving while we were still CONNECTING (four
+        // unanswered SABMs deep) produced loss=0/0 → "Good link quality" —
+        // adaptive announcing a great link to a station we could not reach at
+        // all (field capture 2026-08-22). SABMs are not part of the loss
+        // metric, so a session with no I-frame history has no data to learn from.
+        if session.state == .connected, session.statistics.framesSent > 0 {
+            let framesSent = session.statistics.framesSent
+            let lossRate = Double(session.statistics.retransmissions) / Double(framesSent)
+            let delivery = max(0.05, 1.0 - lossRate)
+            let etx = 1.0 / (delivery * delivery)
+            onLinkQualitySample?(session, lossRate, etx, session.timers.srtt)
+        }
 
         return responseFrames
     }
