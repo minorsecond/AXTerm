@@ -49,7 +49,8 @@ final class AX25PathologicalStateTests: XCTestCase {
     }
     
     /// Tests a disconnection collision (both send DISC simultaneously).
-    /// Spec §6.4.2 (implicit via State transitions): Received DISC while Disconnecting -> send UA -> Disconnected.
+    /// SDL C4.3: Received DISC while awaiting release -> send DM -> Disconnected.
+    /// §6.3.4: the peer accepts UA or DM as the answer to its DISC.
     func testSimultaneousDISCCollision() {
         var smA = AX25StateMachine(config: AX25SessionConfig())
         _ = smA.handle(event: .connectRequest)
@@ -74,12 +75,16 @@ final class AX25PathologicalStateTests: XCTestCase {
         
         XCTAssertEqual(smA.state, .disconnected)
         XCTAssertEqual(smB.state, .disconnected)
-        XCTAssertTrue(collA.contains(.sendUA), "Must send UA for the received DISC")
-        XCTAssertTrue(collB.contains(.sendUA), "Must send UA for the received DISC")
-        
-        // They receive each other's UA
-        _ = smA.handle(event: .receivedUA)
-        _ = smB.handle(event: .receivedUA)
+        // SDL C4.3 (awaiting release): a DISC arriving while our own DISC is
+        // outstanding is answered with DM. §6.3.4 confirms the peer accepts either
+        // UA or DM in reply to its DISC.
+        XCTAssertTrue(collA.contains(.sendDM), "SDL C4.3: DISC collision is answered with DM")
+        XCTAssertTrue(collB.contains(.sendDM), "SDL C4.3: DISC collision is answered with DM")
+        XCTAssertFalse(collA.contains(.sendUA), "UA is the reply for a DISC on an established link, not during teardown")
+
+        // They receive each other's DM (harmless in disconnected state)
+        _ = smA.handle(event: .receivedDM)
+        _ = smB.handle(event: .receivedDM)
         
         XCTAssertEqual(smA.state, .disconnected)
         XCTAssertEqual(smB.state, .disconnected)

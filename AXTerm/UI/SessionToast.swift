@@ -30,7 +30,7 @@ nonisolated struct SessionNotification: Identifiable, Equatable {
     var icon: String {
         switch type {
         case .connected: return "link.circle.fill"
-        case .disconnected: return "link.badge.xmark"
+        case .disconnected: return "xmark.circle.fill"
         case .error: return "exclamationmark.triangle.fill"
         case .peerAxdpEnabled, .peerAxdpEnabledAlreadyUsing: return "bolt.fill"
         case .peerAxdpDisabled: return "bolt.slash.fill"

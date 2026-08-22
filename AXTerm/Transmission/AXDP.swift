@@ -91,7 +91,7 @@ nonisolated enum AXDP {
         static func decode(from data: Data, at offset: Int) -> DecodeResult? {
             // Need at least 3 bytes: type (1) + length (2)
             guard offset + 3 <= data.count else {
-                print("[DEBUG:AXDP:TLV] truncate header | offset=\(offset) need=3 dataLen=\(data.count)")
+                axDebugPrint("[DEBUG:AXDP:TLV] truncate header | offset=\(offset) need=3 dataLen=\(data.count)")
                 return nil
             }
 
@@ -104,9 +104,9 @@ nonisolated enum AXDP {
             // Check value doesn't exceed data
             guard valueEnd <= data.count else {
                 if type == TLVType.payload.rawValue {
-                    print("[DEBUG:AXDP:TLV] truncate payload TLV | offset=\(offset) length=\(length) valueEnd=\(valueEnd) dataLen=\(data.count) SHORT=\(valueEnd - data.count) bytes")
+                    axDebugPrint("[DEBUG:AXDP:TLV] truncate payload TLV | offset=\(offset) length=\(length) valueEnd=\(valueEnd) dataLen=\(data.count) SHORT=\(valueEnd - data.count) bytes")
                 } else {
-                    print("[DEBUG:AXDP:TLV] truncate value | type=0x\(String(format: "%02X", type)) offset=\(offset) length=\(length) valueEnd=\(valueEnd) dataLen=\(data.count)")
+                    axDebugPrint("[DEBUG:AXDP:TLV] truncate value | type=0x\(String(format: "%02X", type)) offset=\(offset) length=\(length) valueEnd=\(valueEnd) dataLen=\(data.count)")
                 }
                 return nil
             }
@@ -267,7 +267,7 @@ nonisolated enum AXDP {
         static func decode(from data: Data) -> (Message, Int)? {
             // Check magic header
             guard hasMagic(data) else {
-                print("[DEBUG:AXDP:DECODE] no magic | dataLen=\(data.count) prefix=\(data.prefix(4).map { String(format: "%02X", $0) }.joined())")
+                axDebugPrint("[DEBUG:AXDP:DECODE] no magic | dataLen=\(data.count) prefix=\(data.prefix(4).map { String(format: "%02X", $0) }.joined())")
                 TxLog.debug(.axdp, "No AXDP magic header", ["size": data.count])
                 return nil
             }
@@ -277,7 +277,7 @@ nonisolated enum AXDP {
             let (tlvs, truncated, tlvConsumedBytes, truncatedAtKnownType) = decodeTLVs(from: tlvData)
 
             guard !tlvs.isEmpty else {
-                print("[DEBUG:AXDP:DECODE] empty tlvs | dataLen=\(data.count) tlvDataLen=\(tlvData.count)")
+                axDebugPrint("[DEBUG:AXDP:DECODE] empty tlvs | dataLen=\(data.count) tlvDataLen=\(tlvData.count)")
                 return nil
             }
 
@@ -424,7 +424,7 @@ nonisolated enum AXDP {
             switch msg.type {
             case .chat, .fileChunk:
                 if msg.payload == nil {
-                    print("[DEBUG:AXDP:DECODE] incomplete msg | type=\(msg.type) bufferLen=\(data.count) payload=nil (graceful)")
+                    axDebugPrint("[DEBUG:AXDP:DECODE] incomplete msg | type=\(msg.type) bufferLen=\(data.count) payload=nil (graceful)")
                     TxLog.debug(.axdp, "Message decoded without payload (truncated/corrupt)", [
                         "type": String(describing: msg.type),
                         "bufferLen": data.count

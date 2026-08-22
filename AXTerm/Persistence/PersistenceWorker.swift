@@ -143,6 +143,11 @@ actor PersistenceWorker {
                     throw error
                 }
                 attempt += 1
+                // Snapshot the loop counters before the detached breadcrumb Task:
+                // capturing the mutable vars races with `delay *= 2` below and would
+                // report whichever value won, not the delay this attempt actually used.
+                let attemptForBreadcrumb = attempt
+                let delayForThisAttempt = delay
                 Task { @MainActor in
                     SentryManager.shared.addBreadcrumb(
                         category: "db.busy.retry",
@@ -150,13 +155,13 @@ actor PersistenceWorker {
                         level: .warning,
                         data: [
                             "operation": operation,
-                            "attempt": attempt,
-                            "delayMs": delay / 1_000_000
+                            "attempt": attemptForBreadcrumb,
+                            "delayMs": delayForThisAttempt / 1_000_000
                         ]
                     )
                 }
-                try await Task.sleep(nanoseconds: delay)
-                delay *= 2
+                try await Task.sleep(nanoseconds: delayForThisAttempt)
+                delay = delayForThisAttempt * 2
             }
         }
     }

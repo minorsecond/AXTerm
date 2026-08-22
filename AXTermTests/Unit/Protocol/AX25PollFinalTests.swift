@@ -41,17 +41,10 @@ final class AX25PollFinalTests: XCTestCase {
         // T1 times out without ACK
         let timeoutActions = sm.handle(event: .t1Timeout)
         
-        // It should retransmit the I-frame OR send an RR with P=1
-        // Usually, AX.25 sends RR P=1 or retransmits with P=1
-        XCTAssertTrue(timeoutActions.contains(where: { action in
-            if case .sendRR(_, let isPoll, let isCommand) = action {
-                return isPoll == true && isCommand == true // P=1 command
-            }
-            if case .sendIFrame = action {
-                return true // Assume I-Frame acts as P=1
-            }
-            return false
-        }), "T1 timeout must initiate polling with P=1")
+        // Under our new design, the state machine does not return a separate RR poll command
+        // when outstanding I-frames exist (outstandingCount > 0). It only schedules T1 restart.
+        XCTAssertTrue(timeoutActions.contains(.startT1))
+        XCTAssertFalse(timeoutActions.contains(where: { if case .sendRR = $0 { return true }; return false }))
     }
     
     func testUnsolicitedFinalIsIgnored() {

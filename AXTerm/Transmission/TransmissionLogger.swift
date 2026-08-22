@@ -583,3 +583,19 @@ final class TxLog {
         }
     }
 }
+
+// MARK: - Debug-only trace printing
+
+/// Debug-only console trace, compiled out of release builds.
+///
+/// The AX.25/AXDP receive path emitted these on every frame via bare `print(...)`. In a
+/// release build that is synchronous console I/O on the main thread for every packet, and
+/// the interpolated arguments (send-buffer key arrays, hex dumps) were built even when
+/// nothing consumed them. Taking the message as an @autoclosure means release builds skip
+/// the formatting as well as the write.
+@inline(__always)
+nonisolated func axDebugPrint(_ message: @autoclosure () -> String) {
+#if DEBUG
+    print(message())
+#endif
+}

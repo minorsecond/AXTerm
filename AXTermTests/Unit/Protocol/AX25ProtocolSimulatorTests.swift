@@ -29,12 +29,17 @@ final class AX25ProtocolSimulatorTests: XCTestCase {
             nodeA.manager.onSendFrame?(sabm)
         }
         
-        // Give time for SABM -> UA exchange
-        try await Task.sleep(nanoseconds: 100_000_000) // 100ms
-        
+        // Wait for the SABM -> UA exchange. Fixed sleeps flake under full-suite
+        // parallel load: the simulator delivers frames via unstructured
+        // Task { Task.sleep } hops, so on a saturated cooperative pool a 100 ms
+        // window is not a guarantee. Poll with a generous deadline instead.
         let sessionA = nodeA.manager.session(for: nodeB.callsign, path: DigiPath(), channel: 0)
+        try await waitUntil("both nodes connected") {
+            sessionA.state == .connected &&
+            nodeB.manager.sessions.values.first(where: { $0.remoteAddress == nodeA.callsign })?.state == .connected
+        }
+
         let sessionB = nodeB.manager.sessions.values.first(where: { $0.remoteAddress == nodeA.callsign })
-        
         XCTAssertEqual(sessionA.state, .connected, "Node A should be connected")
         XCTAssertNotNil(sessionB, "Node B should have created a session")
         XCTAssertEqual(sessionB?.state, .connected, "Node B should be connected")
@@ -46,11 +51,29 @@ final class AX25ProtocolSimulatorTests: XCTestCase {
             nodeA.manager.onSendFrame?(frame)
         }
         
-        // Give time for I-frame delivery and RR ack
-        try await Task.sleep(nanoseconds: 200_000_000) // 200ms
-        
+        // Wait for I-frame delivery and RR ack
+        try await waitUntil("data delivered and acknowledged") {
+            sessionA.outstandingCount == 0 &&
+            sessionB?.stateMachine.sequenceState.vr == 1
+        }
+
         XCTAssertEqual(sessionA.outstandingCount, 0, "Node A should have received an ACK")
         XCTAssertEqual(sessionB?.stateMachine.sequenceState.vr, 1, "Node B should have received the frame and incremented V(R)")
+    }
+
+    /// Poll `condition` every 20 ms until it holds or `deadline` seconds elapse.
+    /// Returns normally either way — the caller's assertions produce the failure
+    /// detail. The deadline only bounds the wait.
+    private func waitUntil(
+        _ label: String,
+        deadline: TimeInterval = 5.0,
+        condition: @escaping () -> Bool
+    ) async throws {
+        let start = Date()
+        while Date().timeIntervalSince(start) < deadline {
+            if condition() { return }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
     }
     
     func testLossyLinkRetransmitsAndEventuallyConnects() async throws {

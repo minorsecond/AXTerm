@@ -81,6 +81,23 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
 
     // MARK: - Formatting Helpers
 
+    /// True when the line was heard as a digipeated copy (any via marked `*` —
+    /// the H bit was set, so what we heard was the digipeater's transmitter).
+    var heardViaDigipeater: Bool {
+        via.contains { $0.hasSuffix("*") }
+    }
+
+    /// True when this line is a digipeated copy of the local station's own
+    /// transmission — the digi repeating our frame back at us. These carry no
+    /// new content (the TX-time line already shows the frame), but seeing them
+    /// confirms the digipeater actually relayed us.
+    func isDigipeatEcho(localCallsign: String) -> Bool {
+        guard heardViaDigipeater, let from else { return false }
+        let local = CallsignValidator.normalize(localCallsign)
+        guard !local.isEmpty else { return false }
+        return CallsignValidator.normalize(from) == local
+    }
+
     var timestampString: String {
         Self.timeFormatter.string(from: timestamp)
     }

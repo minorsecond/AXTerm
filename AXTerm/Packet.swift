@@ -27,6 +27,21 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
     let rawAx25: Data
     let kissEndpoint: KISSEndpoint?
 
+    /// True when every digipeater in the path has set its has-been-repeated (H)
+    /// bit, or the path is empty (direct frame).
+    ///
+    /// AX.25 digipeating rules: a frame is not "delivered" until each digi in its
+    /// list has actioned it. On a shared-audio attachment (e.g. TCP KISS into the
+    /// digipeater's own TNC) we hear BOTH copies of every digipeated frame — the
+    /// original in transit toward the digi (H=0) and the repeated copy (H=1).
+    /// Acting on the in-transit copy double-processes every frame and, worse, can
+    /// answer a frame the digi has not yet forwarded (field capture 2026-08-22:
+    /// the pre-digipeat UA from KB5YZB-7 via DRLNOD was processed 2 s before the
+    /// real, repeated copy arrived).
+    var isFullyDigipeated: Bool {
+        via.allSatisfy { $0.repeated }
+    }
+
     nonisolated static func computeInfoText(from info: Data) -> String? {
         guard !info.isEmpty else { return nil }
         let printableCount = info.filter { $0 >= 0x20 && $0 < 0x7F || $0 == 0x0A || $0 == 0x0D }.count
