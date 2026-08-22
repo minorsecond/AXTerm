@@ -138,10 +138,18 @@ nonisolated final class AX25Session: @unchecked Sendable {
         self.path = path
         self.channel = channel
         self.stateMachine = AX25StateMachine(config: config)
+        // §6.7.1.1: T1 "should be adjusted according to the number of repeaters" —
+        // each digi store-and-forwards the frame in both directions, so a T1 sized
+        // for a direct link fires mid-flight on a digipeated one. The spec gives no
+        // formula; this uses the TNC-2 FRACK convention, retry interval = FRACK ×
+        // (2m+1) for m digis. Only the pre-sample seed is scaled: in adaptive mode
+        // the first RTT sample (SABM→UA) replaces it entirely, and the timers'
+        // rtoMax clamp still bounds it.
+        let hopMultiplier = Double(2 * path.digis.count + 1)
         self.timers = AX25SessionTimers(
             rtoMin: config.rtoMin ?? 1.0,
             rtoMax: config.rtoMax ?? 30.0,
-            initialRto: config.initialRto ?? 4.0,
+            initialRto: (config.initialRto ?? 4.0) * hopMultiplier,
             adaptiveTimeout: config.adaptiveTimeout
         )
         self.statistics = AX25SessionStatistics()

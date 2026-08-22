@@ -559,11 +559,20 @@ final class SessionCoordinator: ObservableObject {
             ])
 
             guard let self = self else { return AX25SessionConfig(adaptiveTimeout: true) }
+            // The operator's configured T1 must survive adaptive being off. These
+            // branches previously returned a bare config, silently dropping the
+            // setting so sessions ran the hardcoded 4 s default (field capture
+            // 2026-08-22: settings said 8 s, every timer log showed rto=4.0s —
+            // shorter than the digipeated path's 4–8 s RTT, so each I-frame cost a
+            // spurious retransmit + REJ). Mirrors syncSessionManagerConfigFromAdaptive.
+            let userT1 = AppSettingsStore.sanitizeAX25T1TimeoutSeconds(
+                self.appSettings?.ax25T1TimeoutSeconds ?? AppSettingsStore.defaultAX25T1TimeoutSeconds
+            )
             if !self.adaptiveTransmissionEnabled {
-                return AX25SessionConfig(adaptiveTimeout: false)
+                return AX25SessionConfig(initialRto: userT1, adaptiveTimeout: false)
             }
             if self.useDefaultConfigForDestinations.contains(where: { canonicalDestination($0) == canonicalDestination(destination) }) {
-                return AX25SessionConfig(adaptiveTimeout: false)
+                return AX25SessionConfig(initialRto: userT1, adaptiveTimeout: false)
             }
             // When multiple connections exist to the same destination, use a conservative merged config so we don't flip parameters between connections or change settings mid-transmission.
             if self.activeSessionCount(forDestination: destination) >= 1 {

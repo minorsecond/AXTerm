@@ -310,6 +310,56 @@ final class AX25SessionTests: XCTestCase {
         XCTAssertEqual(session.timers.rto, 4.0, accuracy: 0.01, "Adaptive-off should keep fixed FRACK/T1 rather than exponential RTO backoff")
     }
 
+    /// §6.7.1.1: T1 "should be adjusted according to the number of repeaters".
+    /// The initial RTO seed is scaled by the TNC-2 FRACK convention (2m+1) for m digis;
+    /// a direct path is unchanged. Field capture 2026-08-22 (KB5YZB-7 via DRLNOD):
+    /// a direct-link 4 s T1 on a one-digi path (measured RTT 4–8 s) fired before
+    /// nearly every ack, costing a spurious retransmit + REJ per I-frame.
+    func testInitialRTOScalesWithDigipeaterCount() {
+        let config = AX25SessionConfig(initialRto: 4.0, adaptiveTimeout: false)
+        let local = AX25Address(call: "K0EPI", ssid: 7)
+        let remote = AX25Address(call: "KB5YZB", ssid: 7)
+
+        let direct = AX25Session(localAddress: local, remoteAddress: remote, config: config)
+        XCTAssertEqual(direct.timers.rto, 4.0, accuracy: 0.01, "direct path keeps the configured T1")
+
+        let oneDigi = AX25Session(
+            localAddress: local, remoteAddress: remote,
+            path: DigiPath.from(["DRLNOD"]), config: config
+        )
+        XCTAssertEqual(oneDigi.timers.rto, 12.0, accuracy: 0.01, "one digi: T1 × (2·1+1)")
+
+        let twoDigi = AX25Session(
+            localAddress: local, remoteAddress: remote,
+            path: DigiPath.from(["DRLNOD", "W0ARP-7"]), config: config
+        )
+        XCTAssertEqual(twoDigi.timers.rto, 20.0, accuracy: 0.01, "two digis: T1 × (2·2+1)")
+    }
+
+    /// The hop-scaled seed must respect rtoMax, and must only be a seed: the first
+    /// RTT sample in adaptive mode replaces it with the measured estimate.
+    func testHopScaledInitialRTOClampsAndYieldsToMeasuredRTT() {
+        let local = AX25Address(call: "K0EPI", ssid: 7)
+        let remote = AX25Address(call: "KB5YZB", ssid: 7)
+
+        let clamped = AX25Session(
+            localAddress: local, remoteAddress: remote,
+            path: DigiPath.from(["DRLNOD", "W0ARP-7", "WIDE2-1"]),
+            config: AX25SessionConfig(rtoMax: 30.0, initialRto: 8.0, adaptiveTimeout: false)
+        )
+        XCTAssertEqual(clamped.timers.rto, 30.0, accuracy: 0.01, "8 s × 7 hops multiplier clamps to rtoMax")
+
+        var adaptive = AX25Session(
+            localAddress: local, remoteAddress: remote,
+            path: DigiPath.from(["DRLNOD"]),
+            config: AX25SessionConfig(initialRto: 4.0, adaptiveTimeout: true)
+        ).timers
+        XCTAssertEqual(adaptive.rto, 12.0, accuracy: 0.01)
+        adaptive.updateRTT(sample: 2.0)
+        // First sample: srtt=2, rttvar=1, rto=2+4·1=6 — the seed is fully replaced.
+        XCTAssertEqual(adaptive.rto, 6.0, accuracy: 0.01, "measured RTT replaces the hop-scaled seed")
+    }
+
     func testSendDataQueuesWhileReceiveSequenceGapIsUnresolved() {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
         manager.defaultConfig = AX25SessionConfig(adaptiveTimeout: false)
