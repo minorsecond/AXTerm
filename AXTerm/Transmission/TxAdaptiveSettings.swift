@@ -126,6 +126,13 @@ nonisolated struct TxAdaptiveSettings: Sendable {
         range: 32...256
     )
 
+    /// Hop-scaled ceiling on the adaptive paclen ladder (bytes). Every digi
+    /// hop multiplies a frame's on-air exposure (2m+1 transmissions per round
+    /// trip), compounding the per-byte corruption probability, so routes give
+    /// up one ladder rung of maximum paclen per hop — see paclenCeiling(forHops:).
+    /// A ceiling on optimism only: loss response below it is untouched.
+    var paclenCeiling: Int = 256
+
     /// Window size (K - outstanding frames)
     var windowSize = AdaptiveSetting<Int>(
         name: "windowSize",
@@ -258,6 +265,32 @@ nonisolated struct TxAdaptiveSettings: Sendable {
     /// Suggested-K cap in auto mode (spec 4.4: kMax user cap, default 4).
     private static let autoWindowCap = 4
 
+    /// Maximum adaptive paclen for a route with `hops` digipeaters: one
+    /// ladder rung down per hop, floored at 128. The 64-byte rung is a LOSS
+    /// response and stays reachable on every route — it is never a hop prior.
+    static func paclenCeiling(forHops hops: Int) -> Int {
+        let topIndex = paclenLadder.count - 1              // 256
+        let flooredIndex = max(1, topIndex - max(0, hops)) // never below 128
+        return paclenLadder[flooredIndex]
+    }
+
+    /// Install the hop-scaled ceiling for this route and clamp any
+    /// already-learned paclen above it (e.g. defaults or state inherited
+    /// before the route's hop count was known).
+    mutating func applyPaclenCeiling(forHops hops: Int) {
+        let ceiling = Self.paclenCeiling(forHops: hops)
+        paclenCeiling = ceiling
+        if paclen.currentAdaptive > ceiling {
+            paclen.currentAdaptive = ceiling
+            paclen.adaptiveReason = "Capped at \(ceiling) for \(hops)-hop digipeater path"
+        }
+        if let trial = probation, trial.priorPaclen > ceiling {
+            probation = AdaptiveProbation(priorWindow: trial.priorWindow,
+                                          priorPaclen: ceiling,
+                                          framesRemaining: trial.framesRemaining)
+        }
+    }
+
     /// Update adaptive values from link quality (spec Sections 4.2 / 4.4 / 7.3).
     ///
     /// - Parameters:
@@ -374,7 +407,7 @@ nonisolated struct TxAdaptiveSettings: Sendable {
             let priorPaclen = paclen.currentAdaptive
             var upgraded = false
 
-            let raisedPaclen = Self.stepUp(priorPaclen, ladder: Self.paclenLadder)
+            let raisedPaclen = min(paclenCeiling, Self.stepUp(priorPaclen, ladder: Self.paclenLadder))
             if raisedPaclen != priorPaclen {
                 paclen.currentAdaptive = raisedPaclen
                 paclen.adaptiveReason = "Stable link — probing larger frames"

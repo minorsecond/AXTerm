@@ -20,6 +20,14 @@ nonisolated struct RouteAdaptiveKey: Hashable, Sendable {
     let pathSignature: String
 }
 
+/// Digipeater hop count encoded in a route's path signature
+/// (DigiPath.display: "" for direct, "DRLNOD" for one hop, "DRLNOD,FNKTWN" …).
+private func hopCount(inPathSignature signature: String) -> Int {
+    let trimmed = signature.trimmingCharacters(in: .whitespaces)
+    guard !trimmed.isEmpty else { return 0 }
+    return trimmed.split(separator: ",").count
+}
+
 /// Normalizes destination so "PEER" and "PEER-0" match (SSID 0 display form).
 private func canonicalDestination(_ destination: String) -> String {
     let u = destination.uppercased().trimmingCharacters(in: .whitespaces)
@@ -361,6 +369,9 @@ final class SessionCoordinator: ObservableObject {
             // Normalize destination for consistent cache lookups (PEER-0 and PEER map to same key)
             let normalizedKey = RouteAdaptiveKey(destination: canonicalDestination(key.destination), pathSignature: key.pathSignature)
             var entry = adaptiveCache[normalizedKey]?.settings ?? TxAdaptiveSettings()
+            // Hop-scaled paclen ceiling for this route: applied before every
+            // update so both fresh entries and inherited state respect it.
+            entry.applyPaclenCeiling(forHops: hopCount(inPathSignature: normalizedKey.pathSignature))
             let before = AdaptiveSnapshot(from: entry)
             let rollbacksBefore = entry.metrics.probeRollbacks
             entry.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits)
