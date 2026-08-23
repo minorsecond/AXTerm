@@ -953,6 +953,46 @@ struct RttEstimator {
 - **K:** window size (max in-flight I frames)
 - **ETX/ETT:** expected transmissions / expected transmission time
 
+## 16) Third-party wire protocols over connected mode (Winlink B2F)
+
+AXTerm can run **wire-exact third-party protocols** (protocols whose byte
+stream is defined outside AXTerm) over an AX.25 connected session. The first
+of these is the Winlink **FBB/B2F** mail exchange. Rules:
+
+- Third-party protocol bytes are carried in I-frames with **PID `0xF0`** and
+  **MUST NOT** be wrapped in an AXDP envelope — the remote end is a foreign
+  implementation and the byte stream must match its specification exactly.
+  (§9.4's "keep the AXDP TLV envelope" applies to AXTerm's own file
+  transfers, not to foreign protocols.)
+- The protocol conversation claims the session's delivered byte stream
+  **exclusively** (`AX25SessionManager.claimDelivery`), so terminal
+  line-splitting and AXDP magic-detection never see foreign bytes. Claims
+  are released when the conversation ends.
+- Session parameters remain fixed at creation (§7.8); the protocol layer
+  never mutates link config mid-session.
+- Protocol timeouts are stretched by expected on-air time for bytes queued
+  at L2 (the peer cannot answer before our bytes finish transmitting).
+
+Checklist:
+- [x] Exclusive session byte-stream claim (terminal + AXDP bypass)
+  - Implementation notes: `AX25SessionManager.claimDelivery/releaseDelivery`;
+    tested in `SessionDeliveryClaimTests`.
+- [x] Winlink B2F engine as a pure sans-IO state machine
+  - Implementation notes: `AXTerm/Winlink/Protocol/B2FSessionEngine.swift`,
+    scripted-dialog tests in `B2FSessionEngineTests` (byte-at-a-time safe).
+- [x] LZHUF payload compression, fixture-exact against wl2k-go
+  - Implementation notes: `AXTerm/Winlink/Protocol/LZHUF.swift`; interop
+    fixtures embedded in `LZHUFFixtures.swift`.
+- [x] AX.25 and Telnet transports behind one `WinlinkTransport` interface
+  - Implementation notes: `AXTerm/Winlink/Session/`; runner pumps
+    transport ↔ engine ↔ store (`WinlinkSessionRunner`).
+- [ ] Token-bucket pacing for third-party bulk sends (blocked on §4.3
+  pacing being enforced on the live send path generally)
+
+See `Docs/Winlink.md` for the full subsystem design.
+
+---
+
 ## Meta: Implementation checklist behavior (do not remove content)
 
 When implementing from this document, you MUST:
