@@ -26,6 +26,18 @@ nonisolated struct SessionKey: Hashable, Sendable {
     }
 }
 
+/// Token proving exclusive ownership of a session's delivered byte stream
+/// (see `AX25SessionManager.claimDelivery`).
+nonisolated struct SessionDeliveryClaim: Sendable {
+    fileprivate let id: UUID
+    let key: SessionKey
+
+    fileprivate init(key: SessionKey) {
+        self.id = UUID()
+        self.key = key
+    }
+}
+
 // MARK: - Session
 
 /// Represents an AX.25 connected-mode session
@@ -454,6 +466,74 @@ final class AX25SessionManager: ObservableObject {
     /// When set, used to get session config per route (destination + path) so direct vs via-digi use separate learned params. If nil, use defaultConfig.
     var getConfigForDestination: ((String, String) -> AX25SessionConfig)?
 
+    // MARK: - Delivery claims
+
+    /// Exclusive raw-byte taps, keyed by session. While a claim is held,
+    /// delivered data bypasses BOTH `onDataReceived` (the terminal, which
+    /// line-splits and drops CR/LF) and `onDataDeliveredForReassembly`
+    /// (AXDP, whose magic detection must never see foreign protocol bytes).
+    /// Used by wire-exact protocol conversations such as Winlink B2F.
+    private var deliveryClaims: [SessionKey: (
+        id: UUID,
+        handler: (AX25Session, Data) -> Void,
+        stateHandler: ((AX25Session, AX25SessionState, AX25SessionState) -> Void)?
+    )] = [:]
+
+    /// Claims the delivered byte stream for one session key. Returns nil if
+    /// another feature already holds the claim. `stateHandler`, when given,
+    /// receives session state transitions alongside the regular observers.
+    func claimDelivery(
+        for key: SessionKey,
+        handler: @escaping (AX25Session, Data) -> Void,
+        stateHandler: ((AX25Session, AX25SessionState, AX25SessionState) -> Void)? = nil
+    ) -> SessionDeliveryClaim? {
+        guard deliveryClaims[key] == nil else { return nil }
+        let claim = SessionDeliveryClaim(key: key)
+        deliveryClaims[key] = (claim.id, handler, stateHandler)
+        return claim
+    }
+
+    func releaseDelivery(_ claim: SessionDeliveryClaim) {
+        guard deliveryClaims[claim.key]?.id == claim.id else { return }
+        deliveryClaims[claim.key] = nil
+    }
+
+    func hasDeliveryClaim(for key: SessionKey) -> Bool {
+        deliveryClaims[key] != nil
+    }
+
+    /// Routes a state transition to the claim holder (if any) and the
+    /// regular observers. All notify sites funnel through here.
+    private func notifyStateChanged(_ session: AX25Session, from oldState: AX25SessionState, to newState: AX25SessionState) {
+        deliveryClaims[session.key]?.stateHandler?(session, oldState, newState)
+        onSessionStateChanged?(session, oldState, newState)
+    }
+
+    /// Waits until a connect attempt resolves: the session leaves the
+    /// `.connecting` state, or the timeout elapses.
+    enum ConnectOutcome: Sendable {
+        case connected
+        case refused
+        case timeout
+    }
+
+    func awaitConnectionOutcome(key: SessionKey, timeout: TimeInterval) async -> ConnectOutcome {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            guard let session = sessions[key] else { return .refused }
+            switch session.state {
+            case .connected:
+                return .connected
+            case .disconnected, .error:
+                return .refused
+            case .connecting, .disconnecting:
+                break
+            }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        return .timeout
+    }
+
     // MARK: - Initialization
 
     init(
@@ -873,7 +953,7 @@ final class AX25SessionManager: ObservableObject {
                 "from": oldState.rawValue,
                 "to": session.state.rawValue
             ])
-            onSessionStateChanged?(session, oldState, session.state)
+            notifyStateChanged(session, from: oldState, to: session.state)
         }
 
         session.sabmSentAt = clock.currentTime
@@ -900,7 +980,7 @@ final class AX25SessionManager: ObservableObject {
         let actions = session.stateMachine.handle(event: .disconnectRequest)
 
         if oldState != session.state {
-            onSessionStateChanged?(session, oldState, session.state)
+            notifyStateChanged(session, from: oldState, to: session.state)
         }
 
         // Clear sabmSentAt to prevent late UA from reopening the session
@@ -918,7 +998,7 @@ final class AX25SessionManager: ObservableObject {
         let actions = session.stateMachine.handle(event: .forceDisconnect)
 
         if oldState != session.state {
-            onSessionStateChanged?(session, oldState, session.state)
+            notifyStateChanged(session, from: oldState, to: session.state)
         }
 
         // Clear sabmSentAt to prevent late UA from reopening the session
@@ -1188,7 +1268,7 @@ final class AX25SessionManager: ObservableObject {
         ])
 
         if oldState != session.state {
-            onSessionStateChanged?(session, oldState, session.state)
+            notifyStateChanged(session, from: oldState, to: session.state)
         }
 
         if session.state == .connected {
@@ -1326,7 +1406,7 @@ final class AX25SessionManager: ObservableObject {
                 "from": oldState.rawValue,
                 "to": session.state.rawValue
             ])
-            onSessionStateChanged?(session, oldState, session.state)
+            notifyStateChanged(session, from: oldState, to: session.state)
         }
 
         // Execute the state machine's actions BEFORE draining. The UA actions
@@ -1404,7 +1484,7 @@ final class AX25SessionManager: ObservableObject {
                 "from": oldState.rawValue,
                 "to": session.state.rawValue
             ])
-            onSessionStateChanged?(session, oldState, session.state)
+            notifyStateChanged(session, from: oldState, to: session.state)
         }
         session.touch()
         _ = processActions(actions, for: session)
@@ -1449,7 +1529,7 @@ final class AX25SessionManager: ObservableObject {
                 "from": oldState.rawValue,
                 "to": session.state.rawValue
             ])
-            onSessionStateChanged?(session, oldState, session.state)
+            notifyStateChanged(session, from: oldState, to: session.state)
         }
         session.touch()
         _ = processActions(actions, for: session)
@@ -1527,7 +1607,7 @@ final class AX25SessionManager: ObservableObject {
                 "from": oldState.rawValue,
                 "to": session.state.rawValue
             ])
-            onSessionStateChanged?(session, oldState, session.state)
+            notifyStateChanged(session, from: oldState, to: session.state)
         }
 
         if sessionEnded {
@@ -1665,7 +1745,7 @@ final class AX25SessionManager: ObservableObject {
                 "from": oldState.rawValue,
                 "to": session.state.rawValue
             ])
-            onSessionStateChanged?(session, oldState, session.state)
+            notifyStateChanged(session, from: oldState, to: session.state)
         }
 
         // Acknowledge received frames in our send buffer: remove [vaBefore, vaAfter)
@@ -1800,7 +1880,7 @@ final class AX25SessionManager: ObservableObject {
                 "from": oldState.rawValue,
                 "to": session.state.rawValue
             ])
-            onSessionStateChanged?(session, oldState, session.state)
+            notifyStateChanged(session, from: oldState, to: session.state)
         }
 
         // Acknowledge received frames: remove only [vaBefore, nr) - not all ns < nr.
@@ -1886,7 +1966,7 @@ final class AX25SessionManager: ObservableObject {
                     "peer": session.remoteAddress.display,
                     "retries": session.stateMachine.retryCount
                 ])
-                onSessionStateChanged?(session, .connected, session.state)
+                notifyStateChanged(session, from: .connected, to: session.state)
                 responseFrames.append(contentsOf: processActions(failureActions, for: session))
                 // Final evidence flush: the retransmissions that exhausted N2
                 // are the loss the next attempt on this route must know about.
@@ -2065,7 +2145,7 @@ final class AX25SessionManager: ObservableObject {
                 "from": oldState.rawValue,
                 "to": session.state.rawValue
             ])
-            onSessionStateChanged?(session, oldState, session.state)
+            notifyStateChanged(session, from: oldState, to: session.state)
         }
 
         // Retire the frames this RNR acknowledged, using the V(A) the state machine
@@ -2164,7 +2244,7 @@ final class AX25SessionManager: ObservableObject {
                 "from": oldState.rawValue,
                 "to": session.state.rawValue
             ])
-            onSessionStateChanged?(session, oldState, session.state)
+            notifyStateChanged(session, from: oldState, to: session.state)
         }
 
         if !validNR {
@@ -2261,7 +2341,7 @@ final class AX25SessionManager: ObservableObject {
                 "from": oldState.rawValue,
                 "to": oldState.rawValue
             ])
-            onSessionStateChanged?(session, oldState, session.state)
+            notifyStateChanged(session, from: oldState, to: session.state)
         }
 
         session.timers.backoff()  // Exponential backoff
@@ -2309,7 +2389,7 @@ final class AX25SessionManager: ObservableObject {
         let actions = session.stateMachine.handle(event: .t3Timeout)
 
         if oldState != session.state {
-            onSessionStateChanged?(session, oldState, session.state)
+            notifyStateChanged(session, from: oldState, to: session.state)
         }
 
         return processActions(actions, for: session)
@@ -2696,8 +2776,14 @@ final class AX25SessionManager: ObservableObject {
                     "hasMagic": hasMagic,
                     "prefixHex": prefixHex
                 ])
-                onDataDeliveredForReassembly?(session, data)
-                onDataReceived?(session, data)
+                if let claim = deliveryClaims[session.key] {
+                    // A protocol conversation (e.g. Winlink B2F) owns this
+                    // session's bytes; terminal and AXDP must not see them.
+                    claim.handler(session, data)
+                } else {
+                    onDataDeliveredForReassembly?(session, data)
+                    onDataReceived?(session, data)
+                }
 
             case .notifyConnected:
                 TxLog.sessionOpen(
