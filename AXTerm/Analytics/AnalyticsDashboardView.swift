@@ -81,6 +81,7 @@ struct AnalyticsDashboardView: View {
                     VStack(alignment: .leading, spacing: AnalyticsStyle.Layout.sectionSpacing) {
                         summarySection
                         chartsSection
+                        stationsSection
                         graphSection
                     }
                     .padding(AnalyticsStyle.Layout.pagePadding)
