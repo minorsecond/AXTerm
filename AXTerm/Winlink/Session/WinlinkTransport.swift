@@ -18,6 +18,10 @@ protocol WinlinkTransport: AnyObject {
     /// The link closed — cleanly or otherwise. Set before calling `open()`.
     var onClose: ((String?) -> Void)? { get set }
 
+    /// Reports outbound delivery: bytes confirmed delivered (AX.25: acked
+    /// at L2; Telnet: written to the socket) out of bytes submitted.
+    var onDeliveryProgress: ((_ bytesDelivered: Int, _ bytesSubmitted: Int) -> Void)? { get set }
+
     /// Establishes the link. Returns once the peer can receive bytes
     /// (AX.25: session connected; Telnet: TCP up and CMS login completed).
     func open() async throws

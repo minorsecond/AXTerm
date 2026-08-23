@@ -35,6 +35,10 @@ final class WinlinkTelnetTransport: WinlinkTransport {
 
     var onReceive: ((Data) -> Void)?
     var onClose: ((String?) -> Void)?
+    var onDeliveryProgress: ((Int, Int) -> Void)?
+
+    private var submittedBytes = 0
+    private var deliveredBytes = 0
 
     var endpointDescription: String { "\(host):\(port)" }
 
@@ -84,7 +88,15 @@ final class WinlinkTelnetTransport: WinlinkTransport {
     }
 
     func send(_ data: Data) {
-        connection?.send(content: data, completion: .contentProcessed { _ in })
+        submittedBytes += data.count
+        let count = data.count
+        connection?.send(content: data, completion: .contentProcessed { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.deliveredBytes += count
+                self.onDeliveryProgress?(self.deliveredBytes, self.submittedBytes)
+            }
+        })
     }
 
     func close() {

@@ -24,6 +24,15 @@ final class WinlinkSessionRunner: ObservableObject {
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var statusText: String = ""
     @Published private(set) var lastSummary: WinlinkExchangeSummary?
+    /// Live byte-level progress for the progress card (nil when idle).
+    @Published private(set) var progress: WinlinkExchangeProgress?
+
+    // Per-message metadata and delivery baselines for send progress.
+    private var messageSubjects: [String: String] = [:]
+    private var messageCompressedSizes: [String: Int] = [:]
+    private var lastDeliveredBytes = 0
+    private var lastSubmittedBytes = 0
+    private var sendBaselineBytes = 0
 
     private let worker: WinlinkPersistenceWorker
     private var engine: B2FSessionEngine?
@@ -102,9 +111,19 @@ final class WinlinkSessionRunner: ObservableObject {
         transport.onClose = { [weak self] _ in
             self?.dispatch(.linkDisconnected)
         }
+        transport.onDeliveryProgress = { [weak self] delivered, submitted in
+            self?.handleDeliveryProgress(delivered: delivered, submitted: submitted)
+        }
+
+        messageSubjects = Dictionary(uniqueKeysWithValues: prepared.map { ($0.message.mid, $0.message.subject) })
+        messageCompressedSizes = Dictionary(uniqueKeysWithValues: prepared.map { ($0.message.mid, $0.compressed.count) })
+        lastDeliveredBytes = 0
+        lastSubmittedBytes = 0
+        sendBaselineBytes = 0
 
         phase = .connecting
         statusText = "Connecting to \(gatewayName)…"
+        progress = WinlinkExchangeProgress(kind: .connecting, startedAt: Date())
         do {
             try await transport.open()
         } catch {
@@ -115,6 +134,7 @@ final class WinlinkSessionRunner: ObservableObject {
 
         phase = .exchanging
         statusText = "Connected — exchanging mail…"
+        progress = WinlinkExchangeProgress(kind: .handshake, startedAt: Date())
 
         let summary = await withCheckedContinuation { (continuation: CheckedContinuation<WinlinkExchangeSummary, Never>) in
             self.completion = continuation
@@ -171,6 +191,14 @@ final class WinlinkSessionRunner: ObservableObject {
 
         case .outboundAccepted(let mid, let offset):
             statusText = "Sending \(mid)…"
+            // Everything submitted before this body (handshake, proposals,
+            // earlier messages) sits below this baseline, so the bar counts
+            // exactly this message's bytes as they are acked.
+            sendBaselineBytes = lastSubmittedBytes
+            let total = max(0, (messageCompressedSizes[mid] ?? 0) - offset)
+            progress = WinlinkExchangeProgress(
+                kind: .sending, mid: mid, subject: messageSubjects[mid],
+                bytesDone: 0, bytesTotal: total, startedAt: Date())
             Task { [worker] in
                 try? await worker.markSending(mid: mid)
                 if offset > 0 { try? await worker.recordSentOffset(mid: mid, offset: offset) }
@@ -195,8 +223,15 @@ final class WinlinkSessionRunner: ObservableObject {
                 try? await worker.saveInbound(message)
             }
 
-        case .receiveProgress(let bytes):
-            statusText = "Receiving… \(bytes) bytes"
+        case .receiveProgress(let mid, let bytes, let total):
+            statusText = "Receiving \(mid)…"
+            if progress?.kind == .receiving, progress?.mid == mid {
+                progress?.bytesDone = bytes
+                progress?.bytesTotal = total
+            } else {
+                progress = WinlinkExchangeProgress(
+                    kind: .receiving, mid: mid, bytesDone: bytes, bytesTotal: total, startedAt: Date())
+            }
 
         case .requestDisconnect:
             transport?.close()
@@ -215,6 +250,15 @@ final class WinlinkSessionRunner: ObservableObject {
         var summary = WinlinkExchangeSummary()
         summary.failureReason = reason
         return summary
+    }
+
+    /// Feeds L2 ack (or socket-write) totals into the current send bar.
+    private func handleDeliveryProgress(delivered deliveredBytes: Int, submitted submittedBytes: Int) {
+        lastDeliveredBytes = deliveredBytes
+        lastSubmittedBytes = submittedBytes
+        guard var current = progress, current.kind == .sending, current.bytesTotal > 0 else { return }
+        current.bytesDone = max(0, min(current.bytesTotal, deliveredBytes - sendBaselineBytes))
+        progress = current
     }
 
     private func resolve(with summary: WinlinkExchangeSummary) {
@@ -249,6 +293,8 @@ final class WinlinkSessionRunner: ObservableObject {
         cancelAllTimers()
         transport?.onReceive = nil
         transport?.onClose = nil
+        transport?.onDeliveryProgress = nil
+        progress = nil
 
         // Persist final delivery states. Anything still marked `sending`
         // (session died mid-body) reverts to `queued`; only offsets the

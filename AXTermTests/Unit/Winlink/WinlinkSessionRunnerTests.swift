@@ -15,6 +15,7 @@ final class WinlinkSessionRunnerTests: XCTestCase {
     final class FakeRMSTransport: WinlinkTransport {
         var onReceive: ((Data) -> Void)?
         var onClose: ((String?) -> Void)?
+        var onDeliveryProgress: ((Int, Int) -> Void)?
         var endpointDescription: String { "fake-rms" }
 
         /// Mail the RMS holds for the client.

@@ -127,17 +127,21 @@ struct WinlinkMailView: View {
 
     @ViewBuilder
     private var runnerStatus: some View {
-        if let runner = context.runner, runner.phase != .idle {
-            HStack(spacing: 6) {
-                if runner.isRunning {
-                    ProgressView().controlSize(.small)
-                }
-                Text(runner.statusText)
+        if let runner = context.runner {
+            if runner.isRunning {
+                WinlinkExchangeProgressView(runner: runner)
+            } else if case .done = runner.phase {
+                Label(runner.statusText, systemImage: "checkmark.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+            } else if case .failed(let reason) = runner.phase {
+                Label(reason, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+                    .help(reason)
             }
-            .help(WinlinkCopy.deliveryStateTooltip)
         }
     }
 

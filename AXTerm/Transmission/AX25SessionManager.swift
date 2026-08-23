@@ -476,7 +476,8 @@ final class AX25SessionManager: ObservableObject {
     private var deliveryClaims: [SessionKey: (
         id: UUID,
         handler: (AX25Session, Data) -> Void,
-        stateHandler: ((AX25Session, AX25SessionState, AX25SessionState) -> Void)?
+        stateHandler: ((AX25Session, AX25SessionState, AX25SessionState) -> Void)?,
+        ackHandler: ((AX25Session, Int) -> Void)?
     )] = [:]
 
     /// Claims the delivered byte stream for one session key. Returns nil if
@@ -485,12 +486,20 @@ final class AX25SessionManager: ObservableObject {
     func claimDelivery(
         for key: SessionKey,
         handler: @escaping (AX25Session, Data) -> Void,
-        stateHandler: ((AX25Session, AX25SessionState, AX25SessionState) -> Void)? = nil
+        stateHandler: ((AX25Session, AX25SessionState, AX25SessionState) -> Void)? = nil,
+        ackHandler: ((AX25Session, Int) -> Void)? = nil
     ) -> SessionDeliveryClaim? {
         guard deliveryClaims[key] == nil else { return nil }
         let claim = SessionDeliveryClaim(key: key)
-        deliveryClaims[key] = (claim.id, handler, stateHandler)
+        deliveryClaims[key] = (claim.id, handler, stateHandler, ackHandler)
         return claim
+    }
+
+    /// Fans an outbound-ack notification (new V(A)/V(S)) out to the claim
+    /// holder and the regular observer.
+    private func notifyOutboundAck(_ session: AX25Session, upTo sequence: Int) {
+        deliveryClaims[session.key]?.ackHandler?(session, sequence)
+        onOutboundAckReceived?(session, sequence)
     }
 
     func releaseDelivery(_ claim: SessionDeliveryClaim) {
@@ -1598,7 +1607,7 @@ final class AX25SessionManager: ObservableObject {
             ])
             session.clearPendingTransmission(reason: "remote DISC")
             // Notify that all frames are considered acknowledged
-            onOutboundAckReceived?(session, session.vs)
+            notifyOutboundAck(session, upTo: session.vs)
         }
 
         if oldState != session.state {
@@ -1764,7 +1773,7 @@ final class AX25SessionManager: ObservableObject {
         // Record the actual inbound via path so callbacks can thread it to the UI.
         session.lastReceivedVia = path.digis.map { $0.display }
 
-        onOutboundAckReceived?(session, session.va)
+        notifyOutboundAck(session, upTo: session.va)
 
         // Execute the state machine's actions BEFORE draining: the actions can carry
         // .stopT1 (computed while nothing was outstanding), and the drain below may
@@ -1913,7 +1922,7 @@ final class AX25SessionManager: ObservableObject {
         session.touch()
 
         axDebugPrint("[DEBUG:AX25:RR] rx | nr=\(nr) va=\(session.va) vs=\(session.vs) sendBufBefore=\(sendBufKeysBefore) sendBufAfter=\(sendBufKeysAfter) outstanding=\(session.outstandingCount)")
-        onOutboundAckReceived?(session, session.va)
+        notifyOutboundAck(session, upTo: session.va)
 
         TxLog.debug(.session, "RR ACK state", [
             "peer": source.display,
@@ -2162,7 +2171,7 @@ final class AX25SessionManager: ObservableObject {
         }
 
         session.touch()
-        onOutboundAckReceived?(session, session.va)
+        notifyOutboundAck(session, upTo: session.va)
 
         TxLog.debug(.session, "RNR ACK state (peer busy)", [
             "peer": source.display,
@@ -2267,7 +2276,7 @@ final class AX25SessionManager: ObservableObject {
         // final ack arrives via REJ (e.g. the peer REJs a duplicate retransmission
         // that crossed its ack in flight) stays stuck at "Sending…" forever.
         if session.va != vaBefore {
-            onOutboundAckReceived?(session, session.va)
+            notifyOutboundAck(session, upTo: session.va)
         }
 
         // Bug A fix: suppress retransmission amplification from duplicate REJ storms.

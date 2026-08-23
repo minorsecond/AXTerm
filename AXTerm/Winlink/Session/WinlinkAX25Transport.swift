@@ -22,6 +22,9 @@ final class WinlinkAX25Transport: WinlinkTransport {
 
     var onReceive: ((Data) -> Void)?
     var onClose: ((String?) -> Void)?
+    var onDeliveryProgress: ((Int, Int) -> Void)?
+
+    private var submittedBytes = 0
 
     var endpointDescription: String {
         path.isEmpty ? destination.display : "\(destination.display) via \(path.display)"
@@ -59,6 +62,9 @@ final class WinlinkAX25Transport: WinlinkTransport {
                     self.releaseClaim()
                     self.onClose?(newState == .error ? "AX.25 session error" : nil)
                 }
+            },
+            ackHandler: { [weak self] session, _ in
+                self?.reportDeliveryProgress(session: session)
             }
         ) else {
             throw WinlinkTransportError.sessionBusy(
@@ -91,6 +97,7 @@ final class WinlinkAX25Transport: WinlinkTransport {
     }
 
     func send(_ data: Data) {
+        submittedBytes += data.count
         let frames = sessionManager.sendData(
             data,
             to: destination,
@@ -99,6 +106,18 @@ final class WinlinkAX25Transport: WinlinkTransport {
             pid: 0xF0,
             displayInfo: "Winlink B2F (\(data.count) bytes)")
         sendFrames(frames)
+        if let session = sessionManager.existingSession(for: destination, path: path, channel: channel) {
+            reportDeliveryProgress(session: session)
+        }
+    }
+
+    /// Delivered = submitted − (queued behind the window + in flight).
+    /// Exact: the session exposes both its pending queue and send buffer.
+    private func reportDeliveryProgress(session: AX25Session) {
+        let pendingQueued = session.pendingDataQueue.reduce(0) { $0 + $1.data.count }
+        let inFlight = session.sendBuffer.values.reduce(0) { $0 + $1.payload.count }
+        let delivered = max(0, submittedBytes - pendingQueued - inFlight)
+        onDeliveryProgress?(delivered, submittedBytes)
     }
 
     func close() {

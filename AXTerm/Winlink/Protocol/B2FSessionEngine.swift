@@ -67,7 +67,7 @@ nonisolated final class B2FSessionEngine {
         /// The body bytes for this MID have been handed to the transport.
         case outboundBodySent(mid: String)
         case messageFullyReceived(WinlinkB2Message, compressedSize: Int)
-        case receiveProgress(bytesReceived: Int)
+        case receiveProgress(mid: String, bytesReceived: Int, totalBytes: Int)
         case requestDisconnect
         case complete(WinlinkExchangeSummary)
         case fail(reason: String)
@@ -247,7 +247,12 @@ nonisolated final class B2FSessionEngine {
                 case .header:
                     actions.append(.startTimer(.binary, seconds: 120))
                 case .progress(let count):
-                    actions.append(.receiveProgress(bytesReceived: count))
+                    if let current = incomingQueue.first {
+                        actions.append(.receiveProgress(
+                            mid: current.mid,
+                            bytesReceived: count,
+                            totalBytes: current.compressedSize))
+                    }
                     actions.append(.startTimer(.binary, seconds: 120))
                 case .completed(let payload):
                     actions.append(contentsOf: finishIncomingMessage(payload))
