@@ -15,6 +15,21 @@ nonisolated enum NavigationItem: String, Hashable, CaseIterable {
     //case raw = "Raw"
 }
 
+/// Which tier of network evidence produced an adaptive sample.
+nonisolated enum AdaptiveAggregateScope: Equatable, Sendable {
+    /// Links involving my own station — ground truth about my RF paths.
+    case localLinks
+    /// Third-party traffic on the shared channel — weaker, condition-level evidence.
+    case channelWide
+
+    var sourceLabel: String {
+        switch self {
+        case .localLinks: return "network"
+        case .channelWide: return "network (channel-wide)"
+        }
+    }
+}
+
 struct ContentView: View {
     @StateObject private var client: PacketEngine
     @ObservedObject private var settings: AppSettingsStore
@@ -172,8 +187,8 @@ struct ContentView: View {
                       !coordinator.hasActiveSessions,
                       let integration = client.netRomIntegration else { continue }
                 let stats = integration.exportLinkStats()
-                guard let (lossRate, etx) = Self.aggregateLinkQualityForAdaptive(stats, localCallsign: coordinator.localCallsign) else { continue }
-                coordinator.applyLinkQualitySample(lossRate: lossRate, etx: etx, srtt: nil, source: "network")
+                guard let sample = Self.aggregateLinkQualityForAdaptive(stats, localCallsign: coordinator.localCallsign) else { continue }
+                coordinator.applyLinkQualitySample(lossRate: sample.lossRate, etx: sample.etx, srtt: nil, source: sample.scope.sourceLabel)
             }
         }
         .task(id: selectedNav) {
@@ -821,32 +836,41 @@ struct ContentView: View {
     /// Aggregate link stats into (lossRate, etx) for adaptive settings. Uses only links with enough observations.
     /// When `localCallsign` is provided, only links involving the local station are considered,
     /// preventing other stations' poor links from dragging adaptive settings to overly conservative values.
-    nonisolated static func aggregateLinkQualityForAdaptive(_ records: [LinkStatRecord], localCallsign: String? = nil) -> (lossRate: Double, etx: Double)? {
+    /// Tiered network evidence for adaptive seeding: links involving MY station
+    /// are ground truth about my own RF paths and always win — but a
+    /// passive-monitoring station may have none (or only rows that fail the
+    /// evidence gates), and the shared channel's third-party traffic is still
+    /// real evidence about the conditions my next transmission will face.
+    /// Per spec 4.2 both tiers feed the EWMAs only, never streaks/probes.
+    nonisolated static func aggregateLinkQualityForAdaptive(_ records: [LinkStatRecord], localCallsign: String? = nil) -> (lossRate: Double, etx: Double, scope: AdaptiveAggregateScope)? {
         let minObs = 5
 
-        // Filter to local station links when a callsign is provided
-        let filtered: [LinkStatRecord]
+        func aggregate(_ subset: [LinkStatRecord]) -> (lossRate: Double, etx: Double)? {
+            let valid = subset.filter { r in
+                r.observationCount >= minObs
+                    && (r.dfEstimate ?? 0) > 0.05
+                    && (r.drEstimate ?? 0) > 0.05
+            }
+            guard !valid.isEmpty else { return nil }
+            let etxValues = valid.map { 1.0 / ($0.dfEstimate! * $0.drEstimate!) }
+            let medianEtx = etxValues.sorted()[etxValues.count / 2]
+            let meanDf = valid.reduce(0.0) { $0 + ($1.dfEstimate ?? 0) } / Double(valid.count)
+            let lossRate = 1.0 - meanDf
+            return (lossRate: max(0, min(1, lossRate)), etx: medianEtx)
+        }
+
         if let local = localCallsign, !local.isEmpty {
             let normalizedLocal = CallsignValidator.normalize(local)
-            filtered = records.filter { r in
+            let localRecords = records.filter { r in
                 CallsignValidator.normalize(r.fromCall) == normalizedLocal
                     || CallsignValidator.normalize(r.toCall) == normalizedLocal
             }
-        } else {
-            filtered = records
+            if let result = aggregate(localRecords) {
+                return (result.lossRate, result.etx, .localLinks)
+            }
         }
-
-        let valid = filtered.filter { r in
-            r.observationCount >= minObs
-                && (r.dfEstimate ?? 0) > 0.05
-                && (r.drEstimate ?? 0) > 0.05
-        }
-        guard !valid.isEmpty else { return nil }
-        let etxValues = valid.map { 1.0 / ($0.dfEstimate! * $0.drEstimate!) }
-        let medianEtx = etxValues.sorted()[etxValues.count / 2]
-        let meanDf = valid.reduce(0.0) { $0 + ($1.dfEstimate ?? 0) } / Double(valid.count)
-        let lossRate = 1.0 - meanDf
-        return (lossRate: max(0, min(1, lossRate)), etx: medianEtx)
+        guard let result = aggregate(records) else { return nil }
+        return (result.lossRate, result.etx, .channelWide)
     }
 }
 
