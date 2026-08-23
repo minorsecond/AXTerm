@@ -122,7 +122,7 @@ extension AdaptiveParams {
             return "\(successStreak) of \(upgradeStreakRequirement) clean frames toward the next upgrade"
         }
         if metrics.samplesSeen == 0 {
-            return "Waiting for evidence — no traffic observed yet"
+            return "Waiting for evidence — no qualifying link samples yet"
         }
         return qualityLabel
     }

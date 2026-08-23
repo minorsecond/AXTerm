@@ -846,13 +846,23 @@ struct ContentView: View {
         let minObs = 5
 
         func aggregate(_ subset: [LinkStatRecord]) -> (lossRate: Double, etx: Double)? {
+            // A row qualifies on real forward evidence alone. Requiring BOTH
+            // df and dr excluded every one-way transfer: the data sender's row
+            // fills df, the acker's row fills dr, and neither passes — so a
+            // channel full of healthy BBS traffic read as "no evidence".
+            // An unmeasured reverse direction uses the symmetry prior (dr = df),
+            // the standard ETX assumption for an unmeasured return path. A
+            // MEASURED bad dr still counts against the row.
             let valid = subset.filter { r in
                 r.observationCount >= minObs
                     && (r.dfEstimate ?? 0) > 0.05
-                    && (r.drEstimate ?? 0) > 0.05
             }
             guard !valid.isEmpty else { return nil }
-            let etxValues = valid.map { 1.0 / ($0.dfEstimate! * $0.drEstimate!) }
+            let etxValues = valid.map { r -> Double in
+                let df = r.dfEstimate!
+                let dr = r.drEstimate ?? df
+                return 1.0 / (max(df, 0.05) * max(dr, 0.05))
+            }
             let medianEtx = etxValues.sorted()[etxValues.count / 2]
             let meanDf = valid.reduce(0.0) { $0 + ($1.dfEstimate ?? 0) } / Double(valid.count)
             let lossRate = 1.0 - meanDf

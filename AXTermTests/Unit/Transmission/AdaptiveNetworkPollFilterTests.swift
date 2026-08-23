@@ -15,7 +15,7 @@ final class AdaptiveNetworkPollFilterTests: XCTestCase {
 
     private func makeStat(
         from: String, to: String,
-        df: Double, dr: Double,
+        df: Double, dr: Double?,
         obs: Int = 10
     ) -> LinkStatRecord {
         LinkStatRecord(
@@ -121,5 +121,42 @@ final class AdaptiveNetworkPollFilterTests: XCTestCase {
 
         let result = ContentView.aggregateLinkQualityForAdaptive(stats, localCallsign: "kb5yzb-7")
         XCTAssertNotNil(result, "Lowercase callsign should still match via normalization")
+    }
+
+    // MARK: - One-sided evidence (field capture 2026-08-23: a BBS mail
+    // transfer filled df on the sender's row and dr on the acker's row —
+    // hundreds of frames, zero rows passing a both-directions gate).
+
+    func testDataSenderRowWithUnmeasuredReverseQualifies() {
+        let stats: [LinkStatRecord] = [
+            // K0NTS-10 pumping I-frames: perfect forward, reverse unmeasured.
+            makeStat(from: "K0NTS-10", to: "WN6OTL", df: 1.0, dr: nil, obs: 67),
+            // The acking side: no forward evidence — still excluded.
+            makeStat(from: "WN6OTL", to: "K0NTS-10", df: 0.04, dr: 0.33, obs: 68),
+        ]
+
+        let result = ContentView.aggregateLinkQualityForAdaptive(stats, localCallsign: "KB5YZB-7")
+        XCTAssertNotNil(result, "A one-way transfer is real channel evidence")
+        XCTAssertEqual(result?.scope, .channelWide)
+        // Symmetry prior for the unmeasured reverse: ETX = 1/(1.0 * 1.0)
+        XCTAssertEqual(result!.etx, 1.0, accuracy: 0.01)
+        XCTAssertLessThan(result!.lossRate, 0.05)
+    }
+
+    func testLocalOneSidedRowQualifiesToo() {
+        let stats: [LinkStatRecord] = [
+            makeStat(from: "KB5YZB-7", to: "N0CALL-1", df: 0.9, dr: nil, obs: 10),
+        ]
+
+        let result = ContentView.aggregateLinkQualityForAdaptive(stats, localCallsign: "KB5YZB-7")
+        XCTAssertEqual(result?.scope, .localLinks)
+    }
+
+    func testRowsWithoutForwardEvidenceStayExcluded() {
+        let stats: [LinkStatRecord] = [
+            makeStat(from: "W0ARP-1", to: "N0CALL-2", df: 0.02, dr: 0.5, obs: 20),
+        ]
+        XCTAssertNil(ContentView.aggregateLinkQualityForAdaptive(stats, localCallsign: "KB5YZB-7"),
+                     "Ack-only rows carry no forward-delivery evidence")
     }
 }
