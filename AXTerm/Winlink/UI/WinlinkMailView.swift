@@ -365,13 +365,21 @@ struct WinlinkMailView: View {
             transportName = "ax25"
         }
 
+        let product = winlinkSettings.clientProduct.trimmingCharacters(in: .whitespaces)
+        let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
+        let sid = WinlinkSID(
+            product: product.isEmpty ? "AXTerm" : product,
+            version: version,
+            features: "B2FHM$")
+
         Task {
             let summary = await runner.runExchange(
                 transport: transport,
                 myCallsign: myCall,
                 password: password.isEmpty ? nil : password,
                 gatewayName: gatewayName,
-                transportName: transportName)
+                transportName: transportName,
+                sid: sid)
             mailboxVM.refresh()
             context.refreshUnread()
             if let failure = summary.failureReason {

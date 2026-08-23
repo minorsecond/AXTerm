@@ -66,7 +66,8 @@ final class WinlinkSessionRunner: ObservableObject {
         myCallsign: String,
         password: String?,
         gatewayName: String,
-        transportName: String
+        transportName: String,
+        sid: WinlinkSID? = nil
     ) async -> WinlinkExchangeSummary {
         guard !isRunning else {
             var summary = WinlinkExchangeSummary()
@@ -100,7 +101,7 @@ final class WinlinkSessionRunner: ObservableObject {
         let engine = B2FSessionEngine(config: .init(
             myCallsign: myCallsign,
             password: password,
-            sid: .axterm(version: Self.appVersion),
+            sid: sid ?? .axterm(version: Self.appVersion),
             outbound: prepared))
         self.engine = engine
         self.transport = transport
@@ -133,7 +134,7 @@ final class WinlinkSessionRunner: ObservableObject {
         }
 
         phase = .exchanging
-        statusText = "Connected — exchanging mail…"
+        statusText = "Signing in to \(gatewayName)…"
         progress = WinlinkExchangeProgress(kind: .handshake, startedAt: Date())
 
         let summary = await withCheckedContinuation { (continuation: CheckedContinuation<WinlinkExchangeSummary, Never>) in
@@ -205,7 +206,7 @@ final class WinlinkSessionRunner: ObservableObject {
             }
 
         case .outboundBodySent(let mid):
-            statusText = "Sent \(mid)"
+            statusText = "Waiting for the link to drain \(mid)…"
 
         case .outboundRejected(let mid):
             Task { [worker] in

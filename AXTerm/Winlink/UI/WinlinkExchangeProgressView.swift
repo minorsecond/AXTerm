@@ -1,95 +1,84 @@
 import SwiftUI
 
-/// Compact live progress card for a running mail exchange: phase,
-/// per-message determinate bar, byte counts, rate, and time remaining.
+/// Live progress for a running mail exchange.
+///
+/// Two presentations, both quiet and toolbar-sized:
+/// - indeterminate phases (connecting, signing in): a small spinner and
+///   one line of text — nothing else;
+/// - transfers: a fixed-width block with title + percent, a thin bar,
+///   and one caption line (bytes · rate · time left).
 struct WinlinkExchangeProgressView: View {
 
     @ObservedObject var runner: WinlinkSessionRunner
 
     var body: some View {
-        if let progress = runner.progress {
+        if let progress = runner.progress, progress.bytesTotal > 0 {
             TimelineView(.periodic(from: .now, by: 1)) { timeline in
-                card(progress, now: timeline.date)
+                transferBlock(progress, now: timeline.date)
             }
-            .transition(.opacity)
         } else if runner.isRunning {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
+            HStack(spacing: 7) {
+                ProgressView()
+                    .controlSize(.small)
                 Text(runner.statusText)
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .truncationMode(.middle)
             }
+            .frame(maxWidth: 280, alignment: .trailing)
         }
     }
 
-    private func card(_ progress: WinlinkExchangeProgress, now: Date) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon(for: progress.kind))
-                .foregroundStyle(.tint)
-                .frame(width: 16)
-
-            VStack(alignment: .leading, spacing: 2) {
+    private func transferBlock(_ progress: WinlinkExchangeProgress, now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Image(systemName: progress.kind == .receiving ? "arrow.down" : "arrow.up")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
                 Text(title(for: progress))
                     .font(.caption.weight(.medium))
                     .lineLimit(1)
-
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
                 if let fraction = progress.fraction {
-                    ProgressView(value: fraction)
-                        .controlSize(.small)
-                        .frame(width: 190)
-                } else {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 190)
+                    Text(fraction.formatted(.percent.precision(.fractionLength(0))))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 }
-
-                Text(detailLine(for: progress, now: now))
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
             }
+
+            ProgressView(value: progress.fraction ?? 0)
+                .controlSize(.small)
+
+            Text(detailLine(for: progress, now: now))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+        .frame(width: 250)
         .help(WinlinkCopy.connectExchangeTooltip)
         .accessibilityElement(children: .combine)
     }
 
-    private func icon(for kind: WinlinkExchangeProgress.Kind) -> String {
-        switch kind {
-        case .connecting: return "antenna.radiowaves.left.and.right"
-        case .handshake: return "hand.wave"
-        case .sending: return "arrow.up.circle"
-        case .receiving: return "arrow.down.circle"
-        }
-    }
-
     private func title(for progress: WinlinkExchangeProgress) -> String {
-        switch progress.kind {
-        case .connecting: return "Connecting…"
-        case .handshake: return "Handshaking…"
-        case .sending:
-            if let subject = progress.subject, !subject.isEmpty {
-                return "Sending “\(subject)”"
-            }
-            return "Sending \(progress.mid ?? "message")"
-        case .receiving:
-            return "Receiving \(progress.mid ?? "message")"
+        let direction = progress.kind == .receiving ? "Receiving" : "Sending"
+        if let subject = progress.subject, !subject.isEmpty {
+            return "\(direction) “\(subject)”"
         }
+        if let mid = progress.mid {
+            return "\(direction) \(mid)"
+        }
+        return direction
     }
 
     private func detailLine(for progress: WinlinkExchangeProgress, now: Date) -> String {
-        guard progress.bytesTotal > 0 else { return runner.statusText }
-
-        var parts = [String]()
-        parts.append("\(byteText(progress.bytesDone)) of \(byteText(progress.bytesTotal))")
-        if let rate = progress.bytesPerSecond(now: now) {
+        var parts = ["\(byteText(progress.bytesDone)) of \(byteText(progress.bytesTotal))"]
+        if let rate = progress.bytesPerSecond(now: now), rate >= 1 {
             parts.append("\(byteText(Int(rate)))/s")
         }
         if let seconds = progress.estimatedSecondsRemaining(now: now), seconds > 2 {
-            parts.append("about \(timeText(seconds)) left")
+            parts.append("\(timeText(seconds)) left")
         }
         return parts.joined(separator: " · ")
     }

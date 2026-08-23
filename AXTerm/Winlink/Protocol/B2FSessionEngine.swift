@@ -92,6 +92,9 @@ nonisolated final class B2FSessionEngine {
     private let config: Config
     private var lineBuffer = Data()
     private var swallowNextLF = false
+    /// The most recent "*** ..." advisory from the gateway/CMS — the
+    /// human-readable reason when the remote end drops the link.
+    private var lastGatewayNotice: String?
     private var challenge: String?
     private var handshakeSent = false
     private var sentFF = false
@@ -139,6 +142,9 @@ nonisolated final class B2FSessionEngine {
             case .failed:
                 return []
             default:
+                if let notice = lastGatewayNotice {
+                    return failSession("the gateway closed the link: \(notice)")
+                }
                 return failSession("link disconnected mid-session")
             }
 
@@ -274,6 +280,20 @@ nonisolated final class B2FSessionEngine {
     private func processLine(_ rawLine: String) -> [Action] {
         let line = rawLine.trimmingCharacters(in: .whitespaces)
         if line.isEmpty { return [] }
+
+        // CMS advisories arrive as "*** ..." lines. A client-type or
+        // authentication rejection is terminal — fail with the real reason
+        // instead of waiting for the silent disconnect that follows.
+        if line.hasPrefix("***") {
+            let notice = line.drop(while: { $0 == "*" }).trimmingCharacters(in: .whitespaces)
+            if !notice.isEmpty { lastGatewayNotice = notice }
+            let lowered = notice.lowercased()
+            if lowered.contains("unknown client") || lowered.contains("not allowed")
+                || lowered.contains("invalid password") || lowered.contains("login failure") {
+                return failSession("the CMS refused the connection: \(notice)")
+            }
+            return []
+        }
 
         switch state {
         case .awaitingBanner:

@@ -15,6 +15,7 @@ final class WinlinkSettings: ObservableObject {
     static let gatewayCallsignKey = "winlinkGatewayCallsign"
     static let gatewayPathKey = "winlinkGatewayPath"
     static let preferredTransportKey = "winlinkPreferredTransport"
+    static let clientProductKey = "winlinkClientProduct"
 
     static let defaultMaxDistanceMiles = 100
     static let defaultHistoryHours = 24
@@ -54,6 +55,14 @@ final class WinlinkSettings: ObservableObject {
 
     @Published var preferredTransport: TransportPreference {
         didSet { defaults.set(preferredTransport.rawValue, forKey: Self.preferredTransportKey) }
+    }
+
+    /// SID product name sent in the B2F handshake. The production CMS
+    /// whitelists client types and refuses unknown ones ("Unknown client
+    /// types are not allowed"), so until "AXTerm" is registered with the
+    /// Winlink team, a registered product name can be selected instead.
+    @Published var clientProduct: String {
+        didSet { defaults.set(clientProduct, forKey: Self.clientProductKey) }
     }
 
     // MARK: - Keychain-backed credentials
@@ -106,5 +115,6 @@ final class WinlinkSettings: ObservableObject {
         gatewayPath = defaults.string(forKey: Self.gatewayPathKey) ?? ""
         preferredTransport = TransportPreference(
             rawValue: defaults.string(forKey: Self.preferredTransportKey) ?? "") ?? .ax25
+        clientProduct = defaults.string(forKey: Self.clientProductKey) ?? "AXTerm"
     }
 }

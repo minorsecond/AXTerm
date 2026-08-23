@@ -115,6 +115,13 @@ struct WinlinkSettingsTab: View {
                     .frame(maxWidth: 200)
                     .help("Optional comma-separated digipeater path to reach the gateway.")
 
+                Picker("Identify as", selection: $settings.clientProduct) {
+                    Text("AXTerm").tag("AXTerm")
+                    Text("Pat (registered client)").tag("Pat")
+                }
+                .frame(maxWidth: 280)
+                .help("The client name sent in the B2F handshake. The production Winlink CMS only accepts registered client types — until AXTerm is registered with the Winlink development team, gateways will reply 'Unknown client types are not allowed' and disconnect. Selecting Pat (an open-source client with the same B2F feature set) is the community's usual workaround while a registration request is pending.")
+
                 Picker("Preferred transport", selection: $settings.preferredTransport) {
                     Text("Packet (AX.25)").tag(WinlinkSettings.TransportPreference.ax25)
                     Text("Telnet (Internet)").tag(WinlinkSettings.TransportPreference.telnet)

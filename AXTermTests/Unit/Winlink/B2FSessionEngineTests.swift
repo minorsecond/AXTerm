@@ -391,6 +391,44 @@ final class B2FSessionEngineTests: XCTestCase {
         XCTAssertEqual(harness.engine.state, .awaitingRemoteProposals)
     }
 
+    // MARK: - CMS advisories
+
+    /// Regression: the production CMS refuses unregistered client types
+    /// with a "***" advisory and then drops the link. The failure must
+    /// carry the real reason, not "link disconnected".
+    func testUnknownClientRejectionSurfacesRealReason() {
+        let harness = makeHarness()
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+        harness.receive("*** Unknown client types are not allowed on production CMS servers\r\n")
+
+        let reason = harness.failureReason
+        XCTAssertNotNil(reason)
+        XCTAssertTrue(reason!.contains("Unknown client types"), reason!)
+        XCTAssertEqual(harness.engine.state, .failed)
+    }
+
+    func testGatewayNoticeIncludedInLinkDropReason() {
+        let harness = makeHarness()
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+        // A notice that is not itself terminal…
+        harness.receive("*** Rate limit reached, come back later\r\n")
+        XCTAssertNil(harness.failureReason)
+        // …but explains the disconnect that follows.
+        harness.fire(.linkDisconnected)
+        XCTAssertTrue(harness.failureReason!.contains("Rate limit reached"), harness.failureReason!)
+    }
+
+    func testConnectedNoticeIsHarmless() {
+        let harness = makeHarness()
+        harness.fire(.connected)
+        harness.receive("*** K0EPI-7 Connected to CMS\r\n")
+        harness.receive("[WL2K-5.0-B2FWIHJM$]\r\n;PQ: 23753528\r\n>\r\n")
+        XCTAssertNil(harness.failureReason)
+        XCTAssertTrue(harness.sentText.contains(";FW: K0EPI\r"))
+    }
+
     // MARK: - Failure paths
 
     func testBannerTimeoutFails() {
