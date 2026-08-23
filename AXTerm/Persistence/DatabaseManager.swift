@@ -378,6 +378,9 @@ nonisolated enum DatabaseManager {
         registerReportedMigration(&migrator, version: 4, name: "fixControlFieldDecoding") { db in
             try fixControlFieldDecoding(db)
         }
+        registerReportedMigration(&migrator, version: 5, name: "createWinlinkTables") { db in
+            try createWinlinkTables(db)
+        }
         return migrator
     }()
 

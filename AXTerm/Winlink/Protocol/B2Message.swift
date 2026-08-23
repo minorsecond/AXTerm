@@ -13,7 +13,7 @@ import CryptoKit
 ///     For each attachment, its bytes followed by CRLF
 ///
 /// Headers and body are ISO-8859-1; attachments are arbitrary 8-bit data.
-nonisolated struct WinlinkB2Message: Equatable, Sendable {
+nonisolated struct WinlinkB2Message: Hashable, Sendable {
 
     enum MessageType: String, Sendable, CaseIterable {
         case privateMessage = "Private"
@@ -26,7 +26,7 @@ nonisolated struct WinlinkB2Message: Equatable, Sendable {
         case system = "System"
     }
 
-    struct Attachment: Equatable, Sendable {
+    struct Attachment: Hashable, Sendable {
         var name: String
         var data: Data
     }
