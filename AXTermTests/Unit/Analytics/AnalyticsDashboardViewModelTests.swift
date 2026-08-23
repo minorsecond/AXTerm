@@ -216,7 +216,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
 
         let viewModel = AnalyticsDashboardViewModel(
             settingsStore: settings,
-            databaseAggregationProvider: { _, _, _, _, _, _ in expected },
+            databaseAggregationProvider: { _, _, _, _ in expected },
             calendar: calendar,
             packetDebounce: 0,
             graphDebounce: 0,
@@ -233,6 +233,63 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.viewState.summary?.totalPackets, 6200)
         XCTAssertEqual(viewModel.viewState.series.packetsPerBucket.first?.value, 6200)
         XCTAssertEqual(viewModel.viewState.topTalkers.first?.label, "SRC")
+    }
+
+    func testManualRefreshBypassesAggregationCache() async {
+        let timestamp = makeDate(year: 2026, month: 2, day: 18, hour: 6, minute: 0, second: 0)
+        let settings = makeSettings()
+        settings.analyticsTimeframe = "custom"
+        settings.analyticsBucket = "hour"
+
+        final class CallCounter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func increment() { lock.lock(); value += 1; lock.unlock() }
+            var count: Int { lock.lock(); defer { lock.unlock() }; return value }
+        }
+        let counter = CallCounter()
+
+        let result = AnalyticsAggregationResult(
+            summary: AnalyticsSummaryMetrics(
+                totalPackets: 1,
+                uniqueStations: 1,
+                totalPayloadBytes: 1,
+                uiFrames: 1,
+                iFrames: 0,
+                infoTextRatio: 1
+            ),
+            series: .empty,
+            heatmap: .empty,
+            histogram: .empty,
+            topTalkers: [],
+            topDestinations: [],
+            topDigipeaters: []
+        )
+
+        let viewModel = AnalyticsDashboardViewModel(
+            settingsStore: settings,
+            databaseAggregationProvider: { _, _, _, _ in
+                counter.increment()
+                return result
+            },
+            calendar: calendar,
+            packetDebounce: 0,
+            graphDebounce: 0,
+            packetScheduler: .main
+        )
+        viewModel.setActive(true)
+        viewModel.customRangeStart = timestamp.addingTimeInterval(-3600)
+        viewModel.customRangeEnd = timestamp.addingTimeInterval(3600)
+        viewModel.updatePackets([makePacket(timestamp: timestamp, from: "ONE", to: "TWO")])
+
+        await waitFor { counter.count >= 1 }
+        let countBeforeRefresh = counter.count
+
+        // With identical inputs, an explicit refresh must still recompute rather than
+        // replay the cached result.
+        viewModel.manualRefresh()
+        await waitFor { counter.count > countBeforeRefresh }
+        XCTAssertGreaterThan(counter.count, countBeforeRefresh)
     }
 
     func testGraphBuildUsesTimeframePacketsProviderWhenAvailable() async {
@@ -393,7 +450,7 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
 
         let viewModel = AnalyticsDashboardViewModel(
             settingsStore: settings,
-            databaseAggregationProvider: { _, _, _, _, _, _ in
+            databaseAggregationProvider: { _, _, _, _ in
                 try? await Task.sleep(for: .milliseconds(80))
                 return expected
             },
@@ -549,7 +606,6 @@ final class AnalyticsDashboardViewModelTests: XCTestCase {
     }
 
     func testNetworkHealthIsInvariantToViewFilters() async {
-        NetworkHealthCalculator.resetEMAState()
 
         let now = Date()
         let packets = [
@@ -643,7 +699,9 @@ private extension AnalyticsDashboardViewModelTests {
             timestamp: timestamp,
             from: from.map { AX25Address(call: $0) },
             to: to.map { AX25Address(call: $0) },
-            via: via.map { AX25Address(call: $0) },
+            // Test digis carry the H bit: only hops that actually repeated count
+            // as observed digipeaters in analytics.
+            via: via.map { AX25Address(call: $0, repeated: true) },
             frameType: .ui
         )
     }

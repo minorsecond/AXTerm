@@ -155,6 +155,10 @@ struct RouteDisplayInfo: Identifiable, Hashable {
     let heardPath: [String]
     let heardPathSummary: String
     let hopCount: Int
+    /// NET/ROM broadcasts carry no path, so the hop count of a classic route is
+    /// unknown — the stored 2-element path is synthetic. Only inferred routes have
+    /// an observed hop count.
+    let hopCountKnown: Bool
     let lastUpdated: Date
     let lastUpdatedRelative: String
 
@@ -197,6 +201,7 @@ struct RouteDisplayInfo: Identifiable, Hashable {
             self.heardPathSummary = "Broadcast from \(info.origin)"
         }
         self.hopCount = max(1, info.path.count)
+        self.hopCountKnown = info.sourceType == "inferred"
         self.lastUpdated = info.lastUpdated
         self.lastUpdatedRelative = Self.formatRelativeTime(info.lastUpdated, now: now)
         self.isLearningInterval = isLearning
@@ -323,14 +328,17 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
         self.dfEstimate = record.dfEstimate
         self.drEstimate = record.drEstimate
 
-        // Calculate ETX with the same clamping rules used by the estimator
+        // Calculate ETX with the same rules as the estimator, including its
+        // conservative dr=0.99 fallback when the reverse path is unobserved —
+        // otherwise the displayed ETX and Quality columns contradict each other
+        // (ETX 1.0 next to Quality 252).
         let config = LinkQualityConfig.default
         if let df = record.dfEstimate, let dr = record.drEstimate, df > 0, dr > 0 {
             let product = max(config.minDeliveryRatio, df) * max(config.minDeliveryRatio, dr)
             self.etx = min(config.maxETX, max(1.0, 1.0 / product))
         } else if let df = record.dfEstimate, df > 0 {
-            let clamped = max(config.minDeliveryRatio, df)
-            self.etx = min(config.maxETX, max(1.0, 1.0 / clamped))
+            let product = max(config.minDeliveryRatio, df) * 0.99
+            self.etx = min(config.maxETX, max(1.0, 1.0 / product))
         } else {
             self.etx = nil
         }
@@ -367,6 +375,20 @@ struct LinkStatDisplayInfo: Identifiable, Hashable {
 
     /// Apple HIG tooltip for link stat freshness column.
     static let freshnessTooltip = FreshnessTooltips.linkStats
+
+    /// Per-row derivation tooltip: explains why the quality is what it is.
+    var qualityTooltip: String {
+        var lines: [String] = ["Quality: \(quality) (\(Int(qualityPercent.rounded()))%)"]
+        let dfText = dfEstimate.map { String(format: "df=%.2f", $0) } ?? "df unobserved"
+        let drText = drEstimate.map { String(format: "dr=%.2f", $0) } ?? "dr unobserved (assumed 0.99)"
+        lines.append("\(dfText), \(drText)")
+        if let etx {
+            lines.append(String(format: "ETX=%.2f — expected transmissions per delivered frame", etx))
+        }
+        lines.append("Duplicates/retries observed: \(duplicateCount)")
+        lines.append("quality = 255 / ETX, where ETX = 1 / (df × dr)")
+        return lines.joined(separator: "\n")
+    }
 
     /// Accessibility label for this link stat's freshness.
     var freshnessAccessibilityLabel: String {
@@ -542,9 +564,10 @@ final class NetRomRoutesViewModel: ObservableObject {
     var filteredNeighbors: [NeighborDisplayInfo] {
         var result = neighbors
 
-        // Filter by expiration if enabled
+        // Filter by expiration if enabled. The threshold matches the rendered
+        // percentage: anything that displays as "0%" (rounds below 0.5%) is hidden.
         if shouldHideExpired {
-            result = result.filter { $0.freshness > 0 }
+            result = result.filter { $0.freshness >= 0.005 }
         }
 
         // Filter by search text
@@ -559,9 +582,9 @@ final class NetRomRoutesViewModel: ObservableObject {
     var filteredRoutes: [RouteDisplayInfo] {
         var result = routes
 
-        // Filter by expiration if enabled
+        // Filter by expiration if enabled (see filteredNeighbors for the threshold).
         if shouldHideExpired {
-            result = result.filter { $0.freshness > 0 }
+            result = result.filter { $0.freshness >= 0.005 }
         }
 
         // Filter by search text
@@ -581,9 +604,9 @@ final class NetRomRoutesViewModel: ObservableObject {
     var filteredLinkStats: [LinkStatDisplayInfo] {
         var result = linkStats
 
-        // Filter by expiration if enabled
+        // Filter by expiration if enabled (see filteredNeighbors for the threshold).
         if shouldHideExpired {
-            result = result.filter { $0.freshness > 0 }
+            result = result.filter { $0.freshness >= 0.005 }
         }
 
         // Filter by search text

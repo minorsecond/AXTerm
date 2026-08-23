@@ -11,6 +11,9 @@ import SwiftUI
 
 struct AnalyticsGraphView: View {
     let graphModel: GraphModel
+    /// In NET/ROM source modes node weight is a route count, not a packet count;
+    /// the hover tooltip must not label it "Packets".
+    var isNetRomSource: Bool = false
     let nodePositions: [NodePosition]
     let selectedNodeIDs: Set<String>
     let hoveredNodeID: String?
@@ -113,7 +116,7 @@ struct AnalyticsGraphView: View {
                         viewSize: geometry.size,
                         cameraState: cameraState
                     )
-                    GraphTooltipView(node: node)
+                    GraphTooltipView(node: node, isNetRomSource: isNetRomSource)
                         .position(tooltipPosition)
                 }
             }
@@ -295,11 +298,17 @@ private struct NodeLabelsOverlay: View {
 
             var drawnRects: [CGRect] = []
 
+            // Suffix labels ("EPI", "TX") save space when zoomed out, but carry
+            // almost no information; once the user zooms in, show full callsigns.
+            let useFullCallsigns = cameraState.scale >= 1.15
+
             for node in sortedNodes.prefix(maxLabels) {
                 guard let position = positionMap[node.id] else { continue }
                 guard CallsignValidator.isValidRoutingNode(node.callsign) else { continue }
 
-                let suffix = CallsignValidator.extractSuffix(node.callsign)
+                let suffix = useFullCallsigns
+                    ? node.callsign
+                    : CallsignValidator.extractSuffix(node.callsign)
 
                 // Calculate screen position
                 let screenPos = normalizedToScreen(
@@ -500,6 +509,7 @@ private struct SelectionRectView: View {
 
 private struct GraphTooltipView: View {
     let node: NetworkGraphNode
+    var isNetRomSource: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -518,7 +528,9 @@ private struct GraphTooltipView: View {
                 }
             }
             
-            Text("Packets: \(node.weight)")
+            // NET/ROM mode: weight is the number of routes touching this node —
+            // labeling it "Packets" showed a route count as traffic.
+            Text(isNetRomSource ? "Routes: \(node.weight)" : "Packets: \(node.weight)")
                 .font(.caption2)
             Text("Bytes: \(ByteCountFormatter.string(fromByteCount: Int64(node.inBytes + node.outBytes), countStyle: .file))")
                 .font(.caption2)

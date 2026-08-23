@@ -15,12 +15,6 @@ import GRDB
 
 final class NetworkHealthScoreTests: XCTestCase {
 
-    override func setUp() {
-        super.setUp()
-        // Reset EMA state between tests for reproducibility
-        NetworkHealthCalculator.resetEMAState()
-    }
-
     // MARK: - Test 1: Formula Weights and Rounding
 
     /// Verify TopologyScore, ActivityScore, and final score against known metric inputs.
@@ -135,7 +129,6 @@ final class NetworkHealthScoreTests: XCTestCase {
             includeViaDigipeaters: false
         )
 
-        NetworkHealthCalculator.resetEMAState()
         let healthShort = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalShort,
             timeframePackets: recentPackets,
@@ -151,7 +144,6 @@ final class NetworkHealthScoreTests: XCTestCase {
             includeViaDigipeaters: false
         )
 
-        NetworkHealthCalculator.resetEMAState()
         let healthLong = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalLong,
             timeframePackets: allPackets,
@@ -198,7 +190,6 @@ final class NetworkHealthScoreTests: XCTestCase {
             includeViaDigipeaters: false
         )
 
-        NetworkHealthCalculator.resetEMAState()
         let healthBaseline = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalGraph,
             timeframePackets: packets,
@@ -232,7 +223,6 @@ final class NetworkHealthScoreTests: XCTestCase {
         )
 
         // But health is still calculated from CANONICAL graph
-        NetworkHealthCalculator.resetEMAState()
         let healthWithFilteredView = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalGraph,  // Same canonical graph
             timeframePackets: packets,
@@ -290,7 +280,6 @@ final class NetworkHealthScoreTests: XCTestCase {
             includeViaDigipeaters: false
         )
 
-        NetworkHealthCalculator.resetEMAState()
         let healthOff = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalOff,
             timeframePackets: packets,
@@ -306,7 +295,6 @@ final class NetworkHealthScoreTests: XCTestCase {
             includeViaDigipeaters: true
         )
 
-        NetworkHealthCalculator.resetEMAState()
         let healthOn = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalOn,
             timeframePackets: packets,
@@ -358,7 +346,6 @@ final class NetworkHealthScoreTests: XCTestCase {
         let packets = builder.buildPackets()
         let graph = NetworkHealthCalculator.buildCanonicalGraph(packets: packets, includeViaDigipeaters: false)
 
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
             canonicalGraph: graph,
             timeframePackets: packets,
@@ -391,7 +378,6 @@ final class NetworkHealthScoreTests: XCTestCase {
         let packets = builder.buildPackets()
         let graph = NetworkHealthCalculator.buildCanonicalGraph(packets: packets, includeViaDigipeaters: false)
 
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
             canonicalGraph: graph,
             timeframePackets: packets,
@@ -420,13 +406,14 @@ final class NetworkHealthScoreTests: XCTestCase {
 
         // Connected pair
         _ = builder.addDirectPeerExchange(between: "W1ABC", and: "K2DEF", countEachDirection: 5)
-        // Isolated node (only sends, doesn't receive bidirectional)
-        _ = builder.addDirectEndpoint(from: "N3GHI", to: "W1ABC", count: 1)
+        // Isolated node: heard on air, but its only traffic goes to a service
+        // endpoint, so it never gains a station-to-station link. (With
+        // canonicalMinEdge=1 a single station-to-station packet already links.)
+        _ = builder.addDirectEndpoint(from: "N3GHI", to: "BEACON", count: 1)
 
         let packets = builder.buildPackets()
         let graph = NetworkHealthCalculator.buildCanonicalGraph(packets: packets, includeViaDigipeaters: false)
 
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
             canonicalGraph: graph,
             timeframePackets: packets,
@@ -463,7 +450,6 @@ final class NetworkHealthScoreTests: XCTestCase {
         let now = Date()
         let emptyGraph = GraphModel(nodes: [], edges: [], adjacency: [:], droppedNodesCount: 0)
 
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
             canonicalGraph: emptyGraph,
             timeframePackets: [],
@@ -473,15 +459,13 @@ final class NetworkHealthScoreTests: XCTestCase {
             now: now
         )
 
-        // With empty graph:
-        // - A2 (packet rate) should be 0
-        // - Overall score follows formula: 0.6×Topology + 0.4×Activity
-        // - C3 (isolation reduction) = 100 when no nodes exist (0 isolated / 0 total)
-        // - This gives TopologyScore = 0.2×100 = 20, FinalScore = 0.6×20 = 12
+        // With no packets there is nothing to score: every component is 0 and the
+        // sample gate reports Unknown rather than praising an empty network.
         XCTAssertEqual(health.scoreBreakdown.a2PacketRateScore, 0, "Empty packets: A2 should be 0")
         XCTAssertEqual(health.scoreBreakdown.packetRatePerMin, 0, "Empty packets: rate should be 0")
-        // Score is 12 due to C3 isolation reduction formula (0 isolated from 0 nodes = 100%)
-        XCTAssertEqual(health.score, 12, "Empty packets: score should be 12 (C3 gives 100% isolation reduction)")
+        XCTAssertEqual(health.scoreBreakdown.c3IsolationReduction, 0, "Empty packets: C3 must not be 100")
+        XCTAssertEqual(health.score, 0, "Empty packets: score should be 0")
+        XCTAssertEqual(health.rating, .unknown, "Empty packets: rating should be Unknown")
     }
 
     private func testHighPacketRateA2() {
@@ -498,7 +482,6 @@ final class NetworkHealthScoreTests: XCTestCase {
         let packets = builder.buildPackets()
         let graph = NetworkHealthCalculator.buildCanonicalGraph(packets: packets, includeViaDigipeaters: false)
 
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
             canonicalGraph: graph,
             timeframePackets: packets,
@@ -530,7 +513,6 @@ final class NetworkHealthScoreTests: XCTestCase {
         let packets = builder.buildPackets()
         let graph = NetworkHealthCalculator.buildCanonicalGraph(packets: packets, includeViaDigipeaters: false)
 
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
             canonicalGraph: graph,
             timeframePackets: packets,
@@ -561,10 +543,76 @@ final class NetworkHealthScoreTests: XCTestCase {
         XCTAssertEqual(HealthRating.from(score: 0), .unknown)
     }
 
+    /// Two stations exchanging a couple of packets must not produce a confident
+    /// score — the old model rated this degenerate sample "Excellent" (87).
+    func testSparseSampleReportsUnknown() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-120))
+        _ = builder.addDirectPeerExchange(between: "W1AAA", and: "K2BBB", countEachDirection: 1)
+        let packets = builder.buildPackets()
+
+        let health = NetworkHealthCalculator.calculate(
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "1h",
+            includeViaDigipeaters: false,
+            now: now
+        )
+
+        XCTAssertEqual(health.score, 0, "Below the sample gate no score is emitted")
+        XCTAssertEqual(health.rating, .unknown)
+        XCTAssertFalse(health.reasons.contains("Network operational"))
+        // Metrics stay available for the explainer
+        XCTAssertEqual(health.metrics.totalStations, 2)
+    }
+
+    /// A2 must not reward a collision-saturated shared channel: a rate deep into
+    /// congestion territory scores lower than a normal rate.
+    func testCongestedChannelScoresLowerThanNormalRate() {
+        let now = Date()
+
+        // Normal: ~5 pkt/min over the 10-minute window
+        var normalBuilder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+        for _ in 0..<25 {
+            _ = normalBuilder.addDirectPeerExchange(between: "W1AAA", and: "K2BBB", countEachDirection: 1)
+        }
+        _ = normalBuilder.addDirectPeerExchange(between: "K2BBB", and: "N3CCC", countEachDirection: 2)
+        let normalPackets = normalBuilder.buildPackets()
+
+        // Saturated: ~50 pkt/min over the same window
+        var busyBuilder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+        for _ in 0..<250 {
+            _ = busyBuilder.addDirectPeerExchange(between: "W1AAA", and: "K2BBB", countEachDirection: 1)
+        }
+        _ = busyBuilder.addDirectPeerExchange(between: "K2BBB", and: "N3CCC", countEachDirection: 2)
+        let busyPackets = busyBuilder.buildPackets()
+
+        let normalHealth = NetworkHealthCalculator.calculate(
+            timeframePackets: normalPackets,
+            allRecentPackets: normalPackets,
+            timeframeDisplayName: "1h",
+            includeViaDigipeaters: false,
+            now: now
+        )
+        let busyHealth = NetworkHealthCalculator.calculate(
+            timeframePackets: busyPackets,
+            allRecentPackets: busyPackets,
+            timeframeDisplayName: "1h",
+            includeViaDigipeaters: false,
+            now: now
+        )
+
+        XCTAssertEqual(normalHealth.scoreBreakdown.a2PacketRateScore, 100, accuracy: 0.5,
+                       "Normal load should score full A2")
+        XCTAssertLessThan(busyHealth.scoreBreakdown.a2PacketRateScore,
+                          normalHealth.scoreBreakdown.a2PacketRateScore,
+                          "Saturated channel must not outscore a normal one")
+    }
+
     /// Verify canonical minEdge constant
     func testCanonicalMinEdgeConstant() {
-        XCTAssertEqual(NetworkHealthCalculator.canonicalMinEdge, 2,
-                       "Canonical minEdge should be 2 for health calculations")
+        XCTAssertEqual(NetworkHealthCalculator.canonicalMinEdge, 1,
+                       "Any observed link is topology evidence for health calculations")
     }
 
     /// Verify activity window constant
@@ -593,7 +641,6 @@ final class NetworkHealthScoreTests: XCTestCase {
             includeViaDigipeaters: false
         )
 
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalGraph,
             timeframePackets: packets,
@@ -626,7 +673,6 @@ final class NetworkHealthScoreTests: XCTestCase {
             includeViaDigipeaters: false
         )
 
-        NetworkHealthCalculator.resetEMAState()
         let health = NetworkHealthCalculator.calculate(
             canonicalGraph: canonicalGraph,
             timeframePackets: timeframePackets,
@@ -664,7 +710,6 @@ final class NetworkHealthScoreTests: XCTestCase {
 
         XCTAssertFalse(packets.isEmpty, "Expected packets in the 7-day snapshot window")
 
-        NetworkHealthCalculator.resetEMAState()
         let graphDirect = NetworkHealthCalculator.buildCanonicalGraph(
             packets: packets,
             includeViaDigipeaters: false
@@ -678,7 +723,6 @@ final class NetworkHealthScoreTests: XCTestCase {
             now: end
         )
 
-        NetworkHealthCalculator.resetEMAState()
         let graphVia = NetworkHealthCalculator.buildCanonicalGraph(
             packets: packets,
             includeViaDigipeaters: true
@@ -723,9 +767,9 @@ final class NetworkHealthScoreTests: XCTestCase {
         XCTContext.runActivity(named: report) { _ in }
     }
 
-    /// Contract test: calculate(graphModel:...) must be driven by timeframe packets,
-    /// not by whichever rendered view graph was passed in.
-    func testCalculateGraphModelParameterDoesNotAffectComputedHealth() {
+    /// Contract test: the convenience entry point takes no rendered view graph and
+    /// must match an explicit canonical-graph calculation exactly.
+    func testConvenienceCalculationMatchesExplicitCanonicalGraph() {
         let now = Date()
         var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
 
@@ -742,20 +786,15 @@ final class NetworkHealthScoreTests: XCTestCase {
         )
         XCTAssertFalse(canonicalGraph.nodes.isEmpty)
 
-        let emptyGraph = GraphModel.empty
-
-        NetworkHealthCalculator.resetEMAState()
         let healthFromCanonical = NetworkHealthCalculator.calculate(
-            graphModel: canonicalGraph,
+            canonicalGraph: canonicalGraph,
             timeframePackets: packets,
             allRecentPackets: packets,
             timeframeDisplayName: "10m",
             includeViaDigipeaters: true,
             now: now
         )
-        NetworkHealthCalculator.resetEMAState()
         let healthFromEmptyView = NetworkHealthCalculator.calculate(
-            graphModel: emptyGraph,
             timeframePackets: packets,
             allRecentPackets: packets,
             timeframeDisplayName: "10m",
@@ -789,7 +828,6 @@ final class NetworkHealthScoreTests: XCTestCase {
         let timeframePackets = shiftedPackets.filter { $0.timestamp >= timeframeStart && $0.timestamp <= syntheticNow }
         XCTAssertFalse(timeframePackets.isEmpty, "Shifted timeframe packets should not be empty")
 
-        NetworkHealthCalculator.resetEMAState()
         let directCanonical = NetworkHealthCalculator.buildCanonicalGraph(
             packets: timeframePackets,
             includeViaDigipeaters: false
@@ -803,7 +841,6 @@ final class NetworkHealthScoreTests: XCTestCase {
             now: syntheticNow
         )
 
-        NetworkHealthCalculator.resetEMAState()
         let viaCanonical = NetworkHealthCalculator.buildCanonicalGraph(
             packets: timeframePackets,
             includeViaDigipeaters: true

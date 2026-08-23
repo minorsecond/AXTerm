@@ -446,9 +446,12 @@ final class NetRomRouteRetentionTests: XCTestCase {
         XCTAssertTrue(calls.contains("EXP0AAA"), "Expired neighbor should be included in loaded state")
         XCTAssertTrue(calls.contains("FRE0BBB"), "Fresh neighbor should be included in loaded state")
 
-        // Expired neighbor should have decayed quality (0 since age/TTL > 1)
+        // Expired neighbor decays exponentially: 1 hour = one TTL past the
+        // 30-minute TTL -> quality halves. Zeroing on load contradicted the
+        // freshness column, which still read high.
         let expiredLoaded = state!.neighbors.first { $0.call == "EXP0AAA" }!
-        XCTAssertEqual(expiredLoaded.quality, 0, "Expired neighbor should have quality decayed to 0")
+        XCTAssertEqual(Double(expiredLoaded.quality), 100, accuracy: 3,
+            "One TTL past expiry should halve the quality, not zero it")
     }
 
     func testPersistenceLoad_ReturnsExpiredRoutes() throws {

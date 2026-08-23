@@ -445,30 +445,74 @@ nonisolated struct NetworkGraphBuilder {
         var identityMembers: [String: Set<String>] = [:]
 
         for event in events {
-            guard let rawFrom = event.from, let rawTo = event.to else { continue }
-            guard CallsignValidator.isValidCallsign(rawFrom) else { continue }
-            guard CallsignValidator.isValidCallsign(rawTo) else { continue }
+            // The sender must be a plausible routing node: a real callsign or a
+            // tactical alias (NET/ROM node idents like DRLNOD are stations too).
+            // The old strict isValidCallsign gate dropped every alias-endpoint
+            // frame wholesale, hiding alias infrastructure from the packet graph.
+            // isValidRoutingNode still rejects service names (BEACON, ID, NODES…),
+            // WIDE/TRACE pseudo-paths, corrupt symbol garbage, and anything on the
+            // user's ignore list.
+            guard let rawFrom = event.from else { continue }
+            guard CallsignValidator.isValidRoutingNode(rawFrom) else { continue }
 
-            // Convert to identity keys
             let from = identityKey(for: rawFrom)
-            let to = identityKey(for: rawTo)
-
-            // Track members
             identityMembers[from, default: []].insert(rawFrom.uppercased())
+
+            // The sender transmitted regardless of who it addressed — a station
+            // that only beacons to ID/BEACON still exists on air.
+            var fromStats = nodeStats[from, default: NodeAggregate()]
+            fromStats.outCount += 1
+            fromStats.outBytes += event.payloadBytes
+            nodeStats[from] = fromStats
+
+            // Relationship evidence needs a station on the other end. Frames to
+            // service destinations (BEACON, ID, NODES, MAIL…) or unparseable
+            // targets carry sender + digipeater evidence only: no edge, and the
+            // destination never becomes a node.
+            guard let rawTo = event.to, CallsignValidator.isValidRoutingNode(rawTo) else {
+                if options.includeViaDigipeaters, !event.via.isEmpty {
+                    let viaKeys = event.via.compactMap { rawVia -> String? in
+                        guard CallsignValidator.isValidRoutingNode(rawVia) else { return nil }
+                        return identityKey(for: rawVia)
+                    }
+                    for (i, rawVia) in event.via.enumerated() where i < viaKeys.count {
+                        identityMembers[viaKeys[i], default: []].insert(rawVia.uppercased())
+                    }
+                    // Hop edges along [sender, digi…] — each repeated hop is real
+                    // RF evidence even when the final destination is a service name.
+                    let path = [from] + viaKeys
+                    for i in 0..<max(0, path.count - 1) {
+                        let key = UndirectedKey(lhs: path[i], rhs: path[i + 1])
+                        var agg = viaPathEdges[key, default: ClassifiedEdgeAggregate()]
+                        agg.count += 1
+                        agg.bytes += event.payloadBytes
+                        agg.lastHeard = max(agg.lastHeard ?? .distantPast, event.timestamp)
+                        agg.hasViaPath = true
+                        viaPathEdges[key] = agg
+                    }
+                    for digiKey in viaKeys {
+                        var digiStats = nodeStats[digiKey, default: NodeAggregate()]
+                        digiStats.inCount += 1
+                        digiStats.outCount += 1
+                        digiStats.inBytes += event.payloadBytes
+                        digiStats.outBytes += event.payloadBytes
+                        nodeStats[digiKey] = digiStats
+                    }
+                }
+                continue
+            }
+
+            let to = identityKey(for: rawTo)
             identityMembers[to, default: []].insert(rawTo.uppercased())
 
-            // Infrastructure traffic (excluded from DirectPeer)
+            // Infrastructure traffic (excluded from DirectPeer). ID/BEACON/exact
+            // BBS are already rejected above; this still guards UI beacons sent
+            // to BBS-prefixed aliases.
             let isInfrastructure = event.frameType == .ui && (
                 rawTo.uppercased() == "ID" ||
                 rawTo.uppercased() == "BEACON" ||
                 rawTo.uppercased().hasPrefix("BBS")
             )
-
-            // Update node stats (all stations seen in packets)
-            var fromStats = nodeStats[from, default: NodeAggregate()]
-            fromStats.outCount += 1
-            fromStats.outBytes += event.payloadBytes
-            nodeStats[from] = fromStats
 
             var toStats = nodeStats[to, default: NodeAggregate()]
             toStats.inCount += 1

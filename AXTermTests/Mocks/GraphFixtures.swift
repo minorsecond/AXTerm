@@ -152,7 +152,7 @@ struct GraphFixtureBuilder {
                 timestamp: row.ts,
                 from: AX25Address(call: row.from),
                 to: row.to.map { AX25Address(call: $0) },
-                via: row.via.map { AX25Address(call: $0) },
+                via: row.via.map { AX25Address(call: $0, repeated: true) },
                 frameType: frameType(from: row.payloadType),
                 info: Data(repeating: 0x41, count: row.payloadBytes)
             )

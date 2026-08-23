@@ -36,8 +36,6 @@ struct AnalyticsDashboardView: View {
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 
-    @State private var scrollOffset: CGFloat = 0
-    @State private var controlBarHeight: CGFloat = 56
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     private enum EndpointBannerMode {
@@ -56,7 +54,6 @@ struct AnalyticsDashboardView: View {
         let minEdgeCount: Int
         let maxNodes: Int
         let focusState: GraphFocusState
-        let ignoredServiceEndpoints: [String]
         let simulationSet: Set<String>
         let temporarilyUnignoredEndpoints: Set<String>
         let temporarilyUnhiddenCallsigns: [String]
@@ -64,48 +61,33 @@ struct AnalyticsDashboardView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            // Main scrollable content
-            ScrollView {
-                VStack(alignment: .leading, spacing: AnalyticsStyle.Layout.sectionSpacing) {
-                    // Spacer for the floating header
-                    Color.clear
-                        .frame(height: controlBarHeight + 12)
-
-                    summarySection
-                    chartsSection
-                    graphSection
-                }
-                .padding(AnalyticsStyle.Layout.pagePadding)
-                .background(
-                    GeometryReader { geo in
-                        Color.clear.preference(
-                            key: ScrollOffsetPreferenceKey.self,
-                            value: geo.frame(in: .named("scroll")).minY
-                        )
-                    }
-                )
-            }
-            .scrollDisabled(false)
-            .defaultScrollAnchor(.top)  // Prevent scroll jumping on layout changes
-            .coordinateSpace(name: "scroll")
-            .onPreferenceChange(ScrollOffsetPreferenceKey.self) { value in
-                scrollOffset = -value
-            }
-
-            // Floating glass control bar
-            FloatingControlBar(
-                scrollOffset: scrollOffset,
-                reduceTransparency: reduceTransparency
-            ) {
+        ZStack(alignment: .bottom) {
+            // Pinned filter bar above the scrollable content (HIG: full-width bar
+            // with bar material, never a floating overlay that covers content).
+            VStack(spacing: 0) {
                 filterSection
-            }
-            .background(
-                GeometryReader { geo in
-                    Color.clear
-                        .preference(key: FloatingControlBarHeightPreferenceKey.self, value: geo.size.height)
+                    .padding(.horizontal, AnalyticsStyle.Layout.pagePadding)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        reduceTransparency
+                            ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor))
+                            : AnyShapeStyle(.bar)
+                    )
+
+                Divider()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: AnalyticsStyle.Layout.sectionSpacing) {
+                        summarySection
+                        chartsSection
+                        stationsSection
+                        graphSection
+                    }
+                    .padding(AnalyticsStyle.Layout.pagePadding)
                 }
-            )
+                .defaultScrollAnchor(.top)  // Prevent scroll jumping on layout changes
+            }
 
             // Export toast notification
             if showExportToast {
@@ -163,13 +145,6 @@ struct AnalyticsDashboardView: View {
             let normalized = Set(newValue.map(CallsignValidator.normalize))
             endpointSimulationSet = endpointSimulationSet.intersection(normalized)
             temporarilyUnignoredEndpoints.subtract(normalized)
-        }
-        .onPreferenceChange(FloatingControlBarHeightPreferenceKey.self) { value in
-            // Keep height stable and avoid tiny oscillations from fractional layout updates.
-            let rounded = ceil(value)
-            if abs(controlBarHeight - rounded) > 1 {
-                controlBarHeight = rounded
-            }
         }
     }
 
@@ -232,19 +207,17 @@ struct AnalyticsDashboardView: View {
 
     private var filterSection: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .bottom, spacing: 12) {
-                FilterControlGroup(title: "Timeframe") {
-                    Picker("Timeframe", selection: $viewModel.timeframe) {
-                        ForEach(AnalyticsTimeframe.allCases, id: \.self) { timeframe in
-                            Text(timeframe.displayName)
-                                .lineLimit(1)
-                                .tag(timeframe)
-                        }
+            HStack(alignment: .center, spacing: 12) {
+                Picker("Timeframe", selection: $viewModel.timeframe) {
+                    ForEach(AnalyticsTimeframe.allCases, id: \.self) { timeframe in
+                        Text(timeframe.displayName)
+                            .lineLimit(1)
+                            .tag(timeframe)
                     }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .controlSize(.small)
                 }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .controlSize(.small)
 
                 if viewModel.timeframe == .custom {
                     Button {
@@ -267,18 +240,16 @@ struct AnalyticsDashboardView: View {
                     }
                 }
 
-                FilterControlGroup(title: "Bucket") {
-                    Picker("Bucket", selection: $viewModel.bucketSelection) {
-                        ForEach(AnalyticsBucketSelection.allCases, id: \.self) { bucket in
-                            Text(bucket.displayName)
-                                .lineLimit(1)
-                                .tag(bucket)
-                        }
+                Picker("Bucket", selection: $viewModel.bucketSelection) {
+                    ForEach(AnalyticsBucketSelection.allCases, id: \.self) { bucket in
+                        Text(bucket.displayName)
+                            .lineLimit(1)
+                            .tag(bucket)
                     }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .controlSize(.small)
                 }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .controlSize(.small)
 
                 Toggle("Auto-update", isOn: $viewModel.autoUpdateEnabled)
                     .toggleStyle(.switch)
@@ -325,6 +296,9 @@ struct AnalyticsDashboardView: View {
                                     .frame(width: 20, alignment: .trailing)
                             }
                         }
+                        .help(viewModel.graphViewMode.isNetRomMode
+                              ? GraphCopy.GraphControls.minEdgeCountNetRomTooltip
+                              : GraphCopy.GraphControls.minEdgeCountTooltip)
 
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Max nodes")
@@ -345,20 +319,93 @@ struct AnalyticsDashboardView: View {
         }
     }
 
+    private var stationsSection: some View {
+        AnalyticsCard(title: "Stations & Sessions") {
+            LazyVGrid(columns: chartColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
+                ChartCard(title: "Station directory", height: 260) {
+                    if viewModel.hasLoadedGraph {
+                        StationDirectoryCard(entries: viewModel.stationDirectory)
+                            .help("Every valid station heard in the selected timeframe, newest first, with inferred roles: Node (sends NET/ROM broadcasts), BBS (mail announcements or SID software banners), Digi (observed repeating frames), Keyboarder (connected-mode data), Beacon (transmits but none of the above).")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading stations")
+                    }
+                }
+
+                ChartCard(title: "Observed sessions", height: 260) {
+                    if viewModel.hasLoadedGraph {
+                        ObservedSessionsCard(sessions: viewModel.observedSessions)
+                            .help("Connected-mode AX.25 sessions reconstructed from SABM/DISC control frames, data flow, and sustained polling. Shows who actually uses the network, not just who beacons.")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading sessions")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Airtime estimate per bucket from the packet and payload-byte series.
+    /// Assumptions documented in the card tooltip (1200 baud, 32 framing bytes,
+    /// 300 ms fixed per-frame overhead).
+    private var channelUtilizationPoints: [AnalyticsSeriesPoint] {
+        let series = viewModel.viewState.series
+        let bucketSeconds = viewModel.resolvedBucket.durationSeconds
+        guard bucketSeconds > 0 else { return [] }
+        let bytesByBucket = Dictionary(uniqueKeysWithValues: series.bytesPerBucket.map { ($0.bucket, $0.value) })
+        return series.packetsPerBucket.map { point in
+            AnalyticsSeriesPoint(
+                bucket: point.bucket,
+                value: AnalyticsStyle.Channel.utilizationPercent(
+                    packets: point.value,
+                    payloadBytes: bytesByBucket[point.bucket] ?? 0,
+                    bucketSeconds: bucketSeconds
+                )
+            )
+        }
+    }
+
     private var summarySection: some View {
         AnalyticsCard(title: "Summary") {
             if let summary = viewModel.viewState.summary, viewModel.hasLoadedAggregation {
                 LazyVGrid(columns: metricColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
-                    SummaryMetricCard(title: "Total packets", value: summary.totalPackets.formatted())
-                    SummaryMetricCard(title: "Unique stations", value: summary.uniqueStations.formatted())
-                    SummaryMetricCard(title: "Payload bytes", value: ByteCountFormatter.string(fromByteCount: Int64(summary.totalPayloadBytes), countStyle: .file))
-                    SummaryMetricCard(title: "UI frames", value: summary.uiFrames.formatted())
-                    SummaryMetricCard(title: "I frames", value: summary.iFrames.formatted())
-                    SummaryMetricCard(title: "Info-text ratio", value: String(format: "%.0f%%", summary.infoTextRatio * 100))
+                    SummaryMetricCard(
+                        title: "Total packets",
+                        value: summary.totalPackets.formatted(),
+                        tooltip: "AX.25 frames received during the selected timeframe."
+                    )
+                    SummaryMetricCard(
+                        title: "Unique stations",
+                        value: summary.uniqueStations.formatted(),
+                        tooltip: "Distinct valid stations observed as sender, destination, or repeating digipeater. Service endpoints (BEACON, ID, WIDE…) are excluded. Grouping follows the graph’s Identity setting (Station merges SSIDs)."
+                    )
+                    SummaryMetricCard(
+                        title: "Payload bytes",
+                        value: ByteCountFormatter.string(fromByteCount: Int64(summary.totalPayloadBytes), countStyle: .file),
+                        tooltip: "Sum of AX.25 information-field bytes. Headers, control fields, and FCS are not counted; supervisory frames carry 0."
+                    )
+                    SummaryMetricCard(
+                        title: "UI frames",
+                        value: summary.uiFrames.formatted(),
+                        tooltip: "Unnumbered Information frames (beacons, APRS, unconnected traffic)."
+                    )
+                    SummaryMetricCard(
+                        title: "I frames",
+                        value: summary.iFrames.formatted(),
+                        tooltip: "Numbered Information frames (connected-mode data)."
+                    )
+                    SummaryMetricCard(
+                        title: "Other frames",
+                        value: max(0, summary.totalPackets - summary.uiFrames - summary.iFrames).formatted(),
+                        tooltip: "Supervisory and unnumbered control frames (RR, RNR, REJ, SABM, UA, DISC…). Without this card, UI + I appeared to lose packets against the total."
+                    )
+                    SummaryMetricCard(
+                        title: "Info-text ratio",
+                        value: String(format: "%.0f%%", summary.infoTextRatio * 100),
+                        tooltip: "Share of frames carrying printable info text."
+                    )
                 }
             } else {
                 LazyVGrid(columns: metricColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
-                    ForEach(0..<6, id: \.self) { _ in
+                    ForEach(0..<7, id: \.self) { _ in
                         SummaryMetricPlaceholderCard()
                     }
                 }
@@ -380,9 +427,14 @@ struct AnalyticsDashboardView: View {
                     }
                 }
 
-                ChartCard(title: "Bytes over time") {
+                ChartCard(title: "Payload bytes over time") {
                     if viewModel.hasLoadedAggregation {
-                        TimeSeriesChart(points: viewModel.viewState.series.bytesPerBucket, valueLabel: "Bytes", bucket: viewModel.resolvedBucket)
+                        TimeSeriesChart(
+                            points: viewModel.viewState.series.bytesPerBucket,
+                            valueLabel: "Bytes",
+                            bucket: viewModel.resolvedBucket,
+                            valueFormatter: { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) }
+                        )
                     } else {
                         ChartLoadingPlaceholder(label: "Loading bytes")
                     }
@@ -399,16 +451,74 @@ struct AnalyticsDashboardView: View {
                 ChartCard(title: "Traffic intensity (hour vs day)", height: AnalyticsStyle.Layout.heatmapHeight) {
                     if viewModel.hasLoadedAggregation {
                         HeatmapView(data: viewModel.viewState.heatmap)
+                            .overlay(alignment: .topTrailing) {
+                                HeatmapIntensityLegend()
+                                    .padding(.trailing, 4)
+                            }
                     } else {
                         ChartLoadingPlaceholder(label: "Loading heatmap")
                     }
                 }
 
-                ChartCard(title: "Payload size distribution") {
+                ChartCard(title: "Payload size distribution (non-empty frames)") {
                     if viewModel.hasLoadedAggregation {
                         HistogramChart(data: viewModel.viewState.histogram)
                     } else {
                         ChartLoadingPlaceholder(label: "Loading distribution")
+                    }
+                }
+
+                ChartCard(title: "Channel utilization") {
+                    if viewModel.hasLoadedAggregation {
+                        TimeSeriesChart(
+                            points: channelUtilizationPoints,
+                            valueLabel: "Utilization",
+                            bucket: viewModel.resolvedBucket,
+                            valueFormatter: { "\($0)%" }
+                        )
+                        .help("Estimated share of channel airtime in use, assuming 1200 baud, ~32 framing bytes, and ~300 ms of TXDelay/flags per frame. Above roughly 30% a shared CSMA channel sees growing collision rates.")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading utilization")
+                    }
+                }
+
+                ChartCard(title: "Frame types over time") {
+                    if viewModel.hasLoadedAggregation {
+                        FrameTypeStackChart(series: viewModel.viewState.series)
+                            .help("Stacked frame mix per interval: I = connected-mode data, UI = beacons and unconnected traffic, Other = supervisory and control frames (RR, SABM, UA…).")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading frame types")
+                    }
+                }
+
+                ChartCard(title: "Retransmit requests (REJ/SREJ)") {
+                    if viewModel.hasLoadedAggregation {
+                        TimeSeriesChart(
+                            points: viewModel.viewState.series.rejectFramesPerBucket,
+                            valueLabel: "REJ/SREJ",
+                            bucket: viewModel.resolvedBucket
+                        )
+                        .help("REJ and SREJ supervisory frames per interval — peers asking for retransmits. Sustained nonzero values indicate RF loss on connected links.")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading link stress")
+                    }
+                }
+
+                ChartCard(title: "Activity by hour") {
+                    if viewModel.hasLoadedGraph {
+                        ActivityByHourChart(profile: viewModel.activityByHourProfile)
+                            .help("When your network is alive, by local hour over the selected timeframe, split by traffic kind. Chat = connected data between regular stations; BBS/Node = connected data touching an inferred Node or BBS (role-based inference from routing broadcasts, mail announcements, and SID software banners — not message content); Beacons = unconnected UI frames; Routing = NET/ROM broadcasts; Control = supervisory frames.")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading hourly profile")
+                    }
+                }
+
+                ChartCard(title: "Top airtime consumers") {
+                    if viewModel.hasLoadedGraph {
+                        AirtimeListView(entries: viewModel.airtimeRanking)
+                            .help("Estimated transmit airtime per station over the selected timeframe (sender plus every digipeater that repeated the frame; 1200 baud, ~300 ms per-frame overhead). Airtime is the honest measure of channel load — long data frames cost far more than short polls.")
+                    } else {
+                        ChartLoadingPlaceholder(label: "Loading airtime")
                     }
                 }
 
@@ -515,6 +625,7 @@ struct AnalyticsDashboardView: View {
                     ZStack {
                         AnalyticsGraphView(
                             graphModel: viewModel.viewState.graphModel,
+                            isNetRomSource: viewModel.graphViewMode.isNetRomMode,
                             nodePositions: viewModel.viewState.nodePositions,
                             selectedNodeIDs: viewModel.viewState.selectedNodeIDs,
                             hoveredNodeID: viewModel.viewState.hoveredNodeID,
@@ -858,8 +969,11 @@ struct AnalyticsDashboardView: View {
             }
 
             if structuralHiddenNodeCount > 0 {
-                Text("Min Edge / Max Nodes: \(structuralHiddenNodeCount)")
+                // The min-edge slider hides connections, never stations, so it is
+                // not part of this count — labeling it "Min Edge" overstated it.
+                Text("Not drawn (max nodes / no drawable link): \(structuralHiddenNodeCount)")
                     .font(.caption)
+                    .help("Valid stations observed in the timeframe that the graph doesn't draw: dropped by the Max nodes cap, or without a qualifying link to another valid station. The Min edge slider hides connections, not stations.")
             }
             if focusHiddenNodeCount > 0 {
                 Text("Focus Mode: \(focusHiddenNodeCount)")
@@ -997,8 +1111,8 @@ extension AnalyticsDashboardView {
             })
         }
 
-        let simulated = endpointSimulationSet.sorted()
-        entries.append(contentsOf: simulated.map {
+        let breakdown = hiddenBreakdown
+        entries.append(contentsOf: breakdown.simulatedPresent.sorted().map {
             HiddenNodeEntry(
                 id: "sim:\($0)",
                 callsign: $0,
@@ -1008,11 +1122,7 @@ extension AnalyticsDashboardView {
             )
         })
 
-        let ignored = Set(settings.ignoredServiceEndpoints.map(CallsignValidator.normalize))
-            .subtracting(endpointSimulationSet)
-            .subtracting(temporarilyUnignoredEndpoints)
-            .sorted()
-        entries.append(contentsOf: ignored.map {
+        entries.append(contentsOf: breakdown.ignoredPresent.sorted().map {
             HiddenNodeEntry(
                 id: "ignore:\($0)",
                 callsign: $0,
@@ -1040,33 +1150,25 @@ extension AnalyticsDashboardView {
         return Array(snapshot.temporarilyUnhiddenCallsigns.prefix(8))
     }
 
-    private var structuralHiddenNodeCount: Int {
-        max(0, viewModel.viewState.classifiedGraphModel.droppedNodesCount)
+    /// Disjoint per-cause hidden sets from the view model: each hidden station
+    /// counts exactly once, min-edge-filtered nodes are included, and ignore-list
+    /// entries only count when the station is actually present in the timeframe.
+    private var hiddenBreakdown: AnalyticsDashboardViewModel.HiddenNodeBreakdown {
+        viewModel.hiddenNodeBreakdown(
+            simulatedEndpoints: endpointSimulationSet,
+            temporarilyUnignored: temporarilyUnignoredEndpoints
+        )
     }
 
-    private var focusHiddenNodeCount: Int {
-        guard viewModel.focusState.isFocusEnabled else { return 0 }
-        let total = viewModel.viewState.graphModel.nodes.count
-        let visible = viewModel.filteredGraph.visibleNodeIDs.count
-        return max(0, total - visible)
-    }
+    private var structuralHiddenNodeCount: Int { hiddenBreakdown.structuralCount }
 
-    private var simulatedHiddenNodeCount: Int {
-        let nodeCallsigns = Set(viewModel.viewState.graphModel.nodes.map { CallsignValidator.normalize($0.callsign) })
-        return endpointSimulationSet.filter { nodeCallsigns.contains($0) }.count
-    }
+    private var focusHiddenNodeCount: Int { hiddenBreakdown.focusHiddenIDs.count }
 
-    private var persistedIgnoredNodeCount: Int {
-        let ignored = Set(settings.ignoredServiceEndpoints.map(CallsignValidator.normalize))
-        return ignored
-            .subtracting(endpointSimulationSet)
-            .subtracting(temporarilyUnignoredEndpoints)
-            .count
-    }
+    private var simulatedHiddenNodeCount: Int { hiddenBreakdown.simulatedPresent.count }
 
-    private var totalHiddenNodesCount: Int {
-        structuralHiddenNodeCount + focusHiddenNodeCount + simulatedHiddenNodeCount + persistedIgnoredNodeCount
-    }
+    private var persistedIgnoredNodeCount: Int { hiddenBreakdown.ignoredPresent.count }
+
+    private var totalHiddenNodesCount: Int { hiddenBreakdown.totalCount }
 
     private func normalizedEndpoint(_ callsign: String) -> String {
         CallsignValidator.normalize(callsign)
@@ -1156,7 +1258,6 @@ extension AnalyticsDashboardView {
             minEdgeCount: viewModel.minEdgeCount,
             maxNodes: viewModel.maxNodes,
             focusState: viewModel.focusState,
-            ignoredServiceEndpoints: settings.ignoredServiceEndpoints,
             simulationSet: endpointSimulationSet,
             temporarilyUnignoredEndpoints: temporarilyUnignoredEndpoints,
             temporarilyUnhiddenCallsigns: hiddenAtEntry,
@@ -1169,7 +1270,9 @@ extension AnalyticsDashboardView {
         viewModel.maxNodes = 300
         endpointSimulationSet.removeAll()
         temporarilyUnignoredEndpoints.removeAll()
-        settings.ignoredServiceEndpoints = []
+        // Session-only override: the persisted ignore list is never touched, so a
+        // crash or quit during the preview cannot lose it.
+        viewModel.setTemporarilyShowingIgnoredEndpoints(true)
     }
 
     private func exitTemporaryShowAll() {
@@ -1182,13 +1285,18 @@ extension AnalyticsDashboardView {
         viewModel.focusState = snapshot.focusState
         endpointSimulationSet = snapshot.simulationSet
         temporarilyUnignoredEndpoints = snapshot.temporarilyUnignoredEndpoints
-        settings.ignoredServiceEndpoints = snapshot.ignoredServiceEndpoints
+        viewModel.setTemporarilyShowingIgnoredEndpoints(false)
     }
 
     private func endTemporaryShowAllWithoutRestore() {
         guard temporaryShowAllActive else { return }
         temporaryShowAllActive = false
         temporaryShowAllSnapshot = nil
+        // "Keep Current View" is the one explicit, user-chosen path that makes the
+        // shown-all state permanent: persist the cleared list, then drop the
+        // session override.
+        settings.ignoredServiceEndpoints = []
+        viewModel.setTemporarilyShowingIgnoredEndpoints(false)
     }
 
     private func showHiddenNode(_ entry: HiddenNodeEntry) {
@@ -1481,9 +1589,9 @@ extension AnalyticsDashboardView {
 
     private var nodeSizeSmallTooltip: String {
         if viewModel.graphViewMode.isNetRomMode {
-            return "Smaller node: lower relative route centrality in the current NET/ROM view."
+            return "Smaller node: lower relative route centrality in the current NET/ROM view. Low-priority nodes hide their labels until you zoom in."
         }
-        return "Smaller node: lower relative traffic/connection weight in the current packet view."
+        return "Smaller node: lower relative traffic/connection weight in the current packet view. Low-priority nodes hide their labels until you zoom in."
     }
 
     private var nodeSizeLargeTooltip: String {
@@ -1725,6 +1833,7 @@ private struct ChartLoadingPlaceholder: View {
 private struct SummaryMetricCard: View {
     let title: String
     let value: String
+    var tooltip: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1739,6 +1848,7 @@ private struct SummaryMetricCard: View {
         .padding(12)
         .background(AnalyticsStyle.Colors.neutralFill)
         .clipShape(RoundedRectangle(cornerRadius: AnalyticsStyle.Layout.cardCornerRadius))
+        .help(tooltip ?? title)
     }
 }
 
@@ -1838,6 +1948,261 @@ private struct GraphViewportHeightPreferenceKey: PreferenceKey {
 }
 
 
+private struct StationDirectoryCard: View {
+    let entries: [StationDirectoryEntry]
+    private let maxRows = 10
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    var body: some View {
+        if entries.isEmpty {
+            EmptyChartPlaceholder(text: "No stations heard")
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(entries.prefix(maxRows)) { entry in
+                    HStack(spacing: 8) {
+                        Text(entry.callsign)
+                            .font(.caption.monospaced())
+                            .frame(minWidth: 84, alignment: .leading)
+                        ForEach(entry.roleBadges, id: \.self) { badge in
+                            Text(badge)
+                                .font(.system(size: 9, weight: .semibold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(badgeColor(badge).opacity(0.18), in: Capsule())
+                                .foregroundStyle(badgeColor(badge))
+                        }
+                        Spacer()
+                        Text("\(entry.frameCount) frames")
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                        Text("Last \(Self.timeFormatter.string(from: entry.lastHeard))")
+                            .font(.caption2)
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            .frame(minWidth: 76, alignment: .trailing)
+                    }
+                    .help("\(entry.callsign): \(entry.roleBadges.joined(separator: ", ")). First heard \(entry.firstHeard.formatted()), last heard \(entry.lastHeard.formatted()), \(entry.frameCount) frames, ~\(String(format: "%.0f", entry.airtimeSeconds)) s of airtime in this timeframe.")
+                }
+                if entries.count > maxRows {
+                    Text("+ \(entries.count - maxRows) more stations")
+                        .font(.caption2)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func badgeColor(_ badge: String) -> Color {
+        switch badge {
+        case "Node": return Color(nsColor: .systemOrange)
+        case "BBS": return Color(nsColor: .systemPurple)
+        case "Digi": return Color(nsColor: .systemTeal)
+        case "Keyboarder": return AnalyticsStyle.Colors.accent
+        default: return Color(nsColor: .systemGray)
+        }
+    }
+}
+
+private struct ObservedSessionsCard: View {
+    let sessions: [SessionObservation]
+    private let maxRows = 8
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    var body: some View {
+        if sessions.isEmpty {
+            EmptyChartPlaceholder(text: "No connected sessions observed")
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(sessions.prefix(maxRows)) { session in
+                    HStack(spacing: 8) {
+                        Text("\(session.stationA) \u{2194} \(session.stationB)")
+                            .font(.caption.monospaced())
+                            .lineLimit(1)
+                        if !session.wasEstablished {
+                            Text("NO ANSWER")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color(nsColor: .systemOrange).opacity(0.18), in: Capsule())
+                                .foregroundStyle(Color(nsColor: .systemOrange))
+                        } else if session.end == nil {
+                            Text("ACTIVE")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color(nsColor: .systemGreen).opacity(0.18), in: Capsule())
+                                .foregroundStyle(Color(nsColor: .systemGreen))
+                        }
+                        Spacer()
+                        Text(sessionSummary(session))
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            .lineLimit(1)
+                    }
+                    .help(sessionTooltip(session))
+                }
+                if sessions.count > maxRows {
+                    Text("+ \(sessions.count - maxRows) more sessions")
+                        .font(.caption2)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func sessionSummary(_ session: SessionObservation) -> String {
+        var parts: [String] = [Self.timeFormatter.string(from: session.start)]
+        if !session.wasEstablished {
+            parts.append("\(session.frameCount) tries")
+            return parts.joined(separator: " \u{00B7} ")
+        }
+        if let duration = session.duration {
+            parts.append(durationText(duration))
+        }
+        if session.byteCount > 0 {
+            parts.append(ByteCountFormatter.string(fromByteCount: Int64(session.byteCount), countStyle: .file))
+        }
+        if !session.viaDigipeaters.isEmpty {
+            parts.append("via \(session.viaDigipeaters.joined(separator: ","))")
+        }
+        return parts.joined(separator: " \u{00B7} ")
+    }
+
+    private func sessionTooltip(_ session: SessionObservation) -> String {
+        if !session.wasEstablished {
+            return "Connect attempt from \(session.stationA) to \(session.stationB) starting \(session.start.formatted()): \(session.frameCount) frames of SABM retries/refusals with no established link. Repeated no-answer attempts can indicate a station that is off the air or out of range."
+        }
+        let endText = session.end.map { "ended \($0.formatted())" } ?? "still active at the end of the window"
+        return "AX.25 session observed on channel between \(session.stationA) and \(session.stationB): started \(session.start.formatted()), \(endText). \(session.frameCount) frames (\(session.iFrameCount) data), \(session.byteCount) payload bytes."
+    }
+
+    private func durationText(_ duration: TimeInterval) -> String {
+        if duration < 60 { return String(format: "%.0f s", duration) }
+        let minutes = Int(duration) / 60
+        if minutes < 60 { return "\(minutes) min" }
+        return String(format: "%dh %02dm", minutes / 60, minutes % 60)
+    }
+}
+
+private struct AirtimeListView: View {
+    let entries: [AirtimeEntry]
+
+    var body: some View {
+        if entries.isEmpty {
+            EmptyChartPlaceholder(text: "No data")
+        } else {
+            let maxAirtime = max(0.001, entries.map(\.airtimeSeconds).max() ?? 0.001)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(entries) { entry in
+                    HStack(spacing: 8) {
+                        Text(entry.callsign)
+                            .frame(minWidth: 84, alignment: .leading)
+                        GeometryReader { proxy in
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(AnalyticsStyle.Colors.accent.opacity(0.35))
+                                .frame(
+                                    width: max(2, proxy.size.width * CGFloat(entry.airtimeSeconds / maxAirtime)),
+                                    height: 8
+                                )
+                                .frame(maxHeight: .infinity, alignment: .center)
+                        }
+                        Text(airtimeText(entry.airtimeSeconds))
+                            .monospacedDigit()
+                            .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            .frame(minWidth: 56, alignment: .trailing)
+                    }
+                    .font(.caption)
+                    .frame(height: 16)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func airtimeText(_ seconds: Double) -> String {
+        if seconds < 60 { return String(format: "%.1f s", seconds) }
+        let minutes = Int(seconds) / 60
+        let remainder = Int(seconds) % 60
+        return "\(minutes)m \(String(format: "%02d", remainder))s"
+    }
+}
+
+private struct ActivityByHourChart: View {
+    let profile: ActivityByHourProfile
+
+    private struct HourClassPoint: Identifiable {
+        let hour: Int
+        let className: String
+        let value: Int
+        var id: String { "\(hour)-\(className)" }
+    }
+
+    private var points: [HourClassPoint] {
+        var result: [HourClassPoint] = []
+        for (hour, counts) in profile.hours.enumerated() {
+            for trafficClass in TrafficClass.allCases {
+                if let value = counts[trafficClass], value > 0 {
+                    result.append(HourClassPoint(hour: hour, className: trafficClass.displayName, value: value))
+                }
+            }
+        }
+        return result
+    }
+
+    var body: some View {
+        if profile.totalCount == 0 {
+            EmptyChartPlaceholder(text: "No data")
+        } else {
+            Chart(points) { point in
+                BarMark(
+                    x: .value("Hour", point.hour),
+                    y: .value("Frames", point.value)
+                )
+                .foregroundStyle(by: .value("Type", point.className))
+            }
+            .chartForegroundStyleScale([
+                "Chat": AnalyticsStyle.Colors.accent,
+                "BBS/Node": Color(nsColor: .systemPurple),
+                "Beacons": Color(nsColor: .systemTeal),
+                "Routing": Color(nsColor: .systemOrange),
+                "Control": Color(nsColor: .systemGray).opacity(0.5)
+            ])
+            .chartXScale(domain: -0.5...23.5)
+            .chartXAxis {
+                AxisMarks(values: [0, 4, 8, 12, 16, 20]) { value in
+                    AxisGridLine()
+                        .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
+                    AxisValueLabel {
+                        if let hour = value.as(Int.self) {
+                            Text(String(format: "%02d", hour))
+                        }
+                    }
+                    .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                }
+            }
+            .chartLegend(position: .top, alignment: .leading, spacing: 4)
+            .chartPlotStyle { plotArea in
+                plotArea.background(AnalyticsStyle.Colors.chartPlotBackground)
+            }
+        }
+    }
+}
+
 private struct ChartCard<Content: View>: View {
     let title: String
     let height: CGFloat
@@ -1872,6 +2237,8 @@ private struct TimeSeriesChart: View {
     let points: [AnalyticsSeriesPoint]
     let valueLabel: String
     let bucket: TimeBucket
+    /// Formats axis and tooltip values (e.g. byte counts). Defaults to plain numbers.
+    var valueFormatter: ((Int) -> String)? = nil
     @State private var selectedPoint: AnalyticsSeriesPoint?
     @State private var hoverLocation: CGPoint?
 
@@ -1879,6 +2246,13 @@ private struct TimeSeriesChart: View {
         let f = DateFormatter()
         f.dateStyle = .none
         f.timeStyle = .short
+        return f
+    }()
+
+    private static let secondsFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .medium
         return f
     }()
 
@@ -1925,8 +2299,7 @@ private struct TimeSeriesChart: View {
                     .symbolSize(60)
                 }
             }
-            .chartYScale(domain: .automatic(includesZero: true))
-            .chartYScale(range: .plotDimension(startPadding: 8, endPadding: 8))
+            .chartYScale(domain: .automatic(includesZero: true), range: .plotDimension(startPadding: 8, endPadding: 8))
             .chartXScale(range: .plotDimension(startPadding: 6, endPadding: 6))
             .chartXAxis {
                 if shortRangeSpansBoundary {
@@ -1970,13 +2343,17 @@ private struct TimeSeriesChart: View {
                 }
             }
             .chartYAxis {
-                AxisMarks(position: .trailing, values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount)) { _ in
+                AxisMarks(position: .trailing, values: .automatic(desiredCount: AnalyticsStyle.Chart.axisLabelCount)) { value in
                     AxisGridLine()
                         .foregroundStyle(AnalyticsStyle.Colors.chartGridLine)
                     AxisTick()
                         .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
-                    AxisValueLabel()
-                        .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
+                    AxisValueLabel {
+                        if let intValue = value.as(Int.self) {
+                            Text(valueFormatter?(intValue) ?? intValue.formatted())
+                        }
+                    }
+                    .foregroundStyle(AnalyticsStyle.Colors.chartAxis)
                 }
             }
             .chartPlotStyle { plotArea in
@@ -2011,7 +2388,8 @@ private struct TimeSeriesChart: View {
                                 TimeSeriesChartTooltip(
                                     point: selectedPoint,
                                     valueLabel: valueLabel,
-                                    bucket: bucket
+                                    bucket: bucket,
+                                    valueFormatter: valueFormatter
                                 )
                                 .position(
                                     x: min(max(hoverLocation.x, 60), geometry.size.width - 60),
@@ -2064,7 +2442,10 @@ private struct TimeSeriesChart: View {
 
     private func xAxisLabel(for date: Date) -> String {
         switch bucket {
-        case .tenSeconds, .minute, .fiveMinutes, .fifteenMinutes:
+        case .tenSeconds:
+            // Without seconds, six consecutive 10s buckets would share one label.
+            return Self.secondsFormatter.string(from: date)
+        case .minute, .fiveMinutes, .fifteenMinutes:
             return Self.timeFormatter.string(from: date)
         case .hour:
             return Self.timeFormatter.string(from: date)
@@ -2078,11 +2459,19 @@ private struct TimeSeriesChartTooltip: View {
     let point: AnalyticsSeriesPoint
     let valueLabel: String
     let bucket: TimeBucket
+    var valueFormatter: ((Int) -> String)? = nil
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .none
         f.timeStyle = .short
+        return f
+    }()
+
+    private static let secondsFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .medium
         return f
     }()
 
@@ -2098,7 +2487,7 @@ private struct TimeSeriesChartTooltip: View {
             Text(formattedTime)
                 .font(.caption2)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-            Text("\(valueLabel): \(point.value)")
+            Text("\(valueLabel): \(valueFormatter?(point.value) ?? point.value.formatted())")
                 .font(.caption.weight(.medium))
         }
         .padding(6)
@@ -2111,6 +2500,9 @@ private struct TimeSeriesChartTooltip: View {
 
     private var formattedTime: String {
         switch bucket {
+        case .tenSeconds:
+            // Seconds precision — otherwise six consecutive buckets share a header.
+            return Self.secondsFormatter.string(from: point.bucket)
         case .minute, .fiveMinutes, .fifteenMinutes:
             return Self.timeFormatter.string(from: point.bucket)
         default:
@@ -2218,6 +2610,48 @@ private struct HistogramChartTooltip: View {
     }
 }
 
+private struct FrameTypeStackChart: View {
+    let series: AnalyticsSeries
+
+    private struct FrameTypePoint: Identifiable {
+        let bucket: Date
+        let type: String
+        let value: Int
+        var id: String { "\(type)-\(bucket.timeIntervalSinceReferenceDate)" }
+    }
+
+    private var points: [FrameTypePoint] {
+        let i = series.iFramesPerBucket.map { FrameTypePoint(bucket: $0.bucket, type: "I", value: $0.value) }
+        let ui = series.uiFramesPerBucket.map { FrameTypePoint(bucket: $0.bucket, type: "UI", value: $0.value) }
+        let other = series.otherFramesPerBucket.map { FrameTypePoint(bucket: $0.bucket, type: "Other", value: $0.value) }
+        return i + ui + other
+    }
+
+    var body: some View {
+        if series.iFramesPerBucket.isEmpty && series.uiFramesPerBucket.isEmpty && series.otherFramesPerBucket.isEmpty {
+            EmptyChartPlaceholder(text: "No data")
+        } else {
+            Chart(points) { point in
+                BarMark(
+                    x: .value("Time", point.bucket),
+                    y: .value("Frames", point.value)
+                )
+                .foregroundStyle(by: .value("Type", point.type))
+            }
+            .chartForegroundStyleScale([
+                "I": AnalyticsStyle.Colors.accent,
+                "UI": AnalyticsStyle.Colors.accent.opacity(0.55),
+                "Other": Color(nsColor: .systemGray).opacity(0.5)
+            ])
+            .chartYScale(domain: .automatic(includesZero: true))
+            .chartLegend(position: .top, alignment: .leading, spacing: 4)
+            .chartPlotStyle { plotArea in
+                plotArea.background(AnalyticsStyle.Colors.chartPlotBackground)
+            }
+        }
+    }
+}
+
 private struct TopListView: View {
     let rows: [RankRow]
 
@@ -2225,17 +2659,34 @@ private struct TopListView: View {
         if rows.isEmpty {
             EmptyChartPlaceholder(text: "No data")
         } else {
+            let maxCount = max(1, rows.map(\.count).max() ?? 1)
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(rows) { row in
-                    HStack {
+                    HStack(spacing: 8) {
                         Text(row.label)
-                        Spacer()
+                            .frame(minWidth: 84, alignment: .leading)
+                        // Proportional bar makes rankings scannable at a glance.
+                        GeometryReader { proxy in
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(AnalyticsStyle.Colors.accent.opacity(0.35))
+                                .frame(
+                                    width: max(2, proxy.size.width * CGFloat(row.count) / CGFloat(maxCount)),
+                                    height: 8
+                                )
+                                .frame(maxHeight: .infinity, alignment: .center)
+                        }
                         Text("\(row.count)")
+                            .monospacedDigit()
                             .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                            .frame(minWidth: 40, alignment: .trailing)
                     }
                     .font(.caption)
+                    .frame(height: 16)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(row.label), \(row.count)")
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 }
@@ -2275,13 +2726,18 @@ private struct HeatmapView: View {
                         for row in 0..<rows {
                             for col in 0..<cols {
                                 let value = data.matrix[row][col]
-                                let alpha = AnalyticsStyle.Heatmap.minAlpha + (AnalyticsStyle.Heatmap.maxAlpha - AnalyticsStyle.Heatmap.minAlpha) * (Double(value) / Double(maxValue))
+                                // Zero traffic renders unfilled; the minimum tint is
+                                // reserved for cells with at least one packet.
+                                let alpha = value == 0
+                                    ? 0
+                                    : AnalyticsStyle.Heatmap.minAlpha + (AnalyticsStyle.Heatmap.maxAlpha - AnalyticsStyle.Heatmap.minAlpha) * (Double(value) / Double(maxValue))
+                                // 1pt gap keeps adjacent nonzero hours visually distinct.
                                 let rect = CGRect(
                                     x: labelWidth + CGFloat(col) * cellWidth,
                                     y: CGFloat(row) * cellHeight,
                                     width: cellWidth,
                                     height: cellHeight
-                                )
+                                ).insetBy(dx: 1, dy: 1)
                                 let path = Path(roundedRect: rect, cornerRadius: AnalyticsStyle.Heatmap.cellCornerRadius)
                                 context.fill(path, with: .color(AnalyticsStyle.Colors.accent.opacity(alpha)))
 
@@ -2374,6 +2830,29 @@ private struct HeatmapView: View {
     }
 }
 
+private struct HeatmapIntensityLegend: View {
+    var body: some View {
+        HStack(spacing: 4) {
+            Text("less")
+            HStack(spacing: 1) {
+                ForEach(0..<5, id: \.self) { step in
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(AnalyticsStyle.Colors.accent.opacity(
+                            AnalyticsStyle.Heatmap.minAlpha
+                                + (AnalyticsStyle.Heatmap.maxAlpha - AnalyticsStyle.Heatmap.minAlpha) * Double(step) / 4
+                        ))
+                        .frame(width: 10, height: 8)
+                }
+            }
+            Text("more")
+        }
+        .font(.caption2)
+        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Heatmap intensity legend, lighter cells mean fewer packets")
+    }
+}
+
 private struct HeatmapTooltip: View {
     let xLabel: String
     let yLabel: String
@@ -2381,7 +2860,7 @@ private struct HeatmapTooltip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("\(yLabel), \(xLabel)")
+            Text("\(yLabel), \(xLabel):00–\(xLabel):59")
                 .font(.caption2)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
             Text("\(value) packets")
@@ -2427,25 +2906,6 @@ private struct ChartTooltip: View {
 
 // Old GraphInspectorView, NodeDetailsView, and MetricRow removed
 // Now using GraphSidebar component with tabbed Overview/Inspector
-
-private struct FilterControlGroup<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-
-    init(title: String, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-            content
-        }
-    }
-}
 
 private struct ChartWidthReader: View {
     let onChange: (CGFloat) -> Void
@@ -2520,67 +2980,3 @@ nonisolated private struct FlowLayout: Layout {
     }
 }
 
-// MARK: - Floating Control Bar
-
-/// Preference key for tracking scroll offset
-nonisolated private struct ScrollOffsetPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-nonisolated private struct FloatingControlBarHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 56
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-/// Floating glass control bar that sticks to the top of the scroll view.
-/// Uses material blur when available, falls back to solid background for accessibility.
-private struct FloatingControlBar<Content: View>: View {
-    let scrollOffset: CGFloat
-    let reduceTransparency: Bool
-    @ViewBuilder let content: Content
-
-    /// Threshold in points before the bar transitions to "scrolled" state
-    private let scrollThreshold: CGFloat = 12
-    /// Corner radius for the pill-shaped bar
-    private let cornerRadius: CGFloat = 12
-
-    private var isScrolled: Bool {
-        scrollOffset > scrollThreshold
-    }
-
-    var body: some View {
-        content
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .frame(maxWidth: AnalyticsStyle.Layout.floatingBarMaxWidth, alignment: .leading)
-        .background(
-            Group {
-                if reduceTransparency {
-                    // Solid background for accessibility
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(Color(nsColor: .windowBackgroundColor))
-                } else {
-                    // Glass effect with material blur - more opaque for better readability
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(.regularMaterial)
-                        .opacity(isScrolled ? 1 : 0.92)
-                }
-            }
-        )
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(isScrolled ? 0.10 : 0.05), radius: isScrolled ? 6 : 3, y: 1)
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, AnalyticsStyle.Layout.floatingBarOuterPadding)
-        .padding(.top, 8)
-        .animation(.easeOut(duration: 0.2), value: isScrolled)
-    }
-}

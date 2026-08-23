@@ -38,6 +38,24 @@ final class CallsignValidatorTests: XCTestCase {
         XCTAssertFalse(CallsignValidator.isValidRoutingNode("WIDE1-1"))
     }
 
+    func testNetRomBroadcastDestinationIsNotARoutingNode() {
+        // "NODES" is the standard NET/ROM broadcast destination (PID 0xCF).
+        // It matches the tactical-alias pattern, so without an explicit service
+        // entry every NET/ROM node's broadcasts would grow a phantom "NODES"
+        // station connected to the whole network.
+        XCTAssertFalse(CallsignValidator.isValidRoutingNode("NODES"))
+        XCTAssertFalse(CallsignValidator.isValidCallsign("NODES"))
+    }
+
+    func testCorruptDecodesAreRejectedByBothValidators() {
+        // Real corrupt frames observed on air: symbols and control characters
+        // must never become stations under either validator.
+        for garbage in ["KVQ$U(", ":L|VR", ";\">CW:", "", "-", "--7"] {
+            XCTAssertFalse(CallsignValidator.isValidCallsign(garbage), "strict must reject \(garbage)")
+            XCTAssertFalse(CallsignValidator.isValidRoutingNode(garbage), "routing must reject \(garbage)")
+        }
+    }
+
     func testCustomIgnoredServiceEndpointsAreRespected() {
         CallsignValidator.configureIgnoredServiceEndpoints(["HORSE", "drlnod"])
         XCTAssertFalse(CallsignValidator.isValidRoutingNode("HORSE"))

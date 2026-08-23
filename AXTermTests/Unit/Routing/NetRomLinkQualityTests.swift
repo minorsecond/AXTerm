@@ -101,6 +101,118 @@ final class NetRomLinkQualityTests: XCTestCase {
         XCTAssertLessThanOrEqual(quality, 255)
     }
 
+    func testSinglePacketDoesNotClaimNearPerfectQuality() {
+        // Cold start blends the first observation with the 0.5 prior: one I-frame
+        // must not instantly assert df = 1.0 (the old behavior yielded ~252/255
+        // from a single packet, indistinguishable from a proven link).
+        var estimator = makeEstimator()
+        let now = Date(timeIntervalSince1970: 1_700_002_050)
+        testClock = now
+
+        estimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: now), timestamp: now)
+
+        let quality = estimator.linkQuality(from: "W0ABC", to: "N0CALL")
+        XCTAssertGreaterThan(quality, 0)
+        XCTAssertLessThan(quality, 220, "One packet of evidence must not read as near-certainty")
+
+        let stats = estimator.linkStats(from: "W0ABC", to: "N0CALL")
+        XCTAssertEqual(stats.dfEstimate ?? 0, 0.75, accuracy: 0.01,
+                       "First sample is the running mean of the 0.5 prior and the observation")
+    }
+
+    func testDuplicatesDoNotAdvanceAdaptiveTTLArrivals() {
+        // Retries are not fresh arrivals: a link with 2 real arrivals plus a burst
+        // of retry duplicates must keep the base sliding-window TTL (the adaptive
+        // TTL needs >= 3 genuine arrivals).
+        var estimator = makeEstimator()
+        let start = Date(timeIntervalSince1970: 1_700_002_060)
+        testClock = start
+
+        estimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: start), timestamp: start)
+        let second = start.addingTimeInterval(30)
+        testClock = second
+        estimator.observePacket(makePacket(from: "W0ABC", to: "N0CALL", timestamp: second), timestamp: second)
+
+        for i in 0..<5 {
+            let ts = second.addingTimeInterval(Double(i + 1) * 3)
+            testClock = ts
+            estimator.observePacket(
+                makePacket(from: "W0ABC", to: "N0CALL", timestamp: ts),
+                timestamp: ts,
+                isDuplicate: true
+            )
+        }
+
+        XCTAssertEqual(
+            estimator.effectiveTTL(from: "W0ABC", to: "N0CALL"),
+            estimator.config.slidingWindowSeconds,
+            "Duplicates must not unlock the adaptive TTL"
+        )
+    }
+
+    func testAliasLinkAccumulatesQuality() {
+        // Tactical aliases (NET/ROM node idents like DRLNOD) are real stations;
+        // links to them must be tracked or their neighbor quality can never
+        // reflect observed link performance.
+        var estimator = makeEstimator()
+        let start = Date(timeIntervalSince1970: 1_700_002_070)
+        for offset in 0..<10 {
+            let ts = start.addingTimeInterval(Double(offset) * 5)
+            testClock = ts
+            estimator.observePacket(makePacket(from: "DRLNOD", to: "K0EPI-7", timestamp: ts), timestamp: ts)
+        }
+
+        XCTAssertGreaterThan(estimator.linkQuality(from: "DRLNOD", to: "K0EPI-7"), 0,
+                             "Alias link must accumulate quality evidence")
+        XCTAssertNotNil(estimator.linkStats(from: "DRLNOD", to: "K0EPI-7").dfEstimate)
+    }
+
+    func testServiceDestinationsRemainExcludedFromLinkQuality() {
+        // Beacons, IDs, and NET/ROM broadcasts are not station-to-station links.
+        var estimator = makeEstimator()
+        let start = Date(timeIntervalSince1970: 1_700_002_080)
+        for (index, destination) in ["ID", "BEACON", "NODES", "MAIL"].enumerated() {
+            for offset in 0..<5 {
+                let ts = start.addingTimeInterval(Double(index * 100 + offset))
+                testClock = ts
+                estimator.observePacket(
+                    makePacket(from: "DRLNOD", to: destination, frameType: .ui, timestamp: ts),
+                    timestamp: ts
+                )
+            }
+        }
+
+        for destination in ["ID", "BEACON", "NODES", "MAIL"] {
+            XCTAssertEqual(estimator.linkQuality(from: "DRLNOD", to: destination), 0,
+                           "\(destination) is a service destination, not a link partner")
+        }
+        XCTAssertTrue(estimator.exportLinkStats().isEmpty,
+                      "No link records may exist for service-destination traffic")
+    }
+
+    func testAliasNeighborQualityLearnsFromLinkEvidence() {
+        // End to end: with alias links tracked, NetRomIntegration's neighbor
+        // quality for an alias must move off the cold-start base on evidence
+        // instead of being frozen at neighborBaseQuality forever.
+        let integration = NetRomIntegration(localCallsign: "K0EPI-7", mode: .hybrid)
+        let start = Date(timeIntervalSince1970: 1_700_002_090)
+
+        for offset in 0..<20 {
+            let ts = start.addingTimeInterval(Double(offset) * 10)
+            integration.observePacket(makePacket(from: "DRLNOD", to: "K0EPI-7", timestamp: ts), timestamp: ts)
+        }
+
+        XCTAssertGreaterThan(integration.linkQuality(from: "DRLNOD", to: "K0EPI-7"), 0,
+                             "Integration must track the alias link")
+
+        let neighbor = integration.currentNeighbors().first { $0.call == "DRLNOD" }
+        XCTAssertNotNil(neighbor, "Alias heard directly must be a neighbor")
+        if let neighbor {
+            XCTAssertNotEqual(neighbor.quality, NetRomConfig.default.neighborBaseQuality,
+                              "Alias neighbor quality must reflect link evidence, not the frozen cold-start base")
+        }
+    }
+
     func testQualityIncreasesWithMorePackets() {
         var estimator = makeEstimator()
         let start = Date(timeIntervalSince1970: 1_700_002_100)

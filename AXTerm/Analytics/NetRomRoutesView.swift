@@ -315,7 +315,7 @@ struct NetRomRoutesView: View {
                     .width(min: 120, ideal: 180)
 
                     TableColumn("Hops") { route in
-                        Text("\(route.hopCount)")
+                        Text(route.hopCountKnown ? "\(route.hopCount)" : "—")
                             .foregroundStyle(.secondary)
                     }
                     .width(min: 40, ideal: 50)
@@ -364,7 +364,7 @@ struct NetRomRoutesView: View {
                     .width(min: 80, ideal: 100)
 
                     TableColumn("Quality") { stat in
-                        QualityBadge(quality: stat.quality, percent: stat.qualityPercent)
+                        QualityBadge(quality: stat.quality, percent: stat.qualityPercent, detailTooltip: stat.qualityTooltip)
                     }
                     .width(min: 80, ideal: 100)
 
@@ -490,7 +490,9 @@ struct NetRomRoutesView: View {
                 kind: .netrom(nextHopOverride: nil),
                 to: route.destination,
                 sourceContext: .routes,
-                suggestedRoutePreview: "\(route.pathSummary) (\(route.hopCount) hops)",
+                suggestedRoutePreview: route.hopCountKnown
+                    ? "\(route.pathSummary) (\(route.hopCount) hops)"
+                    : route.pathSummary,
                 validationErrors: [],
                 routeHint: hint,
                 note: nil
@@ -594,6 +596,7 @@ struct NetRomRoutesView: View {
 struct QualityBadge: View {
     let quality: Int
     let percent: Double
+    var detailTooltip: String? = nil
 
     private var color: Color {
         if percent >= 80 { return .green }
@@ -602,19 +605,21 @@ struct QualityBadge: View {
         return .red
     }
 
+    private var roundedPercent: Int { Int(percent.rounded()) }
+
     var body: some View {
         HStack(spacing: 4) {
             Text("\(quality)")
                 .fontWeight(.medium)
-            Text("(\(Int(percent))%)")
+            Text("(\(roundedPercent)%)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
-        .help("Quality estimates how reliably packets travel in each direction. Lower values indicate retries or weak acknowledgement evidence.")
-        .accessibilityLabel("Quality \(quality) of 255, \(Int(percent)) percent.")
+        .help(detailTooltip ?? "Quality estimates how reliably packets travel in each direction. Lower values indicate retries or weak acknowledgement evidence.")
+        .accessibilityLabel("Quality \(quality) of 255, \(roundedPercent) percent.")
     }
 }
 

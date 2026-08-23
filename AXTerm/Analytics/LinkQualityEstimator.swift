@@ -13,8 +13,8 @@
 //  Since AX.25 often has UI-only frames (no ACK), dr is frequently unobservable.
 //  We support partial observability:
 //    1) Full ETX when both df and dr are estimable
-//    2) Unidirectional fallback: uses conservative dr estimate (initialDeliveryRatio)
-//       when dr is unknown, ensuring quality is penalized for one-way evidence only
+//    2) Unidirectional fallback: assumes a conservative dr of 0.99 when dr is
+//       unknown, so one-way evidence can never read as a fully confirmed link
 //
 //  EWMA smoothing ensures stability - quality doesn't spike from transient conditions.
 //  Directionality is critical: A→B stats MUST NOT affect B→A unless explicit reverse evidence exists.
@@ -58,8 +58,10 @@ nonisolated struct LinkQualityConfig: Equatable, Sendable {
     /// Maximum observations to retain per directional link (ring buffer bound).
     let maxObservationsPerLink: Int
 
-    /// Whether to exclude service destinations (BEACON, ID, MAIL, etc.) from link quality edges.
-    /// Default is true - service destinations are not valid callsigns for routing purposes.
+    /// Whether to exclude service destinations (BEACON, ID, NODES, MAIL, etc.)
+    /// from link quality edges. Default is true. Endpoints are accepted per
+    /// `CallsignValidator.isValidRoutingNode`, so tactical aliases are tracked
+    /// while service names, pseudo-paths, and corrupt garbage are not.
     let excludeServiceDestinations: Bool
 
     /// Multiplier for inter-arrival time → adaptive TTL (e.g. 6.0 means 6× avg inter-arrival).
@@ -229,10 +231,14 @@ nonisolated struct LinkQualityEstimator {
         let to = CallsignValidator.normalize(rawTo)
         guard !from.isEmpty, !to.isEmpty else { return }
 
-        // Filter out service destinations (BEACON, ID, MAIL, etc.) if configured
+        // Filter out service destinations (BEACON, ID, NODES, MAIL, etc.) if
+        // configured. Endpoints are validated as routing nodes, not strict
+        // callsigns: tactical aliases (DRLNOD, EATON…) are real stations, and
+        // refusing them froze alias neighbor quality at the cold-start base
+        // because their links never accumulated df/dr evidence.
         if config.excludeServiceDestinations {
-            guard CallsignValidator.isValidCallsign(from),
-                  CallsignValidator.isValidCallsign(to) else {
+            guard CallsignValidator.isValidRoutingNode(from),
+                  CallsignValidator.isValidRoutingNode(to) else {
                 return
             }
         }
@@ -309,7 +315,7 @@ nonisolated struct LinkQualityEstimator {
     }
 
     /// Get symmetric link quality if both directions have evidence, nil otherwise.
-    /// Uses the minimum of both directions as a conservative estimate.
+    /// Uses the geometric mean of both directions (ETX combines multiplicatively).
     func symmetricLinkQuality(a: String, b: String) -> Int? {
         let normalizedA = CallsignValidator.normalize(a)
         let normalizedB = CallsignValidator.normalize(b)
@@ -551,6 +557,13 @@ nonisolated private struct DirectionalLinkStats {
     var restoredDuplicateCount: Int
     var restoredQuality: Int?
 
+    /// EWMA sample counts per channel, seeded at 1 for the cold-start prior.
+    /// Early samples blend with a count-based alpha (running mean) so a single
+    /// packet cannot claim df = 1.0; the time-based alpha takes over as evidence
+    /// accumulates.
+    var forwardSampleCount: Int = 1
+    var reverseSampleCount: Int = 1
+
     /// Average inter-arrival time for forward observations (EWMA-smoothed, seconds).
     var avgInterArrivalSeconds: Double?
 
@@ -581,6 +594,15 @@ nonisolated private struct DirectionalLinkStats {
         self.restoredObservationCount = restoredObservationCount
         self.restoredDuplicateCount = restoredDuplicateCount
         self.restoredQuality = restoredQuality
+        // Restored evidence counts toward the EWMA warm-up (plus the prior), so an
+        // imported link continues where it left off instead of re-warming from
+        // scratch — and incremental replay matches a full recompute exactly.
+        if restoredForwardEstimate != nil {
+            self.forwardSampleCount = restoredObservationCount + 1
+        }
+        if restoredReverseEstimate != nil {
+            self.reverseSampleCount = restoredObservationCount + 1
+        }
     }
 
     var hasEvidence: Bool {
@@ -600,6 +622,16 @@ nonisolated private struct DirectionalLinkStats {
 
         // Revive from tombstone if new evidence arrives
         tombstonedAt = nil
+
+        // Seed the live EWMA from persisted state before clearing it — otherwise the
+        // first observation after an import throws away everything the link had
+        // learned and restarts from the cold-start prior.
+        if forwardEstimate == nil, let restoredForwardEstimate {
+            forwardEstimate = clamp01(restoredForwardEstimate)
+        }
+        if reverseEstimate == nil, let restoredReverseEstimate {
+            reverseEstimate = clamp01(restoredReverseEstimate)
+        }
 
         // Clear restored values once we have real observations
         restoredForwardEstimate = nil
@@ -624,33 +656,33 @@ nonisolated private struct DirectionalLinkStats {
                     }
                 }
             }
-            arrivalCount += 1
-
-            if previous == nil {
-                forwardEstimate = clamp01(value)
-            } else {
-                forwardEstimate = updateEWMA(
-                    current: forwardEstimate ?? config.initialDeliveryRatio,
-                    value: clamp01(value),
-                    previousTimestamp: previous ?? timestamp,
-                    timestamp: timestamp,
-                    halfLife: config.forwardHalfLifeSeconds
-                )
+            // Retries are not fresh arrivals — counting them inflated the
+            // adaptive-TTL arrival gate.
+            if !isDuplicate {
+                arrivalCount += 1
             }
+
+            forwardEstimate = updateEWMA(
+                current: forwardEstimate ?? config.initialDeliveryRatio,
+                value: clamp01(value),
+                previousTimestamp: previous,
+                timestamp: timestamp,
+                halfLife: config.forwardHalfLifeSeconds,
+                sampleCount: forwardSampleCount
+            )
+            forwardSampleCount += 1
             lastForwardUpdate = timestamp
         case .reverse:
             let previous = lastReverseUpdate
-            if previous == nil {
-                reverseEstimate = clamp01(value)
-            } else {
-                reverseEstimate = updateEWMA(
-                    current: reverseEstimate ?? config.initialDeliveryRatio,
-                    value: clamp01(value),
-                    previousTimestamp: previous ?? timestamp,
-                    timestamp: timestamp,
-                    halfLife: config.reverseHalfLifeSeconds
-                )
-            }
+            reverseEstimate = updateEWMA(
+                current: reverseEstimate ?? config.initialDeliveryRatio,
+                value: clamp01(value),
+                previousTimestamp: previous,
+                timestamp: timestamp,
+                halfLife: config.reverseHalfLifeSeconds,
+                sampleCount: reverseSampleCount
+            )
+            reverseSampleCount += 1
             lastReverseUpdate = timestamp
         }
     }
@@ -754,20 +786,34 @@ nonisolated private struct DirectionalLinkStats {
         return min(config.maxETX, max(1.0, 1.0 / product))
     }
 
+    /// Time-based EWMA with warm-up correction.
+    ///
+    /// The effective alpha is `max(timeAlpha, 1/(sampleCount + 1))`. The
+    /// count-based term makes the early estimate a running mean seeded by the
+    /// `initialDeliveryRatio` prior — one packet yields 0.75, not a hard 1.0 —
+    /// while enough samples let the Δt-based term (λ = 1 − exp(−Δt/H)) dominate,
+    /// as specified in CLAUDE.md §8.
     private func updateEWMA(
         current: Double,
         value: Double,
-        previousTimestamp: Date,
+        previousTimestamp: Date?,
         timestamp: Date,
-        halfLife: TimeInterval
+        halfLife: TimeInterval,
+        sampleCount: Int
     ) -> Double {
-        let delta = max(0.0, timestamp.timeIntervalSince(previousTimestamp))
-        let alpha: Double
-        if halfLife <= 0 {
-            alpha = 1.0
+        let timeAlpha: Double
+        if let previousTimestamp {
+            let delta = max(0.0, timestamp.timeIntervalSince(previousTimestamp))
+            if halfLife <= 0 {
+                timeAlpha = 1.0
+            } else {
+                timeAlpha = 1.0 - exp(-delta / halfLife)
+            }
         } else {
-            alpha = 1.0 - exp(-delta / halfLife)
+            timeAlpha = 0.0
         }
+        let countAlpha = 1.0 / Double(max(1, sampleCount) + 1)
+        let alpha = max(timeAlpha, countAlpha)
         let blended = (1.0 - alpha) * current + alpha * value
         return clamp01(blended)
     }

@@ -182,22 +182,19 @@ final class NetRomPassiveInference {
 
     private func publishEvidence(_ bucket: [NetRomRouteEvidence], destination: String, timestamp: Date) {
         for evidence in bucket {
+            // Publish the honest evidence-derived quality. The router combines it
+            // with the neighbor's path quality; the displayed number then tracks
+            // observation strength and decays on retries. The old code promoted
+            // weak evidence to whatever value would exactly clear the router's
+            // minimumRouteQuality, so every weakly-evidenced route displayed the
+            // same fabricated floor (32) regardless of how good the path was.
             let advertisedQuality = evidence.advertisedQuality(using: config)
-            let neighborQuality = router.neighborsForStation(evidence.origin).first?.quality ?? 0
-            let requiredQuality = minimumBroadcastQuality(
-                minimumCombined: router.config.minimumRouteQuality,
-                pathQuality: neighborQuality
-            )
-            let effectiveQuality = min(
-                NetRomConfig.maximumRouteQuality,
-                max(advertisedQuality, requiredQuality)
-            )
-            guard effectiveQuality >= config.inferredMinimumQuality else { continue }
+            guard advertisedQuality >= config.inferredMinimumQuality else { continue }
             router.broadcastRoutes(
                 from: evidence.origin,
-                quality: effectiveQuality,
+                quality: advertisedQuality,
                 destinations: [
-                    RouteInfo(destination: evidence.destination, origin: evidence.origin, quality: effectiveQuality, path: evidence.path, lastUpdated: timestamp, sourceType: "inferred")
+                    RouteInfo(destination: evidence.destination, origin: evidence.origin, quality: advertisedQuality, path: evidence.path, lastUpdated: timestamp, sourceType: "inferred")
                 ],
                 timestamp: timestamp
             )
@@ -297,9 +294,4 @@ final class NetRomPassiveInference {
         return text == "BEACON" || text.hasPrefix("BEACON ") || text == "ID" || text.hasPrefix("ID ")
     }
 
-    private func minimumBroadcastQuality(minimumCombined: Int, pathQuality: Int) -> Int {
-        guard pathQuality > 0 else { return NetRomConfig.maximumRouteQuality }
-        let numerator = max(0, (minimumCombined * 256) - 128)
-        return (numerator + pathQuality - 1) / pathQuality
-    }
 }

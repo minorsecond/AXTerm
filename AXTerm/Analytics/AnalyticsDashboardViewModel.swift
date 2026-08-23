@@ -16,9 +16,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         DateInterval,
         TimeBucket,
         Calendar,
-        Bool,
-        Int,
-        Int
+        AnalyticsAggregator.Options
     ) async -> AnalyticsAggregationResult?
     typealias TimeframePacketsProvider = @Sendable (DateInterval) async -> [Packet]?
 
@@ -118,6 +116,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             layoutKey = nil
             layoutCache.removeAll()
             scheduleGraphBuild(reason: "stationIdentityMode")
+            // Summary, unique-station series, and top lists group by the same
+            // identity mode as the graph, so they must recompute as well.
+            scheduleAggregation(reason: "stationIdentityMode")
             persistStationIdentityMode()
         }
     }
@@ -471,6 +472,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     func manualRefresh() {
         guard isActive else { return }
+        // An explicit refresh must recompute, not replay a cached window.
+        aggregationCache.removeAll()
+        graphCache.removeAll()
+        classifiedGraphCache.removeAll()
         isAggregationLoading = true
         isGraphLoading = true
         scheduleAggregation(reason: "manualRefresh")
@@ -513,10 +518,13 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
         let neighbors = viewState.graphModel.adjacency[selectedNodeID] ?? []
 
-        // Get classified relationships from the classified graph model
+        // Get classified relationships from the classified graph model.
+        // heardMutual counts as direct-decode evidence — without it a station whose
+        // only links are mutual showed an edge on the canvas but "No neighbors
+        // found" in the inspector.
         let relationships = viewState.classifiedGraphModel.relationships(for: selectedNodeID)
         let directPeers = relationships.filter { $0.linkType == .directPeer }
-        let heardDirect = relationships.filter { $0.linkType == .heardDirect }
+        let heardDirect = relationships.filter { $0.linkType == .heardDirect || $0.linkType == .heardMutual }
         let seenVia = relationships.filter { $0.linkType == .heardVia }
 
         return GraphInspectorDetails(
@@ -559,8 +567,14 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
         let internalPacketCount = internalLinks.reduce(0) { $0 + $1.packetCount }
         let internalByteCount = internalLinks.reduce(0) { $0 + $1.bytes }
-        let selectedNodeTotalBytes = selectedNodes.reduce(0) { $0 + $1.inBytes + $1.outBytes }
-        let touchingByteCount = max(0, selectedNodeTotalBytes - internalByteCount)
+        // "Total" = payload bytes on any link with at least one selected endpoint,
+        // summed over the same edge set as the internal figure. The old computation
+        // subtracted single-counted link bytes from double-counted per-node totals
+        // (every internal packet is one node's out-bytes AND the other's in-bytes),
+        // over-reporting by exactly the internal byte volume.
+        let touchingByteCount = viewState.graphModel.edges
+            .filter { selectedIDSet.contains($0.sourceID) || selectedIDSet.contains($0.targetID) }
+            .reduce(0) { $0 + $1.bytes }
 
         var externalAggregate: [String: GraphMultiInspectorDetails.SharedExternalConnection] = [:]
         for selectedID in selectedIDSet {
@@ -656,7 +670,14 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             .dropFirst()
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.refreshForServiceEndpointFilterChange()
+                guard let self else { return }
+                // The settings didSet just reconfigured the validator with the
+                // persisted list; while the temporary preview is active the
+                // override must win again.
+                if self.temporarilyShowingIgnoredEndpoints {
+                    self.applyEffectiveIgnoredServiceEndpoints()
+                }
+                self.refreshForServiceEndpointFilterChange()
             }
             .store(in: &cancellables)
     }
@@ -708,6 +729,171 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         }
     }
 
+    /// When true, analytics treat the service-endpoint ignore list as empty for
+    /// this session only. This is the "Show All (Temporary)" preview: it swaps the
+    /// validator's *effective* list and never touches persisted settings — the old
+    /// implementation wrote `ignoredServiceEndpoints = []` and a crash mid-preview
+    /// permanently destroyed the user's list.
+    @Published private(set) var temporarilyShowingIgnoredEndpoints = false
+
+    func setTemporarilyShowingIgnoredEndpoints(_ active: Bool) {
+        guard temporarilyShowingIgnoredEndpoints != active else { return }
+        temporarilyShowingIgnoredEndpoints = active
+        applyEffectiveIgnoredServiceEndpoints()
+        refreshForServiceEndpointFilterChange()
+    }
+
+    // MARK: - Hidden Node Accounting
+
+    /// Which stations are hidden from the current graph, split into disjoint
+    /// causes so the "Hidden by filters" badge counts each station exactly once.
+    struct HiddenNodeBreakdown: Equatable {
+        /// Graph nodes outside the focus neighborhood (node identity keys).
+        let focusHiddenIDs: Set<String>
+        /// Valid stations observed in the timeframe that the classified graph
+        /// does not draw — removed by the min-edge threshold, the max-nodes cap,
+        /// or lacking a qualifying link. Disjoint from ignored/simulated because
+        /// those stations fail validation and never enter this universe.
+        let structuralHiddenKeys: Set<String>
+        /// NET/ROM source only: nodes truncated by the max-nodes cap (the NET/ROM
+        /// graph is not packet-derived, so no station universe exists to diff).
+        let maxNodesDroppedCount: Int
+        /// Simulated removals whose station actually appears in the timeframe.
+        let simulatedPresent: Set<String>
+        /// Persisted ignore-list entries whose station actually appears in the
+        /// timeframe. An ignored callsign that never transmits is not a hidden node.
+        let ignoredPresent: Set<String>
+
+        var structuralCount: Int { structuralHiddenKeys.count + maxNodesDroppedCount }
+        var totalCount: Int {
+            focusHiddenIDs.count + structuralCount + simulatedPresent.count + ignoredPresent.count
+        }
+
+        static let empty = HiddenNodeBreakdown(
+            focusHiddenIDs: [],
+            structuralHiddenKeys: [],
+            maxNodesDroppedCount: 0,
+            simulatedPresent: [],
+            ignoredPresent: []
+        )
+    }
+
+    // MARK: - Activity insights (roles, hourly profile, airtime, sessions)
+
+    @Published private(set) var activityByHourProfile: ActivityByHourProfile = .empty
+    @Published private(set) var airtimeRanking: [AirtimeEntry] = []
+    @Published private(set) var observedSessions: [SessionObservation] = []
+    @Published private(set) var stationDirectory: [StationDirectoryEntry] = []
+    @Published private(set) var stationRoles: [String: Set<StationRole>] = [:]
+
+    private func updateActivityInsights(
+        packets: [Packet],
+        identityMode: StationIdentityMode,
+        windowEnd: Date
+    ) {
+        let roles = StationRoleInference.inferRoles(packets: packets, identityMode: identityMode)
+        stationRoles = roles
+        activityByHourProfile = ActivityByHourCalculator.profile(
+            packets: packets,
+            roles: roles,
+            identityMode: identityMode,
+            calendar: calendar
+        )
+        airtimeRanking = AirtimeRanking.rank(
+            packets: packets,
+            identityMode: identityMode,
+            limit: AnalyticsStyle.Tables.topLimit
+        )
+        observedSessions = SessionObservationCalculator.sessions(
+            packets: packets,
+            identityMode: identityMode,
+            windowEnd: windowEnd
+        )
+        stationDirectory = StationDirectoryBuilder.build(
+            packets: packets,
+            roles: roles,
+            identityMode: identityMode
+        )
+    }
+
+    /// Base callsigns observed in the current timeframe (senders, destinations,
+    /// repeating digipeaters), before any validity filtering.
+    private(set) var timeframePresentBaseCalls: Set<String> = []
+
+    /// Valid stations (effective validator) as identity keys — the universe the
+    /// classified graph could draw.
+    private(set) var timeframeValidStationKeys: Set<String> = []
+
+    private func updateTimeframeStationPresence(packets: [Packet], identityMode: StationIdentityMode) {
+        var baseCalls: Set<String> = []
+        var validKeys: Set<String> = []
+        for packet in packets {
+            var displays: [String] = []
+            if let from = packet.from?.display { displays.append(from) }
+            if let to = packet.to?.display { displays.append(to) }
+            for via in packet.via where via.repeated { displays.append(via.display) }
+            for display in displays {
+                let normalized = CallsignValidator.normalize(display)
+                guard !normalized.isEmpty else { continue }
+                baseCalls.insert(CallsignParser.parse(normalized).base)
+                if CallsignValidator.isValidRoutingNode(normalized) {
+                    validKeys.insert(CallsignParser.identityKey(for: normalized, mode: identityMode))
+                }
+            }
+        }
+        timeframePresentBaseCalls = baseCalls
+        timeframeValidStationKeys = validKeys
+    }
+
+    /// Computes the hidden-node breakdown for the current graph state.
+    /// `simulatedEndpoints` and `temporarilyUnignored` are view-session state.
+    func hiddenNodeBreakdown(
+        simulatedEndpoints: Set<String>,
+        temporarilyUnignored: Set<String>
+    ) -> HiddenNodeBreakdown {
+        let focusHidden: Set<String>
+        if focusState.isFocusEnabled {
+            focusHidden = Set(viewState.graphModel.nodes.map(\.id))
+                .subtracting(filteredGraph.visibleNodeIDs)
+        } else {
+            focusHidden = []
+        }
+
+        let structuralKeys: Set<String>
+        let maxNodesDropped: Int
+        if graphViewMode.isNetRomMode {
+            structuralKeys = []
+            maxNodesDropped = max(0, viewState.classifiedGraphModel.droppedNodesCount)
+        } else {
+            let drawnIDs = Set(viewState.classifiedGraphModel.nodes.map(\.id))
+            structuralKeys = timeframeValidStationKeys.subtracting(drawnIDs)
+            maxNodesDropped = 0
+        }
+
+        let simulatedPresent = simulatedEndpoints.intersection(timeframePresentBaseCalls)
+        let ignoredPresent = Set((settingsStore?.ignoredServiceEndpoints ?? []).map(CallsignValidator.normalize))
+            .subtracting(simulatedEndpoints)
+            .subtracting(temporarilyUnignored)
+            .intersection(timeframePresentBaseCalls)
+
+        return HiddenNodeBreakdown(
+            focusHiddenIDs: focusHidden,
+            structuralHiddenKeys: structuralKeys,
+            maxNodesDroppedCount: maxNodesDropped,
+            simulatedPresent: simulatedPresent,
+            ignoredPresent: ignoredPresent
+        )
+    }
+
+    /// Pushes the effective ignore list (empty while the temporary preview is
+    /// active, the persisted list otherwise) into the process-wide validator.
+    private func applyEffectiveIgnoredServiceEndpoints() {
+        let effective = temporarilyShowingIgnoredEndpoints
+            ? []
+            : (settingsStore?.ignoredServiceEndpoints ?? [])
+        CallsignValidator.configureIgnoredServiceEndpoints(effective)
+    }
+
     /// Rebuilds analytics outputs when service-endpoint ignore filters change.
     /// Classification depends on validator state, so caches must be invalidated.
     func refreshForServiceEndpointFilterChange() {
@@ -732,8 +918,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             timeframe: timeframe,
             bucket: bucketSnapshot,
             includeVia: includeViaSnapshot,
+            stationIdentityMode: stationIdentityMode,
             packetCount: packetSnapshot.count,
             lastTimestamp: packetSnapshot.map { $0.timestamp }.max(),
+            windowStart: bucketSnapshot.normalizedStart(for: timeframeInterval.start, calendar: calendar),
             customStart: customRangeStart,
             customEnd: customRangeEnd,
             ignoredServiceEndpointsHash: ignoredServiceEndpointsHash()
@@ -791,8 +979,12 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             ]
         )
 
-        let histogramBinCount = AnalyticsStyle.Histogram.binCount
-        let topLimit = AnalyticsStyle.Tables.topLimit
+        let aggregationOptions = AnalyticsAggregator.Options(
+            includeViaDigipeaters: includeViaSnapshot,
+            histogramBinCount: AnalyticsStyle.Histogram.binCount,
+            topLimit: AnalyticsStyle.Tables.topLimit,
+            stationIdentityMode: stationIdentityMode
+        )
         let provider = databaseAggregationProvider
         if showLoadingState {
             isAggregationLoading = true
@@ -806,9 +998,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                 timeframeInterval,
                 bucketSnapshot,
                 calendar,
-                includeViaSnapshot,
-                histogramBinCount,
-                topLimit
+                aggregationOptions
             ) {
                 result = providerResult
             } else {
@@ -816,11 +1006,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
                     packets: packetSnapshot,
                     bucket: bucketSnapshot,
                     calendar: calendar,
-                    options: AnalyticsAggregator.Options(
-                        includeViaDigipeaters: includeViaSnapshot,
-                        histogramBinCount: histogramBinCount,
-                        topLimit: topLimit
-                    ),
+                    options: aggregationOptions,
                     timeframeInterval: timeframeInterval
                 )
             }
@@ -890,7 +1076,12 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     private func ignoredServiceEndpointsHash() -> Int {
-        let ignored = settingsStore?.ignoredServiceEndpoints ?? []
+        // Cache keys must track the *effective* list: while the temporary preview
+        // is active, classification runs with no ignores, and serving a cached
+        // filtered result would defeat the preview (and vice versa on exit).
+        let ignored = temporarilyShowingIgnoredEndpoints
+            ? []
+            : (settingsStore?.ignoredServiceEndpoints ?? [])
         var hasher = Hasher()
         for endpoint in ignored.sorted() {
             endpoint.hash(into: &hasher)
@@ -900,7 +1091,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func filteredPackets(now: Date) -> [Packet] {
         let range = currentDateRange(now: now)
-        return packets.filter { range.contains($0.timestamp) }
+        // Half-open [start, end) to match the SQLite path's `receivedAt >= ? AND < ?`;
+        // DateInterval.contains is closed and would admit a packet stamped exactly at end.
+        return packets.filter { $0.timestamp >= range.start && $0.timestamp < range.end }
     }
 
     private func timeframePacketSnapshot(now: Date) async -> [Packet] {
@@ -913,8 +1106,11 @@ final class AnalyticsDashboardViewModel: ObservableObject {
 
     private func rebuildGraph(reason: String, applyToViewState: Bool = true, showLoadingState: Bool = true) async {
         let now = Date()
+        let timeframeInterval = currentDateRange(now: now)
         let packetSnapshot = await timeframePacketSnapshot(now: now)
         latestTimeframePackets = packetSnapshot
+        updateTimeframeStationPresence(packets: packetSnapshot, identityMode: stationIdentityMode)
+        updateActivityInsights(packets: packetSnapshot, identityMode: stationIdentityMode, windowEnd: timeframeInterval.end)
         let includeViaSnapshot = includeViaDigipeaters
         let minEdgeSnapshot = minEdgeCount
         let maxNodesSnapshot = maxNodes
@@ -932,6 +1128,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             packetCount: packetSnapshot.count,
             lastTimestamp: packetSnapshot.map { $0.timestamp }.max(),
             netRomUpdateCount: netRomUpdateCount,
+            windowStart: Date(timeIntervalSince1970: (timeframeInterval.start.timeIntervalSince1970 / 60).rounded(.down) * 60),
             customStart: customRangeStart,
             customEnd: customRangeEnd,
             ignoredServiceEndpointsHash: ignoredServiceEndpointsHash()
@@ -1182,15 +1379,16 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         let now = Date()
         let timeframePackets = latestTimeframePackets
 
-        // Network Health uses a CANONICAL graph (minEdge=2, no max nodes) that ignores view filters.
+        // Network Health uses a CANONICAL graph (minEdge=1, no max nodes) that ignores view filters.
         // This ensures the health score is stable under Min Edge slider and Max Node count changes.
         // Only timeframe, includeViaDigipeaters toggle, and time passing affect the score.
         let health = NetworkHealthCalculator.calculate(
-            graphModel: viewState.graphModel,
             timeframePackets: timeframePackets,
             allRecentPackets: packets,
             timeframeDisplayName: timeframe.displayName,
             includeViaDigipeaters: includeViaDigipeaters,
+            stationIdentityMode: stationIdentityMode,
+            timeframeDuration: currentDateRange(now: now).duration,
             now: now
         )
         viewState.networkHealth = health
@@ -1209,13 +1407,18 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     func activeNodeIDs() -> Set<String> {
         let recentCutoff = Date().addingTimeInterval(-600) // 10 minutes
         let recentPackets = packets.filter { $0.timestamp >= recentCutoff }
-        var activeCallsigns: Set<String> = []
+        // Node IDs are identity keys ("W1ABC-7" in SSID mode, "W1ABC" in station
+        // mode). Matching on the bare base call selected nothing in SSID mode.
+        var activeKeys: Set<String> = []
         for packet in recentPackets {
-            if let from = packet.from?.call { activeCallsigns.insert(from) }
-            if let to = packet.to?.call { activeCallsigns.insert(to) }
+            if let from = packet.from?.display {
+                activeKeys.insert(CallsignParser.identityKey(for: from, mode: stationIdentityMode))
+            }
+            if let to = packet.to?.display {
+                activeKeys.insert(CallsignParser.identityKey(for: to, mode: stationIdentityMode))
+            }
         }
-        // Map callsigns to node IDs
-        return Set(viewState.graphModel.nodes.filter { activeCallsigns.contains($0.callsign) }.map { $0.id })
+        return Set(viewState.graphModel.nodes.filter { activeKeys.contains($0.id) }.map { $0.id })
     }
 
     // MARK: - Focus Mode Actions
@@ -1688,8 +1891,13 @@ private struct AggregationCacheKey: Hashable {
     let timeframe: AnalyticsTimeframe
     let bucket: TimeBucket
     let includeVia: Bool
+    let stationIdentityMode: StationIdentityMode
     let packetCount: Int
     let lastTimestamp: Date?
+    /// Resolved window start, quantized to the bucket stride. Rolling timeframes slide
+    /// with the clock; without this the cache would keep serving a window that ended
+    /// long ago whenever no new packets arrive.
+    let windowStart: Date
     let customStart: Date
     let customEnd: Date
     let ignoredServiceEndpointsHash: Int
@@ -1705,6 +1913,8 @@ private struct GraphCacheKey: Hashable {
     let packetCount: Int
     let lastTimestamp: Date?
     let netRomUpdateCount: Int
+    /// Resolved window start quantized to one minute — see AggregationCacheKey.windowStart.
+    let windowStart: Date
     let customStart: Date
     let customEnd: Date
     let ignoredServiceEndpointsHash: Int
@@ -1803,7 +2013,12 @@ private enum AnalyticsInputHasher {
     }
 }
 
-private final class TelemetryRateLimiter {
+/// nonisolated: with SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor this class would
+/// otherwise get an implicitly isolated deinit, and releasing it synchronously
+/// from a @MainActor context aborts in the runtime's task-local teardown
+/// (swift_task_deinitOnExecutorImpl → StopLookupScope, malloc double-free).
+/// State is only touched from the owning main-actor view model.
+nonisolated private final class TelemetryRateLimiter {
     private let minimumInterval: TimeInterval
     private var lastFire: Date?
 

@@ -11,7 +11,10 @@ Network Health provides a 0-100 score indicating the overall health and activity
 ### 1. Canonical Topology Graph
 
 Health topology metrics are computed from a **canonical graph** that:
-- Uses `canonicalMinEdge = 2` (fixed, not the view slider)
+- Uses `canonicalMinEdge = 1` (fixed, not the view slider) — any observed link is
+  topology evidence. Requiring 2+ frames made a station heard once read as
+  "isolated" (a false statement) and produced a score cliff between the first and
+  second packet of a pair.
 - Has no max-node limit (shows full network topology)
 - Applies the `includeViaDigipeaters` toggle
 - **Ignores** view-only filters (Min Edge slider, Max Node count)
@@ -21,17 +24,24 @@ This ensures the health score remains stable when users adjust view filters.
 ### 2. Hybrid Time Windows
 
 - **Topology metrics**: Based on user-selected timeframe (e.g., 24h, 1h)
-- **Activity metrics**: Fixed 10-minute window (unless timeframe < 10m)
+- **Activity metrics**: 10-minute window, clamped to the timeframe when shorter.
+  A1's numerator and denominator draw on consistent windows; earlier versions let
+  a sub-10-minute timeframe silently saturate A1 at 100.
 
-This prevents UX "whiplash" when changing timeframes - activity metrics stay stable.
+### 3. Determinism
 
-### 3. Stability via EMA Smoothing
+The calculator is a pure function: identical inputs always produce the identical
+score. The 10-minute rate window is itself the smoothing — there is no cross-call
+EMA state (a per-invocation EMA made the displayed rate depend on how often the
+UI happened to recompute). When the app has been listening for less than the
+window, the rate divides by the observed span instead of the full window.
 
-Packet rate uses Exponential Moving Average (EMA) smoothing to prevent spiky behavior:
-```
-smoothedRate = α × currentRate + (1-α) × previousRate
-α = 0.25
-```
+### 4. Sample Gate
+
+Below **3 stations or 10 packets** in the timeframe the score is not emitted:
+the panel reports **Unknown** with an explanatory reason. Two stations
+exchanging two packets used to rate "Excellent" (87) — a degenerate sample must
+not outrank a functioning 40-station network.
 
 ## Formula
 
@@ -43,10 +53,17 @@ TopologyScore = 0.5×C1 + 0.3×C2 + 0.2×C3
 
 Where:
 - **C1 (Main Cluster %)**: Largest connected component / total nodes × 100
-- **C2 (Connectivity Ratio %)**: actualEdges / possibleEdges × 100 (capped at 100)
-  - `possibleEdges = n×(n-1)/2` for undirected graph
-- **C3 (Isolation Reduction)**: 100 - (% isolated nodes)
-  - Higher is better; 100 means no isolated stations
+- **C2 (Connectivity %)**: meanDegree / targetMeanDegree × 100 (capped at 100)
+  - `meanDegree = 2 × edges / n`; `targetMeanDegree = 3.0`
+  - Mean degree is size-invariant. The old density formula
+    (`edges / n(n-1)/2`) decays as O(1/n) for bounded-degree RF networks, which
+    punished network growth and capped real networks near 82/100 while scoring a
+    two-node graph 100.
+  - ~3 links per station gives path redundancy without saturating a shared channel.
+- **C3 (Isolation Reduction)**: 100 - (% stations with no observed links)
+  - Higher is better; 100 means every heard station has at least one link.
+  - An empty network scores 0 here (it used to score 100, lifting a dead network
+    to 12/100 "Poor" with a "Network operational" reason).
 
 ### Activity Score (40% of final)
 
@@ -55,9 +72,16 @@ ActivityScore = 0.6×A1 + 0.4×A2
 ```
 
 Where:
-- **A1 (Active Nodes %)**: Stations heard in last 10m / total nodes × 100
-- **A2 (Packet Rate Score)**: min(100, packetRate / idealRate × 100)
-  - `idealRate = 1.0 packets/minute`
+- **A1 (Active Nodes %)**: Stations heard in last 10m / total timeframe nodes × 100
+  (the 10m window is clamped to the timeframe when the timeframe is shorter)
+- **A2 (Packet Rate Score)**: trapezoid against channel capacity
+  - 0 at 0 pkt/min, ramps to 100 at `idealRate = 1.0 pkt/min`
+  - holds 100 through `congestionOnsetRate = 30 pkt/min`
+  - declines linearly to `saturatedScore = 20` at `saturatedRate = 60 pkt/min`
+  - Rationale: a ~200-byte AX.25 frame occupies ~1.4 s of air time at 1200 baud,
+    so ~30 frames/min is already heavy CSMA contention and ~40/min approaches
+    100% channel occupancy. A monotonically increasing score would rate a
+    collision-saturated channel as healthier than a normal one.
 
 ### Final Score
 
@@ -72,15 +96,15 @@ NetworkHealthScore = round(0.6×TopologyScore + 0.4×ActivityScore)
 | Metric | Description | Weight |
 |--------|-------------|--------|
 | C1: Main Cluster | % of nodes in largest connected component | 30% of final |
-| C2: Connectivity | % of possible edges that exist | 18% of final |
-| C3: Isolation Reduction | 100 - % isolated nodes (higher = better) | 12% of final |
+| C2: Connectivity | mean degree vs target of 3 | 18% of final |
+| C3: Isolation Reduction | 100 - % stations with no links (higher = better) | 12% of final |
 
 ### Activity Metrics (10-Minute Window)
 
 | Metric | Description | Weight |
 |--------|-------------|--------|
 | A1: Active Nodes | % of stations heard in last 10 minutes | 24% of final |
-| A2: Packet Rate | Normalized rate (ideal = 1.0 pkt/min), EMA-smoothed | 16% of final |
+| A2: Packet Rate | Rate vs channel capacity (100 from 1–30 pkt/min) | 16% of final |
 
 ## Stability Guarantees
 
@@ -104,16 +128,18 @@ The health score is **stable under view filter changes**:
 | 1-39 | Poor |
 | 0 | Unknown |
 
+Below the sample gate (3 stations / 10 packets) the rating is always **Unknown**.
+
 ## Warnings
 
 The system generates contextual warnings:
 
 | Warning | Condition | Time Window |
 |---------|-----------|-------------|
-| Single relay dominance | >60% of traffic through one station | Timeframe |
-| Stale stations | <30% freshness | Hybrid (10m vs timeframe) |
+| Single relay dominance | >60% of network *links* involve one station, graph >4 nodes | Timeframe |
+| Stale stations | <30% freshness, only for timeframes ≤ 1h (at 24h it would be a tautology) | Hybrid (10m vs timeframe) |
 | Fragmented network | <50% in main cluster (with >5 stations) | Timeframe |
-| Isolated stations | Nodes with degree=0 in canonical graph | Timeframe |
+| Isolated stations | Stations heard with no observed links | Timeframe |
 | Low activity | <0.1 packets/minute | 10-minute |
 
 ## UI Labels and Tooltips
@@ -133,10 +159,10 @@ Activity metrics always show `(10m)`:
 ### Key Tooltip Messages
 
 - **Header**: "Composite score combining network topology (selected timeframe) and recent activity (last 10 minutes). View filters (Min Edge, Max Nodes) don't affect this score."
-- **Main Cluster**: "C1: Percentage of stations in the largest connected group. Computed from canonical graph (minEdge=2)."
-- **Connectivity**: "C2: Percentage of possible links that exist. Formula: actualEdges / possibleEdges × 100."
-- **Active (10m)**: "A1: Percentage of stations heard in the last 10 minutes. Independent of selected timeframe."
-- **Rate (10m)**: "A2: Packets per minute, EMA-smoothed for stability. Normalized to ideal rate of 1.0 pkt/min."
+- **Main Cluster**: "C1: Percentage of stations in the largest connected group. Computed from the canonical graph."
+- **Connectivity**: "C2: Average links per station relative to a target of 3. Formula: meanDegree / 3 × 100."
+- **Active (10m)**: "A1: Stations heard in the last 10 minutes. The activity score uses this as a share of all timeframe stations."
+- **Rate (10m)**: "A2: Packets per minute over the last 10 minutes. Scores 100 from 1 to 30 pkt/min, then declines toward saturation."
 
 ## Implementation Notes
 
@@ -157,7 +183,7 @@ Health is recalculated when:
 - Timeframe changes
 - `includeViaDigipeaters` toggle changes
 
-The canonical graph is built on-demand for each calculation using `NetworkHealthCalculator.buildCanonicalGraph()`.
+The canonical graph is built on-demand for each calculation using `NetworkHealthCalculator.buildCanonicalGraph()`. The calculation is deterministic — recomputing with identical inputs cannot change the score.
 
 ### Performance
 
@@ -179,7 +205,7 @@ Composite health scoring approach inspired by network monitoring systems such as
 - [ ] `includeViaDigipeaters` toggle changes topology metrics appropriately
 - [ ] Tooltips accurately describe behavior and mention canonical graph
 - [ ] No main-thread stalls when packets stream in
-- [ ] EMA smoothing prevents packet rate spikes
+- [ ] Packet rate is deterministic for identical inputs
 - [ ] Warnings include correct timeframe labels
 - [ ] Score explainer popover shows C1/C2/C3/A1/A2 breakdown
 - [ ] Percentage formatting uses dynamic precision (≥10%: 0 decimals, <10%: 1 decimal, <1%: 2 decimals)

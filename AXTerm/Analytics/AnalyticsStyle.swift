@@ -9,6 +9,32 @@ import AppKit
 import SwiftUI
 
 nonisolated enum AnalyticsStyle {
+    /// Channel-utilization model for a shared 1200-baud AX.25 channel.
+    enum Channel {
+        /// AFSK bit rate assumed for airtime estimates.
+        static let baudRate: Double = 1200
+        /// Fixed per-frame airtime: TXDelay, flags, and squelch tails dominate
+        /// short frames (~300 ms is a typical field value).
+        static let perFrameOverheadSeconds: Double = 0.3
+        /// Non-payload bytes per frame (addresses, control, PID, FCS).
+        static let framingBytes: Int = 32
+
+        /// Estimated airtime for a single frame.
+        static func frameAirtimeSeconds(payloadBytes: Int) -> Double {
+            perFrameOverheadSeconds + Double(payloadBytes + framingBytes) * 8.0 / baudRate
+        }
+
+        /// Estimated channel airtime as a percentage of the bucket duration.
+        static func utilizationPercent(packets: Int, payloadBytes: Int, bucketSeconds: Double) -> Int {
+            guard bucketSeconds > 0, packets > 0 else { return 0 }
+            let framing = packets * framingBytes
+            let airtimeSeconds = Double(packets) * perFrameOverheadSeconds
+                + Double(payloadBytes + framing) * 8.0 / baudRate
+            let percent = min(100.0, airtimeSeconds / bucketSeconds * 100.0)
+            return Int(percent.rounded())
+        }
+    }
+
     enum Layout {
         static let pagePadding: CGFloat = 20
         static let sectionSpacing: CGFloat = 18

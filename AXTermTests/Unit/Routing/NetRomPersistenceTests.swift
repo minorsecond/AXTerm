@@ -726,11 +726,13 @@ final class NetRomPersistenceTests: XCTestCase {
 
         guard let state = result else { return }
 
-        // Stale neighbor should be kept but with heavily decayed quality
+        // Stale neighbor decays exponentially past TTL (half-life = TTL):
+        // age 600s vs TTL 300s -> one TTL past expiry -> quality halves.
         let staleNeighbor = state.neighbors.first(where: { $0.call == "W0STALE" })
         XCTAssertNotNil(staleNeighbor, "Stale neighbor should be kept for display")
         if let stale = staleNeighbor {
-            XCTAssertLessThan(stale.quality, 50, "Stale neighbor should be heavily decayed")
+            XCTAssertEqual(Double(stale.quality), 100, accuracy: 3,
+                "One TTL past expiry should halve the quality, not zero it")
         }
 
         // Fresh neighbor should retain quality

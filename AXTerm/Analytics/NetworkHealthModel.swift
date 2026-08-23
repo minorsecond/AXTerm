@@ -66,7 +66,7 @@ nonisolated struct NetworkHealth: Hashable, Sendable {
 nonisolated struct HealthScoreBreakdown: Hashable, Sendable {
     // Topology metrics (timeframe-dependent, canonical graph) - 60% of final score
     let c1MainClusterPct: Double       // % of nodes in largest connected component
-    let c2ConnectivityPct: Double      // % of possible edges that exist (capped at 100)
+    let c2ConnectivityPct: Double      // mean degree vs target (capped at 100)
     let c3IsolationReduction: Double   // 100 - % isolated nodes
     let topologyScore: Double          // 0.5×C1 + 0.3×C2 + 0.2×C3
 
@@ -151,11 +151,11 @@ nonisolated struct NetworkHealthMetrics: Hashable, Sendable {
     let totalPackets: Int
     /// C1: Percentage of nodes in the largest connected component (0-100)
     let largestComponentPercent: Double
-    /// C2: Connectivity ratio = actualEdges / possibleEdges × 100 (capped at 100)
+    /// C2: Connectivity = mean degree / target mean degree × 100 (capped at 100)
     let connectivityRatio: Double
     /// C3: 100 - (% isolated nodes). Higher is better.
     let isolationReduction: Double
-    /// Number of isolated nodes (degree == 0) in the canonical graph
+    /// Stations heard in the timeframe with no observed link to another valid station
     let isolatedNodes: Int
     /// Name of the top relay (highest degree node)
     let topRelayCallsign: String?
@@ -166,7 +166,7 @@ nonisolated struct NetworkHealthMetrics: Hashable, Sendable {
 
     /// Stations active in the last 10 minutes (fixed window, independent of timeframe)
     let activeStations: Int
-    /// Current packet rate (packets per minute over last 10 minutes), EMA-smoothed
+    /// Current packet rate (packets per minute over the last 10 minutes)
     let packetRate: Double
     /// Ratio of active stations to total stations (freshness indicator)
     let freshness: Double
@@ -176,7 +176,7 @@ nonisolated struct NetworkHealthMetrics: Hashable, Sendable {
         totalPackets: 0,
         largestComponentPercent: 0,
         connectivityRatio: 0,
-        isolationReduction: 100,
+        isolationReduction: 0,
         isolatedNodes: 0,
         topRelayCallsign: nil,
         topRelayConcentration: 0,
@@ -204,7 +204,7 @@ nonisolated struct NetworkWarning: Hashable, Identifiable, Sendable {
 /// ## Key Design Principles
 ///
 /// 1. **Canonical Topology Graph**: Health topology metrics are computed from a canonical graph that:
-///    - Uses `canonicalMinEdge = 2` (not the view slider)
+///    - Uses `canonicalMinEdge = 1` (not the view slider)
 ///    - Has no max-node limit (shows full network topology)
 ///    - Applies the `includeViaDigipeaters` toggle
 ///    - **Ignores** view-only filters (Min Edge slider, Max Node count)
@@ -213,7 +213,7 @@ nonisolated struct NetworkWarning: Hashable, Identifiable, Sendable {
 ///    - Topology metrics: Based on user-selected timeframe
 ///    - Activity metrics: Fixed 10-minute window (unless TF < 10m)
 ///
-/// 3. **Stability**: EMA smoothing on packet rate to prevent spiky behavior.
+/// 3. **Determinism**: same inputs always produce the same score — no cross-call state.
 ///
 /// ## Formula
 /// ```
@@ -224,29 +224,50 @@ nonisolated struct NetworkWarning: Hashable, Identifiable, Sendable {
 ///
 /// Where:
 /// - C1 = Main Cluster % (largest connected component / total nodes × 100)
-/// - C2 = Connectivity Ratio % (actualEdges / possibleEdges × 100, capped at 100)
+/// - C2 = Connectivity % (mean degree / target mean degree × 100, capped at 100)
 /// - C3 = Isolation Reduction (100 - % isolated nodes)
 /// - A1 = Active Nodes % (stations in last 10m / total nodes × 100)
-/// - A2 = Packet Rate Score (normalized to ideal rate of 1.0 pkt/min, capped at 100)
+/// - A2 = Packet Rate Score (ramps to 100 at 1.0 pkt/min, declines past congestion onset)
 ///
 /// Reference: Composite health scoring approach inspired by network monitoring (e.g., Optigo Networks).
 nonisolated enum NetworkHealthCalculator {
     /// Canonical minimum edge count for health topology graph.
-    /// This value is used regardless of the view's Min Edge slider setting.
-    static let canonicalMinEdge: Int = 2
+    /// 1: any observed link is topology evidence. A single decoded frame proves the
+    /// stations exist and can reach each other; requiring 2+ frames made a station
+    /// heard once read as "isolated" (a false statement) and produced a score cliff
+    /// between the first and second packet of a pair.
+    static let canonicalMinEdge: Int = 1
 
-    /// Fixed window for activity metrics (independent of user timeframe)
+    /// Fixed window for activity metrics (clamped to the timeframe when shorter)
     static let activityWindowMinutes: Int = 10
 
-    /// Ideal packet rate for normalization (packets per minute)
-    /// Networks with this rate or higher get a full 100 for A2.
+    /// Ideal packet rate for normalization (packets per minute).
+    /// Networks at or above this rate score a full 100 for A2 until congestion onset.
     static let idealPacketRate: Double = 1.0
 
-    /// EMA alpha for packet rate smoothing (0.25 = 25% new, 75% previous)
-    static let packetRateEMAAlpha: Double = 0.25
+    /// Rate at which a shared 1200-baud AX.25 channel approaches saturation.
+    /// A typical ~200-byte frame occupies ~1.4 s of air time, so ~30 frames/min is
+    /// already heavy CSMA contention; A2 declines above this instead of rewarding it.
+    static let congestionOnsetRate: Double = 30.0
 
-    /// Previous EMA rate for smoothing (in-memory state; resets on app restart)
-    private static var previousPacketRateEMA: Double?
+    /// Rate treated as fully saturated (collision-dominated); A2 floors at
+    /// `saturatedScore` from here up.
+    static let saturatedRate: Double = 60.0
+
+    /// A2 floor for a saturated channel.
+    static let saturatedScore: Double = 20.0
+
+    /// Minimum evidence required to emit a score at all. Below this the sample is too
+    /// small for any composite to be meaningful (two stations exchanging two packets
+    /// used to rate "Excellent").
+    static let minimumStationsForScore: Int = 3
+    static let minimumPacketsForScore: Int = 10
+
+    /// Target mean degree for C2. Packet-radio meshes have bounded per-node RF
+    /// neighborhoods; ~3 links per station provides path redundancy without saturating
+    /// a shared channel. Mean degree is size-invariant, unlike graph density
+    /// (edges / n(n-1)/2), which decays as O(1/n) and made the old C2 punish growth.
+    static let targetMeanDegree: Double = 3.0
 
     /// Calculate network health using the new composite scoring formula.
     ///
@@ -265,6 +286,8 @@ nonisolated enum NetworkHealthCalculator {
         allRecentPackets: [Packet],
         timeframeDisplayName: String,
         includeViaDigipeaters: Bool,
+        stationIdentityMode: StationIdentityMode = .station,
+        timeframeDuration: TimeInterval? = nil,
         trendWindowMinutes: Int = 60,
         trendBucketMinutes: Int = 5,
         now: Date = Date()
@@ -274,21 +297,44 @@ nonisolated enum NetworkHealthCalculator {
             timeframePackets: timeframePackets,
             allRecentPackets: allRecentPackets,
             includeViaDigipeaters: includeViaDigipeaters,
+            stationIdentityMode: stationIdentityMode,
+            timeframeDuration: timeframeDuration,
             now: now
         )
 
         let breakdown = calculateCompositeScore(metrics: metrics)
-        let reasons = generateReasons(metrics: metrics, breakdown: breakdown, timeframeDisplayName: timeframeDisplayName)
-        let warnings = generateWarnings(
-            metrics: metrics,
-            canonicalGraph: canonicalGraph,
-            timeframeDisplayName: timeframeDisplayName
-        )
         let trend = calculateActivityTrend(
             packets: allRecentPackets,
             windowMinutes: trendWindowMinutes,
             bucketMinutes: trendBucketMinutes,
             now: now
+        )
+
+        // Sample gate: with almost no evidence any composite is noise. Keep the
+        // metrics and breakdown for the explainer, but report Unknown instead of a
+        // score built from two packets.
+        if metrics.totalStations < minimumStationsForScore || metrics.totalPackets < minimumPacketsForScore {
+            let reason = metrics.totalPackets == 0
+                ? "No packets in the selected timeframe"
+                : "Not enough data to score (needs ≥\(minimumStationsForScore) stations and ≥\(minimumPacketsForScore) packets)"
+            return NetworkHealth(
+                score: 0,
+                rating: .unknown,
+                reasons: [reason],
+                metrics: metrics,
+                warnings: [],
+                activityTrend: trend,
+                scoreBreakdown: breakdown,
+                timeframeDisplayName: timeframeDisplayName
+            )
+        }
+
+        let reasons = generateReasons(metrics: metrics, breakdown: breakdown, timeframeDisplayName: timeframeDisplayName)
+        let warnings = generateWarnings(
+            metrics: metrics,
+            canonicalGraph: canonicalGraph,
+            timeframeDisplayName: timeframeDisplayName,
+            timeframeDuration: timeframeDuration
         )
 
         return NetworkHealth(
@@ -303,14 +349,16 @@ nonisolated enum NetworkHealthCalculator {
         )
     }
 
-    /// Convenience method using the view's graph model (backward compatibility).
-    /// This builds a canonical graph internally for health calculation.
+    /// Convenience entry point: builds the canonical graph internally.
+    /// Health is a function of the timeframe packets alone — it deliberately takes no
+    /// rendered view graph, so view filters cannot influence it.
     static func calculate(
-        graphModel: GraphModel,
         timeframePackets: [Packet],
         allRecentPackets: [Packet],
         timeframeDisplayName: String,
         includeViaDigipeaters: Bool = true,
+        stationIdentityMode: StationIdentityMode = .station,
+        timeframeDuration: TimeInterval? = nil,
         trendWindowMinutes: Int = 60,
         trendBucketMinutes: Int = 5,
         now: Date = Date()
@@ -327,6 +375,8 @@ nonisolated enum NetworkHealthCalculator {
             allRecentPackets: allRecentPackets,
             timeframeDisplayName: timeframeDisplayName,
             includeViaDigipeaters: includeViaDigipeaters,
+            stationIdentityMode: stationIdentityMode,
+            timeframeDuration: timeframeDuration,
             trendWindowMinutes: trendWindowMinutes,
             trendBucketMinutes: trendBucketMinutes,
             now: now
@@ -334,7 +384,7 @@ nonisolated enum NetworkHealthCalculator {
     }
 
     /// Build the canonical topology graph for health metrics.
-    /// Uses canonicalMinEdge=2 and unlimited max nodes.
+    /// Uses canonicalMinEdge (1) and unlimited max nodes.
     static func buildCanonicalGraph(packets: [Packet], includeViaDigipeaters: Bool) -> GraphModel {
         NetworkGraphBuilder.build(
             packets: packets,
@@ -352,12 +402,15 @@ nonisolated enum NetworkHealthCalculator {
         timeframePackets: [Packet],
         allRecentPackets: [Packet],
         includeViaDigipeaters: Bool,
+        stationIdentityMode: StationIdentityMode,
+        timeframeDuration: TimeInterval?,
         now: Date
     ) -> NetworkHealthMetrics {
         // TOPOLOGY METRICS (from canonical graph)
         let countedStations = calculateTotalStations(
             packets: timeframePackets,
-            includeViaDigipeaters: includeViaDigipeaters
+            includeViaDigipeaters: includeViaDigipeaters,
+            identityMode: stationIdentityMode
         )
         // Keep denominator aligned with canonical graph membership.
         // Graph may include routing aliases (e.g., DRL/DRLNOD) that strict callsign-only
@@ -371,45 +424,59 @@ nonisolated enum NetworkHealthCalculator {
             totalNodesOverride: totalNodes
         ))
 
-        // C2: Connectivity Ratio % = actualEdges / possibleEdges × 100
+        // C2: mean degree relative to the target (size-invariant connectivity).
+        // Graph density (edges / n(n-1)/2) decays as O(1/n) for bounded-degree RF
+        // networks, which made C2 unreachable for any real network and rewarded
+        // degenerate two-node graphs with 100%.
         let actualEdges = canonicalGraph.edges.count
-        let possibleEdges = totalNodes > 1 ? (totalNodes * (totalNodes - 1)) / 2 : 0
-        let c2ConnectivityPct = clampPercent(possibleEdges > 0
-            ? min(100, Double(actualEdges) / Double(possibleEdges) * 100)
-            : 0)
+        let meanDegree = totalNodes > 0 ? 2.0 * Double(actualEdges) / Double(totalNodes) : 0
+        let c2ConnectivityPct = clampPercent(meanDegree / targetMeanDegree * 100)
 
-        // C3: Isolation Reduction = 100 - (% isolated nodes)
+        // C3: Isolation Reduction = 100 - (% isolated nodes).
+        // An empty network has nothing to praise: 0, not 100.
         let graphNodeIDs = Set(canonicalGraph.nodes.map(\.id))
         let isolatedCount = max(0, totalNodes - graphNodeIDs.count)
-        let isolatedPct = clampPercent(totalNodes > 0 ? Double(isolatedCount) / Double(totalNodes) * 100 : 0)
-        let c3IsolationReduction = clampPercent(100 - isolatedPct)
+        let c3IsolationReduction: Double
+        if totalNodes > 0 {
+            let isolatedPct = clampPercent(Double(isolatedCount) / Double(totalNodes) * 100)
+            c3IsolationReduction = clampPercent(100 - isolatedPct)
+        } else {
+            c3IsolationReduction = 0
+        }
 
         // Relay concentration (for warnings)
         let (topRelayPct, topRelayCallsign) = calculateRelayConcentration(graph: canonicalGraph)
 
-        // ACTIVITY METRICS (fixed 10-minute window)
-        let activityCutoff = now.addingTimeInterval(-Double(activityWindowMinutes * 60))
+        // ACTIVITY METRICS: 10-minute window, clamped to the timeframe when the
+        // user selected a shorter one (otherwise the numerator would come from a
+        // wider window than the denominator and silently saturate).
+        let windowSeconds = min(Double(activityWindowMinutes * 60), timeframeDuration ?? .infinity)
+        let activityCutoff = now.addingTimeInterval(-windowSeconds)
         let recentPackets = allRecentPackets.filter { $0.timestamp >= activityCutoff }
 
         // A1 source count uses the same station-identity normalization as totalNodes.
         // This keeps percentages stable when SSIDs are grouped into station identities.
         let activeStationsRaw = calculateTotalStations(
             packets: recentPackets,
-            includeViaDigipeaters: includeViaDigipeaters
+            includeViaDigipeaters: includeViaDigipeaters,
+            identityMode: stationIdentityMode
         )
         let activeStations = min(activeStationsRaw, totalNodes)
 
-        // Calculate raw packet rate
-        let rawPacketRate = Double(recentPackets.count) / Double(activityWindowMinutes)
-
-        // Apply EMA smoothing for stability
-        let smoothedRate: Double
-        if let prev = previousPacketRateEMA {
-            smoothedRate = packetRateEMAAlpha * rawPacketRate + (1 - packetRateEMAAlpha) * prev
+        // Packet rate over the observed span. If the buffer's earliest packet lies
+        // inside the window we may not have been listening for the whole window, so
+        // divide by the span we actually observed (floor 1 minute) instead of
+        // under-reporting by up to the full window right after launch.
+        // The 10-minute window is itself the smoothing; no cross-call EMA state
+        // (a per-invocation EMA made the rate depend on UI recompute frequency).
+        let earliestAvailable = allRecentPackets.map(\.timestamp).min()
+        let effectiveSeconds: Double
+        if let earliestAvailable, earliestAvailable > activityCutoff {
+            effectiveSeconds = max(60, now.timeIntervalSince(earliestAvailable))
         } else {
-            smoothedRate = rawPacketRate
+            effectiveSeconds = max(60, windowSeconds)
         }
-        previousPacketRateEMA = smoothedRate
+        let smoothedRate = Double(recentPackets.count) / (effectiveSeconds / 60)
 
         // Freshness = active / total (same identity model for numerator + denominator)
         let freshness = clampRatio(totalNodes > 0 ? Double(activeStations) / Double(totalNodes) : 0)
@@ -444,8 +511,23 @@ nonisolated enum NetworkHealthCalculator {
             ? Double(metrics.activeStations) / Double(metrics.totalStations) * 100
             : 0)
 
-        // A2 = min(100, (packetRate / idealRate) × 100)
-        let a2 = clampPercent(min(100, (metrics.packetRate / idealPacketRate) * 100))
+        // A2: ramps to 100 at the ideal rate, holds through normal load, then
+        // declines toward the congestion floor — on a shared CSMA channel a busier
+        // channel past ~30 frames/min is collision territory, not better health.
+        let rate = metrics.packetRate
+        let a2: Double
+        if rate <= 0 {
+            a2 = 0
+        } else if rate < idealPacketRate {
+            a2 = clampPercent(rate / idealPacketRate * 100)
+        } else if rate <= congestionOnsetRate {
+            a2 = 100
+        } else if rate < saturatedRate {
+            let t = (rate - congestionOnsetRate) / (saturatedRate - congestionOnsetRate)
+            a2 = clampPercent(100 - t * (100 - saturatedScore))
+        } else {
+            a2 = saturatedScore
+        }
 
         // ActivityScore = 0.6×A1 + 0.4×A2
         let activityScore = 0.6 * a1 + 0.4 * a2
@@ -511,24 +593,24 @@ nonisolated enum NetworkHealthCalculator {
 
     private static func calculateTotalStations(
         packets: [Packet],
-        includeViaDigipeaters: Bool
+        includeViaDigipeaters: Bool,
+        identityMode: StationIdentityMode = .station
     ) -> Int {
         guard !packets.isEmpty else { return 0 }
 
         var stations: Set<String> = []
 
         for packet in packets {
-            if let from = packet.from?.call, CallsignValidator.isValidRoutingNode(from) {
-                stations.insert(CallsignParser.identityKey(for: from, mode: .station))
+            if let from = packet.from?.display, CallsignValidator.isValidRoutingNode(from) {
+                stations.insert(CallsignParser.identityKey(for: from, mode: identityMode))
             }
-            if let to = packet.to?.call, CallsignValidator.isValidRoutingNode(to) {
-                stations.insert(CallsignParser.identityKey(for: to, mode: .station))
+            if let to = packet.to?.display, CallsignValidator.isValidRoutingNode(to) {
+                stations.insert(CallsignParser.identityKey(for: to, mode: identityMode))
             }
             if includeViaDigipeaters {
-                for via in packet.via {
-                    let call = via.call
-                    if CallsignValidator.isValidRoutingNode(call) {
-                        stations.insert(CallsignParser.identityKey(for: call, mode: .station))
+                for via in packet.via where via.repeated {
+                    if CallsignValidator.isValidRoutingNode(via.display) {
+                        stations.insert(CallsignParser.identityKey(for: via.display, mode: identityMode))
                     }
                 }
             }
@@ -613,16 +695,14 @@ nonisolated enum NetworkHealthCalculator {
             reasons.append("\(metrics.activeStations) station\(metrics.activeStations == 1 ? "" : "s") recently active")
         }
 
-        // Packet rate reason
-        if metrics.packetRate >= idealPacketRate {
+        // Packet rate reason (positive observations only — negatives are warnings)
+        if metrics.packetRate >= idealPacketRate && metrics.packetRate <= congestionOnsetRate {
             reasons.append("Healthy traffic (\(String(format: "%.1f", metrics.packetRate))/min)")
-        } else if metrics.packetRate > 0 {
-            reasons.append("Light traffic (\(String(format: "%.2f", metrics.packetRate))/min)")
         }
 
         // Ensure at least one reason
         if reasons.isEmpty {
-            if breakdown.finalScore == 0 {
+            if breakdown.finalScore == 0 || metrics.totalStations == 0 {
                 reasons.append("No network activity detected")
             } else {
                 reasons.append("Network operational")
@@ -636,29 +716,39 @@ nonisolated enum NetworkHealthCalculator {
     private static func generateWarnings(
         metrics: NetworkHealthMetrics,
         canonicalGraph: GraphModel,
-        timeframeDisplayName: String
+        timeframeDisplayName: String,
+        timeframeDuration: TimeInterval?
     ) -> [NetworkWarning] {
         var warnings: [NetworkWarning] = []
         let tfLabel = timeframeDisplayName.isEmpty ? "" : " (\(timeframeDisplayName))"
 
-        // Single-point relay dominance (timeframe-dependent)
-        if metrics.topRelayConcentration > 60, let relay = metrics.topRelayCallsign {
+        // Single-point relay dominance. Skipped for tiny graphs, where the top node
+        // trivially touches most links. Concentration is measured over distinct
+        // links, not traffic volume — the copy must say so.
+        if metrics.topRelayConcentration > 60,
+           let relay = metrics.topRelayCallsign,
+           canonicalGraph.nodes.count > 4 {
             warnings.append(NetworkWarning(
                 id: "relay_dominance",
                 severity: .caution,
                 title: "Single relay dominance",
-                detail: "\(relay) handles \(Int(metrics.topRelayConcentration))% of traffic\(tfLabel)"
+                detail: "\(relay) is on \(Int(metrics.topRelayConcentration.rounded()))% of network links\(tfLabel)"
             ))
         }
 
-        // Stale nodes warning (compares 10-minute activity to timeframe graph)
-        if metrics.totalStations > 0 && metrics.freshness < 0.3 {
+        // Stale stations: only meaningful for short timeframes. Over 24h it is
+        // *expected* that most of the day's stations were quiet in the last 10
+        // minutes, so the warning would fire permanently and carry no signal.
+        if metrics.totalStations > 0,
+           metrics.freshness < 0.3,
+           let duration = timeframeDuration,
+           duration <= 3600 {
             let staleCount = metrics.totalStations - metrics.activeStations
             warnings.append(NetworkWarning(
                 id: "stale_nodes",
                 severity: .info,
-                title: "Stale stations",
-                detail: "\(staleCount) stations not heard in 10 minutes"
+                title: "Stale stations\(tfLabel)",
+                detail: "\(staleCount) of \(metrics.totalStations) stations quiet for 10+ minutes"
             ))
         }
 
@@ -688,15 +778,10 @@ nonisolated enum NetworkHealthCalculator {
                 id: "low_activity",
                 severity: .info,
                 title: "Low activity (10m)",
-                detail: "Less than 1 packet per 10 minutes"
+                detail: String(format: "Packet rate %.2f/min over the last 10 minutes", metrics.packetRate)
             ))
         }
 
         return warnings
-    }
-
-    /// Reset EMA state (useful for testing)
-    static func resetEMAState() {
-        previousPacketRateEMA = nil
     }
 }

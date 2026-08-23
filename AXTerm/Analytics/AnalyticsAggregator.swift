@@ -12,6 +12,23 @@ nonisolated struct AnalyticsAggregator {
         let includeViaDigipeaters: Bool
         let histogramBinCount: Int
         let topLimit: Int
+        /// Groups stations the same way the network graph does: `.station`
+        /// collapses SSIDs to the base callsign so "Unique stations" and the top
+        /// lists agree with the graph and the health panel; `.ssid` counts each
+        /// SSID separately.
+        let stationIdentityMode: StationIdentityMode
+
+        init(
+            includeViaDigipeaters: Bool,
+            histogramBinCount: Int,
+            topLimit: Int,
+            stationIdentityMode: StationIdentityMode = .ssid
+        ) {
+            self.includeViaDigipeaters = includeViaDigipeaters
+            self.histogramBinCount = histogramBinCount
+            self.topLimit = topLimit
+            self.stationIdentityMode = stationIdentityMode
+        }
     }
 
     static func aggregate(
@@ -23,26 +40,28 @@ nonisolated struct AnalyticsAggregator {
     ) -> AnalyticsAggregationResult {
         let events = packets.map { PacketEvent(packet: $0) }
 
-        let summary = computeSummary(events: events, includeVia: options.includeViaDigipeaters)
+        let summary = computeSummary(events: events, includeVia: options.includeViaDigipeaters, identityMode: options.stationIdentityMode)
         let series = computeSeries(
             events: events,
             bucket: bucket,
             calendar: calendar,
             includeVia: options.includeViaDigipeaters,
+            identityMode: options.stationIdentityMode,
             timeframeInterval: timeframeInterval
         )
         let heatmap = computeHeatmap(events: events, calendar: calendar, timeframeInterval: timeframeInterval)
         let histogram = computeHistogram(events: events, binCount: options.histogramBinCount)
 
-        let topTalkers = rankTop(
-            stations: events.compactMap { $0.from } + events.compactMap { $0.to },
-            limit: options.topLimit
-        )
-        let topDestinations = rankTop(stations: events.compactMap { $0.to }, limit: options.topLimit)
+        // Talkers are ranked by frames *sent*. Counting destinations here would let a
+        // popular receive-only station top the "talkers" list.
+        let topTalkers = rankTop(stations: events.compactMap { $0.from }, limit: options.topLimit, identityMode: options.stationIdentityMode)
+        let topDestinations = rankTop(stations: events.compactMap { $0.to }, limit: options.topLimit, identityMode: options.stationIdentityMode)
+        // Only digipeaters that actually repeated the frame (H bit set) earn credit;
+        // a requested-but-unused path entry is not evidence the station was on air.
         let topDigipeaters = rankTop(
-            stations: events.flatMap { $0.via },
+            stations: events.flatMap { $0.repeatedVia },
             limit: options.topLimit,
-            allowRoutingAliases: true
+            identityMode: options.stationIdentityMode
         )
 
         return AnalyticsAggregationResult(
@@ -56,7 +75,7 @@ nonisolated struct AnalyticsAggregator {
         )
     }
 
-    private static func computeSummary(events: [PacketEvent], includeVia: Bool) -> AnalyticsSummaryMetrics {
+    private static func computeSummary(events: [PacketEvent], includeVia: Bool, identityMode: StationIdentityMode) -> AnalyticsSummaryMetrics {
         let totalPackets = events.count
         let totalPayloadBytes = events.reduce(0) { $0 + $1.payloadBytes }
         let infoTextCount = events.reduce(0) { $1.infoTextPresent ? $0 + 1 : $0 }
@@ -68,18 +87,18 @@ nonisolated struct AnalyticsAggregator {
         for event in events {
             if let from = event.from {
                 if isStationIncludedInMetrics(from) {
-                    uniqueStations.insert(from)
+                    uniqueStations.insert(CallsignParser.identityKey(for: from, mode: identityMode))
                 }
             }
             if let to = event.to {
                 if isStationIncludedInMetrics(to) {
-                    uniqueStations.insert(to)
+                    uniqueStations.insert(CallsignParser.identityKey(for: to, mode: identityMode))
                 }
             }
             if includeVia {
-                event.via.forEach { via in
+                event.repeatedVia.forEach { via in
                     if isStationIncludedInMetrics(via) {
-                        uniqueStations.insert(via)
+                        uniqueStations.insert(CallsignParser.identityKey(for: via, mode: identityMode))
                     }
                 }
             }
@@ -109,6 +128,7 @@ nonisolated struct AnalyticsAggregator {
         bucket: TimeBucket,
         calendar: Calendar,
         includeVia: Bool,
+        identityMode: StationIdentityMode,
         timeframeInterval: DateInterval?
     ) -> AnalyticsSeries {
         guard !events.isEmpty else { return .empty }
@@ -116,25 +136,37 @@ nonisolated struct AnalyticsAggregator {
         var packetCounts: [BucketKey: Int] = [:]
         var payloadBytes: [BucketKey: Int] = [:]
         var uniqueStations: [BucketKey: Set<String>] = [:]
+        var uiCounts: [BucketKey: Int] = [:]
+        var iCounts: [BucketKey: Int] = [:]
+        var otherCounts: [BucketKey: Int] = [:]
+        var rejectCounts: [BucketKey: Int] = [:]
 
         for event in events {
             let key = BucketKey(date: event.timestamp, bucket: bucket, calendar: calendar)
             packetCounts[key, default: 0] += 1
             payloadBytes[key, default: 0] += event.payloadBytes
+            switch event.frameType {
+            case .ui: uiCounts[key, default: 0] += 1
+            case .i: iCounts[key, default: 0] += 1
+            default: otherCounts[key, default: 0] += 1
+            }
+            if event.isRejectFrame {
+                rejectCounts[key, default: 0] += 1
+            }
             if let from = event.from {
                 if isStationIncludedInMetrics(from) {
-                    uniqueStations[key, default: []].insert(from)
+                    uniqueStations[key, default: []].insert(CallsignParser.identityKey(for: from, mode: identityMode))
                 }
             }
             if let to = event.to {
                 if isStationIncludedInMetrics(to) {
-                    uniqueStations[key, default: []].insert(to)
+                    uniqueStations[key, default: []].insert(CallsignParser.identityKey(for: to, mode: identityMode))
                 }
             }
             if includeVia {
-                event.via.forEach { via in
+                event.repeatedVia.forEach { via in
                     if isStationIncludedInMetrics(via) {
-                        uniqueStations[key, default: []].insert(via)
+                        uniqueStations[key, default: []].insert(CallsignParser.identityKey(for: via, mode: identityMode))
                     }
                 }
             }
@@ -156,11 +188,19 @@ nonisolated struct AnalyticsAggregator {
         let unique = buckets.map { bucketKey in
             AnalyticsSeriesPoint(bucket: bucketKey.date, value: uniqueStations[bucketKey]?.count ?? 0)
         }
+        let ui = buckets.map { AnalyticsSeriesPoint(bucket: $0.date, value: uiCounts[$0, default: 0]) }
+        let iFrames = buckets.map { AnalyticsSeriesPoint(bucket: $0.date, value: iCounts[$0, default: 0]) }
+        let other = buckets.map { AnalyticsSeriesPoint(bucket: $0.date, value: otherCounts[$0, default: 0]) }
+        let rejects = buckets.map { AnalyticsSeriesPoint(bucket: $0.date, value: rejectCounts[$0, default: 0]) }
 
         return AnalyticsSeries(
             packetsPerBucket: packets,
             bytesPerBucket: bytes,
-            uniqueStationsPerBucket: unique
+            uniqueStationsPerBucket: unique,
+            uiFramesPerBucket: ui,
+            iFramesPerBucket: iFrames,
+            otherFramesPerBucket: other,
+            rejectFramesPerBucket: rejects
         )
     }
 
@@ -273,7 +313,11 @@ nonisolated struct AnalyticsAggregator {
     private static func computeHistogram(events: [PacketEvent], binCount: Int) -> HistogramData {
         guard !events.isEmpty, binCount > 0 else { return .empty }
 
-        let payloads = events.map { $0.payloadBytes }
+        // Zero-payload frames (RR/UA/SABM/DISC and friends) are the majority of
+        // connected-mode traffic and would flood the first bin, collapsing the
+        // distribution of actual data frames into one bar.
+        let payloads = events.map { $0.payloadBytes }.filter { $0 > 0 }
+        guard !payloads.isEmpty else { return .empty }
         let maxValue = payloads.max() ?? 0
         let bucketSize = max(1, Int(ceil(Double(maxValue + 1) / Double(binCount))))
 
@@ -295,16 +339,15 @@ nonisolated struct AnalyticsAggregator {
     private static func rankTop(
         stations: [String],
         limit: Int,
-        allowRoutingAliases: Bool = false
+        identityMode: StationIdentityMode
     ) -> [RankRow] {
         guard limit > 0 else { return [] }
         var counts: [String: Int] = [:]
         for station in stations {
-            let isValid = allowRoutingAliases
-                ? CallsignValidator.isValidRoutingNode(station)
-                : CallsignValidator.isValidCallsign(station)
-            guard isValid else { continue }
-            counts[station, default: 0] += 1
+            // Tactical aliases (NET/ROM node idents) are real stations and rank
+            // like callsigns; service endpoints and garbage stay excluded.
+            guard CallsignValidator.isValidRoutingNode(station) else { continue }
+            counts[CallsignParser.identityKey(for: station, mode: identityMode), default: 0] += 1
         }
 
         return counts

@@ -535,10 +535,14 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
                 return neighbor
             }
 
-            // If beyond TTL, apply linear decay but keep the entry for display
-            // decayFactor = 1 - (age / TTL), clamped to [0, 1]
-            let decayFactor = max(0, 1 - (age / config.neighborTTLSeconds))
-            let decayedQuality = Int(Double(neighbor.quality) * decayFactor)
+            // Beyond TTL, decay exponentially (half the quality per additional TTL)
+            // and keep the entry for display. The old linear formula
+            // 1 - age/TTL only ran when age > TTL, so it was always <= 0 and every
+            // restart zeroed the quality of any neighbor older than the TTL while
+            // its Freshness column still read high.
+            let overage = age - config.neighborTTLSeconds
+            let decayFactor = exp(-overage * M_LN2 / config.neighborTTLSeconds)
+            let decayedQuality = Int((Double(neighbor.quality) * decayFactor).rounded())
 
             return NeighborInfo(
                 call: neighbor.call,

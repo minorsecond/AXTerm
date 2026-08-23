@@ -484,13 +484,15 @@ final class NetRomIntegration {
         let forwardQuality = linkEstimator.linkQuality(from: normalized, to: localCallsign)
         let reverseQuality = linkEstimator.linkQuality(from: localCallsign, to: normalized)
 
-        // If we have link quality observations, use the average
-        if forwardQuality > 0 || reverseQuality > 0 {
-            let avgQuality = max(forwardQuality, reverseQuality)
-            // Blend with base quality to avoid cold start issues
-            return max(routerConfig.neighborBaseQuality, avgQuality)
+        // Use the average of the observed directions. The old code took the *max*
+        // (discarding the worse direction) and floored the result at
+        // neighborBaseQuality, so a neighbor could never read below ~80 no matter
+        // how bad its link. Cold start is handled by the estimator's warm-up prior.
+        if forwardQuality > 0 && reverseQuality > 0 {
+            return (forwardQuality + reverseQuality) / 2
         }
-
+        if forwardQuality > 0 { return forwardQuality }
+        if reverseQuality > 0 { return reverseQuality }
         return routerConfig.neighborBaseQuality
     }
 

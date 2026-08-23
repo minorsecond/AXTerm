@@ -200,11 +200,13 @@ final class NetRomStaleSnapshotTests: XCTestCase {
 
         guard let state = result else { return }
 
-        // Stale neighbor should be kept but with quality decayed to near zero
+        // Stale neighbor decays exponentially past TTL (half-life = TTL):
+        // age 600s, TTL 300s -> one full TTL past expiry -> quality halves.
         let staleNeighbor = state.neighbors.first(where: { $0.call == "W0STALE" })
         XCTAssertNotNil(staleNeighbor, "Stale neighbor should be kept for display")
         if let stale = staleNeighbor {
-            XCTAssertLessThan(stale.quality, 50, "Stale neighbor quality should be heavily decayed")
+            XCTAssertEqual(Double(stale.quality), 100, accuracy: 3,
+                "One TTL past expiry should halve the quality, not zero it")
         }
 
         // Fresh neighbor should remain with reasonable quality
@@ -376,10 +378,10 @@ final class NetRomStaleSnapshotTests: XCTestCase {
     // MARK: - Decay Calculation Verification
 
     func testDecayCalculation_BeyondTTL() throws {
-        // Verify decay calculation when neighbor is beyond TTL
-        // Implementation: decay happens linearly beyond TTL
-        // decayFactor = 1 - (age / TTL), where age = now - lastSeen
-        // For age = 1.5 * TTL: decayFactor = 1 - 1.5 = -0.5 -> clamped to 0
+        // Verify decay calculation when neighbor is beyond TTL.
+        // Decay is exponential past the TTL with half-life = TTL:
+        // decayFactor = 2^(-(age - TTL) / TTL)
+        // For age = 1.5 * TTL: decayFactor = 2^-0.5 ~= 0.707
 
         let config = NetRomPersistenceConfig(
             maxSnapshotAgeSeconds: 3600,
@@ -417,7 +419,8 @@ final class NetRomStaleSnapshotTests: XCTestCase {
         // Old neighbor (beyond TTL) should be kept but with quality decayed to 0
         let oldNeighbor = state.neighbors.first(where: { $0.call == "W0OLD" })
         XCTAssertNotNil(oldNeighbor, "Neighbor beyond TTL should be kept for display")
-        XCTAssertEqual(oldNeighbor?.quality, 0, "Neighbor beyond 1.5x TTL should have quality decayed to 0")
+        XCTAssertEqual(Double(oldNeighbor?.quality ?? 0), 141, accuracy: 3,
+            "At 1.5x TTL the quality should be ~0.707x (exponential decay), not zeroed")
 
         // Recent neighbor (within TTL) should retain full quality
         let recentNeighbor = state.neighbors.first(where: { $0.call == "W0RECENT" })

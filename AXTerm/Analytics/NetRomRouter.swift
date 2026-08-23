@@ -258,12 +258,21 @@ nonisolated final class NetRomRouter {
             if advertised.path.contains(where: { normalize($0) == localCallsign }) { continue }
 
             let combined = combinedQuality(broadcastQuality: advertised.quality, pathQuality: neighbor.pathQuality)
-            guard combined >= config.minimumRouteQuality else {
-                #if DEBUG
-                print("[NETROM:ROUTER]   Route to \(normalizedDestination) rejected: quality \(combined) < min \(config.minimumRouteQuality)")
-                #endif
-                continue
+            // minimumRouteQuality is the classic NET/ROM acceptance rule for
+            // *broadcast* routes. Inferred routes are acceptance-gated by evidence
+            // in the inference layer (inferredMinimumQuality) and store the honest
+            // combined value even when it is small — promoting them to the floor
+            // made every weak route display the same fabricated number.
+            let isInferred = advertised.sourceType == "inferred"
+            if !isInferred {
+                guard combined >= config.minimumRouteQuality else {
+                    #if DEBUG
+                    print("[NETROM:ROUTER]   Route to \(normalizedDestination) rejected: quality \(combined) < min \(config.minimumRouteQuality)")
+                    #endif
+                    continue
+                }
             }
+            let storedQuality = max(1, combined)
 
             var normalizedPath = advertised.path.compactMap { normalize($0) }
             if normalizedPath.first != normalizedOrigin {
@@ -275,13 +284,13 @@ nonisolated final class NetRomRouter {
             let effectiveSourceType = advertised.sourceType.isEmpty ? "broadcast" : advertised.sourceType
 
             #if DEBUG
-            print("[NETROM:ROUTER]   ✓ Storing route: \(normalizedDestination) via \(normalizedOrigin) quality=\(combined) source=\(effectiveSourceType)")
+            print("[NETROM:ROUTER]   ✓ Storing route: \(normalizedDestination) via \(normalizedOrigin) quality=\(storedQuality) source=\(effectiveSourceType)")
             #endif
 
             storeRoute(
                 destination: normalizedDestination,
                 origin: normalizedOrigin,
-                quality: combined,
+                quality: storedQuality,
                 path: normalizedPath,
                 timestamp: timestamp,
                 sourceType: effectiveSourceType
@@ -537,11 +546,14 @@ nonisolated final class NetRomRouter {
         // EWMA blend: 70% current + 30% observed
         // This allows quality to both increase AND decrease based on observed link quality.
         // The old formula (max + increment) could only increase, causing all neighbors to hit 255.
-        let blendedQuality = Int(0.7 * Double(candidate.pathQuality) + 0.3 * Double(normalizedQuality))
-
-        // Small bonus for being recently heard (capped at 255)
-        let heardBonus = 5
-        let finalQuality = min(NetRomConfig.maximumRouteQuality, blendedQuality + heardBonus)
+        // No "recently heard" bonus: a flat per-observation increment biased every
+        // neighbor upward regardless of link quality (a chatty bad neighbor would
+        // outrank a quiet good one) and set a floor the blend could never escape.
+        let blendedQuality = min(
+            NetRomConfig.maximumRouteQuality,
+            Int((0.7 * Double(candidate.pathQuality) + 0.3 * Double(normalizedQuality)).rounded())
+        )
+        let finalQuality = blendedQuality
 
         candidate.pathQuality = finalQuality
         candidate.lastUpdate = timestamp
@@ -574,7 +586,16 @@ nonisolated final class NetRomRouter {
         var bucket = routesByDestination[destination] ?? []
         if let existingIndex = bucket.firstIndex(where: { $0.origin == origin }) {
             var existing = bucket[existingIndex]
-            existing.quality = max(existing.quality, quality)
+            // Classic NET/ROM: each broadcast carries the node's *current* quality,
+            // so a fresh update replaces the figure — max() made route quality a
+            // high-water mark that could never decrease. Inferred evidence may only
+            // corroborate (raise) a broadcast-sourced figure, never degrade it.
+            let existingIsBroadcastClass = existing.sourceType != "inferred"
+            if existingIsBroadcastClass && sourceType == "inferred" {
+                existing.quality = max(existing.quality, quality)
+            } else {
+                existing.quality = quality
+            }
             existing.path = path
             existing.lastHeard = timestamp
             existing.obsolescenceCount = 1
