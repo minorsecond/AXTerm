@@ -184,7 +184,7 @@ final class WinlinkViewModelTests: XCTestCase {
         let store = try makeStore()
         let client = FakeCMSClient()
         let settings = makeSettings()
-        let vm = RMSStationsViewModel(store: store, client: client, settings: settings)
+        let vm = RMSStationsViewModel(store: store, makeClient: { client }, settings: settings)
 
         XCTAssertNotNil(vm.refreshBlocker)
         await vm.refresh()
@@ -198,20 +198,20 @@ final class WinlinkViewModelTests: XCTestCase {
         client.stations = [makeStation(callsign: "KE7XO-10", distance: 12)]
         let settings = makeSettings()
         settings.gridSquare = "DM79lr"
-        let vm = RMSStationsViewModel(store: store, client: client, settings: settings)
+        let vm = RMSStationsViewModel(store: store, makeClient: { client }, settings: settings)
 
         await vm.refresh()
         XCTAssertNil(vm.errorText)
         XCTAssertEqual(vm.stations.map(\.callsign), ["KE7XO-10"])
         // Cache survives a new view model (offline start).
-        let vm2 = RMSStationsViewModel(store: store, client: FakeCMSClient(), settings: settings)
+        let vm2 = RMSStationsViewModel(store: store, makeClient: { FakeCMSClient() }, settings: settings)
         XCTAssertEqual(vm2.stations.map(\.callsign), ["KE7XO-10"])
     }
 
     func testSetAsGatewayPersists() async throws {
         let store = try makeStore()
         let settings = makeSettings()
-        let vm = RMSStationsViewModel(store: store, client: FakeCMSClient(), settings: settings)
+        let vm = RMSStationsViewModel(store: store, makeClient: { FakeCMSClient() }, settings: settings)
         vm.setAsGateway(makeStation(callsign: "KE7XO-10", distance: 12))
         XCTAssertEqual(settings.gatewayCallsign, "KE7XO-10")
         XCTAssertEqual(vm.currentGateway, "KE7XO-10")
@@ -234,7 +234,7 @@ final class WinlinkViewModelTests: XCTestCase {
             makeCatalogItem(id: "WX_CARIB", category: "Weather"),
             makeCatalogItem(id: "NEWS_TOP", category: "News"),
         ]
-        let vm = WinlinkCatalogViewModel(store: store, client: client)
+        let vm = WinlinkCatalogViewModel(store: store, makeClient: { client })
         await vm.refresh()
 
         XCTAssertEqual(vm.groups.map(\.category), ["News", "Weather"])
@@ -248,7 +248,7 @@ final class WinlinkViewModelTests: XCTestCase {
             makeCatalogItem(id: "WX_CONUS", category: "Weather", size: 4000),
             makeCatalogItem(id: "NEWS_TOP", category: "News", size: 2500),
         ]
-        let vm = WinlinkCatalogViewModel(store: store, client: client)
+        let vm = WinlinkCatalogViewModel(store: store, makeClient: { client })
         await vm.refresh()
 
         vm.selection = ["WX_CONUS", "NEWS_TOP"]
@@ -266,7 +266,7 @@ final class WinlinkViewModelTests: XCTestCase {
         let store = try makeStore()
         let client = FakeCMSClient()
         client.catalog = [makeCatalogItem(id: "WX_CONUS", category: "Weather")]
-        let vm = WinlinkCatalogViewModel(store: store, client: client)
+        let vm = WinlinkCatalogViewModel(store: store, makeClient: { client })
         await vm.refresh()
         vm.selection = ["WX_CONUS"]
 
@@ -278,7 +278,7 @@ final class WinlinkViewModelTests: XCTestCase {
 
     func testCatalogQueueWithoutSelectionErrors() async throws {
         let store = try makeStore()
-        let vm = WinlinkCatalogViewModel(store: store, client: FakeCMSClient())
+        let vm = WinlinkCatalogViewModel(store: store, makeClient: { FakeCMSClient() })
         XCTAssertNil(vm.queueRequest(myCallsign: "K0EPI"))
         XCTAssertNotNil(vm.errorText)
     }

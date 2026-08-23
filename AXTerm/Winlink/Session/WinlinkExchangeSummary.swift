@@ -52,3 +52,42 @@ nonisolated struct WinlinkExchangeProgress: Equatable, Sendable {
         return remaining.isFinite ? max(0, Int(remaining)) : nil
     }
 }
+
+
+/// One line of the live exchange transcript (the popdown console).
+nonisolated struct WinlinkTranscriptEntry: Identifiable, Equatable, Sendable {
+
+    enum Direction: Equatable, Sendable {
+        case sent
+        case received
+        case event
+    }
+
+    let id: UUID
+    var timestamp: Date
+    var direction: Direction
+    var text: String
+
+    init(direction: Direction, text: String, timestamp: Date = Date()) {
+        self.id = UUID()
+        self.direction = direction
+        self.timestamp = timestamp
+        self.text = text
+    }
+
+    /// Renders a wire chunk for display: printable line-mode text becomes
+    /// lines; binary blocks become a byte-count summary.
+    static func describeWireChunk(_ data: Data) -> [String] {
+        let printable = data.filter { (0x20...0x7e).contains($0) || $0 == 0x0d || $0 == 0x0a || $0 == 0x09 }
+        guard data.count > 0 else { return [] }
+        if printable.count * 10 >= data.count * 9 {
+            // Text: split into lines, drop empties.
+            let text = String(decoding: data, as: UTF8.self)
+            let lines = text
+                .split(omittingEmptySubsequences: true, whereSeparator: { $0 == "\r\n" || $0 == "\r" || $0 == "\n" })
+                .map(String.init)
+            return lines.isEmpty ? ["‹\(data.count) bytes›"] : lines
+        }
+        return ["‹\(data.count) bytes of compressed message data›"]
+    }
+}

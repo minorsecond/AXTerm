@@ -11,12 +11,13 @@ final class RMSStationsViewModel: ObservableObject {
     @Published private(set) var fetchedAt: Date?
 
     private let store: WinlinkStore
-    private let client: CMSClienting
+    /// Built per refresh so a key entered in Settings applies immediately.
+    private let makeClient: () -> CMSClienting
     private let settings: WinlinkSettings
 
-    init(store: WinlinkStore, client: CMSClienting, settings: WinlinkSettings) {
+    init(store: WinlinkStore, makeClient: @escaping () -> CMSClienting, settings: WinlinkSettings) {
         self.store = store
-        self.client = client
+        self.makeClient = makeClient
         self.settings = settings
         loadCache()
     }
@@ -53,7 +54,7 @@ final class RMSStationsViewModel: ObservableObject {
         defer { isRefreshing = false }
 
         do {
-            let fresh = try await client.gatewayProximity(
+            let fresh = try await makeClient().gatewayProximity(
                 gridSquare: settings.gridSquare,
                 maxDistanceMiles: settings.maxDistanceMiles,
                 historyHours: settings.historyHours)

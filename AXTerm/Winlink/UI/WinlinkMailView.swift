@@ -24,6 +24,7 @@ struct WinlinkMailView: View {
     @State private var tab: Tab = .mail
     @State private var showingCatalog = false
     @State private var showingForms = false
+    @State private var showConsole = false
     @State private var exchangeAlert: String?
 
     @Environment(\.openWindow) private var openWindow
@@ -45,11 +46,11 @@ struct WinlinkMailView: View {
             store: store, myCallsign: callsignProvider))
         _stationsVM = StateObject(wrappedValue: RMSStationsViewModel(
             store: store,
-            client: WinlinkCMSClient(accessKey: settingsStore.effectiveAPIKey),
+            makeClient: { WinlinkCMSClient(accessKey: settingsStore.effectiveAPIKey) },
             settings: settingsStore))
         _catalogVM = StateObject(wrappedValue: WinlinkCatalogViewModel(
             store: store,
-            client: WinlinkCMSClient(accessKey: settingsStore.effectiveAPIKey)))
+            makeClient: { WinlinkCMSClient(accessKey: settingsStore.effectiveAPIKey) }))
         _contactsVM = StateObject(wrappedValue: WinlinkContactsViewModel(
             store: context.contactStore ?? NullContactStore()))
     }
@@ -63,6 +64,10 @@ struct WinlinkMailView: View {
             } else {
                 toolbar
                 Divider()
+                if showConsole, let runner = context.runner {
+                    WinlinkExchangeConsoleView(runner: runner)
+                    Divider()
+                }
                 switch tab {
                 case .mail:
                     mailPanes
@@ -147,6 +152,16 @@ struct WinlinkMailView: View {
 
             runnerStatus
 
+            if context.runner != nil {
+                Button {
+                    showConsole.toggle()
+                } label: {
+                    Image(systemName: showConsole ? "chevron.up.square" : "terminal")
+                }
+                .help("Show the exchange console — the live conversation with the gateway (what is being sent and received).")
+                .accessibilityIdentifier("winlinkConsoleToggle")
+            }
+
             exchangeControls
         }
         .padding(.horizontal, 12)
@@ -159,18 +174,53 @@ struct WinlinkMailView: View {
             if runner.isRunning {
                 WinlinkExchangeProgressView(runner: runner)
             } else if case .done = runner.phase {
-                Label(runner.statusText, systemImage: "checkmark.circle")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                resultBanner(
+                    icon: "checkmark.circle.fill",
+                    tint: .green,
+                    text: runner.statusText,
+                    runner: runner)
             } else if case .failed(let reason) = runner.phase {
-                Label(reason, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-                    .help(reason)
+                resultBanner(
+                    icon: "exclamationmark.triangle.fill",
+                    tint: .red,
+                    text: reason,
+                    runner: runner)
             }
         }
+    }
+
+    /// Result of the last exchange — persists until dismissed, so it is
+    /// still there after stepping away. Clicking it opens the console.
+    private func resultBanner(icon: String, tint: Color, text: String, runner: WinlinkSessionRunner) -> some View {
+        HStack(spacing: 6) {
+            Button {
+                showConsole.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: icon)
+                        .foregroundStyle(tint)
+                    Text(text)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                }
+            }
+            .buttonStyle(.plain)
+            .help("\(text)\n\nClick to review the full exchange transcript.")
+
+            Button {
+                runner.clearResult()
+                showConsole = false
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss this result")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(tint.opacity(0.1), in: Capsule())
     }
 
     @ViewBuilder
@@ -372,6 +422,7 @@ struct WinlinkMailView: View {
             version: version,
             features: "B2FHM$")
 
+        showConsole = true
         Task {
             let summary = await runner.runExchange(
                 transport: transport,

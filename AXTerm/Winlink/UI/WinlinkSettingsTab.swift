@@ -10,6 +10,8 @@ struct WinlinkSettingsTab: View {
     @State private var passwordDraft = ""
     @State private var apiKeyDraft = ""
     @State private var didLoadSecrets = false
+    @State private var isVerifyingKey = false
+    @State private var keyVerification: (ok: Bool, message: String)?
 
     var body: some View {
         Form {
@@ -92,14 +94,35 @@ struct WinlinkSettingsTab: View {
                     }
                     .help(WinlinkCopy.passwordTooltip)
 
-                SecureField("CMS access key (optional)", text: $apiKeyDraft)
-                    .onChange(of: apiKeyDraft) { newValue in
-                        guard didLoadSecrets else { return }
-                        settings.apiKeyOverride = newValue
-                    }
-                    .help(WinlinkCopy.apiKeyTooltip)
+                HStack {
+                    SecureField("CMS access key (optional)", text: $apiKeyDraft)
+                        .onChange(of: apiKeyDraft) { newValue in
+                            guard didLoadSecrets else { return }
+                            settings.apiKeyOverride = newValue
+                            keyVerification = nil
+                        }
+                        .help(WinlinkCopy.apiKeyTooltip)
 
-                Text("Both are stored in the macOS Keychain, never in preferences.")
+                    Button {
+                        verifyAPIKey()
+                    } label: {
+                        if isVerifyingKey {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text("Verify")
+                        }
+                    }
+                    .disabled(isVerifyingKey || apiKeyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .help("Checks the key against the Winlink catalog service — the operation that needs a personal key.")
+                }
+
+                if let verification = keyVerification {
+                    Label(verification.message, systemImage: verification.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(verification.ok ? .green : .red)
+                }
+
+                Text("Both are stored in the macOS Keychain, never in preferences. A personal key unlocks the internet catalog refresh (the built-in community key only covers the station list) — request one from the Winlink development team, ideally together with registering AXTerm as a client type.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
@@ -138,6 +161,26 @@ struct WinlinkSettingsTab: View {
             passwordDraft = settings.password
             apiKeyDraft = settings.apiKeyOverride
             didLoadSecrets = true
+        }
+    }
+
+    /// Tests the entered key against the catalog operation (the one that
+    /// requires a personal key) and reports the outcome inline.
+    private func verifyAPIKey() {
+        let key = apiKeyDraft.trimmingCharacters(in: .whitespaces)
+        guard !key.isEmpty else { return }
+        isVerifyingKey = true
+        keyVerification = nil
+        Task { @MainActor in
+            defer { isVerifyingKey = false }
+            do {
+                let items = try await WinlinkCMSClient(accessKey: key).inquiriesCatalog()
+                keyVerification = (true, "Key accepted — catalog access works (\(items.count) items).")
+            } catch let WinlinkCMSError.serviceError(message) {
+                keyVerification = (false, "The CMS rejected the key: \(message)")
+            } catch {
+                keyVerification = (false, "Could not verify: \(RMSStationsViewModel.describe(error))")
+            }
         }
     }
 }

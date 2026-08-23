@@ -19,11 +19,12 @@ final class WinlinkCatalogViewModel: ObservableObject {
     @Published private(set) var fetchedAt: Date?
 
     private let store: WinlinkStore
-    private let client: CMSClienting
+    /// Built per refresh so a key entered in Settings applies immediately.
+    private let makeClient: () -> CMSClienting
 
-    init(store: WinlinkStore, client: CMSClienting) {
+    init(store: WinlinkStore, makeClient: @escaping () -> CMSClienting) {
         self.store = store
-        self.client = client
+        self.makeClient = makeClient
         loadCache()
     }
 
@@ -47,7 +48,7 @@ final class WinlinkCatalogViewModel: ObservableObject {
         defer { isRefreshing = false }
 
         do {
-            let items = try await client.inquiriesCatalog()
+            let items = try await makeClient().inquiriesCatalog()
             try store.replaceCatalogCache(items)
             loadCache()
         } catch {

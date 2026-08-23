@@ -26,6 +26,9 @@ final class WinlinkSessionRunner: ObservableObject {
     @Published private(set) var lastSummary: WinlinkExchangeSummary?
     /// Live byte-level progress for the progress card (nil when idle).
     @Published private(set) var progress: WinlinkExchangeProgress?
+    /// Rolling wire transcript for the popdown exchange console.
+    @Published private(set) var transcript: [WinlinkTranscriptEntry] = []
+    private static let transcriptLimit = 600
 
     // Per-message metadata and delivery baselines for send progress.
     private var messageSubjects: [String: String] = [:]
@@ -79,6 +82,8 @@ final class WinlinkSessionRunner: ObservableObject {
         statusText = "Preparing outbound mail…"
         startedAt = Date()
         bytesQueuedSinceTimer = 0
+        transcript.removeAll()
+        log(.event, "Exchange started — \(transportName) via \(gatewayName)")
 
         // Compress queued mail off the main actor — LZHUF is CPU work.
         let queued = (try? await worker.queuedOutboundMessages()) ?? []
@@ -107,6 +112,7 @@ final class WinlinkSessionRunner: ObservableObject {
         self.transport = transport
 
         transport.onReceive = { [weak self] data in
+            self?.logWire(.received, data)
             self?.dispatch(.bytesReceived(data))
         }
         transport.onClose = { [weak self] _ in
@@ -145,6 +151,13 @@ final class WinlinkSessionRunner: ObservableObject {
         return await finish(summary: summary, gatewayName: gatewayName, transportName: transportName)
     }
 
+    /// Dismisses a finished exchange's persistent result banner.
+    func clearResult() {
+        guard !isRunning else { return }
+        phase = .idle
+        statusText = ""
+    }
+
     /// Requests a polite abort of the running exchange.
     func abort() {
         guard isRunning else { return }
@@ -176,6 +189,7 @@ final class WinlinkSessionRunner: ObservableObject {
     private func perform(_ action: B2FSessionEngine.Action) {
         switch action {
         case .send(let data):
+            logWire(.sent, data)
             bytesQueuedSinceTimer += data.count
             transport?.send(data)
 
@@ -191,6 +205,9 @@ final class WinlinkSessionRunner: ObservableObject {
             timerTasks[kind] = nil
 
         case .outboundAccepted(let mid, let offset):
+            log(.event, offset > 0
+                ? "Gateway accepted \(mid) (resuming at byte \(offset))"
+                : "Gateway accepted \(mid)")
             statusText = "Sending \(mid)…"
             // Everything submitted before this body (handshake, proposals,
             // earlier messages) sits below this baseline, so the bar counts
@@ -209,6 +226,7 @@ final class WinlinkSessionRunner: ObservableObject {
             statusText = "Waiting for the link to drain \(mid)…"
 
         case .outboundRejected(let mid):
+            log(.event, "Gateway rejected \(mid)")
             Task { [worker] in
                 try? await worker.markFailed(mid: mid, error: "rejected by the gateway")
             }
@@ -218,7 +236,8 @@ final class WinlinkSessionRunner: ObservableObject {
                 try? await worker.markDeferred(mid: mid)
             }
 
-        case .messageFullyReceived(let message, _):
+        case .messageFullyReceived(let message, let compressedSize):
+            log(.event, "Received \(message.mid) “\(message.subject)” (\(compressedSize) bytes compressed)")
             statusText = "Received \(message.mid)"
             Task { [worker] in
                 try? await worker.saveInbound(message)
@@ -238,9 +257,11 @@ final class WinlinkSessionRunner: ObservableObject {
             transport?.close()
 
         case .complete(let summary):
+            log(.event, "Exchange complete — sent \(summary.sentMIDs.count), received \(summary.receivedMIDs.count)")
             resolve(with: summary)
 
         case .fail(let reason):
+            log(.event, "Failed: \(reason)")
             var summary = engineSummaryForFailure(reason: reason)
             summary.failureReason = reason
             resolve(with: summary)
@@ -350,6 +371,21 @@ final class WinlinkSessionRunner: ObservableObject {
         case WinlinkTransportError.connectTimeout(let station): return "no response from \(station)"
         case WinlinkTransportError.loginFailed(let detail): return detail
         default: return String(describing: error)
+        }
+    }
+
+    // MARK: - Transcript
+
+    private func log(_ direction: WinlinkTranscriptEntry.Direction, _ text: String) {
+        transcript.append(WinlinkTranscriptEntry(direction: direction, text: text))
+        if transcript.count > Self.transcriptLimit {
+            transcript.removeFirst(transcript.count - Self.transcriptLimit)
+        }
+    }
+
+    private func logWire(_ direction: WinlinkTranscriptEntry.Direction, _ data: Data) {
+        for line in WinlinkTranscriptEntry.describeWireChunk(data) {
+            log(direction, line)
         }
     }
 
