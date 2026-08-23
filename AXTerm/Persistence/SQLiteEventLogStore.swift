@@ -34,6 +34,16 @@ nonisolated final class SQLiteEventLogStore: EventLogStore, @unchecked Sendable 
         }
     }
 
+    func loadEvents(category: AppEventRecord.Category, in window: DateInterval) throws -> [AppEventRecord] {
+        try dbQueue.read { db in
+            try AppEventRecord
+                .filter(Column("category") == category.rawValue)
+                .filter(Column("createdAt") >= window.start && Column("createdAt") < window.end)
+                .order(Column("createdAt").asc)
+                .fetchAll(db)
+        }
+    }
+
     func deleteAll() throws {
         try dbQueue.write { db in
             _ = try AppEventRecord.deleteAll(db)

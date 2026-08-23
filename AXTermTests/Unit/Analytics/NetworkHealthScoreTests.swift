@@ -609,6 +609,106 @@ final class NetworkHealthScoreTests: XCTestCase {
                           "Saturated channel must not outscore a normal one")
     }
 
+    /// Coverage-aware rate: if we only listened for part of the activity
+    /// window, the packet rate divides by listening time, not wall time —
+    /// otherwise reopening the app after a break under-reports a live channel.
+    func testPacketRateUsesCoveredTimeNotWallTime() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-120))
+        // 20 packets in the 2 minutes we were actually listening.
+        for _ in 0..<10 {
+            _ = builder.addDirectPeerExchange(between: "W1AAA", and: "K2BBB", countEachDirection: 1)
+        }
+        _ = builder.addDirectPeerExchange(between: "K2BBB", and: "N3CCC", countEachDirection: 2)
+        let packets = builder.buildPackets()
+
+        // Listening only for the last 2 minutes of the 10-minute window.
+        let coverage = CaptureCoverage(intervals: [
+            DateInterval(start: now.addingTimeInterval(-120), end: now)
+        ])
+
+        let withCoverage = NetworkHealthCalculator.calculate(
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "1h",
+            includeViaDigipeaters: false,
+            coverage: coverage,
+            now: now
+        )
+        let withoutCoverage = NetworkHealthCalculator.calculate(
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "1h",
+            includeViaDigipeaters: false,
+            now: now
+        )
+
+        // 24 frames over 2 covered minutes = 12/min; the wall-clock (fallback)
+        // computation already divides by the observed packet span, so coverage
+        // must agree or improve on it — and must be ~5x the naive /10 figure.
+        XCTAssertEqual(withCoverage.metrics.packetRate, 12.0, accuracy: 1.5)
+        XCTAssertGreaterThanOrEqual(withCoverage.metrics.packetRate, withoutCoverage.metrics.packetRate - 0.01)
+    }
+
+    /// Partial coverage annotates the score and silences warnings that would
+    /// otherwise blame the network for our downtime.
+    func testPartialCoverageAnnotatesAndSuppressesDowntimeWarnings() {
+        let now = Date()
+        let windowDuration: TimeInterval = 3600
+
+        // Traffic only in the first 10 minutes of the hour: we then closed the app.
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-windowDuration))
+        _ = builder.addDirectPeerExchange(between: "W1AAA", and: "K2BBB", countEachDirection: 3)
+        _ = builder.addDirectPeerExchange(between: "K2BBB", and: "N3CCC", countEachDirection: 3)
+        let packets = builder.buildPackets()
+
+        let coverage = CaptureCoverage(intervals: [
+            DateInterval(start: now.addingTimeInterval(-windowDuration), end: now.addingTimeInterval(-windowDuration + 600))
+        ])
+
+        let health = NetworkHealthCalculator.calculate(
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "1h",
+            includeViaDigipeaters: false,
+            timeframeDuration: windowDuration,
+            coverage: coverage,
+            now: now
+        )
+
+        XCTAssertEqual(health.metrics.coverageFraction, 600.0 / 3600.0, accuracy: 0.02)
+        XCTAssertTrue(health.warnings.contains { $0.id == "partial_coverage" },
+                      "Sub-60% coverage must be called out")
+        XCTAssertFalse(health.warnings.contains { $0.id == "stale_nodes" },
+                       "Stale-station warnings are meaningless when we weren't listening")
+    }
+
+    /// Full coverage produces no coverage warning.
+    func testFullCoverageProducesNoCoverageWarning() {
+        let now = Date()
+        var builder = GraphFixtureBuilder(baseTimestamp: now.addingTimeInterval(-600))
+        _ = builder.addDirectPeerExchange(between: "W1AAA", and: "K2BBB", countEachDirection: 3)
+        _ = builder.addDirectPeerExchange(between: "K2BBB", and: "N3CCC", countEachDirection: 3)
+        let packets = builder.buildPackets()
+
+        let coverage = CaptureCoverage(intervals: [
+            DateInterval(start: now.addingTimeInterval(-7200), end: now)
+        ])
+
+        let health = NetworkHealthCalculator.calculate(
+            timeframePackets: packets,
+            allRecentPackets: packets,
+            timeframeDisplayName: "1h",
+            includeViaDigipeaters: false,
+            timeframeDuration: 3600,
+            coverage: coverage,
+            now: now
+        )
+
+        XCTAssertEqual(health.metrics.coverageFraction, 1.0, accuracy: 0.001)
+        XCTAssertFalse(health.warnings.contains { $0.id == "partial_coverage" })
+    }
+
     /// Verify canonical minEdge constant
     func testCanonicalMinEdgeConstant() {
         XCTAssertEqual(NetworkHealthCalculator.canonicalMinEdge, 1,

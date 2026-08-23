@@ -351,13 +351,20 @@ struct AnalyticsDashboardView: View {
         let bucketSeconds = viewModel.resolvedBucket.durationSeconds
         guard bucketSeconds > 0 else { return [] }
         let bytesByBucket = Dictionary(uniqueKeysWithValues: series.bytesPerBucket.map { ($0.bucket, $0.value) })
+        let coverage = viewModel.captureCoverage
         return series.packetsPerBucket.map { point in
-            AnalyticsSeriesPoint(
+            // Divide by LISTENING time in the bucket, not wall time — a
+            // half-covered bucket would otherwise under-report utilization 2x.
+            let bucketWindow = DateInterval(start: point.bucket, duration: bucketSeconds)
+            let covered = coverage.intervals.isEmpty
+                ? bucketSeconds
+                : coverage.coveredSeconds(in: bucketWindow)
+            return AnalyticsSeriesPoint(
                 bucket: point.bucket,
                 value: AnalyticsStyle.Channel.utilizationPercent(
                     packets: point.value,
                     payloadBytes: bytesByBucket[point.bucket] ?? 0,
-                    bucketSeconds: bucketSeconds
+                    bucketSeconds: max(1, covered)
                 )
             )
         }
@@ -418,7 +425,12 @@ struct AnalyticsDashboardView: View {
             LazyVGrid(columns: chartColumns, spacing: AnalyticsStyle.Layout.cardSpacing) {
                 ChartCard(title: "Packets over time") {
                     if viewModel.hasLoadedAggregation {
-                        TimeSeriesChart(points: viewModel.viewState.series.packetsPerBucket, valueLabel: "Packets", bucket: viewModel.resolvedBucket)
+                        TimeSeriesChart(
+                            points: viewModel.viewState.series.packetsPerBucket,
+                            valueLabel: "Packets",
+                            bucket: viewModel.resolvedBucket,
+                            uncoveredIntervals: viewModel.uncoveredWindowIntervals
+                        )
                             .background(ChartWidthReader { width in
                                 viewModel.updateChartWidth(width)
                             })
@@ -433,7 +445,8 @@ struct AnalyticsDashboardView: View {
                             points: viewModel.viewState.series.bytesPerBucket,
                             valueLabel: "Bytes",
                             bucket: viewModel.resolvedBucket,
-                            valueFormatter: { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) }
+                            valueFormatter: { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) },
+                            uncoveredIntervals: viewModel.uncoveredWindowIntervals
                         )
                     } else {
                         ChartLoadingPlaceholder(label: "Loading bytes")
@@ -442,7 +455,12 @@ struct AnalyticsDashboardView: View {
 
                 ChartCard(title: "Unique stations over time") {
                     if viewModel.hasLoadedAggregation {
-                        TimeSeriesChart(points: viewModel.viewState.series.uniqueStationsPerBucket, valueLabel: "Stations", bucket: viewModel.resolvedBucket)
+                        TimeSeriesChart(
+                            points: viewModel.viewState.series.uniqueStationsPerBucket,
+                            valueLabel: "Stations",
+                            bucket: viewModel.resolvedBucket,
+                            uncoveredIntervals: viewModel.uncoveredWindowIntervals
+                        )
                     } else {
                         ChartLoadingPlaceholder(label: "Loading stations")
                     }
@@ -474,7 +492,8 @@ struct AnalyticsDashboardView: View {
                             points: channelUtilizationPoints,
                             valueLabel: "Utilization",
                             bucket: viewModel.resolvedBucket,
-                            valueFormatter: { "\($0)%" }
+                            valueFormatter: { "\($0)%" },
+                            uncoveredIntervals: viewModel.uncoveredWindowIntervals
                         )
                         .help("Estimated share of channel airtime in use, assuming 1200 baud, ~32 framing bytes, and ~300 ms of TXDelay/flags per frame. Above roughly 30% a shared CSMA channel sees growing collision rates.")
                     } else {
@@ -496,7 +515,8 @@ struct AnalyticsDashboardView: View {
                         TimeSeriesChart(
                             points: viewModel.viewState.series.rejectFramesPerBucket,
                             valueLabel: "REJ/SREJ",
-                            bucket: viewModel.resolvedBucket
+                            bucket: viewModel.resolvedBucket,
+                            uncoveredIntervals: viewModel.uncoveredWindowIntervals
                         )
                         .help("REJ and SREJ supervisory frames per interval — peers asking for retransmits. Sustained nonzero values indicate RF loss on connected links.")
                     } else {
@@ -506,8 +526,11 @@ struct AnalyticsDashboardView: View {
 
                 ChartCard(title: "Activity by hour") {
                     if viewModel.hasLoadedGraph {
-                        ActivityByHourChart(profile: viewModel.activityByHourProfile)
-                            .help("When your network is alive, by local hour over the selected timeframe, split by traffic kind. Chat = connected data between regular stations; BBS/Node = connected data touching an inferred Node or BBS (role-based inference from routing broadcasts, mail announcements, and SID software banners — not message content); Beacons = unconnected UI frames; Routing = NET/ROM broadcasts; Control = supervisory frames.")
+                        ActivityByHourChart(
+                            profile: viewModel.activityByHourProfile,
+                            hourCoverageFractions: viewModel.hourCoverageFractions
+                        )
+                            .help("When your network is alive, by local hour over the selected timeframe, split by traffic kind. Gray-shaded hours are ones the app barely listened to — quiet there means downtime, not a dead channel. Chat = connected data between regular stations; BBS/Node = connected data touching an inferred Node or BBS (role-based inference from routing broadcasts, mail announcements, and SID software banners — not message content); Beacons = unconnected UI frames; Routing = NET/ROM broadcasts; Control = supervisory frames.")
                     } else {
                         ChartLoadingPlaceholder(label: "Loading hourly profile")
                     }
@@ -2144,12 +2167,20 @@ private struct AirtimeListView: View {
 
 private struct ActivityByHourChart: View {
     let profile: ActivityByHourProfile
+    /// Covered fraction per hour; hours we barely listened to are hatched so a
+    /// quiet 3 AM bar means the network was quiet, not that the app was closed.
+    var hourCoverageFractions: [Double] = Array(repeating: 1, count: 24)
 
     private struct HourClassPoint: Identifiable {
         let hour: Int
         let className: String
         let value: Int
         var id: String { "\(hour)-\(className)" }
+    }
+
+    private var uncoveredHours: [Int] {
+        guard hourCoverageFractions.count == 24 else { return [] }
+        return (0..<24).filter { hourCoverageFractions[$0] < 0.25 }
     }
 
     private var points: [HourClassPoint] {
@@ -2168,12 +2199,21 @@ private struct ActivityByHourChart: View {
         if profile.totalCount == 0 {
             EmptyChartPlaceholder(text: "No data")
         } else {
-            Chart(points) { point in
-                BarMark(
-                    x: .value("Hour", point.hour),
-                    y: .value("Frames", point.value)
-                )
-                .foregroundStyle(by: .value("Type", point.className))
+            Chart {
+                ForEach(uncoveredHours, id: \.self) { hour in
+                    RectangleMark(
+                        xStart: .value("Hour", Double(hour) - 0.5),
+                        xEnd: .value("Hour", Double(hour) + 0.5)
+                    )
+                    .foregroundStyle(Color(nsColor: .systemGray).opacity(0.10))
+                }
+                ForEach(points) { point in
+                    BarMark(
+                        x: .value("Hour", point.hour),
+                        y: .value("Frames", point.value)
+                    )
+                    .foregroundStyle(by: .value("Type", point.className))
+                }
             }
             .chartForegroundStyleScale([
                 "Chat": AnalyticsStyle.Colors.accent,
@@ -2239,6 +2279,9 @@ private struct TimeSeriesChart: View {
     let bucket: TimeBucket
     /// Formats axis and tooltip values (e.g. byte counts). Defaults to plain numbers.
     var valueFormatter: ((Int) -> String)? = nil
+    /// Spans where the app was not listening — shaded so downtime never reads
+    /// as a silent channel.
+    var uncoveredIntervals: [DateInterval] = []
     @State private var selectedPoint: AnalyticsSeriesPoint?
     @State private var hoverLocation: CGPoint?
 
@@ -2268,6 +2311,14 @@ private struct TimeSeriesChart: View {
             EmptyChartPlaceholder(text: "No data")
         } else {
             Chart {
+                ForEach(Array(uncoveredIntervals.enumerated()), id: \.offset) { _, gap in
+                    RectangleMark(
+                        xStart: .value("Offline", gap.start),
+                        xEnd: .value("Offline", gap.end)
+                    )
+                    .foregroundStyle(Color(nsColor: .systemGray).opacity(0.10))
+                }
+
                 ForEach(points, id: \.bucket) { point in
                     if #available(macOS 13.0, *) {
                         LineMark(

@@ -557,6 +557,8 @@ nonisolated enum FreshnessTooltips {
         Freshness indicates how recently this neighbor was heard.
         100% = just seen; declines toward 0% as the neighbor approaches its
         stale TTL (configurable in Settings, 6 hours by default).
+        Freshness measures knowledge age, so it keeps declining while the app
+        is closed — the network can change while you are not listening.
         """
 
     /// Tooltip for the Routes freshness column.

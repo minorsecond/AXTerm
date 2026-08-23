@@ -99,6 +99,7 @@ final class PacketEngine: ObservableObject {
     private let rawStore: RawStore?
     private let persistenceWorker: PersistenceWorker?
     private let eventLogger: EventLogger?
+    nonisolated private let eventLogStore: EventLogStore?
     private let watchMatcher: WatchMatching
     private let watchRecorder: WatchEventRecording?
     let notificationScheduler: NotificationScheduling?
@@ -293,6 +294,7 @@ final class PacketEngine: ObservableObject {
         consoleStore: ConsoleStore? = nil,
         rawStore: RawStore? = nil,
         eventLogger: EventLogger? = nil,
+        eventLogStore: EventLogStore? = nil,
         watchMatcher: WatchMatching? = nil,
         watchRecorder: WatchEventRecording? = nil,
         notificationScheduler: NotificationScheduling? = nil,
@@ -307,6 +309,7 @@ final class PacketEngine: ObservableObject {
         self.rawStore = rawStore
         self.persistenceWorker = PersistenceWorker(packetStore: packetStore, consoleStore: consoleStore, rawStore: rawStore)
         self.eventLogger = eventLogger
+        self.eventLogStore = eventLogStore
         self.watchMatcher = watchMatcher ?? WatchRuleMatcher(settings: settings)
         self.watchRecorder = watchRecorder
         self.notificationScheduler = notificationScheduler
@@ -537,6 +540,9 @@ final class PacketEngine: ObservableObject {
         connectedHost = nil
         connectedPort = nil
         addSystemLine("Disconnected (reason: \(reason))", category: .connection)
+        // Persist the disconnect: capture-coverage intervals need the closing
+        // edge (connects were logged for months, disconnects never were).
+        eventLogger?.log(level: .info, category: .connection, message: "Disconnected (reason: \(reason))", metadata: nil)
         SentryManager.shared.addBreadcrumb(
             category: "kiss.connection",
             message: "Disconnected",
@@ -1413,6 +1419,31 @@ final class PacketEngine: ObservableObject {
             SentryManager.shared.capturePersistenceFailure("aggregate analytics", error: error)
             return nil
         }
+    }
+
+    /// Connection connect/disconnect timestamps for capture-coverage derivation.
+    /// The lookback is padded so an interval that began before the window still
+    /// covers into it.
+    func captureConnectionEvents(around window: DateInterval) async -> (connects: [Date], disconnects: [Date])? {
+        guard let eventLogStore else { return nil }
+        let padded = DateInterval(
+            start: window.start.addingTimeInterval(-30 * 24 * 3600),
+            end: window.end
+        )
+        let store = eventLogStore
+        return await Task.detached(priority: .userInitiated) { () -> (connects: [Date], disconnects: [Date])? in
+            guard let events = try? store.loadEvents(category: .connection, in: padded) else { return nil }
+            var connects: [Date] = []
+            var disconnects: [Date] = []
+            for event in events {
+                if event.message.hasPrefix("Connected") {
+                    connects.append(event.createdAt)
+                } else if event.message.hasPrefix("Disconnected") {
+                    disconnects.append(event.createdAt)
+                }
+            }
+            return (connects, disconnects)
+        }.value
     }
 
     func loadPackets(in timeframe: DateInterval) async -> [Packet]? {

@@ -19,6 +19,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         AnalyticsAggregator.Options
     ) async -> AnalyticsAggregationResult?
     typealias TimeframePacketsProvider = @Sendable (DateInterval) async -> [Packet]?
+    /// Connection connect/disconnect timestamps around a window plus whether the
+    /// capture is currently live — the inputs for CaptureCoverageBuilder.
+    typealias CaptureEventsProvider = @Sendable (DateInterval) async -> (connects: [Date], disconnects: [Date], isLive: Bool)?
 
     private let logger = Logger(subsystem: "AXTerm", category: "Analytics")
 
@@ -201,6 +204,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     private let calendar: Calendar
     nonisolated private let databaseAggregationProvider: DatabaseAggregationProvider?
     nonisolated private let timeframePacketsProvider: TimeframePacketsProvider?
+    nonisolated private let captureEventsProvider: CaptureEventsProvider?
     private let packetSubject = CurrentValueSubject<[Packet], Never>([])
     private var cancellables: Set<AnyCancellable> = []
     private var packets: [Packet] = []
@@ -249,6 +253,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         settingsStore: AppSettingsStore? = nil,
         netRomIntegration: NetRomIntegration? = nil,
         databaseAggregationProvider: DatabaseAggregationProvider? = nil,
+        captureEventsProvider: CaptureEventsProvider? = nil,
         timeframePacketsProvider: TimeframePacketsProvider? = nil,
         calendar: Calendar = .current,
         packetDebounce: TimeInterval = 0.25,
@@ -258,6 +263,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         self.settingsStore = settingsStore
         self.netRomIntegration = netRomIntegration
         self.databaseAggregationProvider = databaseAggregationProvider
+        self.captureEventsProvider = captureEventsProvider
         self.timeframePacketsProvider = timeframePacketsProvider
         self.calendar = calendar
 
@@ -778,6 +784,39 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         )
     }
 
+    // MARK: - Capture coverage
+
+    /// When the app was actually listening within (and around) the current
+    /// timeframe. Drives coverage-aware rates, chart downtime shading, and the
+    /// partial-coverage health annotation.
+    @Published private(set) var captureCoverage: CaptureCoverage = .empty
+    /// Spans of the current window where we were NOT listening (for chart shading).
+    @Published private(set) var uncoveredWindowIntervals: [DateInterval] = []
+    /// Covered fraction per local hour-of-day across the window (24 entries).
+    @Published private(set) var hourCoverageFractions: [Double] = Array(repeating: 1, count: 24)
+
+    private func updateCaptureCoverage(
+        packets: [Packet],
+        window: DateInterval,
+        events: (connects: [Date], disconnects: [Date], isLive: Bool)?,
+        now: Date
+    ) {
+        // Packet timestamps are the evidence stream; connection events (when the
+        // provider supplies them) give the authoritative interval edges. With no
+        // events at all, coverage degrades to evidence clustering — still
+        // conservative, never claiming unheard listening time.
+        let coverage = CaptureCoverageBuilder.build(
+            connectEvents: events?.connects ?? [],
+            disconnectEvents: events?.disconnects ?? [],
+            evidenceTimes: packets.map(\.timestamp),
+            now: now,
+            isCurrentlyConnected: events?.isLive ?? false
+        )
+        captureCoverage = coverage
+        uncoveredWindowIntervals = coverage.uncoveredIntervals(in: window)
+        hourCoverageFractions = coverage.coverageFractionByHour(in: window, calendar: calendar)
+    }
+
     // MARK: - Activity insights (roles, hourly profile, airtime, sessions)
 
     @Published private(set) var activityByHourProfile: ActivityByHourProfile = .empty
@@ -1111,6 +1150,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         latestTimeframePackets = packetSnapshot
         updateTimeframeStationPresence(packets: packetSnapshot, identityMode: stationIdentityMode)
         updateActivityInsights(packets: packetSnapshot, identityMode: stationIdentityMode, windowEnd: timeframeInterval.end)
+        let captureEvents = await captureEventsProvider?(timeframeInterval)
+        updateCaptureCoverage(packets: packetSnapshot, window: timeframeInterval, events: captureEvents, now: now)
         let includeViaSnapshot = includeViaDigipeaters
         let minEdgeSnapshot = minEdgeCount
         let maxNodesSnapshot = maxNodes
@@ -1389,6 +1430,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             includeViaDigipeaters: includeViaDigipeaters,
             stationIdentityMode: stationIdentityMode,
             timeframeDuration: currentDateRange(now: now).duration,
+            coverage: captureCoverage,
             now: now
         )
         viewState.networkHealth = health

@@ -171,6 +171,11 @@ nonisolated struct NetworkHealthMetrics: Hashable, Sendable {
     /// Ratio of active stations to total stations (freshness indicator)
     let freshness: Double
 
+    /// Fraction of the timeframe during which the app was actually listening
+    /// (1.0 when unknown or fully covered). Quiet spans outside coverage are
+    /// app downtime, not network silence.
+    let coverageFraction: Double
+
     static let empty = NetworkHealthMetrics(
         totalStations: 0,
         totalPackets: 0,
@@ -182,7 +187,8 @@ nonisolated struct NetworkHealthMetrics: Hashable, Sendable {
         topRelayConcentration: 0,
         activeStations: 0,
         packetRate: 0,
-        freshness: 0
+        freshness: 0,
+        coverageFraction: 1
     )
 }
 
@@ -288,6 +294,7 @@ nonisolated enum NetworkHealthCalculator {
         includeViaDigipeaters: Bool,
         stationIdentityMode: StationIdentityMode = .station,
         timeframeDuration: TimeInterval? = nil,
+        coverage: CaptureCoverage? = nil,
         trendWindowMinutes: Int = 60,
         trendBucketMinutes: Int = 5,
         now: Date = Date()
@@ -299,6 +306,7 @@ nonisolated enum NetworkHealthCalculator {
             includeViaDigipeaters: includeViaDigipeaters,
             stationIdentityMode: stationIdentityMode,
             timeframeDuration: timeframeDuration,
+            coverage: coverage,
             now: now
         )
 
@@ -359,6 +367,7 @@ nonisolated enum NetworkHealthCalculator {
         includeViaDigipeaters: Bool = true,
         stationIdentityMode: StationIdentityMode = .station,
         timeframeDuration: TimeInterval? = nil,
+        coverage: CaptureCoverage? = nil,
         trendWindowMinutes: Int = 60,
         trendBucketMinutes: Int = 5,
         now: Date = Date()
@@ -377,6 +386,7 @@ nonisolated enum NetworkHealthCalculator {
             includeViaDigipeaters: includeViaDigipeaters,
             stationIdentityMode: stationIdentityMode,
             timeframeDuration: timeframeDuration,
+            coverage: coverage,
             trendWindowMinutes: trendWindowMinutes,
             trendBucketMinutes: trendBucketMinutes,
             now: now
@@ -404,6 +414,7 @@ nonisolated enum NetworkHealthCalculator {
         includeViaDigipeaters: Bool,
         stationIdentityMode: StationIdentityMode,
         timeframeDuration: TimeInterval?,
+        coverage: CaptureCoverage?,
         now: Date
     ) -> NetworkHealthMetrics {
         // TOPOLOGY METRICS (from canonical graph)
@@ -470,16 +481,34 @@ nonisolated enum NetworkHealthCalculator {
         // The 10-minute window is itself the smoothing; no cross-call EMA state
         // (a per-invocation EMA made the rate depend on UI recompute frequency).
         let earliestAvailable = allRecentPackets.map(\.timestamp).min()
-        let effectiveSeconds: Double
+        var effectiveSeconds: Double
         if let earliestAvailable, earliestAvailable > activityCutoff {
             effectiveSeconds = max(60, now.timeIntervalSince(earliestAvailable))
         } else {
             effectiveSeconds = max(60, windowSeconds)
         }
+        // Coverage-aware denominator: divide by listening time within the
+        // window, not wall time — reopening the app after downtime must not
+        // under-report a live channel.
+        if let coverage {
+            let activityWindow = DateInterval(start: activityCutoff, end: now)
+            let covered = coverage.coveredSeconds(in: activityWindow)
+            if covered >= 60 {
+                effectiveSeconds = min(effectiveSeconds, covered)
+            }
+        }
         let smoothedRate = Double(recentPackets.count) / (effectiveSeconds / 60)
 
         // Freshness = active / total (same identity model for numerator + denominator)
         let freshness = clampRatio(totalNodes > 0 ? Double(activeStations) / Double(totalNodes) : 0)
+
+        let coverageFraction: Double
+        if let coverage, let timeframeDuration, timeframeDuration > 0 {
+            let window = DateInterval(start: now.addingTimeInterval(-timeframeDuration), end: now)
+            coverageFraction = coverage.coverageFraction(in: window)
+        } else {
+            coverageFraction = 1
+        }
 
         return NetworkHealthMetrics(
             totalStations: totalNodes,
@@ -492,7 +521,8 @@ nonisolated enum NetworkHealthCalculator {
             topRelayConcentration: topRelayPct,
             activeStations: activeStations,
             packetRate: smoothedRate,
-            freshness: freshness
+            freshness: freshness,
+            coverageFraction: coverageFraction
         )
     }
 
@@ -736,11 +766,28 @@ nonisolated enum NetworkHealthCalculator {
             ))
         }
 
+        // Partial capture coverage: quiet spans may be OUR downtime, not the
+        // network's. Called out first, and the downtime-sensitive warnings below
+        // are suppressed under it.
+        let hasReliableCoverage = metrics.coverageFraction >= 0.5
+        if metrics.coverageFraction < 0.6 {
+            warnings.append(NetworkWarning(
+                id: "partial_coverage",
+                severity: .info,
+                title: "Partial capture coverage\(tfLabel)",
+                detail: String(
+                    format: "Listening for %.0f%%%% of this window — quiet spans may be app downtime, not network silence",
+                    metrics.coverageFraction * 100
+                )
+            ))
+        }
+
         // Stale stations: only meaningful for short timeframes. Over 24h it is
         // *expected* that most of the day's stations were quiet in the last 10
         // minutes, so the warning would fire permanently and carry no signal.
         if metrics.totalStations > 0,
            metrics.freshness < 0.3,
+           hasReliableCoverage,
            let duration = timeframeDuration,
            duration <= 3600 {
             let staleCount = metrics.totalStations - metrics.activeStations
@@ -753,7 +800,7 @@ nonisolated enum NetworkHealthCalculator {
         }
 
         // Fragmented network (timeframe-dependent - explicit label)
-        if metrics.largestComponentPercent < 50 && canonicalGraph.nodes.count > 5 {
+        if metrics.largestComponentPercent < 50 && canonicalGraph.nodes.count > 5 && hasReliableCoverage {
             warnings.append(NetworkWarning(
                 id: "fragmented",
                 severity: .caution,

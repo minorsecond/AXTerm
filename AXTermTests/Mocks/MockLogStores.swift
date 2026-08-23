@@ -65,6 +65,12 @@ final class MockEventLogStore: EventLogStore, @unchecked Sendable {
         Array(appendedEntries.suffix(limit)).reversed()
     }
 
+    func loadEvents(category: AppEventRecord.Category, in window: DateInterval) throws -> [AppEventRecord] {
+        appendedEntries
+            .filter { $0.category == category && window.contains($0.createdAt) }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+
     func deleteAll() throws {
         deleteAllCalled = true
     }

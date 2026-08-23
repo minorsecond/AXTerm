@@ -99,6 +99,7 @@ struct AXTermApp: App {
             consoleStore: consoleStore,
             rawStore: rawStore,
             eventLogger: eventLogger,
+            eventLogStore: eventStore,
             watchRecorder: watchRecorder,
             notificationScheduler: notificationScheduler,
             databaseWriter: queue

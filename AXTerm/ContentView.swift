@@ -62,6 +62,11 @@ struct ContentView: View {
                     options: options
                 )
             },
+            captureEventsProvider: { interval in
+                guard let events = await client.captureConnectionEvents(around: interval) else { return nil }
+                let isLive = await MainActor.run { client.status == .connected }
+                return (events.connects, events.disconnects, isLive)
+            },
             timeframePacketsProvider: { interval in
                 await client.loadPackets(in: interval)
             }

@@ -1404,7 +1404,8 @@ struct GraphSidebar_Previews: PreviewProvider {
                 // Activity metrics (fixed 10-minute window)
                 activeStations: 7,
                 packetRate: 0.5,
-                freshness: 0.28  // 7/25
+                freshness: 0.28,  // 7/25
+                coverageFraction: 1
             ),
             warnings: [
                 NetworkWarning(
