@@ -353,6 +353,11 @@ final class PacketEngine: ObservableObject {
         configureStationSubscription()
         observeSettings()
         observeCapabilityStore()
+        // Console history first: the terminal is the landing view, its query is
+        // milliseconds, and the PersistenceWorker actor serializes all loads —
+        // enqueued after the 5000-packet station loads it used to appear
+        // seconds late, leaving the terminal empty-then-popping at launch.
+        loadPersistedConsole()
         loadPersistedPackets(reason: "startup")
     }
 
