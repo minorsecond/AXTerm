@@ -384,6 +384,10 @@ struct WinlinkMailView: View {
         }
 
         let password = winlinkSettings.password
+        guard !password.isEmpty else {
+            exchangeAlert = "No Winlink password found — the CMS requires secure login, so the exchange was not started. Enter your password in Settings → Winlink. (After rebuilding or reinstalling the app, macOS can revoke Keychain access; re-entering the password once fixes it.)"
+            return
+        }
         let product = winlinkSettings.clientProduct.trimmingCharacters(in: .whitespaces)
         let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
         let sid = WinlinkSID(

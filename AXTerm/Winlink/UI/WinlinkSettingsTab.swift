@@ -144,6 +144,11 @@ struct WinlinkSettingsTab: View {
                                 .help(index == 0 ? "Primary gateway — tried first." : "Rung #\(index + 1).")
                             Text(entry.callsign)
                                 .font(.body.monospaced())
+                            if let hz = entry.frequencyHz {
+                                Text(String(format: "%.3f MHz", Double(hz) / 1_000_000))
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
                             if !entry.path.isEmpty {
                                 Text("via \(entry.path)")
                                     .font(.caption)
@@ -151,17 +156,17 @@ struct WinlinkSettingsTab: View {
                             }
                             Spacer()
                             Button {
-                                settings.moveInLadder(callsign: entry.callsign, up: true)
+                                settings.moveInLadder(entryID: entry.id, up: true)
                             } label: { Image(systemName: "chevron.up") }
                                 .disabled(index == 0)
                                 .help("Move up the ladder (tried earlier)")
                             Button {
-                                settings.moveInLadder(callsign: entry.callsign, up: false)
+                                settings.moveInLadder(entryID: entry.id, up: false)
                             } label: { Image(systemName: "chevron.down") }
                                 .disabled(index == settings.gatewayLadder.count - 1)
                                 .help("Move down the ladder (tried later)")
                             Button {
-                                settings.removeFromLadder(callsign: entry.callsign)
+                                settings.removeFromLadder(entryID: entry.id)
                             } label: { Image(systemName: "minus.circle") }
                                 .help("Remove from the ladder")
                         }

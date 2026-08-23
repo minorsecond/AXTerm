@@ -208,11 +208,18 @@ final class WinlinkViewModelTests: XCTestCase {
         XCTAssertEqual(vm2.stations.map(\.callsign), ["KE7XO-10"])
     }
 
-    func testSetAsGatewayPersists() async throws {
+    func testLadderPromotionSetsPrimaryGateway() async throws {
         let store = try makeStore()
         let settings = makeSettings()
         let vm = RMSStationsViewModel(store: store, makeClient: { FakeCMSClient() }, settings: settings)
-        vm.setAsGateway(makeStation(callsign: "KE7XO-10", distance: 12))
+        let near = makeStation(callsign: "KE7XO-10", distance: 12)
+        let far = makeStation(callsign: "W7XX-10", distance: 40)
+        vm.addToLadder(far)
+        vm.addToLadder(near)
+        XCTAssertEqual(vm.ladderRank(of: near), 2)
+        vm.promoteToTop(near)
+        XCTAssertEqual(vm.ladderRank(of: near), 1)
+        // The legacy single-gateway field mirrors the top rung.
         XCTAssertEqual(settings.gatewayCallsign, "KE7XO-10")
         XCTAssertEqual(vm.currentGateway, "KE7XO-10")
     }
@@ -307,24 +314,44 @@ final class WinlinkGatewayLadderTests: XCTestCase {
 
     func testAddPromoteMoveRemove() async {
         let settings = makeSettings()
-        settings.addToLadder(callsign: "w0arp-10")
-        settings.addToLadder(callsign: "N0HI-10")
-        settings.addToLadder(callsign: "K0NTS-10")
-        settings.addToLadder(callsign: "W0ARP-10")  // duplicate ignored
+        settings.addToLadder(callsign: "w0arp-10", frequencyHz: 145_050_000)
+        settings.addToLadder(callsign: "N0HI-10", frequencyHz: 145_050_000)
+        settings.addToLadder(callsign: "K0NTS-10", frequencyHz: 145_050_000)
+        settings.addToLadder(callsign: "W0ARP-10", frequencyHz: 145_050_000)  // duplicate port ignored
 
         XCTAssertEqual(settings.gatewayLadder.map(\.callsign), ["W0ARP-10", "N0HI-10", "K0NTS-10"])
-        XCTAssertEqual(settings.ladderRank(of: "n0hi-10"), 2)
+        XCTAssertEqual(settings.ladderRank(callsign: "n0hi-10", frequencyHz: 145_050_000), 2)
 
-        settings.promoteToTop(callsign: "K0NTS-10")
+        let kontsID = settings.gatewayLadder[2].id
+        settings.promoteToTop(entryID: kontsID)
         XCTAssertEqual(settings.gatewayLadder.first?.callsign, "K0NTS-10")
 
-        settings.moveInLadder(callsign: "K0NTS-10", up: false)
+        settings.moveInLadder(entryID: kontsID, up: false)
         XCTAssertEqual(settings.gatewayLadder.map(\.callsign), ["W0ARP-10", "K0NTS-10", "N0HI-10"])
 
-        settings.removeFromLadder(callsign: "K0NTS-10")
+        settings.removeFromLadder(entryID: kontsID)
         XCTAssertEqual(settings.gatewayLadder.count, 2)
         // Legacy mirror follows the top rung.
         XCTAssertEqual(settings.gatewayCallsign, "W0ARP-10")
+    }
+
+    /// A multi-port gateway (same callsign, several frequencies) ladders
+    /// per port: favoriting the 145.050 port must not mark 145.030 or
+    /// 441.075 as laddered.
+    func testMultiPortGatewayLaddersPerFrequency() async {
+        let settings = makeSettings()
+        settings.addToLadder(callsign: "W0ARP-10", frequencyHz: 145_050_000)
+        settings.addToLadder(callsign: "W0ARP-10", frequencyHz: 441_075_000)
+
+        XCTAssertEqual(settings.gatewayLadder.count, 2)
+        XCTAssertEqual(settings.ladderRank(callsign: "W0ARP-10", frequencyHz: 145_050_000), 1)
+        XCTAssertEqual(settings.ladderRank(callsign: "W0ARP-10", frequencyHz: 441_075_000), 2)
+        XCTAssertNil(settings.ladderRank(callsign: "W0ARP-10", frequencyHz: 145_030_000))
+
+        // A frequency-less (manual/legacy) entry matches any port.
+        let loose = makeSettings()
+        loose.addToLadder(callsign: "W0ARP-10")
+        XCTAssertEqual(loose.ladderRank(callsign: "W0ARP-10", frequencyHz: 145_030_000), 1)
     }
 
     func testLadderPersistsAcrossInstances() async {

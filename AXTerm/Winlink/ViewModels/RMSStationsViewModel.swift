@@ -70,28 +70,38 @@ final class RMSStationsViewModel: ObservableObject {
         }
     }
 
-    func setAsGateway(_ station: WinlinkRMSStationRecord) {
-        settings.addToLadder(callsign: station.callsign)
-        settings.promoteToTop(callsign: station.callsign)
+    private func entryID(for station: WinlinkRMSStationRecord) -> String? {
+        settings.gatewayLadder.first {
+            $0.matches(callsign: station.callsign, frequencyHz: station.frequencyHz)
+        }?.id
     }
 
     func addToLadder(_ station: WinlinkRMSStationRecord) {
-        settings.addToLadder(callsign: station.callsign)
+        settings.addToLadder(callsign: station.callsign, frequencyHz: station.frequencyHz)
     }
 
     func removeFromLadder(_ station: WinlinkRMSStationRecord) {
-        settings.removeFromLadder(callsign: station.callsign)
+        guard let id = entryID(for: station) else { return }
+        settings.removeFromLadder(entryID: id)
     }
 
     func promoteToTop(_ station: WinlinkRMSStationRecord) {
-        settings.promoteToTop(callsign: station.callsign)
+        guard let id = entryID(for: station) else { return }
+        settings.promoteToTop(entryID: id)
     }
 
     func ladderRank(of station: WinlinkRMSStationRecord) -> Int? {
-        settings.ladderRank(of: station.callsign)
+        settings.ladderRank(callsign: station.callsign, frequencyHz: station.frequencyHz)
     }
 
-    var ladderSummary: [String] { settings.gatewayLadder.map(\.callsign) }
+    var ladderSummary: [String] {
+        settings.gatewayLadder.map { entry in
+            if let hz = entry.frequencyHz {
+                return "\(entry.callsign) \(String(format: "%.3f", Double(hz) / 1_000_000))"
+            }
+            return entry.callsign
+        }
+    }
 
     var currentGateway: String { settings.gatewayLadder.first?.callsign ?? "" }
 

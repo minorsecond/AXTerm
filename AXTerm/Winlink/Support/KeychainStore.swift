@@ -26,12 +26,19 @@ nonisolated struct KeychainStore: Sendable {
         let update: [String: Any] = [kSecValueData as String: data]
         let updateStatus = SecItemUpdate(query as CFDictionary, update as CFDictionary)
         if updateStatus == errSecSuccess { return true }
-        if updateStatus == errSecItemNotFound {
-            var addQuery = query
-            addQuery[kSecValueData as String] = data
-            return SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess
+
+        // Any failure other than success: recreate the item. This recovers
+        // the case where a rebuilt binary (new code signature) lost access
+        // to the old item — updating it fails with errSecAuthFailed, so
+        // delete-and-add is the only way re-entering a credential can work.
+        SecItemDelete(query as CFDictionary)
+        var addQuery = query
+        addQuery[kSecValueData as String] = data
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        if addStatus != errSecSuccess {
+            NSLog("[Keychain] setString failed for %@: update=%d add=%d", account, updateStatus, addStatus)
         }
-        return false
+        return addStatus == errSecSuccess
     }
 
     func string(account: String) -> String? {
@@ -43,9 +50,15 @@ nonisolated struct KeychainStore: Sendable {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data
-        else { return nil }
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else {
+            if status != errSecItemNotFound {
+                // errSecAuthFailed here usually means a rebuilt binary lost
+                // access to the item — re-entering the credential recreates it.
+                NSLog("[Keychain] read failed for %@: status=%d", account, status)
+            }
+            return nil
+        }
         return String(data: data, encoding: .utf8)
     }
 

@@ -24,11 +24,22 @@ final class WinlinkSettings: ObservableObject {
     static let passwordAccount = "winlink-password"
     static let apiKeyAccount = "winlink-cms-api-key"
 
-    /// One rung of the RF gateway ladder.
+    /// One rung of the RF gateway ladder. A rung identifies a specific
+    /// gateway port: callsign plus (optionally) the advertised frequency,
+    /// so a multi-port station like W0ARP-10 on 145.030/145.050/441.075
+    /// can be laddered per port. frequencyHz nil (manual entries and
+    /// pre-frequency ladders) matches any port of that callsign.
     nonisolated struct GatewayLadderEntry: Codable, Equatable, Identifiable, Sendable {
         var callsign: String
         var path: String = ""
-        var id: String { callsign }
+        var frequencyHz: Int?
+        var id: String { "\(callsign)@\(frequencyHz ?? 0)" }
+
+        func matches(callsign: String, frequencyHz: Int) -> Bool {
+            guard self.callsign == callsign.uppercased() else { return false }
+            guard let own = self.frequencyHz else { return true }
+            return own == frequencyHz
+        }
     }
 
     enum TransportPreference: String, CaseIterable {
@@ -82,36 +93,35 @@ final class WinlinkSettings: ObservableObject {
 
     // MARK: - Ladder operations
 
-    func addToLadder(callsign: String, path: String = "") {
+    func addToLadder(callsign: String, path: String = "", frequencyHz: Int? = nil) {
         let normalized = callsign.trimmingCharacters(in: .whitespaces).uppercased()
         guard !normalized.isEmpty else { return }
-        guard !gatewayLadder.contains(where: { $0.callsign == normalized }) else { return }
-        gatewayLadder.append(GatewayLadderEntry(callsign: normalized, path: path))
+        let entry = GatewayLadderEntry(callsign: normalized, path: path, frequencyHz: frequencyHz)
+        guard !gatewayLadder.contains(where: { $0.id == entry.id }) else { return }
+        gatewayLadder.append(entry)
     }
 
-    func removeFromLadder(callsign: String) {
-        gatewayLadder.removeAll { $0.callsign == callsign }
+    func removeFromLadder(entryID: String) {
+        gatewayLadder.removeAll { $0.id == entryID }
     }
 
-    func promoteToTop(callsign: String) {
-        guard let index = gatewayLadder.firstIndex(where: { $0.callsign == callsign }) else { return }
+    func promoteToTop(entryID: String) {
+        guard let index = gatewayLadder.firstIndex(where: { $0.id == entryID }) else { return }
         let entry = gatewayLadder.remove(at: index)
         gatewayLadder.insert(entry, at: 0)
     }
 
-    func moveInLadder(callsign: String, up: Bool) {
-        guard let index = gatewayLadder.firstIndex(where: { $0.callsign == callsign }) else { return }
+    func moveInLadder(entryID: String, up: Bool) {
+        guard let index = gatewayLadder.firstIndex(where: { $0.id == entryID }) else { return }
         let target = up ? index - 1 : index + 1
         guard gatewayLadder.indices.contains(target) else { return }
         gatewayLadder.swapAt(index, target)
     }
 
-    func ladderContains(callsign: String) -> Bool {
-        gatewayLadder.contains { $0.callsign == callsign.uppercased() }
-    }
-
-    func ladderRank(of callsign: String) -> Int? {
-        gatewayLadder.firstIndex { $0.callsign == callsign.uppercased() }.map { $0 + 1 }
+    /// Rank of the rung matching this specific gateway port, if any.
+    func ladderRank(callsign: String, frequencyHz: Int) -> Int? {
+        gatewayLadder.firstIndex { $0.matches(callsign: callsign, frequencyHz: frequencyHz) }
+            .map { $0 + 1 }
     }
 
     /// SID product name sent in the B2F handshake. The production CMS
