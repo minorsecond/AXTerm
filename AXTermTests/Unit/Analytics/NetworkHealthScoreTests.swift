@@ -677,8 +677,10 @@ final class NetworkHealthScoreTests: XCTestCase {
         )
 
         XCTAssertEqual(health.metrics.coverageFraction, 600.0 / 3600.0, accuracy: 0.02)
-        XCTAssertTrue(health.warnings.contains { $0.id == "partial_coverage" },
-                      "Sub-60% coverage must be called out")
+        let coverageWarning = health.warnings.first { $0.id == "partial_coverage" }
+        XCTAssertNotNil(coverageWarning, "Sub-60% coverage must be called out")
+        XCTAssertEqual(coverageWarning?.detail.contains("17% of this window"), true,
+                       "Percent renders once — a %%%% format literal once produced '17%%'")
         XCTAssertFalse(health.warnings.contains { $0.id == "stale_nodes" },
                        "Stale-station warnings are meaningless when we weren't listening")
     }

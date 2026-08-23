@@ -776,7 +776,7 @@ nonisolated enum NetworkHealthCalculator {
                 severity: .info,
                 title: "Partial capture coverage\(tfLabel)",
                 detail: String(
-                    format: "Listening for %.0f%%%% of this window — quiet spans may be app downtime, not network silence",
+                    format: "Listening for %.0f%% of this window — quiet spans may be app downtime, not network silence",
                     metrics.coverageFraction * 100
                 )
             ))
