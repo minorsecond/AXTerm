@@ -159,4 +159,21 @@ final class AdaptiveNetworkPollFilterTests: XCTestCase {
         XCTAssertNil(ContentView.aggregateLinkQualityForAdaptive(stats, localCallsign: "KB5YZB-7"),
                      "Ack-only rows carry no forward-delivery evidence")
     }
+
+    // MARK: - Launch warm-up cadence
+
+    func testSamplerRetriesFastUntilFirstSample() {
+        XCTAssertEqual(ContentView.networkSampleDelaySeconds(didSampleEver: false, attempts: 1), 1,
+                       "The first sample must not wait behind a 30 s sleep at launch")
+        XCTAssertEqual(ContentView.networkSampleDelaySeconds(didSampleEver: false, attempts: 29), 1)
+    }
+
+    func testSamplerSettlesToSteadyCadenceAfterFirstSample() {
+        XCTAssertEqual(ContentView.networkSampleDelaySeconds(didSampleEver: true, attempts: 2), 30)
+    }
+
+    func testWarmupBudgetCapsFastPollingWhenNothingQualifies() {
+        XCTAssertEqual(ContentView.networkSampleDelaySeconds(didSampleEver: false, attempts: 30), 30,
+                       "A channel with no qualifying evidence must not be polled every second forever")
+    }
 }

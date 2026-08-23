@@ -179,16 +179,29 @@ struct ContentView: View {
             // Feed network-wide link quality into adaptive settings periodically (don't overwhelm, don't be too conservative).
             // Skip when active sessions exist — the session learner provides direct ground truth
             // (actual ACK/retry tracking) which is far more accurate than inferred routing table metrics.
-            let intervalSeconds: UInt64 = 30
+            //
+            // Warm-up: link stats restore from the snapshot within the first
+            // second of launch, so the first sample is attempted immediately
+            // and retried every second until one lands (or the warm-up budget
+            // runs out) — a fixed 30 s first sleep left the popover claiming
+            // "waiting for evidence" while the answer sat ready in memory.
+            var didSampleEver = false
+            var attempts = 0
             while true {
-                try? await Task.sleep(nanoseconds: intervalSeconds * 1_000_000_000)
-                guard let coordinator = SessionCoordinator.shared,
-                      coordinator.adaptiveTransmissionEnabled,
-                      !coordinator.hasActiveSessions,
-                      let integration = client.netRomIntegration else { continue }
-                let stats = integration.exportLinkStats()
-                guard let sample = Self.aggregateLinkQualityForAdaptive(stats, localCallsign: coordinator.localCallsign) else { continue }
-                coordinator.applyLinkQualitySample(lossRate: sample.lossRate, etx: sample.etx, srtt: nil, source: sample.scope.sourceLabel)
+                attempts += 1
+                if let coordinator = SessionCoordinator.shared,
+                   coordinator.adaptiveTransmissionEnabled,
+                   !coordinator.hasActiveSessions,
+                   let integration = client.netRomIntegration,
+                   let sample = Self.aggregateLinkQualityForAdaptive(
+                       integration.exportLinkStats(),
+                       localCallsign: coordinator.localCallsign
+                   ) {
+                    coordinator.applyLinkQualitySample(lossRate: sample.lossRate, etx: sample.etx, srtt: nil, source: sample.scope.sourceLabel)
+                    didSampleEver = true
+                }
+                let delay = Self.networkSampleDelaySeconds(didSampleEver: didSampleEver, attempts: attempts)
+                try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
             }
         }
         .task(id: selectedNav) {
@@ -836,6 +849,18 @@ struct ContentView: View {
     /// Aggregate link stats into (lossRate, etx) for adaptive settings. Uses only links with enough observations.
     /// When `localCallsign` is provided, only links involving the local station are considered,
     /// preventing other stations' poor links from dragging adaptive settings to overly conservative values.
+    /// Sampling cadence for the idle network learner: retry every second
+    /// during launch warm-up until the first sample lands, then settle to the
+    /// steady 30 s rhythm. The warm-up budget caps the fast polling when the
+    /// gates legitimately have nothing to offer yet.
+    nonisolated static func networkSampleDelaySeconds(didSampleEver: Bool, attempts: Int) -> UInt64 {
+        let warmupAttempts = 30
+        if didSampleEver || attempts >= warmupAttempts {
+            return 30
+        }
+        return 1
+    }
+
     /// Tiered network evidence for adaptive seeding: links involving MY station
     /// are ground truth about my own RF paths and always win — but a
     /// passive-monitoring station may have none (or only rows that fail the
