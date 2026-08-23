@@ -23,6 +23,7 @@ struct WinlinkMailView: View {
 
     @State private var tab: Tab = .mail
     @State private var showingCatalog = false
+    @State private var showingForms = false
     @State private var exchangeAlert: String?
 
     @Environment(\.openWindow) private var openWindow
@@ -76,6 +77,17 @@ struct WinlinkMailView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingForms) {
+            if let store = context.store {
+                WinlinkFormsSheet(
+                    store: store,
+                    makeContext: { await makeFormContext() },
+                    onQueued: {
+                        mailboxVM.refresh()
+                        context.refreshUnread()
+                    })
+            }
+        }
         .sheet(isPresented: $showingCatalog) {
             WinlinkCatalogSheet(
                 viewModel: catalogVM,
@@ -115,6 +127,13 @@ struct WinlinkMailView: View {
                 Label("Compose", systemImage: "square.and.pencil")
             }
             .help(WinlinkCopy.composeTooltip)
+
+            Button {
+                showingForms = true
+            } label: {
+                Label("Forms", systemImage: "doc.text")
+            }
+            .help("Winlink forms: check-ins, ICS-213, situation and weather reports, position reports. Auto-filled from your profile and position; recipients see the official form.")
 
             Button {
                 showingCatalog = true
@@ -202,6 +221,26 @@ struct WinlinkMailView: View {
                 onAddContact: { address in addContact(address: address) })
                 .frame(minWidth: 300, idealWidth: 480)
         }
+    }
+
+    /// Context for form auto-fill: callsign, position (GPS fix when
+    /// available), and the operator profile.
+    private func makeFormContext() async -> WinlinkFormContext {
+        let location = await context.locationService.currentLocation()
+        let profile = context.profile
+        return WinlinkFormContext(
+            callsign: appSettings.myCallsign,
+            appVersion: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0",
+            now: Date(),
+            location: location,
+            operatorName: profile.realName,
+            operatorNameWithTitle: profile.nameWithTitle,
+            operatorPhone: profile.phone,
+            operatorEmail: profile.email,
+            organization: profile.organization,
+            city: profile.city,
+            state: profile.state,
+            county: profile.county)
     }
 
     // MARK: - Compose flows

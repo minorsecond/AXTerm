@@ -99,6 +99,10 @@ struct WinlinkMessageDetail: View {
             Divider()
 
             ScrollView {
+                if let form = receivedForm(in: message) {
+                    WinlinkReceivedFormView(form: form)
+                        .padding([.horizontal, .top], 12)
+                }
                 Text(bodyText(of: message))
                     .font(.body.monospaced())
                     .textSelection(.enabled)
@@ -140,6 +144,15 @@ struct WinlinkMessageDetail: View {
         }
         .buttonStyle(.plain)
         .help("Save \"\(attachment.name)\" to disk")
+    }
+
+    private func receivedForm(in message: WinlinkB2Message) -> WinlinkReceivedForm? {
+        for attachment in message.attachments where WinlinkReceivedForm.isFormAttachment(attachment.name) {
+            if let form = WinlinkReceivedForm.parse(attachment.data) {
+                return form
+            }
+        }
+        return nil
     }
 
     private func bodyText(of message: WinlinkB2Message) -> String {
