@@ -13,6 +13,7 @@ struct WinlinkSettingsTab: View {
     @State private var isVerifyingKey = false
     @State private var keyVerification: (ok: Bool, message: String)?
     @State private var newLadderCallsign = ""
+    @State private var passwordSaveOK: Bool?
 
     var body: some View {
         Form {
@@ -88,12 +89,28 @@ struct WinlinkSettingsTab: View {
             }
 
             Section {
-                SecureField("Winlink password", text: $passwordDraft)
-                    .onChange(of: passwordDraft) { newValue in
-                        guard didLoadSecrets else { return }
-                        settings.password = newValue
+                HStack {
+                    SecureField("Winlink password", text: $passwordDraft)
+                        .onChange(of: passwordDraft) { newValue in
+                            guard didLoadSecrets else { return }
+                            passwordSaveOK = newValue.isEmpty
+                                ? nil
+                                : settings.savePasswordVerified(newValue)
+                        }
+                        .help(WinlinkCopy.passwordTooltip)
+                    if let ok = passwordSaveOK {
+                        Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(ok ? .green : .red)
+                            .help(ok
+                                  ? "Saved to the Keychain and verified readable."
+                                  : "The Keychain refused to store or return the password — see below.")
                     }
-                    .help(WinlinkCopy.passwordTooltip)
+                }
+                if passwordSaveOK == false {
+                    Text("The password could not be saved to the Keychain (or was saved but can't be read back). This usually happens with development builds after re-signing. Try: quit and relaunch AXTerm, then re-enter it. If it persists, delete the old entry in Keychain Access (search “com.axterm.winlink”) and enter the password again.")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
 
                 HStack {
                     SecureField("CMS access key (optional)", text: $apiKeyDraft)

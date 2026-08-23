@@ -136,6 +136,15 @@ final class WinlinkSettings: ObservableObject {
 
     private let keychain: KeychainStore
 
+    /// Saves the password and verifies it by reading it back — the only
+    /// way to catch a Keychain that accepts the write but denies reads
+    /// (seen after rebuilds when the code signature changes).
+    @discardableResult
+    func savePasswordVerified(_ value: String) -> Bool {
+        password = value
+        return password == value
+    }
+
     /// Winlink account password (used for `;PR:` secure login).
     var password: String {
         get { keychain.string(account: Self.passwordAccount) ?? "" }

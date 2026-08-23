@@ -386,3 +386,25 @@ final class WinlinkGatewayLadderTests: XCTestCase {
         XCTAssertFalse(WinlinkExchangeFailureClass.isWorthTryingNextGateway("an exchange is already running"))
     }
 }
+
+@MainActor
+final class WinlinkCredentialPersistenceTests: XCTestCase {
+
+    func testPasswordSaveVerifyOverwriteAndClear() async {
+        let defaults = UserDefaults(suiteName: "cred-\(UUID().uuidString)")!
+        let keychain = KeychainStore(service: "test-\(UUID().uuidString)")
+        let settings = WinlinkSettings(defaults: defaults, keychain: keychain)
+
+        XCTAssertTrue(settings.savePasswordVerified("FIRSTPASS"))
+        XCTAssertEqual(settings.password, "FIRSTPASS")
+
+        // Overwrite must survive the update-or-recreate path.
+        XCTAssertTrue(settings.savePasswordVerified("SECONDPASS"))
+        XCTAssertEqual(settings.password, "SECONDPASS")
+
+        settings.password = ""
+        XCTAssertEqual(settings.password, "")
+
+        keychain.remove(account: WinlinkSettings.passwordAccount)
+    }
+}

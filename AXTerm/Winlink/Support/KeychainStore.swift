@@ -34,7 +34,12 @@ nonisolated struct KeychainStore: Sendable {
         SecItemDelete(query as CFDictionary)
         var addQuery = query
         addQuery[kSecValueData as String] = data
-        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        var addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        if addStatus == errSecDuplicateItem {
+            // The orphaned item survived the first delete — try once more.
+            SecItemDelete(query as CFDictionary)
+            addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        }
         if addStatus != errSecSuccess {
             NSLog("[Keychain] setString failed for %@: update=%d add=%d", account, updateStatus, addStatus)
         }
