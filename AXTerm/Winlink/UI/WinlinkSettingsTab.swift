@@ -5,6 +5,7 @@ import SwiftUI
 struct WinlinkSettingsTab: View {
 
     @ObservedObject var settings: WinlinkSettings
+    @ObservedObject var profile: StationProfile
 
     @State private var passwordDraft = ""
     @State private var apiKeyDraft = ""
@@ -49,6 +50,38 @@ struct WinlinkSettingsTab: View {
                 .help("Filters the station list to gateways that reported to the CMS within this window — silent gateways are probably off the air.")
             } header: {
                 Text("Station")
+            }
+
+            Section {
+                TextField("Name", text: $profile.realName, prompt: Text("e.g. Jane Doe"))
+                TextField("Position / title", text: $profile.positionTitle, prompt: Text("e.g. EC, Net Control"))
+                TextField("Organization", text: $profile.organization, prompt: Text("e.g. ARES District 3"))
+                TextField("Phone", text: $profile.phone)
+                TextField("Email", text: $profile.email)
+            } header: {
+                Text("Operator")
+            } footer: {
+                Text("Auto-fills Winlink forms (ICS-213 sender, Check-in contact, Severe WX reporting party…) and signatures. Your Winlink account password is only a credential — the network never shares identity details, so these fields are the source of truth.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                TextField("Street", text: $profile.street)
+                TextField("City", text: $profile.city)
+                HStack {
+                    TextField("State", text: $profile.state)
+                        .frame(maxWidth: 90)
+                    TextField("ZIP", text: $profile.postalCode)
+                        .frame(maxWidth: 110)
+                    TextField("County", text: $profile.county)
+                }
+            } header: {
+                Text("Address")
+            } footer: {
+                Text("Used by welfare and situation-report forms (city, county and state fields).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {

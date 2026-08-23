@@ -1335,6 +1335,9 @@ struct TerminalComposeView: View {
     let onDisconnect: () -> Void
     let onForceDisconnect: () -> Void
     var onReconnectWithNewRouting: (() -> Void)?
+    /// Appends the operator's position stamp to the compose text (GPS or
+    /// grid-square fallback). Nil hides the button.
+    var onInsertPosition: (() -> Void)?
 
     @FocusState private var isTextFieldFocused: Bool
     @State private var showRoutingChangeConfirmation = false
@@ -1464,6 +1467,18 @@ struct TerminalComposeView: View {
                             }
                         }
                         .disabled(!isConnected || !canTypeMessage)
+
+                    if let onInsertPosition {
+                        Button {
+                            onInsertPosition()
+                        } label: {
+                            Image(systemName: "location")
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(!isConnected || !canTypeMessage)
+                        .help("Insert your position (GPS when available, otherwise your grid square) into the message.")
+                        .accessibilityIdentifier("terminalInsertPosition")
+                    }
 
                     if !composeText.isEmpty {
                         Text("\(characterCount)")

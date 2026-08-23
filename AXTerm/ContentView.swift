@@ -543,7 +543,8 @@ struct ContentView: View {
                     settings: settings,
                     sessionCoordinator: sessionCoordinator,
                     connectCoordinator: connectCoordinator,
-                    searchModel: searchModel
+                    searchModel: searchModel,
+                    locationService: winlinkContext.locationService
                 )
             case .packets:
                 packetsView

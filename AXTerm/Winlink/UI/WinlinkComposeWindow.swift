@@ -9,8 +9,13 @@ struct WinlinkComposeWindow: View {
     @ObservedObject private var viewModel: WinlinkComposeViewModel
     @Environment(\.dismiss) private var dismiss
     var onChanged: () -> Void
+    var locationService: StationLocationService?
+    @State private var isFetchingPosition = false
 
-    init(store: WinlinkStore, myCallsign: String, draftMID: String, onChanged: @escaping () -> Void) {
+    init(store: WinlinkStore, myCallsign: String, draftMID: String,
+         locationService: StationLocationService? = nil,
+         onChanged: @escaping () -> Void) {
+        self.locationService = locationService
         let stored = try? store.message(mid: draftMID)
         _viewModel = ObservedObject(wrappedValue: WinlinkComposeViewModel(
             store: store,
@@ -82,6 +87,29 @@ struct WinlinkComposeWindow: View {
                     Label("Attach…", systemImage: "paperclip")
                 }
                 .help("Attach a file. Keep it small — see the size budget.")
+
+                if let locationService {
+                    Button {
+                        isFetchingPosition = true
+                        Task { @MainActor in
+                            defer { isFetchingPosition = false }
+                            guard let location = await locationService.currentLocation() else { return }
+                            let stamp = StationLocationFormat.stamp(location)
+                            if !viewModel.bodyText.isEmpty, !viewModel.bodyText.hasSuffix("\n") {
+                                viewModel.bodyText += "\n"
+                            }
+                            viewModel.bodyText += stamp + "\n"
+                        }
+                    } label: {
+                        if isFetchingPosition {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label("Position", systemImage: "location")
+                        }
+                    }
+                    .disabled(isFetchingPosition)
+                    .help("Insert your position (GPS when available, otherwise your grid square's center) into the message body.")
+                }
 
                 sizeGauge
 

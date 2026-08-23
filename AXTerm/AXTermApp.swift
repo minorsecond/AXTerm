@@ -96,7 +96,8 @@ struct AXTermApp: App {
         self.notificationManager = notificationManager
         self.winlinkContext = WinlinkContext(
             store: queue.map { SQLiteWinlinkStore(dbQueue: $0) },
-            settings: WinlinkSettings(defaults: defaults))
+            settings: WinlinkSettings(defaults: defaults),
+            profile: StationProfile(defaults: defaults))
         self.client = PacketEngine(
             settings: settingsStore,
             packetStore: packetStore,
@@ -151,7 +152,8 @@ struct AXTermApp: App {
                 rawStore: rawStore,
                 eventLogger: eventLogger,
                 notificationManager: notificationManager,
-                winlinkSettings: winlinkContext.settings
+                winlinkSettings: winlinkContext.settings,
+                stationProfile: winlinkContext.profile
             )
         }
 
@@ -165,6 +167,7 @@ struct AXTermApp: App {
                     store: store,
                     myCallsign: settings.myCallsign,
                     draftMID: draftMID,
+                    locationService: winlinkContext.locationService,
                     onChanged: { winlinkContext.refreshUnread() }
                 )
             }

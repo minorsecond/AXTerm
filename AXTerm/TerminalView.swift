@@ -1339,6 +1339,8 @@ struct TerminalView: View {
     @StateObject private var txViewModel: ObservableTerminalTxViewModel
     @StateObject private var connectBarViewModel: ConnectBarViewModel
     @ObservedObject var searchModel: AppToolbarSearchModel
+    /// Optional app-wide position source for "insert my position".
+    var locationService: StationLocationService?
 
     @State private var selectedTab: TerminalTab = .session
     @State private var showingTransferSheet = false
@@ -1365,14 +1367,16 @@ struct TerminalView: View {
         settings: AppSettingsStore,
         sessionCoordinator: SessionCoordinator,
         connectCoordinator: ConnectCoordinator,
-        searchModel: AppToolbarSearchModel
+        searchModel: AppToolbarSearchModel,
+        locationService: StationLocationService? = nil
     ) {
         self.client = client
         _settings = ObservedObject(wrappedValue: settings)
         _sessionCoordinator = ObservedObject(wrappedValue: sessionCoordinator)
         _connectCoordinator = ObservedObject(wrappedValue: connectCoordinator)
         self.searchModel = searchModel
-        
+        self.locationService = locationService
+
         _txViewModel = StateObject(wrappedValue: ObservableTerminalTxViewModel(
             client: client,
             settings: settings,
@@ -2051,6 +2055,16 @@ struct TerminalView: View {
                 onReconnectWithNewRouting: {
                     pendingRoutingReconnect = true
                     disconnectFromDestination()
+                },
+                onInsertPosition: locationService.map { service in
+                    {
+                        Task { @MainActor in
+                            guard let location = await service.currentLocation() else { return }
+                            let stamp = StationLocationFormat.stamp(location)
+                            let text = txViewModel.composeText.wrappedValue
+                            txViewModel.composeText.wrappedValue = text.isEmpty ? stamp : text + " " + stamp
+                        }
+                    }
                 }
             )
             }

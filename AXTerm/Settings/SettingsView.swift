@@ -17,6 +17,7 @@ struct SettingsView: View {
     let eventLogger: EventLogger?
     let notificationManager: NotificationAuthorizationManager
     @ObservedObject var winlinkSettings: WinlinkSettings
+    @ObservedObject var stationProfile: StationProfile
     
     // Inject the router for navigation
     @StateObject var router = SettingsRouter.shared
@@ -39,7 +40,7 @@ struct SettingsView: View {
                 .tabItem { Label("Transmission", systemImage: "antenna.radiowaves.left.and.right") }
                 .tag(SettingsTab.transmission)
 
-            WinlinkSettingsTab(settings: winlinkSettings)
+            WinlinkSettingsTab(settings: winlinkSettings, profile: stationProfile)
                 .tabItem { Label("Winlink", systemImage: "envelope") }
                 .tag(SettingsTab.winlink)
             

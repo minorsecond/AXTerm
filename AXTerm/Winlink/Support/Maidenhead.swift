@@ -70,6 +70,44 @@ nonisolated enum Maidenhead {
         return Coordinate(latitude: lat + latSpan / 2.0, longitude: lon + lonSpan / 2.0)
     }
 
+    /// Encodes a coordinate as a Maidenhead locator (4, 6, or 8 chars).
+    static func gridSquare(latitude: Double, longitude: Double, length: Int = 6) -> String? {
+        guard (-90...90).contains(latitude), (-180...180).contains(longitude),
+              [4, 6, 8].contains(length)
+        else { return nil }
+
+        // Clamp the north/east edges into the last cell.
+        let lon = min(longitude, 179.999_999) + 180.0
+        let lat = min(latitude, 89.999_999) + 90.0
+
+        let fieldLon = Int(lon / 20.0)
+        let fieldLat = Int(lat / 10.0)
+        let squareLon = Int((lon - Double(fieldLon) * 20.0) / 2.0)
+        let squareLat = Int(lat - Double(fieldLat) * 10.0)
+
+        let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWX")
+        var grid = ""
+        grid.append(letters[fieldLon])
+        grid.append(letters[fieldLat])
+        grid.append(String(squareLon))
+        grid.append(String(squareLat))
+        if length == 4 { return grid }
+
+        let subLonUnits = (lon - Double(fieldLon) * 20.0 - Double(squareLon) * 2.0) * 12.0
+        let subLatUnits = (lat - Double(fieldLat) * 10.0 - Double(squareLat)) * 24.0
+        let subLon = min(Int(subLonUnits), 23)
+        let subLat = min(Int(subLatUnits), 23)
+        grid.append(Character(letters[subLon].lowercased()))
+        grid.append(Character(letters[subLat].lowercased()))
+        if length == 6 { return grid }
+
+        let extLon = min(Int((subLonUnits - Double(subLon)) * 10.0), 9)
+        let extLat = min(Int((subLatUnits - Double(subLat)) * 10.0), 9)
+        grid.append(String(extLon))
+        grid.append(String(extLat))
+        return grid
+    }
+
     /// Great-circle distance in kilometers between two grid squares.
     static func distanceKm(from: String, to: String) -> Double? {
         guard let a = center(of: from), let b = center(of: to) else { return nil }

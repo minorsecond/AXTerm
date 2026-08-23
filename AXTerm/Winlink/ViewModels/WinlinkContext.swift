@@ -10,15 +10,22 @@ final class WinlinkContext: ObservableObject {
     let store: WinlinkStore?
     let settings: WinlinkSettings
     let runner: WinlinkSessionRunner?
+    /// Operator identity used to auto-fill forms and signatures.
+    let profile: StationProfile
+    /// App-wide position source (GPS with manual-grid fallback).
+    let locationService: StationLocationService
 
     /// Inbox unread count for the sidebar badge; refreshed after
     /// exchanges and mailbox mutations.
     @Published private(set) var unreadCount: Int = 0
 
-    init(store: WinlinkStore?, settings: WinlinkSettings) {
+    init(store: WinlinkStore?, settings: WinlinkSettings, profile: StationProfile? = nil) {
         self.store = store
         self.settings = settings
         self.runner = store.map { WinlinkSessionRunner(store: $0) }
+        self.profile = profile ?? StationProfile()
+        self.locationService = StationLocationService(
+            manualGridProvider: { [weak settings] in settings?.gridSquare ?? "" })
         refreshUnread()
     }
 
