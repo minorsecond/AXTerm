@@ -4,19 +4,34 @@ import SwiftUI
 /// queue a request message, receive the products as mail later.
 struct WinlinkCatalogSheet: View {
 
+    enum Source: String, CaseIterable {
+        case catalog = "Winlink Catalog"
+        case sailDocs = "Internet (SailDocs)"
+    }
+
     @ObservedObject var viewModel: WinlinkCatalogViewModel
     let myCallsign: String
+    var locationService: StationLocationService?
     var onQueued: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var queuedConfirmation = false
+    @State private var source: Source = .catalog
+    @State private var sailDocsURL = ""
+    @State private var sailDocsCustom = ""
+    @State private var isFetchingSpot = false
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Winlink Catalog")
-                    .font(.headline)
-                    .help(WinlinkCopy.catalogTooltip)
+                Picker("", selection: $source) {
+                    ForEach(Source.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 300)
+                .labelsHidden()
+                .help(source == .catalog ? WinlinkCopy.catalogTooltip
+                      : "SailDocs is a free email robot reachable through the Winlink internet gateway — it mails back web pages, forecasts, and weather data. The unofficial way to pull internet data over packet radio.")
                 Spacer()
                 if let fetchedAt = viewModel.fetchedAt {
                     Text("Updated \(fetchedAt.formatted(.relative(presentation: .named)))")
@@ -37,6 +52,10 @@ struct WinlinkCatalogSheet: View {
             }
             .padding(12)
             Divider()
+
+            if source == .sailDocs {
+                sailDocsPane
+            } else {
 
             if let error = viewModel.errorText {
                 Label(error, systemImage: "exclamationmark.triangle")
@@ -80,6 +99,8 @@ struct WinlinkCatalogSheet: View {
                 }
             }
 
+            }
+
             Divider()
             HStack {
                 if !viewModel.selection.isEmpty {
@@ -90,15 +111,17 @@ struct WinlinkCatalogSheet: View {
                 }
                 Spacer()
                 Button("Close") { dismiss() }
-                Button("Request \(viewModel.selection.count) Item\(viewModel.selection.count == 1 ? "" : "s")") {
-                    if viewModel.queueRequest(myCallsign: myCallsign) != nil {
-                        queuedConfirmation = true
-                        onQueued()
+                if source == .catalog {
+                    Button("Request \(viewModel.selection.count) Item\(viewModel.selection.count == 1 ? "" : "s")") {
+                        if viewModel.queueRequest(myCallsign: myCallsign) != nil {
+                            queuedConfirmation = true
+                            onQueued()
+                        }
                     }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(viewModel.selection.isEmpty)
+                    .help("Queues a request message to INQUIRY in your Outbox. Send it with Connect & Exchange; the data arrives as mail at a later exchange.")
                 }
-                .keyboardShortcut(.defaultAction)
-                .disabled(viewModel.selection.isEmpty)
-                .help("Queues a request message to INQUIRY in your Outbox. Send it with Connect & Exchange; the data arrives as mail at a later exchange.")
             }
             .padding(12)
         }
@@ -107,6 +130,75 @@ struct WinlinkCatalogSheet: View {
             Button("OK") { dismiss() }
         } message: {
             Text("The catalog request is in your Outbox. Run Connect & Exchange to send it; the response arrives as ordinary mail on a later exchange.")
+        }
+    }
+
+    // MARK: - SailDocs
+
+    private var sailDocsPane: some View {
+        Form {
+            Section {
+                Text("SailDocs (saildocs.com) answers email commands with web pages, forecasts, and weather data — through the Winlink internet gateway, that means over the radio. Requests queue in your Outbox; replies arrive as mail at a later exchange. Keep responses small: 10 kB is roughly two minutes of airtime at 1200 baud.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Fetch a web page as text") {
+                HStack {
+                    TextField("URL", text: $sailDocsURL, prompt: Text("https://forecast.weather.gov/…"))
+                        .textFieldStyle(.roundedBorder)
+                    Button("Queue") {
+                        queueSailDocs([.webPage(url: sailDocsURL)])
+                        sailDocsURL = ""
+                    }
+                    .disabled(sailDocsURL.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                .help("SailDocs strips the page to plain text before mailing it back — 'send <url>'.")
+            }
+
+            if locationService != nil {
+                Section("Weather for my position") {
+                    Button {
+                        isFetchingSpot = true
+                        Task { @MainActor in
+                            defer { isFetchingSpot = false }
+                            guard let location = await locationService?.currentLocation() else { return }
+                            queueSailDocs([.spotForecast(
+                                latitude: location.latitude, longitude: location.longitude)])
+                        }
+                    } label: {
+                        if isFetchingSpot {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label("Queue spot forecast for my position", systemImage: "location")
+                        }
+                    }
+                    .disabled(isFetchingSpot)
+                    .help("Requests a SailDocs text spot forecast ('send spot:lat,lon') for your current position — GPS when available, otherwise your grid square.")
+                }
+            }
+
+            Section("Custom command") {
+                HStack {
+                    TextField("Command", text: $sailDocsCustom, prompt: Text("e.g. send gfs:38N,42N,102W,108W"))
+                        .textFieldStyle(.roundedBorder)
+                        .font(.body.monospaced())
+                    Button("Queue") {
+                        queueSailDocs([.custom(sailDocsCustom)])
+                        sailDocsCustom = ""
+                    }
+                    .disabled(sailDocsCustom.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                .help("Any SailDocs command line (see saildocs.com for the full list). GRIB requests return binary attachments — mind the airtime.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func queueSailDocs(_ requests: [SailDocsRequestBuilder.Request]) {
+        if viewModel.queueSailDocsRequest(requests, myCallsign: myCallsign) != nil {
+            queuedConfirmation = true
+            onQueued()
         }
     }
 

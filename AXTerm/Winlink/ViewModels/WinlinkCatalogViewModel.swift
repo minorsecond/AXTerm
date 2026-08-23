@@ -116,6 +116,52 @@ final class WinlinkCatalogViewModel: ObservableObject {
         }
     }
 
+    /// Queues a SailDocs request (internet-over-Winlink). Returns the MID.
+    @discardableResult
+    func queueSailDocsRequest(_ requests: [SailDocsRequestBuilder.Request], myCallsign: String) -> String? {
+        guard let message = SailDocsRequestBuilder.buildMessage(requests: requests, myCallsign: myCallsign) else {
+            errorText = requests.isEmpty ? "Enter a request first." : "Set your callsign in Settings first."
+            return nil
+        }
+        do {
+            try store.saveDraft(message)
+            try store.queueDraft(mid: message.mid)
+            return message.mid
+        } catch {
+            errorText = String(describing: error)
+            return nil
+        }
+    }
+
+    /// Queues a loopback test message to the Winlink TEST bot, which
+    /// echoes it back — the standard end-to-end sanity check.
+    @discardableResult
+    func queueTestMessage(myCallsign: String) -> String? {
+        guard !myCallsign.isEmpty else {
+            errorText = "Set your callsign in Settings first."
+            return nil
+        }
+        let message = WinlinkB2Message(
+            mid: WinlinkB2Message.generateMID(callsign: myCallsign),
+            date: Date(),
+            type: .privateMessage,
+            from: myCallsign,
+            to: ["TEST"],
+            cc: [],
+            subject: "Test message from \(myCallsign)",
+            mbo: myCallsign,
+            body: Data("This is a Winlink loopback test from AXTerm. The TEST bot echoes this message back.\r\n".utf8),
+            attachments: [])
+        do {
+            try store.saveDraft(message)
+            try store.queueDraft(mid: message.mid)
+            return message.mid
+        } catch {
+            errorText = String(describing: error)
+            return nil
+        }
+    }
+
     /// Queues the request into the Outbox. Returns the MID on success.
     @discardableResult
     func queueRequest(myCallsign: String) -> String? {

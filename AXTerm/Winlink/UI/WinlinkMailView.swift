@@ -92,6 +92,7 @@ struct WinlinkMailView: View {
             WinlinkCatalogSheet(
                 viewModel: catalogVM,
                 myCallsign: appSettings.myCallsign,
+                locationService: context.locationService,
                 onQueued: {
                     mailboxVM.refresh()
                     context.refreshUnread()
@@ -195,6 +196,15 @@ struct WinlinkMailView: View {
 
                 Button("Telnet (Internet)") {
                     startExchange(useTelnet: true)
+                }
+
+                Divider()
+
+                Button("Queue Loopback Test Message") {
+                    if catalogVM.queueTestMessage(myCallsign: appSettings.myCallsign) != nil {
+                        mailboxVM.refresh()
+                        exchangeAlert = "Test message queued. Exchange once to send it — the Winlink TEST bot echoes it back on your next exchange."
+                    }
                 }
             } label: {
                 Label("Connect & Exchange", systemImage: "envelope.arrow.triangle.branch")
