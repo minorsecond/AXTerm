@@ -31,26 +31,25 @@ struct GraphToolbar: View {
     let onChangeAnchor: () -> Void
 
     var body: some View {
+        // Content-hugging control cluster: shares one row with the legend instead
+        // of consuming a full-width row of its own.
         HStack(spacing: 12) {
-            // Left group: View controls
             viewControlsGroup
 
-            // Center: Focus indicator (when active)
             if focusState.isFocusEnabled, focusState.anchorNodeID != nil {
                 Divider()
                     .frame(height: 16)
                 focusIndicator
             }
 
-            Spacer()
-
-            // Right: Selection indicator (when nodes selected)
             if selectedNodeCount > 0 {
+                Divider()
+                    .frame(height: 16)
                 selectionIndicator
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.8))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }

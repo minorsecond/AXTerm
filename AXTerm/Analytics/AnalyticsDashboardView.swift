@@ -596,7 +596,9 @@ struct AnalyticsDashboardView: View {
             networkGraphHeaderControls
         } content: {
             VStack(spacing: 8) {
-                // Graph toolbar (HIG: single canonical location for view controls)
+                // One combined row: view controls + legend (a full-width toolbar
+                // row above a separate legend row wasted vertical space).
+                HStack(spacing: 12) {
                 GraphToolbar(
                     focusState: $viewModel.focusState,
                     selectedNodeCount: viewModel.viewState.selectedNodeIDs.count,
@@ -620,8 +622,9 @@ struct AnalyticsDashboardView: View {
                     }
                 )
 
-                // Legend
-                HStack(spacing: 16) {
+                    Divider()
+                        .frame(height: 14)
+
                     if showsMyNodeLegend {
                         LegendItem(color: .systemPurple, label: "My Node")
                     }
