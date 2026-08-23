@@ -108,8 +108,11 @@ nonisolated struct WinlinkAttachmentRecord: Codable, FetchableRecord, MutablePer
 
 // MARK: - RMS station cache
 
-nonisolated struct WinlinkRMSStationRecord: Codable, FetchableRecord, PersistableRecord, Hashable, Sendable {
+nonisolated struct WinlinkRMSStationRecord: Codable, FetchableRecord, PersistableRecord, Hashable, Sendable, Identifiable {
     static let databaseTableName = "winlinkRMSStation"
+
+    /// Table identity: one row per callsign + frequency (the DB primary key).
+    var id: String { "\(callsign)@\(frequencyHz)" }
 
     var callsign: String
     var gridSquare: String

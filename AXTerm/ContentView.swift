@@ -12,6 +12,7 @@ nonisolated enum NavigationItem: String, Hashable, CaseIterable {
     case packets = "Packets"
     case routes = "Routes"
     case analytics = "Analytics"
+    case mail = "Mail"
     //case raw = "Raw"
 }
 
@@ -34,6 +35,7 @@ struct ContentView: View {
     @StateObject private var client: PacketEngine
     @ObservedObject private var settings: AppSettingsStore
     @ObservedObject private var inspectionRouter: PacketInspectionRouter
+    @ObservedObject private var winlinkContext: WinlinkContext
     private let inspectionCoordinator = PacketInspectionCoordinator()
 
     /// Session coordinator for connected-mode sessions - survives tab switches
@@ -61,10 +63,11 @@ struct ContentView: View {
         .ax25
     }
 
-    init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter) {
+    init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter, winlinkContext: WinlinkContext) {
         _client = StateObject(wrappedValue: client)
         _settings = ObservedObject(wrappedValue: settings)
         _inspectionRouter = ObservedObject(wrappedValue: inspectionRouter)
+        _winlinkContext = ObservedObject(wrappedValue: winlinkContext)
         // Initialize analytics view model with settings store for persistence
         _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(
             settingsStore: settings,
@@ -228,6 +231,9 @@ struct ContentView: View {
             case .routes:
                 // Routes view handles its own data loading
                 return
+            case .mail:
+                // Mail view loads its own data from the Winlink store
+                return
             }
         }
         .task(id: inspectionRouter.requestedPacketID) {
@@ -263,6 +269,7 @@ struct ContentView: View {
         case .packets: searchModel.scope = .packets
         case .routes: searchModel.scope = .routes
         case .analytics: searchModel.scope = .analytics
+        case .mail: searchModel.scope = .terminal  // Mail has its own in-pane search
         //case .raw: searchModel.scope = .terminal // Fallback or new scope if needed
         }
     }
@@ -273,7 +280,7 @@ struct ContentView: View {
             connectCoordinator.activeContext = .terminal
         case .routes:
             connectCoordinator.activeContext = .routes
-        case .packets, .analytics:
+        case .packets, .analytics, .mail:
             connectCoordinator.activeContext = .unknown
         }
     }
@@ -294,6 +301,8 @@ struct ContentView: View {
             Section("Views") {
                 ForEach(NavigationItem.allCases, id: \.self) { item in
                     Label(item.rawValue, systemImage: iconFor(item))
+                        .badge(item == .mail && winlinkContext.unreadCount > 0
+                               ? winlinkContext.unreadCount : 0)
                         .tag(item)
                         .accessibilityIdentifier("nav-\(item.rawValue.lowercased())")
                 }
@@ -462,6 +471,7 @@ struct ContentView: View {
         case .packets: return "list.bullet.rectangle"
         case .routes: return "arrow.triangle.branch"
         case .analytics: return "chart.bar"
+        case .mail: return "envelope"
         //case .raw: return "doc.text"
         }
     }
@@ -546,6 +556,13 @@ struct ContentView: View {
                 )
             case .analytics:
                 AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel, connectCoordinator: connectCoordinator)
+            case .mail:
+                WinlinkMailView(
+                    context: winlinkContext,
+                    appSettings: settings,
+                    sessionCoordinator: sessionCoordinator,
+                    client: client
+                )
             //case .raw:
             //    RawView(
             //        chunks: client.rawChunks,
@@ -914,6 +931,7 @@ struct ContentView: View {
     return ContentView(
         client: PacketEngine(settings: settings),
         settings: settings,
-        inspectionRouter: .shared
+        inspectionRouter: .shared,
+        winlinkContext: WinlinkContext(store: nil, settings: WinlinkSettings())
     )
 }

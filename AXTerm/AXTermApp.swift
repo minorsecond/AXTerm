@@ -24,6 +24,7 @@ struct AXTermApp: App {
     private let eventStore: EventLogStore?
     private let eventLogger: EventLogger?
     private let notificationManager: NotificationAuthorizationManager
+    private let winlinkContext: WinlinkContext
     private let client: PacketEngine
 
     init() {
@@ -93,6 +94,9 @@ struct AXTermApp: App {
         self.eventStore = eventStore
         self.eventLogger = eventLogger
         self.notificationManager = notificationManager
+        self.winlinkContext = WinlinkContext(
+            store: queue.map { SQLiteWinlinkStore(dbQueue: $0) },
+            settings: WinlinkSettings(defaults: defaults))
         self.client = PacketEngine(
             settings: settingsStore,
             packetStore: packetStore,
@@ -126,7 +130,7 @@ struct AXTermApp: App {
     var body: some Scene {
         let windowTitle = "AXTerm" + TestModeConfiguration.shared.windowTitleSuffix
         WindowGroup(windowTitle, id: "main") {
-            ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter)
+            ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter, winlinkContext: winlinkContext)
         }
         .commands {
             CommandGroup(after: .windowArrangement) {
@@ -146,12 +150,24 @@ struct AXTermApp: App {
                 consoleStore: consoleStore,
                 rawStore: rawStore,
                 eventLogger: eventLogger,
-                notificationManager: notificationManager
+                notificationManager: notificationManager,
+                winlinkSettings: winlinkContext.settings
             )
         }
 
         Window("Diagnostics", id: "diagnostics") {
             DiagnosticsView(settings: settings, eventStore: eventStore)
+        }
+
+        WindowGroup("New Winlink Message", id: "winlinkCompose", for: String.self) { $draftMID in
+            if let draftMID, let store = winlinkContext.store {
+                WinlinkComposeWindow(
+                    store: store,
+                    myCallsign: settings.myCallsign,
+                    draftMID: draftMID,
+                    onChanged: { winlinkContext.refreshUnread() }
+                )
+            }
         }
 
         MenuBarExtra("AXTerm", systemImage: "antenna.radiowaves.left.and.right", isInserted: $runInMenuBar) {

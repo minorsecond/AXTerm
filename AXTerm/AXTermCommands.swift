@@ -113,6 +113,11 @@ struct AXTermCommands: Commands {
             }
             .keyboardShortcut("4", modifiers: [.command])
 
+            Button("Mail") {
+                selectNavigation?.action(.mail)
+            }
+            .keyboardShortcut("5", modifiers: [.command])
+
             //Button("Raw") {
             //    selectNavigation?.action(.raw)
             //}

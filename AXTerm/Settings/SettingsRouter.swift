@@ -67,6 +67,7 @@ nonisolated enum SettingsTab: Hashable {
     case notifications
     case network
     case transmission
+    case winlink
     case advanced
     case linkDebug
 }
