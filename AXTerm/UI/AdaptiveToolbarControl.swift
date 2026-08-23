@@ -177,6 +177,7 @@ private struct AdaptivePopoverContent: View {
             }
             .frame(height: 140)
             .chartYAxisLabel("ETX", position: .leading)
+            .chartXAxisLabel(chartWindowLabel, position: .bottomTrailing)
             .chartXAxis {
                 AxisMarks(values: .automatic(desiredCount: 4))
             }
@@ -223,6 +224,11 @@ private struct AdaptivePopoverContent: View {
             return "\(destination)"  // Show just destination without "Session:" prefix
         }
         return "Global Network"
+    }
+
+    private var chartWindowLabel: String {
+        let minutes = Int(store.effectiveETXWindow / 60)
+        return minutes >= 60 ? "last hour" : "last \(minutes) min"
     }
 
     private func chartHasEnoughData(_ points: [AdaptiveETXSample]) -> Bool {

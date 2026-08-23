@@ -156,7 +156,13 @@ final class AdaptiveStatusStore: ObservableObject {
     @Published var globalETXHistory = AdaptiveRingBuffer<AdaptiveETXSample>(capacity: 900)
     @Published var sessionETXHistoryByID: [AdaptiveSessionID: AdaptiveRingBuffer<AdaptiveETXSample>] = [:]
 
-    private let globalWindow: TimeInterval = 30 * 60
+    /// One hour of network history: samples land at most every 30 s, and the
+    /// events that move channel ETX (a net, a mail forward, propagation) run
+    /// tens of minutes — a shorter window shows an event's tail with no
+    /// baseline before it. Matches the dashboard's 1h timeframe.
+    private let globalWindow: TimeInterval = 60 * 60
+    /// Per-session samples arrive per-frame; sessions are short-lived and the
+    /// controller has already digested anything older than this.
     private let sessionWindow: TimeInterval = 10 * 60
     private let minSampleSpacing: TimeInterval = 2
 
@@ -169,6 +175,15 @@ final class AdaptiveStatusStore: ObservableObject {
             return session
         }
         return globalAdaptive
+    }
+
+    /// The timespan the ETX chart covers for the current scope — surfaced in
+    /// the UI so the chart says what it shows.
+    var effectiveETXWindow: TimeInterval {
+        if let selectedSessionID, sessionETXHistoryByID[selectedSessionID] != nil {
+            return sessionWindow
+        }
+        return globalWindow
     }
 
     var effectiveETXHistory: [AdaptiveETXSample] {
