@@ -253,7 +253,17 @@ nonisolated struct LinkQualityEstimator {
             observations: RingBuffer(capacity: config.maxObservationsPerLink)
         )
 
-        let isRetry = duplicateStatus == .retryDuplicate || classification == .retryOrDuplicate || decoded.sType == .REJ || decoded.sType == .SREJ
+        // A REJ/SREJ from A reports a missed I-frame FROM B: it is loss
+        // evidence for the B→A direction, not for its own sender's link
+        // (the classifier folds it into .retryOrDuplicate, so exclude it here).
+        let isRejectNotice = decoded.sType == .REJ || decoded.sType == .SREJ
+        let isRetry = duplicateStatus == .retryDuplicate
+            || (classification == .retryOrDuplicate && !isRejectNotice)
+        // UA and DM are solicited responses: either one proves the peer HEARD
+        // the SABM/DISC that provoked it — direct forward-delivery proof for
+        // the frame's original sender (field capture 2026-08-23: a successful
+        // SABM/UA handshake left df=0.0 because the UA carried no weight).
+        let isConnectionResponse = decoded.uType == .UA || decoded.uType == .DM
 
         // Forward evidence (data progress / routing broadcast / UI beacon).
         if classification.forwardEvidenceWeight > 0 && !isRetry {
@@ -274,6 +284,24 @@ nonisolated struct LinkQualityEstimator {
                 timestamp: timestamp,
                 isDuplicate: true,
                 config: config
+            )
+        }
+
+        // Reject notices penalize the direction whose I-frame was lost.
+        if isRejectNotice && !isRetry {
+            applyDirectionalForward(
+                from: to, to: from,
+                value: 0.0,
+                timestamp: timestamp
+            )
+        }
+
+        // Connection responses credit the handshake initiator's forward channel.
+        if isConnectionResponse && !isRetry {
+            applyDirectionalForward(
+                from: to, to: from,
+                value: 0.8,
+                timestamp: timestamp
             )
         }
 
@@ -455,6 +483,25 @@ nonisolated struct LinkQualityEstimator {
     }
 
     // MARK: - Private Helpers
+
+    /// Add forward-channel evidence to an arbitrary directional link — used
+    /// when a frame carries evidence about the OPPOSITE direction (a UA
+    /// proving the SABM arrived, a REJ proving an inbound I-frame was lost).
+    private mutating func applyDirectionalForward(from: String, to: String, value: Double, timestamp: Date) {
+        let key = "\(from)\u{2192}\(to)"
+        var s = stats[key] ?? DirectionalLinkStats(
+            lastUpdated: timestamp,
+            observations: RingBuffer(capacity: config.maxObservationsPerLink)
+        )
+        s.addObservation(
+            channel: .forward,
+            value: value,
+            timestamp: timestamp,
+            isDuplicate: false,
+            config: config
+        )
+        stats[key] = s
+    }
 
     private mutating func applyReverseEvidence(from: String, to: String, value: Double, timestamp: Date) {
         let reverseKey = "\(from)→\(to)"

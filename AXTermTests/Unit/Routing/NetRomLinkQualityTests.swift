@@ -1042,4 +1042,101 @@ final class NetRomLinkQualityTests: XCTestCase {
             XCTAssertEqual(run1.stats.dfEstimate, run2.stats.dfEstimate, "dfEstimate nil state must match")
         }
     }
+
+    // MARK: - Connection handshake evidence (field capture 2026-08-23:
+    // a successful SABM/UA handshake to KB5YZB-7 left df=0.0 because the UA
+    // carried no weight while the SABM retry and REJ carried penalties).
+
+    func testUAResponseCreditsForwardDeliveryOfSABM() {
+        var estimator = makeEstimator()
+        var now = Date(timeIntervalSince1970: 1_700_010_000)
+        testClock = now
+        // SABM P from K0EPI-7, answered by UA F from KB5YZB-7.
+        estimator.observePacket(
+            makePacket(from: "K0EPI-7", to: "KB5YZB-7", frameType: .u, control: 0x3F, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+        now = now.addingTimeInterval(2); testClock = now
+        estimator.observePacket(
+            makePacket(from: "KB5YZB-7", to: "K0EPI-7", frameType: .u, control: 0x73, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+
+        let stats = estimator.linkStats(from: "K0EPI-7", to: "KB5YZB-7")
+        XCTAssertGreaterThan(stats.dfEstimate ?? 0, 0.3,
+                             "A solicited UA is direct proof the SABM was delivered forward")
+    }
+
+    func testHandshakeWithOneRetryStaysAboveAdaptiveGate() {
+        // SABM, T1-retry SABM, then UA: the retry is real loss evidence but the
+        // UA proves the link works. df must stay above the df>0.05 gate that
+        // feeds network-wide adaptive, or a working link reads as dead.
+        var estimator = makeEstimator()
+        var now = Date(timeIntervalSince1970: 1_700_011_000)
+        testClock = now
+        let sabm = makePacket(from: "K0EPI-7", to: "KB5YZB-7", frameType: .u, control: 0x3F, controlByte1: nil, timestamp: now)
+        estimator.observePacket(sabm, timestamp: now)
+        now = now.addingTimeInterval(8); testClock = now
+        estimator.observePacket(
+            makePacket(from: "K0EPI-7", to: "KB5YZB-7", frameType: .u, control: 0x3F, controlByte1: nil, timestamp: now),
+            timestamp: now,
+            isDuplicate: true
+        )
+        now = now.addingTimeInterval(2); testClock = now
+        estimator.observePacket(
+            makePacket(from: "KB5YZB-7", to: "K0EPI-7", frameType: .u, control: 0x73, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+
+        let stats = estimator.linkStats(from: "K0EPI-7", to: "KB5YZB-7")
+        XCTAssertGreaterThan(stats.dfEstimate ?? 0, 0.2,
+                             "One premature T1 retry must not outweigh a completed handshake")
+    }
+
+    func testDMRefusalStillProvesForwardDelivery() {
+        // DM refuses the connect, but the peer HEARD the SABM — delivery proof.
+        var estimator = makeEstimator()
+        var now = Date(timeIntervalSince1970: 1_700_012_000)
+        testClock = now
+        estimator.observePacket(
+            makePacket(from: "K0EPI-7", to: "K0NTS-7", frameType: .u, control: 0x3F, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+        now = now.addingTimeInterval(1); testClock = now
+        estimator.observePacket(
+            makePacket(from: "K0NTS-7", to: "K0EPI-7", frameType: .u, control: 0x0F, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+
+        let stats = estimator.linkStats(from: "K0EPI-7", to: "K0NTS-7")
+        XCTAssertGreaterThan(stats.dfEstimate ?? 0, 0.3)
+    }
+
+    func testRejPenalizesTheLossyDirectionNotTheSender() {
+        // REJ from K0EPI-7 reports a missed I-frame FROM KB5YZB-7: the loss
+        // evidence belongs to KB5YZB-7→K0EPI-7, not to the REJ's own sender.
+        var estimator = makeEstimator()
+        var now = Date(timeIntervalSince1970: 1_700_013_000)
+        testClock = now
+        // Establish forward evidence on the peer's link with an I-frame.
+        estimator.observePacket(
+            makePacket(from: "KB5YZB-7", to: "K0EPI-7", frameType: .i, control: 0x00, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+        let peerDfBefore = estimator.linkStats(from: "KB5YZB-7", to: "K0EPI-7").dfEstimate ?? 0
+
+        now = now.addingTimeInterval(2); testClock = now
+        // REJ(0) response from K0EPI-7 (mod-8 control 0x09).
+        estimator.observePacket(
+            makePacket(from: "K0EPI-7", to: "KB5YZB-7", frameType: .s, control: 0x09, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+
+        let senderStats = estimator.linkStats(from: "K0EPI-7", to: "KB5YZB-7")
+        XCTAssertNil(senderStats.dfEstimate,
+                     "Sending a REJ says nothing about the sender's own forward delivery")
+        let peerDfAfter = estimator.linkStats(from: "KB5YZB-7", to: "K0EPI-7").dfEstimate ?? 0
+        XCTAssertLessThan(peerDfAfter, peerDfBefore,
+                          "The REJ is loss evidence for the direction that dropped the I-frame")
+    }
 }

@@ -2153,15 +2153,14 @@ private struct PathDraftHUD: View {
     }
 
     private func badgeView(_ text: String, isWarning: Bool) -> some View {
-        Text(text)
-            .font(.system(size: 8, weight: .bold))
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-            .background(
-                (isWarning ? Color(nsColor: .systemOrange) : Color(nsColor: .systemGreen)).opacity(0.18),
-                in: Capsule()
-            )
-            .foregroundStyle(isWarning ? Color(nsColor: .systemOrange) : Color(nsColor: .systemGreen))
+        let tint = isWarning ? Color(nsColor: .systemOrange) : Color(nsColor: .systemGreen)
+        return Text(text)
+            .font(.system(size: 9, weight: .bold))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .background(tint.opacity(0.28), in: Capsule())
+            .overlay(Capsule().strokeBorder(tint.opacity(0.5), lineWidth: 0.5))
+            .foregroundStyle(tint)
     }
 }
 
