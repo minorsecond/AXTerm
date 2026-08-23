@@ -229,9 +229,9 @@ final class WinlinkSessionRunner: ObservableObject {
             statusText = "Waiting for the link to drain \(mid)…"
 
         case .outboundRejected(let mid):
-            log(.event, "Gateway rejected \(mid)")
+            log(.event, "Gateway declined \(mid) — it usually means the CMS already has this message")
             Task { [worker] in
-                try? await worker.markFailed(mid: mid, error: "rejected by the gateway")
+                try? await worker.markFailed(mid: mid, error: "declined by the gateway (FS N) — usually the CMS already received this message on an earlier attempt")
             }
 
         case .outboundDeferred(let mid):

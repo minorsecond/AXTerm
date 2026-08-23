@@ -40,6 +40,10 @@ final class WinlinkContext: ObservableObject {
     }
 
     func refreshUnread() {
+        // Crash recovery: an app death mid-exchange leaves messages stuck in
+        // "sending" — requeue them so the next exchange picks them up (the
+        // gateway declines duplicates by MID, so a double-send is harmless).
+        try? store?.revertSendingToQueued()
         unreadCount = (try? store?.unreadInboxCount()) ?? 0
     }
 }
