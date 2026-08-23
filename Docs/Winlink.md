@@ -131,11 +131,72 @@ End-to-end without RF: run a Telnet exchange against the live CMS (send a
 self-addressed message; run a catalog request and poll again). On RF: the
 local RMS (`K0NTS-10` per its ID beacon) is a natural first target.
 
+## Station identity and location (`AXTerm/Station/`)
+
+- `StationProfile` — operator name/title/organization/phone/email plus
+  address fields (UserDefaults). The Winlink password is only a
+  credential; the CMS never shares account identity over B2F, so this
+  profile is the local source of truth that auto-fills forms.
+- `StationLocationService` — one-shot GPS via CoreLocation (location
+  entitlement + usage strings) with fallback to the configured grid
+  square's center. Portable: Winlink compose, the packet-terminal
+  compose bar, forms, position reports, and SailDocs spot forecasts all
+  pull from it. `StationLocationFormat` renders the Winlink
+  insertion-tag position formats.
+
+## Forms (`AXTerm/Winlink/Forms/`)
+
+Native SwiftUI forms over the official Winlink Standard Templates
+(v1.1.20.0, embedded verbatim in `WinlinkFormTemplateTexts.swift`):
+
+- `WinlinkFormEngine` parses template control lines (`To:`/`Subject:`/
+  `Msg:`), substitutes `<var x>` and the official insertion tags
+  (`<MsgSender>`, `<DateTime>`, `<UDTG>`, GPS formats…), and builds the
+  `RMS_Express_Form_<viewer>.xml` attachment (form_parameters + sorted
+  lowercased variables) so Winlink Express renders the official form.
+- Catalog: Winlink Check-in / Check-out, ICS-213 General Message, Field
+  Situation Report, Severe Weather Report, and the Position Report
+  (plain text to `QTH` — how positions reach the Winlink map).
+- Fields auto-fill from `StationProfile` and a live position fix taken
+  when the form opens. Received messages carrying form XML render as a
+  native field card in the reading pane (any form, not just ours).
+
+## Send progress
+
+Delivery claims carry an ack tap; `WinlinkAX25Transport` computes
+delivered = submitted − (pending queue + in-flight window) exactly from
+session state, and Telnet counts socket writes. The runner publishes
+`WinlinkExchangeProgress` (per-message compressed-byte totals, baselined
+so handshake bytes don't pollute the bar); the toolbar card shows phase,
+a determinate bar, bytes, rate, and ETA.
+
+## Address book
+
+Migration v6 (`winlinkContact`): full contact records (callsign and/or
+internet address, phone, org, grid, mailing address, notes, favorites,
+recency). Contacts tab in the Mail area; compose To/Cc fields suggest
+matching contacts as chips; queueing bumps recency; unknown senders get
+a one-click "add to contacts" in the reading pane.
+
+## SailDocs and utilities
+
+The catalog sheet's "Internet (SailDocs)" source builds requests to
+`query@saildocs.com` (web-page-as-text, spot forecast from the station
+position, raw commands) — the community's internet-over-Winlink path,
+useful precisely because it needs no access key. The exchange menu can
+queue a loopback message to the `TEST` echo bot. The Winlink catalog
+index itself is requested over the air (`LIST` to `INQUIRY`) since the
+catalog web service requires a personal key.
+
 ## Known limitations / future work
 
 - B1F-only gateways are refused (clean error) rather than spoken to.
 - No P2P (client-to-client) sessions yet; RMS/CMS only.
 - Pacing: bulk B2F sends ride the normal session queue; §4.3 token-bucket
   enforcement is a codebase-wide gap (spec §16 checklist).
-- The stations list uses CMS-reported grid squares; RF-evidence-based
+- The stations list uses CMS-reported coordinates; RF-evidence-based
   gateway ranking (link-quality metrics) would be a natural AXTerm twist.
+- Catalog LIST replies are shown as mail but not yet auto-parsed into
+  the cached catalog (format varies; needs a captured sample).
+- The community CMS key only covers /gateway/status.json; users with a
+  personal key can also refresh the catalog over the internet.
