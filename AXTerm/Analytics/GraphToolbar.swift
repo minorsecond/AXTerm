@@ -29,6 +29,8 @@ struct GraphToolbar: View {
     let onClearSelection: () -> Void
     let onClearFocus: () -> Void
     let onChangeAnchor: () -> Void
+    var isDraftingPath: Bool = false
+    var onTogglePathDraft: () -> Void = {}
 
     var body: some View {
         // Content-hugging control cluster: shares one row with the legend instead
@@ -75,6 +77,18 @@ struct GraphToolbar: View {
             .buttonStyle(.borderless)
             .help("Home: Reset to default zoom and centered position.")
             .accessibilityLabel(Copy.Toolbar.resetViewAccessibility)
+
+            // Draw Path: click stations in order to build a connect path.
+            Button(action: onTogglePathDraft) {
+                Label("Draw Path", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(isDraftingPath ? Color.accentColor : Color.primary)
+            .help(isDraftingPath
+                  ? "Path drawing active: click stations in order to build the route, Esc to cancel."
+                  : "Draw a connect path: click stations in order from your node, then connect through the drawn hops.")
+            .accessibilityLabel(isDraftingPath ? "Stop drawing path" : "Draw connect path")
         }
         .font(.system(size: 12))
     }
@@ -163,6 +177,8 @@ struct GraphToolbar: View {
 private struct FocusSettingsPopover: View {
     @Binding var focusState: GraphFocusState
     let onChangeAnchor: () -> Void
+    var isDraftingPath: Bool = false
+    var onTogglePathDraft: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

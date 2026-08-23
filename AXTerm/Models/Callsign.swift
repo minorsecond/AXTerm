@@ -44,14 +44,12 @@ nonisolated struct Callsign: Equatable, Hashable, Codable, CustomStringConvertib
             self.ssid = 0
         }
         
-        // Basic validation: Base must have digits/letters
-        // We use the existing validator logic for robustness
-        guard CallsignValidator.isValidCallsign(self.stringValue) else {
-            // Allow slightly relaxed parsing for UI entry, but strict for final object?
-            // Actually CallsignValidator.isValidCallsign is strict.
-            // Let's rely on basic sanity check here so we can represent "in-progress" typing
-            // if needed, but for a model type, we should probably enforce validity.
-            // Retaining stricter validation to ensure model integrity.
+        // Accept anything addressable on a packet network: real callsigns AND
+        // tactical aliases (DRLNOD, EATON…) — connecting to a NET/ROM node by
+        // its alias is standard practice, and broadcasts carry alias calls.
+        // Service names (BEACON, ID, NODES…), WIDE/TRACE pseudo-paths, and
+        // corrupt garbage are still rejected.
+        guard CallsignValidator.isValidRoutingNode(self.stringValue) else {
             return nil
         }
     }

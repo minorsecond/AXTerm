@@ -489,6 +489,10 @@ final class AnalyticsDashboardViewModel: ObservableObject {
     }
 
     func handleEscape() {
+        if isDraftingPath {
+            cancelPathDraft()
+            return
+        }
         handleBackgroundClick()
     }
 
@@ -815,6 +819,113 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         captureCoverage = coverage
         uncoveredWindowIntervals = coverage.uncoveredIntervals(in: window)
         hourCoverageFractions = coverage.coverageFractionByHour(in: window, calendar: calendar)
+    }
+
+    // MARK: - Path drafting (draw a connection on the graph)
+
+    /// Non-nil while the user is drawing a connect path on the graph.
+    @Published private(set) var pathDraft: PathDraft?
+    /// Evidence used to validate drawn hops; rebuilt with the activity insights.
+    @Published private(set) var pathDraftContext: PathDraftContext = .empty
+    private var pathDraftChain: [String] = []
+
+    var isDraftingPath: Bool { pathDraft != nil }
+
+    private var myStationIdentityKey: String {
+        let call = settingsStore?.myCallsign ?? ""
+        return CallsignParser.identityKey(for: call, mode: stationIdentityMode)
+    }
+
+    func beginPathDraft() {
+        pathDraftChain = []
+        pathDraft = GraphPathDrafter.makeDraft(
+            originKey: myStationIdentityKey,
+            chain: pathDraftChain,
+            context: pathDraftContext
+        )
+        Telemetry.breadcrumb(category: "graph.pathDraft", message: "Path draft started")
+    }
+
+    /// Starts a draft aimed directly at a node (context-menu entry point).
+    func beginPathDraft(targeting nodeID: String) {
+        beginPathDraft()
+        handlePathDraftNodeClick(nodeID)
+    }
+
+    func cancelPathDraft() {
+        pathDraftChain = []
+        pathDraft = nil
+    }
+
+    /// Routes a graph node click into the draft while drafting.
+    func handlePathDraftNodeClick(_ nodeID: String) {
+        guard pathDraft != nil else { return }
+        pathDraftChain = GraphPathDrafter.chain(
+            after: nodeID,
+            current: pathDraftChain,
+            originKey: myStationIdentityKey
+        )
+        pathDraft = GraphPathDrafter.makeDraft(
+            originKey: myStationIdentityKey,
+            chain: pathDraftChain,
+            context: pathDraftContext
+        )
+    }
+
+    private func updatePathDraftContext(packets: [Packet], identityMode: StationIdentityMode) {
+        let myKey = CallsignParser.identityKey(for: settingsStore?.myCallsign ?? "", mode: identityMode)
+        var digiRepeats: [String: Int] = [:]
+        var provenForMe: Set<String> = []
+        var senderDisplayCounts: [String: [String: Int]] = [:]
+
+        for packet in packets {
+            let fromDisplay = packet.from?.display
+            let fromKey = fromDisplay.flatMap { display -> String? in
+                guard CallsignValidator.isValidRoutingNode(display) else { return nil }
+                return CallsignParser.identityKey(for: display, mode: identityMode)
+            }
+            if let fromKey, let fromDisplay {
+                senderDisplayCounts[fromKey, default: [:]][CallsignValidator.normalize(fromDisplay), default: 0] += 1
+            }
+            for via in packet.via where via.repeated {
+                let display = via.display
+                guard CallsignValidator.isValidRoutingNode(display) else { continue }
+                let key = CallsignParser.identityKey(for: display, mode: identityMode)
+                digiRepeats[key, default: 0] += 1
+                senderDisplayCounts[key, default: [:]][CallsignValidator.normalize(display), default: 0] += 1
+                if fromKey == myKey {
+                    provenForMe.insert(key)
+                }
+            }
+        }
+
+        // Identity key -> the over-the-air callsign heard most often for it.
+        var preferred: [String: String] = [:]
+        for (key, counts) in senderDisplayCounts {
+            preferred[key] = counts.max { lhs, rhs in
+                if lhs.value != rhs.value { return lhs.value < rhs.value }
+                return lhs.key > rhs.key
+            }?.key
+        }
+        if let myCall = settingsStore?.myCallsign, !myCall.isEmpty {
+            preferred[myKey] = CallsignValidator.normalize(myCall)
+        }
+
+        pathDraftContext = PathDraftContext(
+            roles: stationRoles,
+            digiRepeatCounts: digiRepeats,
+            provenDigisForMyStation: provenForMe,
+            preferredDisplay: preferred
+        )
+
+        // Re-validate an in-progress draft against fresh evidence.
+        if pathDraft != nil {
+            pathDraft = GraphPathDrafter.makeDraft(
+                originKey: myStationIdentityKey,
+                chain: pathDraftChain,
+                context: pathDraftContext
+            )
+        }
     }
 
     // MARK: - Activity insights (roles, hourly profile, airtime, sessions)
@@ -1150,6 +1261,7 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         latestTimeframePackets = packetSnapshot
         updateTimeframeStationPresence(packets: packetSnapshot, identityMode: stationIdentityMode)
         updateActivityInsights(packets: packetSnapshot, identityMode: stationIdentityMode, windowEnd: timeframeInterval.end)
+        updatePathDraftContext(packets: packetSnapshot, identityMode: stationIdentityMode)
         let captureEvents = await captureEventsProvider?(timeframeInterval)
         updateCaptureCoverage(packets: packetSnapshot, window: timeframeInterval, events: captureEvents, now: now)
         let includeViaSnapshot = includeViaDigipeaters

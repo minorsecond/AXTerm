@@ -14,6 +14,8 @@ struct AnalyticsGraphView: View {
     /// In NET/ROM source modes node weight is a route count, not a packet count;
     /// the hover tooltip must not label it "Packets".
     var isNetRomSource: Bool = false
+    /// Node identity keys of the path being drawn (origin first); empty when not drafting.
+    var pathDraftChain: [String] = []
     let nodePositions: [NodePosition]
     let selectedNodeIDs: Set<String>
     let hoveredNodeID: String?
@@ -37,6 +39,7 @@ struct AnalyticsGraphView: View {
     let onSimulateServiceEndpointIgnore: (String) -> Void
     let onApplySimulatedServiceEndpointIgnore: (String) -> Void
     let onCancelSimulatedServiceEndpointIgnore: (String) -> Void
+    var onDrawPathTo: (String) -> Void = { _ in }
 
     @State private var selectionRect: CGRect?
     @State private var hoverPoint: CGPoint?
@@ -85,13 +88,25 @@ struct AnalyticsGraphView: View {
                         DispatchQueue.main.async {
                             cameraState = newState
                         }
-                    }
+                    },
+                    onDrawPathTo: onDrawPathTo
                 )
 
                 if let selectionRect {
                     let h = geometry.size.height
                     let flipped = CGRect(x: selectionRect.minX, y: h - selectionRect.maxY, width: selectionRect.width, height: selectionRect.height)
                     SelectionRectView(rect: flipped)
+                }
+
+                // Drawn connect path overlay
+                if pathDraftChain.count > 1 {
+                    PathDraftOverlay(
+                        chain: pathDraftChain,
+                        nodePositions: nodePositions,
+                        cameraState: cameraState,
+                        viewSize: geometry.size
+                    )
+                    .allowsHitTesting(false)
                 }
 
                 // Node labels overlay
@@ -253,6 +268,78 @@ struct AnalyticsGraphView: View {
 nonisolated struct CameraState: Equatable {
     var scale: CGFloat
     var offset: CGSize
+}
+
+/// Renders the path being drawn: an accent polyline through the clicked
+/// stations with numbered hop markers.
+private struct PathDraftOverlay: View {
+    let chain: [String]
+    let nodePositions: [NodePosition]
+    let cameraState: CameraState
+    let viewSize: CGSize
+
+    var body: some View {
+        Canvas { context, size in
+            let positionMap = Dictionary(uniqueKeysWithValues: nodePositions.map { ($0.id, $0) })
+            let inset = AnalyticsStyle.Layout.graphInset
+
+            let screenPoints: [CGPoint] = chain.compactMap { key in
+                guard let position = positionMap[key] else { return nil }
+                return normalizedToScreen(
+                    normalized: CGPoint(x: position.x, y: position.y),
+                    viewSize: size,
+                    inset: inset,
+                    scale: cameraState.scale,
+                    offset: cameraState.offset
+                )
+            }
+            guard screenPoints.count > 1 else { return }
+
+            var path = Path()
+            path.move(to: screenPoints[0])
+            for point in screenPoints.dropFirst() {
+                path.addLine(to: point)
+            }
+            context.stroke(
+                path,
+                with: .color(Color.accentColor.opacity(0.85)),
+                style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round, dash: [6, 4])
+            )
+
+            for (index, point) in screenPoints.enumerated() {
+                let radius: CGFloat = 9
+                let circleRect = CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
+                context.fill(Circle().path(in: circleRect), with: .color(Color.accentColor))
+                context.draw(
+                    Text(index == 0 ? "MY" : "\(index)")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white),
+                    at: point
+                )
+            }
+        }
+    }
+
+    // Same camera transform as NodeLabelsOverlay / the Metal renderer.
+    private func normalizedToScreen(
+        normalized: CGPoint,
+        viewSize: CGSize,
+        inset: CGFloat,
+        scale: CGFloat,
+        offset: CGSize
+    ) -> CGPoint {
+        let width = max(1, viewSize.width - inset * 2)
+        let height = max(1, viewSize.height - inset * 2)
+        let base = CGPoint(
+            x: inset + normalized.x * width,
+            y: inset + normalized.y * height
+        )
+        let center = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+        return CGPoint(
+            x: (base.x - center.x) * scale + center.x + offset.width,
+            y: (base.y - center.y) * scale + center.y + offset.height
+        )
+    }
 }
 
 /// Overlay that renders callsign suffix labels near nodes.
@@ -446,6 +533,7 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
     let onApplySimulatedServiceEndpointIgnore: (String) -> Void
     let onCancelSimulatedServiceEndpointIgnore: (String) -> Void
     let onCameraUpdate: (CameraState) -> Void
+    var onDrawPathTo: (String) -> Void = { _ in }
 
     func makeCoordinator() -> GraphMetalCoordinator {
         GraphMetalCoordinator(
@@ -462,7 +550,8 @@ private struct GraphMetalViewRepresentable: NSViewRepresentable {
             onSimulateServiceEndpointIgnore: onSimulateServiceEndpointIgnore,
             onApplySimulatedServiceEndpointIgnore: onApplySimulatedServiceEndpointIgnore,
             onCancelSimulatedServiceEndpointIgnore: onCancelSimulatedServiceEndpointIgnore,
-            onCameraUpdate: onCameraUpdate
+            onCameraUpdate: onCameraUpdate,
+            onDrawPathTo: onDrawPathTo
         )
     }
 
@@ -722,7 +811,9 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
     private let onApplySimulatedServiceEndpointIgnore: (String) -> Void
     private let onCancelSimulatedServiceEndpointIgnore: (String) -> Void
     private let onCameraUpdate: (CameraState) -> Void
+    private let onDrawPathTo: (String) -> Void
     private var contextMenuNodeCallsign: String?
+    private var contextMenuNodeID: String?
 
     init(
         onSelect: @escaping (String, Bool) -> Void,
@@ -738,7 +829,8 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         onSimulateServiceEndpointIgnore: @escaping (String) -> Void,
         onApplySimulatedServiceEndpointIgnore: @escaping (String) -> Void,
         onCancelSimulatedServiceEndpointIgnore: @escaping (String) -> Void,
-        onCameraUpdate: @escaping (CameraState) -> Void
+        onCameraUpdate: @escaping (CameraState) -> Void,
+        onDrawPathTo: @escaping (String) -> Void = { _ in }
     ) {
         self.onSelect = onSelect
         self.onSelectMany = onSelectMany
@@ -754,6 +846,7 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
         self.onApplySimulatedServiceEndpointIgnore = onApplySimulatedServiceEndpointIgnore
         self.onCancelSimulatedServiceEndpointIgnore = onCancelSimulatedServiceEndpointIgnore
         self.onCameraUpdate = onCameraUpdate
+        self.onDrawPathTo = onDrawPathTo
         super.init()
     }
 
@@ -1098,8 +1191,17 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             return nil
         }
         contextMenuNodeCallsign = normalized
+        contextMenuNodeID = hit.id
 
         let menu = NSMenu(title: "Node Actions")
+        let drawItem = NSMenuItem(
+            title: "Draw Path to Here",
+            action: #selector(handleContextMenuDrawPath),
+            keyEquivalent: ""
+        )
+        drawItem.target = self
+        menu.addItem(drawItem)
+        menu.addItem(.separator())
         if isServiceEndpointIgnored(normalized) && isServiceEndpointSimulated(normalized) {
             let applyItem = NSMenuItem(
                 title: "Apply Simulated Removal",
@@ -1142,6 +1244,11 @@ private final class GraphMetalCoordinator: NSObject, MTKViewDelegate, GraphMetal
             menu.addItem(simulateItem)
         }
         return menu
+    }
+
+    @objc private func handleContextMenuDrawPath() {
+        guard let nodeID = contextMenuNodeID else { return }
+        onDrawPathTo(nodeID)
     }
 
     @objc private func handleContextMenuAddIgnore() {

@@ -517,7 +517,7 @@ struct ContentView: View {
                     connectCoordinator: connectCoordinator
                 )
             case .analytics:
-                AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel)
+                AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel, connectCoordinator: connectCoordinator)
             //case .raw:
             //    RawView(
             //        chunks: client.rawChunks,

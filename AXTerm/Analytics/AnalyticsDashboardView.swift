@@ -12,6 +12,7 @@ import SwiftUI
 struct AnalyticsDashboardView: View {
     @ObservedObject var packetEngine: PacketEngine
     @ObservedObject var settings: AppSettingsStore
+    let connectCoordinator: ConnectCoordinator?
     @StateObject private var viewModel: AnalyticsDashboardViewModel
     @State private var graphResetToken = UUID()
     @State private var focusNodeID: String?
@@ -30,9 +31,15 @@ struct AnalyticsDashboardView: View {
     @State private var preferredPacketViewMode: GraphViewMode = .connectivity
     @State private var preferredNetRomViewMode: GraphViewMode = .netromHybrid
 
-    init(packetEngine: PacketEngine, settings: AppSettingsStore, viewModel: AnalyticsDashboardViewModel) {
+    init(
+        packetEngine: PacketEngine,
+        settings: AppSettingsStore,
+        viewModel: AnalyticsDashboardViewModel,
+        connectCoordinator: ConnectCoordinator? = nil
+    ) {
         self.packetEngine = packetEngine
         self.settings = settings
+        self.connectCoordinator = connectCoordinator
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 
@@ -619,6 +626,14 @@ struct AnalyticsDashboardView: View {
                     },
                     onChangeAnchor: {
                         viewModel.setSelectedAsAnchor()
+                    },
+                    isDraftingPath: viewModel.isDraftingPath,
+                    onTogglePathDraft: {
+                        if viewModel.isDraftingPath {
+                            viewModel.cancelPathDraft()
+                        } else {
+                            viewModel.beginPathDraft()
+                        }
                     }
                 )
 
@@ -646,12 +661,21 @@ struct AnalyticsDashboardView: View {
                 }
                 .padding(.horizontal, 4)
 
+                if let draft = viewModel.pathDraft {
+                    PathDraftHUD(
+                        draft: draft,
+                        onConnect: { performDraftConnect(draft) },
+                        onCancel: { viewModel.cancelPathDraft() }
+                    )
+                }
+
                 // Graph and sidebar
                 HStack(alignment: .top, spacing: AnalyticsStyle.Layout.cardSpacing) {
                     ZStack {
                         AnalyticsGraphView(
                             graphModel: viewModel.viewState.graphModel,
                             isNetRomSource: viewModel.graphViewMode.isNetRomMode,
+                            pathDraftChain: viewModel.pathDraft?.chainKeys ?? [],
                             nodePositions: viewModel.viewState.nodePositions,
                             selectedNodeIDs: viewModel.viewState.selectedNodeIDs,
                             hoveredNodeID: viewModel.viewState.hoveredNodeID,
@@ -663,6 +687,12 @@ struct AnalyticsDashboardView: View {
                             resetCameraRequest: viewModel.resetCameraRequest,
                             visibleNodeIDs: viewModel.filteredGraph.visibleNodeIDs,
                             onSelect: { nodeID, isShift in
+                                // While drawing a path, clicks build the path
+                                // instead of changing the selection.
+                                if viewModel.isDraftingPath {
+                                    viewModel.handlePathDraftNodeClick(nodeID)
+                                    return
+                                }
                                 viewModel.handleNodeClick(nodeID, isShift: isShift)
                                 // Switch to Inspector tab whenever a selection exists (single or multi).
                                 if !viewModel.viewState.selectedNodeIDs.isEmpty {
@@ -704,6 +734,9 @@ struct AnalyticsDashboardView: View {
                             },
                             onCancelSimulatedServiceEndpointIgnore: { callsign in
                                 cancelSimulation(for: callsign)
+                            },
+                            onDrawPathTo: { nodeID in
+                                viewModel.beginPathDraft(targeting: nodeID)
                             }
                         )
                         if (!viewModel.hasLoadedGraph || viewModel.isGraphLoading) && viewModel.viewState.graphModel.nodes.isEmpty {
@@ -826,7 +859,9 @@ struct AnalyticsDashboardView: View {
             }
 
             // Keyboard shortcuts hint
-            Text("Click to select, Shift-drag to select, right-click a node for ignore/simulate actions, drag to pan, ⌘ or Opt + scroll to zoom, Esc clears")
+            Text(viewModel.isDraftingPath
+                 ? "Drawing path: click stations in order from your node \u{00B7} click the last again to undo \u{00B7} click an earlier hop to prune \u{00B7} Esc cancels"
+                 : "Click to select, Shift-drag to select, right-click a node for path/ignore actions, drag to pan, \u{2318} or Opt + scroll to zoom, Esc clears")
                 .font(.caption)
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 .padding(.top, 4)
@@ -1195,6 +1230,19 @@ extension AnalyticsDashboardView {
     private var persistedIgnoredNodeCount: Int { hiddenBreakdown.ignoredPresent.count }
 
     private var totalHiddenNodesCount: Int { hiddenBreakdown.totalCount }
+
+    private func performDraftConnect(_ draft: PathDraft) {
+        guard let intent = draft.connectIntent() else { return }
+        guard let connectCoordinator else {
+            viewModel.cancelPathDraft()
+            return
+        }
+        connectCoordinator.activeContext = .stations
+        connectCoordinator.requestConnect(
+            ConnectRequest(intent: intent, mode: draft.connectMode, executeImmediately: true)
+        )
+        viewModel.cancelPathDraft()
+    }
 
     private func normalizedEndpoint(_ callsign: String) -> String {
         CallsignValidator.normalize(callsign)
@@ -1973,6 +2021,117 @@ private struct GraphViewportHeightPreferenceKey: PreferenceKey {
     }
 }
 
+
+private struct PathDraftHUD: View {
+    let draft: PathDraft
+    let onConnect: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
+                    .foregroundStyle(Color.accentColor)
+                Text("Drawing path")
+                    .font(.caption.weight(.semibold))
+
+                chainChips
+
+                Spacer()
+
+                Button("Cancel", action: onCancel)
+                    .controlSize(.small)
+                    .help("Stop drawing (Esc)")
+
+                Button {
+                    onConnect()
+                } label: {
+                    Label(connectTitle, systemImage: "bolt.horizontal.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!draft.isConnectable)
+                .help(draft.isConnectable
+                      ? "Connect using exactly the drawn path: \(draft.previewText)"
+                      : "Click a destination station to complete the path.")
+            }
+
+            if draft.viaHops.isEmpty && draft.destinationKey == nil {
+                Text("Click stations in order from your node. Click the last station again to undo, an earlier one to prune back, Esc to cancel.")
+                    .font(.caption2)
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+            }
+
+            ForEach(draft.warnings, id: \.self) { warning in
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(Color(nsColor: .systemOrange))
+                    Text(warning)
+                        .font(.caption2)
+                        .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    private var connectTitle: String {
+        draft.viaHops.isEmpty ? "Connect" : "Connect via \(draft.viaHops.count) digi\(draft.viaHops.count == 1 ? "" : "s")"
+    }
+
+    private var chainChips: some View {
+        HStack(spacing: 4) {
+            chip(text: draft.originDisplay, badge: nil, isWarning: false)
+            ForEach(draft.viaHops) { hop in
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 8))
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                chip(text: hop.displayCallsign, badge: hop.verdict.badgeText, isWarning: hop.verdict.isWarning)
+                    .help(hop.verdict.explanation)
+            }
+            if let destination = draft.destinationDisplay {
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 8))
+                    .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
+                chip(
+                    text: destination,
+                    badge: draft.destinationIsInfrastructure ? "NODE/BBS" : nil,
+                    isWarning: false
+                )
+                .help(draft.destinationIsInfrastructure
+                      ? "Destination is a node or BBS — continue to further stations from its prompt after connecting."
+                      : "Destination station.")
+            }
+        }
+    }
+
+    private func chip(text: String, badge: String?, isWarning: Bool) -> some View {
+        HStack(spacing: 4) {
+            Text(text)
+                .font(.caption.monospaced())
+            if let badge {
+                Text(badge)
+                    .font(.system(size: 8, weight: .bold))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(
+                        (isWarning ? Color(nsColor: .systemOrange) : Color(nsColor: .systemGreen)).opacity(0.18),
+                        in: Capsule()
+                    )
+                    .foregroundStyle(isWarning ? Color(nsColor: .systemOrange) : Color(nsColor: .systemGreen))
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
+    }
+}
 
 private struct StationDirectoryCard: View {
     let entries: [StationDirectoryEntry]

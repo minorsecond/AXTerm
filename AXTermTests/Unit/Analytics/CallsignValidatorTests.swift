@@ -56,6 +56,16 @@ final class CallsignValidatorTests: XCTestCase {
         }
     }
 
+    func testCallsignModelAcceptsTacticalAliases() {
+        // Connecting to a NET/ROM node by alias is standard practice; the
+        // Callsign model must accept what the network can address.
+        XCTAssertEqual(Callsign("DRLNOD")?.stringValue, "DRLNOD")
+        XCTAssertEqual(Callsign("drl-2")?.stringValue, "DRL-2")
+        XCTAssertNil(Callsign("NODES"), "Broadcast destination is not addressable")
+        XCTAssertNil(Callsign("BEACON"))
+        XCTAssertNil(Callsign("KVQ$U("), "Corrupt garbage stays rejected")
+    }
+
     func testCustomIgnoredServiceEndpointsAreRespected() {
         CallsignValidator.configureIgnoredServiceEndpoints(["HORSE", "drlnod"])
         XCTAssertFalse(CallsignValidator.isValidRoutingNode("HORSE"))
