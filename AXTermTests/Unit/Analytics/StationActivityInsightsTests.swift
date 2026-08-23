@@ -265,6 +265,29 @@ final class StationActivityInsightsTests: XCTestCase {
 
     // MARK: - Directory
 
+    func testInfrastructureStationsDoNotShowKeyboarderBadge() {
+        // Real-world case: KB5YZB-7 is a BPQ node whose only connected-mode
+        // traffic is answering inbound connects. Serving connections is not
+        // evidence a human typed — the Keyboarder badge must not appear on
+        // Node/BBS stations, while a regular station with I-frames keeps it.
+        let base = Date(timeIntervalSince1970: 1_700_008_000)
+        let packets = [
+            // KB5YZB-7 answers a connect with its SID banner (I frame) -> bbs + connectedUser
+            makePacket(timestamp: base, from: "KB5YZB-7", to: "K0EPI-7", frameType: .i, control: 0x00, info: "[BPQ-6.0.22.70-B2FWIHJM$]"),
+            // K0EPI-7 types at the node -> connectedUser only
+            makePacket(timestamp: base.addingTimeInterval(5), from: "K0EPI-7", to: "KB5YZB-7", frameType: .i, control: 0x00, info: "bbs")
+        ]
+        let roles = StationRoleInference.inferRoles(packets: packets, identityMode: .ssid)
+        let directory = StationDirectoryBuilder.build(packets: packets, roles: roles, identityMode: .ssid)
+
+        let node = directory.first { $0.callsign == "KB5YZB-7" }
+        XCTAssertEqual(node?.roleBadges, ["BBS"],
+                       "A BBS answering connects must not read as a keyboarder")
+        let human = directory.first { $0.callsign == "K0EPI-7" }
+        XCTAssertEqual(human?.roleBadges, ["Keyboarder"],
+                       "The station typing at the BBS is the keyboarder")
+    }
+
     func testStationDirectoryRollsUpSenders() {
         let base = Date(timeIntervalSince1970: 1_700_007_000)
         let packets = [

@@ -399,11 +399,18 @@ nonisolated struct StationDirectoryEntry: Equatable, Sendable, Identifiable {
     var id: String { callsign }
 
     /// Display roles: a station with no inferred role that only transmits
-    /// unconnected frames is a beacon-only station.
+    /// unconnected frames is a beacon-only station. "Keyboarder" is shown only
+    /// for stations with no infrastructure role — a Node or BBS participates in
+    /// connected sessions *as the service*, which is not evidence a human ever
+    /// typed (e.g. a node whose only I-frames are answering inbound connects).
     var roleBadges: [String] {
         if roles.isEmpty { return ["Beacon"] }
+        let isInfrastructure = roles.contains(.node) || roles.contains(.bbs) || roles.contains(.digipeater)
         let order: [StationRole] = [.node, .bbs, .digipeater, .connectedUser]
-        return order.filter { roles.contains($0) }.map(\.displayName)
+        return order
+            .filter { roles.contains($0) }
+            .filter { !(isInfrastructure && $0 == .connectedUser) }
+            .map(\.displayName)
     }
 }
 
