@@ -16,12 +16,20 @@ final class WinlinkSettings: ObservableObject {
     static let gatewayPathKey = "winlinkGatewayPath"
     static let preferredTransportKey = "winlinkPreferredTransport"
     static let clientProductKey = "winlinkClientProduct"
+    static let gatewayLadderKey = "winlinkGatewayLadder"
 
     static let defaultMaxDistanceMiles = 100
     static let defaultHistoryHours = 24
 
     static let passwordAccount = "winlink-password"
     static let apiKeyAccount = "winlink-cms-api-key"
+
+    /// One rung of the RF gateway ladder.
+    nonisolated struct GatewayLadderEntry: Codable, Equatable, Identifiable, Sendable {
+        var callsign: String
+        var path: String = ""
+        var id: String { callsign }
+    }
 
     enum TransportPreference: String, CaseIterable {
         case ax25
@@ -55,6 +63,55 @@ final class WinlinkSettings: ObservableObject {
 
     @Published var preferredTransport: TransportPreference {
         didSet { defaults.set(preferredTransport.rawValue, forKey: Self.preferredTransportKey) }
+    }
+
+    /// Ordered RF gateway ladder: Connect & Exchange tries each entry
+    /// top-down until a session succeeds. The first entry is the
+    /// "favorite"/primary gateway.
+    @Published var gatewayLadder: [GatewayLadderEntry] {
+        didSet {
+            if let data = try? JSONEncoder().encode(gatewayLadder) {
+                defaults.set(String(data: data, encoding: .utf8), forKey: Self.gatewayLadderKey)
+            }
+            // Keep the legacy single-gateway fields mirroring the top rung.
+            let top = gatewayLadder.first
+            if gatewayCallsign != (top?.callsign ?? "") { gatewayCallsign = top?.callsign ?? "" }
+            if gatewayPath != (top?.path ?? "") { gatewayPath = top?.path ?? "" }
+        }
+    }
+
+    // MARK: - Ladder operations
+
+    func addToLadder(callsign: String, path: String = "") {
+        let normalized = callsign.trimmingCharacters(in: .whitespaces).uppercased()
+        guard !normalized.isEmpty else { return }
+        guard !gatewayLadder.contains(where: { $0.callsign == normalized }) else { return }
+        gatewayLadder.append(GatewayLadderEntry(callsign: normalized, path: path))
+    }
+
+    func removeFromLadder(callsign: String) {
+        gatewayLadder.removeAll { $0.callsign == callsign }
+    }
+
+    func promoteToTop(callsign: String) {
+        guard let index = gatewayLadder.firstIndex(where: { $0.callsign == callsign }) else { return }
+        let entry = gatewayLadder.remove(at: index)
+        gatewayLadder.insert(entry, at: 0)
+    }
+
+    func moveInLadder(callsign: String, up: Bool) {
+        guard let index = gatewayLadder.firstIndex(where: { $0.callsign == callsign }) else { return }
+        let target = up ? index - 1 : index + 1
+        guard gatewayLadder.indices.contains(target) else { return }
+        gatewayLadder.swapAt(index, target)
+    }
+
+    func ladderContains(callsign: String) -> Bool {
+        gatewayLadder.contains { $0.callsign == callsign.uppercased() }
+    }
+
+    func ladderRank(of callsign: String) -> Int? {
+        gatewayLadder.firstIndex { $0.callsign == callsign.uppercased() }.map { $0 + 1 }
     }
 
     /// SID product name sent in the B2F handshake. The production CMS
@@ -116,5 +173,18 @@ final class WinlinkSettings: ObservableObject {
         preferredTransport = TransportPreference(
             rawValue: defaults.string(forKey: Self.preferredTransportKey) ?? "") ?? .ax25
         clientProduct = defaults.string(forKey: Self.clientProductKey) ?? "AXTerm"
+
+        if let json = defaults.string(forKey: Self.gatewayLadderKey),
+           let data = json.data(using: .utf8),
+           let entries = try? JSONDecoder().decode([GatewayLadderEntry].self, from: data) {
+            gatewayLadder = entries
+        } else if let legacy = defaults.string(forKey: Self.gatewayCallsignKey), !legacy.isEmpty {
+            // Migrate the pre-ladder single gateway into rung 1.
+            gatewayLadder = [GatewayLadderEntry(
+                callsign: legacy,
+                path: defaults.string(forKey: Self.gatewayPathKey) ?? "")]
+        } else {
+            gatewayLadder = []
+        }
     }
 }

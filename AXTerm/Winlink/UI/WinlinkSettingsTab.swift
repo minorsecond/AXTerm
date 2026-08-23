@@ -12,6 +12,7 @@ struct WinlinkSettingsTab: View {
     @State private var didLoadSecrets = false
     @State private var isVerifyingKey = false
     @State private var keyVerification: (ok: Bool, message: String)?
+    @State private var newLadderCallsign = ""
 
     var body: some View {
         Form {
@@ -130,13 +131,55 @@ struct WinlinkSettingsTab: View {
             }
 
             Section {
-                TextField("Preferred gateway", text: $settings.gatewayCallsign, prompt: Text("e.g. KE7XO-10"))
-                    .frame(maxWidth: 200)
-                    .help("The RMS gateway Connect & Exchange uses. Usually set from the Stations list.")
+                if settings.gatewayLadder.isEmpty {
+                    Text("No gateways yet — add stations from the Stations tab (star button) or type a callsign below.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(settings.gatewayLadder.enumerated()), id: \.element.id) { index, entry in
+                        HStack(spacing: 8) {
+                            Image(systemName: index == 0 ? "star.fill" : "\(index + 1).circle")
+                                .foregroundStyle(index == 0 ? .yellow : .secondary)
+                                .frame(width: 20)
+                                .help(index == 0 ? "Primary gateway — tried first." : "Rung #\(index + 1).")
+                            Text(entry.callsign)
+                                .font(.body.monospaced())
+                            if !entry.path.isEmpty {
+                                Text("via \(entry.path)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button {
+                                settings.moveInLadder(callsign: entry.callsign, up: true)
+                            } label: { Image(systemName: "chevron.up") }
+                                .disabled(index == 0)
+                                .help("Move up the ladder (tried earlier)")
+                            Button {
+                                settings.moveInLadder(callsign: entry.callsign, up: false)
+                            } label: { Image(systemName: "chevron.down") }
+                                .disabled(index == settings.gatewayLadder.count - 1)
+                                .help("Move down the ladder (tried later)")
+                            Button {
+                                settings.removeFromLadder(callsign: entry.callsign)
+                            } label: { Image(systemName: "minus.circle") }
+                                .help("Remove from the ladder")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+
+                HStack {
+                    TextField("Add gateway", text: $newLadderCallsign, prompt: Text("e.g. K0NTS-10"))
+                        .frame(maxWidth: 160)
+                        .onSubmit(addLadderEntry)
+                    Button("Add", action: addLadderEntry)
+                        .disabled(newLadderCallsign.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
 
                 TextField("Digipeater path", text: $settings.gatewayPath, prompt: Text("optional, e.g. WIDE1-1"))
                     .frame(maxWidth: 200)
-                    .help("Optional comma-separated digipeater path to reach the gateway.")
+                    .help("Optional comma-separated digipeater path, applied when exchanging with ladder gateways.")
 
                 Picker("Identify as", selection: $settings.clientProduct) {
                     Text("AXTerm").tag("AXTerm")
@@ -162,6 +205,13 @@ struct WinlinkSettingsTab: View {
             apiKeyDraft = settings.apiKeyOverride
             didLoadSecrets = true
         }
+    }
+
+    private func addLadderEntry() {
+        let callsign = newLadderCallsign.trimmingCharacters(in: .whitespaces)
+        guard !callsign.isEmpty else { return }
+        settings.addToLadder(callsign: callsign)
+        newLadderCallsign = ""
     }
 
     /// Tests the entered key against the catalog operation (the one that

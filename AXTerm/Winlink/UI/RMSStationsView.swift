@@ -37,10 +37,12 @@ struct RMSStationsView: View {
                     .lineLimit(2)
             }
             Spacer()
-            if viewModel.currentGateway.isEmpty == false {
-                Label(viewModel.currentGateway, systemImage: "envelope.badge")
+            if !viewModel.ladderSummary.isEmpty {
+                Label(viewModel.ladderSummary.joined(separator: " → "), systemImage: "list.number")
                     .font(.caption)
-                    .help("The RMS gateway Connect & Exchange will use.")
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help("Your gateway ladder. Connect & Exchange tries these stations top-down until one completes a session. Manage the order here or in Settings → Winlink.")
             }
             Button {
                 Task { await viewModel.refresh() }
@@ -102,15 +104,35 @@ struct RMSStationsView: View {
 
             TableColumn("") { station in
                 HStack(spacing: 6) {
-                    Button("Set Gateway") { viewModel.setAsGateway(station) }
-                        .help(WinlinkCopy.setGatewayTooltip)
+                    if let rank = viewModel.ladderRank(of: station) {
+                        Menu {
+                            Button("Make Primary") { viewModel.promoteToTop(station) }
+                            Button("Remove from Ladder", role: .destructive) {
+                                viewModel.removeFromLadder(station)
+                            }
+                        } label: {
+                            Label("#\(rank)", systemImage: rank == 1 ? "star.fill" : "star")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help(rank == 1
+                              ? "Your primary gateway — first rung of the ladder."
+                              : "Rung #\(rank) of your gateway ladder — tried after \(rank - 1) other gateway\(rank == 2 ? "" : "s").")
+                    } else {
+                        Button {
+                            viewModel.addToLadder(station)
+                        } label: {
+                            Label("Add", systemImage: "star")
+                        }
+                        .help("Add \(station.callsign) to your gateway ladder. Connect & Exchange tries ladder stations in order until one answers.")
+                    }
                     Button("Exchange") { onConnect(station) }
                         .help(WinlinkCopy.connectExchangeTooltip)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
-            .width(min: 150, ideal: 170)
+            .width(min: 160, ideal: 185)
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
     }

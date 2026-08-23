@@ -296,3 +296,66 @@ final class WinlinkViewModelTests: XCTestCase {
         XCTAssertNil(keychain.string(account: "pw"))
     }
 }
+
+@MainActor
+final class WinlinkGatewayLadderTests: XCTestCase {
+
+    private func makeSettings() -> WinlinkSettings {
+        let defaults = UserDefaults(suiteName: "ladder-\(UUID().uuidString)")!
+        return WinlinkSettings(defaults: defaults, keychain: KeychainStore(service: "test-\(UUID().uuidString)"))
+    }
+
+    func testAddPromoteMoveRemove() async {
+        let settings = makeSettings()
+        settings.addToLadder(callsign: "w0arp-10")
+        settings.addToLadder(callsign: "N0HI-10")
+        settings.addToLadder(callsign: "K0NTS-10")
+        settings.addToLadder(callsign: "W0ARP-10")  // duplicate ignored
+
+        XCTAssertEqual(settings.gatewayLadder.map(\.callsign), ["W0ARP-10", "N0HI-10", "K0NTS-10"])
+        XCTAssertEqual(settings.ladderRank(of: "n0hi-10"), 2)
+
+        settings.promoteToTop(callsign: "K0NTS-10")
+        XCTAssertEqual(settings.gatewayLadder.first?.callsign, "K0NTS-10")
+
+        settings.moveInLadder(callsign: "K0NTS-10", up: false)
+        XCTAssertEqual(settings.gatewayLadder.map(\.callsign), ["W0ARP-10", "K0NTS-10", "N0HI-10"])
+
+        settings.removeFromLadder(callsign: "K0NTS-10")
+        XCTAssertEqual(settings.gatewayLadder.count, 2)
+        // Legacy mirror follows the top rung.
+        XCTAssertEqual(settings.gatewayCallsign, "W0ARP-10")
+    }
+
+    func testLadderPersistsAcrossInstances() async {
+        let suite = "ladder-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        let keychain = KeychainStore(service: "test-\(UUID().uuidString)")
+        let settings = WinlinkSettings(defaults: defaults, keychain: keychain)
+        settings.addToLadder(callsign: "W0ARP-10")
+        settings.addToLadder(callsign: "N0HI-10")
+
+        let reloaded = WinlinkSettings(defaults: UserDefaults(suiteName: suite)!, keychain: keychain)
+        XCTAssertEqual(reloaded.gatewayLadder.map(\.callsign), ["W0ARP-10", "N0HI-10"])
+    }
+
+    func testLegacySingleGatewayMigratesToLadder() async {
+        let suite = "ladder-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.set("KE7XO-10", forKey: WinlinkSettings.gatewayCallsignKey)
+        let settings = WinlinkSettings(defaults: defaults, keychain: KeychainStore(service: "test-\(UUID().uuidString)"))
+        XCTAssertEqual(settings.gatewayLadder.map(\.callsign), ["KE7XO-10"])
+    }
+
+    func testFailureClassifier() {
+        // Gateway-specific → try the next rung.
+        XCTAssertTrue(WinlinkExchangeFailureClass.isWorthTryingNextGateway("no response from W0ARP-10"))
+        XCTAssertTrue(WinlinkExchangeFailureClass.isWorthTryingNextGateway("the gateway closed the link: rate limit"))
+        XCTAssertTrue(WinlinkExchangeFailureClass.isWorthTryingNextGateway("link disconnected mid-session"))
+        // CMS-level → the ladder stops.
+        XCTAssertFalse(WinlinkExchangeFailureClass.isWorthTryingNextGateway(
+            "the CMS refused the connection: Unknown client types are not allowed"))
+        XCTAssertFalse(WinlinkExchangeFailureClass.isWorthTryingNextGateway("invalid password"))
+        XCTAssertFalse(WinlinkExchangeFailureClass.isWorthTryingNextGateway("an exchange is already running"))
+    }
+}

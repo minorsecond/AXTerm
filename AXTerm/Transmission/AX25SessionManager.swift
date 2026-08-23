@@ -566,7 +566,14 @@ final class AX25SessionManager: ObservableObject {
 
         // sendBuffer.count must exactly match outstanding frames according to V(S) and V(A)
         // If this fails, we have a memory leak (frames stuck in buffer) or a duplicate tracking bug.
-        if session.sendBuffer.count != session.stateMachine.sequenceState.outstandingCount {
+        //
+        // Only enforced while connected: a local disconnect deliberately clears
+        // sendBuffer (clearPendingTransmissionState) while the sequence state
+        // still counts frames that were in flight when DISC went out — e.g. a
+        // B2F client sending FQ and immediately disconnecting. That divergence
+        // is intentional teardown, not a leak.
+        if session.state == .connected,
+           session.sendBuffer.count != session.stateMachine.sequenceState.outstandingCount {
             TxLog.invariantViolation("sendBuffer count desynced from outstandingCount", [
                 "sendBufferCount": session.sendBuffer.count,
                 "outstandingCount": session.stateMachine.sequenceState.outstandingCount,

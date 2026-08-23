@@ -70,7 +70,8 @@ final class WinlinkSessionRunner: ObservableObject {
         password: String?,
         gatewayName: String,
         transportName: String,
-        sid: WinlinkSID? = nil
+        sid: WinlinkSID? = nil,
+        preserveTranscript: Bool = false
     ) async -> WinlinkExchangeSummary {
         guard !isRunning else {
             var summary = WinlinkExchangeSummary()
@@ -82,7 +83,9 @@ final class WinlinkSessionRunner: ObservableObject {
         statusText = "Preparing outbound mail…"
         startedAt = Date()
         bytesQueuedSinceTimer = 0
-        transcript.removeAll()
+        if !preserveTranscript {
+            transcript.removeAll()
+        }
         log(.event, "Exchange started — \(transportName) via \(gatewayName)")
 
         // Compress queued mail off the main actor — LZHUF is CPU work.
@@ -380,6 +383,16 @@ final class WinlinkSessionRunner: ObservableObject {
         transcript.append(WinlinkTranscriptEntry(direction: direction, text: text))
         if transcript.count > Self.transcriptLimit {
             transcript.removeFirst(transcript.count - Self.transcriptLimit)
+        }
+
+        // Keep the toolbar status current during line-mode phases: while no
+        // byte-level transfer is active, the label mirrors the latest gateway
+        // line so "Signing in…" never sits stale through the conversation.
+        if isRunning, direction == .received, (progress?.bytesTotal ?? 0) == 0 {
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty, !trimmed.hasPrefix("‹") {
+                statusText = trimmed
+            }
         }
     }
 

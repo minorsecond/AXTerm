@@ -237,12 +237,16 @@ struct WinlinkMailView: View {
                 Button {
                     startExchange(gatewayOverride: nil)
                 } label: {
-                    let gateway = winlinkSettings.gatewayCallsign
-                    Text(gateway.isEmpty
-                         ? "Packet — choose a gateway in Stations first"
-                         : "Packet via \(gateway)")
+                    let ladder = winlinkSettings.gatewayLadder
+                    if ladder.isEmpty {
+                        Text("Packet — add gateways in Stations first")
+                    } else if ladder.count == 1 {
+                        Text("Packet via \(ladder[0].callsign)")
+                    } else {
+                        Text("Packet ladder: \(ladder.prefix(3).map(\.callsign).joined(separator: " → "))\(ladder.count > 3 ? " …" : "")")
+                    }
                 }
-                .disabled(winlinkSettings.gatewayCallsign.isEmpty)
+                .disabled(winlinkSettings.gatewayLadder.isEmpty)
 
                 Button("Telnet (Internet)") {
                     startExchange(useTelnet: true)
@@ -380,41 +384,6 @@ struct WinlinkMailView: View {
         }
 
         let password = winlinkSettings.password
-        let transport: WinlinkTransport
-        let gatewayName: String
-        let transportName: String
-
-        if useTelnet {
-            transport = WinlinkTelnetTransport(callsign: myCall)
-            gatewayName = "Winlink CMS"
-            transportName = "telnet"
-        } else {
-            let gateway = gatewayOverride ?? winlinkSettings.gatewayCallsign
-            guard !gateway.isEmpty else {
-                exchangeAlert = "Choose an RMS gateway in the Stations tab first."
-                return
-            }
-            guard client.status == .connected else {
-                exchangeAlert = "Connect to your TNC before starting a packet exchange."
-                return
-            }
-            let parsed = CallsignNormalizer.parse(gateway)
-            let destination = AX25Address(call: parsed.call, ssid: parsed.ssid)
-            let pathText = winlinkSettings.gatewayPath
-            let path = pathText.isEmpty
-                ? DigiPath()
-                : DigiPath.from(pathText.split(separator: ",").map(String.init))
-            transport = WinlinkAX25Transport(
-                sessionManager: sessionCoordinator.sessionManager,
-                sendFrames: { [weak client] frames in
-                    for frame in frames { client?.send(frame: frame) }
-                },
-                destination: destination,
-                path: path)
-            gatewayName = gateway
-            transportName = "ax25"
-        }
-
         let product = winlinkSettings.clientProduct.trimmingCharacters(in: .whitespaces)
         let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
         let sid = WinlinkSID(
@@ -422,20 +391,106 @@ struct WinlinkMailView: View {
             version: version,
             features: "B2FHM$")
 
+        if useTelnet {
+            showConsole = true
+            let transport = WinlinkTelnetTransport(callsign: myCall)
+            Task {
+                let summary = await runner.runExchange(
+                    transport: transport,
+                    myCallsign: myCall,
+                    password: password.isEmpty ? nil : password,
+                    gatewayName: "Winlink CMS",
+                    transportName: "telnet",
+                    sid: sid)
+                mailboxVM.refresh()
+                context.refreshUnread()
+                if let failure = summary.failureReason {
+                    exchangeAlert = failure
+                }
+            }
+            return
+        }
+
+        // RF: a single station (row button) or the whole ladder.
+        let rungs: [WinlinkSettings.GatewayLadderEntry]
+        if let gatewayOverride {
+            rungs = [.init(callsign: gatewayOverride, path: winlinkSettings.gatewayPath)]
+        } else {
+            rungs = winlinkSettings.gatewayLadder
+        }
+        guard !rungs.isEmpty else {
+            exchangeAlert = "Add an RMS gateway to your ladder in the Stations tab first."
+            return
+        }
+        guard client.status == .connected else {
+            exchangeAlert = "Connect to your TNC before starting a packet exchange."
+            return
+        }
+
         showConsole = true
         Task {
+            await runLadder(rungs, runner: runner, myCallsign: myCall,
+                            password: password, sid: sid)
+        }
+    }
+
+    /// Walks the gateway ladder: tries each rung until a session
+    /// completes. Gateway-specific failures (no answer, busy, link lost)
+    /// fall through to the next rung; CMS-level failures stop the ladder
+    /// because they would repeat everywhere.
+    private func runLadder(
+        _ rungs: [WinlinkSettings.GatewayLadderEntry],
+        runner: WinlinkSessionRunner,
+        myCallsign: String,
+        password: String,
+        sid: WinlinkSID
+    ) async {
+        var lastFailure: String?
+        var lastFailedCallsign = rungs[0].callsign
+
+        for (index, rung) in rungs.enumerated() {
+            let parsed = CallsignNormalizer.parse(rung.callsign)
+            let destination = AX25Address(call: parsed.call, ssid: parsed.ssid)
+            let path = rung.path.isEmpty
+                ? DigiPath()
+                : DigiPath.from(rung.path.split(separator: ",").map(String.init))
+            let transport = WinlinkAX25Transport(
+                sessionManager: sessionCoordinator.sessionManager,
+                sendFrames: { [weak client] frames in
+                    for frame in frames { client?.send(frame: frame) }
+                },
+                destination: destination,
+                path: path)
+
             let summary = await runner.runExchange(
                 transport: transport,
-                myCallsign: myCall,
+                myCallsign: myCallsign,
                 password: password.isEmpty ? nil : password,
-                gatewayName: gatewayName,
-                transportName: transportName,
-                sid: sid)
+                gatewayName: rung.callsign,
+                transportName: "ax25",
+                sid: sid,
+                preserveTranscript: index > 0)
+
             mailboxVM.refresh()
             context.refreshUnread()
-            if let failure = summary.failureReason {
-                exchangeAlert = failure
+
+            guard let failure = summary.failureReason else {
+                return  // success — the ladder is done
             }
+            lastFailure = failure
+            lastFailedCallsign = rung.callsign
+
+            let hasNextRung = index + 1 < rungs.count
+            if hasNextRung, WinlinkExchangeFailureClass.isWorthTryingNextGateway(failure) {
+                continue
+            }
+            break
+        }
+
+        if let lastFailure {
+            exchangeAlert = rungs.count > 1
+                ? "No gateway completed a session. Last error (\(lastFailedCallsign)): \(lastFailure)"
+                : lastFailure
         }
     }
 

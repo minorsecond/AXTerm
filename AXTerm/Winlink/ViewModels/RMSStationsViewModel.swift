@@ -14,12 +14,17 @@ final class RMSStationsViewModel: ObservableObject {
     /// Built per refresh so a key entered in Settings applies immediately.
     private let makeClient: () -> CMSClienting
     private let settings: WinlinkSettings
+    private var settingsSubscription: AnyCancellable?
 
     init(store: WinlinkStore, makeClient: @escaping () -> CMSClienting, settings: WinlinkSettings) {
         self.store = store
         self.makeClient = makeClient
         self.settings = settings
         loadCache()
+        // Ladder edits (from Settings or other rows) must repaint the table.
+        settingsSubscription = settings.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
     }
 
     /// What blocks a refresh right now, if anything (drives inline banners).
@@ -66,10 +71,29 @@ final class RMSStationsViewModel: ObservableObject {
     }
 
     func setAsGateway(_ station: WinlinkRMSStationRecord) {
-        settings.gatewayCallsign = station.callsign
+        settings.addToLadder(callsign: station.callsign)
+        settings.promoteToTop(callsign: station.callsign)
     }
 
-    var currentGateway: String { settings.gatewayCallsign }
+    func addToLadder(_ station: WinlinkRMSStationRecord) {
+        settings.addToLadder(callsign: station.callsign)
+    }
+
+    func removeFromLadder(_ station: WinlinkRMSStationRecord) {
+        settings.removeFromLadder(callsign: station.callsign)
+    }
+
+    func promoteToTop(_ station: WinlinkRMSStationRecord) {
+        settings.promoteToTop(callsign: station.callsign)
+    }
+
+    func ladderRank(of station: WinlinkRMSStationRecord) -> Int? {
+        settings.ladderRank(of: station.callsign)
+    }
+
+    var ladderSummary: [String] { settings.gatewayLadder.map(\.callsign) }
+
+    var currentGateway: String { settings.gatewayLadder.first?.callsign ?? "" }
 
     static func describe(_ error: Error) -> String {
         switch error {
