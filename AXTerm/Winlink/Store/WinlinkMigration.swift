@@ -102,6 +102,36 @@ extension DatabaseManager {
         try seedSystemFolders(db)
     }
 
+    static func createWinlinkContacts(_ db: Database) throws {
+        try db.create(table: WinlinkContactRecord.databaseTableName) { t in
+            t.autoIncrementedPrimaryKey("id")
+            t.column("displayName", .text).notNull()
+            t.column("callsign", .text).notNull().defaults(to: "")
+            t.column("smtpEmail", .text).notNull().defaults(to: "")
+            t.column("phone", .text).notNull().defaults(to: "")
+            t.column("organization", .text).notNull().defaults(to: "")
+            t.column("positionTitle", .text).notNull().defaults(to: "")
+            t.column("gridSquare", .text).notNull().defaults(to: "")
+            t.column("street", .text).notNull().defaults(to: "")
+            t.column("city", .text).notNull().defaults(to: "")
+            t.column("state", .text).notNull().defaults(to: "")
+            t.column("postalCode", .text).notNull().defaults(to: "")
+            t.column("notes", .text).notNull().defaults(to: "")
+            t.column("favorite", .boolean).notNull().defaults(to: false)
+            t.column("createdAt", .datetime).notNull()
+            t.column("updatedAt", .datetime).notNull()
+            t.column("lastUsedAt", .datetime)
+        }
+        try db.create(
+            index: "idx_winlinkContact_callsign",
+            on: WinlinkContactRecord.databaseTableName,
+            columns: ["callsign"])
+        try db.create(
+            index: "idx_winlinkContact_name",
+            on: WinlinkContactRecord.databaseTableName,
+            columns: ["displayName"])
+    }
+
     private static func seedSystemFolders(_ db: Database) throws {
         let seeds: [(WinlinkFolderRecord.SystemRole, String, Int)] = [
             (.inbox, "Inbox", 0),

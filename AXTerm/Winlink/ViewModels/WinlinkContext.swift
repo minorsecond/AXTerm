@@ -10,6 +10,8 @@ final class WinlinkContext: ObservableObject {
     let store: WinlinkStore?
     let settings: WinlinkSettings
     let runner: WinlinkSessionRunner?
+    /// Address book (nil when the database failed to open).
+    let contactStore: ContactStore?
     /// Operator identity used to auto-fill forms and signatures.
     let profile: StationProfile
     /// App-wide position source (GPS with manual-grid fallback).
@@ -19,8 +21,10 @@ final class WinlinkContext: ObservableObject {
     /// exchanges and mailbox mutations.
     @Published private(set) var unreadCount: Int = 0
 
-    init(store: WinlinkStore?, settings: WinlinkSettings, profile: StationProfile? = nil) {
+    init(store: WinlinkStore?, settings: WinlinkSettings, profile: StationProfile? = nil,
+         contactStore: ContactStore? = nil) {
         self.store = store
+        self.contactStore = contactStore
         self.settings = settings
         self.runner = store.map { WinlinkSessionRunner(store: $0) }
         self.profile = profile ?? StationProfile()

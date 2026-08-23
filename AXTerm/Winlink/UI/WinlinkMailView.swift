@@ -7,6 +7,7 @@ struct WinlinkMailView: View {
     enum Tab: String, CaseIterable {
         case mail = "Mail"
         case stations = "Stations"
+        case contacts = "Contacts"
     }
 
     @ObservedObject private var context: WinlinkContext
@@ -18,6 +19,7 @@ struct WinlinkMailView: View {
     @StateObject private var mailboxVM: WinlinkMailboxViewModel
     @StateObject private var stationsVM: RMSStationsViewModel
     @StateObject private var catalogVM: WinlinkCatalogViewModel
+    @StateObject private var contactsVM: WinlinkContactsViewModel
 
     @State private var tab: Tab = .mail
     @State private var showingCatalog = false
@@ -47,6 +49,8 @@ struct WinlinkMailView: View {
         _catalogVM = StateObject(wrappedValue: WinlinkCatalogViewModel(
             store: store,
             client: WinlinkCMSClient(accessKey: settingsStore.effectiveAPIKey)))
+        _contactsVM = StateObject(wrappedValue: WinlinkContactsViewModel(
+            store: context.contactStore ?? NullContactStore()))
     }
 
     var body: some View {
@@ -65,6 +69,10 @@ struct WinlinkMailView: View {
                     RMSStationsView(
                         viewModel: stationsVM,
                         onConnect: { station in startExchange(gatewayOverride: station.callsign) })
+                case .contacts:
+                    WinlinkContactsView(
+                        viewModel: contactsVM,
+                        onCompose: { address in composeTo(address) })
                 }
             }
         }
@@ -189,7 +197,9 @@ struct WinlinkMailView: View {
             WinlinkMessageDetail(
                 viewModel: mailboxVM,
                 onReply: { replyAll in composeReply(replyAll: replyAll) },
-                onForward: { composeForward() })
+                onForward: { composeForward() },
+                knownContact: { address in contactsVM.contact(forAddress: address) != nil },
+                onAddContact: { address in addContact(address: address) })
                 .frame(minWidth: 300, idealWidth: 480)
         }
     }
@@ -198,6 +208,29 @@ struct WinlinkMailView: View {
 
     private func composeNew() {
         openCompose(prefill: nil)
+    }
+
+    /// Compose to a specific address (contact row, add-sender flows).
+    private func composeTo(_ address: String) {
+        let me = appSettings.myCallsign.isEmpty ? "NOCALL" : appSettings.myCallsign
+        let draft = WinlinkB2Message(
+            mid: WinlinkB2Message.generateMID(callsign: me),
+            date: Date(),
+            type: .privateMessage,
+            from: me,
+            to: [address],
+            cc: [],
+            subject: "",
+            mbo: me,
+            body: Data(),
+            attachments: [])
+        openCompose(prefill: draft)
+    }
+
+    /// Jumps to the Contacts tab with the editor prefilled.
+    private func addContact(address: String) {
+        tab = .contacts
+        contactsVM.beginNewContact(prefillAddress: address)
     }
 
     private func composeReply(replyAll: Bool) {

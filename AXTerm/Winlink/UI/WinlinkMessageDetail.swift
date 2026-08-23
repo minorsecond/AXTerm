@@ -8,6 +8,10 @@ struct WinlinkMessageDetail: View {
     @ObservedObject var viewModel: WinlinkMailboxViewModel
     var onReply: (_ replyAll: Bool) -> Void
     var onForward: () -> Void
+    /// True when the address already has an address-book entry.
+    var knownContact: (String) -> Bool = { _ in true }
+    /// Opens the contact editor prefilled with the address.
+    var onAddContact: ((String) -> Void)?
 
     var body: some View {
         if let stored = viewModel.selectedMessage {
@@ -34,7 +38,21 @@ struct WinlinkMessageDetail: View {
                         Text(message.subject.isEmpty ? "(no subject)" : message.subject)
                             .font(.title3.weight(.semibold))
                             .textSelection(.enabled)
-                        headerRow("From", message.from)
+                        HStack(spacing: 6) {
+                            headerRow("From", message.from)
+                            if let onAddContact,
+                               message.from.uppercased() != "SERVICE",
+                               !knownContact(message.from) {
+                                Button {
+                                    onAddContact(message.from)
+                                } label: {
+                                    Image(systemName: "person.badge.plus")
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Add \(message.from) to your contacts")
+                            }
+                        }
                         headerRow("To", message.to.joined(separator: ", "))
                         if !message.cc.isEmpty {
                             headerRow("Cc", message.cc.joined(separator: ", "))

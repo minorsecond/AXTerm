@@ -10,12 +10,18 @@ struct WinlinkComposeWindow: View {
     @Environment(\.dismiss) private var dismiss
     var onChanged: () -> Void
     var locationService: StationLocationService?
+    private let contactStore: ContactStore?
     @State private var isFetchingPosition = false
+    @FocusState private var focusedAddressField: AddressField?
+
+    enum AddressField { case to, cc }
 
     init(store: WinlinkStore, myCallsign: String, draftMID: String,
          locationService: StationLocationService? = nil,
+         contactStore: ContactStore? = nil,
          onChanged: @escaping () -> Void) {
         self.locationService = locationService
+        self.contactStore = contactStore
         let stored = try? store.message(mid: draftMID)
         _viewModel = ObservedObject(wrappedValue: WinlinkComposeViewModel(
             store: store,
@@ -29,8 +35,12 @@ struct WinlinkComposeWindow: View {
         VStack(spacing: 0) {
             Form {
                 TextField("To:", text: $viewModel.toText, prompt: Text("Callsign or email, comma-separated"))
+                    .focused($focusedAddressField, equals: .to)
                     .help("Recipients: callsigns (W1AW) or internet addresses (name@example.com — sent through the Winlink internet gateway).")
+                addressSuggestions(for: .to)
                 TextField("Cc:", text: $viewModel.ccText, prompt: Text("Optional"))
+                    .focused($focusedAddressField, equals: .cc)
+                addressSuggestions(for: .cc)
                 HStack {
                     TextField("Subject:", text: $viewModel.subject)
                     Text("\(viewModel.subjectRemaining)")
@@ -132,6 +142,7 @@ struct WinlinkComposeWindow: View {
 
                 Button("Queue for Sending") {
                     if viewModel.queueForSending() != nil {
+                        recordContactUse()
                         onChanged()
                         dismiss()
                     }
@@ -157,6 +168,76 @@ struct WinlinkComposeWindow: View {
                 .foregroundStyle(viewModel.isOverBudget ? .red : .secondary)
         }
         .help(WinlinkCopy.attachmentBudgetTooltip)
+    }
+
+    /// Contact chips completing the fragment after the last comma.
+    @ViewBuilder
+    private func addressSuggestions(for field: AddressField) -> some View {
+        if let contactStore, focusedAddressField == field {
+            let text = field == .to ? viewModel.toText : viewModel.ccText
+            let fragment = text.split(separator: ",", omittingEmptySubsequences: false)
+                .last.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+            let matches = ((try? contactStore.searchContacts(fragment)) ?? [])
+                .filter { $0.preferredAddress != nil }
+                .prefix(5)
+            if !matches.isEmpty, fragment.count >= 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(Array(matches)) { contact in
+                            Button {
+                                complete(field: field, with: contact)
+                            } label: {
+                                HStack(spacing: 4) {
+                                    if contact.favorite {
+                                        Image(systemName: "star.fill")
+                                            .font(.caption2)
+                                            .foregroundStyle(.yellow)
+                                    }
+                                    Text(contact.displayName).font(.caption)
+                                    Text(contact.preferredAddress ?? "")
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(.quaternary, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .help("Use \(contact.preferredAddress ?? "") from your contacts")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func complete(field: AddressField, with contact: WinlinkContactRecord) {
+        guard let address = contact.preferredAddress else { return }
+        let text = field == .to ? viewModel.toText : viewModel.ccText
+        var parts = text.split(separator: ",", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        if parts.isEmpty {
+            parts = [address]
+        } else {
+            parts[parts.count - 1] = address
+        }
+        let joined = parts.filter { !$0.isEmpty }.joined(separator: ", ")
+        if field == .to {
+            viewModel.toText = joined
+        } else {
+            viewModel.ccText = joined
+        }
+    }
+
+    /// Bumps contact recency for every queued address.
+    private func recordContactUse() {
+        guard let contactStore else { return }
+        let (to, _) = WinlinkComposeViewModel.parseAddressList(viewModel.toText)
+        let (cc, _) = WinlinkComposeViewModel.parseAddressList(viewModel.ccText)
+        let now = Date()
+        for address in to + cc {
+            try? contactStore.touchContact(address: address, at: now)
+        }
     }
 
     private func addAttachment() {

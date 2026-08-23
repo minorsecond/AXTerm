@@ -381,6 +381,9 @@ nonisolated enum DatabaseManager {
         registerReportedMigration(&migrator, version: 5, name: "createWinlinkTables") { db in
             try createWinlinkTables(db)
         }
+        registerReportedMigration(&migrator, version: 6, name: "createWinlinkContacts") { db in
+            try createWinlinkContacts(db)
+        }
         return migrator
     }()
 
