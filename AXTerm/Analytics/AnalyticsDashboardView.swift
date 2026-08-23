@@ -2031,7 +2031,14 @@ private struct ObservedSessionsCard: View {
                         Text("\(session.stationA) \u{2194} \(session.stationB)")
                             .font(.caption.monospaced())
                             .lineLimit(1)
-                        if session.end == nil {
+                        if !session.wasEstablished {
+                            Text("NO ANSWER")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Color(nsColor: .systemOrange).opacity(0.18), in: Capsule())
+                                .foregroundStyle(Color(nsColor: .systemOrange))
+                        } else if session.end == nil {
                             Text("ACTIVE")
                                 .font(.system(size: 9, weight: .bold))
                                 .padding(.horizontal, 5)
@@ -2060,6 +2067,10 @@ private struct ObservedSessionsCard: View {
 
     private func sessionSummary(_ session: SessionObservation) -> String {
         var parts: [String] = [Self.timeFormatter.string(from: session.start)]
+        if !session.wasEstablished {
+            parts.append("\(session.frameCount) tries")
+            return parts.joined(separator: " \u{00B7} ")
+        }
         if let duration = session.duration {
             parts.append(durationText(duration))
         }
@@ -2073,6 +2084,9 @@ private struct ObservedSessionsCard: View {
     }
 
     private func sessionTooltip(_ session: SessionObservation) -> String {
+        if !session.wasEstablished {
+            return "Connect attempt from \(session.stationA) to \(session.stationB) starting \(session.start.formatted()): \(session.frameCount) frames of SABM retries/refusals with no established link. Repeated no-answer attempts can indicate a station that is off the air or out of range."
+        }
         let endText = session.end.map { "ended \($0.formatted())" } ?? "still active at the end of the window"
         return "AX.25 session observed on channel between \(session.stationA) and \(session.stationB): started \(session.start.formatted()), \(endText). \(session.frameCount) frames (\(session.iFrameCount) data), \(session.byteCount) payload bytes."
     }

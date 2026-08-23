@@ -236,6 +236,9 @@ nonisolated struct SessionObservation: Equatable, Sendable, Identifiable {
     let iFrameCount: Int
     let byteCount: Int
     let viaDigipeaters: [String]
+    /// False for connect attempts that were never answered (SABM retries with no
+    /// UA, data, or supervisory response — including DM-refused attempts).
+    let wasEstablished: Bool
 
     var id: String { "\(stationA)|\(stationB)|\(start.timeIntervalSinceReferenceDate)" }
 
@@ -272,6 +275,9 @@ nonisolated enum SessionObservationCalculator {
             var viaDigipeaters: Set<String> = []
             var sawConnectionControl = false
             var sFrameCount = 0
+            /// True once the link demonstrably carried a real session: a UA, any
+            /// data, or supervisory flow. A pure SABM/DM exchange never sets it.
+            var established = false
         }
 
         var open: [PairKey: OpenSession] = [:]
@@ -295,7 +301,8 @@ nonisolated enum SessionObservationCalculator {
                 frameCount: s.frameCount,
                 iFrameCount: s.iFrameCount,
                 byteCount: s.byteCount,
-                viaDigipeaters: s.viaDigipeaters.sorted()
+                viaDigipeaters: s.viaDigipeaters.sorted(),
+                wasEstablished: s.established
             ))
         }
 
@@ -324,10 +331,19 @@ nonisolated enum SessionObservationCalculator {
             }
 
             if isConnect {
-                if let existing = open[key], qualifies(existing) {
+                // AX.25 retries SABM on its T1 timer when nobody answers: a SABM
+                // while the pair is still UNestablished is a retry of the same
+                // attempt, not a new session. Only a SABM after an established
+                // session genuinely starts a new one.
+                if var existing = open[key], !existing.established {
+                    existing.frameCount += 1
+                    existing.lastActivity = packet.timestamp
+                    existing.sawConnectionControl = true
+                    open[key] = existing
+                    continue
+                }
+                if open[key] != nil {
                     close(key, at: packet.timestamp)
-                } else {
-                    open.removeValue(forKey: key)
                 }
                 open[key] = OpenSession(
                     initiator: from,
@@ -351,9 +367,14 @@ nonisolated enum SessionObservationCalculator {
             if packet.frameType == .i {
                 session.iFrameCount += 1
                 session.byteCount += packet.info.count
+                session.established = true
             }
             if packet.frameType == .s {
                 session.sFrameCount += 1
+                session.established = true
+            }
+            if decoded.uType == .UA {
+                session.established = true
             }
             for via in packet.via where via.repeated {
                 if CallsignValidator.isValidRoutingNode(via.display) {
@@ -363,7 +384,13 @@ nonisolated enum SessionObservationCalculator {
             open[key] = session
 
             if isDisconnect {
-                close(key, at: packet.timestamp)
+                // A DM to an unestablished attempt is a refusal, not a session
+                // ending: keep accumulating so a SABM/DM ping-pong stays one row.
+                if session.established {
+                    close(key, at: packet.timestamp)
+                } else if decoded.uType == .DISC {
+                    close(key, at: packet.timestamp)
+                }
             }
         }
 

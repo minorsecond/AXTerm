@@ -251,6 +251,67 @@ final class StationActivityInsightsTests: XCTestCase {
         XCTAssertEqual(sessions.count, 2, "A long quiet gap ends the first session")
     }
 
+    func testSABMRetryBurstIsOneConnectAttempt() {
+        // AX.25 retries SABM on its T1 timer (~every 6 s) when nobody answers.
+        // Six SABMs are ONE failed connect attempt, not six sessions.
+        let base = Date(timeIntervalSince1970: 1_700_009_000)
+        let packets = (0..<6).map { offset in
+            makePacket(
+                timestamp: base.addingTimeInterval(Double(offset) * 6),
+                from: "K0NTS", to: "KF0BPN", frameType: .u, control: 0x2F // SABM
+            )
+        }
+
+        let sessions = SessionObservationCalculator.sessions(
+            packets: packets, identityMode: .station, windowEnd: base.addingTimeInterval(3600)
+        )
+
+        XCTAssertEqual(sessions.count, 1, "A SABM retry burst is a single connect attempt")
+        let attempt = sessions[0]
+        XCTAssertFalse(attempt.wasEstablished, "Nobody ever answered")
+        XCTAssertEqual(attempt.frameCount, 6)
+        XCTAssertEqual(attempt.start, base)
+    }
+
+    func testRefusedConnectDMPingPongIsOneAttempt() {
+        // A busy station answers every SABM with DM: still one attempt, not
+        // a session per SABM/DM pair.
+        let base = Date(timeIntervalSince1970: 1_700_009_500)
+        var packets: [Packet] = []
+        for attempt in 0..<3 {
+            let t = base.addingTimeInterval(Double(attempt) * 8)
+            packets.append(makePacket(timestamp: t, from: "K0NTS", to: "KF0BPN", frameType: .u, control: 0x2F)) // SABM
+            packets.append(makePacket(timestamp: t.addingTimeInterval(1), from: "KF0BPN", to: "K0NTS", frameType: .u, control: 0x0F)) // DM
+        }
+
+        let sessions = SessionObservationCalculator.sessions(
+            packets: packets, identityMode: .station, windowEnd: base.addingTimeInterval(3600)
+        )
+
+        XCTAssertEqual(sessions.count, 1, "SABM/DM ping-pong is one refused attempt")
+        XCTAssertFalse(sessions[0].wasEstablished)
+    }
+
+    func testEstablishedSessionFollowedByReconnectIsTwoSessions() {
+        // A real established session, then a fresh SABM shortly after: the new
+        // connect genuinely starts a second session.
+        let base = Date(timeIntervalSince1970: 1_700_009_800)
+        var packets: [Packet] = [sabm("W1AAA", "K2BBB", at: base)]
+        packets.append(makePacket(timestamp: base.addingTimeInterval(1), from: "K2BBB", to: "W1AAA", frameType: .u, control: 0x63)) // UA
+        packets.append(makePacket(timestamp: base.addingTimeInterval(10), from: "W1AAA", to: "K2BBB", frameType: .i, control: 0x00, info: "hi"))
+        packets.append(disc("W1AAA", "K2BBB", at: base.addingTimeInterval(60)))
+        packets.append(sabm("W1AAA", "K2BBB", at: base.addingTimeInterval(120)))
+        packets.append(makePacket(timestamp: base.addingTimeInterval(121), from: "K2BBB", to: "W1AAA", frameType: .u, control: 0x63)) // UA
+        packets.append(makePacket(timestamp: base.addingTimeInterval(130), from: "W1AAA", to: "K2BBB", frameType: .i, control: 0x00, info: "again"))
+
+        let sessions = SessionObservationCalculator.sessions(
+            packets: packets, identityMode: .station, windowEnd: base.addingTimeInterval(5000)
+        )
+
+        XCTAssertEqual(sessions.count, 2)
+        XCTAssertTrue(sessions.allSatisfy(\.wasEstablished))
+    }
+
     func testStrayFramesDoNotBecomeSessions() {
         let base = Date(timeIntervalSince1970: 1_700_006_000)
         let packets = [
