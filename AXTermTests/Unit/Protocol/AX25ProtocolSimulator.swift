@@ -85,6 +85,31 @@ final class AX25ProtocolSimulator {
     var dropProbability: Double = 0.0          // 0.0 to 1.0
     var duplicateProbability: Double = 0.0     // 0.0 to 1.0
     var corruptionProbability: Double = 0.0    // 0.0 to 1.0
+
+    /// Deterministic RNG (SplitMix64). Unseeded randomness made lossy-link tests
+    /// flaky by design (~1 failure per thousand runs); a fixed seed keeps loss
+    /// patterns realistic AND reproducible, per the project's determinism rule.
+    private var rngState: UInt64 = 0x5EED_5EED_5EED_5EED
+
+    private func nextRandom() -> UInt64 {
+        rngState &+= 0x9E37_79B9_7F4A_7C15
+        var z = rngState
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+
+    private func randomUnit() -> Double {
+        Double(nextRandom() >> 11) / Double(1 << 53)
+    }
+
+    private func randomDouble(in range: ClosedRange<Double>) -> Double {
+        range.lowerBound + randomUnit() * (range.upperBound - range.lowerBound)
+    }
+
+    private func randomInt(below bound: Int) -> Int {
+        bound > 0 ? Int(nextRandom() % UInt64(bound)) : 0
+    }
     
     func addNode(_ node: AX25SimulatorNode) {
         nodes[node.callsign.display] = node
@@ -100,16 +125,16 @@ final class AX25ProtocolSimulator {
     
     private func scheduleDelivery(frame: OutboundFrame, to targetNode: AX25SimulatorNode) {
         // Apply Drop
-        if Double.random(in: 0..<1.0) < dropProbability {
+        if randomUnit() < dropProbability {
             return
         }
         
         // Calculate latency
-        let latency = max(0.001, baseLatency + Double.random(in: -jitter...jitter))
+        let latency = max(0.001, baseLatency + randomDouble(in: -jitter...jitter))
         
         // Corrupt frame
         var frameToDeliver = frame
-        if Double.random(in: 0..<1.0) < corruptionProbability {
+        if randomUnit() < corruptionProbability {
             frameToDeliver = corrupt(frame: frameToDeliver)
         }
         
@@ -122,8 +147,8 @@ final class AX25ProtocolSimulator {
         }
         
         // Apply Duplication
-        if Double.random(in: 0..<1.0) < duplicateProbability {
-            let dupLatency = latency + Double.random(in: 0...0.05)
+        if randomUnit() < duplicateProbability {
+            let dupLatency = latency + randomDouble(in: 0...0.05)
             Task {
                 try? await Task.sleep(nanoseconds: UInt64(dupLatency * 1_000_000_000))
                 if !Task.isCancelled {
@@ -137,8 +162,8 @@ final class AX25ProtocolSimulator {
         guard !frame.payload.isEmpty else { return frame }
         var corruptedData = frame.payload
         // Flip a random bit in a random byte
-        let byteIndex = Int.random(in: 0..<corruptedData.count)
-        let bitIndex = Int.random(in: 0..<8)
+        let byteIndex = randomInt(below: corruptedData.count)
+        let bitIndex = randomInt(below: 8)
         corruptedData[byteIndex] ^= (1 << bitIndex)
         
         return OutboundFrame(
