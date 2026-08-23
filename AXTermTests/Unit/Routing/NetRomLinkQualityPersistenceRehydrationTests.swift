@@ -437,11 +437,12 @@ final class NetRomLinkQualityPersistenceRehydrationTests: XCTestCase {
 
         let statsAfterReplay = freshEstimator.linkStats(from: "W7REP", to: "N0CAL")
 
-        // EXPECT: observation count increased by 10
-        // Note: After new observations, the restored counts are cleared and replaced with live counts
-        // So we expect exactly 10 live observations
-        XCTAssertEqual(statsAfterReplay.observationCount, 10,
-            "After replay, should have 10 live observations")
+        // EXPECT: the 20 restored observations carry as lifetime credit and the
+        // 10 replayed ones add to them — matching a full recompute exactly.
+        // (The old behavior dropped the restored count on the first live frame,
+        // re-darkening every minObs gate after each restart.)
+        XCTAssertEqual(statsAfterReplay.observationCount, 30,
+            "20 restored + 10 replayed observations")
 
         // Compare to full recompute (packets 0..29)
         testClock = baseTime
@@ -462,6 +463,8 @@ final class NetRomLinkQualityPersistenceRehydrationTests: XCTestCase {
         // But both should reflect the duplicate pattern
         XCTAssertEqual(statsAfterReplay.ewmaQuality, statsFullRecompute.ewmaQuality, accuracy: 30,
             "Quality after replay should be similar to full recompute")
+        XCTAssertEqual(statsAfterReplay.observationCount, statsFullRecompute.observationCount,
+            "Incremental replay must match a full recompute's evidence count")
     }
 
     /// Test that bounded replay doesn't corrupt persisted evidence.

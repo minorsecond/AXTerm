@@ -1139,4 +1139,42 @@ final class NetRomLinkQualityTests: XCTestCase {
         XCTAssertLessThan(peerDfAfter, peerDfBefore,
                           "The REJ is loss evidence for the direction that dropped the I-frame")
     }
+
+    // MARK: - Observation-count continuity across restarts
+
+    func testObservationCountCarriesAcrossRestartWhenNewEvidenceArrives() {
+        // Field capture 2026-08-23: K0NTS-1→N3HYM-15 had 7 observations before
+        // an app restart; fresh traffic after the restart RESET the exported
+        // count to live-only, re-darkening every minObs>=5 gate downstream.
+        // Restored estimates already seed the live EWMAs — the evidence-count
+        // credit must carry the same way.
+        var estimator = makeEstimator()
+        var now = Date(timeIntervalSince1970: 1_700_020_000)
+        testClock = now
+
+        estimator.importLinkStats([
+            LinkStatRecord(
+                fromCall: "K0NTS-1",
+                toCall: "N3HYM-15",
+                quality: 126,
+                lastUpdated: now,
+                dfEstimate: 1.0,
+                drEstimate: 0.53,
+                duplicateCount: 1,
+                observationCount: 7
+            )
+        ])
+
+        now = now.addingTimeInterval(5); testClock = now
+        estimator.observePacket(
+            makePacket(from: "K0NTS-1", to: "N3HYM-15", frameType: .i, control: 0x00, controlByte1: nil, timestamp: now),
+            timestamp: now
+        )
+
+        let stats = estimator.linkStats(from: "K0NTS-1", to: "N3HYM-15")
+        XCTAssertGreaterThanOrEqual(stats.observationCount, 8,
+                                    "7 restored observations + 1 live must not collapse to 1")
+        XCTAssertGreaterThanOrEqual(stats.duplicateCount, 1,
+                                    "Restored duplicate credit carries too")
+    }
 }

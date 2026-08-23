@@ -602,6 +602,10 @@ nonisolated private struct DirectionalLinkStats {
     var restoredReverseEstimate: Double?
     var restoredObservationCount: Int
     var restoredDuplicateCount: Int
+    /// Lifetime evidence credit transferred from restored state when live
+    /// observations resume — restarts must not re-darken minObs gates.
+    var carriedObservationCount: Int = 0
+    var carriedDuplicateCount: Int = 0
     var restoredQuality: Int?
 
     /// EWMA sample counts per channel, seeded at 1 for the cold-start prior.
@@ -680,7 +684,13 @@ nonisolated private struct DirectionalLinkStats {
             reverseEstimate = clamp01(restoredReverseEstimate)
         }
 
-        // Clear restored values once we have real observations
+        // Clear restored values once we have real observations — but carry the
+        // evidence-count credit forward: the estimates seed the live EWMAs, and
+        // the observation count must survive the same way or every restart
+        // re-darkens the minObs gates downstream (field capture 2026-08-23:
+        // K0NTS-1→N3HYM-15 dropped 7→1 on the first post-restart frame).
+        carriedObservationCount += restoredObservationCount
+        carriedDuplicateCount += restoredDuplicateCount
         restoredForwardEstimate = nil
         restoredReverseEstimate = nil
         restoredObservationCount = 0
@@ -766,8 +776,8 @@ nonisolated private struct DirectionalLinkStats {
         let dr: Double?
 
         if liveTotal > 0 {
-            total = liveTotal
-            dups = liveDups
+            total = liveTotal + carriedObservationCount
+            dups = liveDups + carriedDuplicateCount
             df = forwardEstimate
             dr = reverseEstimate
         } else if restoredObservationCount > 0 {
