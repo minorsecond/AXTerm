@@ -466,6 +466,11 @@ struct WinlinkMailView: View {
                 destination: destination,
                 path: path)
 
+            // Point the adaptive toolbar at this exchange's route so the
+            // popover shows the session scope instead of "Global Network".
+            sessionCoordinator.selectAdaptiveSession(
+                destination: rung.callsign, path: rung.path.isEmpty ? nil : rung.path)
+
             let summary = await runner.runExchange(
                 transport: transport,
                 myCallsign: myCallsign,
@@ -479,6 +484,7 @@ struct WinlinkMailView: View {
             context.refreshUnread()
 
             guard let failure = summary.failureReason else {
+                sessionCoordinator.selectAdaptiveSession(destination: nil, path: nil)
                 return  // success — the ladder is done
             }
             lastFailure = failure
@@ -490,6 +496,8 @@ struct WinlinkMailView: View {
             }
             break
         }
+
+        sessionCoordinator.selectAdaptiveSession(destination: nil, path: nil)
 
         if let lastFailure {
             exchangeAlert = rungs.count > 1
