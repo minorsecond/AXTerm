@@ -129,6 +129,9 @@ nonisolated struct SidebarStationSelection: Equatable {
     let context: ConnectSourceContext
     let lastUsedMode: ConnectBarMode?
     let hasNetRomRoute: Bool
+    /// Explicit via path carried by the request (e.g. a path drawn on the
+    /// network graph). Empty for plain sidebar clicks.
+    var viaDigipeaters: [String] = []
 }
 
 nonisolated enum SidebarConnectAction: Equatable {
@@ -206,7 +209,7 @@ nonisolated enum ConnectBarStateReducer {
         case .ax25:
             return ConnectDraft(sourceContext: selection.context, destination: normalized, transport: .ax25(.direct))
         case .ax25ViaDigi:
-            return ConnectDraft(sourceContext: selection.context, destination: normalized, transport: .ax25(.viaDigipeaters([])))
+            return ConnectDraft(sourceContext: selection.context, destination: normalized, transport: .ax25(.viaDigipeaters(selection.viaDigipeaters)))
         case .netrom:
             return ConnectDraft(sourceContext: selection.context, destination: normalized, transport: .netrom(NetRomDraftOptions(forcedNextHop: nil, routePreview: nil)))
         }

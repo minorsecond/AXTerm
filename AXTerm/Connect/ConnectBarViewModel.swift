@@ -71,6 +71,12 @@ final class ConnectBarViewModel: ObservableObject {
         let digisSignature: String
     }
 
+    // Implicit MainActor-isolated deinits dispatch through
+    // swift_task_deinitOnExecutor, which crashes in libmalloc when the object
+    // is released synchronously (same failure TelemetryRateLimiter hit).
+    // The deinit touches no isolated state, so opt it out.
+    nonisolated deinit {}
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.barState = .disconnectedDraft(.empty())
@@ -543,8 +549,14 @@ final class ConnectBarViewModel: ObservableObject {
 
     func applySidebarSelection(_ selection: SidebarStationSelection, action: SidebarConnectAction) {
         barState = ConnectBarStateReducer.reduce(state: barState, event: .sidebarSelection(selection, action))
-        guard case let .disconnectedDraft(draft) = barState else { return }
-        applyDraft(draft)
+        // An immediate connect lands in .connecting — the draft's fields must
+        // still be applied, or the follow-up buildIntent() sees an empty bar.
+        switch barState {
+        case let .disconnectedDraft(draft), let .connecting(draft):
+            applyDraft(draft)
+        default:
+            break
+        }
     }
 
     func buildIntent(sourceContext: ConnectSourceContext) -> ConnectIntent {

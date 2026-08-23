@@ -1687,11 +1687,16 @@ struct TerminalView: View {
         if request.intent.sourceContext == .stations {
             let normalized = CallsignValidator.normalize(request.intent.to)
             let hasRoute = client.netRomIntegration?.bestRouteTo(normalized) != nil
+            var requestVias: [String] = []
+            if case let .ax25ViaDigis(digis) = request.intent.kind {
+                requestVias = digis.map(\.stringValue)
+            }
             let selection = SidebarStationSelection(
                 callsign: normalized,
                 context: .stations,
                 lastUsedMode: request.mode,
-                hasNetRomRoute: hasRoute
+                hasNetRomRoute: hasRoute,
+                viaDigipeaters: requestVias
             )
             connectBarViewModel.applySidebarSelection(
                 selection,

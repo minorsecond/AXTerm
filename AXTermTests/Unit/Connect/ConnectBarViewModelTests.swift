@@ -329,4 +329,33 @@ final class ConnectBarViewModelTests: XCTestCase {
         XCTAssertFalse(vm.isSuggestedPathUnavailable(["DRLNOD"]))
     }
 
+
+    func testApplySidebarSelectionWithConnectActionPopulatesFields() {
+        // Regression: with action .connect the reducer enters .connecting and the
+        // published fields (toCall, mode, vias) were never applied — so the
+        // subsequent buildIntent() saw an empty callsign and silently failed.
+        let vm = ConnectBarViewModel()
+        let selection = SidebarStationSelection(
+            callsign: "KB5YZB-7",
+            context: .stations,
+            lastUsedMode: .ax25ViaDigi,
+            hasNetRomRoute: false,
+            viaDigipeaters: ["DRLNOD"]
+        )
+
+        vm.applySidebarSelection(selection, action: .connect)
+
+        XCTAssertEqual(vm.toCall, "KB5YZB-7")
+        XCTAssertEqual(vm.mode, .ax25ViaDigi)
+        XCTAssertEqual(vm.viaDigipeaters, ["DRLNOD"])
+
+        let intent = vm.buildIntent(sourceContext: .stations)
+        XCTAssertEqual(intent.to, "KB5YZB-7")
+        XCTAssertEqual(intent.validationErrors, [], "An immediate connect must not fail validation on an empty draft")
+        if case .ax25ViaDigis(let digis) = intent.kind {
+            XCTAssertEqual(digis.map(\.stringValue), ["DRLNOD"])
+        } else {
+            XCTFail("Expected via-digi intent, got \(intent.kind)")
+        }
+    }
 }

@@ -102,4 +102,52 @@ final class ConnectBarStateReducerTests: XCTestCase {
             XCTFail("Expected AX.25 draft transport from remembered mode")
         }
     }
+
+    func testSidebarConnectActionCarriesDraftIntoConnectingState() {
+        // The graph path-draft (and any execute-immediately request) lands here:
+        // the draft must survive into .connecting, not be dropped on the floor.
+        let selection = SidebarStationSelection(
+            callsign: "KB5YZB-7",
+            context: .stations,
+            lastUsedMode: .ax25,
+            hasNetRomRoute: true
+        )
+
+        let state = ConnectBarStateReducer.reduce(
+            state: .disconnectedDraft(.empty(context: .stations)),
+            event: .sidebarSelection(selection, .connect)
+        )
+
+        guard case .connecting(let draft) = state else {
+            XCTFail("Expected connecting state for the connect action")
+            return
+        }
+        XCTAssertEqual(draft.normalizedDestination, "KB5YZB-7")
+    }
+
+    func testSidebarSelectionCarriesViaDigipeaters() {
+        // A drawn path K0EPI-7 -> DRLNOD -> KB5YZB-7 must keep its via list.
+        let selection = SidebarStationSelection(
+            callsign: "KB5YZB-7",
+            context: .stations,
+            lastUsedMode: .ax25ViaDigi,
+            hasNetRomRoute: false,
+            viaDigipeaters: ["DRLNOD"]
+        )
+
+        let state = ConnectBarStateReducer.reduce(
+            state: .disconnectedDraft(.empty(context: .stations)),
+            event: .sidebarSelection(selection, .connect)
+        )
+
+        guard case .connecting(let draft) = state else {
+            XCTFail("Expected connecting state")
+            return
+        }
+        guard case .ax25(.viaDigipeaters(let vias)) = draft.transport else {
+            XCTFail("Expected via-digi transport, got \(draft.transport)")
+            return
+        }
+        XCTAssertEqual(vias, ["DRLNOD"])
+    }
 }
