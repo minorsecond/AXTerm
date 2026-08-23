@@ -47,14 +47,25 @@ struct WinlinkCatalogSheet: View {
             }
 
             if viewModel.groups.isEmpty {
-                VStack(spacing: 8) {
+                VStack(spacing: 10) {
                     Image(systemName: "books.vertical")
                         .font(.system(size: 30))
                         .foregroundStyle(.secondary)
-                    Text("No catalog cached — refresh to download the list of data products.")
+                    Text("No catalog cached yet")
+                        .font(.headline)
+                    Text("The catalog web service needs a personal access key, but every station can request the catalog **over the air**: queue a LIST inquiry, send it with Connect & Exchange, and the index arrives as mail.")
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                        .frame(maxWidth: 360)
+                        .frame(maxWidth: 420)
+                    Button {
+                        if viewModel.queueCatalogListRequest(myCallsign: myCallsign) != nil {
+                            queuedConfirmation = true
+                            onQueued()
+                        }
+                    } label: {
+                        Label("Request Catalog by Radio", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                    .help("Queues a LIST inquiry to INQUIRY in your Outbox — no internet or access key needed.")
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {

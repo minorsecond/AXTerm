@@ -85,6 +85,37 @@ final class WinlinkCatalogViewModel: ObservableObject {
             attachments: [])
     }
 
+    /// Queues a request for the catalog *index* over the air: a `LIST`
+    /// inquiry whose reply enumerates the available products. This is the
+    /// key-free path — the CMS catalog web service needs a personal
+    /// access key, but the radio path works for everyone.
+    @discardableResult
+    func queueCatalogListRequest(myCallsign: String) -> String? {
+        guard !myCallsign.isEmpty else {
+            errorText = "Set your callsign in Settings before requesting."
+            return nil
+        }
+        let message = WinlinkB2Message(
+            mid: WinlinkB2Message.generateMID(callsign: myCallsign),
+            date: Date(),
+            type: .inquiry,
+            from: myCallsign,
+            to: ["INQUIRY"],
+            cc: [],
+            subject: "REQUEST",
+            mbo: myCallsign,
+            body: Data("LIST\r\n".utf8),
+            attachments: [])
+        do {
+            try store.saveDraft(message)
+            try store.queueDraft(mid: message.mid)
+            return message.mid
+        } catch {
+            errorText = String(describing: error)
+            return nil
+        }
+    }
+
     /// Queues the request into the Outbox. Returns the MID on success.
     @discardableResult
     func queueRequest(myCallsign: String) -> String? {

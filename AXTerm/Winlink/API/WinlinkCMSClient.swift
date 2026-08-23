@@ -45,22 +45,33 @@ nonisolated final class WinlinkCMSClient: CMSClienting, @unchecked Sendable {
 
     // MARK: - Endpoints
 
+    /// Fetches nearby packet gateways.
+    ///
+    /// Uses `/gateway/status.json` (the only gateway operation the
+    /// community access key is authorized for) and computes distance and
+    /// bearing locally from each gateway's reported coordinates.
     func gatewayProximity(gridSquare: String, maxDistanceMiles: Int, historyHours: Int) async throws -> [WinlinkRMSStationRecord] {
-        guard Maidenhead.isValid(gridSquare) else {
+        guard let origin = Maidenhead.center(of: gridSquare) else {
             throw WinlinkCMSError.invalidGridSquare(gridSquare)
         }
-        let response: CMSGatewayProximityResponse = try await get(
-            path: "gateway/proximity",
+        let response: CMSGatewayStatusResponse = try await get(
+            path: "gateway/status.json",
             query: [
-                "GridSquare": gridSquare,
-                "OperatingMode": "Packet",
                 "ServiceCodes": "PUBLIC",
-                "MaxDistance": String(maxDistanceMiles),
                 "HistoryHours": String(historyHours),
             ])
         try checkServiceStatus(response.ResponseStatus)
+
         let fetchedAt = now()
-        return (response.GatewayList ?? []).compactMap { $0.stationRecord(fetchedAt: fetchedAt) }
+        var stations = (response.Gateways ?? []).flatMap {
+            $0.packetStationRecords(from: origin, fetchedAt: fetchedAt)
+        }
+        if maxDistanceMiles > 0 {
+            stations = stations.filter { $0.distanceMiles <= Double(maxDistanceMiles) }
+        }
+        return stations.sorted {
+            ($0.distanceMiles, $0.callsign, $0.frequencyHz) < ($1.distanceMiles, $1.callsign, $1.frequencyHz)
+        }
     }
 
     func inquiriesCatalog() async throws -> [WinlinkCatalogItemRecord] {
@@ -84,6 +95,13 @@ nonisolated final class WinlinkCMSClient: CMSClienting, @unchecked Sendable {
 
         let (data, urlResponse) = try await session.data(from: components.url!)
         if let http = urlResponse as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            // ServiceStack errors ride a JSON body even on 4xx — surface
+            // the real reason (e.g. InvalidAccessKey) instead of a bare code.
+            if let envelope = try? JSONDecoder().decode(CMSErrorEnvelope.self, from: data),
+               let status = envelope.ResponseStatus,
+               status.ErrorCode != nil || status.Message != nil {
+                try checkServiceStatus(status)
+            }
             throw WinlinkCMSError.httpError(status: http.statusCode)
         }
 

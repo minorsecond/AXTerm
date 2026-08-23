@@ -44,42 +44,65 @@ final class WinlinkCMSClientTests: XCTestCase {
     // MARK: - Gateway proximity
 
     func testGatewayProximityBuildsCorrectRequest() async throws {
-        StubURLProtocol.responseData = Data(#"{"GatewayList":[]}"#.utf8)
+        StubURLProtocol.responseData = Data(#"{"Gateways":[]}"#.utf8)
         let client = makeClient()
         _ = try await client.gatewayProximity(gridSquare: "DM79lr", maxDistanceMiles: 120, historyHours: 6)
 
         let url = try XCTUnwrap(StubURLProtocol.lastRequestURL?.absoluteString)
-        XCTAssertTrue(url.contains("/gateway/proximity"), url)
-        XCTAssertTrue(url.contains("GridSquare=DM79lr"), url)
-        XCTAssertTrue(url.contains("MaxDistance=120"), url)
-        XCTAssertTrue(url.contains("OperatingMode=Packet"), url)
+        // The community key is only authorized for the status listing;
+        // proximity math happens locally.
+        XCTAssertTrue(url.contains("/gateway/status.json"), url)
         XCTAssertTrue(url.contains("ServiceCodes=PUBLIC"), url)
         XCTAssertTrue(url.contains("HistoryHours=6"), url)
         XCTAssertTrue(url.contains("Key=TESTKEY123"), url)
         XCTAssertTrue(url.contains("format=json"), url)
     }
 
-    func testGatewayProximityParsesStations() async throws {
+    func testGatewayProximityComputesDistanceAndFiltersPacketChannels() async throws {
+        // Origin DM79 center is ~39.5N 105.0W. KE7XO sits ~0.5° north
+        // (~34.5 mi); the VARA-only gateway must be dropped.
         StubURLProtocol.responseData = Data("""
-        {"GatewayList":[
-          {"Callsign":"KE7XO-10","Gridsquare":"DM79LR","Frequency":145050000.0,
-           "Mode":0,"Baud":"1200","ServiceCode":"PUBLIC","Distance":12.4,"Heading":215.0},
-          {"Callsign":"W0XYZ-10","Gridsquare":"DM78","Frequency":144970000.0,
-           "Mode":0,"Baud":"9600","ServiceCode":"PUBLIC","Distance":33.9,"Heading":90.0},
-          {"Callsign":"","Frequency":0}
+        {"Gateways":[
+          {"Callsign":"KE7XO-10","Latitude":40.0,"Longitude":-105.0,
+           "LastStatus":"Sun, 23 Aug 2026 11:45:00 UTC",
+           "GatewayChannels":[
+             {"SupportedModes":"Packet 1200","Frequency":145050000,"Gridsquare":"DN70","Baud":"0","ServiceCode":"PUBLIC"},
+             {"SupportedModes":"VARA FM WIDE","Frequency":145220000,"Gridsquare":"DN70","Baud":"0","ServiceCode":"PUBLIC"}
+           ]},
+          {"Callsign":"FARAWAY-10","Latitude":10.0,"Longitude":-50.0,
+           "GatewayChannels":[
+             {"SupportedModes":"Packet 9600","Frequency":144970000,"Gridsquare":"AA00","Baud":"0","ServiceCode":"PUBLIC"}
+           ]},
+          {"Callsign":"NOPOS-10","Latitude":0,"Longitude":0,
+           "GatewayChannels":[{"SupportedModes":"Packet 1200","Frequency":144910000}]}
         ]}
         """.utf8)
 
         let client = makeClient()
-        let stations = try await client.gatewayProximity(gridSquare: "DM79", maxDistanceMiles: 0, historyHours: 6)
+        let stations = try await client.gatewayProximity(gridSquare: "DM79", maxDistanceMiles: 500, historyHours: 6)
 
-        XCTAssertEqual(stations.count, 2, "entries without callsign/frequency are dropped")
-        XCTAssertEqual(stations[0].callsign, "KE7XO-10")
+        XCTAssertEqual(stations.map(\.callsign), ["KE7XO-10"], "VARA channel, distant and position-less gateways filtered")
         XCTAssertEqual(stations[0].frequencyHz, 145_050_000)
-        XCTAssertEqual(stations[0].baud, "1200")
-        XCTAssertEqual(stations[0].distanceMiles, 12.4, accuracy: 0.01)
-        XCTAssertEqual(stations[0].headingDegrees, 215, accuracy: 0.01)
+        XCTAssertEqual(stations[0].baud, "1200", "baud derived from the mode string when Baud is 0")
+        XCTAssertEqual(stations[0].distanceMiles, 34.5, accuracy: 3)
+        XCTAssertNotNil(stations[0].lastSeenAt)
         XCTAssertEqual(stations[0].fetchedAt, Date(timeIntervalSince1970: 1_000_000))
+    }
+
+    func testFourHundredWithServiceStackBodySurfacesRealError() async {
+        StubURLProtocol.responseStatus = 400
+        StubURLProtocol.responseData = Data("""
+        {"Gateways":[],"ResponseStatus":{"ErrorCode":"InvalidAccessKey","Message":"Invalid access key for this operation"}}
+        """.utf8)
+        let client = makeClient()
+        do {
+            _ = try await client.gatewayProximity(gridSquare: "DM79", maxDistanceMiles: 0, historyHours: 6)
+            XCTFail("expected serviceError")
+        } catch let WinlinkCMSError.serviceError(message) {
+            XCTAssertTrue(message.contains("Invalid access key"), message)
+        } catch {
+            XCTFail("wrong error: \(error)")
+        }
     }
 
     func testGatewayProximityRejectsInvalidGrid() async {

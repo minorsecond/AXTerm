@@ -1,26 +1,39 @@
 import Foundation
 
 /// DTOs for the Winlink CMS web services (api.winlink.org, JSON).
+///
+/// Note: the community access key (Pat's) is only authorized for
+/// `/gateway/status.json` — the proximity and catalog operations return
+/// `InvalidAccessKey` (HTTP 400). Distance/bearing are therefore computed
+/// locally from each gateway's latitude/longitude.
 
-nonisolated struct CMSGatewayProximityResponse: Codable, Sendable {
-    var GatewayList: [CMSGateway]?
+nonisolated struct CMSGatewayStatusResponse: Codable, Sendable {
+    var Gateways: [CMSGateway]?
     var ResponseStatus: CMSResponseStatus?
 }
 
 nonisolated struct CMSGateway: Codable, Sendable {
     var Callsign: String?
     var BaseCallsign: String?
+    var Latitude: Double?
+    var Longitude: Double?
+    var HoursSinceStatus: Int?
+    /// RFC1123-style, e.g. "Sun, 23 Aug 2026 11:45:00 UTC".
+    var LastStatus: String?
+    var Comments: String?
+    var GatewayChannels: [CMSGatewayChannel]?
+}
+
+nonisolated struct CMSGatewayChannel: Codable, Sendable {
+    /// e.g. "Packet 1200", "Packet 9600", "VARA FM WIDE", "ARDOP 2000".
+    var SupportedModes: String?
+    var Mode: Int?
     var Gridsquare: String?
     /// Hertz.
     var Frequency: Double?
-    var Mode: Int?
     var Baud: String?
+    var OperatingHours: String?
     var ServiceCode: String?
-    /// Miles from the queried grid square.
-    var Distance: Double?
-    /// Degrees true.
-    var Heading: Double?
-    var LastStatus: String?
 }
 
 nonisolated struct CMSInquiriesCatalogResponse: Codable, Sendable {
@@ -47,33 +60,67 @@ nonisolated struct CMSResponseStatus: Codable, Sendable {
     var Message: String?
 }
 
+/// Minimal envelope for decoding the ResponseStatus out of 4xx bodies.
+nonisolated struct CMSErrorEnvelope: Codable, Sendable {
+    var ResponseStatus: CMSResponseStatus?
+}
+
 // MARK: - Mapping to cache records
 
 extension CMSGateway {
-    func stationRecord(fetchedAt: Date) -> WinlinkRMSStationRecord? {
+
+    static let lastStatusFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter
+    }()
+
+    /// Builds one station row per *packet* channel of this gateway, with
+    /// distance and bearing computed from the user's location.
+    func packetStationRecords(
+        from origin: Maidenhead.Coordinate,
+        fetchedAt: Date
+    ) -> [WinlinkRMSStationRecord] {
         guard let callsign = Callsign?.trimmingCharacters(in: .whitespaces), !callsign.isEmpty,
-              let frequency = Frequency, frequency > 0
-        else { return nil }
+              let latitude = Latitude, let longitude = Longitude,
+              latitude != 0 || longitude != 0
+        else { return [] }
 
-        let lastSeen: Date? = LastStatus.flatMap { text in
-            // RFC1123-ish timestamps; tolerate absence.
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-            return formatter.date(from: text)
+        let position = Maidenhead.Coordinate(latitude: latitude, longitude: longitude)
+        let distanceMiles = Maidenhead.haversineKm(origin, position) * 0.621371
+        let bearing = Maidenhead.bearingDegrees(from: origin, to: position)
+        let lastSeen = LastStatus.flatMap { Self.lastStatusFormatter.date(from: $0) }
+
+        return (GatewayChannels ?? []).compactMap { channel in
+            guard let modes = channel.SupportedModes?.lowercased(),
+                  modes.contains("packet"),
+                  let frequency = channel.Frequency, frequency > 0
+            else { return nil }
+
+            // "Packet 1200" style — prefer the mode string's rate over the
+            // often-zero Baud field.
+            let baud: String
+            if let rate = modes.split(separator: " ").last, Int(rate) != nil {
+                baud = String(rate)
+            } else if let rawBaud = channel.Baud, rawBaud != "0", !rawBaud.isEmpty {
+                baud = rawBaud
+            } else {
+                baud = "1200"
+            }
+
+            return WinlinkRMSStationRecord(
+                callsign: callsign,
+                gridSquare: channel.Gridsquare ?? "",
+                frequencyHz: Int(frequency),
+                modeName: channel.SupportedModes ?? "Packet",
+                baud: baud,
+                serviceCode: channel.ServiceCode ?? "PUBLIC",
+                distanceMiles: distanceMiles,
+                headingDegrees: bearing ?? 0,
+                lastSeenAt: lastSeen,
+                fetchedAt: fetchedAt)
         }
-
-        return WinlinkRMSStationRecord(
-            callsign: callsign,
-            gridSquare: Gridsquare ?? "",
-            frequencyHz: Int(frequency),
-            modeName: "Packet",
-            baud: Baud ?? "",
-            serviceCode: ServiceCode ?? "PUBLIC",
-            distanceMiles: Distance ?? 0,
-            headingDegrees: Heading ?? 0,
-            lastSeenAt: lastSeen,
-            fetchedAt: fetchedAt)
     }
 }
 

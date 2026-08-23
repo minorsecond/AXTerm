@@ -79,6 +79,11 @@ nonisolated enum Maidenhead {
     /// Initial bearing in degrees (0–360) from one grid square to another.
     static func bearingDegrees(from: String, to: String) -> Double? {
         guard let a = center(of: from), let b = center(of: to) else { return nil }
+        return bearingDegrees(from: a, to: b)
+    }
+
+    /// Initial bearing in degrees (0–360) between two coordinates.
+    static func bearingDegrees(from a: Coordinate, to b: Coordinate) -> Double? {
         let lat1 = a.latitude * .pi / 180
         let lat2 = b.latitude * .pi / 180
         let dLon = (b.longitude - a.longitude) * .pi / 180

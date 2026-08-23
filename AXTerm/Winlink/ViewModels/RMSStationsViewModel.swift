@@ -78,6 +78,8 @@ final class RMSStationsViewModel: ObservableObject {
             return "\"\(grid)\" is not a valid grid square."
         case WinlinkCMSError.httpError(let status):
             return "The Winlink CMS returned HTTP \(status)."
+        case WinlinkCMSError.serviceError(let message) where message.lowercased().contains("access key"):
+            return "The CMS rejected the access key for this operation. The built-in community key covers the station list; the catalog needs your own key (Settings → Winlink) — or request the catalog over the air instead."
         case WinlinkCMSError.serviceError(let message):
             return "Winlink CMS error: \(message)"
         case WinlinkCMSError.malformedResponse:
