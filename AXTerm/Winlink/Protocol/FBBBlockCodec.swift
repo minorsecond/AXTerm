@@ -78,6 +78,14 @@ nonisolated enum FBBBlockCodec {
         }
 
         private var state: State = .expectSOH
+
+        /// True while no block is in progress — the next byte is expected
+        /// to be SOH. At this boundary a caller may safely divert
+        /// non-binary bytes (gateway error text) back to line handling.
+        var isAtBlockBoundary: Bool {
+            if case .expectSOH = state { return true }
+            return false
+        }
         private var payload = Data()
         private var runningSum: UInt8 = 0
 

@@ -95,6 +95,9 @@ nonisolated final class B2FSessionEngine {
     /// The most recent "*** ..." advisory from the gateway/CMS — the
     /// human-readable reason when the remote end drops the link.
     private var lastGatewayNotice: String?
+    /// Set when the gateway advertises pending mail for us (";PM:" lines).
+    /// Drives the implicit-turnover rule after an all-declined FS.
+    private var remoteHasPendingMail = false
     private var challenge: String?
     private var handshakeSent = false
     private var sentFF = false
@@ -242,6 +245,31 @@ nonisolated final class B2FSessionEngine {
             return Data()
         }
 
+        // Gateways can interject text at a block boundary — most notably
+        // "*** <error>" before dropping the link. Treat anything that is
+        // not SOH there as a line: collect through the buffer and process
+        // it (which surfaces the real failure reason instead of a framing
+        // error).
+        if parser.isAtBlockBoundary, let first = data.first, first != 0x01 {
+            lineBuffer.append(data)
+            while let lineEnd = lineBuffer.firstIndex(where: { $0 == 0x0d || $0 == 0x0a }) {
+                let lineData = lineBuffer.prefix(upTo: lineEnd)
+                var rest = lineBuffer.suffix(from: lineBuffer.index(after: lineEnd))
+                if lineBuffer[lineEnd] == 0x0d {
+                    if rest.first == 0x0a {
+                        rest = rest.dropFirst()
+                    } else if rest.isEmpty {
+                        swallowNextLF = true
+                    }
+                }
+                lineBuffer = Data(rest)
+                let line = String(data: lineData, encoding: .isoLatin1) ?? ""
+                actions.append(contentsOf: processLine(line))
+                if state == .failed || state == .closed { return Data() }
+            }
+            return Data()
+        }
+
         // The parser consumes everything fed to it; feed byte-wise from a
         // buffer so trailing line-mode bytes (after EOT) are preserved.
         var index = data.startIndex
@@ -288,10 +316,21 @@ nonisolated final class B2FSessionEngine {
             let notice = line.drop(while: { $0 == "*" }).trimmingCharacters(in: .whitespaces)
             if !notice.isEmpty { lastGatewayNotice = notice }
             let lowered = notice.lowercased()
-            if lowered.contains("unknown client") || lowered.contains("not allowed")
-                || lowered.contains("invalid password") || lowered.contains("login failure") {
+            let terminalMarkers = [
+                "unknown client", "not allowed", "invalid password",
+                "login fail", "unexpected response", "disconnecting",
+            ]
+            if terminalMarkers.contains(where: { lowered.contains($0) }) {
                 return failSession("the CMS refused the connection: \(notice)")
             }
+            return []
+        }
+
+        // ";PM: <call> <mid> <size> <from> <subject>" — the gateway is
+        // advertising mail queued for us. Remember it: it changes the
+        // turnover rules below.
+        if line.uppercased().hasPrefix(";PM:") {
+            remoteHasPendingMail = true
             return []
         }
 
@@ -407,7 +446,27 @@ nonisolated final class B2FSessionEngine {
                     summary.deferredMIDs.append(mid)
                 }
             }
+            let batchTransferredNothing = !answers.contains {
+                if case .accept = $0 { return true }
+                if case .acceptFromOffset = $0 { return true }
+                return false
+            }
             proposedBatch = []
+
+            // FBB implicit turnover: when an FS answer accepts nothing,
+            // a CMS with pending mail takes the turn immediately — its FC
+            // proposals follow the FS in the same burst, without waiting
+            // for our FF. Sending FF then collides with the proposal and
+            // the CMS aborts with "Unexpected response to proposal"
+            // (observed on the air). So: nothing accepted + nothing more
+            // to offer + remote advertised mail → just start listening.
+            if batchTransferredNothing, pendingOutbound.isEmpty, remoteHasPendingMail {
+                sentFF = true
+                state = .awaitingRemoteProposals
+                actions.append(.startTimer(.response, seconds: 120))
+                return actions
+            }
+
             actions.append(contentsOf: sendNextProposalBatchOrFF())
             return actions
         }

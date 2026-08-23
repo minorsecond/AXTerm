@@ -429,6 +429,57 @@ final class B2FSessionEngineTests: XCTestCase {
         XCTAssertTrue(harness.sentText.contains(";FW: K0EPI\r"))
     }
 
+    /// Field replay (W0ARP-10 → CMS, Aug 23 2026): when an FS answer
+    /// accepts nothing, the CMS takes the turn implicitly — its own FC
+    /// proposals follow the FS in the same burst. The client must NOT
+    /// send FF (it collides with the proposal and the CMS aborts with
+    /// "Unexpected response to proposal"); it must answer FS and receive.
+    func testImplicitTurnoverAfterAllDeclinedFS() throws {
+        let outbound = try prepare(makeMessage(mid: "OUTMSG000001"))
+        let harness = makeHarness(outbound: [outbound])
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+
+        let incoming = makeMessage(mid: "INCOMING0001", subject: "INQUIRY: LIST")
+        harness.receive(";PM: K0EPI 6KFOMF87WJ8T 42548 SERVICE@winlink.org INQUIRY: LIST\r\n")
+
+        let sentBefore = harness.sentText
+        harness.receive("FS N\r\n" + (try remoteProposalBlock(for: [incoming])))
+        let delta = String(harness.sentText.dropFirst(sentBefore.count))
+        XCTAssertFalse(delta.contains("FF\r"), "FF collides with the implicit turnover: \(delta)")
+        XCTAssertTrue(delta.contains("FS Y"), delta)
+
+        harness.receive(try framedIncomingBody(for: incoming))
+        harness.receive("FF\r\n")
+        XCTAssertEqual(harness.completion?.receivedMIDs, ["INCOMING0001"])
+        XCTAssertEqual(harness.completion?.rejectedMIDs, ["OUTMSG000001"])
+    }
+
+    /// Without a ;PM advisory the classic explicit turnover still applies:
+    /// all-declined FS → we send FF as before.
+    func testExplicitTurnoverStillUsedWithoutPendingMailAdvisory() throws {
+        let outbound = try prepare(makeMessage(mid: "OUTMSG000001"))
+        let harness = makeHarness(outbound: [outbound])
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+        harness.receive("FS N\r\n")
+        XCTAssertTrue(harness.sentText.hasSuffix("FF\r"))
+    }
+
+    /// Gateway error text arriving while the engine expects binary blocks
+    /// must surface as the real failure reason, not a framing error.
+    func testGatewayErrorTextAtBinaryBoundarySurfacesReason() throws {
+        let incoming = makeMessage(mid: "INCOMING0001")
+        let harness = makeHarness()
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+        harness.receive(try remoteProposalBlock(for: [incoming]))
+        XCTAssertTrue(harness.sentText.contains("FS Y"))
+        harness.receive("*** [1] Unexpected response to proposal - Disconnecting (74.81.169.201)\r\n")
+        XCTAssertNotNil(harness.failureReason)
+        XCTAssertTrue(harness.failureReason!.contains("Unexpected response"), harness.failureReason!)
+    }
+
     // MARK: - Failure paths
 
     func testBannerTimeoutFails() {
