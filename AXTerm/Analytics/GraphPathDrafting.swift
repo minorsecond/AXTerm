@@ -20,8 +20,9 @@ nonisolated enum PathHopVerdict: Equatable, Sendable {
     /// Observed repeating other stations' frames; plausible but not proven
     /// from your location.
     case observedDigi(repeats: Int)
-    /// A NET/ROM node with no digipeat evidence: nodes route circuits, they do
-    /// not repeat frames — connect to it as a destination instead.
+    /// A NET/ROM node/BBS with no observed digipeat evidence. Many nodes have
+    /// digipeating disabled (though stacks like BPQ can enable it) — the proven
+    /// route is connecting to the node and continuing from its prompt.
     case nodeNotDigi
     /// No evidence this station digipeats at all.
     case unproven
@@ -49,9 +50,46 @@ nonisolated enum PathHopVerdict: Equatable, Sendable {
         case .observedDigi(let repeats):
             return "Observed digipeating other stations (\(repeats) repeats), but never your frames — plausible, unproven from your QTH."
         case .nodeNotDigi:
-            return "This is a NET/ROM node, not a digipeater: nodes route circuits and do not repeat frames. Connect to it as the destination and continue from its prompt."
+            return "NET/ROM node with no observed digipeat evidence. Many nodes have digipeating disabled \u{2014} it may still work, but connecting to the node and continuing from its prompt is the proven route."
         case .unproven:
             return "No evidence this station digipeats — frames sent via it will likely be lost."
+        }
+    }
+}
+
+/// Evidence that MY station's RF can reach the first drawn station at all —
+/// the one leg of the path my own transmitter must cover.
+nonisolated enum PathHopReachability: Equatable, Sendable {
+    /// A direct session between my station and this one has been observed
+    /// (UA exchanged with no digipeat in the path) — a connect worked before.
+    case provenConnect
+    /// Heard direct off-air (frames with no repeated hop), but no session
+    /// between us has been observed.
+    case heardDirect(frames: Int)
+    /// Never heard direct from this QTH — my RF may simply not reach it.
+    case notHeardDirect
+
+    var isWarning: Bool {
+        if case .notHeardDirect = self { return true }
+        return false
+    }
+
+    var badgeText: String {
+        switch self {
+        case .provenConnect: return "CONNECTED BEFORE"
+        case .heardDirect: return "HEARD DIRECT"
+        case .notHeardDirect: return "NOT HEARD DIRECT"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .provenConnect:
+            return "A direct session with this station has worked from your QTH before."
+        case .heardDirect(let frames):
+            return "Heard direct (\(frames) frame\(frames == 1 ? "" : "s")) but no direct session observed yet."
+        case .notHeardDirect:
+            return "Never heard direct from your station \u{2014} your RF may not reach it."
         }
     }
 }
@@ -77,6 +115,12 @@ nonisolated struct PathDraftContext: Equatable, Sendable {
     /// Identity key -> most-heard over-the-air callsign (resolves SSID in
     /// station-grouped identity mode).
     let preferredDisplay: [String: String]
+    /// Frames heard from each station with no repeated (H-bit) hop — proof the
+    /// station is audible direct at my QTH.
+    var directHeardCounts: [String: Int] = [:]
+    /// Stations that have exchanged a direct UA with MY station — a completed
+    /// direct connect (either direction) has been observed.
+    var provenDirectConnects: Set<String> = []
 
     static let empty = PathDraftContext(
         roles: [:], digiRepeatCounts: [:], provenDigisForMyStation: [], preferredDisplay: [:]
@@ -98,6 +142,9 @@ nonisolated struct PathDraft: Equatable, Sendable {
     /// True when the destination is an inferred NET/ROM node or BBS — the
     /// terminal prompt will offer onward connects.
     let destinationIsInfrastructure: Bool
+    /// Whether my own RF has been shown to reach the FIRST drawn station —
+    /// the only leg my transmitter must cover. Nil while the chain is empty.
+    let firstHopReachability: PathHopReachability?
     let warnings: [String]
 
     /// The full drawn chain (origin + vias + destination) for canvas rendering.
@@ -179,7 +226,14 @@ nonisolated enum GraphPathDrafter {
             )
         }
 
+        let firstHopReachability: PathHopReachability? = chain.first.map { key in
+            reachability(for: key, context: context)
+        }
+
         var warnings: [String] = []
+        if let firstKey = chain.first, firstHopReachability == .notHeardDirect {
+            warnings.append("\(context.display(for: firstKey)): never heard direct from your station \u{2014} the first hop must be reachable by your own RF or nothing else in the path matters.")
+        }
         if viaHops.count > recommendedMaxVias {
             warnings.append("\(viaHops.count) digi hops: throughput roughly halves per hop and every retry re-traverses the whole path — 2 or fewer is strongly recommended.")
         }
@@ -197,8 +251,20 @@ nonisolated enum GraphPathDrafter {
             destinationKey: destinationKey,
             destinationDisplay: destinationKey.map { context.display(for: $0) },
             destinationIsInfrastructure: destinationIsInfrastructure,
+            firstHopReachability: firstHopReachability,
             warnings: warnings
         )
+    }
+
+    static func reachability(for key: String, context: PathDraftContext) -> PathHopReachability {
+        if context.provenDirectConnects.contains(key) {
+            return .provenConnect
+        }
+        let heard = context.directHeardCounts[key] ?? 0
+        if heard > 0 {
+            return .heardDirect(frames: heard)
+        }
+        return .notHeardDirect
     }
 
     private static func verdict(for key: String, context: PathDraftContext) -> PathHopVerdict {

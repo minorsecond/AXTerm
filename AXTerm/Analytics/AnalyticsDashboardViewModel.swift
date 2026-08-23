@@ -877,6 +877,8 @@ final class AnalyticsDashboardViewModel: ObservableObject {
         var digiRepeats: [String: Int] = [:]
         var provenForMe: Set<String> = []
         var senderDisplayCounts: [String: [String: Int]] = [:]
+        var directHeard: [String: Int] = [:]
+        var provenConnects: Set<String> = []
 
         for packet in packets {
             let fromDisplay = packet.from?.display
@@ -886,6 +888,25 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             }
             if let fromKey, let fromDisplay {
                 senderDisplayCounts[fromKey, default: [:]][CallsignValidator.normalize(fromDisplay), default: 0] += 1
+            }
+            // Direct audibility: a frame heard before any digipeater repeated it
+            // (empty via, or no hop with the H bit set) proves the sender is
+            // audible direct at this QTH.
+            let heardDirect = packet.via.allSatisfy { !$0.repeated }
+            if let fromKey, heardDirect {
+                directHeard[fromKey, default: 0] += 1
+                // A direct UA between my station and another is a completed
+                // connect handshake — proof a direct session has worked.
+                if packet.frameType == .u, packet.controlFieldDecoded.uType == .UA,
+                   let toDisplay = packet.to?.display,
+                   CallsignValidator.isValidRoutingNode(toDisplay) {
+                    let toKey = CallsignParser.identityKey(for: toDisplay, mode: identityMode)
+                    if fromKey == myKey {
+                        provenConnects.insert(toKey)
+                    } else if toKey == myKey {
+                        provenConnects.insert(fromKey)
+                    }
+                }
             }
             for via in packet.via where via.repeated {
                 let display = via.display
@@ -915,7 +936,9 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             roles: stationRoles,
             digiRepeatCounts: digiRepeats,
             provenDigisForMyStation: provenForMe,
-            preferredDisplay: preferred
+            preferredDisplay: preferred,
+            directHeardCounts: directHeard,
+            provenDirectConnects: provenConnects
         )
 
         // Re-validate an in-progress draft against fresh evidence.

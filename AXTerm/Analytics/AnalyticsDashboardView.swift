@@ -2085,6 +2085,12 @@ private struct PathDraftHUD: View {
         draft.viaHops.isEmpty ? "Connect" : "Connect via \(draft.viaHops.count) digi\(draft.viaHops.count == 1 ? "" : "s")"
     }
 
+    /// The first drawn station is the one leg MY transmitter must reach —
+    /// its reachability badge rides on that chip.
+    private var reachabilityBadge: (text: String, isWarning: Bool)? {
+        draft.firstHopReachability.map { ($0.badgeText, $0.isWarning) }
+    }
+
     private var chainChips: some View {
         HStack(spacing: 4) {
             chip(text: draft.originDisplay, badge: nil, isWarning: false)
@@ -2092,8 +2098,13 @@ private struct PathDraftHUD: View {
                 Image(systemName: "arrow.right")
                     .font(.system(size: 8))
                     .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
-                chip(text: hop.displayCallsign, badge: hop.verdict.badgeText, isWarning: hop.verdict.isWarning)
-                    .help(hop.verdict.explanation)
+                chip(
+                    text: hop.displayCallsign,
+                    badge: hop.verdict.badgeText,
+                    isWarning: hop.verdict.isWarning,
+                    secondBadge: hop.id == draft.viaHops.first?.id ? reachabilityBadge : nil
+                )
+                .help(firstHopHelp(base: hop.verdict.explanation, isFirst: hop.id == draft.viaHops.first?.id))
             }
             if let destination = draft.destinationDisplay {
                 Image(systemName: "arrow.right")
@@ -2102,34 +2113,55 @@ private struct PathDraftHUD: View {
                 chip(
                     text: destination,
                     badge: draft.destinationIsInfrastructure ? "NODE/BBS" : nil,
-                    isWarning: false
+                    isWarning: false,
+                    secondBadge: draft.viaHops.isEmpty ? reachabilityBadge : nil
                 )
-                .help(draft.destinationIsInfrastructure
-                      ? "Destination is a node or BBS — continue to further stations from its prompt after connecting."
-                      : "Destination station.")
+                .help(firstHopHelp(
+                    base: draft.destinationIsInfrastructure
+                        ? "Destination is a node or BBS — continue to further stations from its prompt after connecting."
+                        : "Destination station.",
+                    isFirst: draft.viaHops.isEmpty
+                ))
             }
         }
     }
 
-    private func chip(text: String, badge: String?, isWarning: Bool) -> some View {
+    private func firstHopHelp(base: String, isFirst: Bool) -> String {
+        guard isFirst, let reachability = draft.firstHopReachability else { return base }
+        return base + " " + reachability.explanation
+    }
+
+    private func chip(
+        text: String,
+        badge: String?,
+        isWarning: Bool,
+        secondBadge: (text: String, isWarning: Bool)? = nil
+    ) -> some View {
         HStack(spacing: 4) {
             Text(text)
                 .font(.caption.monospaced())
             if let badge {
-                Text(badge)
-                    .font(.system(size: 8, weight: .bold))
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(
-                        (isWarning ? Color(nsColor: .systemOrange) : Color(nsColor: .systemGreen)).opacity(0.18),
-                        in: Capsule()
-                    )
-                    .foregroundStyle(isWarning ? Color(nsColor: .systemOrange) : Color(nsColor: .systemGreen))
+                badgeView(badge, isWarning: isWarning)
+            }
+            if let secondBadge {
+                badgeView(secondBadge.text, isWarning: secondBadge.isWarning)
             }
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
+    }
+
+    private func badgeView(_ text: String, isWarning: Bool) -> some View {
+        Text(text)
+            .font(.system(size: 8, weight: .bold))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(
+                (isWarning ? Color(nsColor: .systemOrange) : Color(nsColor: .systemGreen)).opacity(0.18),
+                in: Capsule()
+            )
+            .foregroundStyle(isWarning ? Color(nsColor: .systemOrange) : Color(nsColor: .systemGreen))
     }
 }
 

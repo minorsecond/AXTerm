@@ -20,6 +20,14 @@ struct ConnectionStatusStripView: View {
     private var isConnected: Bool {
         sessionState == .connected
     }
+
+    private var isConnecting: Bool {
+        sessionState == .connecting
+    }
+
+    private var isDisconnecting: Bool {
+        sessionState == .disconnecting
+    }
     
     private var linkModeText: String {
         switch connectionMode {
@@ -40,6 +48,10 @@ struct ConnectionStatusStripView: View {
             HStack(spacing: 12) {
                 if isConnected, let session = session {
                     connectedStatusView(session: session)
+                } else if isConnecting {
+                    connectingStatusView()
+                } else if isDisconnecting {
+                    transientStatusView(label: "Disconnecting")
                 } else {
                     disconnectedStatusView()
                 }
@@ -117,6 +129,63 @@ struct ConnectionStatusStripView: View {
         }
     }
     
+    // MARK: - Connecting / Disconnecting Status
+
+    @ViewBuilder
+    private func connectingStatusView() -> some View {
+        HStack(spacing: 6) {
+            ProgressView()
+                .controlSize(.small)
+
+            Text(destinationCall.isEmpty ? "Connecting" : "Connecting to \(destinationCall)")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.primary)
+
+            HStack(spacing: 4) {
+                Text("\u{00B7}")
+                    .foregroundStyle(.tertiary)
+
+                Text(linkModeText)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                if !viaDigipeaters.isEmpty {
+                    Text("\u{00B7}")
+                        .foregroundStyle(.tertiary)
+
+                    Text("via \(viaDigipeaters.joined(separator: " \u{2192} "))")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let session, session.statistics.retransmissions > 0 {
+                    Text("\u{00B7}")
+                        .foregroundStyle(.tertiary)
+
+                    Text("try \(session.statistics.retransmissions + 1)")
+                        .font(.subheadline)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private func transientStatusView(label: String) -> some View {
+        HStack(spacing: 6) {
+            ProgressView()
+                .controlSize(.small)
+
+            Text(destinationCall.isEmpty ? label : "\(label) \(destinationCall)")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Spacer()
+        }
+    }
+
     // MARK: - Disconnected Status
     
     @ViewBuilder

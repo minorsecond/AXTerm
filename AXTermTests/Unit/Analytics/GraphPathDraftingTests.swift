@@ -26,7 +26,9 @@ final class GraphPathDraftingTests: XCTestCase {
                 "K0EPI-7": "K0EPI-7",
                 "DRLNOD": "DRLNOD",
                 "KB5YZB-7": "KB5YZB-7"
-            ]
+            ],
+            directHeardCounts: ["DRLNOD": 300, "KB5YZB-7": 40, "W1AAA": 12],
+            provenDirectConnects: ["DRLNOD"]
         )
     }
 
@@ -132,5 +134,40 @@ final class GraphPathDraftingTests: XCTestCase {
         )
         XCTAssertEqual(draft.destinationDisplay, "KB5YZB-7")
         XCTAssertEqual(draft.connectIntent()?.to, "KB5YZB-7")
+    }
+
+    // MARK: - First-hop reachability
+
+    func testFirstHopProvenByPriorDirectConnect() {
+        // DRLNOD has completed a direct session with my station before.
+        let draft = GraphPathDrafter.makeDraft(
+            originKey: origin, chain: ["DRLNOD", "KB5YZB-7"], context: context
+        )
+        XCTAssertEqual(draft.firstHopReachability, .provenConnect)
+        XCTAssertTrue(draft.warnings.isEmpty)
+    }
+
+    func testFirstHopHeardDirectWithoutSessionEvidence() {
+        // KB5YZB-7 is heard direct but we have never connected to him.
+        let draft = GraphPathDrafter.makeDraft(
+            originKey: origin, chain: ["KB5YZB-7"], context: context
+        )
+        XCTAssertEqual(draft.firstHopReachability, .heardDirect(frames: 40))
+        XCTAssertTrue(draft.warnings.isEmpty, "Heard-direct is evidence enough; no warning")
+    }
+
+    func testFirstHopNeverHeardDirectWarns() {
+        // EATON has no direct-heard evidence at all: my RF may not reach it.
+        let draft = GraphPathDrafter.makeDraft(
+            originKey: origin, chain: ["EATON", "W1AAA"], context: context
+        )
+        XCTAssertEqual(draft.firstHopReachability, .notHeardDirect)
+        XCTAssertTrue(draft.warnings.contains { $0.contains("never heard direct") },
+                      "An unreachable first hop dooms the whole path and must warn")
+    }
+
+    func testEmptyChainHasNoReachability() {
+        let draft = GraphPathDrafter.makeDraft(originKey: origin, chain: [], context: context)
+        XCTAssertNil(draft.firstHopReachability)
     }
 }
