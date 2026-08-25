@@ -328,6 +328,143 @@ nonisolated enum DatabaseManager {
         try db.create(index: "idx_events_level_category", on: AppEventRecord.databaseTableName, columns: ["level", "category"])
     }
 
+    /// What the operator's *other* stations heard (migration v11).
+    ///
+    /// A table of its own, and that is the point. These rows are
+    /// observations made by a different antenna in a different place; no
+    /// query that feeds routing inference may reach them, and giving them
+    /// their own table makes that structural rather than a convention
+    /// someone has to remember. See `WinlinkSyncPolicy.attributed`.
+    ///
+    /// Keyed on observer *and* subject: two receivers hearing one callsign
+    /// are two facts, and a single-column key would let the later sync
+    /// silently overwrite the earlier station's view.
+    /// Time series of directed link quality.
+    ///
+    /// `link_stats` holds only the *current* estimate per link, so the app
+    /// could say what a path is like now and never what it had been. A
+    /// station that degrades over an afternoon looked identical to one that
+    /// was always poor. This is append-only and pruned by age.
+    ///
+    /// Sampled from the NET/ROM snapshot save, which already runs about once
+    /// a minute with the stats in hand — no new timer, and that cadence is
+    /// already proven not to cost anything.
+    /// What the operator knows about a station that no directory does.
+    ///
+    /// Antenna, which repeater it sits on, who runs it, when they are usually
+    /// on, the fact that it answers on 145.050 but not 145.030 — the local
+    /// knowledge a packet operator accumulates and currently keeps on paper.
+    ///
+    /// Keyed by the callsign exactly as displayed, SSID included, because
+    /// `K0NTS-1` and `K0NTS-10` are different services and a note about the
+    /// mailbox is not a note about the node.
+    /// The directory the network publishes about itself.
+    ///
+    /// Most networks never broadcast NET/ROM `NODES`, so there is nothing to
+    /// listen for on that channel — but nodes, BBSs and digipeaters identify
+    /// themselves anyway, because ID is a licence requirement and operators
+    /// fill it with a service list. Collected passively, it needs no internet
+    /// and no registry.
+    ///
+    /// Durable on purpose. Held only in memory it rebuilt from scratch every
+    /// launch, which is the opposite of what a directory is for: the value is
+    /// in what was learned over weeks, especially somewhere the operator is
+    /// only passing through.
+    static func createStationServices(_ db: Database) throws {
+        try db.create(table: "station_services") { t in
+            t.column("callsign", .text).notNull()
+            t.column("service", .text).notNull()
+            t.column("alias", .text)
+            t.column("confidence", .text).notNull()
+            t.column("firstHeard", .datetime).notNull()
+            t.column("lastHeard", .datetime).notNull()
+            t.column("timesHeard", .integer).notNull().defaults(to: 1)
+            t.column("sourceText", .text).notNull().defaults(to: "")
+            // One row per claim about a station, so "declared a BBS" and
+            // "demonstrated a digipeat" can both be true and both be kept.
+            t.primaryKey(["callsign", "service", "confidence"])
+        }
+        try db.create(
+            index: "idx_station_services_callsign",
+            on: "station_services",
+            columns: ["callsign"])
+    }
+
+    /// Antenna height above ground, where the operator knows it.
+    ///
+    /// Lives with the notes because it is the same kind of fact: something a
+    /// human recorded about a station that no directory carries. Nullable
+    /// because it is nearly always unknown for a remote station, and a
+    /// guessed height presented as a known one would quietly change every
+    /// terrain verdict that path appears in.
+    static func addStationAntennaHeight(_ db: Database) throws {
+        let columns = try db.columns(in: "station_notes").map(\.name)
+        guard !columns.contains("antennaHeightMetres") else { return }
+        try db.alter(table: "station_notes") { t in
+            t.add(column: "antennaHeightMetres", .double)
+        }
+    }
+
+    static func createStationNotes(_ db: Database) throws {
+        try db.create(table: "station_notes") { t in
+            t.column("callsign", .text).primaryKey()
+            t.column("body", .text).notNull().defaults(to: "")
+            t.column("createdAt", .datetime).notNull()
+            t.column("updatedAt", .datetime).notNull()
+        }
+        // Photos and files live in their own table: a note is usually text and
+        // reading it should not drag megabytes of image off disk with it.
+        try db.create(table: "station_attachments") { t in
+            t.autoIncrementedPrimaryKey("id")
+            t.column("callsign", .text).notNull().indexed()
+            t.column("kind", .text).notNull()
+            t.column("name", .text).notNull()
+            t.column("addedAt", .datetime).notNull()
+            t.column("byteCount", .integer).notNull()
+            t.column("data", .blob).notNull()
+        }
+    }
+
+    static func createLinkQualityHistory(_ db: Database) throws {
+        try db.create(table: "link_quality_history") { t in
+            t.column("fromCall", .text).notNull()
+            t.column("toCall", .text).notNull()
+            t.column("sampledAt", .datetime).notNull()
+            t.column("quality", .integer).notNull()
+            t.column("dfEstimate", .double)
+            t.column("drEstimate", .double)
+            t.column("dupCount", .integer).notNull().defaults(to: 0)
+        }
+        // Reads are always "this link, recent first".
+        try db.create(
+            index: "idx_link_quality_history_link",
+            on: "link_quality_history",
+            columns: ["fromCall", "toCall", "sampledAt"])
+        // Pruning is by age across every link.
+        try db.create(
+            index: "idx_link_quality_history_time",
+            on: "link_quality_history",
+            columns: ["sampledAt"])
+    }
+
+    static func createRemoteStationActivity(_ db: Database) throws {
+        try db.create(table: "remoteStationActivity") { table in
+            table.column("deviceID", .text).notNull()
+            table.column("callsign", .text).notNull()
+            table.primaryKey(["deviceID", "callsign"])
+            table.column("station", .text).notNull()
+            table.column("gridSquare", .text)
+            table.column("observedAt", .datetime).notNull()
+            table.column("roles", .text).notNull()
+            table.column("firstHeard", .datetime).notNull()
+            table.column("lastHeard", .datetime).notNull()
+            table.column("frameCount", .integer).notNull()
+            table.column("airtimeSeconds", .double).notNull()
+        }
+        try db.create(index: "idx_remoteStationActivity_lastHeard",
+                      on: "remoteStationActivity", columns: ["lastHeard"])
+    }
+
     /// Register a migration with full Sentry lifecycle reporting: a start
     /// breadcrumb, then either a success breadcrumb or — previously impossible —
     /// a failure breadcrumb plus a captured event naming the migration and
@@ -383,6 +520,36 @@ nonisolated enum DatabaseManager {
         }
         registerReportedMigration(&migrator, version: 6, name: "createWinlinkContacts") { db in
             try createWinlinkContacts(db)
+        }
+        registerReportedMigration(&migrator, version: 7, name: "createWinlinkPartialBodies") { db in
+            try createWinlinkPartialBodies(db)
+        }
+        registerReportedMigration(&migrator, version: 8, name: "addWinlinkSessionLogContext") { db in
+            try addWinlinkSessionLogContext(db)
+        }
+        registerReportedMigration(&migrator, version: 9, name: "createWinlinkCatalogFavorites") { db in
+            try createWinlinkCatalogFavorites(db)
+        }
+        registerReportedMigration(&migrator, version: 10, name: "createCallsignDirectory") { db in
+            try createCallsignDirectory(db)
+        }
+        registerReportedMigration(&migrator, version: 11, name: "createRemoteStationActivity") { db in
+            try createRemoteStationActivity(db)
+        }
+        registerReportedMigration(&migrator, version: 12, name: "createLinkQualityHistory") { db in
+            try createLinkQualityHistory(db)
+        }
+        registerReportedMigration(&migrator, version: 13, name: "createStationNotes") { db in
+            try createStationNotes(db)
+        }
+        registerReportedMigration(&migrator, version: 14, name: "addStationScope") { db in
+            try addStationScope(db)
+        }
+        registerReportedMigration(&migrator, version: 15, name: "createStationServices") { db in
+            try createStationServices(db)
+        }
+        registerReportedMigration(&migrator, version: 16, name: "addStationAntennaHeight") { db in
+            try addStationAntennaHeight(db)
         }
         return migrator
     }()

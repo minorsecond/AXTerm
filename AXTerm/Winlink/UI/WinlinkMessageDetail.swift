@@ -1,20 +1,37 @@
 import SwiftUI
-import AppKit
 
 /// Reading pane: headers, monospaced body, attachment chips, and
 /// reply/forward actions.
 struct WinlinkMessageDetail: View {
 
-    @ObservedObject var viewModel: WinlinkMailboxViewModel
+    /// The message to show, or nil for the placeholder. Passed in rather
+    /// than read off a mailbox view model so the same view serves both
+    /// the reading pane and a standalone message window.
+    var stored: WinlinkStoredMessage?
     var onReply: (_ replyAll: Bool) -> Void
     var onForward: () -> Void
+    /// The station's own town, so a state-wide forecast opens on the city
+    /// the operator is actually in.
+    var preferredLocality: String?
     /// True when the address already has an address-book entry.
     var knownContact: (String) -> Bool = { _ in true }
     /// Opens the contact editor prefilled with the address.
     var onAddContact: ((String) -> Void)?
+    /// Imports a spatial attachment onto the map. Nil hides the action.
+    ///
+    /// Explicit rather than automatic: a layer appearing because a message
+    /// arrived would be a stranger drawing on the operator's situational
+    /// picture.
+    var onAddToMap: ((WinlinkB2Message.Attachment, String) -> Void)?
+    /// Opens this message in its own window. Nil hides the control —
+    /// the standalone window itself has no use for it.
+    var onOpenInWindow: (() -> Void)?
+
+    @State private var saveError: String?
+    @State private var pendingExport: ExportableFile?
 
     var body: some View {
-        if let stored = viewModel.selectedMessage {
+        if let stored {
             content(for: stored)
         } else {
             VStack(spacing: 6) {
@@ -76,6 +93,13 @@ struct WinlinkMessageDetail: View {
                             .help("Reply to the sender and all other recipients")
                         Button { onForward() } label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
                             .help("Forward this message (attachments included)")
+                        if let onOpenInWindow {
+                            Button(action: onOpenInWindow) {
+                                Label("Open in Window", systemImage: "macwindow")
+                            }
+                            .keyboardShortcut("o", modifiers: .command)
+                            .help("Open this message in its own window (\u{2318}O). Wide products — tabular forecasts, station lists — need more width than a reading pane has.")
+                        }
                     }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.bordered)
@@ -103,12 +127,68 @@ struct WinlinkMessageDetail: View {
                     WinlinkReceivedFormView(form: form)
                         .padding([.horizontal, .top], 12)
                 }
-                Text(bodyText(of: message))
-                    .font(.body.monospaced())
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
+                let raw = bodyText(of: message)
+                // Fixed-width NWS products get a real table; the view
+                // keeps the raw text one disclosure away. Anything that
+                // does not parse cleanly falls through unchanged rather
+                // than being half-rendered.
+                if let forecast = NWSTabularForecast.parse(raw) {
+                    NWSTabularForecastView(forecast: forecast, rawText: raw,
+                                           preferredLocality: preferredLocality)
+                        .padding(12)
+                } else {
+                    // Links are an overlay on the exact bytes received,
+                    // never an edit — and clickable, never auto-opened.
+                    Text(WinlinkBodyText.attributed(raw))
+                        .font(.body.monospaced())
+                        .textSelection(.enabled)
+                        .tint(.accentColor)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                }
+
+                // A product that arrived as an image cost airtime to
+                // receive; showing it beats making the operator save it
+                // somewhere and find it in the Finder.
+                ForEach(imageAttachments(in: message), id: \.name) { attachment in
+                    imagePreview(attachment)
+                }
             }
+        }
+        .alert("Save failed", isPresented: Binding(
+            get: { saveError != nil },
+            set: { if !$0 { saveError = nil } })) {
+            Button("OK") { saveError = nil }
+        } message: {
+            Text(saveError ?? "")
+        }
+        .exportFile($pendingExport) { saveError = $0 }
+    }
+
+    /// Attachments this platform can actually decode as an image.
+    private func imageAttachments(in message: WinlinkB2Message) -> [WinlinkB2Message.Attachment] {
+        message.attachments.filter { attachment in
+            let ext = (attachment.name as NSString).pathExtension.lowercased()
+            return ["jpg", "jpeg", "png", "gif", "tif", "tiff", "bmp"].contains(ext)
+        }
+    }
+
+    @ViewBuilder
+    private func imagePreview(_ attachment: WinlinkB2Message.Attachment) -> some View {
+        if let image = PlatformImage(data: attachment.data) {
+            VStack(alignment: .leading, spacing: 4) {
+                Divider()
+                Text(attachment.name)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Image(platform: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .help("\(attachment.name) — \(ByteCountFormatter.string(fromByteCount: Int64(attachment.data.count), countStyle: .file)) as received. Right-click the chip above to save it.")
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 12)
         }
     }
 
@@ -144,6 +224,28 @@ struct WinlinkMessageDetail: View {
         }
         .buttonStyle(.plain)
         .help("Save \"\(attachment.name)\" to disk")
+        .contextMenu {
+            Button("Save…") { saveAttachment(attachment) }
+            if let onAddToMap, let kind = MapOverlayAttachment.kind(forAttachmentNamed: attachment.name) {
+                Button("Add to Map (\(kind.displayName))") {
+                    onAddToMap(attachment, stored?.message.from ?? "")
+                }
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            // A small map badge on anything the map could take, so the
+            // operator can see at a glance that a message carries spatial
+            // data rather than discovering it by right-clicking everything.
+            if onAddToMap != nil,
+               MapOverlayAttachment.kind(forAttachmentNamed: attachment.name) != nil {
+                Image(systemName: "map.fill")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.white)
+                    .padding(2)
+                    .background(Color.accentColor, in: Circle())
+                    .offset(x: 4, y: -4)
+            }
+        }
     }
 
     private func receivedForm(in message: WinlinkB2Message) -> WinlinkReceivedForm? {
@@ -159,13 +261,12 @@ struct WinlinkMessageDetail: View {
         String(data: message.body, encoding: .isoLatin1) ?? "(body could not be decoded)"
     }
 
+    /// Hands the attachment to the operator to file wherever they like.
+    ///
+    /// Failure is surfaced, never swallowed: a silent `try?` here made a
+    /// failed save look exactly like a successful one, and the attachment
+    /// may be the only copy of something that cost airtime to receive.
     private func saveAttachment(_ attachment: WinlinkB2Message.Attachment) {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = attachment.name
-        panel.canCreateDirectories = true
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            try? attachment.data.write(to: url)
-        }
+        pendingExport = ExportableFile(name: attachment.name, data: attachment.data)
     }
 }

@@ -52,7 +52,7 @@ struct GraphToolbar: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.8))
+        .background(Color(platform: .platformCardBackground).opacity(0.8))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 

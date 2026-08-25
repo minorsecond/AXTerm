@@ -15,6 +15,14 @@ struct WinlinkMailView: View {
     @ObservedObject private var winlinkSettings: WinlinkSettings
     private let sessionCoordinator: SessionCoordinator
     private let client: PacketEngine
+    /// Imports a spatial attachment onto the map and switches to it. Nil
+    /// hides the action.
+    var onAddToMap: ((WinlinkB2Message.Attachment, String) -> Void)?
+
+    /// Passed to the reading pane only when the app wired a map up.
+    private var onAddSpatialAttachment: ((WinlinkB2Message.Attachment, String) -> Void)? {
+        onAddToMap
+    }
 
     @StateObject private var mailboxVM: WinlinkMailboxViewModel
     @StateObject private var stationsVM: RMSStationsViewModel
@@ -24,30 +32,59 @@ struct WinlinkMailView: View {
     @State private var tab: Tab = .mail
     @State private var showingCatalog = false
     @State private var showingForms = false
+    @State private var showingCommsLog = false
+    @State private var showingFieldStatus = false
+    @State private var showingPositionReport = false
+    @State private var fieldStatusLocation: StationLocation?
+    /// The activation reference sent with a position report — a park or
+    /// summit ID that stays the same all day, so it is remembered.
+    @AppStorage("winlink.positionComment") private var positionComment = ""
+    @State private var positionQueued: String?
     @State private var showConsole = false
     @State private var exchangeAlert: String?
+    /// The gateway the running (or last) exchange actually talks to — the
+    /// active ladder rung, which can differ from the configured gateway.
+    @State private var activeExchangeGateway: String = ""
+
+    /// Reading-pane placement, remembered across launches. Stored as the
+    /// raw string so `@AppStorage` needs no custom conformance.
+    @AppStorage("winlink.readingPaneLayout")
+    private var readingPaneLayoutRaw = ReadingPaneLayout.right.rawValue
+
+    private var readingPaneLayout: ReadingPaneLayout {
+        ReadingPaneLayout(rawValue: readingPaneLayoutRaw) ?? .right
+    }
 
     @Environment(\.openWindow) private var openWindow
 
     init(context: WinlinkContext,
          appSettings: AppSettingsStore,
          sessionCoordinator: SessionCoordinator,
-         client: PacketEngine) {
+         client: PacketEngine,
+         onAddToMap: ((WinlinkB2Message.Attachment, String) -> Void)? = nil) {
         self.context = context
         self.appSettings = appSettings
         self.winlinkSettings = context.settings
         self.sessionCoordinator = sessionCoordinator
         self.client = client
+        self.onAddToMap = onAddToMap
 
         let store = context.store ?? FallbackWinlinkStore()
         let settingsStore = context.settings
         let callsignProvider = { [weak appSettings] in appSettings?.myCallsign ?? "" }
         _mailboxVM = StateObject(wrappedValue: WinlinkMailboxViewModel(
             store: store, myCallsign: callsignProvider))
+        // The last known position judges whether a stored measurement
+        // still describes the link from here; the grid-square fallback
+        // keeps the column meaningful when GPS is unavailable.
+        let locationService = context.locationService
         _stationsVM = StateObject(wrappedValue: RMSStationsViewModel(
             store: store,
             makeClient: { WinlinkCMSClient(accessKey: settingsStore.effectiveAPIKey) },
-            settings: settingsStore))
+            settings: settingsStore,
+            observer: { [weak locationService] in
+                locationService?.lastLocation ?? locationService?.manualLocation()
+            }))
         _catalogVM = StateObject(wrappedValue: WinlinkCatalogViewModel(
             store: store,
             makeClient: { WinlinkCMSClient(accessKey: settingsStore.effectiveAPIKey) }))
@@ -65,7 +102,17 @@ struct WinlinkMailView: View {
                 toolbar
                 Divider()
                 if showConsole, let runner = context.runner {
-                    WinlinkExchangeConsoleView(runner: runner)
+                    let gateway = activeExchangeGateway.isEmpty
+                        ? winlinkSettings.gatewayCallsign.uppercased()
+                        : activeExchangeGateway
+                    WinlinkExchangeConsoleView(
+                        runner: runner,
+                        viz: gateway.isEmpty
+                            ? sessionCoordinator.linkVizMonitor.mostRecentlyActive
+                            : sessionCoordinator.linkVizMonitor.sessions[gateway],
+                        gatewayName: gateway.isEmpty ? "Gateway" : gateway,
+                        adaptive: sessionCoordinator.adaptiveStatusStore.effectiveAdaptive,
+                        observedCapSeconds: observedCap(for: gateway))
                     Divider()
                 }
                 switch tab {
@@ -74,7 +121,20 @@ struct WinlinkMailView: View {
                 case .stations:
                     RMSStationsView(
                         viewModel: stationsVM,
-                        onConnect: { station in startExchange(gatewayOverride: station.callsign) })
+                        settings: winlinkSettings,
+                        onConnect: { station in
+                            // Carry the row's frequency through: the same
+                            // callsign on 145.050 and 441.075 is two links.
+                            // The path is the one stored for *this* link,
+                            // falling back to the global default — a digi
+                            // route is a property of the link, not of the
+                            // station generally.
+                            let stored = winlinkSettings.stationPreferences.path(for: station)
+                            startExchange(gatewayOverride: .init(
+                                callsign: station.callsign,
+                                path: stored.isEmpty ? winlinkSettings.gatewayPath : stored,
+                                frequencyHz: station.frequencyHz))
+                        })
                 case .contacts:
                     WinlinkContactsView(
                         viewModel: contactsVM,
@@ -93,10 +153,35 @@ struct WinlinkMailView: View {
                     })
             }
         }
+        // Arming P2P is a station-wide capability, so the hook is
+        // attached whenever the mail area is present and re-evaluated
+        // when the setting changes. The listener itself re-checks
+        // `isArmed` on every call, so a stale hook can never answer.
+        .onAppear { attachP2PListener() }
+        // Same reason as the iOS shell: reading a message updates the view
+        // model's count, and the sidebar badge reads the context's.
+        .onAppear { mailboxVM.onUnreadCountChanged = { context.refreshUnread() } }
+        .sheet(isPresented: $showingFieldStatus) {
+            WinlinkFieldStatusSheet(
+                readiness: currentReadiness(),
+                gatewayHours: currentGatewayHours(),
+                location: fieldStatusLocation)
+        }
+        .sheet(isPresented: $showingPositionReport) {
+            positionReportSheet
+        }
+        .sheet(isPresented: $showingCommsLog) {
+            WinlinkICS309Sheet(
+                messages: loggableMessages(),
+                defaultOperatorName: context.profile.realName,
+                defaultStationId: appSettings.myCallsign)
+        }
         .sheet(isPresented: $showingCatalog) {
             WinlinkCatalogSheet(
                 viewModel: catalogVM,
                 myCallsign: appSettings.myCallsign,
+                operatorState: context.profile.state,
+                airtime: catalogAirtime,
                 locationService: context.locationService,
                 onQueued: {
                     mailboxVM.refresh()
@@ -111,8 +196,14 @@ struct WinlinkMailView: View {
             Text(exchangeAlert ?? "")
         }
         .onAppear {
-            mailboxVM.refresh()
-            context.refreshUnread()
+            // Defer one tick: onAppear runs inside SwiftUI's update
+            // transaction on macOS, and refresh()/refreshUnread() mutate
+            // @Published state ("Publishing changes from within view
+            // updates is not allowed").
+            Task { @MainActor in
+                mailboxVM.refresh()
+                context.refreshUnread()
+            }
         }
     }
 
@@ -147,6 +238,10 @@ struct WinlinkMailView: View {
                 Label("Catalog", systemImage: "books.vertical")
             }
             .help(WinlinkCopy.catalogTooltip)
+
+            if tab == .mail {
+                stationToolsMenu
+            }
 
             Spacer()
 
@@ -269,22 +364,310 @@ struct WinlinkMailView: View {
 
     // MARK: - Mail panes
 
+    /// Where the reading pane sits, or whether it appears at all.
+    ///
+    /// Right is the classic three-column mail layout and suits ordinary
+    /// correspondence. Bottom gives the reading pane the window's full
+    /// width, which is what the natively-rendered products need — a
+    /// seven-day tabular forecast is eight columns wide and unreadable
+    /// in a side pane.
+    enum ReadingPaneLayout: String, CaseIterable, Identifiable {
+        case right, bottom, hidden
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .right: "Reading Pane on Right"
+            case .bottom: "Reading Pane at Bottom"
+            case .hidden: "Hide Reading Pane"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .right: "sidebar.right"
+            case .bottom: "rectangle.bottomthird.inset.filled"
+            case .hidden: "rectangle"
+            }
+        }
+    }
+
     private var mailPanes: some View {
         HSplitView {
             WinlinkFolderSidebar(viewModel: mailboxVM)
                 .frame(minWidth: 150, idealWidth: 180, maxWidth: 260)
 
-            WinlinkMessageList(viewModel: mailboxVM)
-                .frame(minWidth: 320, idealWidth: 460)
-
-            WinlinkMessageDetail(
-                viewModel: mailboxVM,
-                onReply: { replyAll in composeReply(replyAll: replyAll) },
-                onForward: { composeForward() },
-                knownContact: { address in contactsVM.contact(forAddress: address) != nil },
-                onAddContact: { address in addContact(address: address) })
-                .frame(minWidth: 300, idealWidth: 480)
+            switch readingPaneLayout {
+            case .right:
+                messageList
+                    .frame(minWidth: 320, idealWidth: 460)
+                messageDetail
+                    .frame(minWidth: 300, idealWidth: 480)
+            case .bottom:
+                VSplitView {
+                    messageList
+                        .frame(minHeight: 140, idealHeight: 240)
+                    messageDetail
+                        .frame(minHeight: 200, idealHeight: 420)
+                }
+                .frame(minWidth: 420)
+            case .hidden:
+                messageList
+                    .frame(minWidth: 320)
+            }
         }
+    }
+
+    private var messageList: some View {
+        WinlinkMessageList(
+            viewModel: mailboxVM,
+            onOpenInWindow: { mid in openWindow(id: "winlinkMessage", value: mid) })
+    }
+
+    private var messageDetail: some View {
+        WinlinkMessageDetail(
+            stored: mailboxVM.selectedMessage,
+            onReply: { replyAll in composeReply(replyAll: replyAll) },
+            onForward: { composeForward() },
+            preferredLocality: context.profile.city,
+            knownContact: { address in contactsVM.contact(forAddress: address) != nil },
+            onAddContact: { address in addContact(address: address) },
+            onAddToMap: onAddSpatialAttachment,
+            onOpenInWindow: { openSelectedMessageInWindow() })
+    }
+
+    /// Lifts the selected message into its own window, sized for its
+    /// content rather than for the split.
+    private func openSelectedMessageInWindow() {
+        guard let mid = mailboxVM.selectedMessage?.message.mid else { return }
+        openWindow(id: "winlinkMessage", value: mid)
+    }
+
+    /// Occasional actions live behind one control rather than each
+    /// taking permanent toolbar space. The toolbar should carry what an
+    /// operator reaches for every session; everything else is a menu.
+    private var stationToolsMenu: some View {
+        Menu {
+            Picker("Reading Pane", selection: $readingPaneLayoutRaw) {
+                ForEach(ReadingPaneLayout.allCases) { layout in
+                    Label(layout.title, systemImage: layout.systemImage).tag(layout.rawValue)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+
+            Divider()
+            Button("Open Message in Window") { openSelectedMessageInWindow() }
+                .disabled(mailboxVM.selectedMessage == nil)
+
+            Divider()
+            Button("Station Map\u{2026}") { openScope() }
+            Button("Field Status\u{2026}") { openFieldStatus() }
+            Button("Report Position\u{2026}") { showingPositionReport = true }
+
+            Divider()
+            Button("Communications Log (ICS-309)\u{2026}") { showingCommsLog = true }
+        } label: {
+            Label("Station Tools", systemImage: "ellipsis.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Reading-pane placement, opening a message in its own window, and the ICS-309 communications log.")
+    }
+
+    // MARK: - Winlink P2P
+
+    /// Answers inbound calls as a P2P mail peer when the operator has
+    /// armed it. Every decision is logged to the exchange console —
+    /// a station that silently ignores callers is indistinguishable
+    /// from a broken one.
+    private func attachP2PListener() {
+        sessionCoordinator.onInboundSessionConnected = { session in
+            Task { @MainActor in
+                let listener = WinlinkP2PListener(
+                    isArmed: winlinkSettings.p2pListenEnabled,
+                    myCallsign: appSettings.myCallsign,
+                    isExchangeRunning: context.runner?.isRunning ?? true,
+                    // Refuses to answer when another of the operator's devices
+                    // already holds this callsign on this TNC — otherwise both
+                    // reply to the same caller with nobody watching.
+                    contestedBy: context.contestedIdentityHolder)
+                let called = session.localAddress.display
+                let decision = listener.decide(
+                    called: called, isInitiator: session.isInitiator)
+                guard decision == .answer else {
+                    if case .weInitiated = decision { return }
+                    context.runner?.note(
+                        "Inbound call from \(session.remoteAddress.display) \(decision.explanation)")
+                    return
+                }
+                await answerP2PCall(session)
+            }
+        }
+    }
+
+    private func answerP2PCall(_ session: AX25Session) async {
+        guard let runner = context.runner else { return }
+        let peer = session.remoteAddress.display.uppercased()
+        // The transport reuses the already-connected session rather than
+        // placing a call: `open()` finds it and returns immediately.
+        let transport = WinlinkAX25Transport(
+            sessionManager: sessionCoordinator.sessionManager,
+            sendFrames: { [weak client] frames in
+                for frame in frames { client?.send(frame: frame) }
+            },
+            destination: session.remoteAddress,
+            channel: session.channel)
+        _ = await runner.runExchange(
+            transport: transport,
+            myCallsign: appSettings.myCallsign,
+            password: nil,          // P2P carries no CMS account
+            gatewayName: peer,
+            transportName: "P2P",
+            role: .answering)
+        mailboxVM.refresh()
+        context.exchangeFinished()
+        stationsVM.reloadLinkQuality()
+    }
+
+    // MARK: - Field status
+
+    /// A GPS fix takes seconds; the sheet should not wait on it before
+    /// opening, so the position fills in when it arrives.
+    private func openFieldStatus() {
+        showingFieldStatus = true
+        Task { @MainActor in
+            fieldStatusLocation = await context.locationService.currentLocation()
+        }
+    }
+
+    /// Opens the map as its own window so it can be resized, zoomed and
+    /// put full-screen — none of which a sheet allows.
+    private func openScope() {
+        openWindow(id: "winlinkMap")
+    }
+
+    private func currentReadiness() -> WinlinkReadiness {
+        let catalogItems = catalogVM.groups.flatMap(\.items)
+        let kit = WinlinkOutageKit.build(items: catalogItems, state: context.profile.state)
+        let logs = (try? context.store?.sessionLogs(limit: 2000)) ?? []
+        return WinlinkReadiness.evaluate(.init(
+            callsign: appSettings.myCallsign,
+            hasPassword: !winlinkSettings.password.isEmpty,
+            gatewayCount: winlinkSettings.gatewayLadder.count,
+            gridSquare: winlinkSettings.gridSquare,
+            hasPositionFix: fieldStatusLocation?.source == .gps,
+            catalogItemCount: catalogItems.count,
+            catalogFetchedAt: catalogVM.fetchedAt,
+            outageKitCount: kit.count,
+            outageKitBytes: WinlinkOutageKit.totalBytes(kit),
+            p2pArmed: winlinkSettings.p2pListenEnabled,
+            lastSuccessfulSessionAt: logs
+                .filter { $0.result == "success" && $0.errorText == nil }
+                .map(\.startedAt).max(),
+            queuedOutboundCount: (try? context.store?.queuedOutboundMessages().count) ?? 0,
+            now: Date()))
+    }
+
+    private func currentGatewayHours() -> WinlinkGatewayHours {
+        let logs = (try? context.store?.sessionLogs(limit: 2000)) ?? []
+        // The first ladder rung is the gateway this station actually
+        // works, so its hours are the ones worth planning against.
+        return WinlinkGatewayHours.profile(
+            logs: logs, callsign: winlinkSettings.gatewayLadder.first?.callsign ?? "")
+    }
+
+    // MARK: - Position report
+
+    /// Posts a position to the Winlink map (a message to `QTH`), which
+    /// is the self-spotting path when there is no cell coverage — the
+    /// POTA/SOTA case. Reuses the existing Position Report form so the
+    /// wire format stays the one Winlink expects.
+    private var positionReportSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Report Position", systemImage: "location.circle")
+                .font(.headline)
+            Text("Posts your position to the Winlink map as a message to QTH. With no cell coverage this is how a portable station spots itself.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            if let location = fieldStatusLocation {
+                LabeledContent("Position") {
+                    Text("\(StationLocationFormat.signedDecimal(location))  \(location.gridSquare)")
+                        .font(.callout.monospaced())
+                }
+                LabeledContent("Source") {
+                    Text(location.source.rawValue).foregroundStyle(.secondary)
+                }
+            } else {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Getting a position\u{2026}").foregroundStyle(.secondary)
+                }
+            }
+
+            TextField("Comment", text: $positionComment,
+                      prompt: Text("e.g. POTA K-1234, portable"))
+                .textFieldStyle(.roundedBorder)
+                .help("Sent with the report and remembered between reports \u{2014} an activation reference stays the same all day.")
+
+            HStack {
+                Spacer()
+                Button("Cancel") { showingPositionReport = false }
+                Button("Queue Report") {
+                    Task { await queuePositionReport() }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(fieldStatusLocation == nil)
+            }
+        }
+        .padding(16)
+        .frame(width: 460)
+        .onAppear {
+            Task { @MainActor in
+                fieldStatusLocation = await context.locationService.currentLocation()
+            }
+        }
+        .alert("Position report queued", isPresented: Binding(
+            get: { positionQueued != nil },
+            set: { if !$0 { positionQueued = nil } })) {
+            Button("OK") { showingPositionReport = false }
+        } message: {
+            Text("It is in your Outbox. Send it with Connect & Exchange, or it will ride along with the next one.")
+        }
+    }
+
+    private func queuePositionReport() async {
+        guard let store = context.store,
+              let template = WinlinkFormTemplates.all.first(where: { $0.id == "gps-position-report" })
+        else { return }
+        let formContext = await makeFormContext()
+        let composer = WinlinkFormComposeViewModel(
+            template: template, context: formContext, store: store)
+        if !positionComment.trimmingCharacters(in: .whitespaces).isEmpty {
+            composer.values["Message"] = positionComment
+        }
+        guard let mid = composer.queue() else { return }
+        positionQueued = mid
+        mailboxVM.refresh()
+        context.refreshUnread()
+    }
+
+    /// Every message that actually crossed the air, across all folders.
+    ///
+    /// Drafts are excluded: a message that was composed but never sent is
+    /// not traffic, and logging it would overstate what the station did.
+    private func loggableMessages() -> [WinlinkMessageSummary] {
+        guard let store = context.store else { return [] }
+        var byMID = [String: WinlinkMessageSummary]()
+        for folder in mailboxVM.folders {
+            guard let id = folder.id else { continue }
+            for summary in (try? store.messages(inFolder: id)) ?? []
+            where summary.deliveryState != .draft {
+                byMID[summary.mid] = summary
+            }
+        }
+        return Array(byMID.values)
     }
 
     /// Context for form auto-fill: callsign, position (GPS fix when
@@ -373,9 +756,44 @@ struct WinlinkMailView: View {
 
     // MARK: - Exchange
 
-    private func startExchange(gatewayOverride: String? = nil, useTelnet: Bool = false) {
-        guard let runner = context.runner else { return }
-        guard !runner.isRunning else { return }
+    /// The longest session this gateway has previously allowed, across any
+    /// of its frequencies. A cap is a property of the gateway's software,
+    /// not of the channel, so it carries between bands.
+    private func observedCap(for gateway: String) -> Double? {
+        WinlinkAirtimeEstimate.forGateway(
+            callsign: gateway, frequencyHz: nil, quality: stationsVM.linkQuality)
+            .sessionCapSeconds
+    }
+
+    /// What a catalog request will actually cost on the air, measured
+    /// from this station's own sessions with the gateway it will use.
+    /// The first ladder rung is the one `startExchange` tries first, and
+    /// it carries the frequency — which decides the rate, since the same
+    /// gateway behaves nothing alike at 1200 and 9600 baud.
+    private var catalogAirtime: WinlinkAirtimeEstimate {
+        let rung = winlinkSettings.gatewayLadder.first
+        return WinlinkAirtimeEstimate.forGateway(
+            callsign: rung?.callsign ?? winlinkSettings.gatewayCallsign,
+            frequencyHz: rung?.frequencyHz,
+            quality: stationsVM.linkQuality)
+    }
+
+    private func startExchange(
+        gatewayOverride: WinlinkSettings.GatewayLadderEntry? = nil,
+        useTelnet: Bool = false
+    ) {
+        // Every other guard here tells the operator why nothing happened;
+        // these two used to return in silence, so a tap on Start Exchange
+        // was indistinguishable from a dead button. Whatever the cause, the
+        // operator needs to see that the app declined rather than failed.
+        guard let runner = context.runner else {
+            exchangeAlert = "The mailbox is not ready yet \u{2014} the Winlink store failed to open on this device. Reopening the app usually clears it."
+            return
+        }
+        guard !runner.isRunning else {
+            exchangeAlert = "An exchange is already running. Open the exchange console to watch it, or wait for it to finish."
+            return
+        }
 
         let myCall = appSettings.myCallsign
         guard !myCall.isEmpty, myCall != "NOCALL" else {
@@ -397,6 +815,7 @@ struct WinlinkMailView: View {
 
         if useTelnet {
             showConsole = true
+            activeExchangeGateway = "WINLINK CMS"
             let transport = WinlinkTelnetTransport(callsign: myCall)
             Task {
                 let summary = await runner.runExchange(
@@ -407,7 +826,7 @@ struct WinlinkMailView: View {
                     transportName: "telnet",
                     sid: sid)
                 mailboxVM.refresh()
-                context.refreshUnread()
+                context.exchangeFinished()
                 if let failure = summary.failureReason {
                     exchangeAlert = failure
                 }
@@ -418,7 +837,7 @@ struct WinlinkMailView: View {
         // RF: a single station (row button) or the whole ladder.
         let rungs: [WinlinkSettings.GatewayLadderEntry]
         if let gatewayOverride {
-            rungs = [.init(callsign: gatewayOverride, path: winlinkSettings.gatewayPath)]
+            rungs = [gatewayOverride]
         } else {
             rungs = winlinkSettings.gatewayLadder
         }
@@ -471,17 +890,26 @@ struct WinlinkMailView: View {
             sessionCoordinator.selectAdaptiveSession(
                 destination: rung.callsign, path: rung.path.isEmpty ? nil : rung.path)
 
+            // Fresh per-transfer stats for the console's Activity pane —
+            // link-level RTT/window history stays for continuity.
+            activeExchangeGateway = rung.callsign.uppercased()
+            sessionCoordinator.linkVizMonitor.viz(for: rung.callsign).resetTransferCounters()
+
             let summary = await runner.runExchange(
                 transport: transport,
                 myCallsign: myCallsign,
                 password: password.isEmpty ? nil : password,
                 gatewayName: rung.callsign,
                 transportName: "ax25",
+                frequencyHz: rung.frequencyHz,
                 sid: sid,
                 preserveTranscript: index > 0)
 
             mailboxVM.refresh()
-            context.refreshUnread()
+            context.exchangeFinished()
+            // This session just became evidence — including a no-answer,
+            // which is exactly the outcome the Link column should show.
+            stationsVM.reloadLinkQuality()
 
             guard let failure = summary.failureReason else {
                 sessionCoordinator.selectAdaptiveSession(destination: nil, path: nil)
@@ -543,17 +971,29 @@ private nonisolated final class FallbackWinlinkStore: WinlinkStore, @unchecked S
     func markSent(mid: String) throws {}
     func markFailed(mid: String, error: String) throws {}
     func markDeferred(mid: String) throws {}
+    func savePartialBody(mid: String, compressedSize: Int, data: Data) throws {}
+    func partialBodies() throws -> [WinlinkPartialBodyRecord] { [] }
+    func deletePartialBody(mid: String) throws {}
     func revertSendingToQueued() throws {}
     func recordSentOffset(mid: String, offset: Int) throws {}
     func saveInbound(_ message: WinlinkB2Message) throws -> Bool { false }
     func messages(inFolder folderId: Int64) throws -> [WinlinkMessageSummary] { [] }
     func message(mid: String) throws -> WinlinkStoredMessage? { nil }
+    func inboundMessages(fromAddr: String, limit: Int) throws -> [WinlinkStoredMessage] { [] }
+    func catalogFavorites() throws -> Set<String> { [] }
+    func setCatalogFavorite(inquiryId: String, isFavorite: Bool) throws {}
+    func callsignRecord(callsign: String) throws -> CallsignDirectoryRecord? { nil }
+    func saveCallsignRecord(_ record: CallsignDirectoryRecord) throws {}
     func setRead(mid: String, _ read: Bool) throws {}
     func move(mid: String, toFolder folderId: Int64) throws {}
     func moveToTrash(mid: String) throws {}
     func unreadInboxCount() throws -> Int { 0 }
-    func replaceStationCache(_ stations: [WinlinkRMSStationRecord]) throws {}
+    func replaceStationCache(_ stations: [WinlinkRMSStationRecord],
+                             scope: WinlinkRMSStationRecord.Scope) throws {}
     func stations() throws -> [WinlinkRMSStationRecord] { [] }
+    func stations(scope: WinlinkRMSStationRecord.Scope) throws -> [WinlinkRMSStationRecord] { [] }
+    func downloadedGridFields() throws -> [(field: String, count: Int)] { [] }
+    func clearDownloadedStations() throws {}
     func replaceCatalogCache(_ items: [WinlinkCatalogItemRecord]) throws {}
     func catalogItems() throws -> [WinlinkCatalogItemRecord] { [] }
     func appendSessionLog(_ log: WinlinkSessionLogRecord) throws {}

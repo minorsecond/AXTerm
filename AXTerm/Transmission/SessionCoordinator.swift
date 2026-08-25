@@ -45,6 +45,12 @@ nonisolated struct CachedAdaptiveEntry: Sendable {
 /// This class is owned by ContentView and passed down to child views.
 @MainActor
 final class SessionCoordinator: ObservableObject {
+
+    /// Fired when a remote station connects *to us*. Nothing in this
+    /// type acts on it; it exists so features like Winlink P2P can
+    /// answer without SessionCoordinator knowing they exist.
+    var onInboundSessionConnected: ((AX25Session) -> Void)?
+
     /// Shared instance for settings integration (single coordinator for app lifecycle).
     /// This is assigned in `init` for the main `ContentView`-owned coordinator.
     static weak var shared: SessionCoordinator?
@@ -64,11 +70,27 @@ final class SessionCoordinator: ObservableObject {
         }
     }
 
+    /// Assigns the callsign only when it actually differs.
+    ///
+    /// View initialisers run repeatedly, and on iOS the root view re-inits
+    /// often enough that an unconditional assignment would publish a change
+    /// on every pass — from inside a view update, which SwiftUI warns about.
+    func applyLocalCallsign(_ callsign: String) {
+        guard localCallsign != callsign else { return }
+        localCallsign = callsign
+    }
+
     /// Reference to PacketEngine for sending frames
     weak var packetEngine: PacketEngine?
 
     /// Reference to app settings for capability gating
-    weak var appSettings: AppSettingsStore?
+    weak var appSettings: AppSettingsStore? {
+        didSet {
+            // XID negotiation is manager-level state; sync it here and on
+            // every toggle (AppSettingsStore.didSet pushes via `shared`).
+            sessionManager.negotiateV22 = appSettings?.ax25NegotiateV22 ?? false
+        }
+    }
 
     /// Cancellables for subscriptions
     private var cancellables = Set<AnyCancellable>()
@@ -174,6 +196,8 @@ final class SessionCoordinator: ObservableObject {
     }
 
     let adaptiveStatusStore = AdaptiveStatusStore()
+    /// Live link visualization aggregates (window state, RTT, throughput).
+    let linkVizMonitor = LinkVizMonitor()
 
     /// When true, learn from session and network and use learned params; when false, use fixed defaults.
     @Published var adaptiveTransmissionEnabled: Bool = true
@@ -642,6 +666,10 @@ final class SessionCoordinator: ObservableObject {
             self?.sendFrame(frame)
         }
 
+        sessionManager.onLinkVizEvent = { [weak self] event in
+            self?.linkVizMonitor.ingest(event)
+        }
+
         // Wire up AXDP reassembly - must use in-order delivered data only.
         // Out-of-window or buffered frames are discarded/buffered by AX.25; appending them
         // would corrupt reassembly (chunks arrive out of order over KISS relay).
@@ -709,6 +737,10 @@ final class SessionCoordinator: ObservableObject {
         }
 
         // Wire up session state changes for capability discovery
+        // Set by whoever wants first refusal on inbound connections.
+        // Kept as a plain callback rather than a delegate so the
+        // Winlink side can attach without SessionCoordinator knowing
+        // anything about mail.
         sessionManager.onSessionStateChanged = { [weak self] session, oldState, newState in
             guard let self = self else { return }
 
@@ -722,10 +754,15 @@ final class SessionCoordinator: ObservableObject {
                 let peer = session.remoteAddress.display.uppercased()
 
                 if !isInitiator {
-                    NSSound(named: "Glass")?.play()
+                    PlatformSound.playInboundConnection()
                     self.packetEngine?.notificationScheduler?.scheduleConnectionNotification(callsign: peer)
+                    // Someone called us. Whoever wants to answer decides
+                    // what that means — the Winlink P2P listener is one
+                    // subscriber, and it only acts when the operator has
+                    // armed it.
+                    self.onInboundSessionConnected?(session)
                 } else {
-                    NSSound(named: "Ping")?.play()
+                    PlatformSound.playOutboundConnection()
                 }
 
                 if isInitiator && axdpEnabled && autoNegotiate {
@@ -1271,10 +1308,15 @@ final class SessionCoordinator: ObservableObject {
 
     /// Send a frame via PacketEngine
     private func sendFrame(_ frame: OutboundFrame) {
-        // Guard: don't send if packetEngine is not set (e.g., in tests)
+        // Outside tests this is a wiring fault, not a benign no-op: the state
+        // machine believes it transmitted, so T1 keeps expiring against frames
+        // that never reached the air and the session dies at N2 looking like a
+        // dead path. It was logged at debug for exactly that reason on iOS
+        // until 2026-08-25. A warning names it the moment it happens.
         guard let packetEngine = packetEngine else {
-            TxLog.debug(.session, "Skipping sendFrame - packetEngine not set", [
-                "destination": frame.destination.display
+            TxLog.warning(.session, "Frame NOT transmitted - packetEngine not wired to SessionCoordinator", [
+                "destination": frame.destination.display,
+                "type": frame.frameType
             ])
             return
         }
@@ -1368,7 +1410,23 @@ final class SessionCoordinator: ObservableObject {
         case .DM:
             sessionManager.handleInboundDM(from: from, path: path, channel: channel)
         case .FRMR:
+            // §6.3.2: during XID negotiation, FRMR is a pre-2.2 peer's
+            // documented "use defaults" — resolve the negotiation first so
+            // the deferred SABM proceeds; then normal FRMR handling.
+            sessionManager.handleInboundFRMRDuringNegotiation(from: from, channel: channel)
             sessionManager.handleInboundFRMR(from: from, path: path, channel: channel)
+        case .XID:
+            let responses = sessionManager.handleInboundXID(
+                from: from,
+                path: path,
+                channel: channel,
+                info: packet.info,
+                isCommand: packet.isCommand,
+                pf: (packet.control & 0x10) != 0
+            )
+            for response in responses {
+                sendFrame(response)
+            }
         case .DISC:
             if let response = sessionManager.handleInboundDISC(from: from, path: path, channel: channel) {
                 sendFrame(response)
@@ -2676,9 +2734,19 @@ final class SessionCoordinator: ObservableObject {
                 sendFrame(response)
             }
         case .SREJ:
-            // SREJ is optional in AX.25 2.2 and AXTerm never negotiates it, so a peer
-            // should not send one. Ignore rather than guess at selective-reject state.
-            break
+            // Selective reject, valid once XID negotiated it: retransmit
+            // exactly frame N(R). The manager guards the un-negotiated
+            // case (no session, or nothing buffered at N(R)) by ignoring.
+            let retransmits = sessionManager.handleInboundSREJ(
+                from: packet.from.map { AX25Address(call: $0.display) } ?? from,
+                path: path,
+                channel: channel,
+                nr: nr,
+                pf: pfSet
+            )
+            for frame in retransmits {
+                sendFrame(frame)
+            }
         }
     }
 

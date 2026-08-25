@@ -190,6 +190,20 @@ nonisolated enum CallsignValidator {
         customServiceEndpointsQueue.sync { customServiceEndpoints }
     }
 
+    /// True when a name is a destination rather than a station.
+    ///
+    /// `BEACON`, `ID`, `NODES`, `QST` and friends are addresses that frames
+    /// are sent *to*; nobody holds a licence for them and nobody answers a
+    /// connect request at one. Exposed so the UI can decline to offer actions
+    /// that cannot work, instead of showing an empty profile with a Connect
+    /// button that would key the radio at nothing.
+    static func isServiceEndpoint(_ candidate: String) -> Bool {
+        let upper = candidate.trimmingCharacters(in: .whitespaces).uppercased()
+        let baseCall = upper.components(separatedBy: "-").first ?? upper
+        if isKnownServiceEndpoint(baseCall) { return true }
+        return nonCallsignPrefixes.contains { baseCall.hasPrefix($0) }
+    }
+
     private static func isKnownServiceEndpoint(_ baseCall: String) -> Bool {
         if nonCallsignPatterns.contains(baseCall) {
             return true

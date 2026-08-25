@@ -6,7 +6,9 @@
 //
 
 import SwiftUI
+#if os(macOS)
 import ServiceManagement
+#endif
 
 struct SettingsView: View {
     @ObservedObject var settings: AppSettingsStore
@@ -18,6 +20,10 @@ struct SettingsView: View {
     let notificationManager: NotificationAuthorizationManager
     @ObservedObject var winlinkSettings: WinlinkSettings
     @ObservedObject var stationProfile: StationProfile
+    /// Lets the Winlink tab fill the grid square and address from GPS.
+    var locationService: StationLocationService?
+    /// Nil when the database failed to open — no mailbox, nothing to sync.
+    var winlinkSync: WinlinkSyncController?
     
     // Inject the router for navigation
     @StateObject var router = SettingsRouter.shared
@@ -40,7 +46,8 @@ struct SettingsView: View {
                 .tabItem { Label("Transmission", systemImage: "antenna.radiowaves.left.and.right") }
                 .tag(SettingsTab.transmission)
 
-            WinlinkSettingsTab(settings: winlinkSettings, profile: stationProfile)
+            WinlinkSettingsTab(settings: winlinkSettings, profile: stationProfile,
+                               locationService: locationService, sync: winlinkSync)
                 .tabItem { Label("Winlink", systemImage: "envelope") }
                 .tag(SettingsTab.winlink)
             

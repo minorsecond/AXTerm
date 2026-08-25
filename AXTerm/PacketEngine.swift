@@ -147,6 +147,14 @@ final class PacketEngine: ObservableObject {
     /// NET/ROM routing integration for passive route inference and link quality estimation.
     /// Observes all incoming packets to build routing tables.
     private(set) var netRomIntegration: NetRomIntegration?
+    /// Appends a sample of every measured link on each snapshot save, so the
+    /// station profile can show how a path has behaved rather than only how
+    /// it behaves now.
+    private(set) var linkQualityHistory: SQLiteLinkQualityHistoryStore?
+    /// The operator's own notes and photos about stations.
+    private(set) var stationNotes: SQLiteStationNoteStore?
+    /// What the network has said and shown about what each station runs.
+    private(set) var stationServices: SQLiteStationServiceStore?
 
     /// NET/ROM persistence for saving/loading routing state.
     private var netRomPersistence: NetRomPersistence?
@@ -177,6 +185,22 @@ final class PacketEngine: ObservableObject {
     // MARK: - Published State
 
     @Published private(set) var status: ConnectionStatus = .disconnected
+
+    /// Set when another station on this channel is transmitting under our
+    /// callsign — see `StationIdentityMonitor`. Two AXTerms sharing one
+    /// Direwolf with the same SSID is the usual cause, and the resulting
+    /// AX.25 breakage has no other visible symptom.
+    @Published private(set) var identityCollision: StationIdentityMonitor.Collision?
+    private let identityMonitor = StationIdentityMonitor()
+    /// Last callsign the monitor was primed with, so changing identity clears
+    /// frames sent under the old one — they are not evidence about the new.
+    private var identityMonitorCallsign = ""
+
+    /// Clears the warning. The collision itself is not fixed by dismissing
+    /// it, so this only silences the banner until the next report interval.
+    func dismissIdentityCollision() {
+        identityCollision = nil
+    }
     @Published private(set) var lastError: String?
     private var previousLinkState: KISSLinkState = .disconnected
     @Published private(set) var bytesReceived: Int = 0
@@ -316,6 +340,14 @@ final class PacketEngine: ObservableObject {
 
         // Initialize NET/ROM persistence
         if let writer = databaseWriter {
+            // The time series of what links have been like. Nil when the app
+            // runs without a database — the profile then shows current values
+            // only, which is what it always showed.
+            if let queue = writer as? DatabaseQueue {
+                self.linkQualityHistory = SQLiteLinkQualityHistoryStore(dbQueue: queue)
+                self.stationNotes = SQLiteStationNoteStore(dbQueue: queue)
+                self.stationServices = SQLiteStationServiceStore(dbQueue: queue)
+            }
             self.netRomPersistence = try? NetRomPersistence(database: writer)
             #if DEBUG
             if netRomPersistence != nil {
@@ -401,7 +433,22 @@ final class PacketEngine: ObservableObject {
     /// Connect using the transport configured in settings.
     /// Falls back to network if transport type is unknown.
     func connectUsingSettings() {
-        if settings.isSerialTransport {
+        // This call brings the link into line with whatever the settings say
+        // right now, so any "settings changed while suspended" baseline is by
+        // definition already satisfied. Re-baselining here stops the resume
+        // from firing a second connect that tears down the link this one is
+        // about to open — which is exactly what an operator sees as the app
+        // connecting and immediately dropping, over and over.
+        if isConnectionLogicSuspended {
+            suspendedConfigSnapshot = ConnectionConfigSnapshot(settings: settings)
+        }
+
+        // A serial TNC exists only where there is a serial port. iOS has no
+        // IOKit and no user-accessible USB serial, so a handheld reaches a
+        // TNC over the network or over Bluetooth instead; falling through to
+        // the network path is correct there, not a degraded mode.
+        if settings.isSerialTransport && PlatformIdiom.supportsSerialPorts {
+            #if os(macOS)
             
             // Construct Mobilinkd Config if enabled
             var mobilinkdConfig: MobilinkdConfig?
@@ -422,6 +469,7 @@ final class PacketEngine: ObservableObject {
                 mobilinkdConfig: mobilinkdConfig
             )
             connectSerial(config: config)
+            #endif
         } else if settings.isBLETransport {
             // Construct Mobilinkd config for BLE just like serial
             var bleMobilinkdConfig: MobilinkdConfig?
@@ -470,6 +518,7 @@ final class PacketEngine: ObservableObject {
         connectViaLink(networkLink)
     }
 
+    #if os(macOS)
     /// Connect using a serial device
     func connectSerial(config: SerialConfig) {
         // Orchestration: Check if we are already connected/connecting to this exact device
@@ -500,6 +549,7 @@ final class PacketEngine: ObservableObject {
         let serialLink = KISSLinkSerial(config: config)
         connectViaLink(serialLink)
     }
+    #endif
 
     /// Connect using a BLE device
     func connectBLE(config: BLEConfig) {
@@ -601,6 +651,15 @@ final class PacketEngine: ObservableObject {
             "hex": hexPrefix(kissData)
         ])
         TxLog.kissSend(frameId: frame.id, size: kissData.count)
+        ChannelActivityMonitor.shared.record(
+            callsign: frame.source.display, frameBytes: kissData.count, isTransmit: true)
+        // Remembered so the same frame arriving back — directly or repeated by
+        // a digipeater — is not mistaken for another station using our address.
+        identityMonitor.recordTransmitted(
+            source: frame.source.display,
+            destination: frame.destination.display,
+            control: frame.controlByte ?? 0,
+            info: frame.payload)
         TxLog.hexDump(.kiss, "KISS frame", data: kissData)
 
         LinkDebugLog.shared.recordTxBytes(kissData.count)
@@ -900,6 +959,41 @@ final class PacketEngine: ObservableObject {
             "infoHex": hexPrefix(decoded.info)
         ])
 
+        // Another station transmitting as us corrupts every AX.25 link this
+        // station has, and produces no other error. Checked on every frame
+        // because the offending one may be the only evidence.
+        if identityMonitorCallsign != settings.myCallsign {
+            identityMonitorCallsign = settings.myCallsign
+            identityMonitor.reset()
+            identityCollision = nil
+        }
+
+        if let collision = identityMonitor.inspectReceived(
+            source: decoded.from?.display,
+            destination: decoded.to?.display,
+            control: decoded.control,
+            info: decoded.info,
+            ownCallsign: settings.myCallsign,
+            frameType: decoded.frameType.rawValue) {
+            identityCollision = collision
+            addErrorLine("Another station is transmitting as \(collision.callsign) \u{2014} give one device a different SSID.",
+                         category: .connection)
+            eventLogger?.log(level: .warning, category: .connection,
+                             message: "Callsign collision on channel",
+                             metadata: ["callsign": collision.callsign,
+                                        "destination": collision.destination,
+                                        "frameType": collision.frameType])
+        }
+
+        if let src = decoded.from?.display {
+            ChannelActivityMonitor.shared.record(
+                callsign: src, frameBytes: ax25Data.count, isTransmit: false)
+            // Pulse the first RF hop: src → first digipeater, or src → dest.
+            if let hop = decoded.via.first?.display ?? decoded.to?.display {
+                GraphPulseBus.shared.pulse(from: src, to: hop)
+            }
+        }
+
         let host = connectedHost ?? settings.host
         let port = connectedPort ?? settings.portValue
         let endpoint = KISSEndpoint(host: host, port: port)
@@ -1012,6 +1106,10 @@ final class PacketEngine: ObservableObject {
                 return nil  // UI frames are data, not control — skip SYS line
             case .SABM, .SABME, .DISC:
                 return "\(uType.rawValue)\(pf ? " P" : "")"
+            case .XID:
+                // Command or response — P/F alone can't say which; the
+                // console line just names the negotiation frame.
+                return "XID\(pf ? " P/F" : "")"
             case .UA, .DM, .FRMR:
                 return "\(uType.rawValue)\(pf ? " F" : "")"
             case .UNKNOWN:
@@ -2053,6 +2151,26 @@ final class PacketEngine: ObservableObject {
                 #if DEBUG
                 print("[NETROM:SAVE] ✓ Snapshot saved successfully")
                 #endif
+
+                // Append to the time series while the stats are already in
+                // hand. The store rate-limits itself per link, so calling on
+                // every snapshot costs a cheap MAX() lookup and usually
+                // writes nothing.
+                if let history = await self.linkQualityHistory {
+                    do {
+                        let now = Date()
+                        try history.record(linkStats, at: now)
+                        try history.prune(
+                            before: now.addingTimeInterval(-SQLiteLinkQualityHistoryStore.retention))
+                    } catch {
+                        // History is a convenience, never a precondition:
+                        // losing a sample must not fail the snapshot that
+                        // routing actually depends on.
+                        #if DEBUG
+                        print("[NETROM:SAVE] link history sample failed: \(error)")
+                        #endif
+                    }
+                }
             } catch {
                 #if DEBUG
                 print("[NETROM:SAVE] ❌ Error saving snapshot: \(error)")

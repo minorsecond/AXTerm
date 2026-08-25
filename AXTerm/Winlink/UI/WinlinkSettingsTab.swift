@@ -15,8 +15,81 @@ struct WinlinkSettingsTab: View {
     @State private var newLadderCallsign = ""
     @State private var passwordSaveOK: Bool?
 
+    /// Optional so the tab still previews and builds without a location
+    /// service wired in.
+    var locationService: StationLocationService?
+    /// How far a ladder rung is, when the gateway cache knows. Supplied
+    /// rather than looked up here: Settings is its own scene and has no
+    /// station view model, and inventing one to answer a decoration would be
+    /// a lot of machinery for a caption.
+    var stationDistanceMiles: (String, Int?) -> Double? = { _, _ in nil }
+    /// Nil when the database failed to open — no mailbox, nothing to sync.
+    var sync: WinlinkSyncController?
+    @State private var isLocating = false
+    @State private var locationNote: String?
+    @State private var locationNoteIsError = false
+
     var body: some View {
         Form {
+            Section {
+                HStack {
+                    Button {
+                        Task { await fillFromCurrentPosition() }
+                    } label: {
+                        if isLocating {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label("Use My Current Position", systemImage: "location.fill")
+                        }
+                    }
+                    .disabled(isLocating || locationService == nil)
+                    .help("Sets the grid square from GPS \u{2014} pure arithmetic on the fix, so it works with everything else down \u{2014} and fills city, state, county and ZIP from a reverse lookup, which does need the internet.")
+                    Spacer()
+                }
+                if let locationNote {
+                    Label(locationNote, systemImage: locationNoteIsError
+                          ? "exclamationmark.triangle" : "checkmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(locationNoteIsError ? .orange : .secondary)
+                }
+            } header: {
+                Text("Position")
+            } footer: {
+                Text("Fills the grid square and address below. The grid square comes from the GPS fix alone; the postal address needs a network lookup, so do it while you have a path.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Callsign directory") {
+                Toggle("Look up callsigns online", isOn: $settings.callsignLookupEnabled)
+                    .help("Resolves heard callsigns to a name and location via hamdb.org so they can be placed on the map. Answers are cached permanently and stay usable offline \u{2014} so this is worth turning on while you have a path, even if you will not have one later.\n\nOff by default: a lookup tells a third party which stations you are hearing. That is public licence data, but it is still a disclosure.")
+            }
+
+            Section("Unified mailbox") {
+                Toggle("Sync mail across my devices via iCloud", isOn: $settings.mailboxSyncEnabled)
+                    .help("Shares this mailbox with your other devices signed into the same Apple Account, so mail worked on the home rig is readable on a handheld and read flags follow you.\n\nOff by default: sync sends your Winlink traffic to Apple's servers, which is a decision to make deliberately rather than inherit from an upgrade. It goes to your private database, which only you can read.\n\nMessages, read flags, folders, contacts, starred catalog products and callsign lookups travel. Digipeater paths, the gateway ladder, session logs and grid square do NOT \u{2014} those describe this antenna at this location, and are wrong anywhere else.")
+
+                if settings.mailboxSyncEnabled {
+                    Toggle("Share what this station hears", isOn: $settings.shareStationActivity)
+                        .explain("Publishes a summary of the stations this receiver hears \u{2014} callsign, how often, how much airtime \u{2014} so your other stations can see what this one worked while they were away. It appears there under \u{201C}Other Stations\u{201D}, labelled with the station and grid square that heard it.\n\nIt is never merged into routing metrics. A packet this antenna heard says nothing about what a handheld across town can reach, and folding the two together would produce link quality describing neither.\n\nOff by default: it tells iCloud which stations you can hear, which is a rough statement about where you are and when you are on the air.")
+                }
+
+                if settings.mailboxSyncEnabled, let sync {
+                    SyncStatusRow(sync: sync)
+                }
+            }
+
+            Section("Peer-to-peer (grid-down)") {
+                Toggle("Answer inbound Winlink calls", isOn: $settings.p2pListenEnabled)
+                    .help("Lets other stations connect directly to you and exchange mail with no gateway, no CMS, and no internet — the mode that still works when infrastructure is gone.\n\nOff by default: an armed station accepts mail from anyone who calls and transmits in reply with no operator present. Arm it for an activation, not for everyday operating.")
+                if settings.p2pListenEnabled {
+                    Label("Armed \u{2014} this station answers inbound Winlink calls and will transmit in reply.",
+                          systemImage: "antenna.radiowaves.left.and.right")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+
             Section {
                 HStack {
                     TextField("Grid square", text: $settings.gridSquare, prompt: Text("e.g. DM79lr"))
@@ -33,6 +106,16 @@ struct WinlinkSettingsTab: View {
                     }
                 }
                 .help(WinlinkCopy.gridSquareTooltip)
+
+                AntennaHeightField(title: "Antenna height above ground",
+                                   metres: $settings.antennaHeightMetres,
+                                   isFeet: $settings.heightUnitIsFeet)
+                    .help(WinlinkCopy.antennaHeightTooltip)
+
+                AntennaHeightField(title: "Assume for other stations",
+                                   metres: $settings.assumedRemoteHeightMetres,
+                                   isFeet: $settings.heightUnitIsFeet)
+                    .help(WinlinkCopy.assumedHeightTooltip)
 
                 Stepper(value: $settings.maxDistanceMiles, in: 0...1000, step: 25) {
                     HStack {
@@ -166,6 +249,18 @@ struct WinlinkSettingsTab: View {
                                     .font(.caption.monospaced())
                                     .foregroundStyle(.secondary)
                             }
+                            // A rung carried home from a trip is legitimate
+                            // but wasteful: the ladder would spend a whole
+                            // call attempt on something hundreds of miles
+                            // away. Naming the distance beats making the
+                            // operator cross-reference two screens.
+                            if let miles = ladderDistanceMiles(entry), miles > 150 {
+                                Label(String(format: "%.0f mi", miles),
+                                      systemImage: "exclamationmark.triangle")
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                                    .help("This gateway is \(Int(miles)) miles away — likely added for a trip. It stays in the ladder until removed, and every exchange from here will spend an attempt on it.")
+                            }
                             if !entry.path.isEmpty {
                                 Text("via \(entry.path)")
                                     .font(.caption)
@@ -236,6 +331,11 @@ struct WinlinkSettingsTab: View {
         newLadderCallsign = ""
     }
 
+    /// Distance to a ladder rung, when the gateway cache knows it.
+    private func ladderDistanceMiles(_ entry: WinlinkSettings.GatewayLadderEntry) -> Double? {
+        stationDistanceMiles(entry.callsign, entry.frequencyHz)
+    }
+
     /// Tests the entered key against the catalog operation (the one that
     /// requires a personal key) and reports the outcome inline.
     private func verifyAPIKey() {
@@ -255,4 +355,91 @@ struct WinlinkSettingsTab: View {
             }
         }
     }
+
+    // MARK: - Position
+
+    /// Two halves with different dependencies, and the UI says which is
+    /// which: the grid square is arithmetic on the fix and always works,
+    /// the postal address is a network lookup and does not.
+    private func fillFromCurrentPosition() async {
+        guard let locationService else { return }
+        isLocating = true
+        locationNote = nil
+        locationNoteIsError = false
+        defer { isLocating = false }
+
+        guard let location = await locationService.currentLocation() else {
+            locationNote = "No position available. Check Location permission in System Settings, or set a grid square by hand."
+            locationNoteIsError = true
+            return
+        }
+
+        if let grid = Maidenhead.locator(
+            latitude: location.latitude, longitude: location.longitude) {
+            settings.gridSquare = grid
+        }
+
+        do {
+            let address = try await StationAddressResolver()
+                .address(latitude: location.latitude, longitude: location.longitude)
+            if !address.city.isEmpty { profile.city = address.city }
+            if !address.state.isEmpty { profile.state = address.state }
+            if !address.county.isEmpty { profile.county = address.county }
+            if !address.postalCode.isEmpty { profile.postalCode = address.postalCode }
+            if !address.street.isEmpty { profile.street = address.street }
+            locationNote = "Grid square and address set from \(location.source.rawValue)."
+        } catch {
+            // The grid square still landed — say so, so this does not
+            // read as a total failure.
+            locationNote = "Grid square set to \(settings.gridSquare). "
+                + (error.localizedDescription)
+            locationNoteIsError = true
+        }
+    }
+}
+
+/// Live account of what sync last did.
+///
+/// Sync that shows only a switch is sync nobody trusts. When a message has
+/// not turned up on the other device the operator needs to know whether the
+/// last pass ran, what it moved, and why it stopped — so this states it
+/// rather than implying it with a spinner.
+private struct SyncStatusRow: View {
+
+    @ObservedObject var sync: WinlinkSyncController
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            icon
+            VStack(alignment: .leading, spacing: 2) {
+                Text(sync.status.summary)
+                    .font(.caption)
+                Text("This device: \(WinlinkSyncDevice.shortName(deviceID))")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .help("Identifies this installation when two devices both hold a queued message. Only the device holding the claim transmits it, so the same message cannot go out twice.")
+            }
+            Spacer(minLength: 0)
+            Button("Sync Now") { sync.syncNow() }
+                .controlSize(.small)
+                .disabled(sync.status.isBusy)
+        }
+        .help(sync.status.detail)
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        switch sync.status {
+        case .syncing:
+            ProgressView().controlSize(.small)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        case .unavailable:
+            Image(systemName: "icloud.slash").foregroundStyle(.secondary)
+        default:
+            Image(systemName: "icloud").foregroundStyle(.secondary)
+        }
+    }
+
+    private var deviceID: String { WinlinkSyncDevice.identifier() }
 }

@@ -675,7 +675,11 @@ final class AX25TransmissionTests: XCTestCase {
     }
 
     /// Send 5 I-frames rapidly, verify each is acknowledged immediately (no delay/coalescing).
-    func testImmediateAckForMultipleIFrames() async throws {
+    /// Five in-sequence I-frames, P=1 only on the last: one cumulative RR
+    /// with N(R)=5 answers the whole burst. This used to assert an RR per
+    /// frame — four extra key-ups per burst at 1200 baud, each able to
+    /// collide with the peer's next frame on simplex.
+    func testBurstOfIFramesIsAckedCumulatively() async throws {
 
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         manager.localCallsign = AX25Address(call: "ME", ssid: 0)
@@ -690,7 +694,7 @@ final class AX25TransmissionTests: XCTestCase {
         // Verify session is lookup-able
         XCTAssertNotNil(manager.existingSession(for: dest, path: DigiPath(), channel: 0), "Session should be found by existingSession")
 
-        // Send 5 in-sequence I-frames with P/F=false
+        // Send 5 in-sequence I-frames; only the burst-ending frame polls.
         for ns in 0..<5 {
             if let response = manager.handleInboundIFrame(
                 from: dest,
@@ -698,24 +702,20 @@ final class AX25TransmissionTests: XCTestCase {
                 channel: 0,
                 ns: ns,
                 nr: 0,
-                pf: false,
+                pf: ns == 4,
                 payload: Data([UInt8(0x41 + ns)])
             ) {
                 sentFrames.append(response)
             }
         }
 
-        // Each I-frame should trigger an immediate RR
-        XCTAssertEqual(sentFrames.count, 5, "Each I-frame should trigger an immediate RR")
+        // One cumulative RR — the F=1 poll response — answers the burst.
+        XCTAssertEqual(sentFrames.count, 1, "Only the poll draws an RR; P=0 frames batch onto T2")
 
-        // Verify the last RR acknowledges all
-        if let lastRR = sentFrames.last {
-            XCTAssertEqual(lastRR.frameType, "s", "Response should be an S-frame")
-            if let ctrl = lastRR.controlByte {
-                let rrNr = Int((ctrl >> 5) & 0x07)
-                XCTAssertEqual(rrNr, 5, "Last RR should have N(R)=5")
-            }
-        }
+        let lastRR = try XCTUnwrap(sentFrames.last)
+        XCTAssertEqual(lastRR.frameType, "s", "Response should be an S-frame")
+        let ctrl = try XCTUnwrap(lastRR.controlByte)
+        XCTAssertEqual(Int((ctrl >> 5) & 0x07), 5, "The RR acks all five: N(R)=5")
     }
 
     /// I-frame with P=1 triggers immediate RR response (not delayed).

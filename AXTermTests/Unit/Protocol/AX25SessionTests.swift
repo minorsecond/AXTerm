@@ -459,17 +459,17 @@ final class AX25SessionTests: XCTestCase {
 
         let session = connectSession(manager: manager, destination: destination, path: path)
 
+        // P=1 so the ack is synchronous — a P=0 frame would arm T2 instead.
         let sentFrame = manager.handleInboundIFrame(
             from: mismatchSource,
             path: path,
             channel: 0,
             ns: 0,
             nr: 0,
-            pf: false,
+            pf: true,
             payload: Data("INFO".utf8)
         )
 
-        // With immediate ACK, the RR should be sent immediately
         XCTAssertNotNil(sentFrame, "RR should be sent immediately")
         XCTAssertEqual(sentFrame?.frameType, "s")
         XCTAssertEqual(sentFrame?.displayInfo?.prefix(2), "RR")
@@ -658,19 +658,19 @@ final class AX25SessionTests: XCTestCase {
         let session = connectSession(manager: manager, destination: destination, path: path)
         XCTAssertEqual(session.state, .connected)
 
-        // First delivery of an in-sequence I-frame — with delayed ACK, returns nil
-        // but stores the RR in delayedAckFrame.
-        // First delivery of an in-sequence I-frame
+        // First delivery of an in-sequence I-frame. P=1 keeps the ack
+        // synchronous; the DM-vs-RR distinction under test is orthogonal
+        // to the T2 delayed-ack batching.
         let firstResponse = manager.handleInboundIFrame(
             from: destination,
             path: path,
             channel: 0,
             ns: 0,
             nr: 0,
-            pf: false,
+            pf: true,
             payload: Data("WELCOME".utf8)
         )
-        
+
         XCTAssertNotNil(firstResponse, "I-frame should be acknowledged immediately")
         XCTAssertEqual(firstResponse?.frameType, "s")  // RR
 
@@ -684,7 +684,7 @@ final class AX25SessionTests: XCTestCase {
             channel: 0,
             ns: 0,
             nr: 0,
-            pf: false,
+            pf: true,
             payload: Data("WELCOME".utf8)
         )
 
@@ -1108,7 +1108,9 @@ final class AX25SessionTests: XCTestCase {
             if case .deliverData(let data) = action { return data == payload }
             return false
         })
-        XCTAssertTrue(actions.contains { action in
+        // P=0 → the ack is owed on T2, cumulatively.
+        XCTAssertTrue(actions.contains(.startT2))
+        XCTAssertTrue(sm.handle(event: .t2Timeout).contains { action in
             if case .sendRR(let nr, _, _) = action { return nr == 1 }
             return false
         })
@@ -1167,10 +1169,10 @@ final class AX25SessionTests: XCTestCase {
             if case .deliverData = action { return true }
             return false
         })
-        XCTAssertTrue(actionsDup.contains { action in
+        XCTAssertTrue(sm.handle(event: .t2Timeout).contains { action in
             if case .sendRR(let nr, _, _) = action { return nr == 2 }
             return false
-        }, "Duplicate I-frame should trigger RR for current V(R)")
+        }, "Duplicate I-frame draws a re-ack of the current V(R) when T2 fires")
     }
 
     func testStateMachineReceivedRRAcknowledgesFrames() {
@@ -1501,26 +1503,25 @@ final class AX25SessionTests: XCTestCase {
         let peer = AX25Address(call: "KB5YZB", ssid: 7)
         let session = connectSession(manager: manager, destination: peer, path: DigiPath())
 
-        // First processing: ns=0 arrives when V(R)=0 → in-sequence → immediate RR(nr=1)
+        // First processing: ns=0, P=1 → in-sequence → immediate RR(nr=1) F=1.
+        // (A P=0 frame would arm T2 instead — the delayed cumulative ack.)
         let rr1 = manager.handleInboundIFrame(
             from: peer, path: DigiPath(), channel: 0,
-            ns: 0, nr: 0, pf: false,
+            ns: 0, nr: 0, pf: true,
             payload: Data("Welcome".utf8)
         )
-        // With immediate ACK, the RR is sent immediately
-        XCTAssertNotNil(rr1, "First I-frame (in-sequence) must send immediate RR")
+        XCTAssertNotNil(rr1, "First I-frame (in-sequence, P=1) must send immediate RR")
         XCTAssertEqual(session.vr, 1, "V(R) must advance to 1 after accepting ns=0")
 
-        // Second processing of same frame: ns=0 arrives when V(R)=1 → outside window
-        // It triggers another RR (immediate) to ensure the peer knows we have it.
+        // Second processing of same frame: ns=0 arrives when V(R)=1 → outside window.
+        // P=1 demands the re-ack synchronously.
         let rr2 = manager.handleInboundIFrame(
             from: peer, path: DigiPath(), channel: 0,
-            ns: 0, nr: 0, pf: false,
+            ns: 0, nr: 0, pf: true,
             payload: Data("Welcome".utf8)
         )
 
-        // With immediate ACK, the second RR is also immediate.
-        XCTAssertNotNil(rr2, "Duplicate I-frame must send immediate RR")
+        XCTAssertNotNil(rr2, "Duplicate I-frame with P=1 must send immediate RR")
         XCTAssertEqual(session.vr, 1,
             "V(R) must NOT advance again for an outside-window duplicate")
     }
@@ -1572,19 +1573,19 @@ final class AX25SessionTests: XCTestCase {
         let session = connectSession(manager: manager, destination: destination, path: path)
         XCTAssertEqual(session.state, .connected)
         
-        // Receive I-frame
+        // Receive I-frame with P=1 — the poll response is the synchronous
+        // path; P=0 acks ride T2 (see DelayedAckTests).
         let sentFrame = manager.handleInboundIFrame(
             from: destination,
             path: path,
             channel: 0,
             ns: 0,
             nr: 0,
-            pf: false,
+            pf: true,
             payload: Data("TEST".utf8)
         )
-        
-        // RR must be sent IMMEDIATELY (synchronously)
-        XCTAssertNotNil(sentFrame, "RR should be sent immediately after I-frame")
+
+        XCTAssertNotNil(sentFrame, "RR should be sent immediately after a P=1 I-frame")
         XCTAssertEqual(sentFrame?.frameType, "s")
         XCTAssertEqual(sentFrame?.displayInfo?.prefix(2), "RR")
         XCTAssertEqual(sentFrame?.nr, 1)
@@ -1966,7 +1967,7 @@ final class AX25SessionTests: XCTestCase {
             channel: 0,
             ns: 0,
             nr: 0,
-            pf: false,
+            pf: true,  // P=1 keeps the RR synchronous; delivery is what's under test
             payload: partialText
         )
 

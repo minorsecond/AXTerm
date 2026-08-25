@@ -1,5 +1,9 @@
-import AppKit
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
+
+#if os(macOS)
 
 private final class FirstClickPopupComboBox: NSComboBox {
     private var pendingOpenOnItemsAvailable = false
@@ -35,12 +39,106 @@ private final class FirstClickPopupComboBox: NSComboBox {
     }
 }
 
+#endif
+
 struct EditableComboBoxGroup: Hashable {
     let title: String
     let items: [String]
 }
 
-struct EditableComboBox: NSViewRepresentable {
+/// A text field that also offers known values.
+///
+/// On macOS this is a real `NSComboBox`, because a combo box is the native
+/// control for "type anything, or pick from what we know" and SwiftUI has no
+/// equivalent. iOS has no combo box at all, so there the same idea becomes a
+/// text field with a menu of the same grouped suggestions beside it — which
+/// is how a touch platform expresses the same choice.
+struct EditableComboBox: View {
+    @Binding var text: String
+    let placeholder: String
+    let items: [String]
+    var groups: [EditableComboBoxGroup] = []
+    var width: CGFloat
+    var focusRequested: Binding<Bool>? = nil
+    var accessibilityIdentifier: String? = nil
+    var onCommit: (() -> Void)? = nil
+
+    var body: some View {
+        #if os(macOS)
+        AppKitComboBox(text: $text, placeholder: placeholder, items: items,
+                       groups: groups, width: width, focusRequested: focusRequested,
+                       accessibilityIdentifier: accessibilityIdentifier, onCommit: onCommit)
+        #else
+        TouchComboBox(text: $text, placeholder: placeholder, items: items,
+                      groups: groups, width: width,
+                      accessibilityIdentifier: accessibilityIdentifier, onCommit: onCommit)
+        #endif
+    }
+}
+
+#if os(iOS)
+
+/// Text field plus a suggestion menu.
+///
+/// The field stays free-text: a callsign or a via path the operator has never
+/// used before must remain typeable, so the menu offers what is known without
+/// restricting to it.
+private struct TouchComboBox: View {
+    @Binding var text: String
+    let placeholder: String
+    let items: [String]
+    var groups: [EditableComboBoxGroup] = []
+    var width: CGFloat
+    var accessibilityIdentifier: String?
+    var onCommit: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .submitLabel(.go)
+                .onSubmit { onCommit?() }
+                .accessibilityIdentifier(accessibilityIdentifier ?? "")
+
+            if !suggestionGroups.isEmpty {
+                Menu {
+                    ForEach(suggestionGroups, id: \.title) { group in
+                        if group.title.isEmpty {
+                            ForEach(group.items, id: \.self) { item in
+                                Button(item) { text = item; onCommit?() }
+                            }
+                        } else {
+                            Section(group.title) {
+                                ForEach(group.items, id: \.self) { item in
+                                    Button(item) { text = item; onCommit?() }
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .accessibilityLabel("Known values")
+            }
+        }
+        .frame(maxWidth: width > 0 ? width : nil)
+    }
+
+    private var suggestionGroups: [EditableComboBoxGroup] {
+        if !groups.isEmpty { return groups.filter { !$0.items.isEmpty } }
+        return items.isEmpty ? [] : [EditableComboBoxGroup(title: "", items: items)]
+    }
+}
+
+#endif
+
+#if os(macOS)
+
+private struct AppKitComboBox: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let items: [String]
@@ -119,7 +217,7 @@ struct EditableComboBox: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, NSComboBoxDelegate {
-        var parent: EditableComboBox
+        var parent: AppKitComboBox
         /// Tracks the last set of items to avoid unnecessary removeAll/addAll cycles.
         var lastItems: [String] = []
         /// Set while a dropdown selection is being applied asynchronously,
@@ -131,7 +229,7 @@ struct EditableComboBox: NSViewRepresentable {
         /// Item updates staged while popup is visible or selection commit is in-flight.
         var stagedItems: [String]?
 
-        init(_ parent: EditableComboBox) {
+        init(_ parent: AppKitComboBox) {
             self.parent = parent
         }
 
@@ -202,3 +300,5 @@ struct EditableComboBox: NSViewRepresentable {
         }
     }
 }
+
+#endif

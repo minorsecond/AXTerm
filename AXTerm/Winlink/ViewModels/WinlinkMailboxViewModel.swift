@@ -24,6 +24,15 @@ final class WinlinkMailboxViewModel: ObservableObject {
     private let store: WinlinkStore
     private let myCallsign: () -> String
 
+    /// Fired whenever the number of unread messages may have changed.
+    ///
+    /// `WinlinkContext` keeps its own `unreadCount` for the tab badge,
+    /// because the badge outlives any one mailbox screen. Reading a message
+    /// updates this view model's count and nothing else, so before this
+    /// existed the badge stayed lit until some unrelated action happened to
+    /// call `refreshUnread()` — on iOS, opening a message never did.
+    var onUnreadCountChanged: (() -> Void)?
+
     init(store: WinlinkStore, myCallsign: @escaping () -> String) {
         self.store = store
         self.myCallsign = myCallsign
@@ -38,12 +47,19 @@ final class WinlinkMailboxViewModel: ObservableObject {
     func refresh() {
         do {
             folders = try store.folders()
-            unreadCount = try store.unreadInboxCount()
+            setUnreadCount(try store.unreadInboxCount())
             reloadMessages()
             lastError = nil
         } catch {
             lastError = String(describing: error)
         }
+    }
+
+    /// Single place the count is written, so no path can update it silently.
+    private func setUnreadCount(_ value: Int) {
+        let changed = unreadCount != value
+        unreadCount = value
+        if changed { onUnreadCountChanged?() }
     }
 
     private func reloadMessages() {
@@ -86,7 +102,7 @@ final class WinlinkMailboxViewModel: ObservableObject {
             selectedMessage = stored
             if let stored, !stored.state.isRead {
                 try store.setRead(mid: mid, true)
-                unreadCount = try store.unreadInboxCount()
+                setUnreadCount(try store.unreadInboxCount())
                 reloadMessages()
             }
         } catch {

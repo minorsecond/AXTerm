@@ -10,13 +10,21 @@ final class WinlinkSettings: ObservableObject {
     // MARK: - Keys
 
     static let gridSquareKey = "winlinkGridSquare"
+    static let antennaHeightMetresKey = "stationAntennaHeightMetres"
+    static let assumedRemoteHeightMetresKey = "stationAssumedRemoteHeightMetres"
+    static let heightUnitIsFeetKey = "stationHeightUnitIsFeet"
+    static let shareStationActivityKey = "winlinkShareStationActivity"
     static let maxDistanceMilesKey = "winlinkMaxDistanceMiles"
     static let historyHoursKey = "winlinkHistoryHours"
     static let gatewayCallsignKey = "winlinkGatewayCallsign"
     static let gatewayPathKey = "winlinkGatewayPath"
+    static let p2pListenEnabledKey = "winlinkP2PListenEnabled"
+    static let stationPreferencesKey = "winlinkStationPreferences"
+    static let callsignLookupEnabledKey = "winlinkCallsignLookupEnabled"
     static let preferredTransportKey = "winlinkPreferredTransport"
     static let clientProductKey = "winlinkClientProduct"
     static let gatewayLadderKey = "winlinkGatewayLadder"
+    static let mailboxSyncEnabledKey = "winlinkMailboxSyncEnabled"
 
     static let defaultMaxDistanceMiles = 100
     static let defaultHistoryHours = 24
@@ -54,6 +62,51 @@ final class WinlinkSettings: ObservableObject {
         didSet { defaults.set(gridSquare, forKey: Self.gridSquareKey) }
     }
 
+    /// Height of this station's antenna above the ground beneath it, in
+    /// metres.
+    ///
+    /// Not decoration: this is the single input that most often decides a
+    /// terrain verdict. Sixty percent Fresnel clearance over 13 km at 145 MHz
+    /// needs roughly 49 m of height, and the same path from 10 m clears about
+    /// 9% of the zone. Getting this wrong by a factor of five changes every
+    /// forecast the station appears in.
+    ///
+    /// Above *ground*, not above sea level — the elevation data supplies the
+    /// ground, and adding sea level twice would put every antenna in orbit.
+    @Published var antennaHeightMetres: Double {
+        didSet { defaults.set(antennaHeightMetres, forKey: Self.antennaHeightMetresKey) }
+    }
+
+    /// What to assume for a station whose height nobody has recorded.
+    ///
+    /// Kept separate from the operator's own height and shown wherever a
+    /// forecast is, because it is an assumption rather than a measurement and
+    /// a forecast built on it should say so. Ten metres is a modest mast, not
+    /// a repeater site.
+    @Published var assumedRemoteHeightMetres: Double {
+        didSet { defaults.set(assumedRemoteHeightMetres, forKey: Self.assumedRemoteHeightMetresKey) }
+    }
+
+    /// Feet in the field, metres in the maths.
+    ///
+    /// Heights are stored in metres because the propagation formulas are
+    /// metric, but a US operator knows their tower in feet and converting in
+    /// their head is how a 40 ft mast gets entered as 40 m.
+    @Published var heightUnitIsFeet: Bool {
+        didSet { defaults.set(heightUnitIsFeet, forKey: Self.heightUnitIsFeetKey) }
+    }
+
+    /// Publish what this station hears to the operator's other stations.
+    ///
+    /// Off by default. It tells iCloud which stations this receiver can
+    /// hear, which is a rough statement about where the operator is and
+    /// when they are on the air — the same reasoning that keeps callsign
+    /// lookup opt-in. What arrives is only ever displayed as another
+    /// station's evidence; see `WinlinkSyncPolicy.attributed`.
+    @Published var shareStationActivity: Bool {
+        didSet { defaults.set(shareStationActivity, forKey: Self.shareStationActivityKey) }
+    }
+
     @Published var maxDistanceMiles: Int {
         didSet { defaults.set(maxDistanceMiles, forKey: Self.maxDistanceMilesKey) }
     }
@@ -74,6 +127,38 @@ final class WinlinkSettings: ObservableObject {
 
     @Published var preferredTransport: TransportPreference {
         didSet { defaults.set(preferredTransport.rawValue, forKey: Self.preferredTransportKey) }
+    }
+
+    /// Answer inbound Winlink calls as a P2P mail peer.
+    ///
+    /// Off by default and deliberately so: an armed station accepts mail
+    /// from anyone who calls, and transmits in reply, with no operator
+    /// present. That is what an activation needs and what ordinary
+    /// operating does not, so arming stays a decision rather than a
+    /// default. See `WinlinkP2PListener`.
+    @Published var p2pListenEnabled: Bool {
+        didSet { defaults.set(p2pListenEnabled, forKey: Self.p2pListenEnabledKey) }
+    }
+
+    /// Look up callsigns in an online directory (HamDB) to place heard
+    /// stations on the map.
+    ///
+    /// Off by default: a lookup tells a third party which stations this
+    /// operator is hearing. Public licence data, a small disclosure — but
+    /// a disclosure, and not one to make silently. Answers are cached
+    /// permanently, so this is a "fill it while you have a path" feature.
+    @Published var callsignLookupEnabled: Bool {
+        didSet { defaults.set(callsignLookupEnabled, forKey: Self.callsignLookupEnabledKey) }
+    }
+
+    /// Per-link digipeater paths and table visibility. See
+    /// `WinlinkStationPreferences`.
+    @Published var stationPreferences: WinlinkStationPreferences {
+        didSet {
+            if let data = try? JSONEncoder().encode(stationPreferences) {
+                defaults.set(data, forKey: Self.stationPreferencesKey)
+            }
+        }
     }
 
     /// Ordered RF gateway ladder: Connect & Exchange tries each entry
@@ -132,6 +217,16 @@ final class WinlinkSettings: ObservableObject {
         didSet { defaults.set(clientProduct, forKey: Self.clientProductKey) }
     }
 
+    /// Whether the mailbox replicates to this operator's other devices.
+    ///
+    /// On by default for a new station, off for anyone who has turned it
+    /// off. Mail is the one thing an operator expects to find on whichever
+    /// device they pick up; the measurements are not, and never travel.
+    /// See Docs/UnifiedMailbox.md for exactly what does and does not.
+    @Published var mailboxSyncEnabled: Bool {
+        didSet { defaults.set(mailboxSyncEnabled, forKey: Self.mailboxSyncEnabledKey) }
+    }
+
     // MARK: - Keychain-backed credentials
 
     private let keychain: KeychainStore
@@ -185,10 +280,38 @@ final class WinlinkSettings: ObservableObject {
         self.keychain = keychain
 
         gridSquare = defaults.string(forKey: Self.gridSquareKey) ?? ""
+        // `double(forKey:)` returns 0 for a key that was never set, which as
+        // an antenna height means "on the ground" — a real value that would
+        // silently blockade every path. Nil-coalesce through `object` so an
+        // unset key falls back to the default instead.
+        antennaHeightMetres = (defaults.object(forKey: Self.antennaHeightMetresKey)
+            as? Double) ?? 10
+        assumedRemoteHeightMetres = (defaults.object(forKey: Self.assumedRemoteHeightMetresKey)
+            as? Double) ?? 10
+        heightUnitIsFeet = (defaults.object(forKey: Self.heightUnitIsFeetKey)
+            as? Bool) ?? true
+        shareStationActivity = defaults.bool(forKey: Self.shareStationActivityKey)
         maxDistanceMiles = defaults.object(forKey: Self.maxDistanceMilesKey) as? Int ?? Self.defaultMaxDistanceMiles
         historyHours = defaults.object(forKey: Self.historyHoursKey) as? Int ?? Self.defaultHistoryHours
         gatewayCallsign = defaults.string(forKey: Self.gatewayCallsignKey) ?? ""
         gatewayPath = defaults.string(forKey: Self.gatewayPathKey) ?? ""
+        p2pListenEnabled = defaults.bool(forKey: Self.p2pListenEnabledKey)
+        callsignLookupEnabled = defaults.bool(forKey: Self.callsignLookupEnabledKey)
+        // On for a fresh install, because a mailbox that does not follow the
+        // operator between their own devices is the thing they notice first.
+        // `bool(forKey:)` cannot tell "never set" from "set to false", so the
+        // presence of the key is what distinguishes a new station from one
+        // that has already chosen.
+        //
+        // Note this does send mail to Apple's servers. An operator who has
+        // already turned it off keeps it off — the default applies only where
+        // no decision exists yet — and Settings → Winlink turns it off again.
+        mailboxSyncEnabled = defaults.object(forKey: Self.mailboxSyncEnabledKey) == nil
+            ? true
+            : defaults.bool(forKey: Self.mailboxSyncEnabledKey)
+        stationPreferences = defaults.data(forKey: Self.stationPreferencesKey)
+            .flatMap { try? JSONDecoder().decode(WinlinkStationPreferences.self, from: $0) }
+            ?? WinlinkStationPreferences()
         preferredTransport = TransportPreference(
             rawValue: defaults.string(forKey: Self.preferredTransportKey) ?? "") ?? .ax25
         clientProduct = defaults.string(forKey: Self.clientProductKey) ?? "AXTerm"

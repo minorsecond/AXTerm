@@ -66,6 +66,10 @@ struct ConsoleView: View {
     /// Local station callsign, used to recognize digipeated copies of our own
     /// frames. Empty disables digipeat-echo handling (nothing is hidden).
     var localCallsign: String = ""
+    /// Tapping a callsign in a line asks who it is. Nil keeps the console
+    /// read-only, which is what the Mac wants.
+    var onIdentity: ((String) -> Void)?
+    var onIdentityMenu: ((String) -> Void)?
 
     @State private var autoScroll = true
     @State private var isUserNearBottom = true
@@ -116,7 +120,7 @@ struct ConsoleView: View {
                 // Toolbar
                 HStack(spacing: 12) {
                     Toggle("Auto-scroll", isOn: $autoScroll)
-                        .toggleStyle(.checkbox)
+                        .platformCheckboxToggle()
 
                     Spacer()
 
@@ -154,13 +158,17 @@ struct ConsoleView: View {
                                         .padding(.vertical, 4)
 
                                     ForEach(section.items) { group in
-                                        ConsoleLineGroupView(group: group, localCallsign: localCallsign)
+                                        ConsoleLineGroupView(group: group, localCallsign: localCallsign,
+                                                             onIdentity: onIdentity,
+                                                             onIdentityMenu: onIdentityMenu)
                                             .id(group.id)
                                     }
                                 }
                             } else {
                                 ForEach(groupedLines) { group in
-                                    ConsoleLineGroupView(group: group, localCallsign: localCallsign)
+                                    ConsoleLineGroupView(group: group, localCallsign: localCallsign,
+                                                             onIdentity: onIdentity,
+                                                             onIdentityMenu: onIdentityMenu)
                                         .id(group.id)
                                 }
                             }
@@ -415,6 +423,8 @@ nonisolated struct ConsoleLineGroup: Identifiable {
 struct ConsoleLineGroupView: View {
     let group: ConsoleLineGroup
     var localCallsign: String = ""
+    var onIdentity: ((String) -> Void)?
+    var onIdentityMenu: ((String) -> Void)?
     @State private var isExpanded = false
 
     var body: some View {
@@ -423,7 +433,9 @@ struct ConsoleLineGroupView: View {
                 line: group.primary,
                 duplicateCount: group.duplicateCount,
                 allViaPaths: group.allViaPaths,
-                localCallsign: localCallsign
+                localCallsign: localCallsign,
+                onIdentity: onIdentity,
+                onIdentityMenu: onIdentityMenu
             )
 
             // Expanded duplicates (if any and expanded)
@@ -478,13 +490,32 @@ struct ConsoleLineGroupView: View {
                 }
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if group.duplicateCount > 0 {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    isExpanded.toggle()
+        // Only claim taps when there is something to expand.
+        //
+        // Attached unconditionally, this gesture covered the whole row and
+        // swallowed every tap and right-click aimed at the callsigns inside
+        // it — the identity view opened only on rows that happened to escape
+        // it. The guard used to be inside the closure, which is too late:
+        // the gesture had already consumed the event.
+        .modifier(ExpandDuplicatesTap(isEnabled: group.duplicateCount > 0,
+                                      isExpanded: $isExpanded))
+    }
+}
+
+/// Row-level tap, installed only where it does something.
+private struct ExpandDuplicatesTap: ViewModifier {
+    let isEnabled: Bool
+    @Binding var isExpanded: Bool
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() }
                 }
-            }
+        } else {
+            content
         }
     }
 }
@@ -494,6 +525,11 @@ struct ConsoleLineView: View {
     var duplicateCount: Int = 0
     var allViaPaths: [[String]] = []
     var localCallsign: String = ""
+    /// Tapping a callsign asks who it is. Nil leaves the text inert, which is
+    /// what the Mac's console wants — there a callsign is something you copy.
+    var onIdentity: ((String) -> Void)?
+    /// Long press: the menu of things you can do with an identity.
+    var onIdentityMenu: ((String) -> Void)?
 
     private let callsignSaturation: Double = 0.35
     private let callsignBrightness: Double = 0.75
@@ -530,17 +566,13 @@ struct ConsoleLineView: View {
 
             // Callsigns
             if let from = line.from {
-                Text(from)
-                    .fontWeight(.medium)
-                    .foregroundStyle(callsignColor(for: from))
+                callsign(from)
 
                 if let to = line.to {
-                    Text("→")
+                    Text("\u{2192}")
                         .foregroundStyle(.tertiary)
 
-                    Text(to)
-                        .fontWeight(.medium)
-                        .foregroundStyle(callsignColor(for: to))
+                    callsign(to)
                 }
             }
 
@@ -571,6 +603,45 @@ struct ConsoleLineView: View {
         .opacity(isDigipeatEcho ? 0.6 : 1.0)
     }
     
+    /// One callsign: plain text, or a tap target when someone is listening.
+    ///
+    /// Deliberately not a `Button` — a button style would fight the monospaced
+    /// console layout and add padding that breaks the column alignment every
+    /// line depends on. A tap gesture keeps the row exactly as it looked.
+    @ViewBuilder
+    private func callsign(_ call: String) -> some View {
+        let text = Text(call)
+            .fontWeight(.medium)
+            .foregroundStyle(callsignColor(for: call))
+
+        if let onIdentity {
+            // `.onTapGesture` beside `.onLongPressGesture` is unreliable: the
+            // long-press recogniser can consume the tap, so a callsign opened
+            // its profile sometimes and did nothing other times. A
+            // simultaneous gesture lets both live, and the Mac gets a
+            // right-click menu instead of a press-and-hold it has no idiom for.
+            text
+                .contentShape(Rectangle())
+                .onTapGesture { onIdentity(call) }
+                #if os(iOS)
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.45)
+                        .onEnded { _ in (onIdentityMenu ?? onIdentity)(call) })
+                #else
+                .contextMenu {
+                    Button("Show Profile") { (onIdentityMenu ?? onIdentity)(call) }
+                    Button("Quick Look") { onIdentity(call) }
+                    Divider()
+                    Button("Copy Callsign") { ClipboardWriter.copy(call) }
+                }
+                #endif
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Shows what is known about \(call)")
+        } else {
+            text
+        }
+    }
+
     // MARK: - Premium Styling Components
     
     /// Enhanced indicator bar with emphasis for system/error messages

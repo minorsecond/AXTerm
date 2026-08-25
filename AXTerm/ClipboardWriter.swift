@@ -5,11 +5,14 @@
 //  Created by Ross Wardrup on 2/1/26.
 //
 
-import AppKit
+import Foundation
 
+/// Copies text to the system clipboard.
+///
+/// Now a thin name over `PlatformPasteboard` — kept because call sites read
+/// better as "copy this to the clipboard" than as a platform concept.
 nonisolated enum ClipboardWriter {
     static func copy(_ string: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(string, forType: .string)
+        PlatformPasteboard.copy(string)
     }
 }

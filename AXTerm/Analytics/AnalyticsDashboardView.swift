@@ -5,7 +5,11 @@
 //  Created by AXTerm on 2026-02-21.
 //
 
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import Charts
 import SwiftUI
 
@@ -78,7 +82,7 @@ struct AnalyticsDashboardView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         reduceTransparency
-                            ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor))
+                            ? AnyShapeStyle(Color(platform: .platformWindowBackground))
                             : AnyShapeStyle(.bar)
                     )
 
@@ -88,6 +92,7 @@ struct AnalyticsDashboardView: View {
                     VStack(alignment: .leading, spacing: AnalyticsStyle.Layout.sectionSpacing) {
                         summarySection
                         chartsSection
+                        channelActivitySection
                         stationsSection
                         graphSection
                     }
@@ -323,6 +328,13 @@ struct AnalyticsDashboardView: View {
                     .frame(width: 240)
                 }
             }
+        }
+    }
+
+    private var channelActivitySection: some View {
+        AnalyticsCard(title: "Channel Activity") {
+            ChannelAirtimeLanesView(monitor: ChannelActivityMonitor.shared)
+                .padding(.top, 2)
         }
     }
 
@@ -647,7 +659,7 @@ struct AnalyticsDashboardView: View {
                         LegendItem(color: .systemOrange, label: "Routing Node")
                     }
                     if showsStationLegend {
-                        LegendItem(color: .secondaryLabelColor, label: "Station")
+                        LegendItem(color: .platformSecondaryLabel, label: "Station")
                     }
 
                     Divider()
@@ -795,9 +807,7 @@ struct AnalyticsDashboardView: View {
                         },
                         onExportSummary: {
                             let summary = viewModel.exportNetworkSummary()
-                            let pasteboard = NSPasteboard.general
-                            pasteboard.clearContents()
-                            pasteboard.setString(summary, forType: .string)
+                            ClipboardWriter.copy(summary)
                             // Show toast feedback
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 showExportToast = true
@@ -1542,7 +1552,7 @@ extension AnalyticsDashboardView {
         HStack(spacing: 8) {
             EdgeStrokeLegendItem(
                 label: "Weak",
-                lineColor: Color(nsColor: .secondaryLabelColor),
+                lineColor: Color(platform: .platformSecondaryLabel),
                 thickness: 1.0,
                 opacity: 0.55,
                 tooltip: edgeWeakTooltip
@@ -1550,7 +1560,7 @@ extension AnalyticsDashboardView {
 
             EdgeStrokeLegendItem(
                 label: "Strong",
-                lineColor: Color(nsColor: .secondaryLabelColor),
+                lineColor: Color(platform: .platformSecondaryLabel),
                 thickness: 2.4,
                 opacity: 0.92,
                 tooltip: edgeStrongTooltip
@@ -1559,7 +1569,7 @@ extension AnalyticsDashboardView {
             if showsViaStrokeLegend {
                 EdgeStrokeLegendItem(
                     label: "Via",
-                    lineColor: Color(nsColor: .tertiaryLabelColor),
+                    lineColor: Color(platform: .platformTertiaryLabel),
                     thickness: 1.6,
                     opacity: 0.72,
                     tooltip: "Digipeater-mediated path evidence. Reachability on network, not direct RF proof."
@@ -1571,11 +1581,11 @@ extension AnalyticsDashboardView {
                 .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(Color(nsColor: .controlBackgroundColor).opacity(0.88))
+                .background(Color(platform: .platformCardBackground).opacity(0.88))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 0.5)
+                        .stroke(Color(platform: .platformSeparator).opacity(0.7), lineWidth: 0.5)
                 )
                 .help(edgeDimLegendTooltip)
         }
@@ -1945,13 +1955,13 @@ private struct SummaryMetricPlaceholderCard: View {
 }
 
 private struct LegendItem: View {
-    let color: NSColor
+    let color: PlatformColor
     let label: String
     
     var body: some View {
         HStack(spacing: 4) {
             Circle()
-                .fill(Color(nsColor: color))
+                .fill(Color(platform: color))
                 .frame(width: 8, height: 8)
             Text(label)
                 .font(.caption2)
@@ -1978,11 +1988,11 @@ private struct EdgeStrokeLegendItem: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.88))
+        .background(Color(platform: .platformCardBackground).opacity(0.88))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 0.5)
+                .stroke(Color(platform: .platformSeparator).opacity(0.7), lineWidth: 0.5)
         )
         .help(tooltip)
     }
@@ -1996,7 +2006,7 @@ private struct ScaleDotLegendItem: View {
     var body: some View {
         HStack(spacing: 5) {
             Circle()
-                .fill(Color(nsColor: .secondaryLabelColor).opacity(0.95))
+                .fill(Color(platform: .platformSecondaryLabel).opacity(0.95))
                 .frame(width: diameter, height: diameter)
             Text(label)
                 .font(.system(size: 10, weight: .medium))
@@ -2004,11 +2014,11 @@ private struct ScaleDotLegendItem: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.88))
+        .background(Color(platform: .platformCardBackground).opacity(0.88))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.7), lineWidth: 0.5)
+                .stroke(Color(platform: .platformSeparator).opacity(0.7), lineWidth: 0.5)
         )
         .help(tooltip)
     }
@@ -2066,7 +2076,7 @@ private struct PathDraftHUD: View {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.caption2)
-                        .foregroundStyle(Color(nsColor: .systemOrange))
+                        .foregroundStyle(Color(platform: .systemOrange))
                     Text(warning)
                         .font(.caption2)
                         .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
@@ -2149,11 +2159,11 @@ private struct PathDraftHUD: View {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
+        .background(Color(platform: .platformCardBackground), in: RoundedRectangle(cornerRadius: 5))
     }
 
     private func badgeView(_ text: String, isWarning: Bool) -> some View {
-        let tint = isWarning ? Color(nsColor: .systemOrange) : Color(nsColor: .systemGreen)
+        let tint = isWarning ? Color(platform: .systemOrange) : Color(platform: .systemGreen)
         return Text(text)
             .font(.system(size: 9, weight: .bold))
             .padding(.horizontal, 5)
@@ -2217,11 +2227,11 @@ private struct StationDirectoryCard: View {
 
     private func badgeColor(_ badge: String) -> Color {
         switch badge {
-        case "Node": return Color(nsColor: .systemOrange)
-        case "BBS": return Color(nsColor: .systemPurple)
-        case "Digi": return Color(nsColor: .systemTeal)
+        case "Node": return Color(platform: .systemOrange)
+        case "BBS": return Color(platform: .systemPurple)
+        case "Digi": return Color(platform: .systemTeal)
         case "Keyboarder": return AnalyticsStyle.Colors.accent
-        default: return Color(nsColor: .systemGray)
+        default: return Color(platform: .systemGray)
         }
     }
 }
@@ -2252,15 +2262,15 @@ private struct ObservedSessionsCard: View {
                                 .font(.system(size: 9, weight: .bold))
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
-                                .background(Color(nsColor: .systemOrange).opacity(0.18), in: Capsule())
-                                .foregroundStyle(Color(nsColor: .systemOrange))
+                                .background(Color(platform: .systemOrange).opacity(0.18), in: Capsule())
+                                .foregroundStyle(Color(platform: .systemOrange))
                         } else if session.end == nil {
                             Text("ACTIVE")
                                 .font(.system(size: 9, weight: .bold))
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 1)
-                                .background(Color(nsColor: .systemGreen).opacity(0.18), in: Capsule())
-                                .foregroundStyle(Color(nsColor: .systemGreen))
+                                .background(Color(platform: .systemGreen).opacity(0.18), in: Capsule())
+                                .foregroundStyle(Color(platform: .systemGreen))
                         }
                         Spacer()
                         Text(sessionSummary(session))
@@ -2398,7 +2408,7 @@ private struct ActivityByHourChart: View {
                         xStart: .value("Hour", Double(hour) - 0.5),
                         xEnd: .value("Hour", Double(hour) + 0.5)
                     )
-                    .foregroundStyle(Color(nsColor: .systemGray).opacity(0.10))
+                    .foregroundStyle(Color(platform: .systemGray).opacity(0.10))
                 }
                 ForEach(points) { point in
                     BarMark(
@@ -2410,10 +2420,10 @@ private struct ActivityByHourChart: View {
             }
             .chartForegroundStyleScale([
                 "Chat": AnalyticsStyle.Colors.accent,
-                "BBS/Node": Color(nsColor: .systemPurple),
-                "Beacons": Color(nsColor: .systemTeal),
-                "Routing": Color(nsColor: .systemOrange),
-                "Control": Color(nsColor: .systemGray).opacity(0.5)
+                "BBS/Node": Color(platform: .systemPurple),
+                "Beacons": Color(platform: .systemTeal),
+                "Routing": Color(platform: .systemOrange),
+                "Control": Color(platform: .systemGray).opacity(0.5)
             ])
             .chartXScale(domain: -0.5...23.5)
             .chartXAxis {
@@ -2509,7 +2519,7 @@ private struct TimeSeriesChart: View {
                         xStart: .value("Offline", gap.start),
                         xEnd: .value("Offline", gap.end)
                     )
-                    .foregroundStyle(Color(nsColor: .systemGray).opacity(0.10))
+                    .foregroundStyle(Color(platform: .systemGray).opacity(0.10))
                 }
 
                 ForEach(points, id: \.bucket) { point in
@@ -2532,7 +2542,7 @@ private struct TimeSeriesChart: View {
                 // Highlight selected point with a rule mark
                 if let selectedPoint {
                     RuleMark(x: .value("Selected", selectedPoint.bucket))
-                        .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                        .foregroundStyle(Color(platform: .platformTertiaryLabel))
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 2]))
 
                     PointMark(
@@ -2737,7 +2747,7 @@ private struct TimeSeriesChartTooltip: View {
         .padding(6)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color(nsColor: .windowBackgroundColor))
+                .fill(Color(platform: .platformWindowBackground))
                 .shadow(radius: 2)
         )
     }
@@ -2848,7 +2858,7 @@ private struct HistogramChartTooltip: View {
         .padding(6)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color(nsColor: .windowBackgroundColor))
+                .fill(Color(platform: .platformWindowBackground))
                 .shadow(radius: 2)
         )
     }
@@ -2885,7 +2895,7 @@ private struct FrameTypeStackChart: View {
             .chartForegroundStyleScale([
                 "I": AnalyticsStyle.Colors.accent,
                 "UI": AnalyticsStyle.Colors.accent.opacity(0.55),
-                "Other": Color(nsColor: .systemGray).opacity(0.5)
+                "Other": Color(platform: .systemGray).opacity(0.5)
             ])
             .chartYScale(domain: .automatic(includesZero: true))
             .chartLegend(position: .top, alignment: .leading, spacing: 4)
@@ -2989,7 +2999,7 @@ private struct HeatmapView: View {
                                 if let hovered = hoveredCell, hovered.row == row, hovered.col == col {
                                     context.stroke(
                                         Path(roundedRect: rect.insetBy(dx: 1, dy: 1), cornerRadius: AnalyticsStyle.Heatmap.cellCornerRadius),
-                                        with: .color(Color(nsColor: .labelColor)),
+                                        with: .color(Color(platform: .platformLabel)),
                                         lineWidth: 2
                                     )
                                 }
@@ -3113,7 +3123,7 @@ private struct HeatmapTooltip: View {
         .padding(6)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color(nsColor: .windowBackgroundColor))
+                .fill(Color(platform: .platformWindowBackground))
                 .shadow(radius: 2)
         )
     }
@@ -3142,7 +3152,7 @@ private struct ChartTooltip: View {
             .padding(6)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(nsColor: .windowBackgroundColor))
+                    .fill(Color(platform: .platformWindowBackground))
                     .shadow(radius: 2)
             )
     }

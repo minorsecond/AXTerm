@@ -1,5 +1,4 @@
 import SwiftUI
-import AppKit
 
 struct DestinationPickerControl: View {
     @ObservedObject var viewModel: DestinationPickerViewModel
@@ -23,6 +22,32 @@ struct DestinationPickerControl: View {
                     .foregroundStyle(.secondary)
 
                 HStack(spacing: 6) {
+                    // On touch this is a *button*, not a text field.
+                    //
+                    // Tapping a field raises the keyboard, and the keyboard
+                    // then covers the very list the tap was meant to reveal —
+                    // so the operator ends up typing a callsign they can see
+                    // in a list they cannot reach. Opening the picker instead
+                    // puts the list and its own search field above the
+                    // keyboard, where both fit.
+                    #if os(iOS)
+                    Button {
+                        userInitiatedPopover = true
+                        showPopover = true
+                    } label: {
+                        Text(viewModel.typedText.isEmpty ? "Callsign-SSID" : viewModel.typedText)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(viewModel.typedText.isEmpty ? .tertiary : .primary)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(disabled)
+                    .accessibilityIdentifier("connectBar.destinationField")
+                    .accessibilityLabel("Connect to")
+                    .accessibilityValue(viewModel.typedText.isEmpty ? "No station chosen" : viewModel.typedText)
+                    #else
                     TextField("Callsign-SSID", text: textBinding)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12, design: .monospaced))
@@ -30,6 +55,7 @@ struct DestinationPickerControl: View {
                         .focused($textFieldFocused)
                         .onSubmit { commitFromKeyboard() }
                         .accessibilityIdentifier("connectBar.destinationField")
+                    #endif
 
                     Button {
                         if showPopover {
@@ -55,15 +81,26 @@ struct DestinationPickerControl: View {
                 .padding(.vertical, 6)
                 .background(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(nsColor: .controlBackgroundColor).opacity(0.7))
+                        .fill(Color(platform: .platformCardBackground).opacity(0.7))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(borderColor, lineWidth: borderLineWidth)
                 )
+                // A popover anchored to this field has nowhere to go once the
+                // on-screen keyboard claims the bottom half of the screen: it
+                // is squeezed into whatever strip is left, which on an iPad in
+                // portrait was about one row tall and made the station
+                // unpickable. A sheet owns its own space and can be scrolled.
+                #if os(iOS)
+                .sheet(isPresented: $showPopover) {
+                    suggestionsSheet
+                }
+                #else
                 .popover(isPresented: $showPopover, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
                     suggestionsPopover
                 }
+                #endif
             }
 
             Text(viewModel.validationState.inlineError ?? " ")
@@ -93,6 +130,10 @@ struct DestinationPickerControl: View {
                 userInitiatedPopover = false
             }
         }
+        // Arrow keys and Escape drive the suggestion list where there is a
+        // keyboard. On touch the operator taps a suggestion instead, and the
+        // popover is dismissed by tapping outside it.
+        #if os(macOS)
         .onMoveCommand { direction in
             if direction == .down && textFieldFocused {
                 userInitiatedPopover = true
@@ -109,11 +150,12 @@ struct DestinationPickerControl: View {
             showPopover = false
             userInitiatedPopover = false
         }
+        #endif
     }
 
     private var borderColor: Color {
         if case .invalid = viewModel.validationState { return .red.opacity(0.55) }
-        return Color(nsColor: .separatorColor).opacity(0.45)
+        return Color(platform: .platformSeparator).opacity(0.45)
     }
 
     private var borderLineWidth: CGFloat {
@@ -137,6 +179,80 @@ struct DestinationPickerControl: View {
             }
         )
     }
+
+#if os(iOS)
+    /// The same suggestions, in a sheet the keyboard cannot squash.
+    ///
+    /// Dismissing the keyboard on appear is deliberate: the operator is
+    /// choosing from a list now, not typing, and leaving it up would cover the
+    /// list it was covering before.
+    private var suggestionsSheet: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                // Typing lives here, above the keyboard, alongside the list it
+                // filters — rather than in a field the keyboard then buries.
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Callsign-SSID", text: textBinding)
+                        .textFieldStyle(.plain)
+                        .font(.system(.body, design: .monospaced))
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .focused($textFieldFocused)
+                        .submitLabel(.go)
+                        .onSubmit {
+                            commitFromKeyboard()
+                            showPopover = false
+                        }
+                    if !viewModel.typedText.isEmpty {
+                        Button {
+                            viewModel.typedText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear")
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+
+                Divider()
+
+                suggestionsPopover
+                    .frame(maxHeight: .infinity, alignment: .top)
+            }
+            .navigationTitle("Connect To")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        showPopover = false
+                        textFieldFocused = false
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Use") {
+                        commitFromKeyboard()
+                        showPopover = false
+                        textFieldFocused = false
+                    }
+                    .disabled(DestinationPickerViewModel
+                        .normalizeCandidate(viewModel.typedText).isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        // Focus the search field, not the bar behind the sheet: the operator
+        // opened this to choose, and a keyboard over a half-height sheet still
+        // leaves the list visible above it.
+        .onAppear { textFieldFocused = true }
+        .onDisappear { textFieldFocused = false }
+    }
+#endif
 
     @ViewBuilder
     private var suggestionsPopover: some View {
@@ -229,8 +345,7 @@ struct DestinationPickerControl: View {
                 viewModel.toggleFavorite(row.callsign)
             }
             Button("Copy Callsign") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(row.callsign, forType: .string)
+                ClipboardWriter.copy(row.callsign)
             }
             Button("View Station Details…") {
                 onViewStationDetails?(row.callsign)
@@ -255,6 +370,14 @@ struct DestinationPickerControl: View {
         let selected = DestinationPickerViewModel.normalizeCandidate(row.callsign)
         onDestinationChanged(selected)
         onDestinationCommitted(selected)
+        // Choosing from the sheet is the whole answer, so the sheet goes.
+        // Leaving it open makes the operator hunt for a confirm button after
+        // they have already made the choice. On macOS the popover closes on
+        // its own when focus leaves the field.
+        #if os(iOS)
+        showPopover = false
+        textFieldFocused = false
+        #endif
     }
 
     private func commitFromKeyboard() {

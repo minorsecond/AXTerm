@@ -97,40 +97,45 @@ final class CoreLocationGPSProvider: NSObject, GPSProviding, CLLocationManagerDe
     private let lock = NSLock()
 
     func requestOneShotFix(timeout: TimeInterval) async throws -> (latitude: Double, longitude: Double) {
-        try await withThrowingTaskGroup(of: (latitude: Double, longitude: Double).self) { group in
-            group.addTask { [self] in
-                try await withCheckedThrowingContinuation { continuation in
-                    DispatchQueue.main.async {
-                        self.lock.lock()
-                        self.continuation = continuation
-                        self.lock.unlock()
+        // The timeout must resume the continuation itself. A task-group race
+        // can't: cancelling a task suspended on a checked continuation leaves
+        // it suspended, and CoreLocation can go permanently silent (locationd
+        // "registration timer expired") without ever calling the delegate —
+        // which left callers awaiting forever.
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.main.async {
+                self.lock.lock()
+                if self.continuation != nil {
+                    // An earlier fix is still pending; don't orphan it.
+                    self.lock.unlock()
+                    continuation.resume(throwing: GPSError.unavailable("a GPS fix is already in progress"))
+                    return
+                }
+                self.continuation = continuation
+                self.lock.unlock()
 
-                        let manager = CLLocationManager()
-                        manager.delegate = self
-                        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
-                        self.manager = manager
+                let manager = CLLocationManager()
+                manager.delegate = self
+                manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+                self.manager = manager
 
-                        switch manager.authorizationStatus {
-                        case .denied, .restricted:
-                            self.finish(.failure(GPSError.denied))
-                        case .notDetermined:
-                            manager.requestWhenInUseAuthorization()
-                            // A location request while undetermined queues
-                            // behind the authorization prompt.
-                            manager.requestLocation()
-                        default:
-                            manager.requestLocation()
-                        }
-                    }
+                switch manager.authorizationStatus {
+                case .denied, .restricted:
+                    self.finish(.failure(GPSError.denied))
+                case .notDetermined:
+                    manager.requestWhenInUseAuthorization()
+                    // A location request while undetermined queues
+                    // behind the authorization prompt.
+                    manager.requestLocation()
+                default:
+                    manager.requestLocation()
+                }
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
+                    // No-op if the delegate already resolved the fix.
+                    self.finish(.failure(GPSError.timeout))
                 }
             }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                throw GPSError.timeout
-            }
-            defer { group.cancelAll() }
-            guard let first = try await group.next() else { throw GPSError.timeout }
-            return first
         }
     }
 

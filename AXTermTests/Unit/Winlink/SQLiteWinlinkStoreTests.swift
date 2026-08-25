@@ -289,4 +289,199 @@ final class SQLiteWinlinkStoreTests: XCTestCase {
             XCTAssertEqual(try WinlinkAttachmentRecord.fetchCount(db), 0)
         }
     }
+
+    // MARK: - Partial inbound bodies (B2F resume)
+
+    func testPartialBodyRoundTripAndUpsert() throws {
+        let store = try makeStore()
+        try store.savePartialBody(mid: "PARTIAL00001", compressedSize: 4000, data: Data([1, 2, 3]))
+        try store.savePartialBody(mid: "PARTIAL00001", compressedSize: 4000, data: Data([1, 2, 3, 4, 5]))
+
+        let partials = try store.partialBodies()
+        XCTAssertEqual(partials.count, 1, "same MID replaces, never duplicates")
+        XCTAssertEqual(partials.first?.data, Data([1, 2, 3, 4, 5]))
+        XCTAssertEqual(partials.first?.compressedSize, 4000)
+    }
+
+    func testPartialBodyDelete() throws {
+        let store = try makeStore()
+        try store.savePartialBody(mid: "PARTIAL00002", compressedSize: 100, data: Data([9]))
+        try store.deletePartialBody(mid: "PARTIAL00002")
+        try store.deletePartialBody(mid: "NEVEREXISTED")  // idempotent
+        XCTAssertTrue(try store.partialBodies().isEmpty)
+    }
+
+    func testStalePartialBodiesExpire() throws {
+        let queue = try DatabaseQueue(path: ":memory:")
+        try DatabaseManager.migrator.migrate(queue)
+        nonisolated(unsafe) var clock = Date(timeIntervalSince1970: 1_000_000)
+        let store = SQLiteWinlinkStore(dbQueue: queue, now: { clock })
+
+        try store.savePartialBody(mid: "STALE0000001", compressedSize: 100, data: Data([1]))
+        clock = clock.addingTimeInterval(15 * 24 * 3600)  // beyond the 14-day lifetime
+
+        XCTAssertTrue(try store.partialBodies().isEmpty, "expired partials are not offered for resume")
+        try store.savePartialBody(mid: "FRESH0000001", compressedSize: 100, data: Data([2]))
+        XCTAssertEqual(try store.partialBodies().map(\.mid), ["FRESH0000001"],
+                       "saving prunes expired rows")
+        try queue.read { db in
+            XCTAssertEqual(try WinlinkPartialBodyRecord.fetchCount(db), 1)
+        }
+    }
+
+    // MARK: - Inbound-by-sender query (radio-path catalog ingestion)
+
+    func testInboundMessagesFilteredBySenderNewestFirst() throws {
+        let store = try makeStore()
+        let fmt = WinlinkB2Message.dateFormatter
+
+        var older = makeMessage(mid: "SERVICEOLD01")
+        older.from = "SERVICE"
+        older.date = fmt.date(from: "2026/08/20 10:00")!
+        var newer = makeMessage(mid: "SERVICENEW01")
+        newer.from = "service"  // sender casing must not matter
+        newer.date = fmt.date(from: "2026/08/23 14:09")!
+        var other = makeMessage(mid: "OTHERSNDR001")
+        other.from = "W0ARP"
+        other.date = fmt.date(from: "2026/08/24 09:00")!
+
+        try store.saveInbound(older)
+        try store.saveInbound(newer)
+        try store.saveInbound(other)
+        // An outbound draft from the same address must not appear.
+        var draft = makeMessage(mid: "DRAFTSVC0001")
+        draft.from = "SERVICE"
+        try store.saveDraft(draft)
+
+        let results = try store.inboundMessages(fromAddr: "SERVICE", limit: 10)
+        XCTAssertEqual(results.map(\.message.mid), ["SERVICENEW01", "SERVICEOLD01"])
+        XCTAssertEqual(try store.inboundMessages(fromAddr: "SERVICE", limit: 1).map(\.message.mid),
+                       ["SERVICENEW01"])
+    }
+
+    // MARK: - Catalog favourites
+
+    func testCatalogFavoritesPersistIndependentlyOfTheCatalogCache() throws {
+        let store = try makeStore()
+        let item = WinlinkCatalogItemRecord(
+            inquiryId: "WX_CONUS", category: "WX_US", subject: "Conus", url: "",
+            lifetimeDays: 0, sizeEstimate: 10, enabled: true, fetchedAt: Date())
+        try store.replaceCatalogCache([item])
+        try store.setCatalogFavorite(inquiryId: "WX_CONUS", isFavorite: true)
+        XCTAssertEqual(try store.catalogFavorites(), ["WX_CONUS"])
+
+        // replaceCatalogCache deletes every product row. The star must
+        // not go with them — that is why it lives in its own table.
+        try store.replaceCatalogCache([])
+        XCTAssertEqual(try store.catalogFavorites(), ["WX_CONUS"])
+
+        try store.setCatalogFavorite(inquiryId: "WX_CONUS", isFavorite: false)
+        XCTAssertTrue(try store.catalogFavorites().isEmpty)
+    }
+
+    /// Starring something already starred is a no-op, not a duplicate
+    /// row and not a reset of when it was starred.
+    func testRestarringAFavoriteIsIdempotent() throws {
+        let store = try makeStore()
+        try store.setCatalogFavorite(inquiryId: "WX_CONUS", isFavorite: true)
+        try store.setCatalogFavorite(inquiryId: "WX_CONUS", isFavorite: true)
+        XCTAssertEqual(try store.catalogFavorites(), ["WX_CONUS"])
+    }
+
+    /// Unstarring something never starred must not throw.
+    func testUnstarringAnUnknownFavoriteIsHarmless() throws {
+        let store = try makeStore()
+        XCTAssertNoThrow(try store.setCatalogFavorite(inquiryId: "NOPE", isFavorite: false))
+        XCTAssertTrue(try store.catalogFavorites().isEmpty)
+    }
+
+    // MARK: - List ordering
+
+    /// Reading a message must not move it. The list sorted by the state
+    /// row's `updatedAt`, which marking-as-read bumps, so clicking any
+    /// message sent it to the top of the folder.
+    func testMarkingReadDoesNotReorderTheFolder() throws {
+        let store = try makeStore()
+        let fmt = WinlinkB2Message.dateFormatter
+
+        var oldest = makeMessage(mid: "OLDEST000001")
+        oldest.date = fmt.date(from: "2026/08/22 08:00")!
+        var middle = makeMessage(mid: "MIDDLE000001")
+        middle.date = fmt.date(from: "2026/08/23 08:00")!
+        var newest = makeMessage(mid: "NEWEST000001")
+        newest.date = fmt.date(from: "2026/08/24 08:00")!
+        for message in [oldest, middle, newest] { try store.saveInbound(message) }
+
+        let inbox = try XCTUnwrap(
+            store.folders().first { $0.systemRole == WinlinkFolderRecord.SystemRole.inbox.rawValue }?.id)
+        let before = try store.messages(inFolder: inbox).map(\.mid)
+        XCTAssertEqual(before, ["NEWEST000001", "MIDDLE000001", "OLDEST000001"])
+
+        // Read the oldest one; it must stay where it was.
+        try store.setRead(mid: "OLDEST000001", true)
+        let after = try store.messages(inFolder: inbox).map(\.mid)
+        XCTAssertEqual(after, before, "reading a message reordered the folder")
+    }
+
+    /// Same data in, same order out — regardless of insertion order.
+    func testFolderOrderingIsDeterministic() throws {
+        let store = try makeStore()
+        let fmt = WinlinkB2Message.dateFormatter
+        for mid in ["AAA000000001", "ZZZ000000001", "MMM000000001"] {
+            var message = makeMessage(mid: mid)
+            message.date = fmt.date(from: "2026/08/23 08:00")!
+            try store.saveInbound(message)
+        }
+        let inbox = try XCTUnwrap(
+            store.folders().first { $0.systemRole == WinlinkFolderRecord.SystemRole.inbox.rawValue }?.id)
+        XCTAssertEqual(try store.messages(inFolder: inbox).map(\.mid),
+                       try store.messages(inFolder: inbox).map(\.mid))
+    }
+
+    // MARK: - Callsign directory cache
+
+    /// The cache is the whole reason this is worth having: a station
+    /// looked up once must stay resolvable with the network gone.
+    func testCallsignRecordRoundTrips() throws {
+        let store = try makeStore()
+        let record = CallsignDirectoryRecord(
+            callsign: "W0ARP", name: "Alex Example", gridSquare: "DM79ql",
+            latitude: 39.4918279, longitude: -104.6398437,
+            locality: "Parker", state: "CO", country: "United States",
+            licenseClass: "E", expires: "07/25/2035",
+            source: "HamDB", fetchedAt: Date(timeIntervalSince1970: 1_800_000_000))
+        try store.saveCallsignRecord(record)
+
+        let loaded = try XCTUnwrap(store.callsignRecord(callsign: "W0ARP"))
+        XCTAssertEqual(loaded, record)
+    }
+
+    /// Lookups are by licence, so the SSID must not partition the cache —
+    /// W0ARP-10 and W0ARP-7 are the same licensee.
+    func testCacheIsKeyedByBaseCallsign() throws {
+        let store = try makeStore()
+        try store.saveCallsignRecord(CallsignDirectoryRecord(
+            callsign: "W0ARP", gridSquare: "DM79ql",
+            source: "HamDB", fetchedAt: Date()))
+        XCTAssertNotNil(try store.callsignRecord(callsign: "W0ARP-10"))
+        XCTAssertNotNil(try store.callsignRecord(callsign: "w0arp-7"))
+    }
+
+    func testUnknownCallsignReturnsNothing() throws {
+        let store = try makeStore()
+        XCTAssertNil(try store.callsignRecord(callsign: "ZZ9ZZZ"))
+    }
+
+    /// A later answer replaces the earlier one rather than duplicating.
+    func testResavingReplacesTheEntry() throws {
+        let store = try makeStore()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        try store.saveCallsignRecord(CallsignDirectoryRecord(
+            callsign: "W0ARP", gridSquare: "DM79ql", source: "HamDB", fetchedAt: now))
+        try store.saveCallsignRecord(CallsignDirectoryRecord(
+            callsign: "W0ARP", gridSquare: "DM79qm", source: "HamDB",
+            fetchedAt: now.addingTimeInterval(3600)))
+        let loaded = try XCTUnwrap(store.callsignRecord(callsign: "W0ARP"))
+        XCTAssertEqual(loaded.gridSquare, "DM79qm")
+    }
 }

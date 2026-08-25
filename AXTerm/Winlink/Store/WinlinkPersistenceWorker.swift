@@ -45,4 +45,20 @@ actor WinlinkPersistenceWorker {
     func appendSessionLog(_ log: WinlinkSessionLogRecord) throws {
         try store.appendSessionLog(log)
     }
+
+    func savePartialBody(mid: String, compressedSize: Int, data: Data) throws {
+        try store.savePartialBody(mid: mid, compressedSize: compressedSize, data: data)
+    }
+
+    func partialBodies() throws -> [WinlinkPartialBodyRecord] {
+        try store.partialBodies()
+    }
+
+    func replaceCatalogCache(_ items: [WinlinkCatalogItemRecord]) throws {
+        try store.replaceCatalogCache(items)
+    }
+
+    func deletePartialBody(mid: String) throws {
+        try store.deletePartialBody(mid: mid)
+    }
 }

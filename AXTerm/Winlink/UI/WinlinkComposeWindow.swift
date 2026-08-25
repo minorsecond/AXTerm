@@ -1,5 +1,5 @@
 import SwiftUI
-import AppKit
+import UniformTypeIdentifiers
 
 /// Compose window content. Always edits a persisted draft row (created
 /// by the mail pane before the window opens), so drafts survive
@@ -12,6 +12,8 @@ struct WinlinkComposeWindow: View {
     var locationService: StationLocationService?
     private let contactStore: ContactStore?
     @State private var isFetchingPosition = false
+    @State private var isPickingAttachment = false
+    @State private var attachmentError: String?
     @FocusState private var focusedAddressField: AddressField?
 
     enum AddressField { case to, cc }
@@ -31,15 +33,62 @@ struct WinlinkComposeWindow: View {
         self.onChanged = onChanged
     }
 
+    /// A byte count short enough to sit on one line.
+    ///
+    /// `ByteCountFormatter` spells zero as "Zero KB" and pads small values,
+    /// which is fine in a table column and wrong in a status footer where the
+    /// number is next to a progress bar.
+    nonisolated static func compactSize(_ bytes: Int) -> String {
+        let kb = Double(bytes) / 1024
+        if bytes <= 0 { return "0 KB" }
+        if kb < 1 { return "<1 KB" }
+        if kb < 100 { return String(format: "%.1f KB", kb) }
+        if kb < 1024 { return "\(Int(kb.rounded())) KB" }
+        return String(format: "%.1f MB", kb / 1024)
+    }
+
+    /// A field with its name beside it on iOS, and unchanged on macOS where
+    /// the field already draws its own title.
+    @ViewBuilder
+    private func labelled<Content: View>(_ title: String,
+                                         @ViewBuilder content: () -> Content) -> some View {
+        #if os(iOS)
+        LabeledContent(title, content: content)
+        #else
+        content()
+        #endif
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Form {
-                TextField("To:", text: $viewModel.toText, prompt: Text("Callsign or email, comma-separated"))
-                    .focused($focusedAddressField, equals: .to)
-                    .help("Recipients: callsigns (W1AW) or internet addresses (name@example.com — sent through the Winlink internet gateway).")
+                // A `TextField` title is drawn beside the field on macOS and
+                // *replaced* by the prompt on iOS, so on a handheld these
+                // three rows arrived as unlabelled boxes. `LabeledContent`
+                // puts the name back without changing the Mac.
+                labelled("To:") {
+                    TextField("To:", text: $viewModel.toText,
+                              prompt: Text("Callsign or email, comma-separated"))
+                        .focused($focusedAddressField, equals: .to)
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.emailAddress)
+                        #endif
+                }
+                .explain("Recipients: callsigns (W1AW) or internet addresses (name@example.com — sent through the Winlink internet gateway).",
+                         showsIndicator: false)
                 addressSuggestions(for: .to)
-                TextField("Cc:", text: $viewModel.ccText, prompt: Text("Optional"))
-                    .focused($focusedAddressField, equals: .cc)
+
+                labelled("Cc:") {
+                    TextField("Cc:", text: $viewModel.ccText, prompt: Text("Optional"))
+                        .focused($focusedAddressField, equals: .cc)
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.emailAddress)
+                        #endif
+                }
                 addressSuggestions(for: .cc)
                 HStack {
                     TextField("Subject:", text: $viewModel.subject)
@@ -64,12 +113,27 @@ struct WinlinkComposeWindow: View {
                     HStack(spacing: 8) {
                         ForEach(viewModel.attachments) { item in
                             HStack(spacing: 5) {
-                                Image(systemName: "paperclip")
+                                Image(systemName: item.isCompressed ? "doc.zipper" : "paperclip")
                                 Text(item.name).font(.caption)
-                                Text(ByteCountFormatter.string(
-                                    fromByteCount: Int64(item.data.count), countStyle: .file))
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
+                                if let original = item.original {
+                                    Text(ByteCountFormatter.string(
+                                        fromByteCount: Int64(original.data.count), countStyle: .file)
+                                        + " → "
+                                        + ByteCountFormatter.string(
+                                            fromByteCount: Int64(item.data.count), countStyle: .file))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .help("Zipped before sending — LZHUF (the only compression "
+                                              + "Winlink puts on the wire) has a 2 KB window and "
+                                              + "barely dents a file this size. The recipient opens "
+                                              + "the zip with any tool. Right-click to send the "
+                                              + "original instead.")
+                                } else {
+                                    Text(ByteCountFormatter.string(
+                                        fromByteCount: Int64(item.data.count), countStyle: .file))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
                                 Button {
                                     viewModel.removeAttachment(id: item.id)
                                 } label: {
@@ -81,6 +145,13 @@ struct WinlinkComposeWindow: View {
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+                            .contextMenu {
+                                if item.isCompressed {
+                                    Button("Send Original (Uncompressed)") {
+                                        viewModel.revertAttachmentCompression(id: item.id)
+                                    }
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal, 12)
@@ -92,11 +163,21 @@ struct WinlinkComposeWindow: View {
 
             HStack(spacing: 10) {
                 Button {
-                    addAttachment()
+                    isPickingAttachment = true
                 } label: {
                     Label("Attach…", systemImage: "paperclip")
                 }
-                .help("Attach a file. Keep it small — see the size budget.")
+                .explain("Attach a file. Keep it small — see the size budget.",
+                         showsIndicator: false)
+                .fileImporter(isPresented: $isPickingAttachment,
+                              allowedContentTypes: [.item],
+                              allowsMultipleSelection: true,
+                              onCompletion: addAttachments)
+                .alert("Attachment not added", isPresented: .constant(attachmentError != nil)) {
+                    Button("OK") { attachmentError = nil }
+                } message: {
+                    Text(attachmentError ?? "")
+                }
 
                 if let locationService {
                     Button {
@@ -163,7 +244,11 @@ struct WinlinkComposeWindow: View {
             ProgressView(value: fraction)
                 .frame(width: 90)
                 .tint(viewModel.isOverBudget ? .red : (fraction > 0.75 ? .orange : .accentColor))
-            Text("\(ByteCountFormatter.string(fromByteCount: Int64(total), countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: Int64(budget), countStyle: .file))")
+            // Formatted by hand rather than by ByteCountFormatter, which
+            // renders 0 as "Zero KB" — three words where one number belongs,
+            // and enough of them to wrap the footer onto three lines.
+            Text("\(Self.compactSize(total)) / \(Self.compactSize(budget))")
+                .fixedSize(horizontal: true, vertical: false)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(viewModel.isOverBudget ? .red : .secondary)
         }
@@ -240,16 +325,30 @@ struct WinlinkComposeWindow: View {
         }
     }
 
-    private func addAttachment() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.begin { response in
-            guard response == .OK else { return }
-            for url in panel.urls {
+    /// Reads the files the operator picked.
+    ///
+    /// A file that cannot be read is reported rather than skipped: silently
+    /// attaching three of four selected files sends an incomplete message
+    /// over airtime that cannot be recovered.
+    private func addAttachments(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            attachmentError = error.localizedDescription
+        case .success(let urls):
+            var failed: [String] = []
+            for url in urls {
+                // A file outside the app's container needs explicit access,
+                // and that scope must be released again afterwards.
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 if let data = try? Data(contentsOf: url) {
                     viewModel.addAttachment(name: url.lastPathComponent, data: data)
+                } else {
+                    failed.append(url.lastPathComponent)
                 }
+            }
+            if !failed.isEmpty {
+                attachmentError = "Could not read: " + failed.joined(separator: ", ")
             }
         }
     }

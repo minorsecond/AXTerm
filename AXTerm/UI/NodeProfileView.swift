@@ -1,0 +1,596 @@
+import SwiftUI
+
+/// The one identity view.
+///
+/// Presented as a sheet from a tapped callsign and as a pushed page from the
+/// sheet, the Stations list and map callouts — same content either way, so an
+/// operator learns one layout instead of four.
+struct NodeProfileView: View {
+
+    enum Presentation {
+        /// A peek: compact, dismissible, with a way deeper in.
+        case sheet
+        /// The whole thing.
+        case page
+    }
+
+    let profile: NodeProfile
+    /// Needed to tell the two directions of the history apart.
+    var localCallsign: String = ""
+    /// Whether the operator has allowed directory lookups, so the empty
+    /// state can give advice that matches their settings.
+    var lookupEnabled: Bool = false
+    /// True while a lookup for this callsign is in flight.
+    var isLookingUp: Bool = false
+    /// Where the operator's own notes live. Nil hides the section rather than
+    /// showing an editor that cannot save.
+    var noteStore: StationNoteStore?
+    /// Mirrors the settings choice so a height typed on a station page reads
+    /// back in the same unit everywhere else.
+    @AppStorage(WinlinkSettings.heightUnitIsFeetKey) private var heightUnitIsFeet = true
+    var presentation: Presentation = .page
+    /// Offered only in the sheet, and only when there is somewhere to go.
+    var onOpenFullPage: (() -> Void)?
+    /// Nil disables the action rather than showing a dead button.
+    var onConnect: (() -> Void)?
+    var onShowOnMap: (() -> Void)?
+    var onCompose: (() -> Void)?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                header
+                if profile.isServiceEndpoint {
+                    serviceEndpoint
+                } else if profile.isBare {
+                    bare
+                } else {
+                    if !profile.roles.isEmpty { rolesSection }
+                    if let activity = profile.activity { activitySection(activity) }
+                    if let placement = profile.placement { placementSection(placement) }
+                    if !profile.links.isEmpty { linkSection }
+                    if let topology = profile.topology, !topology.isEmpty {
+                        topologySection(topology)
+                    }
+                    if !profile.siblings.isEmpty { siblingSection }
+                    if let netrom = profile.netrom { netromSection(netrom) }
+                    if let winlink = profile.winlink { winlinkSection(winlink) }
+                    if profile.name != nil || profile.licenseClass != nil { licenceSection }
+                }
+                // Offered even for a bare callsign: knowing nothing about a
+                // station is exactly when an operator most wants to write
+                // down what they just learned. Never for a destination
+                // address, which is not a thing to have notes about.
+                if let noteStore, !profile.isServiceEndpoint {
+                    StationNotesSection(callsign: profile.callsign, store: noteStore,
+                                        heightUnitIsFeet: $heightUnitIsFeet)
+                }
+                actions
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // On the full page the navigation bar already shows the
+            // callsign; printing it again just below was the same word twice.
+            if presentation == .sheet {
+                Text(profile.callsign)
+                    .font(.title2.bold())
+                    .textSelection(.enabled)
+            }
+            if let subtitle = profile.subtitle {
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            // Says which name led here, so an alias tap does not silently
+            // become a different callsign.
+            if let alias = profile.resolvedFromAlias {
+                Label("Reached by tapping the alias \(alias)", systemImage: "tag")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    /// A destination, not a station.
+    private var serviceEndpoint: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Not a station", systemImage: "signpost.right.and.left")
+                .font(.headline)
+            Text("\(profile.callsign) is a destination address, not a licensed station. Frames are sent *to* it — \(endpointPurpose) — and nobody answers a connect request there.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("That is why there is no licence record, no position and no link quality here: there is nothing to know, rather than nothing known yet.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// What this particular destination is conventionally for.
+    private var endpointPurpose: String {
+        switch profile.baseCallsign.uppercased() {
+        case "BEACON": return "unattended periodic transmissions announcing a station"
+        case "ID": return "the identification a station is required to send"
+        case "NODES": return "NET/ROM routing broadcasts"
+        case "MAIL": return "mail notifications from a BBS"
+        case "QST", "CQ", "ALL": return "a general call to anyone listening"
+        case "WX": return "weather bulletins"
+        case "TEST": return "test transmissions"
+        default: return "a convention shared across the network"
+        }
+    }
+
+    private var bare: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(isLookingUp ? "Looking it up\u{2026}" : "Nothing known yet")
+                    .font(.headline)
+                if isLookingUp { ProgressView().controlSize(.small) }
+            }
+            // The advice has to match the setting. Telling an operator to
+            // enable a lookup they already enabled reads as the app not
+            // knowing its own state.
+            Text(bareExplanation)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var bareExplanation: String {
+        if isLookingUp {
+            return "Asking the callsign directory about \(profile.baseCallsign). Nothing has been heard from this station directly, so a licence record is all there is to find."
+        }
+        if lookupEnabled {
+            return "This callsign has been seen on the air but nothing else is known. The directory had no record for \(profile.baseCallsign) \u{2014} unlicensed, unlisted, or a tactical alias \u{2014} and nothing has been heard from the station itself, only addressed to it."
+        }
+        return "This callsign has been seen on the air but nothing else about it is known \u{2014} no directory record, no position, and no routing history. Turning on callsign lookup in Settings would let AXTerm ask the directory who holds it."
+    }
+
+    // MARK: - Sections
+
+    private var rolesSection: some View {
+        section("Roles", systemImage: "person.badge.shield.checkmark") {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(profile.roles, id: \.self) { role in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: role.symbol)
+                            .frame(width: 20)
+                            .foregroundStyle(.tint)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(role.label).font(.subheadline.weight(.medium))
+                            // Every role says what earned it — and for
+                            // NET/ROM that is the station's own declaration,
+                            // quoted rather than paraphrased.
+                            Text(evidence(for: role))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func activitySection(_ activity: NodeProfile.Activity) -> some View {
+        section("Activity", systemImage: "waveform") {
+            VStack(alignment: .leading, spacing: 6) {
+                row("Frames heard", "\(activity.heardCount)")
+                if let last = activity.lastHeard {
+                    row("Last heard", last.formatted(date: .abbreviated, time: .shortened))
+                }
+                if !activity.lastVia.isEmpty {
+                    row("Last path", activity.lastVia.joined(separator: " \u{2192} "))
+                }
+            }
+        }
+    }
+
+    private func placementSection(_ placement: NodeProfile.Placement) -> some View {
+        section("Position", systemImage: "mappin.and.ellipse") {
+            VStack(alignment: .leading, spacing: 6) {
+                if let distance = placement.distanceKilometres {
+                    let miles = GreatCircle.miles(fromKilometres: distance)
+                    let compass = placement.bearingDegrees
+                        .map { " \u{00B7} " + GreatCircle.compassPoint($0) } ?? ""
+                    row("Distance",
+                        String(format: "%.1f km (%.1f mi)%@", distance, miles, compass))
+                }
+                if let grid = placement.gridSquare { row("Grid", grid) }
+                row("Coordinates", String(format: "%.4f, %.4f",
+                                          placement.position.latitude,
+                                          placement.position.longitude))
+                // Precision and meaning are different questions; say which
+                // one this coordinate answers.
+                Text(confidenceNote(placement.confidence))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let source = placement.source {
+                    Text("Source: \(source)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    private func confidenceNote(_ confidence: HeardStationMap.PositionConfidence) -> String {
+        switch confidence {
+        case .exact:
+            return "An exact coordinate, consistent with everything else known about this station."
+        case .gridSquare:
+            return "The centre of a registered grid square — about 8 km across, so the pin describes the square rather than the antenna."
+        case .inferredFromOperator:
+            return "Inferred from the operator's licence address, not from the node itself. Nodes usually sit on a hilltop or repeater site rather than at the operator's house, so treat this as a lead."
+        }
+    }
+
+    /// Both directions, side by side.
+    ///
+    /// The asymmetry is the finding. A station that hears us at 0.97 while we
+    /// hear it at 0.40 has a receive problem, and one blended number would
+    /// have read as a mediocre path and sent the operator looking at the
+    /// wrong end.
+    private var linkSection: some View {
+        section("Link quality", systemImage: "arrow.left.arrow.right") {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(profile.links) { link in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Image(systemName: link.isFromUs
+                                  ? "arrow.up.right" : "arrow.down.left")
+                                .font(.caption)
+                                .foregroundStyle(link.isFromUs ? .blue : .green)
+                            Text(link.isFromUs ? "Us to them" : "Them to us")
+                                .font(.subheadline.weight(.medium))
+                            Spacer()
+                            Text("\(link.quality) / 255")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+
+                        // A bar reads faster than a number for "is this good".
+                        ProgressView(value: Double(link.quality), total: 255)
+                            .tint(qualityTint(link.quality))
+
+                        HStack(spacing: 14) {
+                            if let df = link.df {
+                                metric("df", String(format: "%.2f", df))
+                            }
+                            if let dr = link.dr {
+                                metric("dr", String(format: "%.2f", dr))
+                            }
+                            if let etx = link.etx {
+                                metric("ETX", String(format: "%.2f", etx))
+                            }
+                            if link.duplicates > 0 {
+                                metric("dups", "\(link.duplicates)")
+                            }
+                        }
+                        let samples = profile.history(fromUs: link.isFromUs,
+                                                      localCallsign: localCallsign)
+                        if samples.count >= 2 {
+                            LinkQualitySparkline(samples: samples,
+                                                 tint: qualityTint(link.quality))
+                                .frame(height: 34)
+                            HStack {
+                                Text(historySpan(samples))
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                Spacer()
+                                if let trend = NodeProfile.trend(samples), abs(trend) >= 5 {
+                                    Label(
+                                        trend > 0 ? "up \(trend)" : "down \(abs(trend))",
+                                        systemImage: trend > 0 ? "arrow.up.right" : "arrow.down.right")
+                                        .font(.caption2.weight(.medium))
+                                        .foregroundStyle(trend > 0 ? .green : .orange)
+                                }
+                            }
+                        }
+
+                        Text("Measured \(link.lastUpdated.formatted(.relative(presentation: .named)))")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .explain(linkExplanation(link))
+                }
+                if profile.links.count == 1 {
+                    Text("Only one direction has been measured. The other needs traffic that way before it can be.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func historySpan(_ samples: [LinkQualityHistorySample]) -> String {
+        guard let first = samples.first?.sampledAt else { return "" }
+        let span = Date().timeIntervalSince(first)
+        return "\(samples.count) samples over \(WinlinkExchangeStatus.duration(Int(span)))"
+    }
+
+    private func evidence(for role: NodeProfile.Role) -> String {
+        if role == .netromNode, let declaration = profile.netRomDeclaration {
+            return declaration.evidence
+        }
+        return role.evidence
+    }
+
+    private func metric(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Text(value)
+                .font(.callout.monospacedDigit())
+        }
+    }
+
+    private func qualityTint(_ quality: Int) -> Color {
+        switch quality {
+        case ..<64: return .red
+        case ..<128: return .orange
+        case ..<192: return .yellow
+        default: return .green
+        }
+    }
+
+    /// Says why the number is what it is, not what the letters stand for.
+    private func linkExplanation(_ link: NodeProfile.DirectedLink) -> String {
+        var lines: [String] = []
+        lines.append(link.isFromUs
+            ? "How well \(link.to) receives this station."
+            : "How well this station receives \(link.from).")
+        if let df = link.df, let dr = link.dr {
+            lines.append(String(
+                format: "df=%.2f is the share of frames that arrive; dr=%.2f is the share whose acknowledgement comes back.", df, dr))
+            if let etx = link.etx {
+                lines.append(String(
+                    format: "ETX=%.2f follows from them: 1 / (df \u{00D7} dr), so about %.1f transmissions per delivered frame.", etx, etx))
+            }
+        } else {
+            lines.append("Delivery probabilities are not known yet — they need frames in both directions to estimate.")
+        }
+        if link.duplicates > 0 {
+            lines.append("\(link.duplicates) duplicate frame(s) seen, which usually means acknowledgements are being lost rather than data.")
+        }
+        lines.append("Quality \(link.quality)/255 is NET/ROM's own scale, and it is what routing decisions use.")
+        return lines.joined(separator: " ")
+    }
+
+    /// The rest of the licence.
+    /// Where this station sits in the shape of the network.
+    ///
+    /// Deliberately worded as consequences rather than graph theory. The
+    /// operator does not need to know what an articulation point is; they
+    /// need to know that if this station drops, four others go with it.
+    private func topologySection(_ topology: NodeProfile.Topology) -> some View {
+        section("In the Network", systemImage: "point.3.filled.connected.trianglepath.dotted") {
+            VStack(alignment: .leading, spacing: 8) {
+                row("Direct links", "\(topology.neighbourCount)")
+                    .help("Stations this one has been observed exchanging frames with, counting digipeated paths. Built from watched traffic, not from anything the station announced.")
+
+                if topology.isCritical {
+                    Label {
+                        Text(criticalSummary(topology))
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                    .help("Removing this station from the observed graph disconnects it into \(topology.partitionsWithoutIt.count) pieces of \(topology.partitionsWithoutIt.map(String.init).joined(separator: ", ")) stations. Nothing else that has been heard bridges those pieces \u{2014} which does not prove no other path exists, only that none has been observed.")
+                }
+
+                if !topology.communityMembers.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Clusters with")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(topology.communityMembers.joined(separator: ", "))
+                            .font(.callout.monospaced())
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .help("These stations exchange more traffic with each other than with the rest of what has been heard, found by label propagation over the observed graph. On a network where nobody broadcasts NODES, this is what a \u{201C}local network\u{201D} actually looks like from the outside.")
+                }
+            }
+        }
+    }
+
+    private func criticalSummary(_ topology: NodeProfile.Topology) -> String {
+        let stranded = topology.strandedCount
+        return "Everything heard so far reaches \(stranded) station\(stranded == 1 ? "" : "s") only through this one. If it goes off the air, they go with it."
+    }
+
+    private var siblingSection: some View {
+        section("Other SSIDs", systemImage: "person.2") {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(profile.siblings) { sibling in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(sibling.callsign)
+                            .font(.callout.monospaced())
+                        if let role = sibling.roles.first {
+                            Text(role.label)
+                                .font(.caption2)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(.quaternary, in: Capsule())
+                        }
+                        Spacer(minLength: 8)
+                        Text("\(sibling.heardCount) heard")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text("Same licence, different service. An SSID is how one operator runs a node, a mailbox and a personal station on one callsign.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func netromSection(_ netrom: NodeProfile.NetRom) -> some View {
+        section("NET/ROM", systemImage: "point.3.connected.trianglepath.dotted") {
+            VStack(alignment: .leading, spacing: 6) {
+                if let quality = netrom.neighbourQuality {
+                    row("Neighbour quality", "\(quality) / 255")
+                    // The table is built by watching traffic, so being in it
+                    // says the station is nearby and audible — not that it
+                    // runs NET/ROM.
+                    Text(profile.netRomDeclaration == nil
+                         ? "Measured from traffic heard directly, which is why it appears here. That is not a claim that this station runs NET/ROM — it has not said so."
+                         : "Measured from traffic heard directly between this station and ours.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let via = netrom.reachedVia { row("Reached via", via) }
+                if !netrom.routesVia.isEmpty {
+                    row("Routes through it",
+                        netrom.routesVia.prefix(8).joined(separator: ", ")
+                        + (netrom.routesVia.count > 8 ? " +\(netrom.routesVia.count - 8) more" : ""))
+                }
+            }
+        }
+    }
+
+    private func winlinkSection(_ quality: WinlinkLinkQuality) -> some View {
+        section("Winlink", systemImage: "envelope.arrow.triangle.branch") {
+            VStack(alignment: .leading, spacing: 6) {
+                row("Sessions", "\(quality.completed) completed of \(quality.attempts) attempted")
+                if let rate = quality.answerRate {
+                    row("Answer rate", "\(Int((rate * 100).rounded()))%")
+                }
+                if let bps = quality.effectiveBytesPerSecond {
+                    row("Throughput", String(format: "%.0f B/s", bps))
+                }
+                if let last = quality.lastAnsweredAt {
+                    row("Last answered", last.formatted(date: .abbreviated, time: .shortened))
+                }
+                if let result = quality.lastResult { row("Last result", result) }
+            }
+        }
+    }
+
+    private var licenceSection: some View {
+        section("Licence", systemImage: "person.text.rectangle") {
+            VStack(alignment: .leading, spacing: 6) {
+                if let name = profile.name { row("Name", name) }
+                if let licenseClass = profile.licenseClass { row("Class", licenseClass) }
+                let place = [profile.locality, profile.state, profile.country]
+                    .compactMap { $0 }.filter { !$0.isEmpty }
+                if !place.isEmpty { row("Address", place.joined(separator: ", ")) }
+                if let source = profile.directorySource {
+                    Text("Looked up via \(source).")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    // MARK: - Actions
+
+    @ViewBuilder
+    private var actions: some View {
+        // Nothing answers at a destination, so nothing is offered.
+        if profile.isServiceEndpoint {
+            EmptyView()
+        } else {
+            stationActions
+        }
+    }
+
+    @ViewBuilder
+    private var stationActions: some View {
+        VStack(spacing: 8) {
+            if let onConnect {
+                Button {
+                    onConnect()
+                } label: {
+                    Label("Connect", systemImage: "link")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            HStack(spacing: 8) {
+                if let onShowOnMap, profile.isPlaced {
+                    Button {
+                        onShowOnMap()
+                    } label: {
+                        Label("Show on Map", systemImage: "map")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                if let onCompose {
+                    Button {
+                        onCompose()
+                    } label: {
+                        Label("Message", systemImage: "square.and.pencil")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            if presentation == .sheet, let onOpenFullPage {
+                Button {
+                    onOpenFullPage()
+                } label: {
+                    HStack {
+                        Text("Full profile")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    // MARK: - Building blocks
+
+    @ViewBuilder
+    private func section<Content: View>(_ title: String, systemImage: String,
+                                        @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: systemImage)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color(platform: .platformCardBackground),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 12)
+            Text(value)
+                .font(.callout)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+        }
+    }
+}

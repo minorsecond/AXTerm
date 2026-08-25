@@ -60,7 +60,7 @@ struct ConnectionStatusStripView: View {
             }
             .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .background(Color(platform: .platformCardBackground).opacity(0.5))
         }
         .frame(maxWidth: .infinity)
     }
@@ -193,7 +193,7 @@ struct ConnectionStatusStripView: View {
         HStack(spacing: 6) {
             // Gray status dot - muted, no animation
             Circle()
-                .fill(Color(nsColor: .tertiaryLabelColor))
+                .fill(Color(platform: .platformTertiaryLabel))
                 .frame(width: 8, height: 8)
             
             // "Not connected" - subheadline, clearly not connected state

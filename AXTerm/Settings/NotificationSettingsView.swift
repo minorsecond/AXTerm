@@ -6,6 +6,9 @@
 //
 
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 struct NotificationSettingsView: View {
     @ObservedObject var settings: AppSettingsStore
@@ -17,6 +20,14 @@ struct NotificationSettingsView: View {
     // Watch List State
     @State private var selectedWatchCallsign: String?
     @State private var selectedWatchKeyword: String?
+    /// Open "add" prompt, if any.
+    ///
+    /// A SwiftUI alert replaces the AppKit `NSAlert` this used to run: quite
+    /// apart from being macOS-only, `runModal` blocks the main run loop, so
+    /// the packet stream and every session timer froze behind a dialog asking
+    /// for a callsign.
+    @State private var prompt: TextEntryPrompt?
+    @Environment(\.openURL) private var openURL
     
     var body: some View {
         Form {
@@ -35,9 +46,13 @@ struct NotificationSettingsView: View {
                 LabeledContent("Permissions") {
                     HStack {
                         Button("Open System Settings") {
-                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
-                                NSWorkspace.shared.open(url)
-                            }
+                            // Each platform names its own notification pane.
+                            #if os(macOS)
+                            let target = URL(string: "x-apple.systempreferences:com.apple.preference.notifications")
+                            #else
+                            let target = URL(string: UIApplication.openSettingsURLString)
+                            #endif
+                            if let target { openURL(target) }
                         }
                         
                         Button("Test Notification") {
@@ -150,56 +165,36 @@ struct NotificationSettingsView: View {
         }
         .formStyle(.grouped)
         .padding(20)
+        .textEntryPrompt($prompt)
     }
     
     // MARK: - Actions
     
     private func addWatchCallsign() {
-        let alert = NSAlert()
-        alert.messageText = "Add Watch Callsign"
-        alert.informativeText = "Enter a callsign (e.g. K0EPI) or wildcard (K0EPI-*)."
-        alert.addButton(withTitle: "Add")
-        alert.addButton(withTitle: "Cancel")
-        
-        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-        input.placeholderString = "N0CALL-*"
-        alert.accessoryView = input
-        alert.window.initialFirstResponder = input
-        
-        if alert.runModal() == .alertFirstButtonReturn {
-            let call = input.stringValue.trimmingCharacters(in: .whitespaces).uppercased()
-            if !call.isEmpty {
-                // Basic validation or just add?
-                // For watch lists, we allow wildcards, so strictly speaking calls might not be valid Callsign objects
+        prompt = TextEntryPrompt(
+            id: "watchCallsign",
+            title: "Add Watch Callsign",
+            message: "Enter a callsign (e.g. K0EPI) or a wildcard (K0EPI-*). Wildcards are allowed because a watch list matches SSIDs, not licences.",
+            placeholder: "N0CALL-*",
+            uppercases: true) { call in
                 settings.watchCallsigns.append(call)
             }
-        }
     }
-    
+
     private func removeWatchCallsign(at index: Int) {
         settings.watchCallsigns.remove(at: index)
     }
-    
+
     private func addWatchKeyword() {
-        let alert = NSAlert()
-        alert.messageText = "Add Watch Keyword"
-        alert.informativeText = "Enter a keyword to watch for in packet text."
-        alert.addButton(withTitle: "Add")
-        alert.addButton(withTitle: "Cancel")
-        
-        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-        input.placeholderString = "Emergency"
-        alert.accessoryView = input
-        alert.window.initialFirstResponder = input
-        
-        if alert.runModal() == .alertFirstButtonReturn {
-            let keyword = input.stringValue.trimmingCharacters(in: .whitespaces)
-            if !keyword.isEmpty {
+        prompt = TextEntryPrompt(
+            id: "watchKeyword",
+            title: "Add Watch Keyword",
+            message: "Enter a keyword to watch for in packet text. Matching is case-insensitive.",
+            placeholder: "Emergency") { keyword in
                 settings.watchKeywords.append(keyword)
             }
-        }
     }
-    
+
     private func removeWatchKeyword(at index: Int) {
         settings.watchKeywords.remove(at: index)
     }

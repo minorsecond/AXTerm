@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import AppKit
 import UniformTypeIdentifiers
 
 struct PacketInspectorView: View {
@@ -50,6 +49,8 @@ struct PacketInspectorView: View {
     @State private var findQuery: String = ""
     @FocusState private var isFindFocused: Bool
     @State private var copyFeedback: CopyFeedback?
+    @State private var pendingExport: ExportableFile?
+    @State private var exportError: String?
 
     private let payloadPreviewLimit: Int = 2048
     private let rawPreviewLimit: Int = 2048
@@ -95,6 +96,14 @@ struct PacketInspectorView: View {
             }
         }
         .frame(minWidth: 560, idealWidth: 700, minHeight: 420, idealHeight: 540)
+        .exportFile($pendingExport) { exportError = $0 }
+        .alert("Export failed", isPresented: Binding(
+            get: { exportError != nil },
+            set: { if !$0 { exportError = nil } })) {
+            Button("OK") { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
+        }
     }
 
     // MARK: - Header
@@ -107,8 +116,7 @@ struct PacketInspectorView: View {
                         Text(packet.fromDisplay)
                             .font(.title3.weight(.semibold))
                         Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(packet.fromDisplay, forType: .string)
+                            ClipboardWriter.copy(packet.fromDisplay)
                         } label: {
                             Image(systemName: "doc.on.doc")
                                 .font(.system(size: 10))
@@ -125,8 +133,7 @@ struct PacketInspectorView: View {
                         Text(packet.toDisplay)
                             .font(.title3.weight(.semibold))
                         Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(packet.toDisplay, forType: .string)
+                            ClipboardWriter.copy(packet.toDisplay)
                         } label: {
                             Image(systemName: "doc.on.doc")
                                 .font(.system(size: 10))
@@ -506,7 +513,7 @@ struct PacketInspectorView: View {
                             }
                         }
                         .frame(maxHeight: 200)
-                        .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+                        .background(Color(platform: .platformTextBackground).opacity(0.5))
                         .cornerRadius(6)
                     }
                 } else {
@@ -538,7 +545,7 @@ struct PacketInspectorView: View {
                                 Button(callsign) {
                                     onFilterStation?(callsign)
                                 }
-                                .buttonStyle(.link)
+                                .platformLinkButton()
                             }
                         }
                     }
@@ -751,7 +758,7 @@ struct PacketInspectorView: View {
                 }
             }
             .frame(maxHeight: 200)
-            .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+            .background(Color(platform: .platformTextBackground).opacity(0.5))
             .cornerRadius(6)
         }
         .padding(8)
@@ -846,19 +853,18 @@ struct PacketInspectorView: View {
         }
     }
 
+    /// Hands the packet's JSON to the operator to file.
+    ///
+    /// An encoding failure is surfaced rather than beeped at: a beep says
+    /// something went wrong without saying what, and on a device with the
+    /// ringer off it says nothing at all.
     private func saveJSON() {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "packet-\(packet.id.uuidString.prefix(8)).json"
-        panel.allowedContentTypes = [.json]
-        panel.canCreateDirectories = true
-
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            do {
-                try PacketExport(packet: packet).writeJSON(to: url)
-            } catch {
-                NSSound.beep()
-            }
+        do {
+            let data = try PacketExport(packet: packet).jsonData()
+            pendingExport = ExportableFile(
+                name: "packet-\(packet.id.uuidString.prefix(8)).json", data: data)
+        } catch {
+            exportError = "Could not encode this packet: \(error.localizedDescription)"
         }
     }
 }
@@ -894,7 +900,7 @@ nonisolated private enum PayloadSearchHighlighter {
             if foundRange.location == NSNotFound {
                 break
             }
-            result.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.35), range: foundRange)
+            result.addAttribute(.backgroundColor, value: PlatformColor.platformSearchHighlight, range: foundRange)
             let nextLocation = foundRange.location + foundRange.length
             if nextLocation >= nsText.length {
                 break
@@ -967,7 +973,7 @@ private struct NetRomRouteEntryRow: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(isAlternate ? Color(NSColor.alternatingContentBackgroundColors[1]) : Color.clear)
+        .background(isAlternate ? Color(platform: .platformAlternatingRow) : Color.clear)
     }
 }
 
@@ -1019,7 +1025,7 @@ private struct FormattedNetRomEntryRow: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(isAlternate ? Color(NSColor.alternatingContentBackgroundColors[1]) : Color.clear)
+        .background(isAlternate ? Color(platform: .platformAlternatingRow) : Color.clear)
     }
 }
 

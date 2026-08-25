@@ -44,6 +44,28 @@ struct ConnectionSettingsView: View {
             
             Section {
                 ConnectionStatusView(status: viewModel.connectionStatus)
+
+                // The only way to open the link on a handheld: every other
+                // connect action lives in the macOS menu bar or main-window
+                // toolbar, neither of which exists on iOS. Offered on both
+                // platforms because the host and port are edited right here,
+                // and having to leave the screen to apply them is worse.
+                Button {
+                    if viewModel.canConnect {
+                        viewModel.connect()
+                    } else {
+                        viewModel.disconnect()
+                    }
+                } label: {
+                    if viewModel.connectionStatus == .connecting {
+                        Label("Connecting…", systemImage: "hourglass")
+                    } else if viewModel.canConnect {
+                        Label("Connect", systemImage: "bolt.horizontal.circle")
+                    } else {
+                        Label("Disconnect", systemImage: "bolt.horizontal.circle.fill")
+                    }
+                }
+                .disabled(viewModel.connectionStatus == .connecting)
             }
         }
         .formStyle(.grouped)
@@ -71,6 +93,17 @@ struct NetworkSettingsContent: View {
                 TextField("Host", text: $viewModel.host)
                     .labelsHidden()
                     .frame(maxWidth: .infinity)
+                    // Without a border these read as static labels on iOS —
+                    // the operator cannot tell the host is editable. The
+                    // keyboard hints matter too: autocapitalising the first
+                    // letter of a hostname, or offering letters for an IP,
+                    // turns a working address into a failed connection.
+                    #if os(iOS)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    #endif
             }
             
             GridRow {
@@ -79,6 +112,10 @@ struct NetworkSettingsContent: View {
                 TextField("Port", value: $viewModel.port, format: .number.grouping(.never))
                     .labelsHidden()
                     .frame(width: 80)
+                    #if os(iOS)
+                    .textFieldStyle(.roundedBorder)
+                    .keyboardType(.numberPad)
+                    #endif
             }
         }
         .padding(.vertical, 4)

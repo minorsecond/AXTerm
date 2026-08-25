@@ -644,22 +644,23 @@ final class AX25Phase3CollisionTests: XCTestCase {
         let (manager, _) = makeManager()
         _ = connect(manager)
 
-        // First delivery — V(R) advances to 1
+        // First delivery — V(R) advances to 1. P=1 keeps the RR synchronous
+        // (P=0 acks are batched onto T2; see DelayedAckTests).
         let first = manager.handleInboundIFrame(
             from: peer, path: path, channel: 0,
-            ns: 0, nr: 0, pf: false,
+            ns: 0, nr: 0, pf: true,
             payload: Data("Hello".utf8)
         )
-        XCTAssertNotNil(first, "First I-frame must trigger RR response")
+        XCTAssertNotNil(first, "First I-frame with P=1 must trigger RR response")
         XCTAssertEqual(first?.frameType, "s", "Response must be an S-frame (RR)")
 
         // Duplicate delivery — V(R) must NOT advance again; must still RR
         let dup = manager.handleInboundIFrame(
             from: peer, path: path, channel: 0,
-            ns: 0, nr: 0, pf: false,
+            ns: 0, nr: 0, pf: true,
             payload: Data("Hello".utf8)
         )
-        XCTAssertNotNil(dup, "Duplicate I-frame must still produce an RR (peer recovery)")
+        XCTAssertNotNil(dup, "Duplicate I-frame with P=1 must still produce an RR (peer recovery)")
     }
 
     // MARK: ──────────────────────────────────────────────────────────────

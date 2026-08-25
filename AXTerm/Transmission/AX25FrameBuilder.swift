@@ -264,6 +264,58 @@ nonisolated struct AX25FrameBuilder {
         )
     }
 
+    /// Build an XID negotiation frame (AX.25 2.2 §4.3.3.7). The
+    /// information field carries the FI/GI/PI parameter groups; commands
+    /// go out with P=1, responses mirror the command's P as F.
+    static func buildXID(
+        from source: AX25Address,
+        to destination: AX25Address,
+        via path: DigiPath = DigiPath(),
+        parameters: AX25XIDParameters,
+        isCommand: Bool,
+        pf: Bool = true
+    ) -> OutboundFrame {
+        var control: UInt8 = 0xAF
+        if pf { control |= 0x10 }
+        return OutboundFrame(
+            destination: destination,
+            source: source,
+            path: path,
+            payload: parameters.encoded(isCommand: isCommand),
+            priority: .interactive,
+            frameType: "u",
+            pid: nil,
+            controlByte: control,
+            displayInfo: "XID",
+            isCommand: isCommand
+        )
+    }
+
+    /// Build an SREJ (Selective Reject) frame — retransmit exactly N(R).
+    /// Only valid on a link where XID negotiated SREJ (§6.4.4.2).
+    static func buildSREJ(
+        from source: AX25Address,
+        to destination: AX25Address,
+        via path: DigiPath = DigiPath(),
+        nr: Int,
+        pf: Bool = false,
+        isCommand: Bool = false
+    ) -> OutboundFrame {
+        return OutboundFrame(
+            destination: destination,
+            source: source,
+            path: path,
+            payload: Data(),
+            priority: .interactive,
+            frameType: "s",
+            pid: nil,
+            controlByte: AX25Control.sFrame(base: AX25Control.srejBase, nr: nr, pf: pf),
+            nr: nr,
+            displayInfo: "SREJ(\(nr))",
+            isCommand: isCommand
+        )
+    }
+
     // MARK: - I-Frame Builder
 
     /// Build an I (Information) frame - data in connected mode

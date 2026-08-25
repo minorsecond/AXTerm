@@ -126,4 +126,41 @@ final class SessionDeliveryClaimTests: XCTestCase {
             from: session.remoteAddress, path: DigiPath(), channel: 0)
         XCTAssertTrue(transitions.contains(.disconnected), "transitions: \(transitions)")
     }
+
+    /// A claim must not outlive its session. Claim holders are captured
+    /// weakly, and a protocol runner routinely drops its transport in the
+    /// seconds between sending DISC and the UA arriving — leaving the
+    /// stale claim to refuse every later connect as "session busy".
+    func testDisconnectReleasesTheClaimEvenIfTheHolderIsGone() {
+        let manager = makeManager()
+        let session = establishSession(manager)
+
+        // A holder that has already been deallocated: the state handler
+        // captures nothing and cannot release anything itself.
+        _ = manager.claimDelivery(
+            for: session.key,
+            handler: { _, _ in },
+            stateHandler: { _, _, _ in })
+        XCTAssertTrue(manager.hasDeliveryClaim(for: session.key))
+
+        _ = manager.handleInboundDISC(
+            from: session.remoteAddress, path: DigiPath(), channel: 0)
+
+        XCTAssertFalse(manager.hasDeliveryClaim(for: session.key),
+                       "a disconnected session must not keep its delivery claim")
+
+        // And the peer is reachable again rather than permanently busy.
+        XCTAssertNotNil(manager.claimDelivery(for: session.key) { _, _ in },
+                        "a fresh exchange must be able to claim the link again")
+    }
+
+    func testRemovingASessionReleasesItsClaim() {
+        let manager = makeManager()
+        let session = establishSession(manager)
+        _ = manager.claimDelivery(for: session.key) { _, _ in }
+
+        manager.removeSession(session)
+
+        XCTAssertFalse(manager.hasDeliveryClaim(for: session.key))
+    }
 }

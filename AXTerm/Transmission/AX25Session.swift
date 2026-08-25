@@ -46,8 +46,9 @@ nonisolated struct AX25SessionConfig: Sendable {
     /// Maximum payload bytes per I-frame (paclen). Frames are fragmented at this size.
     let paclen: Int
 
-    /// Maximum receive buffer size for out-of-sequence frames. When nil, equals windowSize.
-    /// Can be set smaller than windowSize to force discard-oldest behavior under load (e.g. testing).
+    /// Maximum receive buffer size for out-of-sequence frames. When nil, holds
+    /// a full receive span (`receiveWindowSpan - 1`). Can be set smaller to
+    /// force discard-oldest behavior under load (e.g. testing).
     let maxReceiveBufferSize: Int?
 
     /// Maximum retries N2
@@ -55,6 +56,12 @@ nonisolated struct AX25SessionConfig: Sendable {
 
     /// Use extended mode (modulo 128 vs modulo 8)
     let extended: Bool
+
+    /// Selective reject negotiated via XID (AX.25 2.2 §6.4.4.2). Off by
+    /// default: a peer that never agreed to SREJ treats one as a protocol
+    /// error. When on, a receive gap draws SREJ for exactly the missing
+    /// frame instead of go-back-N REJ.
+    let srejEnabled: Bool
 
     /// Minimum RTO (seconds). When nil, session timers use default 1.0.
     let rtoMin: Double?
@@ -64,6 +71,15 @@ nonisolated struct AX25SessionConfig: Sendable {
 
     /// Initial RTO (seconds) before any RTT sample. When nil, session timers use default 4.0.
     let initialRto: Double?
+
+    /// T2 response-delay (delayed-ack) ceiling, seconds. nil → 2.0, tuned
+    /// for 1200-baud RF: it spans one max-size frame's ~1.9 s of airtime
+    /// (so back-to-back frames batch into one cumulative ack) while
+    /// staying inside the 3 s production RTO floor. The invariant that
+    /// matters is ecosystem-wide: every peer's T1 must exceed our T2 plus
+    /// a round trip, or the peer retransmits frames we were about to ack.
+    /// Timers enforce a local version of it by clamping to 2/3 of rtoMin.
+    let t2AckDelay: Double?
 
     /// Whether adaptive timeout estimation is enabled
     let adaptiveTimeout: Bool
@@ -79,15 +95,36 @@ nonisolated struct AX25SessionConfig: Sendable {
     /// Sequence number modulo (8 or 128)
     var modulo: Int { extended ? 128 : 8 }
 
+    /// How far ahead of V(R) an out-of-sequence I-frame may sit and still be
+    /// buffered instead of discarded.
+    ///
+    /// Deliberately NOT `windowSize`. K is *our transmit* window — what our
+    /// congestion control picked for frames we send. It says nothing about how
+    /// many frames the peer keeps in flight, and without XID nothing negotiates
+    /// a common value. Deriving the receive span from K meant that at K=2
+    /// anything more than one frame ahead was thrown away, so a peer running
+    /// four outstanding frames had its early arrivals discarded — and once V(R)
+    /// reached them we had to ask for frames the peer had already sent and
+    /// considered delivered. That deadlocks the link (field capture 2026-08-24,
+    /// W0ARP-10: N(S)=7 arrived twice while V(R)=4, was dropped both times, and
+    /// the session died 60 s later still waiting for it).
+    ///
+    /// Half the modulo is the standard sliding-window disambiguation bound:
+    /// inside it a sequence number ahead of V(R) is unambiguously a future
+    /// frame; at or beyond it, it may be a duplicate from the previous lap.
+    var receiveWindowSpan: Int { modulo / 2 }
+
     init(
         windowSize: Int = 4,
         paclen: Int = 128,
         maxReceiveBufferSize: Int? = nil,
         maxRetries: Int = 10,
         extended: Bool = false,
+        srejEnabled: Bool = false,
         rtoMin: Double? = nil,
         rtoMax: Double? = nil,
         initialRto: Double? = nil,
+        t2AckDelay: Double? = nil,
         adaptiveTimeout: Bool = true,
         learnedPathRto: Double? = nil
     ) {
@@ -96,14 +133,40 @@ nonisolated struct AX25SessionConfig: Sendable {
         let ws = max(1, min(windowSize, maxWindow))
         self.windowSize = ws
         self.paclen = max(32, min(paclen, 256))
-        self.maxReceiveBufferSize = maxReceiveBufferSize.map { max(1, min($0, ws)) }
+        // Bounded by the receive span, not by ws: the two are unrelated (see
+        // `receiveWindowSpan`).
+        let span = (extended ? 128 : 8) / 2
+        self.maxReceiveBufferSize = maxReceiveBufferSize.map { max(1, min($0, span - 1)) }
         self.maxRetries = max(1, maxRetries)
         self.extended = extended
+        self.srejEnabled = srejEnabled
         self.rtoMin = rtoMin
         self.rtoMax = rtoMax
         self.initialRto = initialRto
+        self.t2AckDelay = t2AckDelay
         self.adaptiveTimeout = adaptiveTimeout
         self.learnedPathRto = learnedPathRto
+    }
+
+    /// This config with the outcome of an XID exchange applied (§6.3.2):
+    /// SREJ if the response selected it, and the peer's advertised receive
+    /// limits taken as ceilings — N1 and k are notifications of what the
+    /// peer can accept, so ours are clamped to them, never raised.
+    func negotiating(with peer: AX25XIDParameters) -> AX25SessionConfig {
+        AX25SessionConfig(
+            windowSize: min(windowSize, peer.windowSizeRx ?? windowSize),
+            paclen: min(paclen, peer.iFieldLengthRx ?? paclen),
+            maxReceiveBufferSize: maxReceiveBufferSize,
+            maxRetries: maxRetries,
+            extended: extended,
+            srejEnabled: peer.supportsSREJ,
+            rtoMin: rtoMin,
+            rtoMax: rtoMax,
+            initialRto: initialRto,
+            t2AckDelay: t2AckDelay,
+            adaptiveTimeout: adaptiveTimeout,
+            learnedPathRto: learnedPathRto
+        )
     }
 }
 
@@ -221,6 +284,15 @@ nonisolated struct AX25SessionTimers: Sendable {
     /// T3 idle timeout (seconds)
     let t3Timeout: Double = 30.0
 
+    /// T2 response-delay (delayed-ack) timeout, seconds. Long enough to
+    /// span the gap between a burst's frames at 1200 baud (a 256-byte
+    /// frame is ~1.9 s of airtime), short enough to stay inside any sane
+    /// peer's T1 — enforced locally by clamping to 2/3 of rtoMin, since a
+    /// peer on the same link will run a comparable RTO floor. In practice
+    /// it rarely fires: bursts end with a P=1 poll whose mandatory F=1
+    /// response carries the cumulative ack.
+    let t2AckDelay: Double
+
     /// Smoothing factor for SRTT (1/8 per RFC 6298)
     private let alpha: Double = 1.0 / 8.0
 
@@ -241,12 +313,13 @@ nonisolated struct AX25SessionTimers: Sendable {
     /// silently discarded the operator's configured T1.
     private let initialRto: Double
 
-    init(rtoMin: Double = 3.0, rtoMax: Double = 30.0, initialRto: Double = AX25SessionTimers.defaultInitialRto, adaptiveTimeout: Bool = true) {
+    init(rtoMin: Double = 3.0, rtoMax: Double = 30.0, initialRto: Double = AX25SessionTimers.defaultInitialRto, adaptiveTimeout: Bool = true, t2AckDelay: Double = 2.0) {
         self.rtoMin = max(0.5, rtoMin)
         self.rtoMax = max(self.rtoMin, min(60.0, rtoMax))
         self.initialRto = max(self.rtoMin, min(self.rtoMax, initialRto))
         self.rto = self.initialRto
         self.adaptiveTimeout = adaptiveTimeout
+        self.t2AckDelay = max(0.1, min(t2AckDelay, self.rtoMin * 2.0 / 3.0))
     }
 
     /// Update RTT estimates with a new sample (Jacobson/Karels, RFC 6298).
@@ -309,6 +382,17 @@ nonisolated struct AX25SessionStatistics: Sendable {
     var bytesSent: Int = 0
     var bytesReceived: Int = 0
 
+    /// REJs we sent — each one is a gap detected in the peer's I-frame
+    /// stream, so each is direct evidence of a loss on the *reverse* path.
+    ///
+    /// Without this the link controller only ever sees forward-path
+    /// evidence. During a download we transmit almost nothing but RRs, so
+    /// a link dropping a quarter of the gateway's frames reported loss=0
+    /// and ETX=1.00 while the transfer visibly struggled (field capture
+    /// 2026-08-23, W0ARP-10: 344 inbound I-frames, 16 REJs sent, adaptive
+    /// still at "perfect link").
+    var rejSent: Int = 0
+
     mutating func recordSent(bytes: Int) {
         framesSent += 1
         bytesSent += bytes
@@ -323,12 +407,17 @@ nonisolated struct AX25SessionStatistics: Sendable {
         retransmissions += 1
     }
 
+    mutating func recordREJSent() {
+        rejSent += 1
+    }
+
     mutating func reset() {
         framesSent = 0
         framesReceived = 0
         retransmissions = 0
         bytesSent = 0
         bytesReceived = 0
+        rejSent = 0
     }
 }
 
@@ -359,6 +448,9 @@ nonisolated enum AX25SessionEvent: Sendable {
 
     // Timeouts
     case t1Timeout
+    /// The T2 response-delay timer expired: an ack is owed and no frame
+    /// carrying N(R) has gone out since it was armed.
+    case t2Timeout
     case t3Timeout
 }
 
@@ -373,9 +465,22 @@ nonisolated enum AX25SessionAction: Sendable, Equatable {
     case sendRR(nr: Int, pf: Bool = false, isCommand: Bool = false)
     case sendRNR(nr: Int, pf: Bool = false, isCommand: Bool = false)
     case sendREJ(nr: Int, pf: Bool = false, isCommand: Bool = false)
+    /// Selective reject: retransmit exactly frame N(R). F-bit asymmetry
+    /// (§4.3.2.4): F=1 acknowledges everything below N(R); F=0
+    /// acknowledges nothing.
+    case sendSREJ(nr: Int, pf: Bool = false, isCommand: Bool = false)
     case sendIFrame(ns: Int, nr: Int, payload: Data)
     case startT1
     case stopT1
+    /// Arm the T2 response-delay timer (idempotent — the manager keeps an
+    /// already-running deadline): an in-sequence delivery with P=0 owes
+    /// the peer a cumulative ack, but sending it immediately wastes a
+    /// key-up per frame and can collide with the peer's next I-frame on
+    /// simplex. The ack rides the next F=1 poll response, the next
+    /// outgoing I-frame's N(R), or a REJ — or goes out alone when T2
+    /// expires, at most t2AckDelay after the first unacked delivery.
+    case startT2
+    case stopT2
     case startT3
     case stopT3
     case deliverData(Data)
@@ -452,6 +557,18 @@ nonisolated struct AX25StateMachine: Sendable {
     /// This prevents sending multiple REJs for the same gap
     private(set) var rejSent: Bool = false
 
+    /// True while an in-sequence delivery is still unacknowledged — the T2
+    /// delayed-ack debt. Settled by the F=1 poll response, by T2 expiry, by
+    /// a REJ (it carries N(R)), or by any outgoing I-frame's piggybacked
+    /// N(R) via `noteAckTransmitted()`.
+    private(set) var ackPending: Bool = false
+
+    /// The manager builds I-frames itself and every one carries N(R); it
+    /// calls this when one goes out so T2 does not fire a redundant RR.
+    mutating func noteAckTransmitted() {
+        ackPending = false
+    }
+
     /// Peer receiver-busy condition (AX.25 §4.3.2.3).
     /// Set when the remote sends RNR; cleared when it answers RR/REJ or the link is
     /// re-established. While set, no new I-frames may be sent — the peer has told us
@@ -468,6 +585,7 @@ nonisolated struct AX25StateMachine: Sendable {
         sequenceState.reset()
         receiveBuffer.removeAll()
         rejSent = false
+        ackPending = false
         peerBusy = false
     }
 
@@ -862,6 +980,17 @@ nonisolated struct AX25StateMachine: Sendable {
             actions.append(.startT1)
             return actions
 
+        case (.connected, .t2Timeout):
+            // Fire the owed cumulative ack — once. Anything that carried
+            // N(R) in the meantime already settled the debt and cleared
+            // the flag, so a stale expiry stays silent.
+            guard ackPending else { return [] }
+            ackPending = false
+            return [.sendRR(nr: sequenceState.vr, pf: false)]
+
+        case (_, .t2Timeout):
+            return []
+
         case (.connected, .t3Timeout):
             // §4.4.5.2: "When T3 times out, an RR or RNR frame is transmitted as a
             // command with the P bit set, and then T1 is started. When a response to
@@ -988,21 +1117,54 @@ nonisolated struct AX25StateMachine: Sendable {
             // stuck until the peer happened to poll. Starting T1 here matches AX.25 REJ
             // recovery, where the rejecting station times the awaited retransmission.
             if !rejSent {
-                actions.append(.sendREJ(nr: sequenceState.vr, pf: pf))
+                if config.srejEnabled {
+                    // Ask for exactly the missing frame. §4.3.2.4: only an
+                    // F=1 SREJ acknowledges below N(R) — an F=0 SREJ acks
+                    // nothing, so the T2 ack debt must survive it and the
+                    // cumulative RR still goes out later.
+                    actions.append(.sendSREJ(nr: sequenceState.vr, pf: pf))
+                    if pf, ackPending {
+                        ackPending = false
+                        actions.append(.stopT2)
+                    }
+                } else {
+                    actions.append(.sendREJ(nr: sequenceState.vr, pf: pf))
+                    // REJ carries N(R): everything before the gap is now
+                    // acked, so a pending T2 would only fire a redundant RR.
+                    if ackPending {
+                        ackPending = false
+                        actions.append(.stopT2)
+                    }
+                }
                 actions.append(.startT1)
                 rejSent = true
             } else {
                 // Still need to respond if P=1, even if REJ already sent
                 if pf {
                     actions.append(.sendRR(nr: sequenceState.vr, pf: true))
+                    if ackPending {
+                        ackPending = false
+                        actions.append(.stopT2)
+                    }
                 }
             }
         } else {
             // Outside window - this is likely a duplicate of an already-received frame
 
-            // Always send RR to re-ack current V(R). This helps peers recover when
-            // our previous RR was lost and they retransmit a duplicate.
-            actions.append(.sendRR(nr: sequenceState.vr, pf: pf))
+            // Re-ack V(R) so a peer whose RR we lost can resynchronize —
+            // but cumulatively, like any other ack. A retransmitted burst
+            // arrives as several duplicates; re-acking each one repeats
+            // the key-up-per-frame waste the delay exists to remove.
+            if pf {
+                actions.append(.sendRR(nr: sequenceState.vr, pf: true))
+                if ackPending {
+                    ackPending = false
+                    actions.append(.stopT2)
+                }
+            } else {
+                ackPending = true
+                actions.append(.startT2)
+            }
         }
 
         // If piggybacked ack advanced V(A) and frames remain, restart T1 per §6.4.6
@@ -1037,9 +1199,31 @@ nonisolated struct AX25StateMachine: Sendable {
             actions.append(.deliverData(buffered.payload))
         }
 
-        // Send RR acknowledging all delivered frames
-        // If incoming frame had P=1, respond with F=1
-        actions.append(.sendRR(nr: sequenceState.vr, pf: pf))
+        // A second gap can already be visible: frames beyond it are still
+        // buffered. With SREJ negotiated, ask for the new missing frame
+        // now — leaving it costs a full T1 before anything moves.
+        if config.srejEnabled, !receiveBuffer.isEmpty, !rejSent {
+            actions.append(.sendSREJ(nr: sequenceState.vr, pf: false))
+            actions.append(.startT1)
+            rejSent = true
+        }
+
+        // Acknowledge cumulatively. A P=1 frame demands an immediate F=1
+        // response and that one RR covers every frame delivered so far. A
+        // P=0 frame only arms T2: at 1200 baud on simplex, acking each
+        // frame of a K=4 burst spends four key-ups where one is needed,
+        // and our RR can collide with the peer's next I-frame — turning
+        // the ack itself into inbound loss and a go-back-N resend.
+        if pf {
+            actions.append(.sendRR(nr: sequenceState.vr, pf: true))
+            if ackPending {
+                ackPending = false
+                actions.append(.stopT2)
+            }
+        } else {
+            ackPending = true
+            actions.append(.startT2)
+        }
         actions.append(.startT3)
 
         if sequenceState.outstandingCount == 0 {
@@ -1057,7 +1241,9 @@ nonisolated struct AX25StateMachine: Sendable {
             return
         }
 
-        let bufferLimit = config.maxReceiveBufferSize ?? config.windowSize
+        // Room for a full receive span. Defaulting this to K threw away frames
+        // the window test had just accepted.
+        let bufferLimit = config.maxReceiveBufferSize ?? max(1, config.receiveWindowSpan - 1)
         if receiveBuffer.count >= bufferLimit {
 
             // Remove the frame with the LARGEST distance from V(R), i.e. the one we will need last.
@@ -1081,16 +1267,17 @@ nonisolated struct AX25StateMachine: Sendable {
         // Calculate distance from V(R) in forward direction
         let distance = (ns - vr + modulo) % modulo
 
-        // Distance 0 is the expected frame (handled separately). A genuinely new
-        // frame can be at most k−1 ahead of V(R): the sender's window spans
-        // V(A)..V(A)+k−1 and V(A) never exceeds V(R), so distance == k is only
-        // reachable by a stale duplicate from the previous sequence lap. The old
-        // `<= windowSize` bound buffered such a duplicate as a "future" frame and
-        // delivered its lap-old payload when V(R) wrapped around to it, while the
-        // real frame carrying that N(S) was then discarded as a duplicate (caught
-        // by AX25FieldFuzzTests under retransmit churn). `< windowSize` restores
-        // the selective-repeat bound: receive span (k−1) + send window (k) ≤ M−1.
-        return distance > 0 && distance < config.windowSize
+        // Distance 0 is the expected frame (handled separately). Everything
+        // strictly inside half the modulo is unambiguously ahead of V(R), so it
+        // is a future frame worth holding; at or past that point the number may
+        // instead be a duplicate from the previous sequence lap, which must not
+        // be buffered as "future" (an earlier `<= windowSize` bound did exactly
+        // that and delivered a lap-old payload when V(R) wrapped onto it —
+        // caught by AX25FieldFuzzTests under retransmit churn).
+        //
+        // The bound is a property of the sequence space, not of our transmit
+        // window: see `AX25SessionConfig.receiveWindowSpan`.
+        return distance > 0 && distance < config.receiveWindowSpan
     }
 
     /// Calculate distance from V(R) for buffer management
@@ -1134,9 +1321,23 @@ nonisolated struct AX25StateMachine: Sendable {
         }
 
         if sequenceState.outstandingCount == 0 {
-            // All frames acked
-            actions.append(.stopT1)
             actions.append(.startT3)
+            // All frames of ours are acked — but leave T1 alone if a REJ is
+            // outstanding, because there T1 is timing the retransmission we
+            // asked the peer for, not anything we sent.
+            //
+            // Stopping it unconditionally disarmed REJ recovery on every
+            // inbound RR. During a download `outstandingCount` is always 0, so
+            // the peer's own keepalive polls (W0ARP-10 polls every ~15 s, well
+            // inside an 18.7 s RTO) cancelled T1 before it could ever fire: one
+            // lost REJ stranded the gap permanently and the gateway eventually
+            // disconnected (field capture 2026-08-24). Emitting neither
+            // start nor stop leaves the running timer undisturbed — restarting
+            // it would push the deadline out on every poll, which is the same
+            // stall by another route.
+            if !rejSent {
+                actions.append(.stopT1)
+            }
         } else if sequenceState.va != vaBeforeAck {
             // Progress made but frames still outstanding: restart T1 per §6.4.6
             actions.append(.startT1)

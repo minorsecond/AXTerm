@@ -68,13 +68,21 @@ nonisolated enum WinlinkCopy {
     exchange.
     """
 
-    static let catalogSizeTooltip = "Estimated response size. Large products take a long time at 1200 baud — check the airtime before requesting."
 
-    static let catalogRefreshTooltip = "Downloads the current catalog from the Winlink CMS (internet). The catalog itself is not fetched over the air."
+    static let catalogRefreshTooltip = """
+    Downloads the current catalog index from the Winlink CMS over the \
+    internet, which needs a web-services access key. Without one, request \
+    the index by radio instead: a LIST inquiry to INQUIRY comes back as \
+    mail and fills the same cache.
+    """
 
     // MARK: - Settings
 
     static let gridSquareTooltip = "Your Maidenhead locator (e.g. DM79lr). Used to find nearby RMS gateways and compute distances. 4, 6, or 8 characters."
+
+    static let antennaHeightTooltip = "How far your antenna is above the ground beneath it \u{2014} not above sea level, which the terrain data already supplies. This is the single number that most often decides whether a path is workable: 60% Fresnel clearance over 13 km at 145 MHz needs roughly 49 m, and the same path from 10 m clears about 9% of the zone. Height, not gain, is what terrain analysis uses."
+
+    static let assumedHeightTooltip = "Used for any station whose height nobody has recorded \u{2014} which is most of them, since neither the licence directory nor the Winlink CMS carries antenna height. Record a real one on a station's page when you know it. Forecasts built on this assumption say so."
 
     static let passwordTooltip = """
     Your Winlink account password, used for secure login (;PQ/;PR

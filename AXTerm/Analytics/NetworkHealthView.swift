@@ -31,11 +31,11 @@ struct ScoreExplainerView: View {
                 HStack(spacing: 8) {
                     Label("40% Activity (10m)", systemImage: "bolt.fill")
                         .font(.caption2)
-                        .foregroundStyle(Color(nsColor: .systemBlue))
+                        .foregroundStyle(Color(platform: .systemBlue))
                         .help(GraphCopy.ScoreBreakdown.activityTooltip)
                     Label(topologyLabel, systemImage: "network")
                         .font(.caption2)
-                        .foregroundStyle(Color(nsColor: .systemGreen))
+                        .foregroundStyle(Color(platform: .systemGreen))
                         .help(GraphCopy.ScoreBreakdown.topologyTooltip)
                 }
                 .contentShape(Rectangle())
@@ -45,7 +45,7 @@ struct ScoreExplainerView: View {
                 ForEach(breakdown.components, id: \.name) { component in
                     HStack {
                         Circle()
-                            .fill(component.isActivity ? Color(nsColor: .systemBlue) : Color(nsColor: .systemGreen))
+                            .fill(component.isActivity ? Color(platform: .systemBlue) : Color(platform: .systemGreen))
                             .frame(width: 6, height: 6)
                         Text(component.name)
                             .font(.caption.weight(.medium))

@@ -252,8 +252,15 @@ final class IFrameReorderingTests: XCTestCase {
     /// not the next one we need. Otherwise we consistently lose the 5th frame (N(S)=4), i.e. chunk index 4 in file transfers.
     /// Scenario: V(R)=0, window 7 so 1..7 are in window; buffer limit 4 so we can fill with 4,5,6,7. Then frame 1
     /// arrives—buffer full so we drop one. We must drop 7 (farthest), keeping 1,4,5,6. Then 0,2,3 arrive → deliver 0,1,2,3,4,5,6.
+    /// Modulo 128 deliberately: in modulo 8 the N(S)=4..7 used below sit at or
+    /// past half the sequence space from V(R)=0, where a number ahead of V(R)
+    /// cannot be told apart from a duplicate one lap back, so they are no
+    /// longer buffered as "future" (see `AX25SessionConfig.receiveWindowSpan`).
+    /// The eviction policy under test is unchanged; only the sequence space
+    /// moved, so the original chunk-4 regression is still exercised verbatim.
     func testBufferFullDiscardsFarthestNotNextNeededChunk4Preserved() {
-        var sm = AX25StateMachine(config: AX25SessionConfig(windowSize: 7, maxReceiveBufferSize: 4))
+        var sm = AX25StateMachine(config: AX25SessionConfig(
+            windowSize: 7, maxReceiveBufferSize: 4, extended: true))
 
         _ = sm.handle(event: .connectRequest)
         _ = sm.handle(event: .receivedUA)
@@ -452,17 +459,20 @@ final class IFrameReorderingTests: XCTestCase {
         _ = sm.handle(event: .connectRequest)
         _ = sm.handle(event: .receivedUA)
 
-        // Receive frame 0
+        // Receive frame 0 — P=0 arms T2; the ack fires on expiry.
         let actions0 = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, pf: false, payload: Data("A".utf8)))
-        XCTAssertTrue(containsRR(actions0, nr: 1), "Should send RR(1)")
+        XCTAssertFalse(containsAnyRR(actions0), "P=0 delivery is acked via T2, not per frame")
+        XCTAssertTrue(containsRR(sm.handle(event: .t2Timeout), nr: 1), "T2 acks RR(1)")
 
         // Receive frame 2 (buffered, missing 1)
         let actions2 = sm.handle(event: .receivedIFrame(ns: 2, nr: 0, pf: false, payload: Data("C".utf8)))
         XCTAssertFalse(containsAnyRR(actions2), "Should not send RR for buffered frame")
 
-        // Frame 1 arrives - should deliver 1 and 2, then send RR(3)
+        // Frame 1 arrives - delivers 1 and 2; the cumulative RR(3) rides T2
         let actions1 = sm.handle(event: .receivedIFrame(ns: 1, nr: 0, pf: false, payload: Data("B".utf8)))
-        XCTAssertTrue(containsRR(actions1, nr: 3), "Should send RR(3) after delivering buffered frames")
+        XCTAssertFalse(containsAnyRR(actions1))
+        XCTAssertTrue(containsRR(sm.handle(event: .t2Timeout), nr: 3),
+                      "Should ack RR(3) after delivering buffered frames")
     }
 
     // MARK: - Helper Functions

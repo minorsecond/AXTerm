@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import AppKit
 
 /// A custom segmented control that supports individual tooltips on macOS,
 /// which the native Picker with .segmented style does not reliably do.
@@ -42,11 +41,11 @@ struct AnalyticsSegmentedPicker<T: Hashable & Identifiable>: View {
                 }
             }
         }
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.8))
+        .background(Color(platform: .platformCardBackground).opacity(0.8))
         .cornerRadius(5)
         .overlay(
             RoundedRectangle(cornerRadius: 5)
-                .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+                .stroke(Color(platform: .platformSeparator), lineWidth: 0.5)
         )
         .fixedSize()
     }

@@ -12,7 +12,11 @@
 //  - All copy centralized in GraphCopy.swift
 //
 
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import SwiftUI
 
 private typealias Copy = GraphCopy
@@ -231,7 +235,7 @@ private struct SidebarOverviewContent: View {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.caption2)
-                        .foregroundStyle(Color(nsColor: .systemGreen))
+                        .foregroundStyle(Color(platform: .systemGreen))
                     Text(reason)
                         .font(.caption)
                         .foregroundStyle(AnalyticsStyle.Colors.textSecondary)
@@ -345,9 +349,9 @@ private struct SidebarOverviewContent: View {
 
     private func severityColor(for severity: NetworkWarning.WarningSeverity) -> Color {
         switch severity {
-        case .info: return Color(nsColor: .systemBlue)
-        case .caution: return Color(nsColor: .systemYellow)
-        case .warning: return Color(nsColor: .systemOrange)
+        case .info: return Color(platform: .systemBlue)
+        case .caution: return Color(platform: .systemYellow)
+        case .warning: return Color(platform: .systemOrange)
         }
     }
 
@@ -435,7 +439,7 @@ private struct SidebarOverviewContent: View {
                     .tag(metric)
                 }
             }
-            .pickerStyle(.radioGroup)
+            .platformRadioGroup()
             .labelsHidden()
         }
         .padding(12)
@@ -446,10 +450,10 @@ private struct SidebarOverviewContent: View {
 
     private func ratingColor(_ rating: HealthRating) -> Color {
         switch rating {
-        case .excellent: return Color(nsColor: .systemGreen)
-        case .good: return Color(nsColor: .systemBlue)
-        case .fair: return Color(nsColor: .systemOrange)
-        case .poor: return Color(nsColor: .systemRed)
+        case .excellent: return Color(platform: .systemGreen)
+        case .good: return Color(platform: .systemBlue)
+        case .fair: return Color(platform: .systemOrange)
+        case .poor: return Color(platform: .systemRed)
         case .unknown: return AnalyticsStyle.Colors.textSecondary
         }
     }
@@ -916,7 +920,7 @@ private struct SidebarInspectorContent: View {
                 tooltip: Copy.Inspector.directPeersSectionTooltip,
                 relationships: details.directPeers,
                 icon: "arrow.left.arrow.right",
-                iconColor: Color(nsColor: .systemGreen)
+                iconColor: Color(platform: .systemGreen)
             )
         }
 
@@ -927,7 +931,7 @@ private struct SidebarInspectorContent: View {
                 tooltip: Copy.Inspector.heardDirectSectionTooltip,
                 relationships: details.heardDirect,
                 icon: "antenna.radiowaves.left.and.right",
-                iconColor: Color(nsColor: .systemBlue)
+                iconColor: Color(platform: .systemBlue)
             )
         }
 
@@ -938,7 +942,7 @@ private struct SidebarInspectorContent: View {
                 tooltip: Copy.Inspector.heardViaSectionTooltip,
                 relationships: details.seenVia,
                 icon: "arrow.triangle.branch",
-                iconColor: Color(nsColor: .systemOrange)
+                iconColor: Color(platform: .systemOrange)
             )
         }
 
@@ -1190,7 +1194,7 @@ private struct AllSelectedStationsSheet: View {
         }
         .padding(16)
         .frame(minWidth: 520, idealWidth: 620, maxWidth: 700, minHeight: 520, idealHeight: 640, maxHeight: 740)
-        .onExitCommand { dismiss() }
+        .platformEscape { dismiss() }
     }
 }
 
@@ -1278,7 +1282,7 @@ private struct HealthGaugeView: View {
             Circle()
                 .trim(from: 0.15, to: 0.85)
                 .stroke(
-                    Color(nsColor: .separatorColor),
+                    Color(platform: .platformSeparator),
                     style: StrokeStyle(lineWidth: 6, lineCap: .round)
                 )
                 .rotationEffect(.degrees(90))
@@ -1301,11 +1305,11 @@ private struct HealthGaugeView: View {
 
     private var gaugeColor: Color {
         switch rating {
-        case .excellent: return Color(nsColor: .systemGreen)
-        case .good: return Color(nsColor: .systemBlue)
-        case .fair: return Color(nsColor: .systemOrange)
-        case .poor: return Color(nsColor: .systemRed)
-        case .unknown: return Color(nsColor: .tertiaryLabelColor)
+        case .excellent: return Color(platform: .systemGreen)
+        case .good: return Color(platform: .systemBlue)
+        case .fair: return Color(platform: .systemOrange)
+        case .poor: return Color(platform: .systemRed)
+        case .unknown: return Color(platform: .platformTertiaryLabel)
         }
     }
 }

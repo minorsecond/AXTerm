@@ -32,6 +32,7 @@ nonisolated enum AX25UType: String, Codable, Hashable, Sendable {
     case UA = "UA"       // Unnumbered Acknowledge
     case DM = "DM"       // Disconnected Mode
     case FRMR = "FRMR"   // Frame Reject
+    case XID = "XID"     // Exchange Identification (AX.25 2.2 negotiation)
     case UNKNOWN = "UNKNOWN" // Unknown U-frame subtype
 }
 

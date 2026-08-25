@@ -98,7 +98,9 @@ struct AXTermApp: App {
             store: queue.map { SQLiteWinlinkStore(dbQueue: $0) },
             settings: WinlinkSettings(defaults: defaults),
             profile: StationProfile(defaults: defaults),
-            contactStore: queue.map { SQLiteContactStore(dbQueue: $0) })
+            contactStore: queue.map { SQLiteContactStore(dbQueue: $0) },
+            appSettings: settingsStore,
+            activityStore: queue.map { SQLiteStationActivityStore(dbQueue: $0) })
         self.client = PacketEngine(
             settings: settingsStore,
             packetStore: packetStore,
@@ -133,6 +135,13 @@ struct AXTermApp: App {
         let windowTitle = "AXTerm" + TestModeConfiguration.shared.windowTitleSuffix
         WindowGroup(windowTitle, id: "main") {
             ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter, winlinkContext: winlinkContext)
+                // Launch and every return to the foreground: pull whatever
+                // the operator's other devices did while this one was away.
+                .task { winlinkContext.appBecameActive() }
+                .onReceive(NotificationCenter.default.publisher(
+                    for: NSApplication.didBecomeActiveNotification)) { _ in
+                    winlinkContext.appBecameActive()
+                }
         }
         .commands {
             CommandGroup(after: .windowArrangement) {
@@ -154,7 +163,9 @@ struct AXTermApp: App {
                 eventLogger: eventLogger,
                 notificationManager: notificationManager,
                 winlinkSettings: winlinkContext.settings,
-                stationProfile: winlinkContext.profile
+                stationProfile: winlinkContext.profile,
+                locationService: winlinkContext.locationService,
+                winlinkSync: winlinkContext.sync
             )
         }
 
@@ -174,6 +185,26 @@ struct AXTermApp: App {
                 )
             }
         }
+
+        WindowGroup("Winlink Message", id: "winlinkMessage", for: String.self) { $mid in
+            if let mid, let store = winlinkContext.store {
+                WinlinkMessageWindow(
+                    store: store,
+                    mid: mid,
+                    myCallsign: settings.myCallsign,
+                    onDraftSaved: { winlinkContext.refreshUnread() })
+            }
+        }
+
+        // A window rather than a sheet: a map wants to be resized,
+        // zoomed and put full-screen, and a sheet can do none of those.
+        Window("Winlink Station Map", id: "winlinkMap") {
+            WinlinkScopeWindow(
+                stations: (try? winlinkContext.store?.stations()) ?? [],
+                linkQuality: winlinkContext.mapLinkQuality,
+                observerGrid: winlinkContext.settings.gridSquare)
+        }
+        .defaultSize(width: 820, height: 700)
 
         MenuBarExtra("AXTerm", systemImage: "antenna.radiowaves.left.and.right", isInserted: $runInMenuBar) {
             MenuBarView(

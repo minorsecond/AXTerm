@@ -67,6 +67,7 @@ final class AppSettingsStore: ObservableObject {
     static let analyticsHubMetricKey = "analyticsHubMetric"
     static let analyticsStationIdentityModeKey = "analyticsStationIdentityMode"
     static let analyticsAutoUpdateEnabledKey = "analyticsAutoUpdateEnabled"
+    static let ax25NegotiateV22Key = "ax25NegotiateV22"
 
     // AXDP / transmission extension settings keys
     static let axdpExtensionsEnabledKey = "axdpExtensionsEnabled"
@@ -191,6 +192,11 @@ final class AppSettingsStore: ObservableObject {
     static let defaultAnalyticsHubMetric = "Degree"  // Matches HubMetric.degree.rawValue
     static let defaultAnalyticsStationIdentityMode = "station"  // Group SSIDs by default
     static let defaultAnalyticsAutoUpdateEnabled = true
+    /// AX.25 2.2 XID negotiation (SREJ + parameter limits) before the
+    /// first SABM to an unknown station. Default on: 2.2 peers answer,
+    /// pre-2.2 peers answer FRMR (the spec's "use defaults"), and a
+    /// silent peer costs one RTO exactly once per callsign.
+    static let defaultAX25NegotiateV22 = true
 
     // AXDP defaults (match TxAdaptiveSettings defaults)
     static let defaultAXDPExtensionsEnabled = true
@@ -458,6 +464,18 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistNotifyOnlyWhenInactive() }
     }
 
+    static let keepAwakePolicyKey = "keepAwakePolicy"
+
+    /// Whether the app holds the screen on, and when. iOS only — a Mac's
+    /// display sleeping does not suspend the app or drop its sockets.
+    ///
+    /// Defaults to holding only during transfers: that is the case where
+    /// sleeping actually costs something, and holding it permanently would
+    /// flatten a battery the operator may need for other things.
+    @Published var keepAwakePolicy: KeepAwakePolicy {
+        didSet { defaults.set(keepAwakePolicy.rawValue, forKey: Self.keepAwakePolicyKey) }
+    }
+
     @Published private var myCallsignStorage: String
 
     var myCallsign: String {
@@ -692,6 +710,13 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistAnalyticsAutoUpdateEnabled() }
     }
 
+    @Published var ax25NegotiateV22: Bool {
+        didSet {
+            persistAX25NegotiateV22()
+            SessionCoordinator.shared?.sessionManager.negotiateV22 = ax25NegotiateV22
+        }
+    }
+
     // MARK: - NET/ROM Route Settings
 
     @Published var hideExpiredRoutes: Bool {
@@ -859,6 +884,7 @@ final class AppSettingsStore: ObservableObject {
         let storedAnalyticsHubMetric = defaults.string(forKey: Self.analyticsHubMetricKey) ?? Self.defaultAnalyticsHubMetric
         let storedAnalyticsStationIdentityMode = defaults.string(forKey: Self.analyticsStationIdentityModeKey) ?? Self.defaultAnalyticsStationIdentityMode
         let storedAnalyticsAutoUpdateEnabled = defaults.object(forKey: Self.analyticsAutoUpdateEnabledKey) as? Bool ?? Self.defaultAnalyticsAutoUpdateEnabled
+        let storedAX25NegotiateV22 = defaults.object(forKey: Self.ax25NegotiateV22Key) as? Bool ?? Self.defaultAX25NegotiateV22
 
         // NET/ROM route settings
         let storedHideExpiredRoutes = defaults.object(forKey: Self.hideExpiredRoutesKey) as? Bool ?? Self.defaultHideExpiredRoutes
@@ -942,6 +968,8 @@ final class AppSettingsStore: ObservableObject {
         self.notifyOnMention = storedNotifyOnMention
         self.notifyPlaySound = storedNotifyPlaySound
         self.notifyOnlyWhenInactive = storedNotifyOnlyWhenInactive
+        self.keepAwakePolicy = defaults.string(forKey: Self.keepAwakePolicyKey)
+            .flatMap(KeepAwakePolicy.init(rawValue:)) ?? .duringTransfers
         self.myCallsignStorage = CallsignValidator.normalize(storedMyCallsign)
         self.watchCallsigns = storedWatchCallsigns
         self.watchKeywords = storedWatchKeywords
@@ -961,6 +989,7 @@ final class AppSettingsStore: ObservableObject {
         self.analyticsHubMetric = storedAnalyticsHubMetric
         self.analyticsStationIdentityMode = storedAnalyticsStationIdentityMode
         self.analyticsAutoUpdateEnabled = storedAnalyticsAutoUpdateEnabled
+        self.ax25NegotiateV22 = storedAX25NegotiateV22
 
         // NET/ROM route settings
         self.hideExpiredRoutes = storedHideExpiredRoutes
@@ -1272,6 +1301,10 @@ final class AppSettingsStore: ObservableObject {
 
     private func persistAnalyticsAutoUpdateEnabled() {
         defaults.set(analyticsAutoUpdateEnabled, forKey: Self.analyticsAutoUpdateEnabledKey)
+    }
+
+    private func persistAX25NegotiateV22() {
+        defaults.set(ax25NegotiateV22, forKey: Self.ax25NegotiateV22Key)
     }
 
     // MARK: - NET/ROM Route Settings Persistence

@@ -16,6 +16,12 @@ class SettingsRouter: ObservableObject {
 
     /// Injected by the main window view via @Environment(\.openSettings).
     /// Must be set before navigate(to:) is called.
+    /// Opens the app's settings.
+    ///
+    /// Supplied by whichever shell is running: on macOS the `Settings` scene
+    /// sets it, on iOS the root view sets it to switch tabs. Left nil the
+    /// "Open Settings" button silently does nothing, which is exactly what
+    /// happened on iPad before the iOS shell wired it up.
     var openAction: (() -> Void)?
     
     // MARK: - State
@@ -55,8 +61,11 @@ class SettingsRouter: ObservableObject {
             }
         }
         
-        // 3. Bring Window to Front
+        // 3. Bring Window to Front. Only meaningful where windows exist —
+        // a handheld shows one thing at a time and is already frontmost.
+        #if os(macOS)
         NSApp.activate(ignoringOtherApps: true)
+        #endif
         openAction?()
     }
 }

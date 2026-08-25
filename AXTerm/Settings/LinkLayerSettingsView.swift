@@ -59,6 +59,19 @@ struct LinkLayerSettingsView: View {
         Text("Guardrails: \(Int(AppSettingsStore.minAX25T1TimeoutSeconds))-\(Int(AppSettingsStore.maxAX25T1TimeoutSeconds)) seconds. Larger values reduce premature retransmits on slow links; smaller values retry faster.")
             .font(.caption)
             .foregroundStyle(.secondary)
+
+        Toggle("Negotiate AX.25 2.2 (XID / selective reject)", isOn: $settings.ax25NegotiateV22)
+            .help("Before the first connect to an unknown station, offer AX.25 2.2 "
+                  + "parameters via XID. A 2.2 peer agrees to selective reject "
+                  + "(retransmit only the lost frame instead of the whole window) and "
+                  + "exchanges packet-length and window limits. Older stations answer "
+                  + "FRMR or stay silent — either way the connect proceeds classically, "
+                  + "and the answer is remembered so the one-time timeout is never paid "
+                  + "twice. Turn off only if a node misbehaves when it sees XID.")
+
+        Text("Selective reject pays off on lossy paths: with plain REJ, one lost frame costs retransmitting every frame after it.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 
     @ViewBuilder

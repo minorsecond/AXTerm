@@ -31,6 +31,10 @@ nonisolated struct WinlinkExchangeProgress: Equatable, Sendable {
     /// what actually travels on the air). Total 0 means indeterminate.
     var bytesDone: Int = 0
     var bytesTotal: Int = 0
+    /// Bytes carried in from an interrupted session (B2F resume). They are
+    /// part of `bytesDone` because the bar measures the whole message, but
+    /// they never crossed the air here — the rate must not count them.
+    var baselineBytes: Int = 0
     var startedAt: Date
 
     var fraction: Double? {
@@ -38,11 +42,14 @@ nonisolated struct WinlinkExchangeProgress: Equatable, Sendable {
         return min(1.0, Double(bytesDone) / Double(bytesTotal))
     }
 
+    /// Bytes actually moved over the air during this session.
+    var bytesThisSession: Int { max(0, bytesDone - baselineBytes) }
+
     /// Smoothed transfer rate in bytes/second since this message started.
     func bytesPerSecond(now: Date = Date()) -> Double? {
         let elapsed = now.timeIntervalSince(startedAt)
-        guard elapsed > 1, bytesDone > 0 else { return nil }
-        return Double(bytesDone) / elapsed
+        guard elapsed > 1, bytesThisSession > 0 else { return nil }
+        return Double(bytesThisSession) / elapsed
     }
 
     /// Seconds remaining at the current rate.

@@ -110,19 +110,37 @@ final class WinlinkFormEngineTests: XCTestCase {
 
     // MARK: - Position report
 
+    /// Winlink's position service parses degrees and **decimal minutes**.
+    /// This test previously asserted decimal degrees, which the service
+    /// rejects outright: "Latitude: 39.6123N is not a valid latitude...
+    /// It should look similar to 'Latitude: 28-32.4N'" (rejection
+    /// received from SERVICE, 2026-08-24). The test encoded the bug.
     func testPositionReportIsPlainTextToQTH() {
         let template = WinlinkFormTemplates.gpsPositionReport
         var values = WinlinkFormEngine.autoFilledValues(for: template, context: context)
-        XCTAssertEqual(values["Lat"], "39.7392N")
-        XCTAssertEqual(values["Lon"], "104.9903W")
+        XCTAssertEqual(values["Lat"], "39-44.35N")
+        XCTAssertEqual(values["Lon"], "104-59.42W")
         values["Message"] = "Portable at the fairgrounds"
 
         let rendered = WinlinkFormEngine.render(template: template, values: values, context: context)
         XCTAssertEqual(rendered.to, "QTH")
         XCTAssertEqual(rendered.subject, "Position Report")
         XCTAssertTrue(rendered.attachments.isEmpty, "position reports carry no form XML")
-        XCTAssertTrue(rendered.body.contains("Latitude: 39.7392N"), rendered.body)
+        XCTAssertTrue(rendered.body.contains("Latitude: 39-44.35N"), rendered.body)
         XCTAssertTrue(rendered.body.contains("Comment: Portable at the fairgrounds"), rendered.body)
+    }
+
+    /// The shape the service asks for: degrees, a hyphen, minutes to two
+    /// decimals, then the hemisphere — and longitude zero-padded to three
+    /// degree digits.
+    func testPositionFormatMatchesWhatWinlinkAccepts() {
+        let southWest = StationLocation(
+            latitude: -33.8688, longitude: -151.2093,
+            gridSquare: "QF56", source: .gps,
+            timestamp: Date(timeIntervalSince1970: 1_800_000_000))
+        let text = StationLocationFormat.degreeMinute(southWest)
+        XCTAssertTrue(text.hasPrefix("33-52.13S"), text)
+        XCTAssertTrue(text.hasSuffix("151-12.56W"), text)
     }
 
     // MARK: - XML details

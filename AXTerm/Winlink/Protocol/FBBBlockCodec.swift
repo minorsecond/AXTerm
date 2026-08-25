@@ -22,6 +22,14 @@ nonisolated enum FBBBlockCodec {
 
     /// Frames a compressed payload for transmission, starting at `offset`
     /// (non-zero when the receiver requested a partial resume).
+    ///
+    /// A resumed transmission re-sends the six-byte LZHUF wire header
+    /// (CRC16 + uncompressed length) ahead of the continuation. That is
+    /// what RMS gateways do on the air (field capture 2026-08-24,
+    /// W0ARP-10, MID 6KFOMF87WJ8T: the header appeared verbatim at all
+    /// four resume seams), so their receivers expect the same of us. The
+    /// receiving side recognizes the re-sent header by matching it against
+    /// the prefix it already holds, and strips it before stitching.
     static func encode(title: String, offset: Int, payload: Data) -> Data {
         var out = Data()
 
@@ -34,7 +42,9 @@ nonisolated enum FBBBlockCodec {
         out.append(contentsOf: offsetBytes)
         out.append(0x00)
 
-        let body = payload.dropFirst(offset)
+        var body = Data()
+        if offset > 0 { body.append(payload.prefix(LZHUF.wireHeaderSize)) }
+        body.append(Data(payload.dropFirst(offset)))
         var checksum: UInt8 = 0
         var index = body.startIndex
         while index < body.endIndex {
@@ -86,6 +96,12 @@ nonisolated enum FBBBlockCodec {
             if case .expectSOH = state { return true }
             return false
         }
+
+        /// Payload bytes accumulated so far — the resume prefix a caller
+        /// persists when the link dies mid-body. The EOT checksum has not
+        /// vetted these bytes; the stitched stream's own LZHUF CRC is the
+        /// real arbiter when the transfer resumes.
+        var partialPayload: Data { payload }
         private var payload = Data()
         private var runningSum: UInt8 = 0
 

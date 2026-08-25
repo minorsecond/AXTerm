@@ -149,8 +149,12 @@ struct NetworkSettingsView: View {
         .formStyle(.grouped)
         .padding(20)
         .onTapGesture {
-            // Clear focus when clicking background
+            // Clear focus when clicking background. A touch platform
+            // dismisses the keyboard through the focus system instead, and
+            // has no key window to ask.
+            #if os(macOS)
             NSApp.keyWindow?.makeFirstResponder(nil)
+            #endif
         }
     }
 }

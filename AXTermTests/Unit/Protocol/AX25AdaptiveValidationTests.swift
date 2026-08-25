@@ -470,7 +470,10 @@ final class AdaptiveConvergenceTests: XCTestCase {
         let h = AdaptiveTestHarness(config: cfg)
         XCTAssertTrue(h.connect())
 
-        for _ in 0..<15 {
+        // Delayed acks (T2) batch each window into a single cumulative RR,
+        // so one snapshot now covers ~K frames where it used to cover one.
+        // More traffic, same claim: RTO stabilises on a stable channel.
+        for _ in 0..<45 {
             h.queueFrames(count: 1)
             h.advance(seconds: 0.8)
         }
@@ -484,7 +487,7 @@ final class AdaptiveConvergenceTests: XCTestCase {
         let detector = ConvergenceDetector(windowSize: 6, toleranceFraction: 0.15)
         let result = detector.analyze(rtoHistory)
         XCTAssertTrue(result.hasConverged,
-            "RTO should stabilise after 15 I-frame exchanges. " +
+            "RTO should stabilise after 45 I-frame exchanges. " +
             "maxDeviation: \(result.maxDeviation.map { String(format:"%.3f", $0) } ?? "nil")")
     }
 
@@ -532,17 +535,22 @@ final class AdaptiveConvergenceTests: XCTestCase {
         XCTAssertTrue(h.connect())
 
         for _ in 0..<8  { h.queueFrames(count: 1); h.advance(seconds: 1.0) }  // loss period
-        let retxDuringLoss = h.aliceSession?.statistics.retransmissions ?? 0
-        for _ in 0..<8  { h.queueFrames(count: 1); h.advance(seconds: 1.0) }  // recovery
-        let retxAfterRecovery = h.aliceSession?.statistics.retransmissions ?? 0
+        // Settle: the loss period leaves a tail — frames lost near its end
+        // wait out a backed-off T1 (seconds) before their retransmit, and
+        // that one-time payout lands after the channel heals. Comparing
+        // raw phase counts made the test hostage to exactly where each
+        // send fell relative to the time-based loss window (delayed acks
+        // shift every send by a few hundred ms and re-dice the phases).
+        for _ in 0..<8  { h.queueFrames(count: 1); h.advance(seconds: 1.0) }
+        let retxAfterSettle = h.aliceSession?.statistics.retransmissions ?? 0
+        for _ in 0..<8  { h.queueFrames(count: 1); h.advance(seconds: 1.0) }  // measured clean window
+        let retxFinal = h.aliceSession?.statistics.retransmissions ?? 0
 
-        // Growth rate should be lower after recovery than during loss
-        let growthDuringLoss   = retxDuringLoss
-        let growthAfterRecovery = retxAfterRecovery - retxDuringLoss
-
-        // If recovery works, retransmits should grow more slowly in the recovery phase
-        XCTAssertLessThanOrEqual(growthAfterRecovery, growthDuringLoss + 2,
-            "Retransmit growth should slow dramatically after channel recovers")
+        // The real claim: once the channel is clean and the backlog has
+        // drained, retransmissions stop.
+        XCTAssertLessThanOrEqual(retxFinal - retxAfterSettle, 2,
+            "Retransmits must stop once the channel recovers and the loss tail drains "
+            + "(settled at \(retxAfterSettle), grew to \(retxFinal))")
     }
 }
 

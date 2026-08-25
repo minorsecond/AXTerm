@@ -18,9 +18,23 @@ nonisolated enum LZHUF {
 
     enum DecodeError: Error, Equatable {
         case truncated
+        /// The CRC16 over the compressed body did not match its header.
+        /// The bytes are wrong: a bad resume stitch, or corruption on the
+        /// way in.
         case checksumMismatch
+        /// The CRC16 *passed* — so the compressed bytes are provably
+        /// correct — but decompressing them produced the wrong number of
+        /// bytes. That is a decoder fault, not a link fault, and the two
+        /// must never share an error case: they send an investigation in
+        /// opposite directions.
+        case decodedSizeMismatch(expected: Int, actual: Int)
         case invalidHeader
     }
+
+    /// Bytes in the B2F wire header: CRC16 (2) + uncompressed length (4).
+    /// On a resumed transfer the sender re-sends exactly these bytes ahead
+    /// of the continuation (field capture 2026-08-24, W0ARP-10).
+    static let wireHeaderSize = 6
 
     /// Compresses `data` into the B2F wire format (CRC16 + length + stream).
     static func encodeB2F(_ data: Data) -> Data {
@@ -481,7 +495,22 @@ private nonisolated final class Decoder {
     typealias C = LZHUF
 
     private let z = LZHUFState()
-    private var r = C.bufferSize - C.rootPos
+    /// Ring-buffer write position. LZHUF.C starts this at N − F, which is
+    /// also where the space pre-fill in `init` ends and what the encoder
+    /// uses.
+    ///
+    /// This previously read `bufferSize - rootPos`, mixing in a Huffman
+    /// *tree* index (626) that has nothing to do with the ring buffer,
+    /// giving 1422 instead of 1988 — disagreeing with both the encoder and
+    /// this decoder's own pre-fill loop.
+    ///
+    /// Corrected for consistency, not for observable behaviour: a
+    /// differential run over 4000 space-heavy bodies found zero outputs
+    /// where the two values disagree. All reads are relative to `r`, so a
+    /// different starting offset shifts writes and reads together, and the
+    /// pre-fill is uniform across the region either value can reach. Do
+    /// not cite this as a fix for a decode failure.
+    private var r = C.bufferSize - C.lookahead
 
     private let input: [UInt8]
     private var inPos = 0
@@ -517,8 +546,13 @@ private nonisolated final class Decoder {
             }
         }
 
-        // A final match run may not overshoot the declared size in a valid stream.
-        guard out.count == expectedSize else { throw LZHUF.DecodeError.checksumMismatch }
+        // A final match run may not overshoot the declared size in a valid
+        // stream. Reaching here means the CRC16 already passed, so the
+        // compressed bytes are sound and the fault is ours.
+        guard out.count == expectedSize else {
+            throw LZHUF.DecodeError.decodedSizeMismatch(
+                expected: expectedSize, actual: out.count)
+        }
         return out
     }
 

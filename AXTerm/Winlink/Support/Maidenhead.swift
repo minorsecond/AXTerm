@@ -12,6 +12,56 @@ nonisolated enum Maidenhead {
         var longitude: Double
     }
 
+    /// The locator for a position, at 4, 6, or 8 characters.
+    ///
+    /// Pure arithmetic — no network, no services, nothing that can be
+    /// unavailable. A GPS fix is therefore enough to fill in a grid
+    /// square anywhere, including with every other system down, which is
+    /// exactly when it matters.
+    ///
+    /// Six characters (a subsquare, roughly 8 × 4.6 km) is the default:
+    /// it is what Winlink and the link-quality placement rules expect,
+    /// and four characters carries 60 km of uncertainty.
+    static func locator(latitude: Double, longitude: Double, precision: Int = 6) -> String? {
+        guard [4, 6, 8].contains(precision) else { return nil }
+        guard latitude >= -90, latitude <= 90, longitude >= -180, longitude <= 180 else {
+            return nil
+        }
+
+        // Shift into positive space; clamp the poles and the date line so
+        // the top of the range lands inside the last square rather than
+        // one past it.
+        let lon = min(longitude + 180, 359.999999)
+        let lat = min(latitude + 90, 179.999999)
+
+        let fieldLon = Int(lon / 20)
+        let fieldLat = Int(lat / 10)
+        var result = String(UnicodeScalar(UInt8(65 + fieldLon)))
+        result += String(UnicodeScalar(UInt8(65 + fieldLat)))
+
+        let lonAfterField = lon - Double(fieldLon) * 20
+        let latAfterField = lat - Double(fieldLat) * 10
+        let squareLon = Int(lonAfterField / 2)
+        let squareLat = Int(latAfterField)
+        result += "\(squareLon)\(squareLat)"
+        if precision == 4 { return result }
+
+        let lonAfterSquare = lonAfterField - Double(squareLon) * 2
+        let latAfterSquare = latAfterField - Double(squareLat)
+        let subLon = min(23, Int(lonAfterSquare / (2.0 / 24)))
+        let subLat = min(23, Int(latAfterSquare / (1.0 / 24)))
+        result += String(UnicodeScalar(UInt8(97 + subLon)))
+        result += String(UnicodeScalar(UInt8(97 + subLat)))
+        if precision == 6 { return result }
+
+        let lonAfterSub = lonAfterSquare - Double(subLon) * (2.0 / 24)
+        let latAfterSub = latAfterSquare - Double(subLat) * (1.0 / 24)
+        let extLon = min(9, Int(lonAfterSub / (2.0 / 240)))
+        let extLat = min(9, Int(latAfterSub / (1.0 / 240)))
+        result += "\(extLon)\(extLat)"
+        return result
+    }
+
     /// True when `grid` is a syntactically valid 4/6/8-character locator.
     static func isValid(_ grid: String) -> Bool {
         center(of: grid) != nil

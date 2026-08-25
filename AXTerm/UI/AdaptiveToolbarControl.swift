@@ -1,9 +1,9 @@
 import SwiftUI
 import Charts
-import AppKit
 
 struct AdaptiveToolbarControl: View {
     @ObservedObject var store: AdaptiveStatusStore
+    var linkViz: LinkVizMonitor?
     var onOpenAnalytics: (() -> Void)?
     @State private var isPopoverPresented = false
 
@@ -41,12 +41,12 @@ struct AdaptiveToolbarControl: View {
             .background(.thinMaterial, in: Capsule())
             .overlay(
                 Capsule()
-                    .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
+                    .stroke(Color(platform: .platformSeparator).opacity(0.35), lineWidth: 0.5)
             )
         }
         .buttonStyle(.plain)
         .popover(isPresented: $isPopoverPresented, arrowEdge: .top) {
-            AdaptivePopoverContent(store: store, onOpenAnalytics: onOpenAnalytics)
+            AdaptivePopoverContent(store: store, linkViz: linkViz, onOpenAnalytics: onOpenAnalytics)
         }
         .help("Adaptive transmission status")
     }
@@ -54,7 +54,15 @@ struct AdaptiveToolbarControl: View {
 
 private struct AdaptivePopoverContent: View {
     @ObservedObject var store: AdaptiveStatusStore
+    var linkViz: LinkVizMonitor?
     var onOpenAnalytics: (() -> Void)?
+
+    private enum ChartMode: String, CaseIterable {
+        case etx = "ETX"
+        case rtt = "RTT"
+        case window = "Window"
+    }
+    @State private var chartMode: ChartMode = .etx
 
     private let gridColumns: [GridItem] = [
         GridItem(.flexible(), spacing: 8),
@@ -89,19 +97,19 @@ private struct AdaptivePopoverContent: View {
                 learningStatus(adaptive: adaptive)
             }
 
-            etxChart
+            chartSection
 
             HStack(spacing: 10) {
                 Button("Copy Metrics") {
                     copyMetrics()
                 }
-                .buttonStyle(.link)
+                .platformLinkButton()
 
                 if let onOpenAnalytics {
                     Button("Open Analytics…") {
                         onOpenAnalytics()
                     }
-                    .buttonStyle(.link)
+                    .platformLinkButton()
                 }
                 Spacer()
             }
@@ -131,7 +139,7 @@ private struct AdaptivePopoverContent: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(Color(nsColor: .quaternaryLabelColor).opacity(0.1), in: Capsule())
+                .background(Color(platform: .platformQuaternaryLabel).opacity(0.1), in: Capsule())
         }
     }
 
@@ -158,9 +166,62 @@ private struct AdaptivePopoverContent: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+                .fill(Color(platform: .platformCardBackground).opacity(0.55))
         )
         .help("The adaptive controller only upgrades after a sustained clean streak, and every upgrade runs a trial: a retransmission during the trial rolls it back and doubles the streak required next time.")
+    }
+
+    /// The link the RTT/Window charts describe: the selected adaptive
+    /// session's destination, else the most recently active link.
+    private var currentLinkViz: LinkSessionViz? {
+        guard let linkViz else { return nil }
+        if let destination = store.effectiveAdaptive?.destination,
+           let viz = linkViz.sessions[destination.uppercased()] {
+            return viz
+        }
+        return linkViz.mostRecentlyActive
+    }
+
+    @ViewBuilder
+    private var chartSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker("", selection: $chartMode) {
+                ForEach(ChartMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .help("ETX: channel-wide expected transmissions over the last hour. RTT: this link's round-trip time and retransmission timeout. Window: this link's frames in flight vs the configured window, with loss events marked.")
+
+            switch chartMode {
+            case .etx:
+                etxChart
+            case .rtt:
+                if let viz = currentLinkViz, viz.rttHistory.count >= 3 {
+                    RTTChartView(samples: viz.rttHistory)
+                        .frame(height: 140)
+                } else {
+                    chartPlaceholder("No RTT samples yet — connect a session.")
+                }
+            case .window:
+                if let viz = currentLinkViz, viz.windowHistory.count >= 3 {
+                    WindowSawtoothView(samples: viz.windowHistory)
+                        .frame(height: 140)
+                } else {
+                    chartPlaceholder("No window activity yet — connect a session.")
+                }
+            }
+        }
+    }
+
+    private func chartPlaceholder(_ text: String) -> some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(Color(platform: .platformCardBackground).opacity(0.55))
+            .frame(height: 110)
+            .overlay {
+                Text(text)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
     }
 
     @ViewBuilder
@@ -183,7 +244,7 @@ private struct AdaptivePopoverContent: View {
             }
         } else {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+                .fill(Color(platform: .platformCardBackground).opacity(0.55))
                 .frame(height: 110)
                 .overlay {
                     Text("Collecting metrics…")
@@ -214,7 +275,7 @@ private struct AdaptivePopoverContent: View {
         .padding(8)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+                .fill(Color(platform: .platformCardBackground).opacity(0.55))
         )
     }
 
@@ -273,8 +334,7 @@ private struct AdaptivePopoverContent: View {
         \(adaptive.learningNarrative)
         \(adaptive.activitySummary)
         """
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(summary, forType: .string)
+        ClipboardWriter.copy(summary)
     }
 }
 

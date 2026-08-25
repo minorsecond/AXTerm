@@ -224,8 +224,8 @@ nonisolated enum PacketClassifier {
             // UI frames are typically beacons or broadcasts
             return .uiBeacon
 
-        case .SABM, .SABME, .DISC, .UA, .DM, .FRMR:
-            // Session control frames
+        case .SABM, .SABME, .DISC, .UA, .DM, .FRMR, .XID:
+            // Session control frames (XID is 2.2 parameter negotiation)
             return .sessionControl
 
         case .UNKNOWN:

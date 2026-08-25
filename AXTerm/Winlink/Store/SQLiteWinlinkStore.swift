@@ -178,6 +178,38 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
         }
     }
 
+    // MARK: - B2F resume (partial inbound bodies)
+
+    /// Kept partials expire after this long — a gateway rarely re-proposes
+    /// the same MID much later, and stale blobs should not accumulate.
+    private static let partialBodyLifetime: TimeInterval = 14 * 24 * 3600
+
+    func savePartialBody(mid: String, compressedSize: Int, data: Data) throws {
+        try dbQueue.write { [now] db in
+            let stamp = now()
+            try WinlinkPartialBodyRecord(
+                mid: mid, compressedSize: compressedSize, data: data, updatedAt: stamp)
+                .save(db)
+            try WinlinkPartialBodyRecord
+                .filter(Column("updatedAt") < stamp.addingTimeInterval(-Self.partialBodyLifetime))
+                .deleteAll(db)
+        }
+    }
+
+    func partialBodies() throws -> [WinlinkPartialBodyRecord] {
+        try dbQueue.read { [now] db in
+            try WinlinkPartialBodyRecord
+                .filter(Column("updatedAt") >= now().addingTimeInterval(-Self.partialBodyLifetime))
+                .fetchAll(db)
+        }
+    }
+
+    func deletePartialBody(mid: String) throws {
+        _ = try dbQueue.write { db in
+            try WinlinkPartialBodyRecord.deleteOne(db, key: mid)
+        }
+    }
+
     @discardableResult
     func saveInbound(_ message: WinlinkB2Message) throws -> Bool {
         try dbQueue.write { [now] db in
@@ -196,12 +228,16 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
 
     func messages(inFolder folderId: Int64) throws -> [WinlinkMessageSummary] {
         try dbQueue.read { db in
+            // Deliberately unordered here: the state row's `updatedAt`
+            // is bumped by marking a message read, so ordering by it
+            // made a message jump to the top of the list the moment it
+            // was clicked. The list is sorted below by the date the
+            // column actually shows.
             let states = try WinlinkMessageStateRecord
                 .filter(Column("folderId") == folderId)
-                .order(Column("updatedAt").desc)
                 .fetchAll(db)
 
-            return try states.compactMap { state -> WinlinkMessageSummary? in
+            let summaries = try states.compactMap { state -> WinlinkMessageSummary? in
                 guard let record = try WinlinkMessageRecord.fetchOne(db, key: state.messageId) else {
                     return nil
                 }
@@ -222,6 +258,10 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
                     folderId: state.folderId,
                     lastError: state.lastError)
             }
+            // Newest first by the message's own timestamp — the value the
+            // Date column shows. MID breaks ties so two reads of the same
+            // folder never disagree about order.
+            return summaries.sorted { ($0.date, $0.mid) > ($1.date, $1.mid) }
         }
     }
 
@@ -235,6 +275,26 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
                 message: message,
                 direction: WinlinkMessageRecord.Direction(rawValue: record.direction) ?? .inbound,
                 state: state)
+        }
+    }
+
+    func inboundMessages(fromAddr: String, limit: Int) throws -> [WinlinkStoredMessage] {
+        try dbQueue.read { db in
+            let records = try WinlinkMessageRecord
+                .filter(Column("direction") == WinlinkMessageRecord.Direction.inbound.rawValue)
+                .filter(sql: "UPPER(fromAddr) = ?", arguments: [fromAddr.uppercased()])
+                .order(Column("dateUtc").desc)
+                .limit(limit)
+                .fetchAll(db)
+            return try records.compactMap { record -> WinlinkStoredMessage? in
+                guard let state = try WinlinkMessageStateRecord.fetchOne(db, key: record.id),
+                      let message = try Self.loadB2Message(mid: record.id, db: db)
+                else { return nil }
+                return WinlinkStoredMessage(
+                    message: message,
+                    direction: WinlinkMessageRecord.Direction(rawValue: record.direction) ?? .inbound,
+                    state: state)
+            }
         }
     }
 
@@ -279,20 +339,69 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
 
     // MARK: - Caches
 
-    func replaceStationCache(_ stations: [WinlinkRMSStationRecord]) throws {
+    /// Replaces one scope's rows, leaving the other alone.
+    ///
+    /// The old version deleted every row, so refreshing at home with a
+    /// 100-mile radius destroyed a wide list downloaded for a trip — the one
+    /// thing that list exists to survive. The primary key is
+    /// callsign+frequency, so a gateway that is both near home and inside a
+    /// downloaded region can only hold one row; local wins, because it
+    /// carries a distance measured from where the operator actually is.
+    func replaceStationCache(_ stations: [WinlinkRMSStationRecord],
+                             scope: WinlinkRMSStationRecord.Scope = .local) throws {
         try dbQueue.write { db in
-            try WinlinkRMSStationRecord.deleteAll(db)
+            try db.execute(
+                sql: "DELETE FROM \(WinlinkRMSStationRecord.databaseTableName) WHERE scope = ?",
+                arguments: [scope.rawValue])
             for station in stations {
-                try station.insert(db)
+                var row = station
+                row.scope = scope
+                if scope == .global {
+                    // Never overwrite a local row with a global one.
+                    let exists = try Bool.fetchOne(
+                        db,
+                        sql: "SELECT EXISTS(SELECT 1 FROM \(WinlinkRMSStationRecord.databaseTableName) WHERE callsign = ? AND frequencyHz = ? AND scope = 'local')",
+                        arguments: [row.callsign, row.frequencyHz]) ?? false
+                    if exists { continue }
+                }
+                try row.insert(db)
             }
         }
     }
 
+    /// Every cached gateway, both scopes.
     func stations() throws -> [WinlinkRMSStationRecord] {
         try dbQueue.read { db in
             try WinlinkRMSStationRecord
                 .order(Column("distanceMiles"), Column("callsign"))
                 .fetchAll(db)
+        }
+    }
+
+    func stations(scope: WinlinkRMSStationRecord.Scope) throws -> [WinlinkRMSStationRecord] {
+        try dbQueue.read { db in
+            try WinlinkRMSStationRecord
+                .filter(Column("scope") == scope.rawValue)
+                .order(Column("distanceMiles"), Column("callsign"))
+                .fetchAll(db)
+        }
+    }
+
+    /// Which grid fields the downloaded set covers, and how many gateways in
+    /// each — what answers "have I actually got Wyoming?".
+    func downloadedGridFields() throws -> [(field: String, count: Int)] {
+        try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: "SELECT SUBSTR(UPPER(gridSquare), 1, 2) AS field, COUNT(*) AS count FROM \(WinlinkRMSStationRecord.databaseTableName) WHERE scope = 'global' GROUP BY field ORDER BY count DESC"
+            ).map { (field: $0["field"], count: $0["count"]) }
+        }
+    }
+
+    /// Drops the downloaded set, leaving the local one intact.
+    func clearDownloadedStations() throws {
+        _ = try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM \(WinlinkRMSStationRecord.databaseTableName) WHERE scope = 'global'")
         }
     }
 
@@ -310,6 +419,38 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
             try WinlinkCatalogItemRecord
                 .order(Column("category"), Column("subject"))
                 .fetchAll(db)
+        }
+    }
+
+    func catalogFavorites() throws -> Set<String> {
+        try dbQueue.read { db in
+            Set(try WinlinkCatalogFavoriteRecord.fetchAll(db).map(\.inquiryId))
+        }
+    }
+
+    func setCatalogFavorite(inquiryId: String, isFavorite: Bool) throws {
+        try dbQueue.write { db in
+            if isFavorite {
+                // Re-starring an existing favourite must not move its
+                // date; `save` would overwrite `addedAt`.
+                try WinlinkCatalogFavoriteRecord(inquiryId: inquiryId, addedAt: Date())
+                    .insert(db, onConflict: .ignore)
+            } else {
+                _ = try WinlinkCatalogFavoriteRecord.deleteOne(db, key: inquiryId)
+            }
+        }
+    }
+
+    func callsignRecord(callsign: String) throws -> CallsignDirectoryRecord? {
+        let key = CallsignQuery.normalize(callsign)
+        return try dbQueue.read { db in
+            try CallsignDirectoryRecord.fetchOne(db, key: key)
+        }
+    }
+
+    func saveCallsignRecord(_ record: CallsignDirectoryRecord) throws {
+        try dbQueue.write { db in
+            try record.save(db)
         }
     }
 
@@ -416,5 +557,75 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
             mbo: record.mbo,
             body: record.body,
             attachments: attachmentRows.map { .init(name: $0.name, data: $0.data) })
+    }
+}
+
+// MARK: - Sync
+
+/// The narrow surface `WinlinkSyncEngine` needs.
+///
+/// Kept in this file because it reaches the private database queue, and
+/// separate from `WinlinkStore` because a device with no database has
+/// nothing to sync — that should be a missing conformance, not a set of
+/// methods that throw.
+extension SQLiteWinlinkStore: WinlinkSyncStore {
+
+    func syncMessageStates() throws -> [WinlinkMessageStateRecord] {
+        try dbQueue.read { db in
+            try WinlinkMessageStateRecord.fetchAll(db)
+        }
+    }
+
+    func syncStoredMessage(mid: String) throws -> WinlinkStoredMessage? {
+        try message(mid: mid)
+    }
+
+    /// Inserts mail that arrived from another device.
+    ///
+    /// An existing MID is left untouched: message content is immutable once
+    /// delivered (CLAUDE.md §7), so a second copy of the same MID is the
+    /// same message and overwriting it could only lose something.
+    func syncInsertMessage(_ message: WinlinkB2Message,
+                           direction: WinlinkMessageRecord.Direction,
+                           state: WinlinkMessageStateRecord) throws {
+        try dbQueue.write { [now] db in
+            guard try !WinlinkMessageRecord.exists(db, key: message.mid) else { return }
+
+            let record = WinlinkMessageRecord(
+                id: message.mid,
+                direction: direction.rawValue,
+                dateUtc: message.date,
+                messageType: message.type.rawValue,
+                fromAddr: message.from,
+                toAddrs: WinlinkMessageRecord.encodeAddresses(message.to),
+                ccAddrs: WinlinkMessageRecord.encodeAddresses(message.cc),
+                subject: message.subject,
+                mbo: message.mbo,
+                body: message.body,
+                createdAt: now())
+            try record.insert(db)
+
+            for (index, attachment) in message.attachments.enumerated() {
+                var row = WinlinkAttachmentRecord(
+                    id: nil,
+                    messageId: message.mid,
+                    position: index,
+                    name: attachment.name,
+                    size: attachment.data.count,
+                    data: attachment.data)
+                try row.insert(db)
+            }
+
+            var state = state
+            state.messageId = message.mid
+            try state.insert(db)
+        }
+    }
+
+    func syncUpdateState(_ state: WinlinkMessageStateRecord) throws {
+        try dbQueue.write { db in
+            guard try WinlinkMessageStateRecord.exists(db, key: state.messageId) else { return }
+            try state.update(db)
+        }
     }
 }

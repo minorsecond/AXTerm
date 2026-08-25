@@ -7,7 +7,9 @@
 //
 
 import SwiftUI
+#if os(macOS)
 import AppKit
+#endif
 import Combine
 
 struct AutoPathSuggestionItem: Identifiable, Hashable {
@@ -65,11 +67,11 @@ struct ConnectionModeToggle: View {
             }
             .buttonStyle(.plain)
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(Color(platform: .platformCardBackground))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                .stroke(Color(platform: .platformSeparator), lineWidth: 0.5)
         )
         .help(mode.description)
     }
@@ -159,7 +161,7 @@ struct SessionStatusBadge: View {
         .background(.thinMaterial, in: Capsule())
         .overlay(
             Capsule()
-                .stroke(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 0.5)
+                .stroke(Color(platform: .platformSeparator).opacity(0.4), lineWidth: 0.5)
         )
         .fixedSize()
         .help(stateHelp)
@@ -254,6 +256,8 @@ struct SessionStatusBadge: View {
 
 // MARK: - Routing Popover Helpers
 
+#if os(macOS)
+
 /// Manages a manually-created NSPopover so we can set .applicationModal behavior,
 /// which prevents the popover from auto-dismissing when a TextField inside steals
 /// first-responder focus. An NSEvent local monitor handles outside-click dismissal.
@@ -312,6 +316,8 @@ private struct PopoverAnchorView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
+#endif
+
 // MARK: - RoutingCapsuleButton
 
 private struct RoutingCapsuleButton: View {
@@ -319,11 +325,21 @@ private struct RoutingCapsuleButton: View {
     let onAutoConnect: () -> Void
     var isLocked: Bool = false
     var onRequestChange: (() -> Void)?
+    #if os(macOS)
     @StateObject private var popoverManager = RoutingPopoverManager()
     @State private var anchorView: NSView?
+    #else
+    /// SwiftUI's own popover is used on iOS. The AppKit workaround above
+    /// exists because a `TextField` taking first responder inside a SwiftUI
+    /// popover dismisses it on macOS; UIKit has no such behaviour, so the
+    /// plain modifier is correct here — and on iPhone it adapts to a sheet,
+    /// which is the right shape for a form that narrow.
+    @State private var isShowingRouting = false
+    #endif
 
     var body: some View {
         Button {
+            #if os(macOS)
             if popoverManager.isShown {
                 popoverManager.close()
             } else {
@@ -343,6 +359,9 @@ private struct RoutingCapsuleButton: View {
                     anchor: anchor
                 )
             }
+            #else
+            isShowingRouting.toggle()
+            #endif
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "arrow.triangle.branch")
@@ -358,12 +377,26 @@ private struct RoutingCapsuleButton: View {
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color(nsColor: .separatorColor).opacity(0.3), lineWidth: 0.5)
+                    .stroke(Color(platform: .platformSeparator).opacity(0.3), lineWidth: 0.5)
             )
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("connectBar.routingButton")
+        #if os(macOS)
         .background(PopoverAnchorView { view in anchorView = view })
+        #else
+        .popover(isPresented: $isShowingRouting) {
+            RoutingPopoverContent(
+                viewModel: viewModel,
+                onAutoConnect: onAutoConnect,
+                isLocked: isLocked,
+                onRequestChange: onRequestChange.map { action in
+                    { isShowingRouting = false; action() }
+                })
+                .frame(minWidth: 320)
+                .presentationCompactAdaptation(.sheet)
+        }
+        #endif
     }
 
     private var summaryText: String {
@@ -408,7 +441,7 @@ private struct RoutingPopoverContent: View {
                     Text("AX.25 via Digi").tag(ConnectBarMode.ax25ViaDigi)
                     Text("NET/ROM").tag(ConnectBarMode.netrom)
                 }
-                .pickerStyle(.radioGroup)
+                .platformRadioGroup()
                 .labelsHidden()
                 .disabled(isLocked)
             }
@@ -530,7 +563,7 @@ private struct RoutingPopoverContent: View {
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
-                            .background(Capsule().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.08)))
+                            .background(Capsule().fill(Color(platform: .platformQuaternaryLabel).opacity(0.08)))
                     }
 
                     ForEach(Array(viewModel.viaDigipeaters.enumerated()), id: \.offset) { idx, token in
@@ -564,10 +597,10 @@ private struct RoutingPopoverContent: View {
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background(Capsule().fill(Color(nsColor: .windowBackgroundColor)))
+                        .background(Capsule().fill(Color(platform: .platformWindowBackground)))
                         .overlay(
                             Capsule()
-                                .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
+                                .stroke(Color(platform: .platformSeparator).opacity(0.35), lineWidth: 0.5)
                         )
                     }
                 }
@@ -836,11 +869,11 @@ private struct InlineConnectBar: View {
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                .fill(Color(platform: .platformCardBackground).opacity(0.5))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
+                .stroke(Color(platform: .platformSeparator).opacity(0.35), lineWidth: 0.5)
         )
         .onAppear {
             viewModel.applyContext(context)
@@ -981,7 +1014,7 @@ private struct ConnectBarAdvancedDisclosure: View {
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
                             .background(
-                                Capsule().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.08))
+                                Capsule().fill(Color(platform: .platformQuaternaryLabel).opacity(0.08))
                             )
                     }
 
@@ -1019,10 +1052,10 @@ private struct ConnectBarAdvancedDisclosure: View {
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background(Capsule().fill(Color(nsColor: .windowBackgroundColor)))
+                        .background(Capsule().fill(Color(platform: .platformWindowBackground)))
                         .overlay(
                             Capsule()
-                                .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
+                                .stroke(Color(platform: .platformSeparator).opacity(0.35), lineWidth: 0.5)
                         )
                     }
                 }
@@ -1056,10 +1089,10 @@ private struct ConnectBarAdvancedDisclosure: View {
                 .foregroundStyle(viewModel.viaHopCount > 2 ? .orange : .secondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(Capsule().fill(Color(nsColor: .windowBackgroundColor)))
+                .background(Capsule().fill(Color(platform: .platformWindowBackground)))
                 .overlay(
                     Capsule()
-                        .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
+                        .stroke(Color(platform: .platformSeparator).opacity(0.35), lineWidth: 0.5)
                 )
 
             if viewModel.viaHopCount > 2 {
@@ -1270,7 +1303,7 @@ private struct ConnectBarStatusRow: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.45))
+                .fill(Color(platform: .platformCardBackground).opacity(0.45))
         )
     }
 }
@@ -1297,7 +1330,7 @@ private struct BroadcastComposerStrip: View {
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.35))
+                .fill(Color(platform: .platformCardBackground).opacity(0.35))
         )
     }
 }
@@ -1355,7 +1388,11 @@ struct TerminalComposeView: View {
                         .font(.system(size: 11, weight: .medium))
                     Spacer()
                     Button("Open Settings") {
-                        SettingsRouter.shared.openAction?()
+                        // Named destination rather than a bare open: the
+                        // callsign lives in Identity, and dropping the
+                        // operator on whatever tab was last used is how this
+                        // ends up looking like the button does nothing.
+                        SettingsRouter.shared.navigate(to: .general)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
@@ -1508,8 +1545,23 @@ struct TerminalComposeView: View {
                 }
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color(nsColor: .windowBackgroundColor))
+            #if os(iOS)
+            .padding(.top, 12)
+            #else
+            .padding(.top, 10)
+            #endif
+            // A Mac window ends where the padding ends; a handheld has a home
+            // indicator below it. 10pt put the message field and the Send
+            // button hard against that edge, where the system gesture area
+            // starts and a thumb reaching for Send finds the app switcher.
+            #if os(iOS)
+            .padding(.bottom, 18)
+            #else
+            .padding(.bottom, 10)
+            #endif
+            .background(Color(platform: .platformWindowBackground))
+            // Reads as a bar rather than as the last of the log lines.
+            .overlay(alignment: .top) { Divider() }
             .alert("Change Routing?", isPresented: $showRoutingChangeConfirmation) {
                 Button("Reconnect with New Routing") {
                     onReconnectWithNewRouting?()

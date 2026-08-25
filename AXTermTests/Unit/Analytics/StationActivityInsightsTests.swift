@@ -11,6 +11,29 @@ import XCTest
 @testable import AXTerm
 
 final class StationActivityInsightsTests: XCTestCase {
+
+    /// These calculators call `CallsignValidator.isValidRoutingNode`, which
+    /// consults a **process-global** ignore list. Anything that constructs an
+    /// `AppSettingsStore` writes that global — and `AppSettingsStore` retains
+    /// every instance built under XCTest in a static array, applying some
+    /// changes asynchronously via `Task { @MainActor }`. So a store mutated by
+    /// an earlier test can write the global while this one runs, silently
+    /// dropping a station from a ranking.
+    ///
+    /// Pinning it here makes these tests independent of run order rather than
+    /// inheriting whatever ran first. Without it they are correct only by
+    /// luck, which is how two of them failed once in a full-suite run and
+    /// passed on every rerun.
+    override func setUp() {
+        super.setUp()
+        CallsignValidator.configureIgnoredServiceEndpoints([])
+    }
+
+    override func tearDown() {
+        CallsignValidator.configureIgnoredServiceEndpoints([])
+        super.tearDown()
+    }
+
     private var calendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current

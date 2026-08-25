@@ -293,6 +293,30 @@ final class WinlinkSessionRunnerTests: XCTestCase {
         XCTAssertNotNil(logs[0].errorText)
     }
 
+    /// A session that dies partway still moved bytes, and the session log
+    /// is the only record of how many. Reporting zero made the Stations
+    /// list show 0 B/s for precisely the gateways that had done the most
+    /// work, because interrupted transfers are the normal case on a
+    /// gateway that caps session length.
+    func testInterruptedSessionLogsTheBytesItActuallyMoved() async throws {
+        let store = try makeStore()
+        try store.saveDraft(makeMessage(mid: "RUNNERDROP02"))
+        try store.queueDraft(mid: "RUNNERDROP02")
+
+        let transport = FakeRMSTransport()
+        transport.dropAfterFS = true
+        let summary = await runExchange(store: store, transport: transport)
+
+        XCTAssertNotNil(summary.failureReason)
+        XCTAssertGreaterThan(summary.bytesReceived, 0,
+                             "the gateway's banner and handshake were received")
+
+        let logs = try store.sessionLogs(limit: 5)
+        XCTAssertEqual(logs.count, 1)
+        XCTAssertGreaterThan(logs[0].bytesReceived, 0,
+                             "a failed session must not log zero bytes")
+    }
+
     func testFailedOpenReportsFailure() async throws {
         let store = try makeStore()
         let transport = FakeRMSTransport()
@@ -301,5 +325,8 @@ final class WinlinkSessionRunnerTests: XCTestCase {
 
         XCTAssertNotNil(summary.failureReason)
         XCTAssertTrue(summary.failureReason!.contains("connect failed"), summary.failureReason!)
+        // Nothing reached the air, so there is genuinely nothing to count.
+        XCTAssertEqual(summary.bytesReceived, 0)
+        XCTAssertEqual(summary.bytesSent, 0)
     }
 }

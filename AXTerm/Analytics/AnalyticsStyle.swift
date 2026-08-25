@@ -5,7 +5,6 @@
 //  Created by AXTerm on 2026-03-01.
 //
 
-import AppKit
 import SwiftUI
 
 nonisolated enum AnalyticsStyle {
@@ -114,24 +113,24 @@ nonisolated enum AnalyticsStyle {
     }
 
     enum Colors {
-        static let cardBackground = Color(nsColor: .controlBackgroundColor)
-        static let cardStroke = Color(nsColor: .separatorColor)
-        static let divider = Color(nsColor: .separatorColor)
-        static let textSecondary = Color(nsColor: .secondaryLabelColor)
-        static let accent = Color(nsColor: .controlAccentColor)
-        static let graphMyNode = Color(nsColor: .systemPurple)
-        static let chartGridLine = Color(nsColor: .separatorColor).opacity(0.35)
-        static let chartAxis = Color(nsColor: .secondaryLabelColor)
+        static let cardBackground = Color(platform: .platformCardBackground)
+        static let cardStroke = Color(platform: .platformSeparator)
+        static let divider = Color(platform: .platformSeparator)
+        static let textSecondary = Color(platform: .platformSecondaryLabel)
+        static let accent = Color(platform: .platformAccent)
+        static let graphMyNode = Color(platform: .systemPurple)
+        static let chartGridLine = Color(platform: .platformSeparator).opacity(0.35)
+        static let chartAxis = Color(platform: .platformSecondaryLabel)
         static let chartPlotBackground = Color.clear
 
         static func accent(alpha: Double) -> Color {
-            Color(nsColor: NSColor.controlAccentColor.withAlphaComponent(alpha))
+            Color(platform: PlatformColor.platformAccent.platformAlpha(alpha))
         }
 
-        static let neutralFill = Color(nsColor: .secondaryLabelColor).opacity(0.12)
-        static let graphEdge = Color(nsColor: .secondaryLabelColor).opacity(0.55)
-        static let graphNode = Color(nsColor: .labelColor)
-        static let graphNodeMuted = Color(nsColor: .secondaryLabelColor)
-        static let graphOfficialNode = Color(nsColor: .systemOrange)
+        static let neutralFill = Color(platform: .platformSecondaryLabel).opacity(0.12)
+        static let graphEdge = Color(platform: .platformSecondaryLabel).opacity(0.55)
+        static let graphNode = Color(platform: .platformLabel)
+        static let graphNodeMuted = Color(platform: .platformSecondaryLabel)
+        static let graphOfficialNode = Color(platform: .systemOrange)
     }
 }

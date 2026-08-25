@@ -109,11 +109,11 @@ struct ConnectBarView: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.65))
+                .fill(Color(platform: .platformCardBackground).opacity(0.65))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
+                .stroke(Color(platform: .platformSeparator).opacity(0.35), lineWidth: 0.5)
         )
         .onAppear {
             viewModel.applyContext(context)
@@ -149,7 +149,7 @@ struct ConnectBarView: View {
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
                             .background(
-                                Capsule().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.08))
+                                Capsule().fill(Color(platform: .platformQuaternaryLabel).opacity(0.08))
                             )
                     }
 
@@ -168,10 +168,10 @@ struct ConnectBarView: View {
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background(Capsule().fill(Color(nsColor: .windowBackgroundColor)))
+                        .background(Capsule().fill(Color(platform: .platformWindowBackground)))
                         .overlay(
                             Capsule()
-                                .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
+                                .stroke(Color(platform: .platformSeparator).opacity(0.35), lineWidth: 0.5)
                         )
                         .contextMenu {
                             Button("Move Earlier") {
@@ -208,10 +208,10 @@ struct ConnectBarView: View {
                 .foregroundStyle(viewModel.viaHopCount > 2 ? .orange : .secondary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(Capsule().fill(Color(nsColor: .windowBackgroundColor)))
+                .background(Capsule().fill(Color(platform: .platformWindowBackground)))
                 .overlay(
                     Capsule()
-                        .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
+                        .stroke(Color(platform: .platformSeparator).opacity(0.35), lineWidth: 0.5)
                 )
         }
     }

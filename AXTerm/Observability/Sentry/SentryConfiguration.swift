@@ -231,7 +231,14 @@ nonisolated struct SentryConfiguration: Equatable, Sendable {
         return value
     }
 
+    /// Reads the commit from the checkout the app was launched from.
+    ///
+    /// Only ever true for a developer build run out of the repository, which
+    /// is the only place a working tree exists. iOS has no subprocesses at
+    /// all, so there the release comes from the Info.plist alone — the same
+    /// path a shipped Mac build takes.
     private static func readGitCommitFromRepository() -> String? {
+        #if os(macOS)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = ["rev-parse", "--short=12", "HEAD"]
@@ -251,6 +258,9 @@ nonisolated struct SentryConfiguration: Equatable, Sendable {
         } catch {
             return nil
         }
+        #else
+        return nil
+        #endif
     }
 
     private static func clampSampleRate(_ rate: Double) -> Double {

@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import AppKit
 
 struct RawView: View {
     let chunks: [RawChunk]
@@ -32,7 +31,7 @@ struct RawView: View {
             VStack(spacing: 0) {
                 HStack {
                     Toggle("Auto-scroll", isOn: $autoScroll)
-                        .toggleStyle(.checkbox)
+                        .platformCheckboxToggle()
 
                     Spacer()
 
@@ -235,7 +234,6 @@ struct RawChunkView: View {
     }
 
     private func copyToPasteboard(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        ClipboardWriter.copy(text)
     }
 }

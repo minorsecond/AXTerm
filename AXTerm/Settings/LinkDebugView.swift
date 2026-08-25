@@ -193,7 +193,7 @@ struct LinkDebugView: View {
                         Spacer()
 
                         Toggle("Auto-scroll", isOn: $autoScroll)
-                            .toggleStyle(.checkbox)
+                            .platformCheckboxToggle()
 
                         Button("Clear") {
                             viewModel.clear()

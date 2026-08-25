@@ -294,11 +294,16 @@ nonisolated enum WinlinkFormTemplates {
             WinlinkFormField(id: "thetime", label: "Time",
                              autoFill: .custom { WinlinkFormEngine.formatDateTimeUTC($0.now) },
                              hidden: true),
+            // Winlink's position service parses degrees and decimal
+            // minutes ("39-44.35N"), and rejects decimal degrees
+            // outright: "39.6123N is not a valid latitude... It should
+            // look similar to 'Latitude: 28-32.4N'" (rejection received
+            // 2026-08-24).
             WinlinkFormField(id: "Lat", label: "Latitude",
-                             autoFill: .custom { $0.location.map { StationLocationFormat.decimal($0).components(separatedBy: " ").first ?? "" } ?? "" },
+                             autoFill: .custom { $0.location.map { StationLocationFormat.degreeMinute($0).components(separatedBy: " ").first ?? "" } ?? "" },
                              required: true, section: "Position"),
             WinlinkFormField(id: "Lon", label: "Longitude",
-                             autoFill: .custom { $0.location.map { StationLocationFormat.decimal($0).components(separatedBy: " ").last ?? "" } ?? "" },
+                             autoFill: .custom { $0.location.map { StationLocationFormat.degreeMinute($0).components(separatedBy: " ").last ?? "" } ?? "" },
                              required: true, section: "Position"),
             WinlinkFormField(id: "Message", label: "Comment",
                              placeholder: "e.g. Portable at the fairgrounds",

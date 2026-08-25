@@ -7,7 +7,11 @@
 
 import Foundation
 import UserNotifications
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import Combine
 
 nonisolated enum NotificationAction {
@@ -22,8 +26,19 @@ protocol AppStateProviding {
 }
 
 nonisolated struct DefaultAppStateProvider: AppStateProviding {
+    /// Whether the operator is already looking at the app.
+    ///
+    /// A notification for something they can see is noise, so this gates
+    /// them. UIKit's answer is the scene's activation state; asking off the
+    /// main actor would be a data race, so the check hops on and back.
     var isFrontmost: Bool {
-        NSApp.isActive
+        #if os(macOS)
+        return MainActor.assumeIsolated { NSApp.isActive }
+        #else
+        return MainActor.assumeIsolated {
+            UIApplication.shared.applicationState == .active
+        }
+        #endif
     }
 }
 

@@ -230,7 +230,10 @@ final class AX25FieldScenarioTests: XCTestCase {
                       "a lap-old duplicate must not be buffered as a future frame")
         XCTAssertFalse(actions.contains { if case .deliverData = $0 { return true }; return false },
                        "a lap-old duplicate must not be delivered")
-        XCTAssertTrue(actions.contains(.sendRR(nr: 4, pf: false, isCommand: false)),
+        // The re-ack is cumulative: a P=0 duplicate arms T2 and the RR
+        // for the current V(R) goes out on expiry — never a REJ.
+        XCTAssertFalse(actions.contains { if case .sendREJ = $0 { return true }; return false })
+        XCTAssertTrue(sm.handle(event: .t2Timeout).contains(.sendRR(nr: 4, pf: false, isCommand: false)),
                       "a duplicate draws a re-ack of the current V(R), not a REJ")
 
         // The window completes and V(R) wraps; the true second-lap ns=0 must be

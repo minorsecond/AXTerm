@@ -136,7 +136,16 @@ final class WinlinkViewModelTests: XCTestCase {
         let store = try makeStore()
         let vm = WinlinkComposeViewModel(store: store, myCallsign: "K0EPI")
         vm.toText = "W1AW"
-        vm.addAttachment(name: "big.bin", data: Data(repeating: 0, count: 121 * 1024))
+        // Incompressible on purpose: attachments are auto-zipped now, and a
+        // repeating pattern would shrink under budget — which is the
+        // feature working, not the budget failing.
+        var state: UInt64 = 7
+        var noise = Data(capacity: 121 * 1024)
+        for _ in 0..<(121 * 1024) {
+            state ^= state << 13; state ^= state >> 7; state ^= state << 17
+            noise.append(UInt8(truncatingIfNeeded: state))
+        }
+        vm.addAttachment(name: "big.bin", data: noise)
 
         XCTAssertTrue(vm.isOverBudget)
         XCTAssertNil(vm.queueForSending())
@@ -246,6 +255,156 @@ final class WinlinkViewModelTests: XCTestCase {
 
         XCTAssertEqual(vm.groups.map(\.category), ["News", "Weather"])
         XCTAssertEqual(vm.groups[1].items.map(\.inquiryId), ["WX_CARIB", "WX_CONUS"])
+    }
+
+    /// The browser groups through `WinlinkCatalogTaxonomy`, and the
+    /// result is cached on the view model rather than recomputed in
+    /// `body` — 1450 products regrouped on every SwiftUI redraw is the
+    /// kind of view-driven work the performance rules forbid.
+    func testCatalogFamiliesAreDerivedOnce() async throws {
+        let store = try makeStore()
+        let client = FakeCMSClient()
+        client.catalog = [
+            makeCatalogItem(id: "WY1", category: "WX_US_WY"),
+            makeCatalogItem(id: "MED1", category: "WX_MED"),
+        ]
+        let vm = WinlinkCatalogViewModel(store: store, makeClient: { client })
+        await vm.refresh()
+
+        XCTAssertEqual(vm.families.map(\.kind), [.unitedStates, .world])
+        XCTAssertEqual(vm.families.first?.categories.first?.title, "Wyoming")
+        XCTAssertEqual(vm.matchingItems.count, 2)
+    }
+
+    /// Search narrows the sidebar, not just the product list, so a
+    /// category that cannot contribute a match disappears entirely.
+    func testCatalogSearchNarrowsFamilies() async throws {
+        let store = try makeStore()
+        let client = FakeCMSClient()
+        client.catalog = [
+            makeCatalogItem(id: "WY1", category: "WX_US_WY"),
+            makeCatalogItem(id: "MED1", category: "WX_MED"),
+        ]
+        let vm = WinlinkCatalogViewModel(store: store, makeClient: { client })
+        await vm.refresh()
+
+        // Matches the friendly category name, which appears in neither
+        // the subject ("Subject MED1") nor the code (WX_MED).
+        vm.searchQuery = "mediterranean"
+        XCTAssertEqual(vm.families.map(\.kind), [.world])
+        XCTAssertEqual(vm.matchingItems.map(\.inquiryId), ["MED1"])
+
+        vm.searchQuery = ""
+        XCTAssertEqual(vm.families.count, 2)
+    }
+
+    /// A refresh while a search is active must not silently show the
+    /// unfiltered catalog.
+    func testCatalogRefreshKeepsTheActiveSearch() async throws {
+        let store = try makeStore()
+        let client = FakeCMSClient()
+        client.catalog = [
+            makeCatalogItem(id: "WY1", category: "WX_US_WY"),
+            makeCatalogItem(id: "MED1", category: "WX_MED"),
+        ]
+        let vm = WinlinkCatalogViewModel(store: store, makeClient: { client })
+        vm.searchQuery = "wyoming"
+        await vm.refresh()
+        XCTAssertEqual(vm.matchingItems.map(\.inquiryId), ["WY1"])
+    }
+
+    // MARK: - Favourites
+
+    func testCatalogFavouritesRoundTripAndToggleOff() async throws {
+        let store = try makeStore()
+        let client = FakeCMSClient()
+        client.catalog = [
+            makeCatalogItem(id: "WX_CONUS", category: "WX_US"),
+            makeCatalogItem(id: "NEWS_TOP", category: "NEWS"),
+        ]
+        let vm = WinlinkCatalogViewModel(store: store, makeClient: { client })
+        await vm.refresh()
+        XCTAssertTrue(vm.favorites.isEmpty)
+
+        vm.toggleFavorite("WX_CONUS")
+        XCTAssertEqual(vm.favorites, ["WX_CONUS"])
+        XCTAssertEqual(try store.catalogFavorites(), ["WX_CONUS"])
+
+        vm.toggleFavorite("WX_CONUS")
+        XCTAssertTrue(vm.favorites.isEmpty)
+        XCTAssertTrue(try store.catalogFavorites().isEmpty)
+    }
+
+    /// The whole point of a separate table: a catalog refresh wipes and
+    /// rewrites every product row, and starred IDs must survive it.
+    func testFavouritesSurviveACatalogRefresh() async throws {
+        let store = try makeStore()
+        let client = FakeCMSClient()
+        client.catalog = [makeCatalogItem(id: "WX_CONUS", category: "WX_US")]
+        let vm = WinlinkCatalogViewModel(store: store, makeClient: { client })
+        await vm.refresh()
+        vm.toggleFavorite("WX_CONUS")
+
+        client.catalog = [
+            makeCatalogItem(id: "WX_CONUS", category: "WX_US"),
+            makeCatalogItem(id: "WX_NEW", category: "WX_US"),
+        ]
+        await vm.refresh()
+        XCTAssertEqual(vm.favorites, ["WX_CONUS"])
+    }
+
+    /// A starred product can vanish from a later index. That is worth
+    /// knowing, so the star is kept rather than silently dropped — but
+    /// it must not conjure a phantom row into the favourites list.
+    func testFavouriteMissingFromTheIndexIsKeptButNotListed() async throws {
+        let store = try makeStore()
+        let client = FakeCMSClient()
+        client.catalog = [makeCatalogItem(id: "WX_GONE", category: "WX_US")]
+        let vm = WinlinkCatalogViewModel(store: store, makeClient: { client })
+        await vm.refresh()
+        vm.toggleFavorite("WX_GONE")
+
+        client.catalog = [makeCatalogItem(id: "WX_CONUS", category: "WX_US")]
+        await vm.refresh()
+        XCTAssertEqual(vm.favorites, ["WX_GONE"], "the star is remembered")
+        XCTAssertTrue(vm.favoriteItems.isEmpty, "but there is no product to show")
+    }
+
+    func testFavouriteItemsFollowTheActiveSearch() async throws {
+        let store = try makeStore()
+        let client = FakeCMSClient()
+        client.catalog = [
+            makeCatalogItem(id: "WY1", category: "WX_US_WY"),
+            makeCatalogItem(id: "MED1", category: "WX_MED"),
+        ]
+        let vm = WinlinkCatalogViewModel(store: store, makeClient: { client })
+        await vm.refresh()
+        vm.toggleFavorite("WY1")
+        vm.toggleFavorite("MED1")
+        XCTAssertEqual(vm.favoriteItems.count, 2)
+
+        vm.searchQuery = "wyoming"
+        XCTAssertEqual(vm.favoriteItems.map(\.inquiryId), ["WY1"])
+    }
+
+    /// Favourites narrow with the search; the selection basket must
+    /// not, or typing would look like selections vanishing.
+    func testSelectionIgnoresTheSearchWhileFavoritesFollowIt() async throws {
+        let store = try makeStore()
+        let client = FakeCMSClient()
+        client.catalog = [
+            makeCatalogItem(id: "WY1", category: "WX_US_WY"),
+            makeCatalogItem(id: "MED1", category: "WX_MED"),
+        ]
+        let vm = WinlinkCatalogViewModel(store: store, makeClient: { client })
+        await vm.refresh()
+        vm.selection = ["WY1", "MED1"]
+        vm.toggleFavorite("WY1")
+        vm.toggleFavorite("MED1")
+
+        vm.searchQuery = "wyoming"
+        XCTAssertEqual(vm.selectedItems.count, 2, "the basket keeps both")
+        XCTAssertEqual(vm.favoriteItems.map(\.inquiryId), ["WY1"], "browsing narrows")
     }
 
     func testCatalogRequestMessageExactFormat() async throws {

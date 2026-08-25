@@ -41,7 +41,11 @@ final class FBBBlockCodecTests: XCTestCase {
         guard case .header(_, let offset) = events.first else { return XCTFail("no header event") }
         XCTAssertEqual(offset, 150)
         guard case .completed(let received) = events.last else { return XCTFail("no completion") }
-        XCTAssertEqual(received, payload.dropFirst(150))
+        // A resume re-sends the six-byte LZHUF wire header ahead of the
+        // continuation, matching what RMS gateways do on the air (field
+        // capture 2026-08-24); the receiver strips it by matching it
+        // against the prefix it already holds.
+        XCTAssertEqual(received, payload.prefix(LZHUF.wireHeaderSize) + payload.dropFirst(150))
     }
 
     // MARK: - Round trip through the parser

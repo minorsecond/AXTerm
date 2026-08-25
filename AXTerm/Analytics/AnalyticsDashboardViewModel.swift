@@ -987,7 +987,17 @@ final class AnalyticsDashboardViewModel: ObservableObject {
             roles: roles,
             identityMode: identityMode
         )
+        // Handed down rather than re-derived elsewhere: what this station
+        // publishes to the operator's other stations is then exactly what
+        // the operator is looking at, instead of a second computation that
+        // could quietly disagree with the screen.
+        onStationDirectoryChanged?(stationDirectory)
     }
+
+    /// Notified whenever the station directory is rebuilt, so the sync
+    /// layer can publish this station's observations without reaching into
+    /// analytics for packets, roles and identity mode.
+    var onStationDirectoryChanged: (([StationDirectoryEntry]) -> Void)?
 
     /// Base callsigns observed in the current timeframe (senders, destinations,
     /// repeating digipeaters), before any validity filtering.

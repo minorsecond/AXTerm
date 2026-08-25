@@ -6,30 +6,7 @@
 //
 
 import SwiftUI
-
-nonisolated enum NavigationItem: String, Hashable, CaseIterable {
-    case terminal = "Terminal"
-    case packets = "Packets"
-    case routes = "Routes"
-    case analytics = "Analytics"
-    case mail = "Mail"
-    //case raw = "Raw"
-}
-
-/// Which tier of network evidence produced an adaptive sample.
-nonisolated enum AdaptiveAggregateScope: Equatable, Sendable {
-    /// Links involving my own station — ground truth about my RF paths.
-    case localLinks
-    /// Third-party traffic on the shared channel — weaker, condition-level evidence.
-    case channelWide
-
-    var sourceLabel: String {
-        switch self {
-        case .localLinks: return "network"
-        case .channelWide: return "network (channel-wide)"
-        }
-    }
-}
+import Combine
 
 struct ContentView: View {
     @StateObject private var client: PacketEngine
@@ -42,6 +19,78 @@ struct ContentView: View {
     /// Uses SessionCoordinator.shared so Settings can update the same instance
     @StateObject private var sessionCoordinator: SessionCoordinator
     @StateObject private var connectCoordinator = ConnectCoordinator()
+    /// Shared so a callsign resolved on the map stays resolved
+    /// everywhere else in the session.
+    @StateObject private var callsignLookup: CallsignLookupService
+    /// Learns node aliases (DRLNOD, HORSE) from ID beacons already
+    /// arriving, so via-path hops can be placed.
+    @StateObject private var nodeAliases = NodeAliasStore()
+    /// The Mac gets the same identity view the handheld does — a callsign in
+    /// the console is the same question there as here.
+    @StateObject private var profiles = NodeProfileCoordinator()
+    @State private var lookingUpCallsign: String?
+    /// Map overlays, owned here so a layer arriving as a Winlink attachment
+    /// and a layer the operator drew end up in the same place.
+    @StateObject private var overlayStore = MapOverlayStore()
+
+    /// Grid squares for RMS gateways, keyed by callsign with SSID — a
+    /// gateway's position is known from the CMS even when its licensee
+    /// has never been looked up.
+    /// Records what stations announced and what digipeaters demonstrated.
+    private func harvestServices(from packets: [Packet]) {
+        guard let services = client.stationServices else { return }
+        let recent = Array(packets.suffix(400))
+        try? services.record(
+            StationServiceHarvester.declarations(in: recent)
+                + StationServiceHarvester.demonstratedDigipeaters(in: recent))
+    }
+
+    /// Same gathering as the handheld's, from the Mac's own view state.
+    private var macResolver: NodeProfileResolver {
+        let stations = client.stations
+        let heard = HeardStationMap.entries(
+            stations: stations,
+            directory: callsignLookup.records,
+            gatewayGrids: gatewayGrids,
+            excluding: settings.myCallsign)
+        let aliasEntries = HeardStationMap.aliasEntries(
+            aliases: nodeAliases.directory,
+            usedAliases: HeardStationMap.aliasesInUse(stations),
+            directory: callsignLookup.records,
+            stations: stations)
+        let neighbours = client.netRomIntegration?.currentNeighbors() ?? []
+        let routes = client.netRomIntegration?.currentRoutes() ?? []
+
+        return NodeProfileResolver(
+            localCallsign: settings.myCallsign,
+            aliases: nodeAliases.directory,
+            heardEntries: heard + aliasEntries,
+            directory: callsignLookup.records,
+            linkQuality: winlinkContext.mapLinkQuality,
+            observer: Maidenhead.center(of: winlinkContext.settings.gridSquare)
+                .map(GreatCircle.Point.init),
+            neighbourQuality: Dictionary(
+                neighbours.map { ($0.call.uppercased(), $0.quality) },
+                uniquingKeysWith: max),
+            routes: routes.map { (destination: $0.destination.uppercased(),
+                                  via: ($0.path.first ?? $0.origin).uppercased(),
+                                  isBroadcast: $0.sourceType == "broadcast") },
+            digipeaters: HeardStationMap.aliasesInUse(stations),
+            linkStats: client.netRomIntegration?.exportLinkStats() ?? [],
+            declaredServices: nodeAliases.declaredServices,
+            networkPaths: NetworkPathObserver.paths(
+                in: Array(client.packets.suffix(600)),
+                localCallsign: settings.myCallsign),
+            serviceStore: client.stationServices,
+            historyStore: client.linkQualityHistory)
+    }
+
+    private var gatewayGrids: [String: String] {
+        guard let store = winlinkContext.store else { return [:] }
+        let stations = (try? store.stations()) ?? []
+        return Dictionary(stations.map { ($0.callsign.uppercased(), $0.gridSquare) },
+                          uniquingKeysWith: { first, _ in first })
+    }
 
     @Environment(\.openSettings) private var openSettings
 
@@ -50,6 +99,8 @@ struct ContentView: View {
     @State private var filters = PacketFilters()
 
     @State private var selection = Set<Packet.ID>()
+    /// Surfaced when turning a map layer into a Winlink draft fails.
+    @State private var layerSendError: String?
     @State private var inspectorSelection: PacketInspectorSelection?
     @FocusState private var isSearchFocused: Bool
     @State private var didLoadPacketsHistory = false
@@ -120,6 +171,9 @@ struct ContentView: View {
         coordinator.appSettings = settings
         coordinator.subscribeToPackets(from: client)
         _sessionCoordinator = StateObject(wrappedValue: coordinator)
+        _callsignLookup = StateObject(wrappedValue: CallsignLookupService(
+            store: winlinkContext.store,
+            isNetworkEnabled: winlinkContext.settings.callsignLookupEnabled))
     }
 
     var body: some View {
@@ -133,6 +187,13 @@ struct ContentView: View {
         .searchFocused($isSearchFocused)
         .toolbar {
             toolbarContent
+        }
+        .alert("Could not prepare the layer", isPresented: Binding(
+            get: { layerSendError != nil },
+            set: { if !$0 { layerSendError = nil } })) {
+            Button("OK") { layerSendError = nil }
+        } message: {
+            Text(layerSendError ?? "")
         }
         .overlay(alignment: .topLeading) {
             if TestModeConfiguration.shared.isTestMode {
@@ -174,6 +235,13 @@ struct ContentView: View {
         .task {
             // Warm analytics caches in the background so first tab-open is fast.
             analyticsViewModel.prewarmIfNeeded(with: client.packets)
+            // Analytics owns the derivation; the context owns the decision
+            // to publish. Wired here because this is the one place holding
+            // both, and it keeps the store from reaching up into analytics
+            // for packets and inferred roles.
+            analyticsViewModel.onStationDirectoryChanged = { [weak winlinkContext] directory in
+                winlinkContext?.publishLocalActivity(directory, callsign: settings.myCallsign)
+            }
         }
         .onReceive(client.$packets) { packets in
             analyticsViewModel.prewarmIfNeeded(with: packets)
@@ -231,6 +299,12 @@ struct ContentView: View {
             case .routes:
                 // Routes view handles its own data loading
                 return
+            case .map:
+                // Learn aliases from beacons already received. Cheap —
+                // only ID/beacon destinations are inspected — and it
+                // runs off the view-update path.
+                nodeAliases.ingest(packets: client.packets)
+                return
             case .mail:
                 // Mail view loads its own data from the Winlink store
                 return
@@ -246,6 +320,40 @@ struct ContentView: View {
         .focusedValue(\.selectNavigation, SelectNavigationAction { item in
             selectedNav = item
         })
+        // Harvested wherever the operator happens to be. Tying this to the
+        // Map tab meant the network's own directory only grew while someone
+        // was looking at a map, which is the one time they are not reading it.
+        .onReceive(client.$packets.throttle(for: .seconds(5), scheduler: RunLoop.main, latest: true)) { packets in
+            harvestServices(from: packets)
+        }
+        .sheet(item: $profiles.presented) { presentation in
+            VStack(spacing: 0) {
+                HStack {
+                    Spacer()
+                    Button("Done") { profiles.dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                }
+                .padding(12)
+                Divider()
+                NodeProfileView(
+                    profile: macResolver.profile(for: presentation.callsign),
+                    localCallsign: settings.myCallsign,
+                    lookupEnabled: winlinkContext.settings.callsignLookupEnabled,
+                    isLookingUp: lookingUpCallsign == presentation.callsign,
+                    noteStore: client.stationNotes,
+                    presentation: presentation.isPage ? .page : .sheet,
+                    onOpenFullPage: presentation.isPage
+                        ? nil : { profiles.promoteSheetToPage() })
+                    .task(id: presentation.callsign) {
+                        guard winlinkContext.settings.callsignLookupEnabled else { return }
+                        lookingUpCallsign = presentation.callsign
+                        defer { lookingUpCallsign = nil }
+                        await callsignLookup.resolve(presentation.callsign)
+                    }
+            }
+            .frame(minWidth: presentation.isPage ? 560 : 440,
+                   minHeight: presentation.isPage ? 620 : 500)
+        }
         .onChange(of: settings.myCallsign) { _, newValue in
             sessionCoordinator.localCallsign = newValue
         }
@@ -269,6 +377,7 @@ struct ContentView: View {
         case .packets: searchModel.scope = .packets
         case .routes: searchModel.scope = .routes
         case .analytics: searchModel.scope = .analytics
+        case .map: searchModel.scope = .terminal
         case .mail: searchModel.scope = .terminal  // Mail has its own in-pane search
         //case .raw: searchModel.scope = .terminal // Fallback or new scope if needed
         }
@@ -280,7 +389,7 @@ struct ContentView: View {
             connectCoordinator.activeContext = .terminal
         case .routes:
             connectCoordinator.activeContext = .routes
-        case .packets, .analytics, .mail:
+        case .packets, .analytics, .mail, .map:
             connectCoordinator.activeContext = .unknown
         }
     }
@@ -471,6 +580,7 @@ struct ContentView: View {
         case .packets: return "list.bullet.rectangle"
         case .routes: return "arrow.triangle.branch"
         case .analytics: return "chart.bar"
+        case .map: return "map"
         case .mail: return "envelope"
         //case .raw: return "doc.text"
         }
@@ -520,21 +630,34 @@ struct ContentView: View {
 
     // MARK: - Detail View
 
+    /// A callsign collision breaks every link this station has, and its
+    /// symptoms look like a dozen unrelated faults until somebody names the
+    /// cause — so it sits above the transport error, not below it.
+    @ViewBuilder
+    private var banners: some View {
+        if let collision = client.identityCollision {
+            IdentityCollisionBanner(collision: collision) {
+                client.dismissIdentityCollision()
+            }
+        }
+        if let err = client.lastError {
+            HStack {
+                Image(systemName: "exclamationmark.triangle")
+                Text(err)
+                Spacer()
+            }
+            .foregroundStyle(.red)
+            .font(.caption)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.red.opacity(0.1))
+        }
+    }
+
     @ViewBuilder
     private var detailView: some View {
         VStack(spacing: 0) {
-            if let err = client.lastError {
-                HStack {
-                    Image(systemName: "exclamationmark.triangle")
-                    Text(err)
-                    Spacer()
-                }
-                .foregroundStyle(.red)
-                .font(.caption)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(.red.opacity(0.1))
-            }
+            banners
 
             switch selectedNav {
             case .terminal:
@@ -544,7 +667,9 @@ struct ContentView: View {
                     sessionCoordinator: sessionCoordinator,
                     connectCoordinator: connectCoordinator,
                     searchModel: searchModel,
-                    locationService: winlinkContext.locationService
+                    locationService: winlinkContext.locationService,
+                    onIdentity: { profiles.peek($0) },
+                    onIdentityMenu: { profiles.openPage($0) }
                 )
             case .packets:
                 packetsView
@@ -557,12 +682,27 @@ struct ContentView: View {
                 )
             case .analytics:
                 AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel, connectCoordinator: connectCoordinator)
+            case .map:
+                StationsMapView(
+                    stations: client.stations,
+                recentPackets: Array(client.packets.suffix(600)),
+                    gatewayGrids: gatewayGrids,
+                    observerGrid: winlinkContext.settings.gridSquare,
+                    myCallsign: settings.myCallsign,
+                    lookup: callsignLookup,
+                    aliases: nodeAliases,
+                    settings: winlinkContext.settings,
+                    noteStore: client.stationNotes,
+                    focusCallsign: .constant(nil),
+                    overlayStore: overlayStore,
+                    onSendLayer: layerSendAction)
             case .mail:
                 WinlinkMailView(
                     context: winlinkContext,
                     appSettings: settings,
                     sessionCoordinator: sessionCoordinator,
-                    client: client
+                    client: client,
+                    onAddToMap: addSpatialAttachmentToMap
                 )
             //case .raw:
             //    RawView(
@@ -603,6 +743,81 @@ struct ContentView: View {
         .onChange(of: client.packets) { _, _ in scheduleSelectionSync(with: rows) }
     }
 
+    /// Imports a spatial attachment onto the map and switches to it.
+    ///
+    /// Switching views is the point: an operator who asked to put a boundary
+    /// on the map wants to see it, and leaving them in the mailbox wondering
+    /// whether it worked is the same failure as a silent save.
+    private func addSpatialAttachmentToMap(_ attachment: WinlinkB2Message.Attachment,
+                                           from sender: String) {
+        let added = overlayStore.addFromAttachment(
+            data: attachment.data, filename: attachment.name, senderCallsign: sender)
+        if added != nil { selectedNav = .map }
+    }
+
+    /// Nil without a mailbox, which hides the send action rather than
+    /// offering one that cannot work.
+    ///
+    /// Spelled out with an explicit type: a ternary yielding a bare `nil` for
+    /// an optional closure gives the type checker nothing to work from, and
+    /// it gives up on the whole view body rather than on this line.
+    private var layerSendAction: ((MapOverlayLayer, MapOverlayExport.Format) -> Void)? {
+        guard winlinkContext.store != nil else { return nil }
+        return { layer, format in sendLayerViaWinlink(layer, format: format) }
+    }
+
+    /// Turns a map layer into a Winlink draft and opens the mailbox on it.
+    ///
+    /// A draft rather than a queued message: the operator chooses the
+    /// recipient, and — given what a layer can cost in airtime — should see
+    /// the size before it goes anywhere.
+    private func sendLayerViaWinlink(_ layer: MapOverlayLayer,
+                                     format: MapOverlayExport.Format) {
+        guard let store = winlinkContext.store else { return }
+        do {
+            let data: Data
+            switch format {
+            case .geoJSON: data = try GeoJSONWriter.data(for: layer)
+            case .shapefile: data = try ShapefileWriter.zippedShapefile(layer: layer)
+            }
+
+            // The same airtime estimator the catalog uses, so the number in
+            // the body is measured where this station has evidence and says
+            // so where it does not.
+            let airtime = WinlinkAirtimeEstimate.forGateway(
+                callsign: winlinkContext.settings.gatewayCallsign,
+                frequencyHz: nil,
+                quality: winlinkContext.mapLinkQuality)
+            let assessment = MapOverlayExport.assess(byteCount: data.count, airtime: airtime)
+
+            let draft = MapOverlayMessage.draft(
+                layer: layer, format: format, attachment: data,
+                assessment: assessment,
+                operatorCallsign: settings.myCallsign,
+                generatedAt: Date())
+
+            let message = WinlinkB2Message(
+                mid: WinlinkB2Message.generateMID(callsign: settings.myCallsign),
+                date: Date(),
+                type: .privateMessage,
+                from: settings.myCallsign,
+                to: [],
+                cc: [],
+                subject: draft.subject,
+                mbo: settings.myCallsign,
+                body: Data(draft.body.utf8),
+                attachments: [.init(name: draft.attachmentName, data: draft.attachment)])
+
+            try store.saveDraft(message)
+            winlinkContext.refreshUnread()
+            selectedNav = .mail
+        } catch let error as ShapefileWriter.WriteError {
+            layerSendError = error.explanation
+        } catch {
+            layerSendError = "Could not prepare \(layer.name) for sending: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: - Toolbar
 
     @ToolbarContentBuilder
@@ -611,6 +826,7 @@ struct ContentView: View {
             if sessionCoordinator.adaptiveTransmissionEnabled, client.status == .connected {
                 AdaptiveToolbarControl(
                     store: sessionCoordinator.adaptiveStatusStore,
+                    linkViz: sessionCoordinator.linkVizMonitor,
                     onOpenAnalytics: {
                         selectedNav = .analytics
                     }
@@ -632,6 +848,12 @@ struct ContentView: View {
                     }
                     .help("Clear Packet Log")
                 }
+            }
+            // Between the adaptive chip and the TNC pill: both report "is
+            // this station working", and the mailbox being current on the
+            // operator's other radio belongs in the same glance.
+            if let sync = winlinkContext.sync {
+                SyncStatusIndicator(sync: sync)
             }
             tncToolbarMenu
         }
@@ -706,7 +928,7 @@ struct ContentView: View {
         .background(.thinMaterial, in: Capsule())
         .overlay(
             Capsule()
-                .stroke(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
+                .stroke(Color(platform: .platformSeparator).opacity(0.35), lineWidth: 0.5)
         )
     }
     
@@ -735,7 +957,7 @@ struct ContentView: View {
         case .connected: return .green
         case .connecting: return .yellow
         case .failed: return .red
-        case .disconnected: return Color(nsColor: .tertiaryLabelColor)
+        case .disconnected: return Color(platform: .platformTertiaryLabel)
         }
     }
 

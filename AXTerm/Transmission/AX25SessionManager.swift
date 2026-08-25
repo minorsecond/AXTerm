@@ -112,6 +112,8 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// bad patch.
     var lastSampledFramesSent: Int = 0
     var lastSampledRetransmissions: Int = 0
+    var lastSampledFramesReceived: Int = 0
+    var lastSampledREJSent: Int = 0
 
     /// Bumped on every T1 start/stop. A fired T1 closure whose captured generation
     /// no longer matches is stale: cancel() cannot recall a closure the scheduler
@@ -122,6 +124,13 @@ nonisolated final class AX25Session: @unchecked Sendable {
 
     /// T3 idle timer task
     var t3TimerTask: AnyCancellableTask?
+
+    /// T2 response-delay (delayed-ack) timer task
+    var t2TimerTask: AnyCancellableTask?
+
+    /// Bumped on every T2 start/stop so a fire that raced a cancel is
+    /// recognized as stale (same pattern and reason as `t1Generation`).
+    var t2Generation: UInt64 = 0
 
     /// N(R) at which we last triggered an immediate REJ retransmit.
     /// Used to suppress duplicate REJ retransmission amplification (Bug A):
@@ -141,6 +150,20 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// Monotonic time when SABM was sent, from the injected clock (for RTT calculation).
     /// Using TimeInterval keeps this compatible with the virtual clock in tests.
     var sabmSentAt: TimeInterval?
+
+    /// True once SABM has been retransmitted, so the connect RTT sample is
+    /// discarded (Karn's algorithm).
+    ///
+    /// `sabmSentAt` deliberately keeps the *first* send time — the late-UA
+    /// window is measured from it — so elapsed time spans every retry. A UA
+    /// cannot be attributed to a particular SABM, and measuring it against
+    /// the first one charges the whole backoff ladder to the path.
+    ///
+    /// Field capture 2026-08-25, W0ARP-10: UA arrived on the 5th SABM after
+    /// 4+8+16+30s of backoff, and the resulting sample was srtt=61.1s,
+    /// rttvar=30.6s, rto=30s (clamped). The link's real RTT was 1.8s. Every
+    /// subsequent T3 poll then waited 30s on a healthy path.
+    var sabmRetransmitted = false
 
     /// Timestamp when session was established
     var connectedAt: Date?
@@ -194,7 +217,8 @@ nonisolated final class AX25Session: @unchecked Sendable {
             rtoMin: config.rtoMin ?? 1.0,
             rtoMax: config.rtoMax ?? 30.0,
             initialRto: seed,
-            adaptiveTimeout: config.adaptiveTimeout
+            adaptiveTimeout: config.adaptiveTimeout,
+            t2AckDelay: config.t2AckDelay ?? 2.0
         )
         self.statistics = AX25SessionStatistics()
         self.lastActivityAt = Date()
@@ -448,6 +472,10 @@ final class AX25SessionManager: ObservableObject {
     /// Callback when data is received from a connected session
     var onDataReceived: ((AX25Session, Data) -> Void)?
 
+    /// Lightweight link-visualization event stream (window state, deliveries,
+    /// REJ/retransmit markers). See LinkVizMonitor.
+    var onLinkVizEvent: ((LinkVizEvent) -> Void)?
+
     /// Callback when data is delivered (in-order) from a connected session.
     /// Used for AXDP reassembly - must only append chunks that were accepted by the AX.25 layer,
     /// not out-of-window or buffered frames (those will be delivered later in sequence).
@@ -465,6 +493,47 @@ final class AX25SessionManager: ObservableObject {
 
     /// When set, used to get session config per route (destination + path) so direct vs via-digi use separate learned params. If nil, use defaultConfig.
     var getConfigForDestination: ((String, String) -> AX25SessionConfig)?
+
+    // MARK: - AX.25 2.2 negotiation (XID)
+
+    /// Master switch for XID parameter negotiation before the first SABM
+    /// to an unknown peer. Off by default so bare managers and the test
+    /// harnesses keep the classic connect flow; the app enables it from
+    /// Settings. A silent peer costs one RTO exactly once — the outcome
+    /// is cached per callsign for the life of the process.
+    var negotiateV22: Bool = false
+
+    enum PeerXIDStatus {
+        case supported(AX25XIDParameters)
+        case unsupported
+    }
+
+    /// Capability cache keyed by remote callsign display. Capabilities
+    /// belong to the station, not to any particular path or session.
+    private(set) var peerXIDStatus: [String: PeerXIDStatus] = [:]
+
+    /// XID commands in flight: peer callsign → the half-open session key
+    /// and the timeout that resolves a silent peer as pre-2.2.
+    private var pendingXID: [String: (key: SessionKey, task: AnyCancellableTask?)] = [:]
+
+    /// True while an XID exchange for this session is unresolved. The
+    /// session still reads `.disconnected` during that phase — callers
+    /// awaiting a connection outcome must treat it as in-progress, not as
+    /// a refusal (field capture 2026-08-24: the Winlink transport threw
+    /// "connect refused" milliseconds after the first XID went out, while
+    /// the link went on to connect without it).
+    func isNegotiating(key: SessionKey) -> Bool {
+        pendingXID.values.contains { $0.key == key }
+    }
+
+    /// Our offer: SREJ plus our receive limits from the session's config.
+    private func localXIDParameters(config: AX25SessionConfig) -> AX25XIDParameters {
+        var params = AX25XIDParameters()
+        params.supportsSREJ = true
+        params.iFieldLengthRx = config.paclen
+        params.windowSizeRx = config.windowSize
+        return params
+    }
 
     // MARK: - Delivery claims
 
@@ -515,6 +584,17 @@ final class AX25SessionManager: ObservableObject {
     /// regular observers. All notify sites funnel through here.
     private func notifyStateChanged(_ session: AX25Session, from oldState: AX25SessionState, to newState: AX25SessionState) {
         deliveryClaims[session.key]?.stateHandler?(session, oldState, newState)
+
+        // A claim cannot outlive its session. Claim holders release their
+        // own claim on disconnect, but they are held weakly here and a
+        // protocol runner routinely drops its transport in the seconds
+        // between sending DISC and the UA coming back — the handler above
+        // then no-ops and the claim would be stranded, refusing every
+        // later connection to this peer as "session busy" until relaunch.
+        if newState == .disconnected || newState == .error {
+            deliveryClaims[session.key] = nil
+        }
+
         onSessionStateChanged?(session, oldState, newState)
     }
 
@@ -534,7 +614,10 @@ final class AX25SessionManager: ObservableObject {
             case .connected:
                 return .connected
             case .disconnected, .error:
-                return .refused
+                // A pending XID exchange keeps the session in .disconnected
+                // until the answer (or its absence) resolves — that is a
+                // connection in progress, never a refusal.
+                if !isNegotiating(key: key) { return .refused }
             case .connecting, .disconnecting:
                 break
             }
@@ -609,6 +692,27 @@ final class AX25SessionManager: ObservableObject {
     /// Emit a detailed snapshot of session state for debugging retries, timers, and window usage.
     /// This is intentionally verbose and only compiled into DEBUG builds.
     private func debugDumpSessionState(_ session: AX25Session, context: String) {
+        if let emit = onLinkVizEvent {
+            let sm = session.stateMachine
+            emit(.snapshot(LinkWindowSnapshot(
+                peer: session.remoteAddress.display,
+                context: context,
+                vs: sm.sequenceState.vs,
+                va: sm.sequenceState.va,
+                vr: sm.sequenceState.vr,
+                outstanding: session.outstandingCount,
+                windowSize: sm.config.windowSize,
+                retryCount: sm.retryCount,
+                sendBufferSeq: session.sendBuffer.keys.sorted(),
+                rto: session.timers.rto,
+                srtt: session.timers.srtt,
+                rttvar: session.timers.rttvar,
+                date: Date(),
+                framesSent: session.statistics.framesSent,
+                framesReceived: session.statistics.framesReceived,
+                retransmissions: session.statistics.retransmissions,
+                rejSent: session.statistics.rejSent)))
+        }
 #if DEBUG
         let sm = session.stateMachine
         let timers = session.timers
@@ -679,7 +783,13 @@ final class AX25SessionManager: ObservableObject {
         }
 
         let pathSignature = path.display
-        let config = getConfigForDestination?(destination.display, pathSignature) ?? defaultConfig
+        var config = getConfigForDestination?(destination.display, pathSignature) ?? defaultConfig
+        // A completed XID exchange binds every future session with this
+        // station: SREJ and the peer's receive ceilings apply whether the
+        // next link is opened by us or by an inbound SABM.
+        if negotiateV22, case .supported(let params) = peerXIDStatus[destination.display] {
+            config = config.negotiating(with: params)
+        }
 
         axDebugPrint("====== DEBUG TRACE: session(for:) ======")
         axDebugPrint("adaptiveTimeout: \(config.adaptiveTimeout)")
@@ -768,6 +878,7 @@ final class AX25SessionManager: ObservableObject {
               stale.state == .error
                 || (stale.state == .disconnected && stale.hasEverConnected) else { return [] }
         stopT1Timer(for: stale)
+        stopT2Timer(for: stale)
         stopT3Timer(for: stale)
         removeSession(stale)
         TxLog.debug(.session, "Discarded ended session for reconnect", [
@@ -781,6 +892,9 @@ final class AX25SessionManager: ObservableObject {
 
     func removeSession(_ session: AX25Session) {
         sessions.removeValue(forKey: session.key)
+        // Nothing can hold a delivery claim on a session that no longer
+        // exists; leaving one behind blocks all future connects to the peer.
+        deliveryClaims[session.key] = nil
 
         TxLog.debug(.session, "Session removed", [
             "session": String(session.id.uuidString.prefix(8)),
@@ -960,6 +1074,19 @@ final class AX25SessionManager: ObservableObject {
             return nil
         }
 
+        // AX.25 2.2 negotiation: an unknown peer gets one XID command
+        // before any SABM. Known peers use the cached outcome directly.
+        if negotiateV22 {
+            switch peerXIDStatus[destination.display] {
+            case .none:
+                return beginXIDNegotiation(session: session)
+            case .supported(let params):
+                applyNegotiatedConfig(params, to: session)
+            case .unsupported:
+                break
+            }
+        }
+
         let oldState = session.state
         let actions = session.stateMachine.handle(event: .connectRequest)
 
@@ -973,6 +1100,7 @@ final class AX25SessionManager: ObservableObject {
         }
 
         session.sabmSentAt = clock.currentTime
+        session.sabmRetransmitted = false
         session.touch()
 
         debugTrace("sending SABM", [
@@ -1022,6 +1150,130 @@ final class AX25SessionManager: ObservableObject {
         session.clearPendingTransmission(reason: "Force disconnect")
         session.touch()
         _ = processActions(actions, for: session)
+    }
+
+    // MARK: - XID negotiation flow
+
+    /// Sends the XID command for a virgin session and arms the timeout
+    /// that treats silence as "pre-2.2". Returns the XID frame.
+    private func beginXIDNegotiation(session: AX25Session) -> OutboundFrame {
+        let peerKey = session.remoteAddress.display
+        let frame = AX25FrameBuilder.buildXID(
+            from: session.localAddress,
+            to: session.remoteAddress,
+            via: session.path,
+            parameters: localXIDParameters(config: session.stateMachine.config),
+            isCommand: true,
+            pf: true
+        )
+        debugTrace("TX XID command", ["peer": peerKey])
+
+        let sessionKey = session.key
+        let task = clock.schedule(delay: session.timers.rto) { [weak self] in
+            guard let self else { return }
+            guard self.pendingXID[peerKey] != nil else { return }
+            TxLog.debug(.session, "XID timeout — peer treated as pre-2.2", ["peer": peerKey])
+            self.resolveXID(peer: peerKey, status: .unsupported)
+        }
+        pendingXID[peerKey] = (key: sessionKey, task: task)
+        session.touch()
+        return frame
+    }
+
+    /// Resolves an in-flight negotiation and continues the deferred
+    /// connect (SABM) with whatever was agreed.
+    private func resolveXID(peer: String, status: PeerXIDStatus) {
+        guard let pending = pendingXID.removeValue(forKey: peer) else { return }
+        pending.task?.cancel()
+        peerXIDStatus[peer] = status
+
+        guard let session = sessions[pending.key],
+              session.state == .disconnected || session.state == .error else { return }
+
+        if case .supported(let params) = status {
+            applyNegotiatedConfig(params, to: session)
+        }
+
+        let oldState = session.state
+        let actions = session.stateMachine.handle(event: .connectRequest)
+        if oldState != session.state {
+            notifyStateChanged(session, from: oldState, to: session.state)
+        }
+        session.sabmSentAt = clock.currentTime
+        session.sabmRetransmitted = false
+        session.touch()
+        for frame in processActions(actions, for: session) {
+            onSendFrame?(frame)
+        }
+    }
+
+    /// Rebuilds a virgin session's state machine with the negotiated
+    /// parameters. Safe only before SABM: no sequence state exists yet.
+    private func applyNegotiatedConfig(_ params: AX25XIDParameters, to session: AX25Session) {
+        guard session.state == .disconnected || session.state == .error,
+              session.stateMachine.sequenceState.vs == 0,
+              session.stateMachine.sequenceState.vr == 0 else { return }
+        let negotiated = session.stateMachine.config.negotiating(with: params)
+        session.stateMachine = AX25StateMachine(config: negotiated)
+        debugTrace("Negotiated config applied", [
+            "peer": session.remoteAddress.display,
+            "srej": negotiated.srejEnabled ? 1 : 0,
+            "k": negotiated.windowSize,
+            "paclen": negotiated.paclen
+        ])
+    }
+
+    /// Handles an inbound XID frame — either the peer answering our
+    /// command, or the peer opening its own negotiation.
+    ///
+    /// A malformed information field resolves as "unsupported": stranding
+    /// the connect on a parse error would turn a peer bug into a dead
+    /// button, and defaults are always safe.
+    func handleInboundXID(
+        from source: AX25Address,
+        path: DigiPath,
+        channel: UInt8,
+        info: Data,
+        isCommand: Bool,
+        pf: Bool
+    ) -> [OutboundFrame] {
+        let peerKey = source.display
+        let parsed = AX25XIDParameters.parse(info)
+
+        if isCommand {
+            // The peer negotiates with us. Answer with the intersection of
+            // its offer and our capabilities, and remember the outcome for
+            // the SABM that follows.
+            var ours = localXIDParameters(config: defaultConfig)
+            ours.supportsSREJ = ours.supportsSREJ && (parsed?.supportsSREJ ?? false)
+            if let parsed {
+                peerXIDStatus[peerKey] = .supported(parsed)
+            }
+            debugTrace("RX XID command", ["peer": peerKey, "srej": ours.supportsSREJ ? 1 : 0])
+            return [AX25FrameBuilder.buildXID(
+                from: localCallsign,
+                to: source,
+                via: path,
+                parameters: ours,
+                isCommand: false,
+                pf: pf
+            )]
+        }
+
+        debugTrace("RX XID response", ["peer": peerKey, "parsed": parsed != nil ? 1 : 0])
+        if let parsed {
+            resolveXID(peer: peerKey, status: .supported(parsed))
+        } else {
+            resolveXID(peer: peerKey, status: .unsupported)
+        }
+        return []
+    }
+
+    /// §6.3.2: a pre-2.2 peer answers an XID command with FRMR. During
+    /// negotiation that is the documented "use defaults" — never an error.
+    func handleInboundFRMRDuringNegotiation(from source: AX25Address, channel: UInt8) {
+        guard pendingXID[source.display] != nil else { return }
+        resolveXID(peer: source.display, status: .unsupported)
     }
 
     // MARK: - Data Transmission
@@ -1141,13 +1393,22 @@ final class AX25SessionManager: ObservableObject {
                 }
                 let info = (i == 0) ? displayInfo : nil
                 let wasIdle = session.outstandingCount == 0
+                // Checkpoint (§6.2): the frame that fills the send window
+                // carries P=1, matching what RMS gateways do on the air
+                // (field capture 2026-08-24: every burst poll-terminated).
+                // The peer's mandatory F=1 response acks the whole burst at
+                // once — essential now that receivers may delay acks on T2.
+                // Deliberately only on window-full, not on every burst end:
+                // DRLNOD DMs sessions that poll on every idle line (see
+                // shouldPollFirstOutboundIFrame).
+                let fillsWindow = session.outstandingCount + 1 >= effectiveSendWindowDirect
                 let ns = session.vs  // Capture before buildIFrame increments vs
                 let iFrame = buildIFrame(
                     for: session,
                     payload: chunk,
                     pid: pid,
                     displayInfo: info,
-                    pf: shouldPollFirstOutboundIFrame(for: session, wasIdle: wasIdle)
+                    pf: fillsWindow || shouldPollFirstOutboundIFrame(for: session, wasIdle: wasIdle)
                 )
                 frames.append(iFrame)
                 axDebugPrint("[DEBUG:AX25:SEND] immediate tx chunk \(i) | N(S)=\(ns) payload=\(chunk.count)")
@@ -1262,7 +1523,13 @@ final class AX25SessionManager: ObservableObject {
                 "peer": source.display
             ])
             let pathSignature = path.display
-            let config = getConfigForDestination?(source.display, pathSignature) ?? defaultConfig
+            var config = getConfigForDestination?(source.display, pathSignature) ?? defaultConfig
+            // Honor a completed XID exchange (see session(for:)): the SABM
+            // following our XID response must open the link with what the
+            // response promised.
+            if negotiateV22, case .supported(let params) = peerXIDStatus[source.display] {
+                config = config.negotiating(with: params)
+            }
             session = AX25Session(
                 localAddress: destination,  // We're the destination of the SABM
                 remoteAddress: source,
@@ -1403,7 +1670,13 @@ final class AX25SessionManager: ObservableObject {
         let oldState = session.state
 
         // Calculate RTT if we were connecting (Bug F fix: use clock.currentTime not Date())
-        if session.state == .connecting, let sabmSent = session.sabmSentAt {
+        //
+        // Karn's algorithm, which the I-frame path already honours via
+        // `rttSendTime(ackedBy:)`: a UA answering a retransmitted SABM is
+        // ambiguous, so it yields no sample at all. The timers keep whatever
+        // they had, which is a better estimate than one built from backoff.
+        if session.state == .connecting, let sabmSent = session.sabmSentAt,
+           !session.sabmRetransmitted {
             let rtt = clock.currentTime - sabmSent
             session.timers.updateRTT(sample: rtt)
             TxLog.rttUpdate(
@@ -1665,6 +1938,7 @@ final class AX25SessionManager: ObservableObject {
             "pf": pf ? 1 : 0,
             "len": payload.count
         ])
+        onLinkVizEvent?(.inboundIFrame(peer: source.display, ns: ns, bytes: payload.count))
         // Try exact path match first, then fall back to address-only lookup
         var session = existingSession(for: source, path: path, channel: channel)
         if session == nil {
@@ -2032,7 +2306,7 @@ final class AX25SessionManager: ObservableObject {
     /// Delta-based (spec 4.2): each sample covers only what happened since
     /// the previous one, so the EWMA in the link controller sees time-local
     /// evidence. An inbound frame that changed nothing emits nothing.
-    private func emitLinkQualitySampleIfNeeded(for session: AX25Session) {
+    func emitLinkQualitySampleIfNeeded(for session: AX25Session) {
         // .error is included so a dying link's terminal retransmissions still
         // reach the controller — that loss is exactly the evidence that should
         // make the next attempt on this route skeptical.
@@ -2043,16 +2317,48 @@ final class AX25SessionManager: ObservableObject {
         // evidence or a loss rate above 1 handed to the controller.
         let deltaSent = max(0, session.statistics.framesSent - session.lastSampledFramesSent)
         let deltaRetrans = max(0, session.statistics.retransmissions - session.lastSampledRetransmissions)
-        guard deltaSent > 0 || deltaRetrans > 0 else { return }
+        // Reverse-path evidence. A receive-heavy session (any download)
+        // sends almost no I-frames, so gating on forward evidence alone
+        // starved the controller exactly when the link was working hardest.
+        let deltaReceived = max(0, session.statistics.framesReceived - session.lastSampledFramesReceived)
+        let deltaREJ = max(0, session.statistics.rejSent - session.lastSampledREJSent)
+        guard deltaSent > 0 || deltaRetrans > 0 || deltaREJ > 0 else { return }
         session.lastSampledFramesSent = session.statistics.framesSent
         session.lastSampledRetransmissions = session.statistics.retransmissions
-        // Fraction of this sample's transmissions that were repeats —
-        // bounded [0, 1), unlike the old retransmissions/framesSent
-        // which exceeded 1.0 whenever a frame needed several tries.
+        session.lastSampledFramesReceived = session.statistics.framesReceived
+        session.lastSampledREJSent = session.statistics.rejSent
+
+        // df — forward delivery probability. Fraction of this sample's
+        // transmissions that were first attempts; bounded [0, 1], unlike
+        // retransmissions/framesSent which exceeded 1.0 whenever a frame
+        // needed several tries.
         let transmissions = deltaSent + deltaRetrans
-        let lossRate = Double(deltaRetrans) / Double(max(1, transmissions))
-        let delivery = max(0.05, 1.0 - lossRate)
-        let etx = 1.0 / (delivery * delivery)
+        let forwardLoss = transmissions > 0
+            ? Double(deltaRetrans) / Double(transmissions)
+            : 0
+        let df = 1.0 - forwardLoss
+
+        // dr — reverse delivery probability. Each REJ we sent marks a gap
+        // in the peer's stream, so REJs over (frames that arrived + gaps
+        // we had to ask about) estimates how much of what the peer sent
+        // actually reached us. With no inbound traffic this sample carries
+        // no reverse evidence and dr falls back to df rather than
+        // inventing a number.
+        let reverseObservations = deltaReceived + deltaREJ
+        let dr = reverseObservations > 0
+            ? 1.0 - Double(deltaREJ) / Double(reverseObservations)
+            : df
+
+        // AXTERM CLAUDE.md §8: ETX = 1 / (max(df,0.05) · max(dr,0.05)),
+        // clamped to [1, 20]. The two directions are separate terms —
+        // substituting df for dr (the old 1/df²) makes an asymmetric link
+        // look symmetric, which is the one case where it matters most.
+        let etx = min(20.0, max(1.0, 1.0 / (max(df, 0.05) * max(dr, 0.05))))
+
+        // The controller's single "loss" input is the worse direction:
+        // whichever way frames are being lost, the link needs backing off.
+        let lossRate = min(1.0, max(forwardLoss, 1.0 - dr))
+
         onLinkQualitySample?(session, LinkQualitySample(
             lossRate: lossRate,
             etx: etx,
@@ -2199,6 +2505,75 @@ final class AX25SessionManager: ObservableObject {
     }
 
     /// Handle an inbound REJ (reject - request retransmit)
+    /// Selective reject: the peer asks for exactly frame N(R)
+    /// (AX.25 2.2 §6.4.4.2). Unlike REJ this is not go-back-N: the send
+    /// buffer keeps every other outstanding frame, and — §4.3.2.4 — only
+    /// an F=1 SREJ acknowledges the frames below N(R); an F=0 SREJ
+    /// acknowledges nothing at all.
+    func handleInboundSREJ(
+        from source: AX25Address,
+        path: DigiPath,
+        channel: UInt8,
+        nr: Int,
+        pf: Bool = false
+    ) -> [OutboundFrame] {
+        var session = existingSession(for: source, path: path, channel: channel)
+        if session == nil {
+            session = findConnectedSession(from: source, channel: channel)
+        }
+        if session == nil {
+            session = findConnectedSessionByCallsign(from: source, channel: channel)
+        }
+        guard let session, session.state == .connected else { return [] }
+
+        debugTrace("SREJ received", [
+            "from": source.display, "nr": nr, "pf": pf ? 1 : 0
+        ])
+
+        if pf {
+            // F=1 acknowledges everything below N(R): clear both the send
+            // buffer and V(A) — the buffer alone leaves the window closed.
+            let vaBefore = session.va
+            if session.stateMachine.sequenceState.isValidNR(nr: nr) {
+                session.acknowledgeUpTo(from: vaBefore, to: nr)
+                session.stateMachine.sequenceState.ackUpTo(nr: nr)
+                if session.va != vaBefore {
+                    notifyOutboundAck(session, upTo: session.va)
+                }
+            }
+        }
+
+        guard let buffered = session.sendBuffer[nr] else {
+            // Nothing we still hold — most likely an ack crossed the SREJ
+            // in flight. Ignoring is safe; the peer's next S-frame resyncs.
+            return []
+        }
+
+        // Same amplification guard as REJ: once we retransmit for this
+        // N(R), T1 owns the retry cycle until progress or expiry.
+        if session.lastREJRetransmitNR == nr {
+            debugTrace("Duplicate SREJ suppressed", ["nr": nr])
+            return []
+        }
+        session.lastREJRetransmitNR = nr
+
+        if session.timers.adaptiveTimeout {
+            // One selective loss is still a loss event.
+            session.aimdWindow.onLoss()
+        }
+
+        // Refresh N(R) to the current V(R) — the buffered copy's ack
+        // field is stale by definition.
+        let frame = buffered.withUpdatedNR(session.vr)
+        session.statistics.recordRetransmit()
+        if let ctrl = frame.controlByte {
+            session.markRetransmitted(ns: Int((ctrl >> 1) & 0x07))
+        }
+        startT1Timer(for: session)
+        session.touch()
+        return [frame]
+    }
+
     func handleInboundREJ(
         from source: AX25Address,
         path: DigiPath,
@@ -2349,6 +2724,12 @@ final class AX25SessionManager: ObservableObject {
     /// Handle T1 (retransmit) timeout for a session
     func handleT1Timeout(session: AX25Session) -> [OutboundFrame] {
         let oldState = session.state
+        // Recorded before the transition, while the state still says why the
+        // timer fired: a T1 expiry in `connecting` means the SABM is about to
+        // go out again, which makes any later UA an ambiguous RTT sample.
+        if oldState == .connecting {
+            session.sabmRetransmitted = true
+        }
         let actions = session.stateMachine.handle(event: .t1Timeout)
 
         if oldState != session.state {
@@ -2481,6 +2862,41 @@ final class AX25SessionManager: ObservableObject {
         session.t1PendingRetransmitTask = nil
     }
 
+    /// Arm T2, the response-delay timer — once. The first unacknowledged
+    /// delivery starts the clock; later frames in the burst leave the
+    /// deadline alone. Re-arming per frame looked attractive (transmit
+    /// only when the channel goes quiet) but is unbounded: any arrival
+    /// cadence faster than T2 defers the ack forever, and the sender's T1
+    /// (rtoMin 3 s) fires spuriously first — observed directly as RTO
+    /// oscillation in the adaptive harness. Arm-once bounds the deferral
+    /// at t2AckDelay, comfortably inside any sane peer's T1, and on the
+    /// air it rarely matters anyway: gateways end every burst with a P=1
+    /// poll (field capture 2026-08-24) whose F=1 response carries the ack.
+    private func startT2Timer(for session: AX25Session) {
+        guard session.t2TimerTask == nil else { return }
+        session.t2Generation &+= 1
+        let generation = session.t2Generation
+        let sessionId = session.id
+
+        session.t2TimerTask = clock.schedule(delay: session.timers.t2AckDelay) { [weak self] in
+            guard let self = self else { return }
+            guard let session = self.sessions.values.first(where: { $0.id == sessionId }) else { return }
+            guard session.t2Generation == generation else { return }
+            session.t2TimerTask = nil
+            let actions = session.stateMachine.handle(event: .t2Timeout)
+            let frames = self.processActions(actions, for: session)
+            for frame in frames {
+                self.onSendFrame?(frame)
+            }
+        }
+    }
+
+    private func stopT2Timer(for session: AX25Session) {
+        session.t2Generation &+= 1
+        session.t2TimerTask?.cancel()
+        session.t2TimerTask = nil
+    }
+
     /// Start T3 (idle) timer for a session
     private func startT3Timer(for session: AX25Session) {
         // Cancel any existing T3 timer
@@ -2584,13 +3000,15 @@ final class AX25SessionManager: ObservableObject {
 
         var wasIdle = session.outstandingCount == 0
         for item in drained {
+            // Checkpoint on window-full, as in sendData (§6.2).
+            let fillsWindow = session.outstandingCount + 1 >= effectiveSendWindow
             let ns = session.vs  // Capture before buildIFrame increments vs
             let iFrame = buildIFrame(
                 for: session,
                 payload: item.data,
                 pid: item.pid,
                 displayInfo: item.displayInfo,
-                pf: shouldPollFirstOutboundIFrame(for: session, wasIdle: wasIdle)
+                pf: fillsWindow || shouldPollFirstOutboundIFrame(for: session, wasIdle: wasIdle)
             )
             debugTrace("TX I (drain queue)", ["frame": describeFrame(iFrame)])
             axDebugPrint("[DEBUG:AX25:DRAIN] tx | N(S)=\(ns) payload=\(item.data.count) va=\(session.va) vs=\(session.vs)")
@@ -2640,6 +3058,10 @@ final class AX25SessionManager: ObservableObject {
         let ns = session.vs
         let nr = session.vr
 
+        // This frame's N(R) is the cumulative ack — the T2 debt is settled.
+        session.stateMachine.noteAckTransmitted()
+        stopT2Timer(for: session)
+
         // Increment V(S) in state machine
         session.stateMachine.sequenceState.incrementVS()
 
@@ -2682,6 +3104,7 @@ final class AX25SessionManager: ObservableObject {
             let shouldForcePoll = forcePollOnFirst && (index == 0)
             let updatedFrame = frame.withUpdatedNR(session.vr, preservePollFinal: preservePollFinal, forcePoll: shouldForcePoll)
             debugTrace("TX I (retransmit)", ["reason": reason, "frame": describeFrame(updatedFrame)])
+            onLinkVizEvent?(.retransmit(peer: session.remoteAddress.display, count: 1))
             session.statistics.recordRetransmit()
             if let ctrl = updatedFrame.controlByte {
                 session.markRetransmitted(ns: Int((ctrl >> 1) & 0x07))
@@ -2758,6 +3181,8 @@ final class AX25SessionManager: ObservableObject {
                 frames.append(frame)
 
             case .sendREJ(let nr, let pf, let isCommand):
+                onLinkVizEvent?(.rejSent(peer: session.remoteAddress.display, nr: nr))
+                session.statistics.recordREJSent()
                 let frame = AX25FrameBuilder.buildREJ(
                     from: session.localAddress,
                     to: session.remoteAddress,
@@ -2767,6 +3192,22 @@ final class AX25SessionManager: ObservableObject {
                     isCommand: isCommand
                 )
                 debugTrace("TX REJ", ["frame": describeFrame(frame)])
+                frames.append(frame)
+
+            case .sendSREJ(let nr, let pf, let isCommand):
+                // Each SREJ is a detected gap in the peer's stream — the
+                // same reverse-path loss evidence a REJ is.
+                onLinkVizEvent?(.rejSent(peer: session.remoteAddress.display, nr: nr))
+                session.statistics.recordREJSent()
+                let frame = AX25FrameBuilder.buildSREJ(
+                    from: session.localAddress,
+                    to: session.remoteAddress,
+                    via: session.path,
+                    nr: nr,
+                    pf: pf,
+                    isCommand: isCommand
+                )
+                debugTrace("TX SREJ", ["frame": describeFrame(frame)])
                 frames.append(frame)
 
             case .sendIFrame(let ns, let nr, let payload):
@@ -2792,6 +3233,7 @@ final class AX25SessionManager: ObservableObject {
                     "hasMagic": hasMagic,
                     "prefixHex": prefixHex
                 ])
+                onLinkVizEvent?(.delivered(peer: session.remoteAddress.display, bytes: data.count))
                 if let claim = deliveryClaims[session.key] {
                     // A protocol conversation (e.g. Winlink B2F) owns this
                     // session's bytes; terminal and AXDP must not see them.
@@ -2830,6 +3272,12 @@ final class AX25SessionManager: ObservableObject {
 
             case .stopT1:
                 stopT1Timer(for: session)
+
+            case .startT2:
+                startT2Timer(for: session)
+
+            case .stopT2:
+                stopT2Timer(for: session)
 
             case .startT3:
                 startT3Timer(for: session)

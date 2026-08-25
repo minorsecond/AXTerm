@@ -14,6 +14,21 @@ final class WinlinkComposeViewModel: ObservableObject {
         let id = UUID()
         var name: String
         var data: Data
+        /// Set when `data` is a zip of the file the user attached — kept so
+        /// the compression can be undone in place and the saving shown.
+        var original: (name: String, data: Data)?
+
+        var isCompressed: Bool { original != nil }
+
+        static func == (lhs: AttachmentItem, rhs: AttachmentItem) -> Bool {
+            lhs.id == rhs.id && lhs.name == rhs.name && lhs.data == rhs.data
+                && lhs.original?.name == rhs.original?.name
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(id)
+            hasher.combine(name)
+        }
     }
 
     @Published var toText: String = ""
@@ -186,8 +201,26 @@ final class WinlinkComposeViewModel: ObservableObject {
 
     // MARK: - Attachments
 
+    /// Attaches a file, zipping it first when that meaningfully shrinks
+    /// what will cross the air. LZHUF — the only compression B2F puts on
+    /// the wire — has a 2 KB window; deflate's 32 KB routinely halves a
+    /// large text attachment that LZHUF barely dents. Media, archives,
+    /// tiny files, and form XML pass through untouched, and the chip in
+    /// the compose window shows the saving with an undo.
     func addAttachment(name: String, data: Data) {
-        attachments.append(AttachmentItem(name: name, data: data))
+        if let zipped = AttachmentCompressor.zipped(name: name, data: data) {
+            attachments.append(AttachmentItem(
+                name: zipped.name, data: zipped.data, original: (name: name, data: data)))
+        } else {
+            attachments.append(AttachmentItem(name: name, data: data))
+        }
+    }
+
+    /// Reverts a zipped attachment to the exact file the user picked.
+    func revertAttachmentCompression(id: UUID) {
+        guard let index = attachments.firstIndex(where: { $0.id == id }),
+              let original = attachments[index].original else { return }
+        attachments[index] = AttachmentItem(name: original.name, data: original.data)
     }
 
     func removeAttachment(id: UUID) {

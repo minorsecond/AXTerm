@@ -17,6 +17,7 @@ struct TransmissionSettingsView: View {
     // File transfer list logic
     @State private var newAllowCallsign = ""
     @State private var newDenyCallsign = ""
+    @State private var prompt: TextEntryPrompt?
 
     var body: some View {
         Form {
@@ -198,6 +199,7 @@ struct TransmissionSettingsView: View {
         .onAppear {
             seedAdaptiveSettings()
         }
+        .textEntryPrompt($prompt)
     }
     
     // MARK: - Helpers
@@ -252,23 +254,15 @@ struct TransmissionSettingsView: View {
     }
     
     private func resetStationAlert() {
-        let alert = NSAlert()
-        alert.messageText = "Reset Station Parameters"
-        alert.informativeText = "Enter the callsign of the station to reset learned parameters for."
-        alert.addButton(withTitle: "Reset")
-        alert.addButton(withTitle: "Cancel")
-        
-        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-        input.placeholderString = "N0CALL-1"
-        alert.accessoryView = input
-        alert.window.initialFirstResponder = input
-        
-        if alert.runModal() == .alertFirstButtonReturn {
-            let call = input.stringValue.trimmingCharacters(in: .whitespaces)
-            if !call.isEmpty {
+        prompt = TextEntryPrompt(
+            id: "resetStation",
+            title: "Reset Station Parameters",
+            message: "Enter the callsign whose learned link parameters should be discarded. The station starts again from the defaults and re-learns from what it observes.",
+            placeholder: "N0CALL-1",
+            confirmTitle: "Reset",
+            uppercases: true) { call in
                 SessionCoordinator.shared?.resetStationToDefault(callsign: call)
             }
-        }
     }
 
     @ViewBuilder
@@ -359,33 +353,24 @@ struct TransmissionSettingsView: View {
     
     // Actions for add
     private func addToAllowList() {
-        let alert = NSAlert()
-        alert.messageText = "Add to Auto-Accept"
-        alert.informativeText = "Enter callsign to always accept files from."
-        alert.addButton(withTitle: "Add")
-        alert.addButton(withTitle: "Cancel")
-        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-        input.placeholderString = "N0CALL-7"
-        alert.accessoryView = input
-        alert.window.initialFirstResponder = input
-        if alert.runModal() == .alertFirstButtonReturn {
-            let call = input.stringValue
-            if !call.isEmpty { settings.allowCallsignForFileTransfer(call) }
-        }
+        prompt = TextEntryPrompt(
+            id: "allowFile",
+            title: "Add to Auto-Accept",
+            message: "Files from this callsign will be accepted and written to disk with no further prompt. Anyone can transmit any callsign, so this is trust in the operator, not proof of identity.",
+            placeholder: "N0CALL-7",
+            uppercases: true) { call in
+                settings.allowCallsignForFileTransfer(call)
+            }
     }
+
     private func addToDenyList() {
-        let alert = NSAlert()
-        alert.messageText = "Add to Auto-Deny"
-        alert.informativeText = "Enter callsign to always deny files from."
-        alert.addButton(withTitle: "Add")
-        alert.addButton(withTitle: "Cancel")
-        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-        input.placeholderString = "N0CALL-7"
-        alert.accessoryView = input
-        alert.window.initialFirstResponder = input
-        if alert.runModal() == .alertFirstButtonReturn {
-            let call = input.stringValue
-            if !call.isEmpty { settings.denyCallsignForFileTransfer(call) }
-        }
+        prompt = TextEntryPrompt(
+            id: "denyFile",
+            title: "Add to Auto-Deny",
+            message: "Files offered by this callsign will be refused without asking.",
+            placeholder: "N0CALL-7",
+            uppercases: true) { call in
+                settings.denyCallsignForFileTransfer(call)
+            }
     }
 }

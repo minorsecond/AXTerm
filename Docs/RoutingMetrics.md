@@ -23,6 +23,37 @@ ETX = 1 / (max(df, 0.05) × max(dr, 0.05)),  clamped to [1.0, 20.0]
 
 ETX ≈ 1 is a clean link; ETX 3 means a frame needs three attempts on average.
 
+### Session-scoped ETX (AX.25 connected mode)
+
+`AX25SessionManager.emitLinkQualitySampleIfNeeded` produces the same metric
+from a live session's own counters, as deltas since the previous sample:
+
+| Term | Evidence |
+| --- | --- |
+| `df` | `1 − retransmissions / (framesSent + retransmissions)` — our I-frames that landed first try. |
+| `dr` | `1 − rejSent / (framesReceived + rejSent)` — each REJ we sent marks a gap in the peer's stream, so it is direct evidence of loss on the reverse path. |
+
+`dr` falls back to `df` only when a sample carries no inbound traffic at
+all, rather than inventing a number.
+
+**Both directions are separate terms.** This code previously computed
+`1 / df²`, substituting the forward probability for the reverse one. On a
+symmetric link that is harmless; on an asymmetric one — the case ETX
+exists to catch — it reports a perfect link while the transfer struggles.
+Field capture 2026-08-23 (W0ARP-10): 344 inbound I-frames, 16 REJs sent,
+our own transmissions all landing first try. The UI showed "23% retx,
+16 REJ" while the adaptive popover showed ETX 1.00 / Loss 0%, because the
+two were measuring opposite directions and only the forward one reached
+the controller.
+
+The sample also fires on reverse-path evidence. Gating on forward evidence
+alone starved the controller during downloads — when we send almost
+nothing but RRs — which is exactly when the link is working hardest. The
+reported `lossRate` is the worse of the two directions: whichever way
+frames are being lost, the link needs backing off.
+
+Tests: `DirectionalETXTests`.
+
 ## Quality (0–255)
 
 ```

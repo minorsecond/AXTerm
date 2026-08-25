@@ -674,15 +674,134 @@ On receiving an I-frame with seq `ns`:
 - If `ns == VR` (expected):
   - accept payload
   - `VR = (VR + 1) mod M`
-  - send RR (or piggyback in outgoing I frames)
-- Else:
-  - send REJ (or SREJ if negotiated) to request retransmit
+  - **P=1:** answer immediately with RR F=1 — that single RR is cumulative
+    and acknowledges everything delivered so far
+  - **P=0:** arm T2 (if not already armed) and send nothing yet
+- Else if `ns` is inside the **receive span** ahead of `VR`:
+  - buffer the frame for later delivery
+  - send REJ once per gap (or SREJ if negotiated); start T1 to time the
+    retransmission we just asked for. REJ carries `N(R)`, so it settles any
+    pending T2 ack debt.
+- Else (outside the span — most likely a duplicate):
+  - discard; re-advertise `VR` cumulatively (immediately with F=1 on P=1,
+    otherwise via T2 like any other ack)
+
+#### T2 delayed acknowledgment
+
+Acks are cumulative, so one RR answers a whole burst — sending one per frame
+spends a key-up (~0.5 s of channel at 1200 baud) per frame and, on simplex,
+risks colliding with the peer's next I-frame, converting the ack itself into
+inbound loss and a go-back-N resend. Rules:
+
+- An in-sequence P=0 delivery **arms T2 once**; frames arriving while it runs
+  do not push the deadline back. Re-arming per frame is unbounded — any
+  arrival cadence faster than T2 defers the ack forever and the peer's T1
+  fires first (observed as RTO oscillation in the adaptive harness).
+- The debt is settled by whatever carries `N(R)` first: the F=1 response to a
+  P=1 poll, an outgoing I-frame's piggybacked `N(R)`, a REJ, or the RR that
+  T2 itself fires (F=0). A settled debt disarms T2; a stale T2 expiry with
+  nothing owed stays silent.
+- **T2 must sit inside every plausible peer T1.** Production default 2.0 s:
+  longer than one max-size frame's airtime at 1200 baud (~1.9 s, so
+  back-to-back frames batch), comfortably under the 3.0 s RTO floor. Timers
+  clamp T2 to ⅔ of `rtoMin` to keep the invariant when either is configured.
+- In practice T2 rarely fires: RMS gateways end every burst with a P=1 frame
+  (field capture 2026-08-24: 208 inbound I-frames, every burst
+  poll-terminated), and the mandatory F=1 response carries the ack.
+
+#### Receive span
+
+The receive span is `M / 2` — how far ahead of `VR` an out-of-sequence I-frame
+may sit and still be buffered. Inside it, a sequence number ahead of `VR` is
+unambiguously a future frame; at or beyond it, the same number may be a
+duplicate one lap back, and buffering it as "future" would deliver a lap-old
+payload when `VR` wraps onto it.
+
+**The span is not `K`.** `K` is the *transmit* window this station chose for
+frames it sends; it says nothing about how many frames the peer keeps in
+flight, and nothing negotiates a common value without XID. Deriving the span
+from `K` means a station that has throttled itself to `K=2` throws away frames
+a peer running four outstanding frames legitimately sent — and once `VR`
+reaches them, it must ask for frames the peer already sent and considers
+delivered. That deadlocks the link. Field capture 2026-08-24 (W0ARP-10):
+`N(S)=7` arrived twice while `VR=4`, was discarded both times, and the session
+died 60 s later still waiting for it.
+
+The out-of-sequence buffer must be able to hold a full span; sizing it to `K`
+silently re-discards frames the span test just accepted.
+
+#### T1 during REJ recovery
+
+While a REJ is outstanding, T1 is timing the *peer's* retransmission, not
+anything this station sent. An inbound RR must therefore leave it alone — it
+must be neither stopped nor restarted:
+
+- Stopping it disarms REJ recovery. On a receive-heavy link nothing of ours is
+  ever outstanding, so a peer's keepalive polls cancel T1 before it can fire
+  and a single lost REJ strands the gap permanently.
+- Restarting it is the same stall by another route: each poll pushes the
+  deadline out, so a peer polling faster than the RTO keeps T1 alive forever
+  without it ever expiring.
+
+T1 stops on an RR only when no gap is outstanding.
+
+#### Selective reject (SREJ)
+
+Available only after XID negotiation (below). A receive gap draws
+`SREJ(V(R))` — retransmit exactly the missing frame — instead of go-back-N
+REJ. Discipline:
+
+- One SREJ outstanding per gap; T1 times the awaited retransmission.
+- The F-bit asymmetry (§4.3.2.4) is load-bearing: **SREJ F=1 acknowledges
+  everything below N(R); SREJ F=0 acknowledges nothing.** Sending an F=0
+  SREJ therefore must NOT settle the T2 ack debt (the cumulative RR still
+  goes out), and receiving one must not clear the send buffer.
+- When filling one gap exposes another (frames beyond it still buffered),
+  SREJ the new missing frame immediately — waiting costs a full T1.
+- Transmit side: an inbound SREJ resends only frame N(R), with N(R)
+  refreshed to the current V(R). Duplicate SREJs for the same frame are
+  suppressed (T1 owns the retry), same as the REJ amplification guard.
+
+### 7.5.1 AX.25 2.2 parameter negotiation (XID)
+
+Before the first SABM to an unknown station (per-callsign cache), send an
+XID command (control 0xBF) offering: SREJ, our PACLEN as N1, our K —
+**modulo 8 explicitly**. Wire format and bit values follow the field
+reference (Direwolf xid.c): FI 0x82, GI 0x80, 16-bit group length,
+PI 2 / 3 / 6 / 8 / 9 / 10. A command offers a menu; a response picks one.
+
+Outcomes, all cached per callsign so the cost is paid at most once:
+
+- **XID response** → adopt: SREJ iff selected; PACLEN = min(ours, their
+  N1); K = min(ours, their k). N1/k are notifications — ceilings, never
+  raised. Then SABM.
+- **FRMR** → the spec's documented pre-2.2 answer (§6.3.2): "use
+  defaults". Proceed with plain SABM. Never an error.
+- **Silence** → one RTO, then plain SABM.
+- A malformed XID response resolves as unsupported — a peer's encoding bug
+  must not strand the connect.
+
+Inbound: an XID command draws a response selecting the intersection of the
+offer and our capabilities; the SABM that follows opens the session with
+exactly what the response promised.
+
+**Modulo 128 is deliberately not offered.** Extended mode changes the
+control-field length of every I- and S-frame, and the inbound KISS decode
+pipeline is not session-aware — it cannot know where a peer's two-byte
+control field ends. At 1200 baud the window is not the bottleneck anyway:
+k=7 × 256 bytes keeps ~14 s of airtime in flight. SREJ and the N1/k
+exchange carry all the value at deployable risk.
 
 ### 7.6 Send logic (I frames)
 Maintain send buffer for unacked frames:
 - `VS` next sequence to send
 - `VA` oldest unacked
 - Send while `(VS - VA) < K` and queue not empty
+- **Checkpoint (§6.2): the frame that fills the send window carries P=1** —
+  the peer's mandatory F=1 response acks the burst at once, which matters
+  against receivers that batch acks on T2. Only on window-full, not on every
+  burst end: some node stacks (DRLNOD, live capture) DM a session that polls
+  on every idle line.
 - Start T1 if not running
 - On RR with `nr`:
   - ack frames up to `nr-1`

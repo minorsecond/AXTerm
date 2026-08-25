@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import AppKit
 import Combine
 import UniformTypeIdentifiers
 
@@ -14,6 +13,9 @@ import UniformTypeIdentifiers
 final class DiagnosticsViewModel: ObservableObject {
     @Published var events: [AppEventRecord] = []
     @Published var copyFeedback: String?
+    /// The report waiting to be filed by the operator; see `.exportFile`.
+    @Published var pendingExport: ExportableFile?
+    @Published var exportError: String?
 
     private let settings: AppSettingsStore
     private let eventStore: EventLogStore?
@@ -47,23 +49,16 @@ final class DiagnosticsViewModel: ObservableObject {
         }
     }
 
+    /// Hands the diagnostics report to the operator to file.
+    ///
+    /// Failure is reported, not swallowed: the export is something the
+    /// operator explicitly asked for, and a silent failure looked exactly
+    /// like a successful save.
     func exportDiagnostics() {
-        makeReportJSON(limit: exportLimit) { json in
+        makeReportJSON(limit: exportLimit) { [weak self] json in
             guard let json else { return }
-            let panel = NSSavePanel()
-            panel.allowedContentTypes = [.json]
-            panel.nameFieldStringValue = "AXTerm-Diagnostics.json"
-            panel.canCreateDirectories = true
-            panel.begin { response in
-                guard response == .OK, let url = panel.url else { return }
-                do {
-                    try json.write(to: url, atomically: true, encoding: .utf8)
-                } catch {
-                    // The user explicitly asked for this export — a silent
-                    // failure looked like a successful save.
-                    Telemetry.capture(error: error, message: "Diagnostics export write failed")
-                }
-            }
+            self?.pendingExport = ExportableFile(name: "AXTerm-Diagnostics.json",
+                                                 data: Data(json.utf8))
         }
     }
 
@@ -92,6 +87,9 @@ struct DiagnosticsView: View {
         VStack(spacing: 0) {
             header
             Divider()
+            #if os(iOS)
+            touchList
+            #else
             Table(model.events) {
                 TableColumn("Time") { event in
                     Text(Self.timeFormatter.string(from: event.createdAt))
@@ -109,12 +107,78 @@ struct DiagnosticsView: View {
                         .lineLimit(2)
                 }
             }
+            #endif
         }
+        #if os(macOS)
         .frame(minWidth: 700, minHeight: 400)
+        #endif
         .task {
             model.load()
         }
+        .exportFile($model.pendingExport) { model.exportError = $0 }
+        .alert("Export failed", isPresented: Binding(
+            get: { model.exportError != nil },
+            set: { if !$0 { model.exportError = nil } })) {
+            Button("OK") { model.exportError = nil }
+        } message: {
+            Text(model.exportError ?? "")
+        }
     }
+
+#if os(iOS)
+    /// The same events as a touch list.
+    ///
+    /// `Table` renders only its first column on iOS, so this screen showed a
+    /// column of bare timestamps with no level, category or message — the
+    /// diagnostics view being the one place that has to be readable when
+    /// something has gone wrong. Same trap as the mailbox and the address
+    /// book; this was the last one left.
+    private var touchList: some View {
+        Group {
+            if model.events.isEmpty {
+                ContentUnavailableView(
+                    "No events",
+                    systemImage: "checkmark.seal",
+                    description: Text("Nothing has been logged on this device yet."))
+            } else {
+                List(model.events, id: \.id) { event in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Text(event.level.rawValue.uppercased())
+                                .font(.caption2.weight(.bold))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(tint(for: event.level).opacity(0.18), in: Capsule())
+                                .foregroundStyle(tint(for: event.level))
+                            Text(event.category.rawValue)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 6)
+                            Text(Self.timeFormatter.string(from: event.createdAt))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                        }
+                        Text(event.message)
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    .padding(.vertical, 3)
+                }
+                .listStyle(.plain)
+            }
+        }
+    }
+
+    /// Severity has to survive the loss of the colour-coded column.
+    private func tint(for level: AppEventRecord.Level) -> Color {
+        switch level {
+        case .error: return .red
+        case .warning: return .orange
+        case .info: return .blue
+        }
+    }
+#endif
 
     private var header: some View {
         HStack {

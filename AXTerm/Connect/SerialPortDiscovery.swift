@@ -72,6 +72,13 @@ final class SerialPortDiscovery: ObservableObject {
     }
     
     nonisolated private func performDiscovery() async -> [SerialDevice] {
+        // iOS has no user-accessible serial ports: /dev exists inside the
+        // sandbox but never contains a TNC. Returning empty is the honest
+        // answer, and `PlatformIdiom.supportsSerialPorts` is what the UI
+        // consults to explain *why* rather than showing an empty list that
+        // looks like a device failed to appear.
+        guard PlatformIdiom.supportsSerialPorts else { return [] }
+
         do {
             let devContents = try fileManager.contentsOfDirectory(atPath: "/dev")
             

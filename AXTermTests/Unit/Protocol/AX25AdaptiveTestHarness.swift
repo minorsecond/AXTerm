@@ -54,7 +54,12 @@ struct HarnessConfig {
         maxRetries: 6,
         rtoMin: 1.0,
         rtoMax: 16.0,
-        initialRto: 2.0
+        initialRto: 2.0,
+        // Scaled with this harness's fast channel the same way the 2.0 s
+        // production default is scaled to 1200-baud RF: the delayed ack
+        // must land well inside the peer's T1 (rtoMin 1.0 here), or every
+        // batched ack turns into a spurious retransmit and RTO oscillates.
+        t2AckDelay: 0.4
     )
 
     /// Whether to run AdaptiveInvariantChecker after each clock advance.
@@ -368,9 +373,14 @@ final class AdaptiveTestHarness {
             }
 
         case "i":
+            // Recover the real P bit (bit 4 of the modulo-8 control byte).
+            // Hardcoding pf: false silently stripped checkpoint polls, which
+            // matters now that receivers batch acks on T2 and rely on the
+            // burst-ending poll for the immediate cumulative F=1 response.
             if let r = bob.handleInboundIFrame(
                 from: from, path: path, channel: channel,
-                ns: frame.ns ?? 0, nr: frame.nr ?? 0, pf: false,
+                ns: frame.ns ?? 0, nr: frame.nr ?? 0,
+                pf: ((frame.controlByte ?? 0) & 0x10) != 0,
                 payload: frame.payload
             ) {
                 responses.append(r)
@@ -423,9 +433,14 @@ final class AdaptiveTestHarness {
             }
 
         case "i":
+            // Recover the real P bit (bit 4 of the modulo-8 control byte).
+            // Hardcoding pf: false silently stripped checkpoint polls, which
+            // matters now that receivers batch acks on T2 and rely on the
+            // burst-ending poll for the immediate cumulative F=1 response.
             if let r = alice.handleInboundIFrame(
                 from: from, path: path, channel: channel,
-                ns: frame.ns ?? 0, nr: frame.nr ?? 0, pf: false,
+                ns: frame.ns ?? 0, nr: frame.nr ?? 0,
+                pf: ((frame.controlByte ?? 0) & 0x10) != 0,
                 payload: frame.payload
             ) {
                 responses.append(r)

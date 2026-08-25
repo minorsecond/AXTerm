@@ -1332,6 +1332,11 @@ private struct SessionRecord: Identifiable, Hashable {
 
 /// Main terminal view with session output and transmission controls
 struct TerminalView: View {
+    /// Tapping a callsign in the console asks who it is; long-pressing opens
+    /// the menu of things to do with it. Supplied by the shell, because who
+    /// presents a profile is the shell's business, not the terminal's.
+    var onIdentity: ((String) -> Void)?
+    var onIdentityMenu: ((String) -> Void)?
     @ObservedObject var client: PacketEngine
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var sessionCoordinator: SessionCoordinator
@@ -1345,6 +1350,8 @@ struct TerminalView: View {
     @State private var selectedTab: TerminalTab = .session
     @State private var showingTransferSheet = false
     @State private var selectedFileURL: URL?
+    /// Drives the iOS file importer; unused on macOS, which runs a panel.
+    @State private var isPickingTransfer = false
 
     // Transfer error alert
     @State private var transferError: String?
@@ -1368,8 +1375,12 @@ struct TerminalView: View {
         sessionCoordinator: SessionCoordinator,
         connectCoordinator: ConnectCoordinator,
         searchModel: AppToolbarSearchModel,
-        locationService: StationLocationService? = nil
+        locationService: StationLocationService? = nil,
+        onIdentity: ((String) -> Void)? = nil,
+        onIdentityMenu: ((String) -> Void)? = nil
     ) {
+        self.onIdentity = onIdentity
+        self.onIdentityMenu = onIdentityMenu
         self.client = client
         _settings = ObservedObject(wrappedValue: settings)
         _sessionCoordinator = ObservedObject(wrappedValue: sessionCoordinator)
@@ -1513,6 +1524,12 @@ struct TerminalView: View {
             .onDisappear {
                 stopAutoConnectAttempts()
             }
+            #if os(iOS)
+            .fileImporter(isPresented: $isPickingTransfer,
+                          allowedContentTypes: [.item],
+                          allowsMultipleSelection: false,
+                          onCompletion: acceptPickedTransfer)
+            #endif
             .modifier(TerminalViewModifiers(
                 searchModel: searchModel,
                 showingTransferSheet: $showingTransferSheet,
@@ -2142,7 +2159,7 @@ struct TerminalView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .background(Color(platform: .platformCardBackground).opacity(0.5))
     }
 
     private var connectionMessage: String {
@@ -2162,7 +2179,9 @@ struct TerminalView: View {
                 lines: lines,
                 showDaySeparators: settings.showConsoleDaySeparators,
                 clearedAt: $settings.terminalClearedAt,
-                localCallsign: settings.myCallsign
+                localCallsign: settings.myCallsign,
+                onIdentity: onIdentity,
+                onIdentityMenu: onIdentityMenu
             )
             .opacity(lines.isEmpty ? 0 : 1)
             
@@ -3057,7 +3076,13 @@ struct TerminalView: View {
         return true
     }
 
+    /// Picks a file to send over the air.
+    ///
+    /// macOS runs its own panel modally, which is the platform convention and
+    /// keeps this a plain function call. iOS has no modal panel, so the flag
+    /// drives a `fileImporter` on the view instead — see `isPickingTransfer`.
     private func selectFileForTransfer() {
+        #if os(macOS)
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -3067,6 +3092,22 @@ struct TerminalView: View {
             selectedFileURL = url
             showingTransferSheet = true
         }
+        #else
+        isPickingTransfer = true
+        #endif
+    }
+
+    /// Accepts the file the operator chose on a platform with no modal panel.
+    ///
+    /// The security scope has to be *held*, not released here: the transfer
+    /// reads the file later, on its own schedule. Releasing on return would
+    /// leave the transfer reading a URL it no longer has permission to open,
+    /// which fails partway through a send rather than before one.
+    private func acceptPickedTransfer(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result, let url = urls.first else { return }
+        _ = url.startAccessingSecurityScopedResource()
+        selectedFileURL = url
+        showingTransferSheet = true
     }
 
     private func startTransfer(destination: String, path: String, transferProtocol: TransferProtocolType = .axdp, compressionSettings: TransferCompressionSettings = .useGlobal) {

@@ -132,6 +132,89 @@ extension DatabaseManager {
             columns: ["displayName"])
     }
 
+    static func createWinlinkPartialBodies(_ db: Database) throws {
+        try db.create(table: WinlinkPartialBodyRecord.databaseTableName) { t in
+            t.primaryKey("mid", .text)
+            t.column("compressedSize", .integer).notNull()
+            t.column("data", .blob).notNull()
+            t.column("updatedAt", .datetime).notNull()
+        }
+    }
+
+    /// Adds link identity (frequency) and observation position to the
+    /// session log so empirical link quality can be attributed to the
+    /// right link and qualified by where it was measured from.
+    ///
+    /// All columns are nullable: rows written before this migration have
+    /// no position, and telnet sessions have no frequency. A nil is
+    /// "unknown", never "zero" — the quality query must treat it as
+    /// unattributable rather than assume the operator's current QTH.
+    static func addWinlinkSessionLogContext(_ db: Database) throws {
+        try db.alter(table: WinlinkSessionLogRecord.databaseTableName) { t in
+            t.add(column: "frequencyHz", .integer)
+            t.add(column: "obsLatitude", .double)
+            t.add(column: "obsLongitude", .double)
+            t.add(column: "obsGrid", .text)
+            t.add(column: "obsSource", .text)
+        }
+        // Quality lookups scan by link; the log grows one row per exchange.
+        try db.create(
+            index: "winlinkSessionLog_link",
+            on: WinlinkSessionLogRecord.databaseTableName,
+            columns: ["gatewayCallsign", "frequencyHz", "startedAt"],
+            ifNotExists: true)
+    }
+
+    /// Starred catalog products (migration v9). Separate from the
+    /// catalog cache on purpose — see `WinlinkCatalogFavoriteRecord`.
+    static func createWinlinkCatalogFavorites(_ db: Database) throws {
+        try db.create(table: WinlinkCatalogFavoriteRecord.databaseTableName) { t in
+            t.primaryKey("inquiryId", .text)
+            t.column("addedAt", .datetime).notNull()
+        }
+    }
+
+    /// Cached callsign-directory answers (migration v10). Source-agnostic
+    /// by design — the `source` column records which directory answered,
+    /// so HamDB today and anything else later share one cache.
+    /// Splits the gateway cache into what is near home and what was fetched
+    /// for a trip.
+    ///
+    /// `gateway/status.json` has no geographic filter — it returns every
+    /// public gateway in the world and the radius is applied on this device.
+    /// So the wide list was already being downloaded and then discarded. The
+    /// only thing missing was somewhere to keep it that an ordinary refresh
+    /// near home would not wipe.
+    static func addStationScope(_ db: Database) throws {
+        // Existing rows were fetched under the local radius, so that is what
+        // they are.
+        try db.alter(table: WinlinkRMSStationRecord.databaseTableName) { t in
+            t.add(column: "scope", .text).notNull().defaults(to: "local")
+        }
+        // The list filters by scope on every read.
+        try db.create(
+            index: "idx_winlinkRMSStation_scope",
+            on: WinlinkRMSStationRecord.databaseTableName,
+            columns: ["scope", "distanceMiles"])
+    }
+
+    static func createCallsignDirectory(_ db: Database) throws {
+        try db.create(table: CallsignDirectoryRecord.databaseTableName) { t in
+            t.primaryKey("callsign", .text)
+            t.column("name", .text)
+            t.column("gridSquare", .text)
+            t.column("latitude", .double)
+            t.column("longitude", .double)
+            t.column("locality", .text)
+            t.column("state", .text)
+            t.column("country", .text)
+            t.column("licenseClass", .text)
+            t.column("expires", .text)
+            t.column("source", .text).notNull()
+            t.column("fetchedAt", .datetime).notNull()
+        }
+    }
+
     private static func seedSystemFolders(_ db: Database) throws {
         let seeds: [(WinlinkFolderRecord.SystemRole, String, Int)] = [
             (.inbox, "Inbox", 0),

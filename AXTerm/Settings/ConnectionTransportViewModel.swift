@@ -309,6 +309,40 @@ final class ConnectionTransportViewModel: ObservableObject {
         packetEngine.isConnectionLogicSuspended = suspend
     }
     
+    // MARK: - Connecting
+
+    /// Whether a connection attempt would do anything right now.
+    var canConnect: Bool { Self.canConnect(from: connectionStatus) }
+
+    /// Pure, so the button's states can be tested without standing up a
+    /// `PacketEngine` and a real socket.
+    ///
+    /// `.failed` counts as connectable: a failed attempt is the case where
+    /// the operator most wants to retry, and leaving the button saying
+    /// "Disconnect" there would strand them.
+    nonisolated static func canConnect(from status: ConnectionStatus) -> Bool {
+        switch status {
+        case .disconnected, .failed: true
+        case .connecting, .connected: false
+        }
+    }
+
+    /// Opens the link using whatever transport is currently configured.
+    ///
+    /// The suspension in place while this screen is on-screen only gates
+    /// *settings-change-triggered* reconnects, so an explicit connect works
+    /// straight through it. Lifting the suspension here would be actively
+    /// wrong: doing so compares the settings snapshot taken on appear, and
+    /// since editing the host or port is exactly what the operator just did,
+    /// it fires a second connect that closes the link this one opened.
+    func connect() {
+        packetEngine.connectUsingSettings()
+    }
+
+    func disconnect() {
+        packetEngine.disconnect(reason: "operator disconnected from Connection settings")
+    }
+
     // MARK: - Safe Selection Handling
     
     /// Called by UI when user changes transport selection.

@@ -6,7 +6,11 @@
 //  Apple HIG-compliant design with native table styling, tooltips, and export functionality.
 //
 
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import SwiftUI
 
 /// Main view for the NET/ROM Routes page.
@@ -34,14 +38,29 @@ struct NetRomRoutesView: View {
     var body: some View {
         VStack(spacing: 0) {
             // Toolbar
+            //
+            // Scrolled sideways on a handheld. The controls carry fixed widths
+            // sized for a Mac window (340 + 160 + 180 plus a toggle and four
+            // buttons), and an HStack cannot shrink below its content — so on
+            // an 834pt iPad it forced the whole VStack wider than the screen
+            // and dragged the table's leftmost column, the callsign, off the
+            // edge with it. Scrolling keeps every control reachable instead of
+            // silently clipping the one that matters most.
+            #if os(iOS)
+            ScrollView(.horizontal, showsIndicators: false) {
+                routesToolbar
+            }
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            #else
             routesToolbar
+            #endif
 
             Divider()
 
             // Content based on selected tab
             tabContent
         }
-        .background(Color(NSColor.windowBackgroundColor))
+        .background(Color(platform: .platformWindowBackground))
         .confirmationDialog(
             "Clear all NET/ROM routing data?",
             isPresented: $showingClearConfirmation,
@@ -94,7 +113,7 @@ struct NetRomRoutesView: View {
 
             // Hide expired toggle
             Toggle("Hide expired", isOn: $settings.hideExpiredRoutes)
-                .toggleStyle(.checkbox)
+                .platformCheckboxToggle()
                 .help("When enabled, hides entries with 0% freshness (older than TTL)")
 
             // Search field
@@ -155,6 +174,117 @@ struct NetRomRoutesView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
+
+#if os(iOS)
+    // MARK: - Touch presentations
+
+    /// Routes as stacked rows.
+    ///
+    /// Nine side-by-side columns fit a 900pt Mac window and not an 834pt
+    /// iPad, where the destination callsign — the field the whole view exists
+    /// for — truncated to `KB5YZB…` while `Hops` kept a column to itself.
+    ///
+    /// Tooltips move to `.explain()`: `.help()` renders nothing on iOS, so
+    /// every derivation CLAUDE.md requires was silently absent here.
+    private var routesTouchList: some View {
+        List(viewModel.filteredRoutes) { route in
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(NetRomTouchRow.headline(
+                        destination: route.destination, nextHop: route.nextHop))
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    QualityBadge(quality: route.quality, percent: route.qualityPercent)
+                }
+
+                if NetRomTouchRow.shouldShowPath(route.pathSummary, nextHop: route.nextHop) {
+                    Text(route.pathSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .explain("Connect path: \(route.pathSummary)", showsIndicator: false)
+                }
+
+                HStack(spacing: 6) {
+                    SourceTypeBadge(sourceType: route.sourceType)
+                    Text(NetRomTouchRow.detail(
+                        hops: route.hopCountKnown ? route.hopCount : nil,
+                        updated: route.lastUpdatedRelative,
+                        freshness: route.freshnessDisplayString))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .explain(RouteDisplayInfo.freshnessTooltip, showsIndicator: false)
+            }
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+            .contextMenu {
+                Button("Connect (NET/ROM)") { requestRouteConnect(route, action: .netrom) }
+                Button("Connect Direct (AX.25)") { requestRouteConnect(route, action: .ax25Direct) }
+                Button("Connect via Digi (AX.25)") { requestRouteConnect(route, action: .ax25ViaDigi) }
+            }
+        }
+        .listStyle(.plain)
+    }
+
+    /// Link quality as stacked rows.
+    ///
+    /// df, dr, ETX and dups are the metrics CLAUDE.md requires an explanation
+    /// for, and at 50pt per column on a handheld they were unreadable even
+    /// where they rendered. A dash means *no observation yet*, which is not
+    /// the same claim as a measured zero.
+    private var linkQualityTouchList: some View {
+        List(viewModel.filteredLinkStats) { stat in
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(NetRomTouchRow.headline(destination: stat.fromCall, nextHop: stat.toCall))
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    QualityBadge(quality: stat.quality, percent: stat.qualityPercent,
+                                 detailTooltip: stat.qualityTooltip)
+                }
+
+                HStack(spacing: 10) {
+                    metricLabel("df", NetRomTouchRow.metric(stat.dfEstimate, decimals: 2))
+                        .explain("Forward delivery probability (0–1): how often a frame sent this way arrives.")
+                    metricLabel("dr", NetRomTouchRow.metric(stat.drEstimate, decimals: 2))
+                        .explain("Reverse delivery probability (0–1): how often the reply comes back.")
+                    metricLabel("ETX", NetRomTouchRow.metric(stat.etx, decimals: 1))
+                        .explain("Expected transmissions per delivered frame. 1.0 is a perfect link; above 3 is poor.")
+                    metricLabel("dups", "\(stat.duplicateCount)")
+                        .explain("Duplicate or retried frames observed. A high count usually means retries.")
+                }
+                .font(.caption2)
+
+                Text(NetRomTouchRow.detail(
+                    hops: nil, updated: stat.lastUpdatedRelative,
+                    freshness: stat.freshnessDisplayString))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .explain(LinkStatDisplayInfo.freshnessTooltip, showsIndicator: false)
+            }
+            .padding(.vertical, 2)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(NetRomTouchRow.spokenLink(
+                from: stat.fromCall, to: stat.toCall,
+                df: stat.dfEstimate, dr: stat.drEstimate))
+        }
+        .listStyle(.plain)
+    }
+
+    /// A metric and its name, so a bare number is never on its own.
+    private func metricLabel(_ name: String, _ value: String) -> some View {
+        HStack(spacing: 2) {
+            Text(name).foregroundStyle(.tertiary)
+            Text(value).foregroundStyle(.secondary).monospacedDigit()
+        }
+    }
+#endif
 
     // MARK: - Actions
 
@@ -245,7 +375,7 @@ struct NetRomRoutesView: View {
                     }
                     .width(min: 50, ideal: 70)
                 }
-                .tableStyle(.inset(alternatesRowBackgrounds: true))
+                .platformInsetTable()
             }
         }
     }
@@ -260,6 +390,9 @@ struct NetRomRoutesView: View {
                     message: "No routes have been discovered yet. Routes are built from NET/ROM broadcasts or inferred from packet observations."
                 )
             } else {
+                #if os(iOS)
+                routesTouchList
+                #else
                 Table(viewModel.filteredRoutes) {
                     TableColumn("Destination") { route in
                         Text(route.destination)
@@ -335,7 +468,8 @@ struct NetRomRoutesView: View {
                     }
                     .width(min: 50, ideal: 70)
                 }
-                .tableStyle(.inset(alternatesRowBackgrounds: true))
+                .platformInsetTable()
+                #endif
             }
         }
     }
@@ -350,6 +484,9 @@ struct NetRomRoutesView: View {
                     message: "No link quality data has been collected yet. Link quality is estimated from packet observations using ETX-style metrics."
                 )
             } else {
+                #if os(iOS)
+                linkQualityTouchList
+                #else
                 Table(viewModel.filteredLinkStats) {
                     TableColumn("From") { stat in
                         Text(stat.fromCall)
@@ -426,7 +563,8 @@ struct NetRomRoutesView: View {
                     }
                     .width(min: 50, ideal: 70)
                 }
-                .tableStyle(.inset(alternatesRowBackgrounds: true))
+                .platformInsetTable()
+                #endif
             }
         }
     }
@@ -456,8 +594,7 @@ struct NetRomRoutesView: View {
     // MARK: - Helpers
 
     private func copyToClipboard(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        ClipboardWriter.copy(text)
     }
 
     private func requestNeighborConnect(_ neighbor: NeighborDisplayInfo) {

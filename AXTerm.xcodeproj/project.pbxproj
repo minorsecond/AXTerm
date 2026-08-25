@@ -10,6 +10,8 @@
 		9B1C3E6C2F3A000100000003 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1C3E6C2F3A000100000002 /* GRDB */; };
 		9B1C3E6C2F3A000100000004 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1C3E6C2F3A000100000002 /* GRDB */; };
 		9B1C3E6C2F3A000100000007 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1C3E6C2F3A000100000006 /* Sentry */; };
+		I0500012F40000000000A000 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1C3E6C2F3A000100000002 /* GRDB */; };
+		I0500012F40000000000B000 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 9B1C3E6C2F3A000100000006 /* Sentry */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -42,6 +44,7 @@
 		3487E8B42F2AA2A800DF0172 /* AXTermUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AXTermUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AABBCC112F3B000000000001 /* AXTerm-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AXTerm-Debug.xcconfig"; sourceTree = "<group>"; };
 		AABBCC112F3B000000000002 /* AXTerm-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "AXTerm-Release.xcconfig"; sourceTree = "<group>"; };
+		I0500012F400000000002000 /* AXTerm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AXTerm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		INTG00012F3C000000000001 /* AXTermIntegrationTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AXTermIntegrationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -52,6 +55,27 @@
 				Info.plist,
 			);
 			target = 3487E89C2F2AA2A700DF0172 /* AXTerm */;
+		};
+		I0500012F400000000009000 /* Exceptions for "AXTerm" folder in "AXTerm-iOS" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Assets/Icon/Assets.xcassets,
+				AXTermApp.swift,
+				AXTermAppDelegate.swift,
+				AXTermCommands.swift,
+				ContentView.swift,
+				Info.plist,
+				MenuBarView.swift,
+				PacketNSTableView.swift,
+				PacketTableCoordinator.swift,
+				PacketTableNSTableView.swift,
+				RowSelectionCaptureView.swift,
+				"Transmission/AppDelegate+Diagnostics.swift",
+				"Transmission/AX25DiagnosticLogger+FileLogging.swift",
+				Transmission/KISSLinkSerial.swift,
+				Winlink/UI/WinlinkMailView.swift,
+			);
+			target = I0500012F400000000001000 /* AXTerm-iOS */;
 		};
 		INTG00012F3C00000000000D /* Exceptions for "AXTermIntegrationTests" folder in "AXTermIntegrationTests" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
@@ -67,6 +91,7 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				34C5FAA12F2F600000E7F39B /* Exceptions for "AXTerm" folder in "AXTerm" target */,
+				I0500012F400000000009000 /* Exceptions for "AXTerm" folder in "AXTerm-iOS" target */,
 			);
 			path = AXTerm;
 			sourceTree = "<group>";
@@ -116,6 +141,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		I0500012F400000000004000 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				I0500012F40000000000A000 /* GRDB in Frameworks */,
+				I0500012F40000000000B000 /* Sentry in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		INTG00012F3C000000000004 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -146,6 +180,7 @@
 				3487E8AA2F2AA2A800DF0172 /* AXTermTests.xctest */,
 				3487E8B42F2AA2A800DF0172 /* AXTermUITests.xctest */,
 				INTG00012F3C000000000001 /* AXTermIntegrationTests.xctest */,
+				I0500012F400000000002000 /* AXTerm.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -224,6 +259,30 @@
 			productReference = 3487E8B42F2AA2A800DF0172 /* AXTermUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		I0500012F400000000001000 /* AXTerm-iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = I0500012F400000000006000 /* Build configuration list for PBXNativeTarget "AXTerm-iOS" */;
+			buildPhases = (
+				I0500012F400000000003000 /* Sources */,
+				I0500012F400000000004000 /* Frameworks */,
+				I0500012F400000000005000 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				3487E89F2F2AA2A700DF0172 /* AXTerm */,
+			);
+			name = "AXTerm-iOS";
+			packageProductDependencies = (
+				9B1C3E6C2F3A000100000002 /* GRDB */,
+				9B1C3E6C2F3A000100000006 /* Sentry */,
+			);
+			productName = "AXTerm-iOS";
+			productReference = I0500012F400000000002000 /* AXTerm.app */;
+			productType = "com.apple.product-type.application";
+		};
 		INTG00012F3C000000000005 /* AXTermIntegrationTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = INTG00012F3C00000000000A /* Build configuration list for PBXNativeTarget "AXTermIntegrationTests" */;
@@ -268,6 +327,9 @@
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = 3487E89C2F2AA2A700DF0172;
 					};
+					I0500012F400000000001000 = {
+						CreatedOnToolsVersion = 26.2;
+					};
 					INTG00012F3C000000000005 = {
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = 3487E89C2F2AA2A700DF0172;
@@ -296,6 +358,7 @@
 				3487E8A92F2AA2A800DF0172 /* AXTermTests */,
 				3487E8B32F2AA2A800DF0172 /* AXTermUITests */,
 				INTG00012F3C000000000005 /* AXTermIntegrationTests */,
+				I0500012F400000000001000 /* AXTerm-iOS */,
 			);
 		};
 /* End PBXProject section */
@@ -316,6 +379,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		3487E8B22F2AA2A800DF0172 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		I0500012F400000000005000 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -347,6 +417,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		3487E8B02F2AA2A800DF0172 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		I0500012F400000000003000 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -661,6 +738,78 @@
 			};
 			name = Release;
 		};
+		I0500012F400000000007000 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "AXTerm/AXTerm-iOS.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 7KNS6YGX5V;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = AXTerm;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AXTerm needs local network access to reach a KISS TNC service (for example Direwolf or LinBPQ) on your network.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "AXTerm uses your position to set the station grid square, place stations on the map, and stamp position reports.";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rosswardrup.AXTerm;
+				PRODUCT_NAME = AXTerm;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		I0500012F400000000008000 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "AXTerm/AXTerm-iOS.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 7KNS6YGX5V;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = AXTerm;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "AXTerm needs local network access to reach a KISS TNC service (for example Direwolf or LinBPQ) on your network.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "AXTerm uses your position to set the station grid square, place stations on the map, and stamp position reports.";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rosswardrup.AXTerm;
+				PRODUCT_NAME = AXTerm;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		INTG00012F3C00000000000B /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -740,6 +889,15 @@
 			buildConfigurations = (
 				3487E8C52F2AA2A800DF0172 /* Debug */,
 				3487E8C62F2AA2A800DF0172 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		I0500012F400000000006000 /* Build configuration list for PBXNativeTarget "AXTerm-iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				I0500012F400000000007000 /* Debug */,
+				I0500012F400000000008000 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

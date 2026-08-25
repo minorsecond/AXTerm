@@ -67,19 +67,41 @@ nonisolated protocol WinlinkStore: Sendable {
     @discardableResult
     func saveInbound(_ message: WinlinkB2Message) throws -> Bool
 
+    // B2F resume: partially received compressed bodies
+    func savePartialBody(mid: String, compressedSize: Int, data: Data) throws
+    func partialBodies() throws -> [WinlinkPartialBodyRecord]
+    func deletePartialBody(mid: String) throws
+
     // Mailbox reading
     func messages(inFolder folderId: Int64) throws -> [WinlinkMessageSummary]
     func message(mid: String) throws -> WinlinkStoredMessage?
+    /// Newest-first inbound messages from one sender — the catalog code
+    /// scans SERVICE mail for the inquiry server's LIST reply.
+    func inboundMessages(fromAddr: String, limit: Int) throws -> [WinlinkStoredMessage]
     func setRead(mid: String, _ read: Bool) throws
     func move(mid: String, toFolder folderId: Int64) throws
     func moveToTrash(mid: String) throws
     func unreadInboxCount() throws -> Int
 
     // RMS station + catalog caches
-    func replaceStationCache(_ stations: [WinlinkRMSStationRecord]) throws
+    func replaceStationCache(_ stations: [WinlinkRMSStationRecord],
+                             scope: WinlinkRMSStationRecord.Scope) throws
     func stations() throws -> [WinlinkRMSStationRecord]
+    func stations(scope: WinlinkRMSStationRecord.Scope) throws -> [WinlinkRMSStationRecord]
+    /// Grid fields covered by the downloaded set, with gateway counts.
+    func downloadedGridFields() throws -> [(field: String, count: Int)]
+    func clearDownloadedStations() throws
     func replaceCatalogCache(_ items: [WinlinkCatalogItemRecord]) throws
     func catalogItems() throws -> [WinlinkCatalogItemRecord]
+
+    /// InquiryIds the operator starred. Survives `replaceCatalogCache`,
+    /// so it may name products the current index no longer carries.
+    func catalogFavorites() throws -> Set<String>
+    func setCatalogFavorite(inquiryId: String, isFavorite: Bool) throws
+
+    /// Cached callsign-directory answers, keyed by base callsign.
+    func callsignRecord(callsign: String) throws -> CallsignDirectoryRecord?
+    func saveCallsignRecord(_ record: CallsignDirectoryRecord) throws
 
     // Session log
     func appendSessionLog(_ log: WinlinkSessionLogRecord) throws

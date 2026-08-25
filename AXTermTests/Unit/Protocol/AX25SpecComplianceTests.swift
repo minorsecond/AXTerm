@@ -328,7 +328,10 @@ final class AX25SpecComplianceTests: XCTestCase {
         let delivered = extractDeliveredData(from: actions)
         XCTAssertEqual(delivered.count, 1)
         XCTAssertEqual(delivered.first, payload)
-        XCTAssertTrue(containsRR(actions, nr: 1))
+        // P=0 delivery arms T2 (delayed cumulative ack); the RR goes out
+        // when T2 expires, not per frame.
+        XCTAssertTrue(actions.contains(.startT2))
+        XCTAssertTrue(containsRR(sm.handle(event: .t2Timeout), nr: 1))
     }
 
     /// §6.4.1: In-sequence I-frame increments V(R)
@@ -500,8 +503,10 @@ final class AX25SpecComplianceTests: XCTestCase {
         // ns=0 is now outside the window [2, 3]
         let actions = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, pf: false, payload: Data("dup".utf8)))
 
-        XCTAssertTrue(containsRR(actions, nr: 2), "Outside window should re-ack with RR(V(R))")
         XCTAssertEqual(extractDeliveredData(from: actions).count, 0, "Should not deliver outside-window frame")
+        // The re-ack is cumulative like any other: a P=0 duplicate arms T2.
+        XCTAssertTrue(containsRR(sm.handle(event: .t2Timeout), nr: 2),
+                      "Outside window should re-ack with RR(V(R)) when T2 fires")
     }
 
     /// §6.4.4: Outside window + P=1 → RR(F=1)
@@ -939,7 +944,9 @@ final class AX25SpecComplianceTests: XCTestCase {
 
         let actions = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, pf: false, payload: Data("np".utf8)))
 
-        XCTAssertTrue(containsRR(actions, nr: 1, pf: false))
+        // No poll → no immediate response; the ack rides T2 with F=0.
+        XCTAssertFalse(containsAnyRR(actions))
+        XCTAssertTrue(containsRR(sm.handle(event: .t2Timeout), nr: 1, pf: false))
     }
 
     /// §6.2: rejSent + P=1 → RR(V(R), F=1)
@@ -2028,9 +2035,9 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
             from: destination, path: path, channel: 0,
             ns: 0, nr: 1, pf: false, payload: Data("Welcome".utf8)
         )
-        // Check immediate ACK
-        XCTAssertNotNil(inboundResponse)
-        XCTAssertEqual(inboundResponse?.frameType, "s")
+        // P=0 → the ack is delayed onto T2; no synchronous S-frame.
+        XCTAssertNil(inboundResponse,
+                     "a P=0 I-frame must not draw an immediate RR (delayed ack)")
         
         XCTAssertEqual(receivedData.count, 1)
 

@@ -295,6 +295,31 @@ final class B2FSessionEngineTests: XCTestCase {
         XCTAssertTrue(harness.sentText.hasSuffix("FQ\r"))
     }
 
+    func testTurnPassesToUsAfterReceivingBatch() throws {
+        // Field capture 2026-08-24 (CMS via W0ARP-10): after the gateway
+        // finished transmitting its proposed message it went silent — per
+        // FBB the data transfer hands the turn to the receiver, and the
+        // gateway waits for our FF (or proposals). Sitting in
+        // awaitingRemoteProposals instead left the link idle until the
+        // gateway gave up and DISCed (~70 s).
+        let incoming = makeMessage(mid: "INCOMING0001", subject: "Inbound", body: "Hi there!\r\n")
+        let harness = makeHarness()
+        harness.fire(.connected)
+        harness.receive(standardBanner)
+
+        harness.receive(try remoteProposalBlock(for: [incoming]))
+        harness.receive(try framedIncomingBody(for: incoming))
+
+        XCTAssertTrue(harness.sentText.hasSuffix("FF\r"),
+                      "batch drained → the turn is ours; we must send FF, not wait: \(harness.sentText.suffix(40))")
+
+        // The gateway closes its turn with FQ and the session completes.
+        harness.receive("FQ\r\n")
+        let summary = try XCTUnwrap(harness.completion)
+        XCTAssertEqual(summary.receivedMIDs, ["INCOMING0001"])
+        XCTAssertNil(summary.failureReason)
+    }
+
     func testReceiveTwoMessagesInOneBatch() throws {
         let first = makeMessage(mid: "INCOMING0001", body: "first\r\n")
         let second = makeMessage(mid: "INCOMING0002", body: "second\r\n")
@@ -525,5 +550,110 @@ final class B2FSessionEngineTests: XCTestCase {
         XCTAssertTrue(harness.sentText.hasSuffix("FQ\r"))
         XCTAssertTrue(harness.contains(.requestDisconnect))
         XCTAssertEqual(harness.completion, nil, "aborted sessions do not complete")
+    }
+
+    // MARK: - P2P (answering role)
+
+    /// In a grid-down there is no CMS and no gateway to call. Two
+    /// stations connect directly, and one of them has to answer — which
+    /// means AXTerm has to speak the half of B2F it has never spoken.
+    private func makeAnsweringHarness(
+        outbound: [B2FSessionEngine.PreparedOutbound] = []
+    ) -> Harness {
+        Harness(config: .init(
+            myCallsign: "K0EPI", password: nil, role: .answering, outbound: outbound))
+    }
+
+    /// The answering station speaks first: SID, then a prompt. Until it
+    /// does, the caller has nothing to handshake against.
+    func testAnsweringStationSendsBannerOnConnect() {
+        let harness = makeAnsweringHarness()
+        harness.fire(.connected)
+        XCTAssertTrue(harness.sentText.contains("[AXTerm-"), harness.sentText)
+        XCTAssertTrue(harness.sentText.contains("B2F"), "our SID must advertise B2F")
+        XCTAssertTrue(harness.sentText.hasSuffix(">\r"),
+                      "the caller waits for a prompt: \(harness.sentText)")
+    }
+
+    /// P2P carries no CMS challenge, so the answering side never sends
+    /// `;PQ:` and never demands a `;PR:` response.
+    func testAnsweringStationIssuesNoPasswordChallenge() {
+        let harness = makeAnsweringHarness()
+        harness.fire(.connected)
+        XCTAssertFalse(harness.sentText.contains(";PQ:"), harness.sentText)
+    }
+
+    /// After the caller's handshake the answering station listens: in
+    /// B2F the side that just handshook proposes first.
+    func testAnsweringStationWaitsForTheCallersProposals() throws {
+        let incoming = makeMessage(mid: "INCOMING0001", body: "from the field\r\n")
+        let harness = makeAnsweringHarness()
+        harness.fire(.connected)
+        let bannerLength = harness.sentText.count
+
+        harness.receive(";FW: W0ARP\r\n[Winlink Express-1.7.6.0-B2FHM$]\r\n")
+        XCTAssertEqual(harness.sentText.count, bannerLength,
+                       "nothing is sent until the caller proposes")
+
+        harness.receive(try remoteProposalBlock(for: [incoming]))
+        XCTAssertTrue(harness.sentText.hasSuffix("FS Y\r"), harness.sentText)
+
+        harness.receive(try framedIncomingBody(for: incoming))
+        harness.receive("FF\r\n")
+        let summary = try XCTUnwrap(harness.completion)
+        XCTAssertEqual(summary.receivedMIDs, ["INCOMING0001"])
+    }
+
+    /// The full P2P round trip: they send us one, we send them one, both
+    /// sides close cleanly. This is the exchange that has to work when
+    /// there is no infrastructure at all.
+    func testAnsweringStationCompletesBidirectionalP2PExchange() throws {
+        let outbound = try prepare(makeMessage(mid: "OUTMSG000001"))
+        let incoming = makeMessage(mid: "INCOMING0001", body: "sitrep\r\n")
+        let harness = makeAnsweringHarness(outbound: [outbound])
+
+        harness.fire(.connected)
+        harness.receive(";FW: W0ARP\r\n[Winlink Express-1.7.6.0-B2FHM$]\r\n")
+
+        // They propose first; we accept and take their body.
+        harness.receive(try remoteProposalBlock(for: [incoming]))
+        harness.receive(try framedIncomingBody(for: incoming))
+
+        // Their batch drained, so the turn is ours — we propose.
+        XCTAssertTrue(harness.sentText.contains("FC EM OUTMSG000001"), harness.sentText)
+        harness.receive("FS Y\r\n")
+        XCTAssertTrue(harness.contains(.outboundAccepted(mid: "OUTMSG000001", offset: 0)))
+
+        harness.receive("FF\r\n")
+        let summary = try XCTUnwrap(harness.completion)
+        XCTAssertEqual(summary.receivedMIDs, ["INCOMING0001"])
+        XCTAssertEqual(summary.sentMIDs, ["OUTMSG000001"])
+    }
+
+    /// A caller whose SID lacks B2F cannot be talked to safely, and the
+    /// answering side must say so rather than risk a B1 exchange.
+    func testAnsweringStationRejectsANonB2FCaller() {
+        let harness = makeAnsweringHarness()
+        harness.fire(.connected)
+        harness.receive(";FW: W0ARP\r\n[SomeBBS-1.0-B1FHM$]\r\n")
+        XCTAssertNotNil(harness.failureReason)
+    }
+
+    /// A caller that connects and says nothing must not hold the channel
+    /// open forever — in an emergency the frequency is shared.
+    func testAnsweringStationTimesOutASilentCaller() {
+        let harness = makeAnsweringHarness()
+        harness.fire(.connected)
+        XCTAssertTrue(harness.contains(.startTimer(.banner, seconds: 90)))
+        harness.fire(.timerFired(.banner))
+        XCTAssertNotNil(harness.failureReason)
+    }
+
+    /// The initiator role must be untouched by all of this.
+    func testInitiatorRoleStillSendsNothingBeforeTheBanner() {
+        let harness = makeHarness()
+        harness.fire(.connected)
+        XCTAssertTrue(harness.sentText.isEmpty,
+                      "the calling station speaks only after the banner")
     }
 }
