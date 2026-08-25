@@ -132,15 +132,25 @@ struct StationsMapView: View {
         guard drawable == 0 else {
             return "\(drawable) of \(snapshot.predictions.count) untried paths look workable"
         }
+        // Nothing drawable is a normal answer in rolling ground, so the line
+        // names the one thing that would change it. Assumed height is the
+        // knob, and quoting its current value saves the operator hunting for
+        // which setting the verdict even depends on.
+        let assumed = describe(settings.assumedRemoteHeightMetres)
         guard let closest = snapshot.closestBlocked,
               let metres = closest.blockedByMetres else {
-            return "\(snapshot.predictions.count) untried paths checked, none clear"
+            return "\(snapshot.predictions.count) untried paths checked, "
+                + "none clear at \(assumed) assumed"
         }
-        let height = settings.heightUnitIsFeet
+        return "None clear at \(assumed) assumed \u{2014} closest is "
+            + "\(closest.from)\u{2013}\(closest.to), terrain \(describe(metres)) above the line"
+    }
+
+    /// A height in whichever unit the operator entered theirs in.
+    private func describe(_ metres: Double) -> String {
+        settings.heightUnitIsFeet
             ? String(format: "%.0f ft", metres / 0.3048)
             : String(format: "%.0f m", metres)
-        return "None clear \u{2014} closest is \(closest.from)\u{2013}\(closest.to), "
-            + "terrain \(height) above the line"
     }
 
     /// Recorded antenna heights, with the operator's own from settings.

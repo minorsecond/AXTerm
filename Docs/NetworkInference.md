@@ -157,6 +157,25 @@ collinear clears exactly as much of the zone as a rubber duck at the same
 height. Type and gain would matter to a link budget, which AXTerm does not
 compute; collecting them now would be storing data nothing reads.
 
+### Which pairs get evaluated
+
+Candidates are gathered first, then **sorted by distance and evaluated
+nearest-first**, and the result budget counts only paths worth *drawing*.
+
+Both details are load-bearing, and getting them wrong drew an empty map.
+The first version walked pairs alphabetically and stopped at a fixed count of
+*any* result, blocked ones included. In rolling terrain most pairs are
+blocked, so the quota was spent long before a workable path was reached — the
+map drew nothing while the summary cheerfully reported it had checked sixty
+paths. It had; they were the sixty whose callsigns sorted first.
+
+Nearest-first is also the right priority on its own terms: a 9 km path that
+works is more use than a 90 km one that might. Ties break on callsign, so the
+same inputs always give the same forecasts in the same order.
+
+A separate `maximumProfiles` budget bounds the work, so a large station list
+cannot pin a background thread sampling terrain indefinitely.
+
 ### When everything is blocked
 
 The common outcome in rolling terrain at modest heights, and it renders as an

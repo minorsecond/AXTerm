@@ -109,7 +109,8 @@ nonisolated struct PredictedPath: Equatable, Sendable, Identifiable {
         heights: [String: Double] = [:],
         defaultHeightMetres: Double = 10,
         maximumKilometres: Double = 120,
-        limit: Int = 60
+        limit: Int = 60,
+        maximumProfiles: Int = 400
     ) -> [PredictedPath] {
 
         func height(_ callsign: String) -> Double {
@@ -120,9 +121,20 @@ nonisolated struct PredictedPath: Equatable, Sendable, Identifiable {
 
         let known = Set(alreadyObserved.map(\.id))
         let names = positions.keys.sorted()
-        var result: [PredictedPath] = []
 
-        outer: for i in names.indices {
+        // Candidates are gathered before any terrain is sampled, and sorted
+        // by distance.
+        //
+        // Order matters more than it looks. Walking the pairs alphabetically
+        // and stopping at a fixed count spends the whole budget on whichever
+        // callsigns sort first, which has nothing to do with which paths are
+        // worth knowing about. Nearest-first is both cheaper to be wrong
+        // about and the order an operator cares about: a 9 km path that works
+        // is more use than a 90 km one that might.
+        var candidates: [(a: String, b: String,
+                          from: GreatCircle.Point, to: GreatCircle.Point,
+                          distance: Double)] = []
+        for i in names.indices {
             for j in names.index(after: i)..<names.endIndex {
                 let a = names[i], b = names[j]
                 guard let from = positions[a], let to = positions[b] else { continue }
@@ -135,23 +147,47 @@ nonisolated struct PredictedPath: Equatable, Sendable, Identifiable {
                 guard distance <= maximumKilometres else { continue }
 
                 // A path already carrying traffic needs no forecast.
-                let pairKey = "\([a, b].sorted()[0])~\([a, b].sorted()[1])"
+                let ends = [a, b].sorted()
+                let pairKey = "\(ends[0])~\(ends[1])"
                 if known.contains(where: { $0.hasPrefix(pairKey) }) { continue }
 
-                let profile = TerrainProfile.between(
-                    origin: from, destination: to,
-                    originHeight: height(a),
-                    destinationHeight: height(b),
-                    frequencyHz: frequencyHz,
-                    sampler: sampler)
+                candidates.append((a, b, from, to, distance))
+            }
+        }
+        // Distance decides, callsign breaks ties, so the same inputs always
+        // produce the same forecasts in the same order.
+        candidates.sort {
+            $0.distance == $1.distance
+                ? ($0.a, $0.b) < ($1.a, $1.b)
+                : $0.distance < $1.distance
+        }
 
-                guard let outlook = outlook(for: profile.verdict) else { continue }
-                result.append(PredictedPath(
-                    from: a, to: b, outlook: outlook,
-                    distanceKilometres: distance,
-                    assumedHeights: heights[a.uppercased()] == nil
-                        || heights[b.uppercased()] == nil))
-                if result.count >= limit { break outer }
+        var result: [PredictedPath] = []
+        var drawable = 0
+        for candidate in candidates.prefix(maximumProfiles) {
+            let profile = TerrainProfile.between(
+                origin: candidate.from, destination: candidate.to,
+                originHeight: height(candidate.a),
+                destinationHeight: height(candidate.b),
+                frequencyHz: frequencyHz,
+                sampler: sampler)
+
+            guard let outlook = outlook(for: profile.verdict) else { continue }
+            let path = PredictedPath(
+                from: candidate.a, to: candidate.b, outlook: outlook,
+                distanceKilometres: candidate.distance,
+                assumedHeights: heights[candidate.a.uppercased()] == nil
+                    || heights[candidate.b.uppercased()] == nil)
+            result.append(path)
+
+            // The budget counts paths worth *drawing*. Counting blocked ones
+            // against it meant a region where most paths are blocked — which
+            // is most rolling terrain at modest antenna heights — exhausted
+            // the quota before reaching a single workable path, and the map
+            // drew nothing while reporting it had checked sixty.
+            if path.isWorthDrawing {
+                drawable += 1
+                if drawable >= limit { break }
             }
         }
         return result

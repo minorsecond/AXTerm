@@ -261,4 +261,88 @@ final class PredictedPathTests: XCTestCase {
                                 antennaMetres: 60)
         XCTAssertNil(paths[0].blockedByMetres)
     }
+
+    // MARK: - Budget
+
+    /// Terrain that blocks anything east of a line, so a run of stations
+    /// produces many blocked pairs and a few clear ones.
+    private struct WallToTheEast: ElevationSampling {
+        let wallLongitude: Double
+        func elevation(at point: GreatCircle.Point) -> Double? {
+            point.longitude > wallLongitude ? 4000 : 1600
+        }
+    }
+
+    /// The defect that made the map draw nothing: blocked paths were counted
+    /// against the result budget, so in terrain where most paths are blocked
+    /// the quota was spent before a single workable one was reached.
+    func testBlockedPathsDoNotConsumeTheDrawableBudget() {
+        // Thirty stations west of the wall, all mutually clear at height, and
+        // thirty east of it that nothing reaches.
+        var positions: [String: GreatCircle.Point] = [:]
+        for index in 0..<30 {
+            positions[String(format: "W%02d", index)] = GreatCircle.Point(
+                latitude: 39.0 + Double(index) * 0.01, longitude: -105.5)
+            positions[String(format: "E%02d", index)] = GreatCircle.Point(
+                latitude: 39.0 + Double(index) * 0.01, longitude: -104.0)
+        }
+        let paths = PredictedPath.predictions(
+            between: positions, alreadyObserved: [],
+            sampler: WallToTheEast(wallLongitude: -105.0),
+            frequencyHz: vhf, defaultHeightMetres: 100, limit: 5)
+
+        let drawable = paths.filter(\.isWorthDrawing)
+        XCTAssertEqual(drawable.count, 5, "the budget counts drawable paths")
+        XCTAssertFalse(paths.isEmpty)
+    }
+
+    /// Nearest first, so a fixed budget is spent on the paths most likely to
+    /// be useful rather than on whichever callsigns sort first.
+    func testCandidatesAreEvaluatedNearestFirst() {
+        let near = GreatCircle.Point(latitude: 39.74, longitude: -104.98)
+        let positions: [String: GreatCircle.Point] = [
+            "AAAA": near,
+            "ZZZZ": GreatCircle.Point(latitude: 39.75, longitude: -104.97),
+            "MMMM": GreatCircle.Point(latitude: 40.40, longitude: -104.30),
+        ]
+        let paths = PredictedPath.predictions(
+            between: positions, alreadyObserved: [],
+            sampler: FlatGround(metres: 1600), frequencyHz: vhf,
+            defaultHeightMetres: 10)
+        let distances = paths.map(\.distanceKilometres)
+        XCTAssertEqual(distances, distances.sorted(),
+                       "forecasts should come back nearest first")
+    }
+
+    /// Same inputs, same forecasts, same order — the map must not reshuffle
+    /// between redraws.
+    func testTheOrderIsDeterministic() {
+        let positions: [String: GreatCircle.Point] = [
+            "A": denver,
+            "B": nearby,
+            "C": GreatCircle.Point(latitude: 39.80, longitude: -105.10),
+        ]
+        func run() -> [String] {
+            PredictedPath.predictions(
+                between: positions, alreadyObserved: [],
+                sampler: FlatGround(metres: 1600), frequencyHz: vhf,
+                defaultHeightMetres: 40).map(\.id)
+        }
+        XCTAssertEqual(run(), run())
+    }
+
+    /// Work stays bounded even when nothing is drawable, so a big station
+    /// list cannot pin a background thread sampling terrain forever.
+    func testTotalProfilesStayBounded() {
+        var positions: [String: GreatCircle.Point] = [:]
+        for index in 0..<40 {
+            positions[String(format: "S%02d", index)] = GreatCircle.Point(
+                latitude: 39.0 + Double(index) * 0.005, longitude: -104.98)
+        }
+        let paths = PredictedPath.predictions(
+            between: positions, alreadyObserved: [],
+            sampler: FlatGround(metres: 1600), frequencyHz: vhf,
+            defaultHeightMetres: 1, limit: 1000, maximumProfiles: 25)
+        XCTAssertLessThanOrEqual(paths.count, 25)
+    }
 }
