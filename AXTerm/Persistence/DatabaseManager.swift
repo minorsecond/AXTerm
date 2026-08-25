@@ -405,6 +405,30 @@ nonisolated enum DatabaseManager {
         }
     }
 
+    /// Paths between stations, kept across launches.
+    ///
+    /// Without this the network graph is only ever as old as the packet
+    /// window in memory — a few minutes on a busy channel — so every restart
+    /// forgets which stations reach each other and the articulation-point and
+    /// cluster analysis starts from nothing. A packet network is quiet for
+    /// hours at a time; its shape is not.
+    ///
+    /// Keyed on the undirected path id, so A-B and B-A are one row.
+    static func createNetworkPaths(_ db: Database) throws {
+        try db.create(table: "network_paths") { t in
+            t.column("id", .text).primaryKey()
+            t.column("fromCall", .text).notNull()
+            t.column("toCall", .text).notNull()
+            /// Comma-separated digipeaters, in order. Empty means direct.
+            t.column("via", .text).notNull().defaults(to: "")
+            t.column("evidence", .integer).notNull()
+            t.column("observations", .integer).notNull().defaults(to: 0)
+            t.column("firstSeen", .datetime).notNull()
+            t.column("lastSeen", .datetime).notNull().indexed()
+            t.column("unansweredAttempts", .integer).notNull().defaults(to: 0)
+        }
+    }
+
     static func createStationNotes(_ db: Database) throws {
         try db.create(table: "station_notes") { t in
             t.column("callsign", .text).primaryKey()
@@ -550,6 +574,9 @@ nonisolated enum DatabaseManager {
         }
         registerReportedMigration(&migrator, version: 16, name: "addStationAntennaHeight") { db in
             try addStationAntennaHeight(db)
+        }
+        registerReportedMigration(&migrator, version: 17, name: "createNetworkPaths") { db in
+            try createNetworkPaths(db)
         }
         return migrator
     }()

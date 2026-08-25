@@ -29,6 +29,14 @@ struct StationsMapView: View {
     /// Where recorded antenna heights live. Nil means every height is the
     /// stated assumption, which the forecast labels say plainly.
     var noteStore: StationNoteStore?
+    /// Paths remembered from previous sessions. Nil falls back to whatever
+    /// the live packet window shows, which on a quiet morning is nothing.
+    var pathStore: NetworkPathStore?
+    /// What stations have announced they run. Nil hides the directory rather
+    /// than opening an empty one.
+    var serviceStore: StationServiceStore?
+    /// Opens an identity page from a directory row.
+    var onOpenProfile: ((String) -> Void)?
 
 
     @State private var selection: String?
@@ -80,6 +88,7 @@ struct StationsMapView: View {
     @State private var pendingGeometry: ShapefileReader.Geometry?
     @State private var drawPrompt: TextEntryPrompt?
     @State private var showingOfflineMaps = false
+    @State private var showingDirectory = false
     @State private var isCapturing = false
     @State private var captureName = ""
     @State private var showingCapture = false
@@ -203,9 +212,17 @@ struct StationsMapView: View {
         return positions
     }
 
-    /// Observed paths plus the ones implied by shared digipeaters.
+    /// Everything known about who reaches whom.
+    ///
+    /// The live window plus what previous sessions recorded, folded together
+    /// so a path proven yesterday is not downgraded by a quiet morning. The
+    /// transitive inferences are derived *after* the merge, so a digipeater
+    /// heard last week can still imply a path today.
     private var networkPaths: [NetworkPath] {
-        let observed = NetworkPathObserver.paths(in: recentPackets, localCallsign: myCallsign)
+        let live = NetworkPathObserver.paths(in: recentPackets, localCallsign: myCallsign)
+        let remembered = (try? pathStore?.paths(
+            since: Date().addingTimeInterval(-SQLiteNetworkPathStore.retention))) ?? []
+        let observed = NetworkPath.merging(live + remembered)
         return observed + NetworkPathObserver.transitivePaths(from: observed)
     }
     private var unplaced: [HeardStationMap.Entry] { entries.filter { !$0.isPlaced } }
@@ -405,6 +422,14 @@ struct StationsMapView: View {
                       : "point.topleft.down.to.point.bottomright.curvepath")
             }
             .help("Choose what the map draws between stations: paths already observed, and paths the terrain says are possible but nobody has tried.")
+            if serviceStore != nil {
+                Button {
+                    showingDirectory = true
+                } label: {
+                    Image(systemName: "text.book.closed")
+                }
+                .help("What the stations around here run \u{2014} nodes, bulletin boards, digipeaters and gateways, as they announced themselves in ID and beacon frames. The network's own directory, which nothing else assembles because nobody publishes one.")
+            }
             Button {
                 showsList.toggle()
             } label: {
@@ -415,6 +440,21 @@ struct StationsMapView: View {
         }
         .padding(12)
         .sheet(isPresented: $showingCapture) { captureSheet }
+        .sheet(isPresented: $showingDirectory) {
+            NavigationStack {
+                StationDirectoryView(store: serviceStore) { callsign in
+                    showingDirectory = false
+                    onOpenProfile?(callsign)
+                }
+                .navigationTitle("Station Directory")
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingDirectory = false }
+                    }
+                }
+            }
+            .frame(minWidth: 440, minHeight: 460)
+        }
         .sheet(isPresented: $showingOfflineMaps) {
             NavigationStack {
                 OfflineMapsView(

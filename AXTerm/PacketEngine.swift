@@ -155,6 +155,9 @@ final class PacketEngine: ObservableObject {
     private(set) var stationNotes: SQLiteStationNoteStore?
     /// What the network has said and shown about what each station runs.
     private(set) var stationServices: SQLiteStationServiceStore?
+    /// Observed paths, kept across launches so the network graph does not
+    /// start every session convinced the network is empty.
+    private(set) var networkPaths: SQLiteNetworkPathStore?
 
     /// NET/ROM persistence for saving/loading routing state.
     private var netRomPersistence: NetRomPersistence?
@@ -347,6 +350,11 @@ final class PacketEngine: ObservableObject {
                 self.linkQualityHistory = SQLiteLinkQualityHistoryStore(dbQueue: queue)
                 self.stationNotes = SQLiteStationNoteStore(dbQueue: queue)
                 self.stationServices = SQLiteStationServiceStore(dbQueue: queue)
+                self.networkPaths = SQLiteNetworkPathStore(dbQueue: queue)
+                // A path nobody has seen for a fortnight is not evidence any
+                // more; leaving it in would draw a neighbour that moved away.
+                try? self.networkPaths?.prune(
+                    before: Date().addingTimeInterval(-SQLiteNetworkPathStore.retention))
             }
             self.netRomPersistence = try? NetRomPersistence(database: writer)
             #if DEBUG

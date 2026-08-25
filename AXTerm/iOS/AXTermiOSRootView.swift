@@ -306,6 +306,17 @@ struct AXTermiOSRootView: View {
                     StationServiceHarvester.declarations(in: recent)
                         + StationServiceHarvester.demonstratedDigipeaters(in: recent))
             }
+            // Paths, kept across launches so the graph does not start every
+            // session convinced the network is empty. Only what was actually
+            // observed — a transitive path is re-derived on demand, and
+            // storing an inference would let it harden into a fact that
+            // outlives its evidence.
+            if let store = client.networkPaths {
+                try? store.record(
+                    NetworkPathObserver.paths(in: Array(packets.suffix(600)),
+                                              localCallsign: settings.myCallsign),
+                    now: Date())
+            }
         }
         .task(id: context.settings.callsignLookupEnabled) {
             callsignLookup.isNetworkEnabled = context.settings.callsignLookupEnabled
@@ -415,6 +426,9 @@ struct AXTermiOSRootView: View {
                 aliases: nodeAliases,
                 settings: context.settings,
                 noteStore: client.stationNotes,
+                pathStore: client.networkPaths,
+                serviceStore: client.stationServices,
+                onOpenProfile: { profiles.openPage($0) },
                 focusCallsign: $mapFocusCallsign,
                 overlayStore: overlayStore)
             .navigationTitle("Map")
@@ -572,6 +586,20 @@ struct AXTermiOSRootView: View {
     /// Everything the identity view needs, gathered from where it actually
     /// lives. Rebuilt per presentation — a profile is a reading, not a
     /// subscription, and these sources are already in memory.
+    /// The graph the identity page reasons over.
+    ///
+    /// Live traffic merged with what previous sessions recorded, so "which
+    /// stations does the network depend on" is answered from days of evidence
+    /// rather than from the last few minutes of it.
+    private var rememberedNetworkPaths: [NetworkPath] {
+        let live = NetworkPathObserver.paths(
+            in: Array(client.packets.suffix(600)),
+            localCallsign: settings.myCallsign)
+        let remembered = (try? client.networkPaths?.paths(
+            since: Date().addingTimeInterval(-SQLiteNetworkPathStore.retention))) ?? []
+        return NetworkPath.merging(live + remembered)
+    }
+
     private var resolver: NodeProfileResolver {
         let stations = client.stations
         let heard = HeardStationMap.entries(
@@ -605,9 +633,7 @@ struct AXTermiOSRootView: View {
             digipeaters: HeardStationMap.aliasesInUse(stations),
             linkStats: client.netRomIntegration?.exportLinkStats() ?? [],
             declaredServices: nodeAliases.declaredServices,
-            networkPaths: NetworkPathObserver.paths(
-                in: Array(client.packets.suffix(600)),
-                localCallsign: settings.myCallsign),
+            networkPaths: rememberedNetworkPaths,
             serviceStore: client.stationServices,
             historyStore: client.linkQualityHistory)
     }

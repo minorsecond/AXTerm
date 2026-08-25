@@ -237,3 +237,56 @@ disabled and says why. They never guess.
 `NetworkInsightModel` computes all three off the main actor and fingerprints
 its inputs, so the map re-rendering on every packet does not restart a
 terrain pass.
+
+---
+
+## 6. Persistence
+
+Paths derived from the live packet window are folded into `network_paths`
+(migration v17) on the same five-second throttle as the service harvest.
+Without it the graph is only ever as old as the packets in memory — minutes on
+a busy channel — so every launch begins convinced the network is empty. A
+packet network is quiet for hours at a time; its shape is not.
+
+Merge rules, in `NetworkPath.merged`:
+
+| Field | Rule | Why |
+| --- | --- | --- |
+| `evidence` | stronger wins | Proof does not expire because a quiet hour passed |
+| `firstSeen` | earlier | The window widens, it does not move |
+| `lastSeen` | later | |
+| `unansweredAttempts` | larger | High-water mark: a path that failed four times last week is not laundered clean by one window that never tried it |
+| `observations` | **larger, not summed** | See below |
+
+`observations` deliberately understates. The observer re-derives from a
+rolling window every few seconds, so summing would inflate without bound — a
+quiet path recorded often would outrank a busy one. The stored number means
+"the most this path was seen carrying in one window", not a lifetime total,
+and nothing in the graph reads it as one. Recording the same window three
+times is a no-op, which is the property the tests actually pin.
+
+Only *observed* paths are stored. Transitive inferences are re-derived on
+demand from whatever the graph holds; storing one would let it harden into a
+fact that outlives its evidence.
+
+Retention is a fortnight, pruned when the database opens. A station that moved
+away should stop being drawn as a neighbour.
+
+## 7. The station directory
+
+`station_services` had been filling up since the harvester landed with no way
+to see it. `StationDirectoryView` (Map toolbar, both shells) lists what each
+station runs, grouped by callsign and sorted alphabetically — not by recency,
+because a directory is scanned for a half-remembered name and a list that
+reorders as traffic arrives cannot be scanned at all.
+
+Every row carries its confidence. `demonstrated` means we watched it repeat a
+frame — only digipeating can be proven that way, since nothing a node or BBS
+does is visible in a frame header. `declared` is the station's own word from
+an ID or beacon, which for most services is the only announcement that will
+ever be made.
+
+Filtering by service narrows the rows shown under a station, not merely which
+stations appear; showing a station's BBS entry under a digipeater filter would
+misreport what the filter did. The picker offers only services something has
+actually announced.

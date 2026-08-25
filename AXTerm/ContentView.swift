@@ -37,6 +37,22 @@ struct ContentView: View {
     /// gateway's position is known from the CMS even when its licensee
     /// has never been looked up.
     /// Records what stations announced and what digipeaters demonstrated.
+    /// Folds what the live window shows into the durable path table.
+    ///
+    /// Runs on the same throttle as the service harvest and for the same
+    /// reason: the network's own record of itself should grow wherever the
+    /// operator happens to be, not only while a map is on screen.
+    private func recordNetworkPaths(from packets: [Packet]) {
+        guard let store = client.networkPaths else { return }
+        let recent = Array(packets.suffix(600))
+        let observed = NetworkPathObserver.paths(in: recent,
+                                                 localCallsign: settings.myCallsign)
+        // Only what was actually observed. Transitive paths are re-derived on
+        // demand from whatever the graph holds, and storing an inference
+        // would let it harden into a fact that outlives its evidence.
+        try? store.record(observed, now: Date())
+    }
+
     private func harvestServices(from packets: [Packet]) {
         guard let services = client.stationServices else { return }
         let recent = Array(packets.suffix(400))
@@ -46,6 +62,20 @@ struct ContentView: View {
     }
 
     /// Same gathering as the handheld's, from the Mac's own view state.
+    /// The graph the identity page reasons over.
+    ///
+    /// Live traffic merged with what previous sessions recorded, so "which
+    /// stations does the network depend on" is answered from days of evidence
+    /// rather than from the last few minutes of it.
+    private var rememberedNetworkPaths: [NetworkPath] {
+        let live = NetworkPathObserver.paths(
+            in: Array(client.packets.suffix(600)),
+            localCallsign: settings.myCallsign)
+        let remembered = (try? client.networkPaths?.paths(
+            since: Date().addingTimeInterval(-SQLiteNetworkPathStore.retention))) ?? []
+        return NetworkPath.merging(live + remembered)
+    }
+
     private var macResolver: NodeProfileResolver {
         let stations = client.stations
         let heard = HeardStationMap.entries(
@@ -78,9 +108,7 @@ struct ContentView: View {
             digipeaters: HeardStationMap.aliasesInUse(stations),
             linkStats: client.netRomIntegration?.exportLinkStats() ?? [],
             declaredServices: nodeAliases.declaredServices,
-            networkPaths: NetworkPathObserver.paths(
-                in: Array(client.packets.suffix(600)),
-                localCallsign: settings.myCallsign),
+            networkPaths: rememberedNetworkPaths,
             serviceStore: client.stationServices,
             historyStore: client.linkQualityHistory)
     }
@@ -206,25 +234,6 @@ struct ContentView: View {
                     .frame(width: 1, height: 1)
             }
         }
-        .sheet(item: $inspectorSelection) { selection in
-            if let packet = client.packet(with: selection.id) {
-                PacketInspectorView(
-                    packet: packet,
-                    isPinned: client.isPinned(packet.id),
-                    onTogglePin: { client.togglePin(for: packet.id) },
-                    onFilterStation: { call in
-                        client.selectedStationCall = call
-                    },
-                    onClose: {
-                        SentryManager.shared.addBreadcrumb(category: "ui.inspector", message: "Inspector closed", level: .info, data: ["packetID": selection.id.uuidString])
-                        inspectorSelection = nil
-                    }
-                )
-            } else {
-                Text("Packet unavailable")
-                    .padding()
-            }
-        }
         .task {
             guard !didLoadConsoleHistory else { return }
             didLoadConsoleHistory = true
@@ -325,8 +334,80 @@ struct ContentView: View {
         // was looking at a map, which is the one time they are not reading it.
         .onReceive(client.$packets.throttle(for: .seconds(5), scheduler: RunLoop.main, latest: true)) { packets in
             harvestServices(from: packets)
+            recordNetworkPaths(from: packets)
         }
-        .sheet(item: $profiles.presented) { presentation in
+        // One sheet, not two.
+        //
+        // SwiftUI honours a single `.sheet` per view: attach two and the
+        // second silently shadows the first. That is why the identity page
+        // opened once and then refused to reappear after being dismissed —
+        // the packet inspector's sheet was fighting it for the same slot.
+        // Both are routed through one modifier and one enum instead.
+        .sheet(item: rootSheet) { sheet in
+            switch sheet {
+            case .inspector(let packetID):
+                inspectorSheet(PacketInspectorSelection(id: packetID))
+            case .profile(let presentation):
+                profileSheet(presentation)
+            }
+        }
+        .onChange(of: settings.myCallsign) { _, newValue in
+            sessionCoordinator.localCallsign = newValue
+        }
+        .onChange(of: selectedNav) { _, newValue in
+            syncSearchScope(for: newValue)
+            syncConnectContext(for: newValue)
+        }
+        .onAppear {
+            SettingsRouter.shared.openAction = { openSettings() }
+            connectCoordinator.navigateToTerminal = {
+                selectedNav = .terminal
+                connectCoordinator.activeContext = .terminal
+            }
+            syncConnectContext(for: selectedNav)
+        }
+    }
+
+    /// Reads whichever source is active and clears both on dismissal.
+    ///
+    /// The rules live in `RootSheetRoute` so they can be tested; this is only
+    /// the wiring between them and the two pieces of view state.
+    private var rootSheet: Binding<RootSheetRoute?> {
+        Binding(
+            get: {
+                RootSheetRoute.current(inspector: inspectorSelection?.id,
+                                       profile: profiles.presented)
+            },
+            set: { newValue in
+                let next = RootSheetRoute.apply(newValue)
+                inspectorSelection = next.inspector.map(PacketInspectorSelection.init(id:))
+                profiles.presented = next.profile
+            })
+    }
+
+    @ViewBuilder
+    private func inspectorSheet(_ selection: PacketInspectorSelection) -> some View {
+            if let packet = client.packet(with: selection.id) {
+                PacketInspectorView(
+                    packet: packet,
+                    isPinned: client.isPinned(packet.id),
+                    onTogglePin: { client.togglePin(for: packet.id) },
+                    onFilterStation: { call in
+                        client.selectedStationCall = call
+                    },
+                    onClose: {
+                        SentryManager.shared.addBreadcrumb(category: "ui.inspector", message: "Inspector closed", level: .info, data: ["packetID": selection.id.uuidString])
+                        inspectorSelection = nil
+                    }
+                )
+            } else {
+                Text("Packet unavailable")
+                    .padding()
+            }
+    }
+
+    @ViewBuilder
+    private func profileSheet(_ presentation: NodeProfileCoordinator.Presentation) -> some View {
             VStack(spacing: 0) {
                 HStack {
                     Spacer()
@@ -353,22 +434,6 @@ struct ContentView: View {
             }
             .frame(minWidth: presentation.isPage ? 560 : 440,
                    minHeight: presentation.isPage ? 620 : 500)
-        }
-        .onChange(of: settings.myCallsign) { _, newValue in
-            sessionCoordinator.localCallsign = newValue
-        }
-        .onChange(of: selectedNav) { _, newValue in
-            syncSearchScope(for: newValue)
-            syncConnectContext(for: newValue)
-        }
-        .onAppear {
-            SettingsRouter.shared.openAction = { openSettings() }
-            connectCoordinator.navigateToTerminal = {
-                selectedNav = .terminal
-                connectCoordinator.activeContext = .terminal
-            }
-            syncConnectContext(for: selectedNav)
-        }
     }
 
     private func syncSearchScope(for item: NavigationItem) {
@@ -693,6 +758,9 @@ struct ContentView: View {
                     aliases: nodeAliases,
                     settings: winlinkContext.settings,
                     noteStore: client.stationNotes,
+                    pathStore: client.networkPaths,
+                    serviceStore: client.stationServices,
+                    onOpenProfile: { profiles.openPage($0) },
                     focusCallsign: .constant(nil),
                     overlayStore: overlayStore,
                     onSendLayer: layerSendAction)

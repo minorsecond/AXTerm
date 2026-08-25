@@ -73,6 +73,43 @@ nonisolated struct NetworkPath: Equatable, Sendable, Identifiable {
         return "\(ends[0])~\(ends[1])|\(via.joined(separator: ","))"
     }
 
+    /// Combines what was stored with what the live window shows.
+    ///
+    /// Merge rules follow from where each field comes from:
+    ///
+    /// - **evidence** takes the stronger. Evidence is a claim about what has
+    ///   been proven, and proof does not expire because a quiet hour passed.
+    /// - **firstSeen** takes the earlier, **lastSeen** the later.
+    /// - **unansweredAttempts** takes the larger — a high-water mark, so a
+    ///   path that failed four times last week is not laundered clean by one
+    ///   fresh window that never tried it.
+    /// - **observations** takes the larger rather than the sum. This
+    ///   understates a busy path, and does so deliberately: the live count is
+    ///   derived from a rolling window that is re-derived every few seconds,
+    ///   so summing would inflate it without bound. The number means "the
+    ///   most this path was seen carrying in one window", not a lifetime
+    ///   total, and nothing in the graph reads it as one.
+    ///
+    /// Merging the other way round must give the same answer, because the
+    /// caller should never have to care which side is "stored".
+    static func merged(_ lhs: NetworkPath, _ rhs: NetworkPath) -> NetworkPath {
+        var result = lhs.evidence >= rhs.evidence ? lhs : rhs
+        result.observations = max(lhs.observations, rhs.observations)
+        result.firstSeen = min(lhs.firstSeen, rhs.firstSeen)
+        result.lastSeen = max(lhs.lastSeen, rhs.lastSeen)
+        result.unansweredAttempts = max(lhs.unansweredAttempts, rhs.unansweredAttempts)
+        return result
+    }
+
+    /// Folds a mixed list down to one entry per path.
+    static func merging(_ paths: [NetworkPath]) -> [NetworkPath] {
+        var byID: [String: NetworkPath] = [:]
+        for path in paths {
+            byID[path.id] = byID[path.id].map { merged($0, path) } ?? path
+        }
+        return byID.values.sorted { $0.id < $1.id }
+    }
+
     /// True when connect attempts have gone unanswered and nothing has ever
     /// completed. Worth drawing differently: a path that looks plausible and
     /// does not work is the one that wastes the most airtime.
