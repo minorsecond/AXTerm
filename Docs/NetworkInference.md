@@ -344,7 +344,22 @@ renders what is on screen, with the shaded image cached — shading a
 The renderer flips the image inside its own rect, without which the terrain
 mirrors and the mountains appear east of Denver.
 
-## 9. Stations that arrived down a wire
+**Blended, not painted.** MapKit has no overlay level *beneath* the roads, so
+a terrain layer is always on top of them. Painted opaquely it buries the
+street grid, the labels and the network lines the map exists for — which is
+exactly what the first version did. Hillshade multiplies instead, the way
+cartographic relief does: it darkens what is already there rather than
+replacing it.
+
+Multiplying only works because the shade is rescaled so **level ground is
+white**. Raw hillshade puts flat terrain at cos(zenith) — mid-grey — and
+multiplying that darkens the entire map uniformly. Dividing through by the
+flat-ground value makes level terrain 1.0, which multiplies to no change, so
+only real slopes darken.
+
+Path links are re-added whenever terrain changes. Order within an overlay
+level is insertion order, so terrain toggled on after the network would
+otherwise cover it.
 
 Packet networks are bridged. A local node linked to the internet — LinBPQ, a
 CMS gateway, an APRS-IS feed — puts frames from stations thousands of
@@ -362,6 +377,26 @@ node on a Colorado hilltop whose licensee lives in Virginia is real and
 common, and that distance measures a mailing address rather than a radio path.
 Unplaced stations are never filtered either — an unplaced station is usually
 the one most worth looking at.
+
+### Downloading a drawn area
+
+The Map's **Download** drawing tool takes two taps — opposite corners — and
+opens the offline sheet scoped to that box, for both map tiles and terrain.
+Asking for a third corner to describe a rectangle is busywork, and any shape
+becomes its own bounding box because tiles are square and a download is a
+rectangle. The preview shows the box rather than the tapped points, so what is
+about to be fetched is what is on screen.
+
+A download box is a question, not a feature: it gets no name and is never
+saved to a layer.
+
+One request fetches at most `maximumTilesPerRequest` (64, about 260 MB). A
+hand can draw a continent in two taps — the same shape of mistake that once
+had this fetching a strip from Utah to Virginia — and when the cap bites the
+sheet says so, naming how many tiles the area actually covers. A cap the
+operator cannot see reads as coverage they did not get.
+
+## 10. Stations that arrived down a wire
 
 Nothing is deleted. The filter is off by default, the toolbar control appears
 only when there is something it would affect, its tooltip names the stations,

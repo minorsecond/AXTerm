@@ -496,10 +496,13 @@ struct OfflineBasemapMapView {
         // Terrain is diffed on its own key. Shading a tile costs a few
         // million floating-point operations, and rebuilding it because a
         // path link appeared would make every new packet stutter the map.
-        applyTerrain(to: mapView, coordinator: coordinator)
+        let terrainChanged = applyTerrain(to: mapView, coordinator: coordinator)
 
         let wanted = overlays.map(\.id) + pathLinks.map(\.id)
-        guard coordinator.installedOverlayIDs != wanted else { return }
+        // Order within a level is insertion order, so terrain added *after*
+        // the network would cover it. Re-adding the vectors whenever terrain
+        // changes keeps them on top no matter which was toggled first.
+        guard terrainChanged || coordinator.installedOverlayIDs != wanted else { return }
         coordinator.installedOverlayIDs = wanted
 
         let existing = mapView.overlays.filter {
@@ -532,15 +535,17 @@ struct OfflineBasemapMapView {
     /// Drawn below everything else the map puts on top: terrain is the ground
     /// the network sits on, and a hillshade over the station markers would
     /// bury the thing the map is actually for.
-    private func applyTerrain(to mapView: MKMapView, coordinator: Coordinator) {
+    @discardableResult
+    private func applyTerrain(to mapView: MKMapView, coordinator: Coordinator) -> Bool {
         let wanted = terrainOverlays.map(\.id)
-        guard coordinator.installedTerrainIDs != wanted else { return }
+        guard coordinator.installedTerrainIDs != wanted else { return false }
         coordinator.installedTerrainIDs = wanted
 
         mapView.removeOverlays(mapView.overlays.compactMap { $0 as? ElevationOverlay })
         for overlay in terrainOverlays {
             mapView.addOverlay(overlay, level: .aboveRoads)
         }
+        return true
     }
 
     /// Evidence decides the colour, so the map reads at a glance: green has

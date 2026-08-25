@@ -22,6 +22,11 @@ struct OfflineMapsView: View {
     /// around a bounding box of everyone heard — one distant station makes
     /// that box a continent.
     var observer: GreatCircle.Point?
+    /// A region the operator drew on the map. When present it is what both
+    /// downloads act on — they asked for exactly this box, and second-guessing
+    /// it with a radius around their station would be answering a different
+    /// question.
+    var drawnRegion: MKCoordinateRegion?
     /// Region to offer for download — normally what the operator is looking
     /// at. Nil disables the download section rather than defaulting to
     /// somewhere arbitrary.
@@ -148,6 +153,24 @@ struct OfflineMapsView: View {
                     Button("Cancel") { elevation.cancelDownload() }
                         .buttonStyle(.borderless)
                 }
+            } else if let drawnRegion {
+                let estimate = elevation.estimate(covering: drawnRegion)
+                Button {
+                    if estimate.tileCount > ElevationDownloader.largeRegionTileCount {
+                        confirmingTerrain = estimate
+                    } else {
+                        elevation.download(covering: drawnRegion)
+                    }
+                } label: {
+                    Label("Download Terrain for This Area", systemImage: "mountain.2")
+                }
+                .disabled(estimate.tileCount == 0)
+                .help("Fetches USGS 3DEP elevation for the box you drew \u{2014} public-domain federal data, no account needed. Tiles are one degree square, so the download covers whole tiles wherever the box crosses them.")
+
+                Text(terrainSummary(estimate))
+                    .font(.caption)
+                    .foregroundStyle(estimate.wasCapped ? .orange : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } else if let observer {
                 let estimate = elevation.estimate(around: observer)
                 Button {
@@ -160,11 +183,9 @@ struct OfflineMapsView: View {
                     Label("Download Terrain Around My Station", systemImage: "mountain.2")
                 }
                 .disabled(estimate.tileCount == 0)
-                .help("Fetches USGS 3DEP elevation for the ground within about 120 km of your station \u{2014} public-domain federal data, no account needed. That radius is deliberate: it is the range beyond which path forecasts stop looking, so anything further answers no question the app asks.")
+                .help("Fetches USGS 3DEP elevation for the ground within about 120 km of your station \u{2014} public-domain federal data, no account needed. That radius is deliberate: it is the range beyond which path forecasts stop looking, so anything further answers no question the app asks. To choose a different area, draw one on the map with the Download tool.")
 
-                Text(estimate.tileCount == 0
-                     ? "Everything within range is already stored."
-                     : "\(estimate.tileCount) tile\(estimate.tileCount == 1 ? "" : "s") to fetch, about \(estimate.sizeDescription).")
+                Text(terrainSummary(estimate))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -186,6 +207,24 @@ struct OfflineMapsView: View {
                 .help("Removes every stored elevation tile. Path profiles and terrain forecasts stop working until some are downloaded again.")
             }
         }
+    }
+
+    /// States the cost, and says out loud when a cap trimmed the request.
+    ///
+    /// A cap the operator cannot see reads as coverage they did not get —
+    /// they would come back from the field wondering why the far half of the
+    /// box has no terrain.
+    private func terrainSummary(_ estimate: ElevationStorage.Estimate) -> String {
+        guard estimate.tileCount > 0 else {
+            return "Everything in this area is already stored."
+        }
+        let base = "\(estimate.tileCount) tile\(estimate.tileCount == 1 ? "" : "s") "
+            + "to fetch, about \(estimate.sizeDescription)."
+        guard estimate.wasCapped else { return base }
+        return base + " That area covers \(estimate.requestedTileCount) tiles, "
+            + "more than the \(ElevationStorage.maximumTilesPerRequest) one request "
+            + "will fetch \u{2014} the nearest part is downloaded, so draw a smaller "
+            + "box for the rest."
     }
 
     private var importSection: some View {

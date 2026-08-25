@@ -100,6 +100,10 @@ struct StationsMapView: View {
     @State private var drawPrompt: TextEntryPrompt?
     @State private var showingOfflineMaps = false
     @State private var showingDirectory = false
+    /// A box the operator drew to bound a download. Cleared when the sheet
+    /// closes, so the next download offers their own area again rather than
+    /// silently reusing a box from an hour ago.
+    @State private var downloadRegion: MKCoordinateRegion?
     @State private var isCapturing = false
     @State private var captureName = ""
     @State private var showingCapture = false
@@ -412,6 +416,20 @@ struct StationsMapView: View {
 
     // MARK: - Header
 
+    /// Hit target for the header's icon-only controls.
+    ///
+    /// A glyph is about 17pt, which is a fine *pointer* target and far too
+    /// small for a finger — Apple's own guidance is 44pt, and on an iPad the
+    /// row of bare icons at the end of this bar was noticeably fiddly. The
+    /// icon does not change size; the tappable area around it does.
+    private var iconHitTarget: CGFloat {
+        #if os(iOS)
+        return 44
+        #else
+        return 24
+        #endif
+    }
+
     private var header: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
@@ -492,6 +510,7 @@ struct StationsMapView: View {
                 Image(systemName: showsPaths || showsPredictedPaths
                       ? "point.topleft.down.to.point.bottomright.curvepath.fill"
                       : "point.topleft.down.to.point.bottomright.curvepath")
+                    .iconHitTarget(iconHitTarget)
             }
             .help("Choose what the map draws between stations: paths already observed, and paths the terrain says are possible but nobody has tried.")
             if !distantStations.isEmpty {
@@ -501,6 +520,7 @@ struct StationsMapView: View {
                     Image(systemName: hidesDistantStations
                           ? "line.3.horizontal.decrease.circle.fill"
                           : "line.3.horizontal.decrease.circle")
+                        .iconHitTarget(iconHitTarget)
                 }
                 .help(distantFilterTooltip)
             }
@@ -521,6 +541,7 @@ struct StationsMapView: View {
                 }
             } label: {
                 Image(systemName: terrainStyle == nil ? "mountain.2" : "mountain.2.fill")
+                    .iconHitTarget(iconHitTarget)
             }
             .help("Draws the stored elevation data over the basemap. Hillshade lights the ground from the north-west so ridge lines read as ridges \u{2014} the feature that actually blocks a path. Elevation colours absolute height on a fixed scale, so the same colour means the same altitude on every tile. This is the very data the path forecasts are computed from.")
 
@@ -529,6 +550,7 @@ struct StationsMapView: View {
                     showingDirectory = true
                 } label: {
                     Image(systemName: "text.book.closed")
+                        .iconHitTarget(iconHitTarget)
                 }
                 .help("What the stations around here run \u{2014} nodes, bulletin boards, digipeaters and gateways, as they announced themselves in ID and beacon frames. The network's own directory, which nothing else assembles because nobody publishes one.")
             }
@@ -536,6 +558,7 @@ struct StationsMapView: View {
                 showsList.toggle()
             } label: {
                 Image(systemName: showsList ? "sidebar.right" : "sidebar.trailing")
+                    .iconHitTarget(iconHitTarget)
             }
             .help(showsList ? "Hide the station list and give the map the window."
                             : "Show the station list.")
@@ -563,13 +586,18 @@ struct StationsMapView: View {
                     store: offlineTiles,
                     elevation: elevation,
                     observer: observer,
-                    suggestedRegion: MapRegionFit.region(
+                    drawnRegion: downloadRegion,
+                    suggestedRegion: downloadRegion ?? MapRegionFit.region(
                         covering: [observer].compactMap { $0 } + Array(coordinates.values))?.mkRegion,
-                    suggestedRegionName: "this area")
+                    suggestedRegionName: downloadRegion == nil
+                        ? "this area" : "the area you drew")
                 .navigationTitle("Offline Data")
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { showingOfflineMaps = false }
+                        Button("Done") {
+                            showingOfflineMaps = false
+                            downloadRegion = nil
+                        }
                     }
                 }
             }
@@ -691,6 +719,16 @@ struct StationsMapView: View {
     }
 
     private func finishShape(_ geometry: ShapefileReader.Geometry) {
+        // A download box is a question, not a feature: it gets no name and is
+        // never saved to a layer.
+        if drawing.mode == .download {
+            let region = drawing.region()
+            drawing.cancel()
+            guard let region else { return }
+            downloadRegion = region
+            showingOfflineMaps = true
+            return
+        }
         drawing.cancel()
         promptForName(geometry)
     }

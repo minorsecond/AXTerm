@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// Turns an elevation grid into pixels.
 ///
@@ -25,6 +26,34 @@ nonisolated enum TerrainShading {
             switch self {
             case .hillshade: return "Hillshade"
             case .elevation: return "Elevation"
+            }
+        }
+
+        /// How the layer combines with the map underneath.
+        ///
+        /// MapKit has no overlay level below the roads, so a terrain layer is
+        /// always drawn on top of them — painting it opaquely buries the
+        /// street grid, the labels and the network lines the map is for.
+        /// Multiplying instead of painting is what real cartographic relief
+        /// does: it darkens what is already there rather than replacing it,
+        /// so roads still read through the shading.
+        var blendMode: CGBlendMode {
+            switch self {
+            case .hillshade: return .multiply
+            // A hypsometric tint multiplied goes muddy, and its job is to
+            // colour rather than to shade. Kept as a light wash instead.
+            case .elevation: return .normal
+            }
+        }
+
+        /// Layer opacity, applied to the whole tile rather than per pixel so
+        /// it can be tuned in one place.
+        var opacity: CGFloat {
+            switch self {
+            case .hillshade: return 0.75
+            // Deliberately faint. This is background information about
+            // height, not the subject of the map.
+            case .elevation: return 0.32
             }
         }
     }
@@ -84,13 +113,14 @@ nonisolated enum TerrainShading {
                                           metresPerSampleX: metresPerSampleX,
                                           metresPerSampleY: metresPerSampleY)
                     guard let shade else { continue }
-                    let level = UInt8(clamping: Int((shade * 255).rounded()))
-                    // Drawn as a translucent grey wash so the basemap's roads
-                    // and water still read through it.
-                    (r, g, b, a) = (level, level, level, 190)
+                    let level = UInt8(clamping: Int((relief(from: shade) * 255).rounded()))
+                    // Opaque here; the layer's own opacity does the blending.
+                    // Per-pixel alpha as well would make the two interact and
+                    // leave the strength impossible to reason about.
+                    (r, g, b, a) = (level, level, level, 255)
                 case .elevation:
                     let tint = elevationTint(metres: value)
-                    (r, g, b, a) = (tint.0, tint.1, tint.2, 170)
+                    (r, g, b, a) = (tint.0, tint.1, tint.2, 255)
                 }
                 pixels[offset] = r
                 pixels[offset + 1] = g
@@ -99,6 +129,20 @@ nonisolated enum TerrainShading {
             }
         }
         return pixels
+    }
+
+    /// Rescales a hillshade so flat ground is white.
+    ///
+    /// Raw hillshade puts level ground at cos(zenith) — mid-grey — and
+    /// multiplying that over the map darkens *everything* uniformly, which is
+    /// how the first version turned Denver brown and buried the streets.
+    /// Dividing through by the flat-ground value makes level terrain 1.0,
+    /// which multiplies to no change at all, so only actual slopes darken and
+    /// the relief is all that shows.
+    static func relief(from shade: Double) -> Double {
+        let flat = cos((90 - sunAltitudeDegrees) * .pi / 180)
+        guard flat > 0 else { return shade }
+        return min(shade / flat, 1)
     }
 
     /// Horn's method: slope and aspect from the eight neighbours.

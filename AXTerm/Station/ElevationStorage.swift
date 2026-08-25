@@ -89,10 +89,57 @@ final class ElevationStorage: ObservableObject {
         return ElevationDownloader.tiles(covering: region)
     }
 
+    /// The most tiles one request may fetch, however big the drawn box.
+    ///
+    /// About 260 MB and 64 sequential requests to a public service, which is
+    /// already a lot to ask of it. The cap exists because a region is drawn
+    /// by hand and a hand can draw a continent in two taps — the same shape
+    /// of mistake that once had this fetching a strip from Utah to Virginia.
+    /// A refusal that says how far over the line the request is beats a
+    /// download that quietly runs all afternoon.
+    static let maximumTilesPerRequest = 64
+
+    /// Tiles under a drawn region, capped.
+    static func tilesWorthFetching(covering region: MKCoordinateRegion)
+        -> (tiles: [(lat: Int, lon: Int)], wasCapped: Bool) {
+        let all = ElevationDownloader.tiles(covering: region)
+        guard all.count > maximumTilesPerRequest else { return (all, false) }
+        return (Array(all.prefix(maximumTilesPerRequest)), true)
+    }
+
+    /// What fetching a drawn region would cost.
+    func estimate(covering region: MKCoordinateRegion) -> Estimate {
+        let requested = ElevationDownloader.tiles(covering: region)
+        let capped = Self.tilesWorthFetching(covering: region)
+        let missing = capped.tiles.filter { tile in
+            (try? store?.hasTile(lat: tile.lat, lon: tile.lon)) != true
+        }
+        return Estimate(tileCount: missing.count,
+                        byteCount: Int64(missing.count) * Self.bytesPerTile,
+                        requestedTileCount: requested.count,
+                        wasCapped: capped.wasCapped)
+    }
+
+    func download(covering region: MKCoordinateRegion) {
+        downloader?.download(tiles: Self.tilesWorthFetching(covering: region).tiles)
+    }
+
+    /// A tile is `tileSamples` squared 32-bit floats. That is the number that
+    /// matters — the GeoTIFF on the wire compresses, the stored grid does not.
+    static var bytesPerTile: Int64 {
+        Int64(ElevationStore.tileSamples) * Int64(ElevationStore.tileSamples) * 4
+    }
+
     /// What a download would actually cost, before starting it.
     struct Estimate: Equatable {
         var tileCount: Int
         var byteCount: Int64
+        /// How many tiles the region actually covers, before any cap.
+        var requestedTileCount: Int = 0
+        /// True when the request was trimmed to fit the per-request cap.
+        /// Surfaced rather than silently applied — a cap the operator cannot
+        /// see reads as coverage they did not get.
+        var wasCapped: Bool = false
 
         var sizeDescription: String {
             ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file)
@@ -105,12 +152,9 @@ final class ElevationStorage: ObservableObject {
         let missing = tiles.filter { tile in
             (try? store?.hasTile(lat: tile.lat, lon: tile.lon)) != true
         }
-        // A tile is `tileSamples` squared 32-bit floats, which is the number
-        // that matters — the GeoTIFF on the wire compresses, the stored grid
-        // does not.
-        let perTile = Int64(ElevationStore.tileSamples) * Int64(ElevationStore.tileSamples) * 4
         return Estimate(tileCount: missing.count,
-                        byteCount: Int64(missing.count) * perTile)
+                        byteCount: Int64(missing.count) * Self.bytesPerTile,
+                        requestedTileCount: tiles.count)
     }
 
     /// Downloads terrain around one station.

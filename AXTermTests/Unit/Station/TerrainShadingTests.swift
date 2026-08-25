@@ -105,14 +105,18 @@ final class TerrainShadingTests: XCTestCase {
         XCTAssertEqual(pixels.count, samples * samples * 4)
     }
 
-    func testShadedPixelsAreTranslucentSoTheBasemapReadsThrough() {
+    /// Shaded pixels are opaque; the layer's own opacity does the blending.
+    ///
+    /// Per-pixel alpha *and* layer opacity would multiply together, leaving
+    /// the strength of the wash impossible to reason about from either value.
+    /// Only a no-data gap is transparent.
+    func testShadedPixelsAreOpaqueAndTheLayerOpacityBlendsThem() {
         let grid = slopedGrid(risingToward: "east")
         let pixels = TerrainShading.rgba(from: grid, samples: samples,
                                          style: .hillshade,
                                          metresPerSampleX: 100, metresPerSampleY: 100)
-        let alpha = pixels[(4 * samples + 4) * 4 + 3]
-        XCTAssertGreaterThan(alpha, 0)
-        XCTAssertLessThan(alpha, 255)
+        XCTAssertEqual(pixels[(4 * samples + 4) * 4 + 3], 255)
+        XCTAssertLessThan(TerrainShading.Style.hillshade.opacity, 1)
     }
 
     // MARK: - Elevation ramp
@@ -156,5 +160,46 @@ final class TerrainShadingTests: XCTestCase {
     func testSpacingIsAboutAHundredMetresAtTheStandardResolution() {
         let spacing = TerrainShading.metresPerSample(tileLatitude: 39, samples: 1024)
         XCTAssertEqual(spacing.y, 108.8, accuracy: 2)
+    }
+
+    // MARK: - Blending
+
+    /// The fix for terrain burying the map: level ground must multiply to no
+    /// change at all. Raw hillshade puts flat terrain at mid-grey, and
+    /// multiplying that over the basemap darkened Denver uniformly and hid
+    /// the street grid.
+    func testFlatGroundReliefIsWhiteSoItMultipliesToNothing() {
+        let flat = [Float](repeating: 1600, count: samples * samples)
+        let raw = try? XCTUnwrap(shade(flat, row: 4, column: 4))
+        XCTAssertEqual(TerrainShading.relief(from: raw ?? 0), 1.0, accuracy: 0.001)
+        // And the raw value really is mid-grey, which is what made it a bug.
+        XCTAssertLessThan(raw ?? 1, 0.8)
+    }
+
+    func testSlopesFacingAwayStillDarken() {
+        let facingAway = shade(slopedGrid(risingToward: "north"), row: 4, column: 4)
+        XCTAssertLessThan(TerrainShading.relief(from: try XCTUnwrap(facingAway)), 1.0)
+    }
+
+    func testReliefNeverBrightens() {
+        for direction in ["north", "south", "east", "west"] {
+            let value = shade(slopedGrid(risingToward: direction), row: 4, column: 4)
+            XCTAssertLessThanOrEqual(
+                TerrainShading.relief(from: try XCTUnwrap(value)), 1.0,
+                "a multiply layer above 1.0 would brighten the map, not shade it")
+        }
+    }
+
+    /// Hillshade multiplies so roads read through; a colour ramp multiplied
+    /// goes muddy, so it stays a light wash instead.
+    func testEachStyleBlendsInTheWayItsJobNeeds() {
+        XCTAssertEqual(TerrainShading.Style.hillshade.blendMode, .multiply)
+        XCTAssertEqual(TerrainShading.Style.elevation.blendMode, .normal)
+        XCTAssertLessThan(TerrainShading.Style.elevation.opacity,
+                          TerrainShading.Style.hillshade.opacity)
+        for style in TerrainShading.Style.allCases {
+            XCTAssertGreaterThan(style.opacity, 0)
+            XCTAssertLessThanOrEqual(style.opacity, 1)
+        }
     }
 }

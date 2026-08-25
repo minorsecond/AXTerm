@@ -1,5 +1,6 @@
 import Foundation
 import CoreLocation
+import MapKit
 
 /// What the next tap on the map means.
 nonisolated enum MapDrawingMode: String, CaseIterable, Identifiable, Sendable {
@@ -11,6 +12,12 @@ nonisolated enum MapDrawingMode: String, CaseIterable, Identifiable, Sendable {
     case line
     /// Taps add vertices to an area.
     case area
+    /// Taps bound a region to fetch map tiles and terrain for.
+    ///
+    /// A separate mode rather than a use of `.area`, because it produces no
+    /// saved feature and asks for no name — the shape is a question about
+    /// what to download, not a thing to keep.
+    case download
 
     var id: String { rawValue }
 
@@ -20,6 +27,7 @@ nonisolated enum MapDrawingMode: String, CaseIterable, Identifiable, Sendable {
         case .point: "Mark"
         case .line: "Line"
         case .area: "Area"
+        case .download: "Download"
         }
     }
 
@@ -29,11 +37,12 @@ nonisolated enum MapDrawingMode: String, CaseIterable, Identifiable, Sendable {
         case .point: "mappin"
         case .line: "scribble"
         case .area: "pentagon"
+        case .download: "square.and.arrow.down.on.square"
         }
     }
 
     /// Whether this mode accumulates vertices before producing anything.
-    var isMultiPoint: Bool { self == .line || self == .area }
+    var isMultiPoint: Bool { self == .line || self == .area || self == .download }
 
     var help: String {
         switch self {
@@ -45,6 +54,8 @@ nonisolated enum MapDrawingMode: String, CaseIterable, Identifiable, Sendable {
             "Tap to add each point of a line — a route, a path, a boundary that is not closed. Needs at least two points."
         case .area:
             "Tap to add each corner of an area — a zone, a search sector, a coverage estimate. Needs at least three corners; the shape closes itself."
+        case .download:
+            "Tap the corners of the area you want available offline, then finish — the map tiles and the elevation data for exactly that box get downloaded. Nothing is saved as a feature; the shape is only a way of saying where."
         }
     }
 }
@@ -84,6 +95,9 @@ nonisolated struct MapDrawingSession: Equatable, Sendable {
         case .point: 1
         case .line: 2
         case .area: 3
+        // Two opposite corners are enough to describe a box, and asking for
+        // a third corner to define a rectangle is busywork.
+        case .download: 2
         }
     }
 
@@ -146,7 +160,58 @@ nonisolated struct MapDrawingSession: Equatable, Sendable {
             return .polyline([vertices])
         case .area:
             return .polygon([vertices])
+        case .download:
+            // The corners describe a box, so the geometry is that box rather
+            // than the path tapped out. Downloading tiles for a polygon's
+            // outline instead of its extent would miss the middle.
+            guard let bounds = boundingBox() else { return nil }
+            return .polygon([bounds])
         }
+    }
+
+    /// The rectangle enclosing every vertex, closed.
+    ///
+    /// Tiles are square and a download is a rectangle, so any drawn shape
+    /// becomes its own bounding box. Said plainly here rather than left
+    /// implicit, because an operator drawing a narrow diagonal corridor gets
+    /// the whole box and should not be surprised by the size.
+    func boundingBox() -> [CLLocationCoordinate2D]? {
+        guard let first = vertices.first else { return nil }
+        var minLat = first.latitude, maxLat = first.latitude
+        var minLon = first.longitude, maxLon = first.longitude
+        for vertex in vertices.dropFirst() {
+            minLat = min(minLat, vertex.latitude)
+            maxLat = max(maxLat, vertex.latitude)
+            minLon = min(minLon, vertex.longitude)
+            maxLon = max(maxLon, vertex.longitude)
+        }
+        guard minLat != maxLat, minLon != maxLon else { return nil }
+        return [
+            CLLocationCoordinate2D(latitude: maxLat, longitude: minLon),
+            CLLocationCoordinate2D(latitude: maxLat, longitude: maxLon),
+            CLLocationCoordinate2D(latitude: minLat, longitude: maxLon),
+            CLLocationCoordinate2D(latitude: minLat, longitude: minLon),
+            CLLocationCoordinate2D(latitude: maxLat, longitude: minLon),
+        ]
+    }
+
+    /// The drawn extent as a map region, for the download to act on.
+    func region() -> MKCoordinateRegion? {
+        guard let first = vertices.first else { return nil }
+        var minLat = first.latitude, maxLat = first.latitude
+        var minLon = first.longitude, maxLon = first.longitude
+        for vertex in vertices.dropFirst() {
+            minLat = min(minLat, vertex.latitude)
+            maxLat = max(maxLat, vertex.latitude)
+            minLon = min(minLon, vertex.longitude)
+            maxLon = max(maxLon, vertex.longitude)
+        }
+        guard minLat != maxLat, minLon != maxLon else { return nil }
+        return MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2,
+                                           longitude: (minLon + maxLon) / 2),
+            span: MKCoordinateSpan(latitudeDelta: maxLat - minLat,
+                                   longitudeDelta: maxLon - minLon))
     }
 
     /// Vertices for the in-progress preview.
@@ -154,6 +219,11 @@ nonisolated struct MapDrawingSession: Equatable, Sendable {
     /// An area shows its closing edge while being drawn so the operator can
     /// see the shape they are making, not the open path they have tapped.
     func previewVertices() -> [CLLocationCoordinate2D] {
+        // A download box previews as the box itself, so what is about to be
+        // fetched is what is on screen.
+        if mode == .download, vertices.count >= 2, let box = boundingBox() {
+            return box
+        }
         guard mode == .area, vertices.count >= 3, let first = vertices.first else {
             return vertices
         }
