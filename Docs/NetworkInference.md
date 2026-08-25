@@ -309,3 +309,61 @@ Filtering by service narrows the rows shown under a station, not merely which
 stations appear; showing a station's BBS entry under a digipeater filter would
 misreport what the filter did. The picker offers only services something has
 actually announced.
+
+## 8. Drawing the terrain
+
+The elevation data decides which paths are called blocked, but until now it
+was invisible — an operator was told "there is a ridge 40 m above the line"
+and had to take it on faith. The Map's terrain menu draws the same grid the
+forecaster reads, in two styles.
+
+**Hillshade** lights the ground from the north-west at 45°, the cartographic
+convention. Not an arbitrary one: lit from the south-east the image inverts
+perceptually and valleys read as hills. Slope and aspect come from Horn's
+method over the eight neighbours, with 2× vertical exaggeration because
+true-scale shading at ~100 m sampling is nearly flat grey.
+
+**Elevation** colours absolute height on a **fixed** 0–4500 m ramp. Fixed
+rather than per-tile: normalising each tile against its own extremes would put
+a seam at every tile boundary and make a flat tile glow like a mountain range.
+
+Three details that would each look plausible while being wrong, and are
+pinned by tests:
+
+- A no-data sample stays fully transparent. Painting it as ground would draw a
+  flat plain over unknown terrain.
+- A sample with any missing neighbour gets no shade at all rather than a
+  guessed slope — the edge of a coverage hole is exactly where a fabricated
+  neighbour would render a convincing cliff that is not there.
+- Longitude spacing shrinks with latitude. Using the latitude spacing for both
+  axes tilts every slope on the map.
+
+Tiles are drawn `.aboveRoads` (below labels), one overlay each so MapKit only
+renders what is on screen, with the shaded image cached — shading a
+1024-square grid is a few million operations and the map redraws on every pan.
+The renderer flips the image inside its own rect, without which the terrain
+mirrors and the mountains appear east of Denver.
+
+## 9. Stations that arrived down a wire
+
+Packet networks are bridged. A local node linked to the internet — LinBPQ, a
+CMS gateway, an APRS-IS feed — puts frames from stations thousands of
+kilometres away onto the same stream as the neighbour down the road, and
+nothing in a frame distinguishes them.
+
+`StationPlausibility` marks anything further than **300 km** as impossible to
+have arrived by radio. The threshold is deliberately generous: real packet
+links run to a couple of hundred kilometres from good sites and tropospheric
+ducting can carry further, so this catches the obvious cases without ever
+quietly hiding a genuine long haul.
+
+A position **inferred from an operator's licence address is never filtered**. A
+node on a Colorado hilltop whose licensee lives in Virginia is real and
+common, and that distance measures a mailing address rather than a radio path.
+Unplaced stations are never filtered either — an unplaced station is usually
+the one most worth looking at.
+
+Nothing is deleted. The filter is off by default, the toolbar control appears
+only when there is something it would affect, its tooltip names the stations,
+and a banner with a Show button stays on screen the whole time it is on. A
+list that silently drops rows is how twenty missing stations stay missing.

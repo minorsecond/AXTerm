@@ -86,6 +86,16 @@ nonisolated final class ElevationStore: @unchecked Sendable {
         }
     }
 
+    /// Which tiles are on disk, for drawing them.
+    func storedTiles() throws -> [(lat: Int, lon: Int)] {
+        try dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: "SELECT tile_lat, tile_lon FROM elevation ORDER BY tile_lat, tile_lon"
+            ).map { (lat: $0["tile_lat"], lon: $0["tile_lon"]) }
+        }
+    }
+
     func removeAllTiles() throws {
         try dbQueue.write { db in
             try db.execute(sql: "DELETE FROM elevation")

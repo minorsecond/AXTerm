@@ -42,6 +42,9 @@ struct OfflineBasemapMapView {
     /// Observed paths between stations, drawn as great-circle lines so the
     /// geometry matches how the signal actually travelled.
     var pathLinks: [MapPathLink] = []
+    /// Shaded elevation tiles. Empty draws none, so a map with no terrain
+    /// stored looks exactly as it did.
+    var terrainOverlays: [ElevationOverlay] = []
     /// In-progress drawing. Taps add vertices while this is active.
     @Binding var drawing: MapDrawingSession
     /// Called when a tap lands on the map in a drawing mode.
@@ -202,10 +205,14 @@ struct OfflineBasemapMapView {
         /// Links keep their evidence so the renderer can dash the ones that
         /// have never actually been travelled.
         var linkStyles: [ObjectIdentifier: MapPathLink] = [:]
+        var installedTerrainIDs: [String] = []
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let tileOverlay = overlay as? MKTileOverlay {
                 return MKTileOverlayRenderer(tileOverlay: tileOverlay)
+            }
+            if overlay is ElevationOverlay {
+                return ElevationOverlayRenderer(overlay: overlay)
             }
 
             let color = overlayColors[ObjectIdentifier(overlay)] ?? .systemBlue
@@ -486,11 +493,18 @@ struct OfflineBasemapMapView {
     private func applyVectorOverlays(to mapView: MKMapView, coordinator: Coordinator) {
         // Links are part of the identity so a new path appearing redraws,
         // and panning with an unchanged network does not.
+        // Terrain is diffed on its own key. Shading a tile costs a few
+        // million floating-point operations, and rebuilding it because a
+        // path link appeared would make every new packet stutter the map.
+        applyTerrain(to: mapView, coordinator: coordinator)
+
         let wanted = overlays.map(\.id) + pathLinks.map(\.id)
         guard coordinator.installedOverlayIDs != wanted else { return }
         coordinator.installedOverlayIDs = wanted
 
-        let existing = mapView.overlays.filter { !($0 is MKTileOverlay) }
+        let existing = mapView.overlays.filter {
+            !($0 is MKTileOverlay) && !($0 is ElevationOverlay)
+        }
         mapView.removeOverlays(existing)
         coordinator.overlayColors.removeAll()
         coordinator.linkStyles.removeAll()
@@ -510,6 +524,22 @@ struct OfflineBasemapMapView {
             coordinator.overlayColors[ObjectIdentifier(line)] = Self.linkColor(for: link)
             coordinator.linkStyles[ObjectIdentifier(line)] = link
             mapView.addOverlay(line, level: .aboveRoads)
+        }
+    }
+
+    /// Adds or removes shaded elevation tiles.
+    ///
+    /// Drawn below everything else the map puts on top: terrain is the ground
+    /// the network sits on, and a hillshade over the station markers would
+    /// bury the thing the map is actually for.
+    private func applyTerrain(to mapView: MKMapView, coordinator: Coordinator) {
+        let wanted = terrainOverlays.map(\.id)
+        guard coordinator.installedTerrainIDs != wanted else { return }
+        coordinator.installedTerrainIDs = wanted
+
+        mapView.removeOverlays(mapView.overlays.compactMap { $0 as? ElevationOverlay })
+        for overlay in terrainOverlays {
+            mapView.addOverlay(overlay, level: .aboveRoads)
         }
     }
 

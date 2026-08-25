@@ -62,6 +62,17 @@ struct StationsMapView: View {
     @AppStorage("stations.showsPredictedPaths") private var showsPredictedPaths = false
     /// Graph analysis of the observed network: which stations everything
     /// depends on, and which stations cluster together.
+    /// Which terrain shading is drawn, if any. Off by default: the map's
+    /// first job is where stations are, and a relief wash under everything
+    /// is a choice rather than a default.
+    @AppStorage("stations.terrainStyle") private var terrainStyleRaw = ""
+    /// Sets aside stations too far away to have arrived by radio.
+    ///
+    /// Off by default. Hiding data is never the right default, and the
+    /// heuristic is a heuristic — but one internet-bridged station on the
+    /// far coast stretches the map's zoom until every local station is a
+    /// cluster of dots, so the toggle earns its place.
+    @AppStorage("stations.hidesDistantStations") private var hidesDistantStations = false
     @StateObject private var insights = NetworkInsightModel()
     /// Stored elevation grids. Terrain forecasts read this and nothing else,
     /// so the feature works with the network down, and is honestly
@@ -166,6 +177,41 @@ struct StationsMapView: View {
         return heights
     }
 
+    /// Names the stations the filter affects, rather than only what it does.
+    ///
+    /// An operator should be able to tell from the tooltip whether the thing
+    /// about to disappear is the one they were looking for.
+    private var distantFilterTooltip: String {
+        let names = distantStations.prefix(4).map(\.callsign).joined(separator: ", ")
+        let more = distantStations.count > 4
+            ? " and \(distantStations.count - 4) more" : ""
+        let action = hidesDistantStations ? "Showing" : "Hiding"
+        return "\(action) \(distantStations.count) station"
+            + "\(distantStations.count == 1 ? "" : "s") further than "
+            + "\(Int(StationPlausibility.defaultRangeKilometres)) km away: \(names)\(more). "
+            + "A packet network bridged to the internet puts frames from the "
+            + "far side of the country on the same stream as the neighbour "
+            + "down the road, and one of them stretches the map until every "
+            + "local station is a dot. Nothing is deleted, and a node placed "
+            + "at its operator's licence address is never filtered \u{2014} "
+            + "that distance would be measuring a mailing address."
+    }
+
+    private var terrainStyle: TerrainShading.Style? {
+        TerrainShading.Style(rawValue: terrainStyleRaw)
+    }
+
+    /// Shaded tiles for whatever is stored.
+    ///
+    /// Rebuilt only when the style or the stored tile count changes — the
+    /// overlays cache their rendered images, and making new ones on every
+    /// redraw would throw that away.
+    private var terrainOverlays: [ElevationOverlay] {
+        guard let terrainStyle, let store = elevation.store,
+              elevation.hasTerrain else { return [] }
+        return ElevationOverlay.overlays(from: store, style: terrainStyle)
+    }
+
     private var observer: GreatCircle.Point? {
         Maidenhead.center(of: observerGrid).map(GreatCircle.Point.init)
     }
@@ -187,7 +233,22 @@ struct StationsMapView: View {
         return heard + nodes
     }
 
-    private var placed: [HeardStationMap.Entry] { entries.filter(\.isPlaced) }
+    /// Stations set aside as impossible to have heard over the air.
+    ///
+    /// Computed even when the toggle is off, so the toolbar can say how many
+    /// there are rather than the operator discovering the feature by
+    /// accident.
+    private var distantStations: [HeardStationMap.Entry] {
+        StationPlausibility.partition(entries, observer: observer).hidden
+    }
+
+    /// Entries after the distance filter, if it is on.
+    private var visibleEntries: [HeardStationMap.Entry] {
+        guard hidesDistantStations else { return entries }
+        return StationPlausibility.partition(entries, observer: observer).shown
+    }
+
+    private var placed: [HeardStationMap.Entry] { visibleEntries.filter(\.isPlaced) }
 
     /// The network drawn between the pins.
     ///
@@ -235,13 +296,13 @@ struct StationsMapView: View {
         let observed = NetworkPath.merging(live + remembered)
         return observed + NetworkPathObserver.transitivePaths(from: observed)
     }
-    private var unplaced: [HeardStationMap.Entry] { entries.filter { !$0.isPlaced } }
+    private var unplaced: [HeardStationMap.Entry] { visibleEntries.filter { !$0.isPlaced } }
 
     private var scope: StationScope {
         guard let observer else { return StationScope.build(observerLabel: "", sites: []) }
         return HeardStationMap.scope(
             observerLabel: observerGrid.uppercased(),
-            observer: observer, entries: entries, now: Date())
+            observer: observer, entries: visibleEntries, now: Date())
     }
 
     /// The same positions the scope uses, fanned so stations sharing a
@@ -259,6 +320,7 @@ struct StationsMapView: View {
                 noPosition
             } else {
                 if !unplaced.isEmpty { unplacedBanner }
+                if hidesDistantStations, !distantStations.isEmpty { distantBanner }
                 if showsList {
                     // A draggable split is a Mac affordance; on a touch
                     // screen the same two panes stack, so the map keeps a
@@ -432,6 +494,36 @@ struct StationsMapView: View {
                       : "point.topleft.down.to.point.bottomright.curvepath")
             }
             .help("Choose what the map draws between stations: paths already observed, and paths the terrain says are possible but nobody has tried.")
+            if !distantStations.isEmpty {
+                Button {
+                    hidesDistantStations.toggle()
+                } label: {
+                    Image(systemName: hidesDistantStations
+                          ? "line.3.horizontal.decrease.circle.fill"
+                          : "line.3.horizontal.decrease.circle")
+                }
+                .help(distantFilterTooltip)
+            }
+            Menu {
+                Picker("Terrain", selection: $terrainStyleRaw) {
+                    Text("No Terrain").tag("")
+                    ForEach(TerrainShading.Style.allCases) { style in
+                        Text(style.label).tag(style.rawValue)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+                .disabled(!elevation.hasTerrain)
+                if !elevation.hasTerrain {
+                    Text("No terrain data downloaded")
+                } else {
+                    Text("\(elevation.tileCount) tile\(elevation.tileCount == 1 ? "" : "s") stored")
+                }
+            } label: {
+                Image(systemName: terrainStyle == nil ? "mountain.2" : "mountain.2.fill")
+            }
+            .help("Draws the stored elevation data over the basemap. Hillshade lights the ground from the north-west so ridge lines read as ridges \u{2014} the feature that actually blocks a path. Elevation colours absolute height on a fixed scale, so the same colour means the same altitude on every tile. This is the very data the path forecasts are computed from.")
+
             if serviceStore != nil {
                 Button {
                     showingDirectory = true
@@ -496,6 +588,28 @@ struct StationsMapView: View {
         return "\(placed.count) of \(entries.count) placed \u{2014} \(unplaced.count) with no known position"
     }
 
+    /// Says what the filter took away, and offers it straight back.
+    ///
+    /// A list that quietly drops rows is how twenty missing stations stay
+    /// missing. The count is on screen whenever the filter is on, not buried
+    /// in a tooltip on the control that caused it.
+    private var distantBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .foregroundStyle(.secondary)
+            Text("\(distantStations.count) station\(distantStations.count == 1 ? "" : "s") hidden \u{2014} further than \(Int(StationPlausibility.defaultRangeKilometres)) km, so not heard by radio.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Button("Show") { hidesDistantStations = false }
+                .font(.caption)
+                .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.quaternary.opacity(0.4))
+    }
+
     /// Twenty stations with no position is the map's most important
     /// fact, so it is stated on the map rather than left to a tooltip on
     /// a greyed-out button.
@@ -551,6 +665,7 @@ struct StationsMapView: View {
                                observerCallsign: myCallsign,
                                basemap: basemap, legend: .recency,
                                pathLinks: pathLinks,
+                               terrainOverlays: terrainOverlays,
                                tileStore: offlineTiles.hasStoredTiles ? offlineTiles.store : nil,
                                tileSource: offlineTiles.storedSource,
                                overlays: overlayStore.visibleLayers,

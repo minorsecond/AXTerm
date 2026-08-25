@@ -26,6 +26,9 @@ struct StationMapView: View {
     /// Observed paths between stations. Empty draws nothing, so a map with no
     /// topology yet looks exactly as it did.
     var pathLinks: [MapPathLink] = []
+    /// Shaded elevation, drawn under the network. Non-empty forces the
+    /// MKMapView path, which is the only one that can host an overlay.
+    var terrainOverlays: [ElevationOverlay] = []
     /// Stored tiles and the provider they came from. Nil means offline mode
     /// is unavailable — the picker hides it rather than offering a basemap
     /// that would draw nothing.
@@ -53,7 +56,7 @@ struct StationMapView: View {
         // exactly where an operator would first try them.
         if basemap.isOffline, let tileStore {
             mapKitMap(store: tileStore)
-        } else if drawing != nil || !overlays.isEmpty {
+        } else if drawing != nil || !overlays.isEmpty || !terrainOverlays.isEmpty {
             mapKitMap(store: nil)
         } else {
             appleMap
@@ -75,6 +78,7 @@ struct StationMapView: View {
             basemap: basemap,
             overlays: overlays,
             pathLinks: pathLinks,
+            terrainOverlays: terrainOverlays,
             drawing: drawing ?? .constant(MapDrawingSession()),
             onDrawTap: onDrawTap,
             selection: $selection,
