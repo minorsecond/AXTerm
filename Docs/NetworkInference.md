@@ -344,6 +344,30 @@ renders what is on screen, with the shaded image cached — shading a
 The renderer flips the image inside its own rect, without which the terrain
 mirrors and the mountains appear east of Denver.
 
+**Rendering cost.** A one-degree tile is 1024 squared — a million samples.
+Three things made that take seconds rather than a tenth of one, and all three
+were in the inner loop:
+
+- The readable hillshade calls `atan`, `atan2`, `cos` and `sin` per sample:
+  four million transcendental calls per tile. Substituting the slope and
+  aspect identities collapses it to one square root and four hoisted
+  constants. `TerrainShadingTests` checks the fast form against the readable
+  one across a spread of gradients rather than trusting the algebra.
+- Gathering the eight neighbours through a temporary array allocated once per
+  sample — a million heap allocations per tile, costing more than all the
+  arithmetic. They are read straight into locals.
+- Rows are independent, so the work splits across cores with
+  `concurrentPerform`.
+
+Together: about 9x in a debug build, 1.14s to 0.13s per tile.
+
+Shading also no longer happens inside `draw`. MapKit expects a renderer to
+return promptly, and computing there froze panning until every visible tile
+finished. The first call starts the work on a background queue and returns
+nil; `setNeedsDisplay` fires when the tile is ready, so terrain fades in a
+tile at a time. Results live in a process-wide `NSCache`, so panning back,
+switching styles, or rebuilding the overlay list costs nothing.
+
 **Blended, not painted.** MapKit has no overlay level *beneath* the roads, so
 a terrain layer is always on top of them. Painted opaquely it buries the
 street grid, the labels and the network lines the map exists for — which is

@@ -92,40 +92,92 @@ nonisolated enum TerrainShading {
     static func rgba(from grid: [Float], samples: Int, style: Style,
                      metresPerSampleX: Double, metresPerSampleY: Double) -> [UInt8] {
         precondition(grid.count == samples * samples, "grid is not square")
-        var pixels = [UInt8](repeating: 0, count: samples * samples * 4)
+        let byteCount = samples * samples * 4
+        var pixels = [UInt8](repeating: 0, count: byteCount)
+        let light = LightConstants()
+        let flat = cos((90 - sunAltitudeDegrees) * .pi / 180)
+        let inverseX = 1 / (8 * metresPerSampleX)
+        let inverseY = 1 / (8 * metresPerSampleY)
 
-        for row in 0..<samples {
-            for column in 0..<samples {
-                let index = row * samples + column
-                let value = Double(grid[index])
-                let offset = index * 4
+        // Rows are independent, so the work splits across cores exactly.
+        // `concurrentPerform` blocks until the whole band set is done, which
+        // is what the caller wants — it is already off the main thread.
+        pixels.withUnsafeMutableBufferPointer { output in
+            grid.withUnsafeBufferPointer { input in
+                let bands = min(ProcessInfo.processInfo.activeProcessorCount, samples)
+                let rowsPerBand = (samples + bands - 1) / bands
 
-                // A gap stays transparent. Shading it as sea level would draw
-                // a flat plain over unknown ground, which is the one mistake
-                // here that actively misleads.
-                guard value.isFinite else { continue }
+                DispatchQueue.concurrentPerform(iterations: bands) { band in
+                    let firstRow = band * rowsPerBand
+                    let lastRow = min(firstRow + rowsPerBand, samples)
+                    guard firstRow < lastRow else { return }
 
-                let (r, g, b, a): (UInt8, UInt8, UInt8, UInt8)
-                switch style {
-                case .hillshade:
-                    let shade = hillshade(grid: grid, samples: samples,
-                                          row: row, column: column,
-                                          metresPerSampleX: metresPerSampleX,
-                                          metresPerSampleY: metresPerSampleY)
-                    guard let shade else { continue }
-                    let level = UInt8(clamping: Int((relief(from: shade) * 255).rounded()))
-                    // Opaque here; the layer's own opacity does the blending.
-                    // Per-pixel alpha as well would make the two interact and
-                    // leave the strength impossible to reason about.
-                    (r, g, b, a) = (level, level, level, 255)
-                case .elevation:
-                    let tint = elevationTint(metres: value)
-                    (r, g, b, a) = (tint.0, tint.1, tint.2, 255)
+                    for row in firstRow..<lastRow {
+                        for column in 0..<samples {
+                            let index = row * samples + column
+                            let value = Double(input[index])
+                            let offset = index * 4
+
+                            // A gap stays transparent. Shading it as sea level
+                            // would draw a flat plain over unknown ground,
+                            // which is the one mistake here that actively
+                            // misleads.
+                            guard value.isFinite else { continue }
+
+                            switch style {
+                            case .hillshade:
+                                guard row > 0, row < samples - 1,
+                                      column > 0, column < samples - 1 else { continue }
+                                // Read straight into locals. Gathering these
+                                // through a temporary array allocates once per
+                                // sample — a million heap allocations per
+                                // tile, which cost more than the arithmetic
+                                // this whole routine exists to do.
+                                let north = index - samples
+                                let south = index + samples
+                                let a = Double(input[north - 1])
+                                let b = Double(input[north])
+                                let c = Double(input[north + 1])
+                                let d = Double(input[index - 1])
+                                let f = Double(input[index + 1])
+                                let g = Double(input[south - 1])
+                                let h = Double(input[south])
+                                let i = Double(input[south + 1])
+
+                                // A fabricated neighbour makes a fabricated
+                                // slope, and the edge of a coverage hole is
+                                // where that renders a convincing cliff.
+                                guard a.isFinite, b.isFinite, c.isFinite, d.isFinite,
+                                      f.isFinite, g.isFinite, h.isFinite, i.isFinite
+                                else { continue }
+
+                                let dzdx = ((c + 2 * f + i) - (a + 2 * d + g)) * inverseX
+                                // Row 0 is the north edge, so increasing row
+                                // runs south; this sign keeps the light on the
+                                // correct side.
+                                let dzdy = ((g + 2 * h + i) - (a + 2 * b + c)) * inverseY
+
+                                let shade = hillshade(dzdx: dzdx, dzdy: dzdy, light: light)
+                                let level = UInt8(clamping:
+                                    Int((min(shade / flat, 1) * 255).rounded()))
+                                // Opaque here; the layer's own opacity does the
+                                // blending. Per-pixel alpha as well would make
+                                // the two interact and leave the strength
+                                // impossible to reason about.
+                                output[offset] = level
+                                output[offset + 1] = level
+                                output[offset + 2] = level
+                                output[offset + 3] = 255
+                            case .elevation:
+                                let tint = elevationTint(metres: value)
+                                output[offset] = tint.0
+                                output[offset + 1] = tint.1
+                                output[offset + 2] = tint.2
+                                output[offset + 3] = 255
+                            }
+                        }
+                    }
                 }
-                pixels[offset] = r
-                pixels[offset + 1] = g
-                pixels[offset + 2] = b
-                pixels[offset + 3] = a
             }
         }
         return pixels
@@ -143,6 +195,49 @@ nonisolated enum TerrainShading {
         let flat = cos((90 - sunAltitudeDegrees) * .pi / 180)
         guard flat > 0 else { return shade }
         return min(shade / flat, 1)
+    }
+
+    /// The same shade with the trigonometry lifted out of the loop.
+    ///
+    /// The readable form calls `atan`, `atan2`, `cos` and `sin` for every
+    /// sample. At 1024 squared that is four million transcendental calls per
+    /// tile, and it was the whole reason terrain took seconds to appear.
+    ///
+    /// Substituting `cos(slope) = 1/sqrt(1+S²)`, `sin(slope) = S/sqrt(1+S²)`
+    /// and the aspect's own sine and cosine — which are just the gradient
+    /// components over their magnitude — collapses the expression to
+    ///
+    ///     shade = [cos Z + sin Z · k · (sin A · dzdy − cos A · dzdx)]
+    ///             / sqrt(1 + k²(dzdx² + dzdy²))
+    ///
+    /// with the four constants hoisted. One square root per sample, no
+    /// transcendentals, and algebraically identical — `TerrainShadingTests`
+    /// checks the two against each other rather than taking that on trust.
+    /// Flat ground still falls out as cos Z, since the numerator loses its
+    /// second term and the denominator becomes one.
+    struct LightConstants {
+        let cosZenith: Double
+        let sinZenith: Double
+        let cosAzimuth: Double
+        let sinAzimuth: Double
+
+        init() {
+            let zenith = (90 - sunAltitudeDegrees) * .pi / 180
+            let azimuth = (360 - sunAzimuthDegrees + 90) * .pi / 180
+            cosZenith = cos(zenith)
+            sinZenith = sin(zenith)
+            cosAzimuth = cos(azimuth)
+            sinAzimuth = sin(azimuth)
+        }
+    }
+
+    static func hillshade(dzdx: Double, dzdy: Double,
+                          light: LightConstants) -> Double {
+        let k = verticalExaggeration
+        let numerator = light.cosZenith
+            + light.sinZenith * k * (light.sinAzimuth * dzdy - light.cosAzimuth * dzdx)
+        let denominator = (1 + k * k * (dzdx * dzdx + dzdy * dzdy)).squareRoot()
+        return min(max(numerator / denominator, 0), 1)
     }
 
     /// Horn's method: slope and aspect from the eight neighbours.

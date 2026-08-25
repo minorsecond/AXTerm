@@ -261,18 +261,19 @@ struct StationsMapView: View {
     /// everything funnels through, which stations sit alone, and where a path
     /// crosses ground that explains a poor link.
     private var pathLinks: [MapPathLink] {
-        guard showsPaths else { return [] }
-        var positions: [String: GreatCircle.Point] = [:]
-        for entry in placed {
-            positions[entry.callsign.uppercased()] = entry.position
-        }
-        if let observer, !myCallsign.isEmpty {
-            positions[myCallsign.uppercased()] = observer
-        }
-        return MapPathLink.links(from: networkPaths, positions: positions)
-            + MapPathLink.links(fromPredictions: showsPredictedPaths
-                                    ? insights.snapshot.predictions : [],
-                                positions: positions)
+        // Each layer is gated on its own switch. A single guard on
+        // `showsPaths` covering both meant forecasts could only be seen
+        // alongside measurements — two independent menu items, one of which
+        // silently did nothing on its own.
+        guard showsPaths || showsPredictedPaths else { return [] }
+        let positions = networkPositions
+
+        let observed = showsPaths
+            ? MapPathLink.links(from: networkPaths, positions: positions) : []
+        let predicted = showsPredictedPaths
+            ? MapPathLink.links(fromPredictions: insights.snapshot.predictions,
+                                positions: positions) : []
+        return observed + predicted
     }
 
     /// Positions for everything the graph might mention, us included.
@@ -534,10 +535,27 @@ struct StationsMapView: View {
                 .pickerStyle(.inline)
                 .labelsHidden()
                 .disabled(!elevation.hasTerrain)
-                if !elevation.hasTerrain {
-                    Text("No terrain data downloaded")
-                } else {
+
+                Divider()
+                // A menu that says "no data" and stops there leaves the
+                // operator to guess which of the other controls fetches it.
+                // The way to get terrain belongs where its absence is noticed.
+                Button {
+                    showingOfflineMaps = true
+                } label: {
+                    Label(elevation.hasTerrain
+                          ? "Download More Terrain\u{2026}" : "Download Terrain\u{2026}",
+                          systemImage: "arrow.down.circle")
+                }
+                Button {
+                    drawing.begin(.download)
+                } label: {
+                    Label("Draw an Area to Download\u{2026}", systemImage: "square.dashed")
+                }
+                if elevation.hasTerrain {
                     Text("\(elevation.tileCount) tile\(elevation.tileCount == 1 ? "" : "s") stored")
+                } else {
+                    Text("No terrain data yet")
                 }
             } label: {
                 Image(systemName: terrainStyle == nil ? "mountain.2" : "mountain.2.fill")

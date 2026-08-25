@@ -15,11 +15,30 @@ nonisolated final class ElevationOverlay: NSObject, MKOverlay {
     let coordinate: CLLocationCoordinate2D
     let boundingMapRect: MKMapRect
 
-    /// Rendered lazily and kept, because shading a 1024-square grid is a few
-    /// million floating-point operations and MapKit redraws on every pan.
+    /// Shading a 1024-square grid is a few million operations, and MapKit
+    /// asks for a redraw on every pan. Rendered once, off the main thread,
+    /// and kept in a process-wide cache so panning back, toggling styles, or
+    /// rebuilding the overlay list is free.
     private let lock = NSLock()
-    private var cachedImage: CGImage?
+    private var state: RenderState = .idle
     private let makeImage: @Sendable () -> CGImage?
+
+    private enum RenderState {
+        case idle
+        case rendering
+        case ready(CGImage?)
+    }
+
+    /// Shared across overlay instances, so rebuilding the list — which the
+    /// view does whenever the stored tile count changes — does not throw away
+    /// work already done.
+    private static let cache: NSCache<NSString, CGImage> = {
+        let cache = NSCache<NSString, CGImage>()
+        // Roughly ten tiles at 1024 squared RGBA. Beyond that the operator is
+        // looking at more terrain than fits on a screen anyway.
+        cache.totalCostLimit = 48 * 1024 * 1024
+        return cache
+    }()
 
     init(tileLatitude: Int, tileLongitude: Int,
          style: TerrainShading.Style,
@@ -48,12 +67,48 @@ nonisolated final class ElevationOverlay: NSObject, MKOverlay {
     /// throw away the rendered image with it.
     var id: String { "terrain|\(style.rawValue)|\(tileLatitude)/\(tileLongitude)" }
 
-    func image() -> CGImage? {
+    /// The shaded image if it is ready.
+    ///
+    /// Never blocks. MapKit calls the renderer expecting it to return
+    /// promptly; shading inside that call is what made the terrain take
+    /// seconds to appear and froze panning while it did. The first call
+    /// starts the work and returns nil, and `onReady` fires when the tile can
+    /// be drawn.
+    func image(onReady: @escaping @Sendable () -> Void) -> CGImage? {
         lock.lock()
-        defer { lock.unlock() }
-        if let cachedImage { return cachedImage }
-        cachedImage = makeImage()
-        return cachedImage
+
+        if let cached = Self.cache.object(forKey: id as NSString) {
+            state = .ready(cached)
+            lock.unlock()
+            return cached
+        }
+
+        switch state {
+        case .ready(let image):
+            lock.unlock()
+            return image
+        case .rendering:
+            lock.unlock()
+            return nil
+        case .idle:
+            state = .rendering
+            lock.unlock()
+
+            let key = id as NSString
+            let build = makeImage
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let image = build()
+                if let image {
+                    Self.cache.setObject(image, forKey: key,
+                                         cost: image.height * image.bytesPerRow)
+                }
+                self?.lock.lock()
+                self?.state = .ready(image)
+                self?.lock.unlock()
+                onReady()
+            }
+            return nil
+        }
     }
 
     /// Builds the overlays for everything currently stored.
@@ -96,8 +151,17 @@ nonisolated final class ElevationOverlayRenderer: MKOverlayRenderer {
 
     override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale,
                        in context: CGContext) {
-        guard let overlay = overlay as? ElevationOverlay,
-              let image = overlay.image() else { return }
+        guard let overlay = overlay as? ElevationOverlay else { return }
+        // Nil means the shading is still running. Asking MapKit to redraw
+        // this tile when it finishes is what keeps the map responsive: the
+        // terrain fades in a tile at a time instead of the whole map
+        // stalling until every tile is ready.
+        guard let image = overlay.image(onReady: { [weak self] in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                self.setNeedsDisplay(overlay.boundingMapRect)
+            }
+        }) else { return }
 
         let rect = rect(for: overlay.boundingMapRect)
         context.saveGState()

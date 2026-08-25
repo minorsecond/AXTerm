@@ -202,4 +202,96 @@ final class TerrainShadingTests: XCTestCase {
             XCTAssertLessThanOrEqual(style.opacity, 1)
         }
     }
+
+    // MARK: - The fast path
+
+    /// The optimisation is only safe if it is the same function. Rather than
+    /// trust the algebra that removed four transcendental calls per sample,
+    /// check it against the readable version over a wide spread of gradients.
+    func testTheFastShadeMatchesTheReadableOne() {
+        let light = TerrainShading.LightConstants()
+        let gradients = stride(from: -2.0, through: 2.0, by: 0.13)
+
+        for dzdx in gradients {
+            for dzdy in gradients {
+                let fast = TerrainShading.hillshade(dzdx: dzdx, dzdy: dzdy, light: light)
+
+                // The readable form, inlined here so the reference cannot
+                // drift out from under the test.
+                let k = TerrainShading.verticalExaggeration
+                let slope = atan(k * (dzdx * dzdx + dzdy * dzdy).squareRoot())
+                var aspect = atan2(dzdy, -dzdx)
+                if aspect < 0 { aspect += 2 * .pi }
+                let zenith = (90 - TerrainShading.sunAltitudeDegrees) * .pi / 180
+                let azimuth = (360 - TerrainShading.sunAzimuthDegrees + 90) * .pi / 180
+                let reference = min(max(
+                    cos(zenith) * cos(slope)
+                        + sin(zenith) * sin(slope) * cos(azimuth - aspect), 0), 1)
+
+                XCTAssertEqual(fast, reference, accuracy: 1e-9,
+                               "dzdx=\(dzdx) dzdy=\(dzdy)")
+            }
+        }
+    }
+
+    /// The degenerate case the algebra has to survive: a zero gradient makes
+    /// the aspect undefined, and the fast form must still land on flat.
+    func testAZeroGradientGivesTheFlatGroundValue() {
+        let light = TerrainShading.LightConstants()
+        let shade = TerrainShading.hillshade(dzdx: 0, dzdy: 0, light: light)
+        let flat = cos((90 - TerrainShading.sunAltitudeDegrees) * .pi / 180)
+        XCTAssertEqual(shade, flat, accuracy: 1e-12)
+        XCTAssertEqual(TerrainShading.relief(from: shade), 1.0, accuracy: 1e-12)
+    }
+
+    /// The whole-grid path must agree with the per-sample one, since the
+    /// render loop inlines the neighbour gathering rather than calling it.
+    func testTheRenderedGridAgreesWithPerSampleShading() throws {
+        let grid = slopedGrid(risingToward: "east")
+        let pixels = TerrainShading.rgba(from: grid, samples: samples,
+                                         style: .hillshade,
+                                         metresPerSampleX: 100, metresPerSampleY: 100)
+        for (row, column) in [(2, 2), (4, 4), (5, 3)] {
+            let expected = TerrainShading.relief(
+                from: try XCTUnwrap(shade(grid, row: row, column: column)))
+            let actual = Double(pixels[(row * samples + column) * 4]) / 255
+            XCTAssertEqual(actual, expected, accuracy: 1.0 / 255)
+        }
+    }
+
+    func testEdgesAndGapsStayTransparentInTheRenderedGrid() {
+        var grid = slopedGrid(risingToward: "east")
+        grid[4 * samples + 4] = Float.nan
+        let pixels = TerrainShading.rgba(from: grid, samples: samples,
+                                         style: .hillshade,
+                                         metresPerSampleX: 100, metresPerSampleY: 100)
+        XCTAssertEqual(pixels[(0 * samples + 3) * 4 + 3], 0, "north edge")
+        XCTAssertEqual(pixels[(4 * samples + 4) * 4 + 3], 0, "the gap itself")
+        XCTAssertEqual(pixels[(4 * samples + 5) * 4 + 3], 0, "neighbour of a gap")
+    }
+
+    /// Guards the thing the operator actually noticed: a full tile taking
+    /// seconds. Generous enough not to be flaky on a loaded machine, tight
+    /// enough that reintroducing per-sample trigonometry would trip it.
+    func testAFullTileShadesQuickly() throws {
+        let side = ElevationStore.tileSamples
+        var grid = [Float](repeating: 0, count: side * side)
+        for row in 0..<side {
+            for column in 0..<side {
+                grid[row * side + column] =
+                    Float(1600 + sin(Double(row) / 40) * 300 + cos(Double(column) / 55) * 200)
+            }
+        }
+        let spacing = TerrainShading.metresPerSample(tileLatitude: 39, samples: side)
+
+        let started = Date()
+        let pixels = TerrainShading.rgba(from: grid, samples: side, style: .hillshade,
+                                         metresPerSampleX: spacing.x,
+                                         metresPerSampleY: spacing.y)
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertEqual(pixels.count, side * side * 4)
+        XCTAssertLessThan(elapsed, 0.5,
+                          "a tile took \(String(format: "%.3f", elapsed))s to shade")
+    }
 }

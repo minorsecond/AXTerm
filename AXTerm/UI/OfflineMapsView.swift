@@ -38,8 +38,7 @@ struct OfflineMapsView: View {
     @State private var selectedSource: MapTileSource = .usgsTopo
     @State private var zoomRange: ClosedRange<Int> = 8...13
     @State private var isPickingFile = false
-    @State private var confirmingLargeDownload: OfflineRegionDownloader.Estimate?
-    @State private var confirmingTerrain: ElevationStorage.Estimate?
+    @State private var confirmation: DownloadConfirmation?
 
     var body: some View {
         Form {
@@ -57,32 +56,60 @@ struct OfflineMapsView: View {
                 store.downloader.importMBTiles(from: url)
             }
         }
-        .alert("Large download", isPresented: Binding(
-            get: { confirmingLargeDownload != nil },
-            set: { if !$0 { confirmingLargeDownload = nil } })) {
-            Button("Download", role: .destructive) {
-                confirmingLargeDownload = nil
-                startDownload(confirmed: true)
-            }
-            Button("Cancel", role: .cancel) { confirmingLargeDownload = nil }
-        } message: {
-            if let estimate = confirmingLargeDownload {
-                Text("This covers \(estimate.tileCount.formatted()) tiles, roughly \(estimate.sizeDescription). That is a lot of requests to a community server and a lot of space on this device. Importing an .mbtiles file is faster and easier on the provider.")
-            }
+        // One alert, not two.
+        //
+        // SwiftUI honours a single `.alert` per view for the same reason it
+        // honours a single `.sheet`: the last one wins and the earlier one
+        // silently never presents. Adding a terrain confirmation below the
+        // basemap one is why "Download this area" stopped doing anything at
+        // all — the button set its state and no alert ever appeared.
+        .alert(item: $confirmation) { confirmation in
+            Alert(
+                title: Text(confirmation.title),
+                message: Text(confirmation.message),
+                primaryButton: .destructive(Text("Download")) {
+                    switch confirmation.kind {
+                    case .basemap: startDownload(confirmed: true)
+                    case .terrain:
+                        if let drawnRegion {
+                            elevation.download(covering: drawnRegion)
+                        } else if let observer {
+                            elevation.download(around: observer)
+                        }
+                    }
+                },
+                secondaryButton: .cancel())
         }
-        .alert("Large terrain download", isPresented: Binding(
-            get: { confirmingTerrain != nil },
-            set: { if !$0 { confirmingTerrain = nil } })) {
-            Button("Download", role: .destructive) {
-                confirmingTerrain = nil
-                if let observer { elevation.download(around: observer) }
-            }
-            Button("Cancel", role: .cancel) { confirmingTerrain = nil }
-        } message: {
-            if let estimate = confirmingTerrain {
-                Text("This fetches \(estimate.tileCount) elevation tiles, about \(estimate.sizeDescription), one request at a time from a public USGS service.")
-            }
-        }
+    }
+
+    private static func terrainConfirmation(_ estimate: ElevationStorage.Estimate)
+        -> DownloadConfirmation {
+        DownloadConfirmation(
+            kind: .terrain,
+            title: "Large terrain download",
+            message: "This fetches \(estimate.tileCount) elevation tiles, about "
+                + "\(estimate.sizeDescription), one request at a time from a public "
+                + "USGS service.")
+    }
+
+    private static func basemapConfirmation(_ estimate: OfflineRegionDownloader.Estimate)
+        -> DownloadConfirmation {
+        DownloadConfirmation(
+            kind: .basemap,
+            title: "Large download",
+            message: "This covers \(estimate.tileCount.formatted()) tiles, roughly "
+                + "\(estimate.sizeDescription). That is a lot of requests to a "
+                + "community server and a lot of space on this device. Importing an "
+                + ".mbtiles file is faster and easier on the provider.")
+    }
+
+    /// What the single confirmation alert is asking about.
+    struct DownloadConfirmation: Identifiable {
+        enum Kind { case basemap, terrain }
+        let kind: Kind
+        let title: String
+        let message: String
+        var id: String { title + message }
     }
 
     // MARK: - Sections
@@ -157,7 +184,7 @@ struct OfflineMapsView: View {
                 let estimate = elevation.estimate(covering: drawnRegion)
                 Button {
                     if estimate.tileCount > ElevationDownloader.largeRegionTileCount {
-                        confirmingTerrain = estimate
+                        confirmation = Self.terrainConfirmation(estimate)
                     } else {
                         elevation.download(covering: drawnRegion)
                     }
@@ -175,7 +202,7 @@ struct OfflineMapsView: View {
                 let estimate = elevation.estimate(around: observer)
                 Button {
                     if estimate.tileCount > ElevationDownloader.largeRegionTileCount {
-                        confirmingTerrain = estimate
+                        confirmation = Self.terrainConfirmation(estimate)
                     } else {
                         elevation.download(around: observer)
                     }
@@ -356,7 +383,7 @@ struct OfflineMapsView: View {
         guard let region = suggestedRegion else { return }
         let estimate = OfflineRegionDownloader.estimate(region: region, zoomRange: zoomRange)
         if estimate.isLarge && !confirmed {
-            confirmingLargeDownload = estimate
+            confirmation = Self.basemapConfirmation(estimate)
             return
         }
         store.downloader.download(region: region, zoomRange: zoomRange, source: selectedSource)
