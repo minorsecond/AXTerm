@@ -26,6 +26,9 @@ struct ContentView: View {
     /// arriving, so via-path hops can be placed.
     @StateObject private var nodeAliases = NodeAliasStore()
     @StateObject private var nodeCapabilities = NodeCapabilityStore()
+    /// Reads BPQ ROUTES tables out of session transcripts; its rows become
+    /// harvested routes when the capability verdict allows it.
+    @State private var routesScraper = BpqRoutesScraper()
     /// The Nodes page's search text, held here so the sidebar can point it at
     /// one node's table.
     @State private var nodeQuery: String = ""
@@ -1102,6 +1105,30 @@ struct ContentView: View {
                         nodeAliases.ingest(text: text, source: peer)
                         nodeCapabilities.ingest(line: text, peer: peer)
                         bbsService.observeSessionText(text, from: peer)
+                        // A ROUTES table is the node's own neighbor list with
+                        // measured qualities — the only routing knowledge a
+                        // NODES-silent channel publishes. Rows become NET/ROM
+                        // routes only through the capability gate: a KA-Node's
+                        // table can never anchor a circuit.
+                        if let row = routesScraper.ingest(line: text, peer: peer, at: Date()) {
+                            let decision = HarvestedRoutePolicy.decide(
+                                rows: [row],
+                                anchorCanRouteNetRom: nodeCapabilities.canRouteNetRom(peer),
+                                localCallsign: settings.myCallsign)
+                            if !decision.accepted.isEmpty {
+                                client.netRomIntegration?.harvestedRoutes(
+                                    from: peer,
+                                    destinations: decision.accepted,
+                                    timestamp: row.observedAt)
+                            }
+                            for refusal in decision.refused {
+                                Telemetry.breadcrumb(
+                                    category: "netrom.harvest",
+                                    message: "Scraped route refused",
+                                    data: ["neighbor": refusal.neighbor, "reason": refusal.reason],
+                                    level: .debug)
+                            }
+                        }
                     },
                     searchModel: searchModel,
                     locationService: winlinkContext.locationService,

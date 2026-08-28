@@ -276,6 +276,41 @@ final class NetRomIntegration {
         router.broadcastRoutes(from: origin, quality: quality, destinations: destinations, timestamp: timestamp)
     }
 
+    /// Session-scraped route knowledge (see HarvestedRoutePolicy).
+    ///
+    /// Same funnel as broadcasts on purpose: broadcastRoutes is the single
+    /// place route learning is validated, scaled by our own link to the
+    /// origin, and stored. The router silently drops claims from an origin
+    /// that is not a neighbor — correct, since there is no link quality to
+    /// scale by — but for harvested rows that silence would be baffling in
+    /// the field (a session relayed through a digipeater harvests nothing),
+    /// so the drop leaves a breadcrumb.
+    func harvestedRoutes(from anchor: String, destinations: [RouteInfo], timestamp: Date) {
+        guard !destinations.isEmpty else { return }
+        let normalized = CallsignValidator.normalize(anchor)
+        let isNeighbor = router.currentNeighbors().contains { $0.call == normalized }
+        if !isNeighbor {
+            Telemetry.breadcrumb(
+                category: "netrom.harvest",
+                message: "Harvested routes dropped — anchor is not a direct neighbor",
+                data: ["anchor": normalized, "rows": destinations.count],
+                level: .info
+            )
+        } else {
+            Telemetry.breadcrumb(
+                category: "netrom.harvest",
+                message: "Routes harvested from a node's ROUTES table",
+                data: [
+                    "anchor": normalized,
+                    "rows": destinations.count,
+                    "destinations": destinations.map(\.destination).joined(separator: " ")
+                ],
+                level: .info
+            )
+        }
+        router.broadcastRoutes(from: anchor, quality: 255, destinations: destinations, timestamp: timestamp)
+    }
+
     // MARK: - Query Methods
 
     private var hasLoggedFirstQuery = false
