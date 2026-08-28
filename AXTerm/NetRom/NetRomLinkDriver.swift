@@ -459,6 +459,19 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
         }
     }
 
+    /// How the last auto-try campaign ended without connecting, kept so
+    /// the connect ladder can tell "the station answered no" from "the
+    /// path died". A refusal stops the whole ladder; exhaustion falls
+    /// through to the next family.
+    struct CampaignPostMortem: Equatable {
+        let destination: AX25Address
+        let wasRefused: Bool
+        let detail: String
+        let endedAt: Date
+    }
+
+    private(set) var lastCampaignPostMortem: CampaignPostMortem?
+
     /// A circuit that belonged to a campaign has ended. Decide whether
     /// the campaign continues.
     ///
@@ -478,6 +491,11 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
         case .stop(let why):
             campaign.finish()
             campaigns[key] = nil
+            lastCampaignPostMortem = CampaignPostMortem(
+                destination: destination,
+                wasRefused: reason == .refused,
+                detail: "\(destination.display) \(why)",
+                endedAt: Date())
             onOperatorNote?("\(destination.display) \(why).")
             return true
         case .tryNext:

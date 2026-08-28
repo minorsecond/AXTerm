@@ -3241,6 +3241,16 @@ struct TerminalView: View {
             abandonCircuits(to: resolved)
             return .cancelled
 
+        case .refused(let detail):
+            // The transport worked end to end — the station answered and
+            // said no. Deliberately NOT the negative cache: that cache
+            // means "native didn't work here", and it just did.
+            abandonCircuits(to: resolved)
+            connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+            connectBarViewModel.markFailed(reason: .connectRejected, detail: detail)
+            updateActiveSessionRecordState("Refused")
+            return .refused(detail: detail)
+
         case .failed(let detail), .timeout(let detail):
             // Abandon whatever is still in flight before trying anything
             // else. Left alone a connecting circuit keeps retransmitting
@@ -3310,6 +3320,9 @@ struct TerminalView: View {
     private enum CircuitWaitResult {
         case success
         case failed(String)
+        /// The far station answered the CONREQ with a choke — an answer,
+        /// not a path failure, so the strategy ladder stops here.
+        case refused(String)
         case timeout(String)
         case cancelled
     }
@@ -3327,17 +3340,28 @@ struct TerminalView: View {
         to destination: AX25Address,
         timeoutSeconds: TimeInterval
     ) async -> CircuitWaitResult {
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        let start = Date()
+        let deadline = start.addingTimeInterval(timeoutSeconds)
         while Date() < deadline {
             if Task.isCancelled { return .cancelled }
-            let live = sessionCoordinator.netRomDriver.circuits.filter {
+            let driver = sessionCoordinator.netRomDriver
+            let live = driver.circuits.filter {
                 CallsignNormalizer.addressesMatch($0.destination, destination)
                     && $0.state != .disconnected
             }
             if live.contains(where: { $0.state == .connected }) { return .success }
             if live.isEmpty {
-                // The driver's own operator note has already said why —
-                // refused, out of routes, neighbor link down.
+                // A campaign that ended in a refusal is the station
+                // answering no — surfaced as its own outcome so the
+                // strategy ladder stops instead of knocking on the next
+                // door. Everything else the driver's own operator note
+                // has already explained — out of routes, link down.
+                if let postMortem = driver.lastCampaignPostMortem,
+                   postMortem.wasRefused,
+                   postMortem.endedAt >= start,
+                   CallsignNormalizer.addressesMatch(postMortem.destination, destination) {
+                    return .refused(postMortem.detail)
+                }
                 return .failed("no route carried the circuit")
             }
             do { try await Task.sleep(nanoseconds: 250_000_000) }
