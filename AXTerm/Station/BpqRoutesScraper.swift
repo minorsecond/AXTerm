@@ -59,7 +59,7 @@ nonisolated struct BpqRoutesScraper: Equatable, Sendable {
         let key = peer.uppercased()
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if trimmed.uppercased() == "ROUTES" {
+        if Self.isRoutesHeader(trimmed) {
             armedPeers[key] = time
             return nil
         }
@@ -89,6 +89,24 @@ nonisolated struct BpqRoutesScraper: Equatable, Sendable {
         // fine: the next header re-arms for free.
         armedPeers.removeValue(forKey: key)
         return nil
+    }
+
+    /// The table header, in both shapes BPQ actually prints.
+    ///
+    /// Field capture 2026-08-28 (the one that found the bug): the header
+    /// arrived as `YZBBPQ:KB5YZB-7} Routes` — the node's prompt and the
+    /// echoed command name share one line, so a check for a bare "Routes"
+    /// never armed and the whole table scrolled past as prose. A prompt
+    /// prefix is accepted when it looks like one: `ALIAS:CALL}` with a
+    /// colon and no spaces, the same shape test the classifier uses.
+    static func isRoutesHeader(_ trimmed: String) -> Bool {
+        let upper = trimmed.uppercased()
+        if upper == "ROUTES" { return true }
+        guard let brace = upper.lastIndex(of: "}") else { return false }
+        let prompt = upper[upper.startIndex..<brace]
+        guard prompt.contains(":"), !prompt.contains(" ") else { return false }
+        let rest = upper[upper.index(after: brace)...].trimmingCharacters(in: .whitespaces)
+        return rest == "ROUTES"
     }
 
     /// `> 1 KE0GB-7 192 91` → (port 1, KE0GB-7, quality 192, count 91, active).

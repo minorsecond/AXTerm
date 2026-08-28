@@ -34,6 +34,34 @@ final class BpqRoutesScraperTests: XCTestCase {
         XCTAssertEqual(second?.isActive, false)
     }
 
+    /// The field capture of 08:40 2026-08-28, verbatim: BPQ printed the
+    /// prompt and the header on ONE line (`YZBBPQ:KB5YZB-7} Routes`), and
+    /// a bare-"Routes" check never armed — the whole table scrolled past
+    /// as prose and nothing was harvested. Never regress this.
+    func testThePromptPrefixedHeaderArmsTheScraper() {
+        var scraper = BpqRoutesScraper()
+        XCTAssertNil(scraper.ingest(line: "YZBBPQ:KB5YZB-7} Routes", peer: "KB5YZB-7", at: now))
+
+        let first = scraper.ingest(line: "> 1 KE0GB-7   192 97 ", peer: "KB5YZB-7", at: now.addingTimeInterval(1))
+        XCTAssertEqual(first?.neighbor, "KE0GB-7")
+        XCTAssertEqual(first?.quality, 192)
+        XCTAssertEqual(first?.count, 97)
+
+        let second = scraper.ingest(line: "> 1 VE3CGR-7  192 8 ", peer: "KB5YZB-7", at: now.addingTimeInterval(2))
+        XCTAssertEqual(second?.neighbor, "VE3CGR-7")
+    }
+
+    func testHeaderRecognizerRejectsProseEndingInRoutes() {
+        XCTAssertTrue(BpqRoutesScraper.isRoutesHeader("Routes"))
+        XCTAssertTrue(BpqRoutesScraper.isRoutesHeader("routes"))
+        XCTAssertTrue(BpqRoutesScraper.isRoutesHeader("YZBBPQ:KB5YZB-7} Routes"))
+        XCTAssertFalse(BpqRoutesScraper.isRoutesHeader("I know some good Routes"),
+                       "prose is not a header without a prompt-shaped prefix")
+        XCTAssertFalse(BpqRoutesScraper.isRoutesHeader("see the map} Routes"),
+                       "a prompt prefix has a colon and no spaces")
+        XCTAssertFalse(BpqRoutesScraper.isRoutesHeader("YZBBPQ:KB5YZB-7} NODES"))
+    }
+
     // MARK: - Guardrails
 
     /// A bare row without the header is indistinguishable from a line in a
