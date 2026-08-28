@@ -146,6 +146,17 @@ struct NodeProfileView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
+                    // The prefix speaks when the directory has not: for a
+                    // callsign with no licence record (most non-US calls —
+                    // the directory covers few), where it is licensed is
+                    // still printed in the callsign itself.
+                    if profile.country == nil, !profile.isServiceEndpoint,
+                       let region = CallsignRegion.region(for: profile.baseCallsign),
+                       region != CallsignRegion.region(for: localCallsign) {
+                        Text("Licensed in \(region), by callsign prefix")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
                     if let activity = profile.activity {
                         freshnessLine(activity)
                     }

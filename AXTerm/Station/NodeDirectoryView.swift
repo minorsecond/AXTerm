@@ -49,6 +49,11 @@ struct NodeDirectoryView: View {
     /// offer no route *and* name none of these can be forgotten.
     var knownCallsigns: Set<String> = []
 
+    /// The operator's own callsign, so rows licensed elsewhere can say so.
+    /// Domestic entries stay untagged — on a US channel, "United States"
+    /// four hundred times over is noise, and the foreign tag is the signal.
+    var localCallsign: String = ""
+
     @State private var confirmingForget = false
 
     @State private var order: Order = .alias
@@ -415,6 +420,27 @@ struct NodeDirectoryView: View {
                           + "not what each station is.")
             }
 
+            // Where the callsign is licensed, when that is somewhere else.
+            // The prefix is a fact; what it implies about the path is left
+            // to the operator — on VHF a row from another continent is
+            // almost certainly reached over an internet link somewhere in
+            // the chain, on long-haul HF it may be genuine RF, and this
+            // station cannot observe which.
+            if let region = foreignRegion(entry.callsign) {
+                Text(region)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Capsule().strokeBorder(Color.secondary.opacity(0.35)))
+                    .help("Licensed in \(region), read from the callsign prefix. "
+                          + "The node claims a path; whether the hops beyond it are "
+                          + "RF or internet links is not something this station can "
+                          + "observe. On a VHF channel a path to another country "
+                          + "almost certainly includes an internet link — on "
+                          + "long-haul HF it may well be radio the whole way.")
+            }
+
             // The other routes. The one heading this section is not repeated —
             // it was the same on ninety consecutive rows.
             if let label = otherRoutesLabel(entry, under: teller) {
@@ -434,6 +460,14 @@ struct NodeDirectoryView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
         .contentShape(Rectangle())
+    }
+
+    /// The entry's licensing country when it differs from the operator's
+    /// own — nil for domestic rows and unknown prefixes alike.
+    private func foreignRegion(_ callsign: String) -> String? {
+        guard let region = CallsignRegion.region(for: callsign) else { return nil }
+        let home = CallsignRegion.region(for: localCallsign)
+        return region == home ? nil : region
     }
 
     /// The nodes that listed this station apart from the one heading its

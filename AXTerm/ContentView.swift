@@ -1240,7 +1240,8 @@ struct ContentView: View {
                             nextHopOverride: via, executeImmediately: true)
                         selectedNav = .terminal
                     },
-                    knownCallsigns: knownCallsigns)
+                    knownCallsigns: knownCallsigns,
+                    localCallsign: settings.myCallsign)
             case .analytics:
                 AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel, connectCoordinator: connectCoordinator)
             case .map:
