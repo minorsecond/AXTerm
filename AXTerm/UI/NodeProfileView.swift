@@ -55,6 +55,9 @@ struct NodeProfileView: View {
     var onConnect: (() -> Void)?
     var onShowOnMap: (() -> Void)?
     var onCompose: (() -> Void)?
+    /// Opens another station's profile — cluster members and sibling SSIDs
+    /// are questions, and a tap should answer them. Nil renders plain text.
+    var onOpenCallsign: ((String) -> Void)?
 
     var body: some View {
         ScrollView {
@@ -392,8 +395,10 @@ struct NodeProfileView: View {
             items.append((CGFloat(60 + profile.roles.count * 52), AnyView(rolesSection)))
         }
         if let activity = profile.activity,
-           activity.lastHeard != nil || !activity.lastVia.isEmpty {
-            items.append((110, AnyView(activitySection(activity))))
+           activity.lastHeard != nil || !activity.lastVia.isEmpty
+            || activity.heardByHour.contains(where: { $0 > 0 }) {
+            let chart: CGFloat = activity.heardByHour.contains(where: { $0 > 0 }) ? 80 : 0
+            items.append((110 + chart, AnyView(activitySection(activity))))
         }
         if let placement = profile.placement {
             items.append((160, AnyView(placementSection(placement))))
@@ -546,17 +551,64 @@ struct NodeProfileView: View {
     private func activitySection(_ activity: NodeProfile.Activity) -> some View {
         // Frame count and relative recency already lead the page as tiles;
         // this section carries what the tiles compress away — the exact
-        // timestamp and the path the last frame took.
+        // timestamp, the path the last frame took, and *when* this station
+        // is on the air.
         section("Activity", systemImage: "waveform") {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 if let last = activity.lastHeard {
                     row("Last heard", last.formatted(date: .abbreviated, time: .shortened))
                 }
                 if !activity.lastVia.isEmpty {
                     row("Last path", activity.lastVia.joined(separator: " \u{2192} "))
                 }
+                if activity.heardByHour.contains(where: { $0 > 0 }) {
+                    activityChart(activity.heardByHour)
+                }
             }
         }
+    }
+
+    /// Frames heard per hour over the last day — one quiet single-hue bar
+    /// row, because the question is magnitude over time ("when is this
+    /// station actually on the air"), not identity. Hours with nothing get
+    /// a hairline so silence is visibly measured rather than missing.
+    private func activityChart(_ counts: [Int]) -> some View {
+        let peak = max(counts.max() ?? 0, 1)
+        return VStack(alignment: .leading, spacing: 3) {
+            Text("Frames heard, last 24 hours")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(alignment: .bottom, spacing: 2) {
+                ForEach(counts.indices, id: \.self) { index in
+                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                        .fill(counts[index] > 0
+                              ? AnyShapeStyle(.tint)
+                              : AnyShapeStyle(Color.primary.opacity(0.12)))
+                        .frame(height: counts[index] > 0
+                               ? max(4, 30 * CGFloat(counts[index]) / CGFloat(peak))
+                               : 1.5)
+                        .frame(maxWidth: .infinity)
+                        .help(Self.hourBarHelp(index: index, count: counts[index],
+                                               total: counts.count))
+                }
+            }
+            .frame(height: 32, alignment: .bottom)
+            HStack {
+                Text("24 h ago").font(.caption2).foregroundStyle(.tertiary)
+                Spacer()
+                Text("now").font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.top, 2)
+    }
+
+    nonisolated static func hourBarHelp(index: Int, count: Int, total: Int) -> String {
+        let from = total - index
+        let to = from - 1
+        let window = to == 0 ? "the last hour" : "\(from)\u{2013}\(to) h ago"
+        return count == 0
+            ? "Nothing heard \(window)."
+            : "\(count) frame\(count == 1 ? "" : "s") heard \(window)."
     }
 
     private func placementSection(_ placement: NodeProfile.Placement) -> some View {
@@ -756,13 +808,19 @@ struct NodeProfileView: View {
                 }
 
                 if !topology.communityMembers.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 6) {
                         Text("Clusters with")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text(topology.communityMembers.joined(separator: ", "))
-                            .font(.callout.monospaced())
-                            .fixedSize(horizontal: false, vertical: true)
+                        // Chips, not a comma blob: each member is a question
+                        // ("who is that?") and a tap answers it.
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 96),
+                                                     spacing: 6, alignment: .leading)],
+                                  alignment: .leading, spacing: 6) {
+                            ForEach(topology.communityMembers, id: \.self) { member in
+                                callsignChip(member)
+                            }
+                        }
                     }
                     .help("These stations exchange more traffic with each other than with the rest of what has been heard, found by label propagation over the observed graph. On a network where nobody broadcasts NODES, this is what a \u{201C}local network\u{201D} actually looks like from the outside.")
                 }
@@ -780,8 +838,7 @@ struct NodeProfileView: View {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(profile.siblings) { sibling in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(sibling.callsign)
-                            .font(.callout.monospaced())
+                        callsignChip(sibling.callsign)
                         if let role = sibling.roles.first {
                             Text(role.label)
                                 .font(.caption2)
@@ -969,6 +1026,25 @@ struct NodeProfileView: View {
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
             .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1))
+    }
+
+    /// A callsign as a small tappable chip. Quiet by design — identity is
+    /// the text; the chip only says "this is a thing you can open".
+    @ViewBuilder
+    private func callsignChip(_ callsign: String) -> some View {
+        let label = Text(callsign)
+            .font(.caption.monospaced())
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Color.primary.opacity(0.06),
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+        if let onOpenCallsign {
+            Button { onOpenCallsign(callsign) } label: { label }
+                .buttonStyle(.plain)
+                .help("Open \(callsign)'s profile.")
+        } else {
+            label
+        }
     }
 
     private func row(_ label: String, _ value: String) -> some View {

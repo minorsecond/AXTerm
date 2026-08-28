@@ -249,8 +249,9 @@ struct AXTermiOSRootView: View {
         // the terminal, the Stations list and a map callout all land here.
         .sheet(item: $profiles.presented) { presentation in
             NavigationStack {
+                let profile = resolver.profile(for: presentation.callsign)
                 NodeProfileView(
-                    profile: resolver.profile(for: presentation.callsign),
+                    profile: profile,
                     localCallsign: settings.myCallsign,
                     lookupEnabled: context.settings.callsignLookupEnabled,
                     isLookingUp: lookingUpCallsign == presentation.callsign,
@@ -259,7 +260,8 @@ struct AXTermiOSRootView: View {
                     onOpenFullPage: presentation.isPage
                         ? nil : { profiles.promoteSheetToPage() },
                     onConnect: connectAction(to: presentation.callsign),
-                    onShowOnMap: { showOnMap(presentation.callsign) })
+                    onShowOnMap: { showOnMap(presentation.callsign) },
+                    onOpenCallsign: { profiles.peek($0) })
                     .navigationTitle(presentation.isPage ? presentation.callsign : "Station")
                     .navigationBarTitleDisplayMode(presentation.isPage ? .large : .inline)
                     .toolbar {
@@ -271,7 +273,10 @@ struct AXTermiOSRootView: View {
                     // resolver only ever read the lookup cache, so a callsign
                     // never seen on the map stayed blank even with lookup on.
                     .task(id: presentation.callsign) {
-                        await lookUp(presentation.callsign)
+                        // The station behind the name, not the name tapped —
+                        // an alias like ALBBBS fails the plausibility gate
+                        // and the station behind it stayed nameless.
+                        await lookUp(profile.baseCallsign)
                     }
             }
             .presentationDetents(presentation.isPage ? [.large] : [.medium, .large])

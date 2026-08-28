@@ -103,6 +103,10 @@ struct NodeProfileResolver {
     var historyStore: LinkQualityHistoryStore?
     /// How far back the profile charts. A fortnight matches retention.
     var historyWindow: TimeInterval = 14 * 24 * 3600
+    /// When this station transmitted, for the activity-by-hour chart. A
+    /// closure so the packet scan happens only while a profile is open,
+    /// not on every resolver rebuild.
+    var heardTimestamps: (String) -> [Date] = { _ in [] }
 
     func profile(for callsign: String) -> NodeProfile {
         let key = callsign.trimmingCharacters(in: .whitespaces).uppercased()
@@ -113,7 +117,7 @@ struct NodeProfileResolver {
         let heard = heardEntries.first { $0.callsign.uppercased() == key }
             ?? heardEntries.first { $0.callsign.uppercased() == resolved }
 
-        return NodeProfile.make(
+        var profile = NodeProfile.make(
             callsign: key,
             localCallsign: localCallsign,
             aliasDirectory: aliases,
@@ -134,6 +138,14 @@ struct NodeProfileResolver {
             observer: observer,
             nodeSoftware: capabilities.family(for: resolved),
             nodeSoftwareEvidence: capabilities.evidence(for: resolved))
+        if var activity = profile.activity {
+            let stamps = heardTimestamps(resolved)
+                + (key == resolved ? [] : heardTimestamps(key))
+            activity.heardByHour = NodeProfile.hourlyBuckets(
+                timestamps: stamps, now: Date())
+            profile.activity = activity
+        }
+        return profile
     }
 
     /// This station's place in the graph of observed paths.

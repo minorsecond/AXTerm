@@ -125,6 +125,23 @@ nonisolated struct NodeProfile: Equatable, Sendable {
         var heardCount: Int
         var lastHeard: Date?
         var lastVia: [String]
+        /// Frames heard per hour, oldest bucket first, newest last. Empty
+        /// when nobody supplied timestamps — the chart simply doesn't draw.
+        var heardByHour: [Int] = []
+    }
+
+    /// Buckets timestamps into per-hour counts covering the trailing
+    /// `hours` hours: index 0 is the oldest hour, the last index is the
+    /// hour ending now. Timestamps outside the window are dropped.
+    nonisolated static func hourlyBuckets(timestamps: [Date], now: Date,
+                                          hours: Int = 24) -> [Int] {
+        var buckets = Array(repeating: 0, count: max(1, hours))
+        for stamp in timestamps {
+            let age = now.timeIntervalSince(stamp)
+            guard age >= 0, age < Double(hours) * 3600 else { continue }
+            buckets[buckets.count - 1 - Int(age / 3600)] += 1
+        }
+        return buckets
     }
 
     /// One measured direction of a link.

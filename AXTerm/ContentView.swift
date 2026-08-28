@@ -131,7 +131,14 @@ struct ContentView: View {
             capabilities: nodeCapabilities.directory,
             networkPaths: rememberedNetworkPaths,
             serviceStore: client.stationServices,
-            historyStore: client.linkQualityHistory)
+            historyStore: client.linkQualityHistory,
+            heardTimestamps: { [weak client] call in
+                guard let client else { return [] }
+                let upper = call.uppercased()
+                return client.packets.compactMap {
+                    $0.fromDisplay.uppercased() == upper ? $0.timestamp : nil
+                }
+            })
     }
 
     private var gatewayGrids: [String: String] {
@@ -476,7 +483,11 @@ struct ContentView: View {
         // the store a beat later and the licence fields popped in.
         .onChange(of: profiles.presented) { _, presented in
             guard let presented else { return }
-            callsignLookup.preload([presented.callsign])
+            // Through the alias, when one was tapped: the cache is keyed by
+            // the station's own callsign.
+            let station = nodeAliases.directory.callsign(for: presented.callsign)
+                ?? presented.callsign
+            callsignLookup.preload([station])
         }
         .onChange(of: selectedNav) { _, newValue in
             syncSearchScope(for: newValue)
@@ -586,7 +597,8 @@ struct ContentView: View {
                     onConnect: {
                         profiles.dismiss()
                         connectFromProfile(profile)
-                    })
+                    },
+                    onOpenCallsign: { profiles.peek($0) })
                     .onPreferenceChange(NodeProfileContentHeightKey.self) { height in
                         guard height > 0 else { return }
                         profileContentHeights[measureKey] = height
@@ -595,7 +607,13 @@ struct ContentView: View {
                         guard winlinkContext.settings.callsignLookupEnabled else { return }
                         lookingUpCallsign = presentation.callsign
                         defer { lookingUpCallsign = nil }
-                        await callsignLookup.resolve(presentation.callsign)
+                        // The station behind the name, not the name tapped:
+                        // a profile reached via the alias ALBBBS is about
+                        // KB8OAK, and "ALBBBS" has no digit so the
+                        // plausibility gate (rightly) refuses to look it up
+                        // — which left alias-reached stations permanently
+                        // nameless.
+                        await callsignLookup.resolve(profile.baseCallsign)
                     }
             }
             // A record arriving from the network (or a late measurement)
