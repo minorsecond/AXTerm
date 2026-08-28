@@ -146,6 +146,10 @@ final class SessionCoordinator: ObservableObject {
         netRomNativeFailedAt[canonicalDestination(destination)] = nil
     }
     private var netRomBroadcastTimer: Timer?
+    /// One-shot first announcement after a launch restore — see
+    /// scheduleNetRomBroadcasts for why launch neither broadcasts
+    /// immediately nor waits a whole interval.
+    private var netRomWarmupBroadcastTimer: Timer?
     private var beaconTimer: Timer?
 
     /// Asks stations whether they can hear us, on the operator's terms.
@@ -949,12 +953,34 @@ final class SessionCoordinator: ObservableObject {
         let wasAnnouncing = netRomBroadcastTimer != nil || isFirstConfigure
         netRomBroadcastTimer?.invalidate()
         netRomBroadcastTimer = nil
+        netRomWarmupBroadcastTimer?.invalidate()
+        netRomWarmupBroadcastTimer = nil
         guard enabled else { return }
         let interval = TimeInterval(max(5, minutes) * 60)
         if !wasAnnouncing {
             // Switched on just now: say so once, so enabling the setting
             // does something visible.
             _ = netRomDriver.broadcastNodes()
+        } else if isFirstConfigure {
+            // Restored at launch with announcing already on. Broadcasting
+            // synchronously here transmitted before the radio was wired
+            // (2026-08-27), but waiting a whole interval created the
+            // opposite failure (2026-08-28): a develop-restart-test rhythm
+            // never kept the app alive for the 60-minute default, so a
+            // station with "Announce" switched on had never announced once
+            // and no node held a route back to it. One warm-up shot after
+            // the TNC has had time to connect covers the restart case; the
+            // connected guard skips it harmlessly when the radio is down,
+            // and the interval timer stays the steady cadence.
+            let warmup = Timer(timeInterval: 90, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self,
+                          self.packetEngine?.status == .connected else { return }
+                    _ = self.netRomDriver.broadcastNodes()
+                }
+            }
+            RunLoop.main.add(warmup, forMode: .common)
+            netRomWarmupBroadcastTimer = warmup
         }
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
