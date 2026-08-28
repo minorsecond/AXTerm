@@ -10,6 +10,16 @@ nonisolated struct NodeProfileContentHeightKey: PreferenceKey {
     }
 }
 
+/// The width actually given to the profile, so the page can decide how many
+/// columns fit rather than assuming a platform.
+nonisolated struct NodeProfileContentWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 /// The one identity view.
 ///
 /// Presented as a sheet from a tapped callsign and as a pushed page from the
@@ -67,33 +77,22 @@ struct NodeProfileView: View {
                     }
                 } else {
                     statTiles
-                    // The page is given real width, so the sections flow into
-                    // columns instead of one tall stack — a narrow window (or
-                    // iOS) collapses back to a single column on its own.
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 330),
-                                                 spacing: 16, alignment: .top)],
-                              alignment: .leading, spacing: 16) {
-                        if !profile.roles.isEmpty { rolesSection }
-                        if let activity = profile.activity,
-                           activity.lastHeard != nil || !activity.lastVia.isEmpty {
-                            activitySection(activity)
-                        }
-                        if let placement = profile.placement { placementSection(placement) }
-                        if !profile.links.isEmpty { linkSection }
-                        if let topology = profile.topology, !topology.isEmpty {
-                            topologySection(topology)
-                        }
-                        if !profile.siblings.isEmpty { siblingSection }
-                        if let netrom = profile.netrom { netromSection(netrom) }
-                        if let winlink = profile.winlink { winlinkSection(winlink) }
-                        if profile.name != nil || profile.licenseClass != nil { licenceSection }
-                    }
+                    // Balanced columns, not a grid: LazyVGrid makes every
+                    // row as tall as its tallest cell, so a short Activity
+                    // card next to a tall Roles card left a card-sized hole
+                    // — enough of them and the page scrolled on a display
+                    // with room to spare. Here each column stacks its cards
+                    // independently, and cards are dealt to whichever column
+                    // is currently shortest.
+                    pageColumns
                 }
                 // Offered even for a bare callsign: knowing nothing about a
                 // station is exactly when an operator most wants to write
                 // down what they just learned. Never for a destination
-                // address, which is not a thing to have notes about.
-                if let noteStore, !profile.isServiceEndpoint {
+                // address, which is not a thing to have notes about. On the
+                // full page the editor rides in the columns with the other
+                // cards instead of adding a full-width block underneath.
+                if let noteStore, !profile.isServiceEndpoint, !notesLiveInColumns {
                     StationNotesSection(callsign: profile.callsign, store: noteStore,
                                         heightUnitIsFeet: $heightUnitIsFeet)
                 }
@@ -101,13 +100,20 @@ struct NodeProfileView: View {
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
-            // Reports the content's natural height so the presenting sheet
-            // can size itself to fit — grow until nothing needs scrolling,
-            // stop at the window's edge.
+            // Reports the content's natural size: height so the presenting
+            // sheet can fit itself (grow until nothing needs scrolling, stop
+            // at the window's edge), width so the page can pick its column
+            // count from the space it actually got.
             .background(GeometryReader { proxy in
-                Color.clear.preference(key: NodeProfileContentHeightKey.self,
-                                       value: proxy.size.height)
+                Color.clear
+                    .preference(key: NodeProfileContentHeightKey.self,
+                                value: proxy.size.height)
+                    .preference(key: NodeProfileContentWidthKey.self,
+                                value: proxy.size.width)
             })
+        }
+        .onPreferenceChange(NodeProfileContentWidthKey.self) { width in
+            measuredWidth = width
         }
     }
 
@@ -343,6 +349,98 @@ struct NodeProfileView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Page columns
+
+    /// The measured content width, driving the column count.
+    @State private var measuredWidth: CGFloat = 0
+
+    private var notesLiveInColumns: Bool {
+        presentation == .page && !profile.isServiceEndpoint && !profile.isBare
+            && noteStore != nil
+    }
+
+    private var columnCount: Int {
+        guard measuredWidth > 0 else { return 2 }
+        return max(1, min(3, Int(measuredWidth / 330)))
+    }
+
+    private var pageColumns: some View {
+        let items = pageSectionItems
+        let assignment = Self.distributeSections(estimates: items.map(\.estimate),
+                                                 into: columnCount)
+        return HStack(alignment: .top, spacing: 16) {
+            ForEach(assignment.indices, id: \.self) { column in
+                VStack(alignment: .leading, spacing: 16) {
+                    ForEach(assignment[column], id: \.self) { index in
+                        items[index].view
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .top)
+            }
+        }
+    }
+
+    /// Each card with a rough height estimate — enough to deal cards into
+    /// columns of similar height without measuring anything. Estimates only
+    /// steer balance; being off by half a card costs a little whitespace,
+    /// never correctness.
+    private var pageSectionItems: [(estimate: CGFloat, view: AnyView)] {
+        var items: [(estimate: CGFloat, view: AnyView)] = []
+        if !profile.roles.isEmpty {
+            items.append((CGFloat(60 + profile.roles.count * 52), AnyView(rolesSection)))
+        }
+        if let activity = profile.activity,
+           activity.lastHeard != nil || !activity.lastVia.isEmpty {
+            items.append((110, AnyView(activitySection(activity))))
+        }
+        if let placement = profile.placement {
+            items.append((160, AnyView(placementSection(placement))))
+        }
+        if !profile.links.isEmpty {
+            items.append((CGFloat(60 + profile.links.count * 190), AnyView(linkSection)))
+        }
+        if let topology = profile.topology, !topology.isEmpty {
+            let clusters = topology.communityMembers.isEmpty ? 0 : 90
+            items.append((CGFloat(100 + (topology.isCritical ? 50 : 0) + clusters),
+                          AnyView(topologySection(topology))))
+        }
+        if !profile.siblings.isEmpty {
+            items.append((CGFloat(110 + profile.siblings.count * 26), AnyView(siblingSection)))
+        }
+        if let netrom = profile.netrom {
+            items.append((160, AnyView(netromSection(netrom))))
+        }
+        if let winlink = profile.winlink {
+            items.append((180, AnyView(winlinkSection(winlink))))
+        }
+        if profile.name != nil || profile.licenseClass != nil {
+            items.append((130, AnyView(licenceSection)))
+        }
+        if notesLiveInColumns, let noteStore {
+            items.append((260, AnyView(
+                StationNotesSection(callsign: profile.callsign, store: noteStore,
+                                    heightUnitIsFeet: $heightUnitIsFeet))))
+        }
+        return items
+    }
+
+    /// Deals cards into columns: reading order preserved, each card placed
+    /// in the currently shortest column (ties go left). Greedy is within a
+    /// card of optimal for this few items, and unlike optimal it never
+    /// reorders neighbours confusingly.
+    nonisolated static func distributeSections(estimates: [CGFloat],
+                                               into columns: Int) -> [[Int]] {
+        let columnCount = max(1, columns)
+        var assignment = Array(repeating: [Int](), count: columnCount)
+        var heights = Array(repeating: CGFloat(0), count: columnCount)
+        for (index, estimate) in estimates.enumerated() {
+            let target = heights.indices.min { heights[$0] < heights[$1] } ?? 0
+            assignment[target].append(index)
+            heights[target] += estimate
+        }
+        return assignment
     }
 
     // MARK: - Stat tiles

@@ -599,8 +599,10 @@ struct ContentView: View {
         let fitted = profileContentHeight > 0
             ? profileContentHeight + doneBarChrome
             : (isPage ? 740 : 560)
+        // Wide enough for three balanced columns on a big display; a
+        // smaller window narrows the page and the columns drop with it.
         let width: CGFloat = isPage
-            ? min(960, max(720, windowWidth - 320))
+            ? min(1240, max(720, windowWidth - 320))
             : 480
         return CGSize(width: width, height: max(360, min(fitted, maxHeight)))
     }
