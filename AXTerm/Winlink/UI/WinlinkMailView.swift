@@ -486,7 +486,8 @@ struct WinlinkMailView: View {
             Task { @MainActor in
                 let listener = WinlinkP2PListener(
                     isArmed: winlinkSettings.p2pListenEnabled,
-                    myCallsign: appSettings.myCallsign,
+                    myCallsign: winlinkSettings.effectiveP2PCallsign(
+                        stationCallsign: appSettings.myCallsign),
                     isExchangeRunning: context.runner?.isRunning ?? true,
                     // Refuses to answer when another of the operator's devices
                     // already holds this callsign on this TNC — otherwise both

@@ -19,6 +19,7 @@ final class WinlinkSettings: ObservableObject {
     static let gatewayCallsignKey = "winlinkGatewayCallsign"
     static let gatewayPathKey = "winlinkGatewayPath"
     static let p2pListenEnabledKey = "winlinkP2PListenEnabled"
+    static let p2pListenCallsignKey = "winlinkP2PListenCallsign"
     static let stationPreferencesKey = "winlinkStationPreferences"
     static let callsignLookupEnabledKey = "winlinkCallsignLookupEnabled"
     static let preferredTransportKey = "winlinkPreferredTransport"
@@ -138,6 +139,24 @@ final class WinlinkSettings: ObservableObject {
     /// default. See `WinlinkP2PListener`.
     @Published var p2pListenEnabled: Bool {
         didSet { defaults.set(p2pListenEnabled, forKey: Self.p2pListenEnabledKey) }
+    }
+
+    /// The callsign P2P answers on, SSID included. Empty means the station
+    /// callsign, which is what it has always used.
+    ///
+    /// This is an *address*, not an identity: the Winlink account and the
+    /// callsign carried in B2F stay the station's. Giving the listener its own
+    /// SSID is only what lets it share a radio with another service — a
+    /// mailbox, or a node on the same host — since a caller picks the service
+    /// by the callsign they dial.
+    @Published var p2pListenCallsign: String {
+        didSet { defaults.set(p2pListenCallsign, forKey: Self.p2pListenCallsignKey) }
+    }
+
+    /// The address P2P actually answers on, given the station callsign.
+    func effectiveP2PCallsign(stationCallsign: String) -> String {
+        let own = p2pListenCallsign.trimmingCharacters(in: .whitespaces)
+        return own.isEmpty ? stationCallsign.uppercased() : own.uppercased()
     }
 
     /// Look up callsigns in an online directory (HamDB) to place heard
@@ -296,6 +315,7 @@ final class WinlinkSettings: ObservableObject {
         gatewayCallsign = defaults.string(forKey: Self.gatewayCallsignKey) ?? ""
         gatewayPath = defaults.string(forKey: Self.gatewayPathKey) ?? ""
         p2pListenEnabled = defaults.bool(forKey: Self.p2pListenEnabledKey)
+        p2pListenCallsign = defaults.string(forKey: Self.p2pListenCallsignKey) ?? ""
         callsignLookupEnabled = defaults.bool(forKey: Self.callsignLookupEnabledKey)
         // On for a fresh install, because a mailbox that does not follow the
         // operator between their own devices is the thing they notice first.

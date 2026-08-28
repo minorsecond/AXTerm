@@ -100,6 +100,46 @@ final class WinlinkMessageRowModelTests: XCTestCase {
                        "The current year is redundant on every row: \(label)")
     }
 
+    /// The defect the two tests above were written to catch and could not:
+    /// `dateLabel` took `now`, then asked the system clock anyway, so "today"
+    /// meant the day the suite happened to run. Both dates here are years away
+    /// from any plausible run date, so nothing about them can be today.
+    func testTodayIsDecidedByTheSuppliedNowNotTheSystemClock() {
+        let now = date(2030, 6, 15, 14, 30)
+
+        let sameDay = WinlinkMessageRowModel.dateLabel(
+            date(2030, 6, 15, 10, 52), now: now, calendar: calendar)
+        XCTAssertTrue(sameDay.contains("52"), "Expected a time-of-day label, got \(sameDay)")
+
+        XCTAssertEqual(
+            WinlinkMessageRowModel.dateLabel(date(2030, 6, 14, 9, 0), now: now, calendar: calendar),
+            "Yesterday")
+
+        // And the real today is not 15 June 2030, so it must read as a date.
+        // Checked by the absence of a clock time rather than by a separator,
+        // which differs by locale.
+        let realToday = WinlinkMessageRowModel.dateLabel(Date(), now: now, calendar: calendar)
+        XCTAssertFalse(realToday.contains(":"),
+                       "A date that is not the supplied `now` must not read as today: \(realToday)")
+    }
+
+    /// The times on a row and the day it is filed under have to agree.
+    func testTimesAreFormattedInTheCalendarsOwnZone() {
+        var tokyo = Calendar(identifier: .gregorian)
+        tokyo.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        tokyo.locale = Locale(identifier: "en_US_POSIX")
+
+        // 23:30 UTC on the 24th is 08:30 on the 25th in Tokyo — the same day
+        // as `now` there, so it is a time label and it is the Tokyo time.
+        let instant = calendar.date(from: DateComponents(
+            year: 2026, month: 8, day: 24, hour: 23, minute: 30))!
+        let now = tokyo.date(from: DateComponents(
+            year: 2026, month: 8, day: 25, hour: 14, minute: 0))!
+
+        let label = WinlinkMessageRowModel.dateLabel(instant, now: now, calendar: tokyo)
+        XCTAssertTrue(label.contains("8:30"), "Expected the Tokyo time, got \(label)")
+    }
+
     func testPreviousYearsCarryTheYear() {
         let now = date(2026, 8, 25, 14, 30)
         let label = WinlinkMessageRowModel.dateLabel(

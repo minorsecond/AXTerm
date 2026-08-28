@@ -6,6 +6,8 @@ struct WinlinkSettingsTab: View {
 
     @ObservedObject var settings: WinlinkSettings
     @ObservedObject var profile: StationProfile
+    /// Used only to show what an empty listen callsign resolves to.
+    var stationCallsign: String = ""
 
     @State private var passwordDraft = ""
     @State private var apiKeyDraft = ""
@@ -87,6 +89,18 @@ struct WinlinkSettingsTab: View {
                           systemImage: "antenna.radiowaves.left.and.right")
                         .font(.caption)
                         .foregroundStyle(.orange)
+
+                    TextField("Answer on callsign", text: $settings.p2pListenCallsign,
+                              prompt: Text(stationCallsign.isEmpty ? "your station callsign"
+                                           : stationCallsign.uppercased()))
+                        .font(.system(.body, design: .monospaced))
+                    Text("Leave empty to answer as \(stationCallsign.isEmpty ? "your station callsign" : stationCallsign.uppercased()). "
+                         + "Give the listener its own SSID to share the radio with another service — "
+                         + "the mailbox, or a node on this host. Callers pick a service by the "
+                         + "callsign they dial.\n\nThis is an address, not an identity: your Winlink "
+                         + "account and the callsign carried in the mail exchange are unchanged.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 

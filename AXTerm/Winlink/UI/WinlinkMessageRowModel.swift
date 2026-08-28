@@ -64,17 +64,32 @@ nonisolated struct WinlinkMessageRowModel: Equatable {
 
     /// The convention every mail client shares: recent mail is placed by
     /// time of day, older mail by date, and the year only once it matters.
+    ///
+    /// "Today" means the same day as `now`, not the same day as the system
+    /// clock. `isDateInToday`/`isDateInYesterday` ask the clock and ignore
+    /// their calendar's reference point, so this took a `now` it then threw
+    /// away — the label was right in the app (which passes the real date) and
+    /// unpinnable in a test, which passed only on the day it was written.
     static func dateLabel(_ date: Date, now: Date, calendar: Calendar) -> String {
-        if calendar.isDateInToday(date) {
-            return date.formatted(date: .omitted, time: .shortened)
+        // Formatted through the same calendar the comparisons use. Otherwise a
+        // row can say "Yesterday" beside a time from the other side of
+        // midnight, whenever the two disagree about the time zone.
+        let style = Date.FormatStyle(
+            locale: calendar.locale ?? .autoupdatingCurrent,
+            calendar: calendar,
+            timeZone: calendar.timeZone)
+
+        if calendar.isDate(date, inSameDayAs: now) {
+            return date.formatted(style.hour().minute())
         }
-        if calendar.isDateInYesterday(date) {
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+           calendar.isDate(date, inSameDayAs: yesterday) {
             return "Yesterday"
         }
         if calendar.component(.year, from: date) == calendar.component(.year, from: now) {
-            return date.formatted(.dateTime.month(.abbreviated).day())
+            return date.formatted(style.month(.abbreviated).day())
         }
-        return date.formatted(.dateTime.year(.twoDigits).month(.defaultDigits).day())
+        return date.formatted(style.year(.twoDigits).month(.defaultDigits).day())
     }
 
     /// Only states that ask something of the operator, or warn them.

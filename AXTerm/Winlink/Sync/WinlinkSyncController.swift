@@ -43,6 +43,9 @@ final class WinlinkSyncController: ObservableObject {
     /// pass. Two concurrent passes are not harmful — the merge is idempotent
     /// — but they waste a round trip and confuse the status.
     private var inFlight: Task<Void, Never>?
+    /// When the last pass finished, successfully or not. Foreground passes
+    /// are debounced against it; see `WinlinkSyncRetry.foregroundDebounce`.
+    private var lastCompletedAt: Date?
 
     init(engine: WinlinkSyncEngine, isEnabled: @escaping @MainActor () -> Bool) {
         self.engine = engine
@@ -121,6 +124,12 @@ final class WinlinkSyncController: ObservableObject {
     /// working the handheld all afternoon.
     func onForeground() {
         start()
+        guard WinlinkSyncRetry.shouldSyncOnForeground(
+            lastCompletedAt: lastCompletedAt, now: Date()) else {
+            Self.log("Skipped — a pass finished less than "
+                     + "\(Int(WinlinkSyncRetry.foregroundDebounce))s ago")
+            return
+        }
         sync()
     }
 
@@ -167,6 +176,35 @@ final class WinlinkSyncController: ObservableObject {
         print("[WINLINK:SYNC] \(message)")
     }
 
+    /// One pass, trying again on the failures that are worth trying again.
+    ///
+    /// A dropped connection is not an answer from iCloud; it is the absence
+    /// of one. Reporting it as a failed sync put a red badge on the header
+    /// for a condition the next attempt cleared, and made the operator press
+    /// a button the app could have pressed itself (2026-08-28).
+    private func runWithRetries() async throws -> WinlinkSyncEngine.Report {
+        var attempt = 1
+        while true {
+            do {
+                return try await engine.sync()
+            } catch {
+                guard let plan = WinlinkSyncRetry.plan(for: error, attempt: attempt) else {
+                    throw error
+                }
+                Telemetry.breadcrumb(
+                    category: "winlink.sync",
+                    message: "Retrying after a recoverable failure",
+                    data: ["attempt": attempt, "delay": plan.delay, "reason": plan.reason],
+                    level: .info)
+                Self.log("Retrying in \(Int(plan.delay))s — \(plan.reason) "
+                         + "(attempt \(attempt) of \(WinlinkSyncRetry.maxRetries + 1))")
+                try? await Task.sleep(for: .seconds(plan.delay))
+                if Task.isCancelled { throw error }
+                attempt += 1
+            }
+        }
+    }
+
     private func sync() {
         // Every outcome is logged, including the early exits. A pass that
         // does nothing silently is indistinguishable from one that never ran,
@@ -193,9 +231,12 @@ final class WinlinkSyncController: ObservableObject {
         Self.log("Pass started")
         inFlight = Task { [weak self] in
             guard let self else { return }
-            defer { self.inFlight = nil }
+            defer {
+                self.inFlight = nil
+                self.lastCompletedAt = Date()
+            }
             do {
-                let report = try await engine.sync()
+                let report = try await self.runWithRetries()
                 if report.skippedNoAccount {
                     // Not a failure. An operator in the field with no signal
                     // should see why nothing moved, not an error.
