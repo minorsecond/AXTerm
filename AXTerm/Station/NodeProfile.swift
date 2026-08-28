@@ -258,15 +258,17 @@ nonisolated struct NodeProfile: Equatable, Sendable {
 
     /// Whether the full page would show anything the sheet does not already.
     ///
-    /// The two render the same sections — the page only has more room. For a
-    /// station harvested from a node's table there is nothing to give room to,
-    /// so offering "Full profile" promised a second screen identical to the
-    /// first. The name and the route both fit in the sheet; measurements,
-    /// history and neighbours are what need the space.
+    /// The sheet is a peek — tiles, roles, one warning — and every detail
+    /// section renders on the page only. So anything that produces a detail
+    /// section counts as depth, licence records included: the sheet's
+    /// subtitle shows the name, but the class and full address live in the
+    /// Licence section, and without this the link to reach them never
+    /// appeared for a directory-only station.
     var hasDepth: Bool {
         placement != nil || activity != nil || netrom != nil || winlink != nil
             || topology != nil || !links.isEmpty || !siblings.isEmpty
             || !linkHistory.isEmpty || !declaredServices.isEmpty
+            || name != nil || licenseClass != nil
     }
 
     /// True when nothing beyond the callsign itself is known.

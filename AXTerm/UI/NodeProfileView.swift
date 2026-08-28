@@ -44,6 +44,17 @@ struct NodeProfileView: View {
                     serviceEndpoint
                 } else if profile.isBare {
                     bare
+                } else if presentation == .sheet {
+                    // The peek the sheet was always meant to be: the headline
+                    // numbers, what the station is, and the one warning that
+                    // cannot wait. Every detail section lives on the full
+                    // page — rendering them all here made the sheet a long
+                    // scroll of things the tiles had already said.
+                    statTiles
+                    if !profile.roles.isEmpty { rolesSection }
+                    if let topology = profile.topology, topology.isCritical {
+                        criticalLine(topology)
+                    }
                 } else {
                     statTiles
                     if !profile.roles.isEmpty { rolesSection }
@@ -163,6 +174,24 @@ struct NodeProfileView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.top, 1)
+        .help(activity.lastHeard.map {
+            "Last heard \($0.formatted(date: .abbreviated, time: .shortened))."
+        } ?? "Never heard transmitting; known only from others' traffic.")
+    }
+
+    /// The topology warning, sheet-sized: the consequence in one line, with
+    /// the full section left to the page.
+    private func criticalLine(_ topology: NodeProfile.Topology) -> some View {
+        Label {
+            Text(criticalSummary(topology))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+        }
+        .help("Removing this station from the observed graph disconnects it. Details are on the full profile.")
     }
 
     private func freshnessColor(_ lastHeard: Date?) -> Color {
@@ -324,18 +353,15 @@ struct NodeProfileView: View {
                                   value: "\(activity.heardCount)", detail: "frames",
                                   symbol: "waveform", tint: .orange))
         }
-        if let last = profile.activity?.lastHeard {
-            tiles.append(StatTile(
-                id: "last", label: "Last heard",
-                value: last.formatted(.relative(presentation: .numeric,
-                                                unitsStyle: .narrow)),
-                detail: nil, symbol: "clock", tint: .blue))
-        }
+        // No "last heard" tile: the freshness line in the header already
+        // says it, two lines up, and saying it twice was the clutter.
         if let km = profile.placement?.distanceKilometres {
+            let compass = profile.placement?.bearingDegrees
+                .map { " \u{00B7} " + GreatCircle.compassPoint($0) } ?? ""
             tiles.append(StatTile(
                 id: "distance", label: "Distance",
                 value: String(format: "%.1f mi", GreatCircle.miles(fromKilometres: km)),
-                detail: String(format: "%.1f km", km),
+                detail: String(format: "%.0f km%@", km, compass),
                 symbol: "location.north.line", tint: .purple))
         }
         if let quality = headlineQuality {
@@ -402,13 +428,8 @@ struct NodeProfileView: View {
     private func placementSection(_ placement: NodeProfile.Placement) -> some View {
         section("Position", systemImage: "mappin.and.ellipse") {
             VStack(alignment: .leading, spacing: 6) {
-                if let distance = placement.distanceKilometres {
-                    let miles = GreatCircle.miles(fromKilometres: distance)
-                    let compass = placement.bearingDegrees
-                        .map { " \u{00B7} " + GreatCircle.compassPoint($0) } ?? ""
-                    row("Distance",
-                        String(format: "%.1f km (%.1f mi)%@", distance, miles, compass))
-                }
+                // Distance and bearing are a tile at the top of the page;
+                // this section carries what the tile cannot — where exactly.
                 if let grid = placement.gridSquare { row("Grid", grid) }
                 row("Coordinates", String(format: "%.4f, %.4f",
                                           placement.position.latitude,
