@@ -256,27 +256,61 @@ struct NodeProfileView: View {
         return "Heard \(last.formatted(.relative(presentation: .named)))"
     }
 
-    /// How to get there — for a station harvested from a node's table this is
-    /// the only thing the profile actually knows, and it belongs beside the
-    /// callsign rather than buried below a page of empty sections.
+    /// How to get there, as a picture: every station the connect will
+    /// actually touch, in order. The old prose ("Connect to COSCO and ask
+    /// for…") named only the teller; the operator then watched the app dial
+    /// three other stations first and asked, reasonably, what it thought it
+    /// was doing (2026-08-28).
     private var reachLine: some View {
-        Label {
-            Text("Connect to ") + Text(profile.reachVia[0]).bold()
-                + Text(" and ask for \(profile.alias ?? profile.callsign)")
-                + Text(profile.reachVia.count > 1
-                       ? "  ·  or \(profile.reachVia.dropFirst().joined(separator: ", "))"
-                       : "")
-        } icon: {
-            Image(systemName: "arrow.triangle.branch")
+        VStack(alignment: .leading, spacing: 4) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    pathNode("You", terminal: false)
+                    ForEach(pathChain, id: \.self) { hop in
+                        pathArrow
+                        pathNode(hop, terminal: false)
+                    }
+                    pathArrow
+                    pathNode(profile.alias ?? profile.callsign, terminal: true)
+                }
+            }
+            if profile.reachVia.count > 1 {
+                Text("Also listed by \(profile.reachVia.dropFirst().joined(separator: ", "))")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(.top, 2)
-        .help(profile.reachVia.count > 1
-              ? "These nodes listed this station, freshest claim first. Any of them "
-                + "should be able to connect you through."
-              : "This node listed the station, so it knows how to get there. "
-                + "A node's claim, not a route this station has measured.")
+        .padding(.top, 3)
+        .help("The connect walks this chain left to right: an AX.25 link to the "
+              + "first node, then each node is asked at its own command prompt to "
+              + "connect onward to the next. Built from the nodes' claims and this "
+              + "station's route table — a plan, not a measured path.")
+    }
+
+    /// The chain the relay planner computed, falling back to the bare
+    /// teller when planning had nothing more to say.
+    private var pathChain: [String] {
+        profile.plannedChain.isEmpty
+            ? Array(profile.reachVia.prefix(1))
+            : profile.plannedChain
+    }
+
+    private func pathNode(_ name: String, terminal: Bool) -> some View {
+        Text(name)
+            .font(.caption.monospaced().weight(terminal ? .semibold : .regular))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .foregroundStyle(terminal ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+            .background(terminal
+                        ? AnyShapeStyle(.tint.opacity(0.12))
+                        : AnyShapeStyle(Color.primary.opacity(0.06)),
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+    }
+
+    private var pathArrow: some View {
+        Image(systemName: "chevron.right")
+            .font(.system(size: 8, weight: .semibold))
+            .foregroundStyle(.tertiary)
     }
 
     /// A destination, not a station.

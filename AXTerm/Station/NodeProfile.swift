@@ -220,6 +220,13 @@ nonisolated struct NodeProfile: Equatable, Sendable {
     var reachVia: [String] = []
     /// Set when the operator tapped an *alias* and this is the station behind it.
     var resolvedFromAlias: String?
+    /// The node chain a prompt-relay connect would walk, link target first
+    /// — the same plan the relay itself builds, computed ahead of time so
+    /// the profile can *show* what pressing Connect will do instead of the
+    /// operator finding out from the transcript (2026-08-28: "show a path
+    /// diagram so we know what it's going to do"). Empty when the station
+    /// is reached directly.
+    var plannedChain: [String] = []
 
     var name: String?
     var locality: String?

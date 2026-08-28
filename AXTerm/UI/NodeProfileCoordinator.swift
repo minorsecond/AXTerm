@@ -151,6 +151,27 @@ struct NodeProfileResolver {
                 timestamps: stamps, now: Date())
             profile.activity = activity
         }
+        // The chain the prompt relay would walk, computed with the relay's
+        // own planner so the picture and the behaviour cannot drift apart.
+        // Routes here are deliberately unfiltered by TTL: for planning, a
+        // stale signpost beats none, and the teller fallback covers the
+        // rest — same policy as the relay itself.
+        if let teller = profile.reachVia.first {
+            var routesByDestination: [String: String] = [:]
+            for route in routes where routesByDestination[route.destination] == nil {
+                routesByDestination[route.destination] = route.via
+            }
+            let aliasDirectory = aliases
+            profile.plannedChain = NetRomRelayPlan.plan(
+                destination: key,
+                teller: teller,
+                routeLookup: { station in
+                    routesByDestination[station.uppercased()]
+                        ?? aliasDirectory.tellerClaims(for: station).first?.teller
+                },
+                aliasResolve: { aliasDirectory.callsign(for: $0) }
+            ).chain
+        }
         return profile
     }
 
