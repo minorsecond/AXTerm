@@ -42,9 +42,13 @@ struct ContentView: View {
     /// The window's content size, read by a background GeometryReader so
     /// sheets can size themselves against the space actually available.
     @State private var windowSize: CGSize = .zero
-    /// The profile sheet's measured content height (see
-    /// NodeProfileContentHeightKey) — fit-to-content, clamped to the window.
-    @State private var profileContentHeight: CGFloat = 0
+    /// Measured profile content heights (see NodeProfileContentHeightKey),
+    /// keyed per callsign-and-presentation. A dictionary rather than one
+    /// value because a single value needed resetting between presentations,
+    /// and the reset raced the preference delivery: onAppear zeroed the
+    /// height *after* the preference had already fired, the value never
+    /// changed again, and the sheet sat on its fallback size forever.
+    @State private var profileContentHeights: [String: CGFloat] = [:]
     /// Map overlays, owned here so a layer arriving as a Winlink attachment
     /// and a layer the operator drew end up in the same place.
     @StateObject private var overlayStore = MapOverlayStore()
@@ -544,9 +548,15 @@ struct ContentView: View {
         return known
     }
 
+    private func profileMeasureKey(_ presentation: NodeProfileCoordinator.Presentation) -> String {
+        presentation.callsign + (presentation.isPage ? "#page" : "#peek")
+    }
+
     @ViewBuilder
     private func profileSheet(_ presentation: NodeProfileCoordinator.Presentation) -> some View {
-            let size = profileSheetSize(isPage: presentation.isPage)
+            let measureKey = profileMeasureKey(presentation)
+            let size = profileSheetSize(isPage: presentation.isPage,
+                                        contentHeight: profileContentHeights[measureKey])
             VStack(spacing: 0) {
                 HStack {
                     Spacer()
@@ -570,7 +580,8 @@ struct ContentView: View {
                         connectFromProfile(profile)
                     })
                     .onPreferenceChange(NodeProfileContentHeightKey.self) { height in
-                        profileContentHeight = height
+                        guard height > 0 else { return }
+                        profileContentHeights[measureKey] = height
                     }
                     .task(id: presentation.callsign) {
                         guard winlinkContext.settings.callsignLookupEnabled else { return }
@@ -579,7 +590,6 @@ struct ContentView: View {
                         await callsignLookup.resolve(presentation.callsign)
                     }
             }
-            .onAppear { profileContentHeight = 0 }
             .frame(width: size.width, height: size.height)
     }
 
@@ -589,16 +599,16 @@ struct ContentView: View {
     /// display; the profile reports its natural height and the sheet grows
     /// until nothing needs scrolling or the window runs out. Width is fixed
     /// per presentation — the peek is a column, the page is wide enough for
-    /// two columns of section cards — because the measured height is only
-    /// meaningful at the width it was measured at.
-    private func profileSheetSize(isPage: Bool) -> CGSize {
+    /// balanced columns of section cards — because the measured height is
+    /// only meaningful at the width it was measured at.
+    private func profileSheetSize(isPage: Bool, contentHeight: CGFloat?) -> CGSize {
         let windowHeight = windowSize.height > 0 ? windowSize.height : 900
         let windowWidth = windowSize.width > 0 ? windowSize.width : 1400
-        let doneBarChrome: CGFloat = 58
+        // Done bar plus divider, and a little slack: overshooting leaves a
+        // sliver of blank, undershooting brings the scroll bar back.
+        let chrome: CGFloat = 58 + 20
         let maxHeight = windowHeight - 80
-        let fitted = profileContentHeight > 0
-            ? profileContentHeight + doneBarChrome
-            : (isPage ? 740 : 560)
+        let fitted = contentHeight.map { $0 + chrome } ?? (isPage ? 740 : 620)
         // Wide enough for three balanced columns on a big display; a
         // smaller window narrows the page and the columns drop with it.
         let width: CGFloat = isPage

@@ -4,9 +4,10 @@
 //
 //  The full-profile page deals its section cards into balanced columns —
 //  LazyVGrid's row-height coupling left card-sized holes and made the page
-//  scroll on displays with room to spare. The dealing rule worth pinning:
-//  reading order is preserved within a column, each card lands in the
-//  currently shortest column, and ties go left.
+//  scroll on displays with room to spare. The dealing is largest-first
+//  into the shortest column (in-order greedy let small cards fill the
+//  columns before the dominant Link-quality card arrived, which then
+//  towered over everything), with reading order restored within columns.
 //
 
 import XCTest
@@ -20,32 +21,34 @@ final class NodeProfilePageColumnsTests: XCTestCase {
         XCTAssertEqual(assignment, [[0, 1, 2]])
     }
 
-    func testCardsGoToTheShortestColumn() {
-        // 200 left, 50 right, then 60 lands right (50 < 200), 100 lands
-        // right again (110 < 200), and the last card returns left.
-        let assignment = NodeProfileView.distributeSections(
-            estimates: [200, 50, 60, 100, 40], into: 2)
-        XCTAssertEqual(assignment, [[0, 4], [1, 2, 3]])
-    }
-
-    func testTiesGoLeftAndOrderIsPreservedWithinColumns() {
-        let assignment = NodeProfileView.distributeSections(
-            estimates: [100, 100, 100, 100], into: 2)
-        XCTAssertEqual(assignment, [[0, 2], [1, 3]])
-        for column in assignment {
-            XCTAssertEqual(column, column.sorted(), "reading order must survive")
-        }
-    }
-
-    func testColumnsAreRoughlyBalanced() {
-        let estimates: [CGFloat] = [268, 110, 160, 250, 240, 160, 130, 260]
+    func testADominantCardDoesNotTowerOverTheRest() {
+        // The K0NTS-10 field case: a 600pt link card among modest cards.
+        // In-order greedy produced columns of 802/508/600; largest-first
+        // lands within one small card of even.
+        let estimates: [CGFloat] = [110, 160, 600, 242, 188, 160, 130, 320]
         let assignment = NodeProfileView.distributeSections(estimates: estimates, into: 3)
         let heights = assignment.map { $0.reduce(CGFloat(0)) { $0 + estimates[$1] } }
         let spread = (heights.max() ?? 0) - (heights.min() ?? 0)
-        XCTAssertLessThanOrEqual(spread, 268,
-            "no column should exceed another by more than the largest card")
+        XCTAssertLessThanOrEqual(spread, 150,
+            "columns should end within a small card of each other; got \(heights)")
         XCTAssertEqual(assignment.flatMap { $0 }.sorted(), Array(estimates.indices),
                        "every card is dealt exactly once")
+    }
+
+    func testReadingOrderSurvivesWithinEachColumn() {
+        let estimates: [CGFloat] = [50, 400, 60, 300, 70, 200]
+        let assignment = NodeProfileView.distributeSections(estimates: estimates, into: 2)
+        for column in assignment {
+            XCTAssertEqual(column, column.sorted(),
+                           "cards within a column must read top-to-bottom in page order")
+        }
+    }
+
+    func testEqualCardsDealEvenly() {
+        let assignment = NodeProfileView.distributeSections(
+            estimates: [100, 100, 100, 100], into: 2)
+        XCTAssertEqual(assignment.map(\.count), [2, 2])
+        XCTAssertEqual(assignment.flatMap { $0 }.sorted(), [0, 1, 2, 3])
     }
 
     func testZeroOrNegativeColumnCountIsClampedToOne() {

@@ -399,11 +399,17 @@ struct NodeProfileView: View {
             items.append((160, AnyView(placementSection(placement))))
         }
         if !profile.links.isEmpty {
-            items.append((CGFloat(60 + profile.links.count * 190), AnyView(linkSection)))
+            // Each measured direction is a headline, bar, metric row,
+            // sparkline with its caption, and a freshness line — the
+            // tallest card on the page, and underestimating it stacked
+            // Notes underneath and left a dead band below every other
+            // column.
+            items.append((CGFloat(60 + profile.links.count * 270), AnyView(linkSection)))
         }
         if let topology = profile.topology, !topology.isEmpty {
-            let clusters = topology.communityMembers.isEmpty ? 0 : 90
-            items.append((CGFloat(100 + (topology.isCritical ? 50 : 0) + clusters),
+            let clusters = topology.communityMembers.isEmpty
+                ? 0 : 70 + topology.communityMembers.count * 6
+            items.append((CGFloat(100 + (topology.isCritical ? 60 : 0) + clusters),
                           AnyView(topologySection(topology))))
         }
         if !profile.siblings.isEmpty {
@@ -419,28 +425,34 @@ struct NodeProfileView: View {
             items.append((130, AnyView(licenceSection)))
         }
         if notesLiveInColumns, let noteStore {
-            items.append((260, AnyView(
+            items.append((320, AnyView(
                 StationNotesSection(callsign: profile.callsign, store: noteStore,
                                     heightUnitIsFeet: $heightUnitIsFeet))))
         }
         return items
     }
 
-    /// Deals cards into columns: reading order preserved, each card placed
-    /// in the currently shortest column (ties go left). Greedy is within a
-    /// card of optimal for this few items, and unlike optimal it never
-    /// reorders neighbours confusingly.
+    /// Deals cards into columns of similar height: largest card first into
+    /// the currently shortest column (longest-processing-time scheduling —
+    /// placing in reading order let small cards fill the columns before the
+    /// dominant Link-quality card arrived, which then towered over
+    /// everything and left a dead band under the rest). Reading order is
+    /// restored *within* each column afterwards, which is the order a
+    /// reader actually experiences.
     nonisolated static func distributeSections(estimates: [CGFloat],
                                                into columns: Int) -> [[Int]] {
         let columnCount = max(1, columns)
         var assignment = Array(repeating: [Int](), count: columnCount)
         var heights = Array(repeating: CGFloat(0), count: columnCount)
-        for (index, estimate) in estimates.enumerated() {
+        let bySize = estimates.indices.sorted {
+            estimates[$0] != estimates[$1] ? estimates[$0] > estimates[$1] : $0 < $1
+        }
+        for index in bySize {
             let target = heights.indices.min { heights[$0] < heights[$1] } ?? 0
             assignment[target].append(index)
-            heights[target] += estimate
+            heights[target] += estimates[index]
         }
-        return assignment
+        return assignment.map { $0.sorted() }
     }
 
     // MARK: - Stat tiles
