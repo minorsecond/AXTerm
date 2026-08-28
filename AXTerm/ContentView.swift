@@ -39,6 +39,12 @@ struct ContentView: View {
     /// the console is the same question there as here.
     @StateObject private var profiles = NodeProfileCoordinator()
     @State private var lookingUpCallsign: String?
+    /// The window's content size, read by a background GeometryReader so
+    /// sheets can size themselves against the space actually available.
+    @State private var windowSize: CGSize = .zero
+    /// The profile sheet's measured content height (see
+    /// NodeProfileContentHeightKey) — fit-to-content, clamped to the window.
+    @State private var profileContentHeight: CGFloat = 0
     /// Map overlays, owned here so a layer arriving as a Winlink attachment
     /// and a layer the operator drew end up in the same place.
     @StateObject private var overlayStore = MapOverlayStore()
@@ -434,6 +440,14 @@ struct ContentView: View {
             harvestServices(from: packets)
             recordNetworkPaths(from: packets)
         }
+        // Sheets are sized against the window, so the window's size has to
+        // be known. A background reader costs nothing and avoids AppKit
+        // window plumbing.
+        .background(GeometryReader { proxy in
+            Color.clear
+                .onAppear { windowSize = proxy.size }
+                .onChange(of: proxy.size) { _, newSize in windowSize = newSize }
+        })
         // One sheet, not two.
         //
         // SwiftUI honours a single `.sheet` per view: attach two and the
@@ -532,6 +546,7 @@ struct ContentView: View {
 
     @ViewBuilder
     private func profileSheet(_ presentation: NodeProfileCoordinator.Presentation) -> some View {
+            let size = profileSheetSize(isPage: presentation.isPage)
             VStack(spacing: 0) {
                 HStack {
                     Spacer()
@@ -554,6 +569,9 @@ struct ContentView: View {
                         profiles.dismiss()
                         connectFromProfile(profile)
                     })
+                    .onPreferenceChange(NodeProfileContentHeightKey.self) { height in
+                        profileContentHeight = height
+                    }
                     .task(id: presentation.callsign) {
                         guard winlinkContext.settings.callsignLookupEnabled else { return }
                         lookingUpCallsign = presentation.callsign
@@ -561,13 +579,30 @@ struct ContentView: View {
                         await callsignLookup.resolve(presentation.callsign)
                     }
             }
-            // The page earns its name with width: two columns of section
-            // cards (330pt minimum each, plus padding) instead of the
-            // sheet's single tall stack scrolling off the screen.
-            .frame(minWidth: presentation.isPage ? 880 : 440,
-                   idealWidth: presentation.isPage ? 920 : 460,
-                   minHeight: presentation.isPage ? 600 : 500,
-                   idealHeight: presentation.isPage ? 740 : 560)
+            .onAppear { profileContentHeight = 0 }
+            .frame(width: size.width, height: size.height)
+    }
+
+    /// Fit the sheet to its content, clamped to the window.
+    ///
+    /// A fixed frame either scrolled on a laptop or rattled around a big
+    /// display; the profile reports its natural height and the sheet grows
+    /// until nothing needs scrolling or the window runs out. Width is fixed
+    /// per presentation — the peek is a column, the page is wide enough for
+    /// two columns of section cards — because the measured height is only
+    /// meaningful at the width it was measured at.
+    private func profileSheetSize(isPage: Bool) -> CGSize {
+        let windowHeight = windowSize.height > 0 ? windowSize.height : 900
+        let windowWidth = windowSize.width > 0 ? windowSize.width : 1400
+        let doneBarChrome: CGFloat = 58
+        let maxHeight = windowHeight - 80
+        let fitted = profileContentHeight > 0
+            ? profileContentHeight + doneBarChrome
+            : (isPage ? 740 : 560)
+        let width: CGFloat = isPage
+            ? min(960, max(720, windowWidth - 320))
+            : 480
+        return CGSize(width: width, height: max(360, min(fitted, maxHeight)))
     }
 
     /// Connects to whatever the profile is about, the way it is reachable.

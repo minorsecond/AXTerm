@@ -1,5 +1,15 @@
 import SwiftUI
 
+/// The profile's natural content height, published so whoever presents it
+/// can fit the container to the content instead of picking a number.
+nonisolated struct NodeProfileContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 /// The one identity view.
 ///
 /// Presented as a sheet from a tapped callsign and as a pushed page from the
@@ -91,6 +101,13 @@ struct NodeProfileView: View {
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
+            // Reports the content's natural height so the presenting sheet
+            // can size itself to fit — grow until nothing needs scrolling,
+            // stop at the window's edge.
+            .background(GeometryReader { proxy in
+                Color.clear.preference(key: NodeProfileContentHeightKey.self,
+                                       value: proxy.size.height)
+            })
         }
     }
 
