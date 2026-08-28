@@ -470,6 +470,14 @@ struct ContentView: View {
         .onChange(of: settings.myCallsign) { _, newValue in
             sessionCoordinator.localCallsign = newValue
         }
+        // Warm the in-memory directory from the on-disk cache the moment a
+        // profile is requested. Without this, a station looked up weeks ago
+        // still rendered its first frame nameless — the async task then hit
+        // the store a beat later and the licence fields popped in.
+        .onChange(of: profiles.presented) { _, presented in
+            guard let presented else { return }
+            callsignLookup.preload([presented.callsign])
+        }
         .onChange(of: selectedNav) { _, newValue in
             syncSearchScope(for: newValue)
             syncConnectContext(for: newValue)
@@ -590,6 +598,10 @@ struct ContentView: View {
                         await callsignLookup.resolve(presentation.callsign)
                     }
             }
+            // A record arriving from the network (or a late measurement)
+            // reflows the page; animating the change makes it read as the
+            // profile filling in rather than elements popping into place.
+            .animation(.easeOut(duration: 0.2), value: size)
             .frame(width: size.width, height: size.height)
     }
 
