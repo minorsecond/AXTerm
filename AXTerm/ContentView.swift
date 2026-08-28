@@ -1097,6 +1097,7 @@ struct ContentView: View {
                     sessionCoordinator: sessionCoordinator,
                     connectCoordinator: connectCoordinator,
                     nodeAliases: nodeAliases,
+                    nodeCapabilities: nodeCapabilities,
                     onSessionText: { text, peer in
                         // A node's `N` names its whole view of the network in
                         // one reply; a BBS listing names a dozen operators'

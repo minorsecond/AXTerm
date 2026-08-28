@@ -431,6 +431,27 @@ nonisolated struct NodeAliasDirectory: Equatable, Sendable {
     /// Union across aliases because a station can be listed under several
     /// (`DRLBBS` and `DRLNOD` are one licence), and a node that named any of
     /// them knows how to get there.
+    /// Dated teller claims for a destination named by alias or callsign,
+    /// newest first. The connect planner ranks a relay by how recently a
+    /// node listed the destination, so it needs the date, not just the name.
+    func tellerClaims(for destination: String) -> [(teller: String, claimedAt: Date)] {
+        let key = destination.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !key.isEmpty else { return [] }
+        var freshest: [String: Date] = [:]
+        for entry in entries.values
+        where entry.callsign.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == key
+            || entry.alias.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == key {
+            for (teller, when) in entry.tellers
+            where (freshest[teller] ?? .distantPast) < when {
+                freshest[teller] = when
+            }
+        }
+        return freshest.sorted {
+            if $0.value != $1.value { return $0.value > $1.value }
+            return $0.key < $1.key
+        }.map { (teller: $0.key, claimedAt: $0.value) }
+    }
+
     func tellers(forCallsign callsign: String) -> [String] {
         let key = callsign.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !key.isEmpty else { return [] }

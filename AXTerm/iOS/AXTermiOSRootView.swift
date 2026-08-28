@@ -338,6 +338,7 @@ struct AXTermiOSRootView: View {
                 sessionCoordinator: sessionCoordinator,
                 connectCoordinator: connectCoordinator,
                 nodeAliases: nodeAliases,
+                nodeCapabilities: nodeCapabilities,
                 searchModel: searchModel,
                 locationService: context.locationService,
                 onIdentity: { profiles.peek($0) },

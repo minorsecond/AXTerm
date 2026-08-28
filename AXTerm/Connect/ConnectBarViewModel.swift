@@ -1029,6 +1029,21 @@ final class ConnectBarViewModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + suggestionsDebounce, execute: work)
     }
 
+    /// Digi-path evidence for the strategy ladder, whatever mode the bar is
+    /// in: the engine gates digi suggestions on `.ax25ViaDigi`, but the
+    /// ladder compares families and wants the paths even while the bar
+    /// shows NET/ROM.
+    func digiPathEvidence(for destination: String) -> [ConnectSuggestions.DigiPath] {
+        sanitizedDigiPaths(ConnectSuggestionEngine.build(
+            to: destination,
+            mode: .ax25ViaDigi,
+            routes: routeRows,
+            neighbors: neighborRows,
+            observedPaths: Array(observedPathStore.values),
+            attemptHistory: attemptHistory
+        ).recommendedDigiPaths)
+    }
+
     private func rebuildSuggestions() {
         suggestions = ConnectSuggestionEngine.build(
             to: toCall,

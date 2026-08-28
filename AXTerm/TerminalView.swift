@@ -1534,6 +1534,9 @@ struct TerminalView: View {
     /// Nodes page answered "No known route" — the app holding the answer in
     /// one screen and refusing it in another.
     @ObservedObject var nodeAliases: NodeAliasStore
+    /// Capability verdicts for the strategy ladder — read for planning,
+    /// never observed: a verdict changing mid-plan is next plan's business.
+    let nodeCapabilities: NodeCapabilityStore?
     @StateObject private var txViewModel: ObservableTerminalTxViewModel
     @StateObject private var connectBarViewModel: ConnectBarViewModel
     @ObservedObject var searchModel: AppToolbarSearchModel
@@ -1568,6 +1571,7 @@ struct TerminalView: View {
         sessionCoordinator: SessionCoordinator,
         connectCoordinator: ConnectCoordinator,
         nodeAliases: NodeAliasStore,
+        nodeCapabilities: NodeCapabilityStore? = nil,
         onSessionText: ((String, String) -> Void)? = nil,
         searchModel: AppToolbarSearchModel,
         locationService: StationLocationService? = nil,
@@ -1581,6 +1585,7 @@ struct TerminalView: View {
         _sessionCoordinator = ObservedObject(wrappedValue: sessionCoordinator)
         _connectCoordinator = ObservedObject(wrappedValue: connectCoordinator)
         _nodeAliases = ObservedObject(wrappedValue: nodeAliases)
+        self.nodeCapabilities = nodeCapabilities
         self.onSessionText = onSessionText
         self.searchModel = searchModel
         self.locationService = locationService
@@ -2796,6 +2801,11 @@ struct TerminalView: View {
         connectWithActiveIntent(sourceContext: connectCoordinator.activeContext)
     }
 
+    /// The Auto button: the operator names a station, the app plans every
+    /// way it knows to get there — direct, digi path, native circuit,
+    /// node-prompt relay — ranked by evidence, tried in order, each attempt
+    /// explained in the transcript. Forced modes and the plain Connect
+    /// button are untouched; this is the cross-family path.
     private func startAutoConnectAttempts(sourceContext: ConnectSourceContext) {
         stopAutoConnectAttempts()
         syncLegacyFieldsFromConnectBar()
@@ -2806,39 +2816,147 @@ struct TerminalView: View {
             return
         }
 
-        let plan = ConnectAttemptPlanner.plan(mode: connectBarViewModel.mode, suggestions: connectBarViewModel.connectSuggestions)
-        if connectBarViewModel.mode == .ax25ViaDigi && plan.steps.isEmpty {
-            connectBarViewModel.markFailed(reason: .noRoute, detail: "No suggested digi paths available.")
+        let ladder = ConnectStrategyPlanner.plan(evidence: buildStrategyEvidence(destination: destination))
+
+        guard !ladder.isEmpty else {
+            // Silence would read as a hang; the skip reasons are the answer.
+            for skip in ladder.skipped {
+                client.appendSystemNotification("Can't try \(skip.familyLabel): \(skip.reason).")
+            }
+            connectBarViewModel.markFailed(
+                reason: .noRoute,
+                detail: "No evidence of any way to reach \(destination).")
             return
         }
 
         connectCoordinator.navigateToTerminal?()
         connectBarViewModel.beginAutoAttempting()
 
+        client.appendSystemNotification(
+            "Auto-routing to \(destination) — \(ladder.steps.count) "
+            + "way\(ladder.steps.count == 1 ? "" : "s") known, best evidence first.")
+        for skip in ladder.skipped {
+            client.appendSystemNotification("Skipping \(skip.familyLabel): \(skip.reason).")
+        }
+
         autoAttemptTask = Task { @MainActor in
-            let runner = ConnectAttemptRunner(maxAttempts: 3, backoffSeconds: 5)
-            let result = await runner.run(
-                plan: plan,
-                onStatus: { attemptIndex, totalAttempts, step in
+            let runner = ConnectStrategyRunner()
+            let outcome = await runner.run(
+                ladder: ladder,
+                onExplain: { rung, total, step in
                     connectBarViewModel.updateAutoAttemptStatus(
-                        autoAttemptStatusText(
-                            step: step,
-                            attemptIndex: attemptIndex,
-                            totalAttempts: totalAttempts
-                        )
-                    )
+                        "Trying \(rung)/\(total): \(step.kind.familyLabel)")
+                    client.appendSystemNotification("Trying \(rung)/\(total): \(step.reason)")
                 },
-                execute: { step, _, _ in
-                    await executeAutoAttemptStep(
-                        step,
-                        destination: destination,
-                        sourceContext: sourceContext
-                    )
+                execute: { step in
+                    await executeStrategyStep(step, destination: destination, sourceContext: sourceContext)
                 }
             )
-
-            handleAutoAttemptRunnerResult(result)
+            handleStrategyLadderOutcome(outcome, destination: destination, rungCount: ladder.steps.count)
             autoAttemptTask = nil
+        }
+    }
+
+    /// The snapshot the pure planner reads — assembled here because this is
+    /// where all the stores live.
+    private func buildStrategyEvidence(destination: String) -> ConnectStrategyEvidence {
+        var evidence = ConnectStrategyEvidence(destination: destination, now: Date())
+
+        if let station = client.stations.first(where: {
+            CallsignValidator.normalize($0.call) == destination
+        }), let lastHeard = station.lastHeard {
+            evidence.direct = .init(lastHeard: lastHeard, heardVia: station.lastVia)
+        }
+
+        evidence.digiPaths = connectBarViewModel.digiPathEvidence(for: destination)
+        evidence.candidateRoutes = client.netRomIntegration?.candidateRoutes(to: destination) ?? []
+
+        if let capabilities = nodeCapabilities {
+            for route in evidence.candidateRoutes {
+                let anchor = route.origin.uppercased()
+                if let verdict = capabilities.canRouteNetRom(anchor) {
+                    evidence.capabilityByAnchor[anchor] = verdict
+                }
+            }
+        }
+
+        evidence.tellers = nodeAliases.directory.tellerClaims(for: destination).map {
+            .init(teller: $0.teller, claimedAt: $0.claimedAt)
+        }
+        evidence.nativeCircuitCoolingDown = !sessionCoordinator.shouldTryNativeNetRom(to: destination)
+        evidence.advertiseSelfEnabled = sessionCoordinator.netRomDriver.advertisesItself
+        return evidence
+    }
+
+    private func executeStrategyStep(
+        _ step: ConnectStrategyStep,
+        destination: String,
+        sourceContext: ConnectSourceContext
+    ) async -> ConnectAttemptStepResult {
+        if Task.isCancelled { return .cancelled }
+
+        switch step.kind {
+        case .directL2:
+            return await executeAutoAttemptStep(
+                .ax25ViaDigis(digis: []),
+                destination: destination,
+                sourceContext: sourceContext,
+                timeoutSeconds: step.budget)
+
+        case .ax25ViaDigis(let digis):
+            return await executeAutoAttemptStep(
+                .ax25ViaDigis(digis: digis),
+                destination: destination,
+                sourceContext: sourceContext,
+                timeoutSeconds: step.budget)
+
+        case .netromCircuit(let override):
+            connectBarViewModel.setMode(.netrom, for: sourceContext)
+            connectBarViewModel.applySuggestedTo(destination)
+            connectBarViewModel.nextHopSelection = override ?? ConnectBarViewModel.autoNextHopID
+            connectBarViewModel.validate()
+            syncLegacyFieldsFromConnectBar()
+            let intent = connectBarViewModel.buildIntent(sourceContext: sourceContext)
+            guard intent.validationErrors.isEmpty else { return .failed }
+            // Straight to the circuit — never through executeNETROMAutoAttempt,
+            // whose hardcoded fallback would run a relay the planner may have
+            // ranked elsewhere (or skipped).
+            return await attemptNativeNetRomCircuit(intent: intent, announceFallback: false) ?? .failed
+
+        case .nodePromptRelay(let teller):
+            connectBarViewModel.setMode(.netrom, for: sourceContext)
+            connectBarViewModel.applySuggestedTo(destination)
+            connectBarViewModel.validate()
+            syncLegacyFieldsFromConnectBar()
+            let intent = connectBarViewModel.buildIntent(sourceContext: sourceContext)
+            return await runNodePromptRelayWithRetry(intent: intent, override: teller)
+        }
+    }
+
+    private func handleStrategyLadderOutcome(
+        _ outcome: ConnectStrategyRunner.Outcome,
+        destination: String,
+        rungCount: Int
+    ) {
+        switch outcome {
+        case .connected:
+            connectBarViewModel.endAutoAttempting()
+        case .refused(let detail):
+            connectBarViewModel.endAutoAttempting()
+            connectBarViewModel.markFailed(reason: .connectRejected, detail: detail)
+            updateActiveSessionRecordState("Failed")
+            client.appendSystemNotification(
+                "\(destination) answered and declined (\(detail)) — stopping rather than knocking on other doors.")
+        case .exhausted:
+            connectBarViewModel.endAutoAttempting()
+            if case .failed = connectBarViewModel.barState {} else {
+                connectBarViewModel.markFailed(
+                    reason: .timeout,
+                    detail: "Tried every way this station knows (\(rungCount)) — none got through.")
+            }
+        case .cancelled:
+            connectBarViewModel.endAutoAttempting()
+            updateActiveSessionRecordState("Cancelled")
         }
     }
 
@@ -2851,21 +2969,6 @@ struct TerminalView: View {
             txViewModel.forceDisconnect()
             connectBarViewModel.markDisconnected()
             updateActiveSessionRecordState("Disconnected")
-        }
-    }
-
-    private func autoAttemptStatusText(step: ConnectAttemptStep, attemptIndex: Int, totalAttempts: Int) -> String {
-        switch step {
-        case .ax25ViaDigis(let digis):
-            if digis.isEmpty {
-                return "Trying \(attemptIndex)/\(totalAttempts): direct"
-            }
-            return "Trying \(attemptIndex)/\(totalAttempts): via \(formatViaPath(digis))"
-        case .netrom(let nextHopOverride):
-            if let nextHopOverride, !nextHopOverride.isEmpty {
-                return "Trying \(attemptIndex)/\(totalAttempts): next hop \(nextHopOverride)"
-            }
-            return "Trying \(attemptIndex)/\(totalAttempts): next hop Auto"
         }
     }
 
@@ -2927,32 +3030,11 @@ struct TerminalView: View {
         }
     }
 
-    private func handleAutoAttemptRunnerResult(_ result: ConnectAttemptRunnerResult) {
-        switch result.outcome {
-        case .success:
-            connectBarViewModel.endAutoAttempting()
-        case .failed:
-            connectBarViewModel.endAutoAttempting()
-            if case .failed = connectBarViewModel.barState {
-                return
-            }
-            connectBarViewModel.markFailed(reason: .timeout, detail: "Auto connect attempts exhausted.")
-        case .cancelled:
-            connectBarViewModel.endAutoAttempting()
-            updateActiveSessionRecordState("Cancelled")
-        case .unavailable(let message):
-            connectBarViewModel.endAutoAttempting()
-            connectBarViewModel.markFailed(reason: .unknown, detail: message)
-            updateActiveSessionRecordState("Failed")
-        case .noPlan:
-            connectBarViewModel.endAutoAttempting()
-        }
-    }
-
     private func executeAutoAttemptStep(
         _ step: ConnectAttemptStep,
         destination: String,
-        sourceContext: ConnectSourceContext
+        sourceContext: ConnectSourceContext,
+        timeoutSeconds: TimeInterval = 45
     ) async -> ConnectAttemptStepResult {
         if Task.isCancelled {
             return .cancelled
@@ -2960,7 +3042,7 @@ struct TerminalView: View {
 
         switch step {
         case .ax25ViaDigis(let digis):
-            connectBarViewModel.setMode(.ax25ViaDigi, for: sourceContext)
+            connectBarViewModel.setMode(digis.isEmpty ? .ax25 : .ax25ViaDigi, for: sourceContext)
             connectBarViewModel.applySuggestedTo(destination)
             connectBarViewModel.applyPathPreset(digis)
             syncLegacyFieldsFromConnectBar()
@@ -2971,7 +3053,7 @@ struct TerminalView: View {
                 updateActiveSessionRecordState("Failed")
                 return .failed
             }
-            return await executeAX25AutoAttempt(intent: intent, digis: digis)
+            return await executeAX25AutoAttempt(intent: intent, digis: digis, timeoutSeconds: timeoutSeconds)
 
         case .netrom(let nextHopOverride):
             connectBarViewModel.setMode(.netrom, for: sourceContext)
@@ -2990,7 +3072,11 @@ struct TerminalView: View {
         }
     }
 
-    private func executeAX25AutoAttempt(intent: ConnectIntent, digis: [String]) async -> ConnectAttemptStepResult {
+    private func executeAX25AutoAttempt(
+        intent: ConnectIntent,
+        digis: [String],
+        timeoutSeconds: TimeInterval = 45
+    ) async -> ConnectAttemptStepResult {
         upsertSessionRecord(intent: intent, statusText: "Connecting")
         connectBarViewModel.markConnecting()
 
@@ -3016,7 +3102,7 @@ struct TerminalView: View {
             ])
         }
 
-        let waitResult = await waitForAX25ConnectOutcome(destination: intent.normalizedTo, digis: digis, timeoutSeconds: 45)
+        let waitResult = await waitForAX25ConnectOutcome(destination: intent.normalizedTo, digis: digis, timeoutSeconds: timeoutSeconds)
         switch waitResult {
         case .success:
             connectBarViewModel.recordAttempt(intent: intent, result: .success)
@@ -3063,7 +3149,14 @@ struct TerminalView: View {
     ///
     /// - Returns: the attempt's result, or nil meaning "fall back to the
     ///   command-prompt relay" — no route known, or no answer in time.
-    private func attemptNativeNetRomCircuit(intent: ConnectIntent) async -> ConnectAttemptStepResult? {
+    /// - Parameter announceFallback: whether a nil return should tell the
+    ///   operator the prompt relay is coming next. True for the legacy
+    ///   native-then-relay path; false when the strategy ladder calls this
+    ///   as one rung, because what runs next is the planner's decision.
+    private func attemptNativeNetRomCircuit(
+        intent: ConnectIntent,
+        announceFallback: Bool = true
+    ) async -> ConnectAttemptStepResult? {
         let driver = sessionCoordinator.netRomDriver
         let target = CallsignNormalizer.toAddress(intent.normalizedTo)
 
@@ -3103,10 +3196,14 @@ struct TerminalView: View {
             TxLog.debug(.session, "Native NET/ROM unavailable, falling back to prompt relay", [
                 "destination": intent.normalizedTo, "reason": reason.operatorText
             ])
-            client.appendSystemNotification(
-                reason.operatorText
-                + " Asking a node to connect on our behalf instead — its menus will "
-                + "appear below, because that method talks to node command prompts.")
+            if announceFallback {
+                client.appendSystemNotification(
+                    reason.operatorText
+                    + " Asking a node to connect on our behalf instead — its menus will "
+                    + "appear below, because that method talks to node command prompts.")
+            } else {
+                client.appendSystemNotification(reason.operatorText)
+            }
             return nil
         }
 
@@ -3177,11 +3274,12 @@ struct TerminalView: View {
                     + "have nowhere to go — turn on \"Announce this station to the "
                     + "network\" in Transmission settings if you want circuits to "
                     + "work here."
+            let fallbackText = announceFallback
+                ? " Asking a node to connect on our behalf instead — its menus will appear below."
+                : ""
             client.appendSystemNotification(
                 "\(intent.normalizedTo.uppercased()) did not answer as a NET/ROM node "
-                + "(\(detail))." + advice
-                + " Asking a node to connect on our behalf instead — its menus will "
-                + "appear below.")
+                + "(\(detail))." + advice + fallbackText)
             return nil
         }
     }
@@ -3245,7 +3343,12 @@ struct TerminalView: View {
         // Real NET/ROM first. Only when the network cannot carry a circuit
         // do we fall back to driving node command prompts.
         if let native = await attemptNativeNetRomCircuit(intent: intent) { return native }
+        return await runNodePromptRelayWithRetry(intent: intent, override: override)
+    }
 
+    /// The prompt relay with its one justified retry — shared by the legacy
+    /// native-then-relay path and the strategy ladder's relay rung.
+    private func runNodePromptRelayWithRetry(intent: ConnectIntent, override: String?) async -> ConnectAttemptStepResult {
         let first = await runNodePromptRelay(intent: intent, override: override)
 
         // One retry, and only for the one failure that is not a failure: a
