@@ -103,9 +103,11 @@ nonisolated struct NodeProfile: Equatable, Sendable {
             case .bulletinBoard:
                 return "It identified itself as running a bulletin board."
             case .relay:
-                return "It declared itself a relay (/R): connect to it, then ask it to "
-                    + "connect onward, each hop running its own acknowledgements. Unlike "
-                    + "a digipeater, it carries the connection, not just the frames."
+                return "It declared itself a relay (/R). Many operators use the word as "
+                    + "a synonym for digipeater; declared beside a separate digipeater "
+                    + "entry it usually means connect-through relaying — connect to it, "
+                    + "then ask it to connect onward, each hop acknowledging its own "
+                    + "traffic. The declaration alone does not say which."
             case .winlinkGateway:
                 return "A Winlink session has been attempted or completed with it."
             }
