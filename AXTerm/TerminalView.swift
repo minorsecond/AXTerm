@@ -3431,7 +3431,18 @@ struct TerminalView: View {
             destination: intent.normalizedTo,
             teller: nextHop,
             routeLookup: { [weak client] station in
-                client?.netRomIntegration?.bestRouteTo(station)?.origin
+                if let origin = client?.netRomIntegration?.bestRouteTo(station)?.origin {
+                    return origin
+                }
+                // bestRouteTo filters by TTL — right for routing, wrong for
+                // chain planning: the harvested COSCO route scraped this
+                // morning is "expired" by evening, and the walk found
+                // nothing behind the alias (field capture 2026-08-28,
+                // second run). The alias directory still remembers who
+                // *listed* the station, and a remembered signpost beats
+                // dialling a name we cannot hear — the relay proves every
+                // hop live anyway.
+                return nodeAliases.directory.tellerClaims(for: station).first?.teller
             },
             aliasResolve: { nodeAliases.directory.callsign(for: $0) }
         )
@@ -3852,7 +3863,18 @@ struct TerminalView: View {
             destination: intent.normalizedTo,
             teller: nextHop,
             routeLookup: { [weak client] station in
-                client?.netRomIntegration?.bestRouteTo(station)?.origin
+                if let origin = client?.netRomIntegration?.bestRouteTo(station)?.origin {
+                    return origin
+                }
+                // bestRouteTo filters by TTL — right for routing, wrong for
+                // chain planning: the harvested COSCO route scraped this
+                // morning is "expired" by evening, and the walk found
+                // nothing behind the alias (field capture 2026-08-28,
+                // second run). The alias directory still remembers who
+                // *listed* the station, and a remembered signpost beats
+                // dialling a name we cannot hear — the relay proves every
+                // hop live anyway.
+                return nodeAliases.directory.tellerClaims(for: station).first?.teller
             },
             aliasResolve: { nodeAliases.directory.callsign(for: $0) }
         )
