@@ -164,6 +164,10 @@ final class NetRomIntegration {
         let normalizedFrom = CallsignValidator.normalize(rawFrom)
         let observedQuality = linkQualityForNeighbor(normalizedFrom)
 
+        // allowedRouteSources deliberately excludes "harvested" (and "inferred")
+        // in both branches below: hearing the anchor node on the air proves the
+        // anchor is alive, not that the table we scraped from it is still true.
+        // Harvested freshness renews only when a ROUTES listing is re-scraped.
         switch mode {
         case .classic:
             // Classic mode: only direct observations become neighbors
@@ -313,6 +317,12 @@ final class NetRomIntegration {
     }
 
     /// Get routes filtered by mode.
+    ///
+    /// "harvested" routes (scraped from a node's own ROUTES listing) appear in
+    /// hybrid mode only — deliberately. Classic mode is the protocol-faithful
+    /// view and a scraped table is not protocol traffic; inference mode is the
+    /// traffic-derived view and a scrape is not traffic. Hybrid already
+    /// returns everything, so harvested rides along with no extra filter.
     func currentRoutes(forMode mode: NetRomRoutingMode) -> [RouteInfo] {
         let all = router.currentRoutes()
         switch mode {

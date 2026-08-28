@@ -805,6 +805,7 @@ struct SourceTypeBadge: View {
         case "classic": return "Classic"
         case "inferred": return "Inferred"
         case "broadcast": return "Broadcast"
+        case "harvested": return "Harvested"
         default: return sourceType.capitalized
         }
     }
@@ -814,6 +815,7 @@ struct SourceTypeBadge: View {
         case "classic": return "radio"
         case "inferred": return "wand.and.stars"
         case "broadcast": return "megaphone"
+        case "harvested": return "tray.and.arrow.down"
         default: return "questionmark.circle"
         }
     }
@@ -826,6 +828,8 @@ struct SourceTypeBadge: View {
             return "Inferred: Deduced from packet patterns without explicit announcement"
         case "broadcast":
             return "Broadcast: Received via NET/ROM routing broadcast"
+        case "harvested":
+            return "Harvested: Read from a node's own ROUTES table during a session. Second-hand — used for this station's routing, never advertised."
         default:
             return "Source type: \(sourceType)"
         }

@@ -196,12 +196,17 @@ struct RouteDisplayInfo: Identifiable, Hashable {
             let reversedHeard = Array(info.path.dropLast().reversed())
             self.heardPath = reversedHeard
             self.heardPathSummary = reversedHeard.isEmpty ? "Direct" : reversedHeard.joined(separator: " → ")
+        } else if info.sourceType == "harvested" {
+            self.heardPath = [info.origin]
+            self.heardPathSummary = "Scraped from \(info.origin)'s ROUTES table"
         } else {
             self.heardPath = [info.origin]
             self.heardPathSummary = "Broadcast from \(info.origin)"
         }
         self.hopCount = max(1, info.path.count)
-        self.hopCountKnown = info.sourceType == "inferred"
+        // Inferred paths were watched hop by hop; harvested paths are exactly
+        // [anchor, neighbor] by construction. Both are fully known.
+        self.hopCountKnown = info.sourceType == "inferred" || info.sourceType == "harvested"
         self.lastUpdated = info.lastUpdated
         self.lastUpdatedRelative = Self.formatRelativeTime(info.lastUpdated, now: now)
         self.isLearningInterval = isLearning
@@ -223,6 +228,9 @@ struct RouteDisplayInfo: Identifiable, Hashable {
     var heardPathTooltip: String {
         if sourceType == "inferred" {
             return "How traffic from \(destination) reached you: \(heardPathSummary)"
+        }
+        if sourceType == "harvested" {
+            return "Read from \(nextHop)'s own ROUTES listing during a connected session — \(nextHop)'s claim about its link to \(destination), scaled by this station's link to \(nextHop). Never advertised onward."
         }
         return "Last explicit routing advertisement heard from \(nextHop)"
     }
@@ -496,8 +504,10 @@ final class NetRomRoutesViewModel: ObservableObject {
     /// - Parameter route: The route info.
     /// - Returns: Tuple of (TTL in seconds, whether we're still learning the interval).
     private func routeTTL(for route: RouteInfo) -> (ttl: TimeInterval, isLearning: Bool) {
-        // Inferred routes use activity decay like neighbors - no broadcast interval to track
-        if route.sourceType == "inferred" {
+        // Inferred and harvested routes use activity decay like neighbors —
+        // neither has a broadcast interval to adapt to (harvested came from a
+        // scraped ROUTES table, not from periodic advertisements).
+        if route.sourceType == "inferred" || route.sourceType == "harvested" {
             return (neighborStaleTTLSeconds, false)
         }
 
@@ -991,6 +1001,12 @@ final class NetRomRoutesViewModel: ObservableObject {
             expect(route.path.allSatisfy { isDisplayableNode($0) }, "Invalid route path node in \(route.id)")
             expect(route.hopCount >= 1, "Invalid hop count for route \(route.id): \(route.hopCount)")
             expect((0...255).contains(route.quality), "Route quality out of range: \(route.id)=\(route.quality)")
+            // Mode-independent: any string outside the known vocabulary means a
+            // producer invented a source without wiring the display ripples.
+            expect(
+                ["classic", "broadcast", "inferred", "harvested"].contains(route.sourceType),
+                "Unknown route source \(route.sourceType) for \(route.id)"
+            )
             if mode == .classic {
                 expect(route.sourceType == "classic" || route.sourceType == "broadcast", "Classic mode leaked route source \(route.sourceType) for \(route.id)")
             } else if mode == .inference {

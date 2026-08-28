@@ -262,9 +262,14 @@ nonisolated final class NetRomRouter {
             // *broadcast* routes. Inferred routes are acceptance-gated by evidence
             // in the inference layer (inferredMinimumQuality) and store the honest
             // combined value even when it is small — promoting them to the floor
-            // made every weak route display the same fabricated number.
-            let isInferred = advertised.sourceType == "inferred"
-            if !isInferred {
+            // made every weak route display the same fabricated number. Harvested
+            // routes get the same exemption: on a NODES-silent channel a weak
+            // scraped route is the only route there is, and storing the honest
+            // small number beats discarding the only way in — tier ranking keeps
+            // real broadcasts on top regardless.
+            let advertisedSourceType = advertised.sourceType.isEmpty ? "broadcast" : advertised.sourceType
+            let isBroadcastClass = Self.sourceTier(advertisedSourceType) == 2
+            if isBroadcastClass {
                 guard combined >= config.minimumRouteQuality else {
                     #if DEBUG
                     print("[NETROM:ROUTER]   Route to \(normalizedDestination) rejected: quality \(combined) < min \(config.minimumRouteQuality)")
@@ -281,7 +286,7 @@ nonisolated final class NetRomRouter {
             if normalizedPath.contains(localCallsign) { continue }
 
             // Determine sourceType: use the advertised sourceType, but ensure inferred routes stay inferred
-            let effectiveSourceType = advertised.sourceType.isEmpty ? "broadcast" : advertised.sourceType
+            let effectiveSourceType = advertisedSourceType
 
             #if DEBUG
             print("[NETROM:ROUTER]   ✓ Storing route: \(normalizedDestination) via \(normalizedOrigin) quality=\(storedQuality) source=\(effectiveSourceType)")
@@ -347,9 +352,19 @@ nonisolated final class NetRomRouter {
     func candidateRoutes(to destination: String, currentDate: Date = Date()) -> [RouteInfo] {
         guard let normalized = normalize(destination),
               let bucket = routesByDestination[normalized] else { return [] }
+        let cutoff = currentDate.addingTimeInterval(-config.routeTTLSeconds)
         var seen = Set<String>()
         return bucket
+            // Same TTL cutoff as bestRouteTo/hasRoute. Without it, auto-try
+            // walked routes the rest of the router had already declared dead —
+            // spending a full attempt timeout per expired entry.
+            .filter { $0.lastHeard >= cutoff }
             .sorted { lhs, rhs in
+                // Tier first (see sourceTier): a live broadcast route is
+                // attempted before scraped or guessed ones of any quality.
+                let lhsTier = Self.sourceTier(lhs.sourceType)
+                let rhsTier = Self.sourceTier(rhs.sourceType)
+                if lhsTier != rhsTier { return lhsTier > rhsTier }
                 if lhs.quality != rhs.quality { return lhs.quality > rhs.quality }
                 // Deterministic tie-break (CLAUDE.md §9): freshest, then
                 // alphabetical, so the same table always yields the same
@@ -402,6 +417,30 @@ nonisolated final class NetRomRouter {
         // Check if we have a preferred route for this destination
         if let preferred = preferredRoutes[normalized],
            let preferredRoute = candidates.first(where: { $0.origin == preferred.origin }) {
+            // Hysteresis exists to stop flapping between *comparable*
+            // measurements; cross-tier numbers are not comparable. If a
+            // higher-tier route appeared (a real broadcast arriving on top of
+            // a harvested or inferred pick), holding the old pick because the
+            // newcomer's quality didn't clear a margin would invert the
+            // source-priority rule — so tier preempts immediately, and the
+            // margin/hold logic below only ever arbitrates within a tier.
+            if Self.sourceTier(absoluteBest.sourceType) > Self.sourceTier(preferredRoute.sourceType) {
+                preferredRoutes[normalized] = PreferredRoute(origin: absoluteBest.origin, selectedAt: currentDate)
+                Telemetry.breadcrumb(
+                    category: "netrom.routing",
+                    message: "Next hop switched — higher-tier route appeared",
+                    data: [
+                        "destination": normalized,
+                        "from": preferredRoute.origin,
+                        "fromSource": preferredRoute.sourceType,
+                        "to": absoluteBest.origin,
+                        "toSource": absoluteBest.sourceType,
+                        "quality": absoluteBest.quality
+                    ],
+                    level: .info
+                )
+                return absoluteBest
+            }
             // Preferred route is still valid — check if the best candidate is significantly better
             let marginThreshold = Double(preferredRoute.quality) * (1.0 + config.hysteresisMargin)
             let holdTimeElapsed = currentDate.timeIntervalSince(preferred.selectedAt) >= config.hysteresisHoldSeconds
@@ -616,20 +655,23 @@ nonisolated final class NetRomRouter {
         if let existingIndex = bucket.firstIndex(where: { $0.origin == origin }) {
             var existing = bucket[existingIndex]
             // Classic NET/ROM: each broadcast carries the node's *current* quality,
-            // so a fresh update replaces the figure — max() made route quality a
-            // high-water mark that could never decrease. Inferred evidence may only
-            // corroborate (raise) a broadcast-sourced figure, never degrade it.
-            let existingIsBroadcastClass = existing.sourceType != "inferred"
-            if existingIsBroadcastClass && sourceType == "inferred" {
+            // so a same-or-higher-tier update replaces the figure — max() made
+            // route quality a high-water mark that could never decrease.
+            // Lower-tier evidence (inferred under harvested, anything under
+            // broadcast) may only corroborate (raise) the figure, never degrade
+            // it, and never rewrites the path or the sourceType: the better
+            // claim owns the record, the weaker one at most agrees with it.
+            let incomingTier = Self.sourceTier(sourceType)
+            let existingTier = Self.sourceTier(existing.sourceType)
+            if incomingTier < existingTier {
                 existing.quality = max(existing.quality, quality)
+                existing.lastHeard = timestamp
+                existing.obsolescenceCount = 1
             } else {
                 existing.quality = quality
-            }
-            existing.path = path
-            existing.lastHeard = timestamp
-            existing.obsolescenceCount = 1
-            // Don't overwrite classic/broadcast with inferred
-            if existing.sourceType == "inferred" && sourceType != "inferred" {
+                existing.path = path
+                existing.lastHeard = timestamp
+                existing.obsolescenceCount = 1
                 existing.sourceType = sourceType
             }
             bucket[existingIndex] = existing
@@ -666,6 +708,24 @@ nonisolated final class NetRomRouter {
         routesByDestination[destination] = bucket
     }
 
+    /// Trust tier for a route source: broadcast/classic > harvested > inferred.
+    ///
+    /// Quality numbers are not comparable across tiers — a broadcast figure is
+    /// the protocol's own computation, a harvested figure is scaled hearsay
+    /// read out of one node's ROUTES table, and an inferred figure is a
+    /// traffic-pattern guess — so tier compares first and quality only decides
+    /// within a tier. This is what "NODES broadcasts are first priority when
+    /// the network has them" means in code: on a channel with real broadcasts
+    /// they win outright, and on a silent channel (this operator's home
+    /// network has zero PID-0xCF traffic) the lower tiers are all there is.
+    static func sourceTier(_ sourceType: String) -> Int {
+        switch sourceType {
+        case "broadcast", "classic": return 2
+        case "harvested": return 1
+        default: return 0
+        }
+    }
+
     private func combinedQuality(broadcastQuality: Int, pathQuality: Int) -> Int {
         let normalizedBroadcast = clampQuality(broadcastQuality)
         let normalizedPath = clampQuality(pathQuality)
@@ -678,6 +738,14 @@ nonisolated final class NetRomRouter {
     }
 
     private func routeSort(lhs: RouteRecord, rhs: RouteRecord) -> Bool {
+        // Tier before quality — this ordering also guards the
+        // maxRoutesPerDestination eviction in storeRoute: a full bucket must
+        // never drop a broadcast route to keep two harvested ones.
+        let lhsTier = Self.sourceTier(lhs.sourceType)
+        let rhsTier = Self.sourceTier(rhs.sourceType)
+        if lhsTier != rhsTier {
+            return lhsTier > rhsTier
+        }
         if lhs.quality != rhs.quality {
             return lhs.quality > rhs.quality
         }

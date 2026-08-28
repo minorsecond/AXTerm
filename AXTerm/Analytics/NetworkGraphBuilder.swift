@@ -232,6 +232,9 @@ nonisolated struct NetworkGraphBuilder {
             var originStats = nodeStats[originKey] ?? seededStats(for: originKey)
             originStats.routes += 1
             originStats.ssids.insert(route.origin)
+            // Deliberately excludes "harvested": a scraped ROUTES table proves
+            // the anchor *can* route, not that we heard routing traffic from
+            // it. isOfficial means the latter and stays strict.
             if route.sourceType == "broadcast" || route.sourceType == "classic" {
                 originStats.isOfficial = true
             }

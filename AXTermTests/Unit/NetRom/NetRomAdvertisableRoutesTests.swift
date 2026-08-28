@@ -38,6 +38,21 @@ final class NetRomAdvertisableRoutesTests: XCTestCase {
         XCTAssertEqual(decision.withheld.first?.destination, "KN6VV-1")
     }
 
+    /// A harvested route was read out of another node's ROUTES table.
+    /// Advertising it would let one operator's scrape propagate through the
+    /// network as if it were that node's own broadcast — withheld outright,
+    /// even through a live neighbour, even at full quality.
+    func testAHarvestedRouteIsNeverAdvertised() {
+        let decision = NetRomAdvertisableRoutes.decide(
+            routes: [route("COSCO", via: "KB5YZB-7", quality: 192, source: "harvested")],
+            neighbors: [neighbor("KB5YZB-7")],
+            now: now)
+        XCTAssertTrue(decision.advertisable.isEmpty)
+        XCTAssertEqual(decision.withheld.first?.destination, "COSCO")
+        XCTAssertTrue(decision.withheld.first?.reason.contains("second-hand") ?? false,
+                      "the withheld reason should say why: \(decision.withheld.first?.reason ?? "nil")")
+    }
+
     func testARouteThroughALiveNeighbourIsAdvertised() {
         let decision = NetRomAdvertisableRoutes.decide(
             routes: [route("KB5YZB-1", via: "DRLNOD", quality: 23)],

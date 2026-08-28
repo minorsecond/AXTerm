@@ -76,6 +76,16 @@ nonisolated enum NetRomAdvertisableRoutes {
         var withheld: [(destination: String, reason: String)] = []
 
         for route in routes {
+            // Harvested routes are excluded outright, not merely quality-capped:
+            // they were read out of another node's ROUTES table, and advertising
+            // them would let one operator's scrape propagate through the network
+            // as if it were that node's own broadcast. Second-hand knowledge is
+            // not ours to promise at any quality.
+            guard route.sourceType != "harvested" else {
+                withheld.append((route.destination,
+                                 "harvested from \(route.origin)'s table — second-hand knowledge is not ours to advertise"))
+                continue
+            }
             let hop = normalize(route.origin)
             guard let neighbor = live[hop] else {
                 withheld.append((route.destination,
