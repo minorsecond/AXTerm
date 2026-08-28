@@ -120,48 +120,34 @@ struct NodeProfileView: View {
         }
     }
 
-    /// The avatar: a disc whose hue is a stable hash of the base callsign —
-    /// so a station keeps its colour everywhere it appears — carrying a glyph
-    /// for what the station *is*. Destination addresses go grey: they are not
-    /// anyone, and colour would suggest otherwise.
+    /// The avatar: a quiet tinted disc carrying a glyph for what the station
+    /// *is*. One accent colour, matching the alias chip and role icons — a
+    /// first cut hashed the callsign into a hue, and a page of saturated
+    /// party-balloon discs read as a toy, not a terminal. Grey for a
+    /// destination address (not anyone) and for a station nothing is known
+    /// about (no false vitality).
     private var monogram: some View {
         ZStack {
-            Circle().fill(monogramGradient)
+            Circle().fill(monogramIsMuted
+                          ? AnyShapeStyle(.quaternary)
+                          : AnyShapeStyle(.tint.opacity(0.12)))
             Image(systemName: monogramSymbol)
-                .font(.system(size: 23, weight: .medium))
-                .foregroundStyle(.white)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(monogramIsMuted
+                                 ? AnyShapeStyle(.secondary)
+                                 : AnyShapeStyle(.tint))
         }
-        .frame(width: 54, height: 54)
+        .frame(width: 48, height: 48)
         .accessibilityHidden(true)
     }
 
-    private var monogramGradient: LinearGradient {
-        if profile.isServiceEndpoint {
-            return LinearGradient(colors: [Color.gray.opacity(0.75), Color.gray],
-                                  startPoint: .topLeading, endPoint: .bottomTrailing)
-        }
-        let hue = Self.identityHue(for: profile.baseCallsign)
-        return LinearGradient(
-            colors: [Color(hue: hue, saturation: 0.52, brightness: 0.88),
-                     Color(hue: hue, saturation: 0.74, brightness: 0.60)],
-            startPoint: .topLeading, endPoint: .bottomTrailing)
+    private var monogramIsMuted: Bool {
+        profile.isServiceEndpoint || profile.isBare
     }
 
     private var monogramSymbol: String {
         if profile.isServiceEndpoint { return "signpost.right.and.left" }
         return profile.roles.first?.symbol ?? "antenna.radiowaves.left.and.right"
-    }
-
-    /// FNV-1a over the base callsign, folded into a hue. Deterministic so a
-    /// station's colour never changes between launches, and every SSID of one
-    /// licence shares it — the same operator should look like the same person.
-    nonisolated static func identityHue(for baseCallsign: String) -> Double {
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in baseCallsign.uppercased().utf8 {
-            hash ^= UInt64(byte)
-            hash = hash &* 0x0000_0100_0000_01b3
-        }
-        return Double(hash % 360) / 360.0
     }
 
     /// A live-ness dot beside how recently the station was heard. The
@@ -281,7 +267,7 @@ struct NodeProfileView: View {
     // MARK: - Sections
 
     private var rolesSection: some View {
-        section("Roles", systemImage: "person.badge.shield.checkmark", tint: .indigo) {
+        section("Roles", systemImage: "person.badge.shield.checkmark") {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(profile.roles, id: \.self) { role in
                     HStack(alignment: .top, spacing: 10) {
@@ -401,7 +387,7 @@ struct NodeProfileView: View {
         // Frame count and relative recency already lead the page as tiles;
         // this section carries what the tiles compress away — the exact
         // timestamp and the path the last frame took.
-        section("Activity", systemImage: "waveform", tint: .orange) {
+        section("Activity", systemImage: "waveform") {
             VStack(alignment: .leading, spacing: 6) {
                 if let last = activity.lastHeard {
                     row("Last heard", last.formatted(date: .abbreviated, time: .shortened))
@@ -414,7 +400,7 @@ struct NodeProfileView: View {
     }
 
     private func placementSection(_ placement: NodeProfile.Placement) -> some View {
-        section("Position", systemImage: "mappin.and.ellipse", tint: .red) {
+        section("Position", systemImage: "mappin.and.ellipse") {
             VStack(alignment: .leading, spacing: 6) {
                 if let distance = placement.distanceKilometres {
                     let miles = GreatCircle.miles(fromKilometres: distance)
@@ -460,7 +446,7 @@ struct NodeProfileView: View {
     /// have read as a mediocre path and sent the operator looking at the
     /// wrong end.
     private var linkSection: some View {
-        section("Link quality", systemImage: "arrow.left.arrow.right", tint: .blue) {
+        section("Link quality", systemImage: "arrow.left.arrow.right") {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(profile.links) { link in
                     VStack(alignment: .leading, spacing: 6) {
@@ -597,7 +583,7 @@ struct NodeProfileView: View {
     /// operator does not need to know what an articulation point is; they
     /// need to know that if this station drops, four others go with it.
     private func topologySection(_ topology: NodeProfile.Topology) -> some View {
-        section("In the Network", systemImage: "point.3.filled.connected.trianglepath.dotted", tint: .purple) {
+        section("In the Network", systemImage: "point.3.filled.connected.trianglepath.dotted") {
             VStack(alignment: .leading, spacing: 8) {
                 row("Direct links", "\(topology.neighbourCount)")
                     .help("Stations this one has been observed exchanging frames with, counting digipeated paths. Built from watched traffic, not from anything the station announced.")
@@ -635,7 +621,7 @@ struct NodeProfileView: View {
     }
 
     private var siblingSection: some View {
-        section("Other SSIDs", systemImage: "person.2", tint: .teal) {
+        section("Other SSIDs", systemImage: "person.2") {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(profile.siblings) { sibling in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -669,7 +655,7 @@ struct NodeProfileView: View {
     }
 
     private func netromSection(_ netrom: NodeProfile.NetRom) -> some View {
-        section("NET/ROM", systemImage: "point.3.connected.trianglepath.dotted", tint: .green) {
+        section("NET/ROM", systemImage: "point.3.connected.trianglepath.dotted") {
             VStack(alignment: .leading, spacing: 6) {
                 if let quality = netrom.neighbourQuality {
                     row("Neighbour quality", "\(quality) / 255")
@@ -698,7 +684,7 @@ struct NodeProfileView: View {
     }
 
     private func winlinkSection(_ quality: WinlinkLinkQuality) -> some View {
-        section("Winlink", systemImage: "envelope.arrow.triangle.branch", tint: .cyan) {
+        section("Winlink", systemImage: "envelope.arrow.triangle.branch") {
             VStack(alignment: .leading, spacing: 6) {
                 row("Sessions", "\(quality.completed) completed of \(quality.attempts) attempted")
                 if let rate = quality.answerRate {
@@ -716,7 +702,7 @@ struct NodeProfileView: View {
     }
 
     private var licenceSection: some View {
-        section("Licence", systemImage: "person.text.rectangle", tint: .gray) {
+        section("Licence", systemImage: "person.text.rectangle") {
             VStack(alignment: .leading, spacing: 6) {
                 if let name = profile.name { row("Name", name) }
                 if let licenseClass = profile.licenseClass { row("Class", licenseClass) }
@@ -812,22 +798,14 @@ struct NodeProfileView: View {
 
     @ViewBuilder
     private func section<Content: View>(_ title: String, systemImage: String,
-                                        tint: Color = .accentColor,
                                         @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                // The System Settings idiom: a small filled square carrying
-                // the glyph, so sections are told apart by colour before
-                // they are read.
-                Image(systemName: systemImage)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 22, height: 22)
-                    .background(tint.gradient,
-                                in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-            }
+            // Deliberately quiet: a tinted-square-per-section variant was
+            // tried and a page of them read as a carnival. Colour in this
+            // view is reserved for meaning — freshness, quality, warnings.
+            Label(title, systemImage: systemImage)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
