@@ -149,10 +149,11 @@ struct TransmissionSettingsView: View {
                           + "into its own routing table.")
 
                 if settings.netRomAdvertiseSelf {
-                    Stepper(
-                        "Announce every \(settings.netRomBroadcastMinutes) min",
+                    durationRow(
+                        "Announce every",
                         value: $settings.netRomBroadcastMinutes,
-                        in: 5...240, step: 5
+                        presets: [5, 10, 15, 20, 30, 45, 60, 90, 120, 240],
+                        label: Self.minutesLabel
                     )
                     .onChange(of: settings.netRomBroadcastMinutes) { _, _ in applyNetRomSettings() }
                     .help("BPQ's default is 60 minutes. Shorter intervals spend more of a "
@@ -224,9 +225,13 @@ struct TransmissionSettingsView: View {
                           + "directly. Each hop is another transmission on a shared "
                           + "channel, so two is usually plenty.")
 
-                    Stepper("Send every \(settings.beaconMinutes) min",
-                            value: $settings.beaconMinutes, in: 10...240, step: 5)
-                        .onChange(of: settings.beaconMinutes) { _, _ in applyNetRomSettings() }
+                    durationRow(
+                        "Send every",
+                        value: $settings.beaconMinutes,
+                        presets: [10, 15, 20, 30, 45, 60, 90, 120, 240],
+                        label: Self.minutesLabel
+                    )
+                    .onChange(of: settings.beaconMinutes) { _, _ in applyNetRomSettings() }
 
                     if case let .failure(problem) = BeaconPlan.plan(
                         text: settings.beaconText, path: settings.beaconPath) {
@@ -278,21 +283,33 @@ struct TransmissionSettingsView: View {
                     .help("Local time, and it may wrap past midnight. Set both the "
                           + "same for any hour.")
 
-                    Stepper("At most \(settings.pingMaxProbesPerHour) per hour",
-                            value: $settings.pingMaxProbesPerHour, in: 1...60)
-                        .onChange(of: settings.pingMaxProbesPerHour) { _, _ in applyNetRomSettings() }
-                        .help("A hard ceiling, whatever the spacing below would allow.")
+                    durationRow(
+                        "At most",
+                        value: $settings.pingMaxProbesPerHour,
+                        presets: [1, 2, 3, 4, 6, 8, 12, 20, 30, 60],
+                        label: { "\($0) per hour" }
+                    )
+                    .onChange(of: settings.pingMaxProbesPerHour) { _, _ in applyNetRomSettings() }
+                    .help("A hard ceiling, whatever the spacing below would allow.")
 
-                    Stepper("At least \(settings.pingMinSecondsBetween) s apart",
-                            value: $settings.pingMinSecondsBetween, in: 30...900, step: 30)
-                        .onChange(of: settings.pingMinSecondsBetween) { _, _ in applyNetRomSettings() }
-                        .help("Between any two probes, whoever they are for.")
+                    durationRow(
+                        "At least",
+                        value: $settings.pingMinSecondsBetween,
+                        presets: [30, 60, 90, 120, 180, 300, 600, 900],
+                        label: { "\(Self.secondsLabel($0)) apart" }
+                    )
+                    .onChange(of: settings.pingMinSecondsBetween) { _, _ in applyNetRomSettings() }
+                    .help("Between any two probes, whoever they are for.")
 
-                    Stepper("Each station at most every \(settings.pingStationCooldownMinutes) min",
-                            value: $settings.pingStationCooldownMinutes, in: 10...720, step: 10)
-                        .onChange(of: settings.pingStationCooldownMinutes) { _, _ in applyNetRomSettings() }
-                        .help("Doubles each time a station does not answer, up to a day, "
-                              + "so a silent station is asked less and less rather than more.")
+                    durationRow(
+                        "Each station at most every",
+                        value: $settings.pingStationCooldownMinutes,
+                        presets: [10, 15, 20, 30, 45, 60, 120, 240, 480, 720],
+                        label: Self.minutesLabel
+                    )
+                    .onChange(of: settings.pingStationCooldownMinutes) { _, _ in applyNetRomSettings() }
+                    .help("Doubles each time a station does not answer, up to a day, "
+                          + "so a silent station is asked less and less rather than more.")
 
                     Toggle("Also stations others are calling",
                            isOn: $settings.pingProbeStationsOthersCall)
@@ -417,6 +434,49 @@ struct TransmissionSettingsView: View {
     
     private static func hourLabel(_ hour: Int) -> String {
         String(format: "%02d:00", hour)
+    }
+
+    // MARK: Duration menus
+
+    /// A pop-up menu for a paced-transmission setting. These were Steppers,
+    /// which made wide ranges click-torture — 120 s → 900 s of probe spacing
+    /// was twenty-six clicks on a control a few pixels tall. A menu shows
+    /// every sensible choice at once, matching the hour-window pickers above.
+    @ViewBuilder
+    private func durationRow(
+        _ title: String,
+        value: Binding<Int>,
+        presets: [Int],
+        label: @escaping (Int) -> String
+    ) -> some View {
+        LabeledContent(title) {
+            Picker("", selection: value) {
+                ForEach(Self.durationMenuOptions(presets: presets,
+                                                 current: value.wrappedValue),
+                        id: \.self) { option in
+                    Text(label(option)).tag(option)
+                }
+            }
+            .labelsHidden()
+            .fixedSize()
+        }
+    }
+
+    /// A value dialed in under the old steppers (say 25 min) may not be a
+    /// preset; a macOS pop-up whose selection has no matching tag renders
+    /// blank, so the current value is spliced into the list when missing.
+    nonisolated static func durationMenuOptions(presets: [Int], current: Int) -> [Int] {
+        presets.contains(current) ? presets : (presets + [current]).sorted()
+    }
+
+    nonisolated static func minutesLabel(_ minutes: Int) -> String {
+        guard minutes >= 60, minutes.isMultiple(of: 60) else { return "\(minutes) min" }
+        return minutes == 60 ? "1 hour" : "\(minutes / 60) hours"
+    }
+
+    nonisolated static func secondsLabel(_ seconds: Int) -> String {
+        guard seconds >= 60, seconds.isMultiple(of: 60) else { return "\(seconds) s" }
+        return "\(seconds / 60) min"
     }
 
     /// What a station's probing history amounts to, in a phrase.
