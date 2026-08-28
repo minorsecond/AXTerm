@@ -109,6 +109,12 @@ nonisolated final class AX25Session: @unchecked Sendable {
     /// Each entry is (data, pid, displayInfo)
     var pendingDataQueue: [(data: Data, pid: UInt8, displayInfo: String?)] = []
 
+    /// Set when the peer answered our SABM with DM — a refusal. A refusal
+    /// is an answer, not a path failure: the connect wait loop reads this
+    /// so the strategy ladder stops instead of knocking on other doors.
+    /// Cleared at the start of every connect attempt.
+    var peerRefusedConnect: Bool = false
+
     /// T1 retransmit timer task
     var t1TimerTask: AnyCancellableTask?
 
@@ -1138,6 +1144,10 @@ final class AX25SessionManager: ObservableObject {
             return nil
         }
 
+        // A fresh attempt starts with a clean verdict — last hour's DM says
+        // nothing about a peer that may have rebooted since.
+        session.peerRefusedConnect = false
+
         // AX.25 2.2 negotiation: an unknown peer gets one XID command
         // before any SABM. Known peers use the cached outcome directly.
         if negotiateV22 {
@@ -1857,6 +1867,11 @@ final class AX25SessionManager: ObservableObject {
         }
 
         let oldState = session.state
+        // A DM while we were connecting is the peer refusing our SABM
+        // (§6.3.1) — record it before the state machine erases the context.
+        if oldState == .connecting {
+            session.peerRefusedConnect = true
+        }
         let actions = session.stateMachine.handle(event: .receivedDM)
 
         if oldState != session.state {

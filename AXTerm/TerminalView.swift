@@ -3117,6 +3117,13 @@ struct TerminalView: View {
             updateActiveSessionRecordState("Failed")
             disconnectSession(destination: intent.normalizedTo, digis: digis)
             return .failed
+        case .refused(let detail):
+            connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+            connectBarViewModel.markFailed(reason: .connectRejected, detail: detail)
+            updateActiveSessionRecordState("Refused")
+            // Nothing to tear down: the DM already ended the session on
+            // both sides.
+            return .refused(detail: detail)
         case .timeout:
             connectBarViewModel.recordAttempt(intent: intent, result: .failed)
             connectBarViewModel.markFailed(reason: .timeout, detail: "Connection timed out.")
@@ -3463,6 +3470,13 @@ struct TerminalView: View {
             connectBarViewModel.markFailed(reason: .connectRejected, detail: detail)
             updateActiveSessionRecordState("Failed")
             return .failed
+        case .refused(let detail):
+            // The relay-phase wait never produces this today; kept for
+            // exhaustiveness so a future refusal signal flows through.
+            connectBarViewModel.recordAttempt(intent: intent, result: .failed)
+            connectBarViewModel.markFailed(reason: .connectRejected, detail: detail)
+            updateActiveSessionRecordState("Refused")
+            return .refused(detail: detail)
         case .timeout:
             txViewModel.netRomRelayPhase = nil
             connectBarViewModel.recordAttempt(intent: intent, result: .failed)
@@ -3492,6 +3506,9 @@ struct TerminalView: View {
     private enum AX25AutoWaitResult {
         case success
         case failed(detail: String)
+        /// The peer answered the SABM with DM — an answer, not a path
+        /// failure, so the strategy ladder stops instead of falling through.
+        case refused(detail: String)
         case timeout
         case cancelled
     }
@@ -3513,6 +3530,9 @@ struct TerminalView: View {
 
             if let session = txViewModel.sessionManager.existingSession(for: destinationAddress, path: path)
                 ?? txViewModel.sessionManager.connectedSession(withPeer: destinationAddress) {
+                if session.peerRefusedConnect {
+                    return .refused(detail: "\(destination) answered the connect request with DM (refused).")
+                }
                 switch session.state {
                 case .connected:
                     return .success
