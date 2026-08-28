@@ -45,8 +45,12 @@ struct NodeProfileView: View {
                 } else if profile.isBare {
                     bare
                 } else {
+                    statTiles
                     if !profile.roles.isEmpty { rolesSection }
-                    if let activity = profile.activity { activitySection(activity) }
+                    if let activity = profile.activity,
+                       activity.lastHeard != nil || !activity.lastVia.isEmpty {
+                        activitySection(activity)
+                    }
                     if let placement = profile.placement { placementSection(placement) }
                     if !profile.links.isEmpty { linkSection }
                     if let topology = profile.topology, !topology.isEmpty {
@@ -75,18 +79,33 @@ struct NodeProfileView: View {
     // MARK: - Header
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // On the full page the navigation bar already shows the
-            // callsign; printing it again just below was the same word twice.
-            if presentation == .sheet {
-                Text(profile.callsign)
-                    .font(.title2.bold())
-                    .textSelection(.enabled)
-            }
-            if let subtitle = profile.subtitle {
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 14) {
+                monogram
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(profile.callsign)
+                            .font(.system(.title2, design: .rounded).weight(.bold))
+                            .textSelection(.enabled)
+                        if let alias = profile.alias {
+                            Text(alias)
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 2)
+                                .foregroundStyle(.tint)
+                                .background(.tint.opacity(0.12), in: Capsule())
+                                .help("The NET/ROM alias this station answers to.")
+                        }
+                    }
+                    if let subtitle = profile.subtitle {
+                        Text(subtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let activity = profile.activity {
+                        freshnessLine(activity)
+                    }
+                }
             }
             // Says which name led here, so an alias tap does not silently
             // become a different callsign.
@@ -99,6 +118,82 @@ struct NodeProfileView: View {
                 reachLine
             }
         }
+    }
+
+    /// The avatar: a disc whose hue is a stable hash of the base callsign —
+    /// so a station keeps its colour everywhere it appears — carrying a glyph
+    /// for what the station *is*. Destination addresses go grey: they are not
+    /// anyone, and colour would suggest otherwise.
+    private var monogram: some View {
+        ZStack {
+            Circle().fill(monogramGradient)
+            Image(systemName: monogramSymbol)
+                .font(.system(size: 23, weight: .medium))
+                .foregroundStyle(.white)
+        }
+        .frame(width: 54, height: 54)
+        .accessibilityHidden(true)
+    }
+
+    private var monogramGradient: LinearGradient {
+        if profile.isServiceEndpoint {
+            return LinearGradient(colors: [Color.gray.opacity(0.75), Color.gray],
+                                  startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
+        let hue = Self.identityHue(for: profile.baseCallsign)
+        return LinearGradient(
+            colors: [Color(hue: hue, saturation: 0.52, brightness: 0.88),
+                     Color(hue: hue, saturation: 0.74, brightness: 0.60)],
+            startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
+    private var monogramSymbol: String {
+        if profile.isServiceEndpoint { return "signpost.right.and.left" }
+        return profile.roles.first?.symbol ?? "antenna.radiowaves.left.and.right"
+    }
+
+    /// FNV-1a over the base callsign, folded into a hue. Deterministic so a
+    /// station's colour never changes between launches, and every SSID of one
+    /// licence shares it — the same operator should look like the same person.
+    nonisolated static func identityHue(for baseCallsign: String) -> Double {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in baseCallsign.uppercased().utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        return Double(hash % 360) / 360.0
+    }
+
+    /// A live-ness dot beside how recently the station was heard. The
+    /// thresholds match how the routing metrics think about recency: minutes
+    /// mean "on the air now", a couple of hours means "around today".
+    private func freshnessLine(_ activity: NodeProfile.Activity) -> some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(freshnessColor(activity.lastHeard))
+                .frame(width: 7, height: 7)
+            Text(freshnessText(activity))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 1)
+    }
+
+    private func freshnessColor(_ lastHeard: Date?) -> Color {
+        guard let lastHeard else { return .gray.opacity(0.5) }
+        let age = Date().timeIntervalSince(lastHeard)
+        if age < 15 * 60 { return .green }
+        if age < 2 * 3600 { return .yellow }
+        return .gray
+    }
+
+    private func freshnessText(_ activity: NodeProfile.Activity) -> String {
+        guard let last = activity.lastHeard else {
+            return activity.heardCount == 0
+                ? "Announced, never heard directly"
+                : "\(activity.heardCount) frames heard"
+        }
+        return "Heard \(last.formatted(.relative(presentation: .named)))"
     }
 
     /// How to get there — for a station harvested from a node's table this is
@@ -186,13 +281,15 @@ struct NodeProfileView: View {
     // MARK: - Sections
 
     private var rolesSection: some View {
-        section("Roles", systemImage: "person.badge.shield.checkmark") {
+        section("Roles", systemImage: "person.badge.shield.checkmark", tint: .indigo) {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(profile.roles, id: \.self) { role in
-                    HStack(alignment: .top, spacing: 8) {
+                    HStack(alignment: .top, spacing: 10) {
                         Image(systemName: role.symbol)
-                            .frame(width: 20)
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(.tint)
+                            .frame(width: 26, height: 26)
+                            .background(.tint.opacity(0.12), in: Circle())
                         VStack(alignment: .leading, spacing: 1) {
                             Text(role.label).font(.subheadline.weight(.medium))
                             // Every role says what earned it — and for
@@ -209,10 +306,103 @@ struct NodeProfileView: View {
         }
     }
 
+    // MARK: - Stat tiles
+
+    private struct StatTile: Identifiable {
+        let id: String
+        let label: String
+        let value: String
+        let detail: String?
+        let symbol: String
+        let tint: Color
+    }
+
+    /// The numbers an operator scans for before reading anything: how much,
+    /// how recently, how far, how good. Tiles rather than rows so the answer
+    /// is legible at a glance; anything unknown simply has no tile.
+    @ViewBuilder
+    private var statTiles: some View {
+        let tiles = tileData
+        if tiles.count >= 2 {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 8)],
+                      spacing: 8) {
+                ForEach(tiles) { statTile($0) }
+            }
+        }
+    }
+
+    private var tileData: [StatTile] {
+        var tiles: [StatTile] = []
+        if let activity = profile.activity, activity.heardCount > 0 {
+            tiles.append(StatTile(id: "heard", label: "Heard",
+                                  value: "\(activity.heardCount)", detail: "frames",
+                                  symbol: "waveform", tint: .orange))
+        }
+        if let last = profile.activity?.lastHeard {
+            tiles.append(StatTile(
+                id: "last", label: "Last heard",
+                value: last.formatted(.relative(presentation: .numeric,
+                                                unitsStyle: .narrow)),
+                detail: nil, symbol: "clock", tint: .blue))
+        }
+        if let km = profile.placement?.distanceKilometres {
+            tiles.append(StatTile(
+                id: "distance", label: "Distance",
+                value: String(format: "%.1f mi", GreatCircle.miles(fromKilometres: km)),
+                detail: String(format: "%.1f km", km),
+                symbol: "location.north.line", tint: .purple))
+        }
+        if let quality = headlineQuality {
+            tiles.append(StatTile(id: "quality", label: "Link quality",
+                                  value: "\(quality)", detail: "of 255",
+                                  symbol: "dot.radiowaves.left.and.right",
+                                  tint: qualityTint(quality)))
+        }
+        return tiles
+    }
+
+    /// The best measured direction, falling back to NET/ROM's neighbour
+    /// figure. "Best" rather than an average because the tile answers "can I
+    /// work this station", and the better direction is the ceiling on that.
+    private var headlineQuality: Int? {
+        profile.links.map(\.quality).max() ?? profile.netrom?.neighbourQuality
+    }
+
+    private func statTile(_ tile: StatTile) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Image(systemName: tile.symbol)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(tile.tint)
+                Text(tile.label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Text(tile.value)
+                .font(.system(.title3, design: .rounded).weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            if let detail = tile.detail {
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color(platform: .platformCardBackground),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1))
+    }
+
     private func activitySection(_ activity: NodeProfile.Activity) -> some View {
-        section("Activity", systemImage: "waveform") {
+        // Frame count and relative recency already lead the page as tiles;
+        // this section carries what the tiles compress away — the exact
+        // timestamp and the path the last frame took.
+        section("Activity", systemImage: "waveform", tint: .orange) {
             VStack(alignment: .leading, spacing: 6) {
-                row("Frames heard", "\(activity.heardCount)")
                 if let last = activity.lastHeard {
                     row("Last heard", last.formatted(date: .abbreviated, time: .shortened))
                 }
@@ -224,7 +414,7 @@ struct NodeProfileView: View {
     }
 
     private func placementSection(_ placement: NodeProfile.Placement) -> some View {
-        section("Position", systemImage: "mappin.and.ellipse") {
+        section("Position", systemImage: "mappin.and.ellipse", tint: .red) {
             VStack(alignment: .leading, spacing: 6) {
                 if let distance = placement.distanceKilometres {
                     let miles = GreatCircle.miles(fromKilometres: distance)
@@ -270,7 +460,7 @@ struct NodeProfileView: View {
     /// have read as a mediocre path and sent the operator looking at the
     /// wrong end.
     private var linkSection: some View {
-        section("Link quality", systemImage: "arrow.left.arrow.right") {
+        section("Link quality", systemImage: "arrow.left.arrow.right", tint: .blue) {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(profile.links) { link in
                     VStack(alignment: .leading, spacing: 6) {
@@ -407,7 +597,7 @@ struct NodeProfileView: View {
     /// operator does not need to know what an articulation point is; they
     /// need to know that if this station drops, four others go with it.
     private func topologySection(_ topology: NodeProfile.Topology) -> some View {
-        section("In the Network", systemImage: "point.3.filled.connected.trianglepath.dotted") {
+        section("In the Network", systemImage: "point.3.filled.connected.trianglepath.dotted", tint: .purple) {
             VStack(alignment: .leading, spacing: 8) {
                 row("Direct links", "\(topology.neighbourCount)")
                     .help("Stations this one has been observed exchanging frames with, counting digipeated paths. Built from watched traffic, not from anything the station announced.")
@@ -445,7 +635,7 @@ struct NodeProfileView: View {
     }
 
     private var siblingSection: some View {
-        section("Other SSIDs", systemImage: "person.2") {
+        section("Other SSIDs", systemImage: "person.2", tint: .teal) {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(profile.siblings) { sibling in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -479,10 +669,14 @@ struct NodeProfileView: View {
     }
 
     private func netromSection(_ netrom: NodeProfile.NetRom) -> some View {
-        section("NET/ROM", systemImage: "point.3.connected.trianglepath.dotted") {
+        section("NET/ROM", systemImage: "point.3.connected.trianglepath.dotted", tint: .green) {
             VStack(alignment: .leading, spacing: 6) {
                 if let quality = netrom.neighbourQuality {
                     row("Neighbour quality", "\(quality) / 255")
+                    // The same read-it-at-a-glance bar the link section uses,
+                    // on the same 0–255 scale and colour thresholds.
+                    ProgressView(value: Double(quality), total: 255)
+                        .tint(qualityTint(quality))
                     // The table is built by watching traffic, so being in it
                     // says the station is nearby and audible — not that it
                     // runs NET/ROM.
@@ -504,7 +698,7 @@ struct NodeProfileView: View {
     }
 
     private func winlinkSection(_ quality: WinlinkLinkQuality) -> some View {
-        section("Winlink", systemImage: "envelope.arrow.triangle.branch") {
+        section("Winlink", systemImage: "envelope.arrow.triangle.branch", tint: .cyan) {
             VStack(alignment: .leading, spacing: 6) {
                 row("Sessions", "\(quality.completed) completed of \(quality.attempts) attempted")
                 if let rate = quality.answerRate {
@@ -522,7 +716,7 @@ struct NodeProfileView: View {
     }
 
     private var licenceSection: some View {
-        section("Licence", systemImage: "person.text.rectangle") {
+        section("Licence", systemImage: "person.text.rectangle", tint: .gray) {
             VStack(alignment: .leading, spacing: 6) {
                 if let name = profile.name { row("Name", name) }
                 if let licenseClass = profile.licenseClass { row("Class", licenseClass) }
@@ -618,17 +812,30 @@ struct NodeProfileView: View {
 
     @ViewBuilder
     private func section<Content: View>(_ title: String, systemImage: String,
+                                        tint: Color = .accentColor,
                                         @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: systemImage)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                // The System Settings idiom: a small filled square carrying
+                // the glyph, so sections are told apart by colour before
+                // they are read.
+                Image(systemName: systemImage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 22, height: 22)
+                    .background(tint.gradient,
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+            }
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(Color(platform: .platformCardBackground),
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1))
     }
 
     private func row(_ label: String, _ value: String) -> some View {
