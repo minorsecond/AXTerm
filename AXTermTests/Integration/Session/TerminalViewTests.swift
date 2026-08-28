@@ -12,9 +12,6 @@ import SwiftUI
 
 @MainActor
 final class TerminalViewTests: XCTestCase {
-    private static var retainedCoordinators: [ConnectCoordinator] = []
-    private static var retainedConnectBarViewModels: [ConnectBarViewModel] = []
-
     @MainActor
     private func createViewModel(sourceCall: String = "N0CALL") -> ObservableTerminalTxViewModel {
         let settings = AppSettingsStore()
@@ -168,13 +165,25 @@ final class TerminalViewTests: XCTestCase {
         XCTAssertEqual(allCases[1], .packets)
     }
 
-    func testStationDefaultConnectModeIsAX25() {
-        XCTAssertEqual(ContentView.stationDefaultConnectMode(), .ax25)
+    /// There is no fixed default any more: how to reach a station is derived
+    /// from what is known about it — a remembered choice, a NET/ROM route, or
+    /// the digipeaters its frames actually came through. A constant here was
+    /// what made the sidebar say "Via DRLNOD" and then call direct.
+    /// See `StationConnectModeTests`.
+    @MainActor
+    func testStationConnectModeFollowsTheEvidence() {
+        let coordinator = ConnectCoordinator()
+        XCTAssertEqual(
+            coordinator.preferredMode(for: "K0NTS-7", hasNetRomRoute: false, heardVia: []),
+            .ax25)
+        XCTAssertEqual(
+            coordinator.preferredMode(for: "KB5YZB-7", hasNetRomRoute: false,
+                                      heardVia: ["DRLNOD"]),
+            .ax25ViaDigi)
     }
 
     func testConnectCoordinatorImmediateRequestTriggersNavigationCallback() {
         let coordinator = ConnectCoordinator()
-        Self.retainedCoordinators.append(coordinator)
         var didNavigate = false
         coordinator.navigateToTerminal = { didNavigate = true }
         let intent = ConnectIntent(
@@ -192,7 +201,6 @@ final class TerminalViewTests: XCTestCase {
 
     func testFailedStateRemainsVisibleInConnectBarModel() {
         let vm = ConnectBarViewModel()
-        Self.retainedConnectBarViewModels.append(vm)
         vm.applySuggestedTo("N0CALL")
         vm.markConnecting()
         vm.markFailed(reason: .timeout, detail: "Timed out waiting for UA")

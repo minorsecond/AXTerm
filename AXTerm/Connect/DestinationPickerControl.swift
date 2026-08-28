@@ -4,6 +4,9 @@ struct DestinationPickerControl: View {
     @ObservedObject var viewModel: DestinationPickerViewModel
     var externalText: String
     var groups: [ConnectSuggestionGroup]
+    /// Destination → the node that listed it, so a reachable row can name the
+    /// route instead of leaving the operator to look it up.
+    var reachableVia: [String: String] = [:]
     var disabled: Bool
     var compactLabel: Bool = true
     let onDestinationChanged: (String) -> Void
@@ -114,7 +117,7 @@ struct DestinationPickerControl: View {
         .disabled(disabled)
         .onAppear {
             viewModel.syncExternalDestination(externalText)
-            viewModel.updateDataSources(groups: groups)
+            viewModel.updateDataSources(groups: groups, reachableVia: reachableVia)
         }
         .onChange(of: externalText) { _, newValue in
             if !textFieldFocused {
@@ -122,7 +125,7 @@ struct DestinationPickerControl: View {
             }
         }
         .onChange(of: groups) { _, newValue in
-            viewModel.updateDataSources(groups: newValue)
+            viewModel.updateDataSources(groups: newValue, reachableVia: reachableVia)
         }
         .onChange(of: textFieldFocused) { _, isFocused in
             if !isFocused {

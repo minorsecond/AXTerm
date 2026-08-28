@@ -6,12 +6,15 @@ struct DestinationSuggestionRow: Identifiable, Hashable {
         case favorites
         case recent
         case neighbors
+        /// Named in a node's table rather than heard here.
+        case reachable
 
         var title: String {
             switch self {
             case .favorites: return "Favorites"
             case .recent: return "Recent Heard"
             case .neighbors: return "Neighbors"
+            case .reachable: return "Reachable via nodes"
             }
         }
     }
@@ -76,6 +79,9 @@ final class DestinationPickerViewModel: ObservableObject {
 
     private var recentValues: [String] = []
     private var neighborValues: [String] = []
+    private var reachableValues: [String] = []
+    /// Destination → the node that listed it, for the row's subtitle.
+    private var reachableVia: [String: String] = [:]
     private var baseFavorites: Set<String> = []
     private var userFavorites: Set<String> = []
     private var aliasEvidence: [AliasKey: Set<DestinationAliasEvidence>] = [:]
@@ -125,10 +131,13 @@ final class DestinationPickerViewModel: ObservableObject {
         updateValidationAndSuggestions()
     }
 
-    func updateDataSources(groups: [ConnectSuggestionGroup]) {
+    func updateDataSources(groups: [ConnectSuggestionGroup],
+                           reachableVia: [String: String] = [:]) {
         var recents: [String] = []
         var neighbors: [String] = []
         var favorites: [String] = []
+        var reachable: [String] = []
+        self.reachableVia = reachableVia
 
         for group in groups {
             switch group.id {
@@ -138,6 +147,8 @@ final class DestinationPickerViewModel: ObservableObject {
                 recents.append(contentsOf: group.values)
             case "neighbors":
                 neighbors.append(contentsOf: group.values)
+            case "reachable":
+                reachable.append(contentsOf: group.values)
             default:
                 break
             }
@@ -146,6 +157,10 @@ final class DestinationPickerViewModel: ObservableObject {
         baseFavorites = Set(favorites.map(Self.normalizeCandidate).filter { !$0.isEmpty })
         recentValues = dedupeNormalized(recents)
         neighborValues = dedupeNormalized(neighbors)
+        // Anything already offered as heard, favourited or a neighbour is left
+        // out: the operator has a better-evidenced way to it than hearsay.
+        let alreadyOffered = Set(recentValues + neighborValues + Array(baseFavorites))
+        reachableValues = dedupeNormalized(reachable).filter { !alreadyOffered.contains($0) }
         updateValidationAndSuggestions()
     }
 
@@ -370,10 +385,24 @@ final class DestinationPickerViewModel: ObservableObject {
             fallbackSecondary: "Neighbor node"
         )
 
+        // The route is the point of these, so it replaces the generic subtitle
+        // rather than sitting behind an "aka" the way a heard station's alias
+        // does. "AGCHAT — via KB5YZB-7" answers the question in one line.
+        let reachableRows = Self.rankedSuggestions(query: query, candidates: reachableValues)
+            .map { candidate in
+                DestinationSuggestionRow(
+                    callsign: candidate,
+                    secondaryText: reachableVia[candidate].map { "via \($0)" } ?? "Listed by a node",
+                    section: .reachable,
+                    isFavorite: isFavorite(candidate),
+                    aliasText: nil)
+            }
+
         let sections = [
             DestinationSuggestionSection(id: DestinationSuggestionRow.Section.favorites.rawValue, title: DestinationSuggestionRow.Section.favorites.title, rows: favoritesRows),
             DestinationSuggestionSection(id: DestinationSuggestionRow.Section.recent.rawValue, title: DestinationSuggestionRow.Section.recent.title, rows: recentRows),
-            DestinationSuggestionSection(id: DestinationSuggestionRow.Section.neighbors.rawValue, title: DestinationSuggestionRow.Section.neighbors.title, rows: neighborRows)
+            DestinationSuggestionSection(id: DestinationSuggestionRow.Section.neighbors.rawValue, title: DestinationSuggestionRow.Section.neighbors.title, rows: neighborRows),
+            DestinationSuggestionSection(id: DestinationSuggestionRow.Section.reachable.rawValue, title: DestinationSuggestionRow.Section.reachable.title, rows: reachableRows)
         ]
 
         return sections.filter { !$0.rows.isEmpty }

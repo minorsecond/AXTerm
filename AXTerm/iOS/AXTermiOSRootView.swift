@@ -81,6 +81,9 @@ struct AXTermiOSRootView: View {
             case .network: self = .connection
             case .transmission: self = .transmission
             case .notifications, .linkDebug: self = .diagnostics
+            // No mailbox UI on a handheld yet; the closest thing it has is
+            // the station's own identity.
+            case .bbs: self = .identity
             }
         }
     }
@@ -332,6 +335,7 @@ struct AXTermiOSRootView: View {
                 settings: settings,
                 sessionCoordinator: sessionCoordinator,
                 connectCoordinator: connectCoordinator,
+                nodeAliases: nodeAliases,
                 searchModel: searchModel,
                 locationService: context.locationService,
                 onIdentity: { profiles.peek($0) },

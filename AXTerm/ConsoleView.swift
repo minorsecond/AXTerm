@@ -108,10 +108,38 @@ struct ConsoleView: View {
         )
     }
 
-    /// Group duplicates together by content signature.
-    /// Only collapse lines that are explicitly marked as duplicates (received via a different path).
-    private var groupedLines: [ConsoleLineGroup] {
-        ConsoleLineGrouper.group(typeFilteredLines)
+    /// The rendered console, rebuilt only when something it depends on changes.
+    ///
+    /// These used to be computed properties read from `body`, which meant the
+    /// whole pipeline — filter every line, group duplicates, split by day — ran
+    /// on **every** body evaluation, over a buffer that sits pegged at its
+    /// 10,000-line cap on a busy channel. Packets arrive continuously, so the
+    /// main thread spent its time re-deriving a list that had barely changed,
+    /// and the app stopped responding. CLAUDE.md §12: no unbounded view-driven
+    /// loops.
+    ///
+    /// `LazyVStack` does not save this: the array has to be fully materialised
+    /// before it can be lazy about drawing it.
+    @State private var groupedLines: [ConsoleLineGroup] = []
+    @State private var dayGroupedLines: [DayGroupedSection<ConsoleLineGroup>] = []
+
+    /// Everything the rendered console depends on, as one comparable value.
+    ///
+    /// `lines.count` alone is not enough: once the buffer is full every append
+    /// also trims, so the count stays at 10,000 while the content changes
+    /// underneath. The newest line's identity is what actually moves.
+    private var renderInputs: String {
+        let flags = [showID, showBeacon, showMail, showData,
+                     showPrompt, showOther, showSystem, showDigipeats]
+            .map { $0 ? "1" : "0" }.joined()
+        return "\(lines.count)|\(lines.last?.id.uuidString ?? "-")|"
+            + "\(clearedAt?.timeIntervalSince1970 ?? 0)|\(flags)|\(localCallsign)"
+    }
+
+    private func rebuildRenderedLines() {
+        let groups = ConsoleLineGrouper.group(typeFilteredLines)
+        groupedLines = groups
+        dayGroupedLines = DayGrouping.group(items: groups, date: { $0.primary.timestamp })
     }
 
     var body: some View {
@@ -203,6 +231,11 @@ struct ConsoleView: View {
                     }
                 }
                 .background(.background)
+                // Rebuilt here rather than read from `body`: see
+                // `groupedLines`. One pass per actual change instead of one
+                // per view evaluation.
+                .onAppear { rebuildRenderedLines() }
+                .onChange(of: renderInputs) { _, _ in rebuildRenderedLines() }
             }
 
             // Undo clear banner
@@ -297,10 +330,6 @@ struct ConsoleView: View {
                 )
             }
         }
-    }
-
-    private var dayGroupedLines: [DayGroupedSection<ConsoleLineGroup>] {
-        DayGrouping.group(items: groupedLines, date: { $0.primary.timestamp })
     }
 
     // MARK: - Clear Actions

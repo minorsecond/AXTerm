@@ -64,18 +64,88 @@ nonisolated enum TerminalSessionDisplayScope {
 
 /// Phase of a NET/ROM connect-through relay handshake.
 fileprivate enum NetRomRelayPhase {
-    /// L2 connected to next-hop node, waiting for welcome banner.
-    case awaitingBanner(destination: String, nextHop: String)
-    /// Banner received + C command sent, waiting for node "Connected" response.
-    case awaitingConnected(destination: String, nextHop: String)
+    /// L2 connected to the link target, waiting for a node banner.
+    ///
+    /// `nextHop` is the **L2 peer** and never changes for the life of the
+    /// relay — every frame, including the far node's banner, arrives from
+    /// it. `remaining` is the chain of further node prompts still to
+    /// drive before commanding the destination; empty means the node
+    /// talking now is the one to ask.
+    case awaitingBanner(destination: String, nextHop: String, remaining: [String])
+    /// A C command was sent, waiting for the node's answer.
+    case awaitingConnected(destination: String, nextHop: String, remaining: [String])
     /// Relay established — transparent I/O to final destination.
     case established(destination: String, nextHop: String)
 }
 
+/// When a change in session state means a live NET/ROM relay is gone.
+nonisolated enum NetRomRelayLifecycle {
+    /// Whether a `.disconnected` session state ends an armed relay.
+    ///
+    /// The distinction is level versus transition. `.disconnected` is both "the
+    /// link went away" and "this session has not connected yet" — a session is
+    /// created in that state and stays there until its SABM goes out, which XID
+    /// negotiation can stretch to eight seconds. Only a transition *from* a
+    /// state the link actually reached says the link is gone.
+    static func abandonsRelay(onDisconnectFrom oldState: AX25SessionState?) -> Bool {
+        guard let oldState else { return false }
+        return oldState != .disconnected
+    }
+
+    /// What to call the far end on screen, given what the operator typed.
+    ///
+    /// The mirror of `wireDestination`, and deliberately not its equal. The
+    /// wire redirect arms on *any* live relay phase, because a frame sent
+    /// during the handshake would open a second link. The display waits for the
+    /// circuit to actually be up: naming the destination while the node has yet
+    /// to answer would announce a connection that has not happened, which is
+    /// the same overclaim as calling an established circuit by its next hop,
+    /// only pointing the other way.
+    static func displayedDestination(typed: String, establishedDestination: String?) -> String {
+        guard let destination = establishedDestination, !destination.isEmpty else { return typed }
+        return destination
+    }
+
+    /// Where session bytes must actually be addressed.
+    ///
+    /// Through an established circuit the destination the operator typed and
+    /// the peer that carries the frames come apart: they are talking to
+    /// KB5YZB-1, but every frame rides the L2 link to DRLNOD, which forwards.
+    /// The digipeater path goes with the typed destination and is dropped with
+    /// it — the node is reached directly, and the circuit beyond it is the
+    /// node's business, not ours.
+    static func wireDestination(
+        typed: (call: String, path: String),
+        establishedNextHop: String?
+    ) -> (call: String, path: String) {
+        guard let nextHop = establishedNextHop, !nextHop.isEmpty else { return typed }
+        return (nextHop, "")
+    }
+}
+
 /// Matches plain-text success/failure responses from BBS/NET/ROM nodes during relay handshake.
+///
+/// There is no standard for these strings — each node family answers a connect
+/// request in its own words, and the only way to know them is to have been
+/// answered. BPQ/LinBPQ, the most common node software on the air, says
+/// **`###LINK MADE`**, which matches nothing that reads like "connected"
+/// (captured against DRLNOD/KE0NCQ, 2026-08-26; its absence left every circuit
+/// stuck one step from done — the far end's BBS banner arrived and the relay
+/// still believed it was waiting).
 nonisolated struct NetRomRelayResponseParser {
-    static let successPatterns = ["connected to", "*** connected", "linked to", "link established"]
-    static let failurePatterns = ["no route", "not found", "invalid command", "busy", "*** busy", "rejected", "failure"]
+    static let successPatterns = [
+        "connected to", "*** connected", "linked to", "link established",
+        "link made"    // BPQ / LinBPQ: "###LINK MADE"
+    ]
+    // Deliberately not a bare "connected": "disconnected" contains it, and
+    // reading a teardown notice as a successful connect is worse than missing
+    // a node whose wording we have not met yet.
+    static let failurePatterns = [
+        "no route", "not found", "invalid command", "busy", "*** busy",
+        "rejected", "failure",
+        "downlink denied",  // BPQ, when the node will not connect outward
+        "no connection"
+    ]
 
     static func isSuccess(_ text: String) -> Bool {
         let lower = text.lowercased()
@@ -129,13 +199,180 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 
     /// Current phase of a NET/ROM connect-through handshake (nil when no relay active).
     /// fileprivate so TerminalView (same file) can both read and write the phase.
-    @Published fileprivate var netRomRelayPhase: NetRomRelayPhase?
+    @Published fileprivate var netRomRelayPhase: NetRomRelayPhase? {
+        didSet {
+            // Any phase change is forward motion, including arming. Doing
+            // it here rather than at each of the dozen assignment sites is
+            // the difference between a watchdog that is correct and one
+            // that is correct until someone adds a thirteenth.
+            relayProgressTick &+= 1
+            switch netRomRelayPhase {
+            case let .awaitingBanner(_, nextHop, _):
+                // Mid-chain hops overwrite this immediately afterwards
+                // with the node that actually just came on the link; at
+                // arm time the L2 peer is the one expected to greet.
+                relayWaitingOn = nextHop.uppercased()
+            case .awaitingConnected:
+                break
+            case .established, nil:
+                relayWaitingOn = nil
+                relayWitness.stopWatching()
+            }
+        }
+    }
+
+    /// Reads a hop's outcome off the air when the node's own word for it is
+    /// lost. Rebuilt at each ask so it always carries this station's current
+    /// identity — the operator can change callsign mid-session.
+    private var relayWitness = RelayLegWitness(localCallsign: "NOCALL", answers: [])
+
+    /// Whether this handshake has permanently discarded received bytes.
+    ///
+    /// A flushed receive gap is not a normal timeout: the node said something
+    /// and we destroyed it to get at what came after (`skipReceiveGapForHandshake`).
+    /// Whatever verdict it carried is unrecoverable, so failing the attempt on
+    /// silence afterwards is failing on evidence we threw away ourselves. The
+    /// connect path reads this to retry the chain from a clean link rather
+    /// than report a circuit that was never actually refused.
+    @Published fileprivate private(set) var relayLostFrames = false
+
+    /// Each attempt answers for its own losses. Without this a gap flushed on
+    /// the first run would license a retry after the second, and so on.
+    fileprivate func clearRelayFrameLoss() { relayLostFrames = false }
+
+    /// Bumped every time the relay handshake actually moves — a banner
+    /// read, a hop made, a C command sent.
+    ///
+    /// The stall watchdog was armed once, when L2 to the link target came
+    /// up, and its twenty seconds then had to cover the *whole* chain. On
+    /// 2026-08-27 that fired at 14:24:32 on a relay that had greeted at
+    /// 14:24:12, made its first hop at 14:24:17 and been asked for COSCO at
+    /// 14:24:22 — nine seconds of honest waiting, reported to the operator
+    /// as "DRLNOD has said nothing since the link came up" and answered
+    /// with a stray CR into a node that was mid-connect. Progress has to
+    /// reset the clock, or a chain is judged by a budget written for one
+    /// hop.
+    @Published fileprivate private(set) var relayProgressTick = 0
+
+    /// The node whose answer the relay is actually waiting on right now.
+    ///
+    /// Distinct from `netRomRelayNextHop`, which is the L2 peer and never
+    /// changes: after the first hop is made every byte still arrives from
+    /// DRLNOD, but the station being waited on is KB5YZB-7. Anything that
+    /// tells the operator who has gone quiet must name the latter.
+    @Published fileprivate private(set) var relayWaitingOn: String?
+
+    /// Record that the relay moved forward, and who is now expected to speak.
+    fileprivate func noteRelayProgress(waitingOn: String?) {
+        relayProgressTick &+= 1
+        relayWaitingOn = waitingOn?.uppercased()
+    }
 
     /// Called when relay handshake succeeds (destination, nextHop).
     var onNetRomRelayEstablished: ((String, String) -> Void)?
 
     /// Called when relay handshake fails (error detail).
     var onNetRomRelayFailed: ((String) -> Void)?
+
+    /// Progress notes for the operator's transcript.
+    ///
+    /// The relay's own state was previously visible only in `TxLog`, which
+    /// lands in a debug console the operator is not reading. That left the
+    /// terminal showing frames with no way to tell a circuit from a direct
+    /// link — the same screenshot could mean four different things.
+    var onRelayNotice: ((String) -> Void)?
+
+    /// Who the operator is actually conversing with on this session.
+    ///
+    /// The inverse of `wireDestination`. Frames on a NET/ROM circuit genuinely
+    /// come from the next hop — that is honest at layer 2 — but their *content*
+    /// is the far end talking, and labelling KB5YZB-7's BBS banner "DRLNOD"
+    /// tells the operator something that isn't so. Once the circuit is up, BPQ
+    /// forwards transparently, so everything on that link belongs to the far
+    /// end until the circuit ends.
+    fileprivate func conversationPeer(for session: AX25Session) -> AX25Address {
+        guard case let .established(destination, nextHop) = netRomRelayPhase,
+              session.remoteAddress.display.uppercased() == nextHop.uppercased()
+        else { return session.remoteAddress }
+        return parseCallsign(destination)
+    }
+
+    /// The peer that actually carries this session's bytes, and the path to it.
+    ///
+    /// Normally this is just the destination the operator typed. Through an
+    /// established NET/ROM circuit the two come apart: the operator is talking
+    /// to KB5YZB-1, but every frame rides the L2 link to DRLNOD, which forwards
+    /// it. `destinationCall` names who they are talking to — correct for the UI,
+    /// and wrong for the wire. Addressing frames to the destination opens a
+    /// second, unrelated link to it (2026-08-26: the circuit came up through
+    /// DRLNOD, and the first thing typed went out as a fresh SABM to KB5YZB-1).
+    fileprivate var wireDestination: (call: String, path: String) {
+        // Any live relay phase, not only `.established`. Field capture
+        // 2026-08-26 17:53: the circuit was armed and waiting on DRLNOD's
+        // banner when the operator typed, and because the redirect was gated on
+        // `.established` the text opened a fresh direct link to KB5YZB-7 —
+        // exactly the second link this whole mechanism exists to prevent. While
+        // a relay is in flight, nothing may address the destination directly.
+        return NetRomRelayLifecycle.wireDestination(
+            typed: (viewModel.destinationCall, viewModel.digiPath),
+            establishedNextHop: netRomRelayNextHop)
+    }
+
+    /// The next hop of a relay in any live phase, or nil when none is running.
+    fileprivate var netRomRelayNextHop: String? {
+        switch netRomRelayPhase {
+        case let .awaitingBanner(_, nextHop, _),
+             let .awaitingConnected(_, nextHop, _):
+            return nextHop
+        case let .established(_, nextHop):
+            return nextHop
+        case nil:
+            return nil
+        }
+    }
+
+    /// The two ends of an established relay, for anything that names the far
+    /// end to the operator.
+    ///
+    /// Bringing a NET/ROM circuit up rewrites the connect bar to the next hop,
+    /// because that is where the L2 link genuinely goes. Nothing rewrites it
+    /// back, so every readout fed from the connect bar keeps saying DRLNOD long
+    /// after the conversation moved to KB5YZB-7 (2026-08-27, reported as
+    /// "it says I'm connected to drlnode... the endpoint right now is
+    /// kb5yzb-7"). The wire fields stay as they are — they are still right
+    /// about the wire — and the displays ask here instead.
+    fileprivate var relayConversation: (destination: String, nextHop: String)? {
+        guard case let .established(destination, nextHop) = netRomRelayPhase else { return nil }
+        return (destination, nextHop)
+    }
+
+    /// The far end of a relay still being set up, or nil when none is.
+    ///
+    /// Separate from `relayConversation`, which is deliberately established-only
+    /// so nothing claims a live circuit early. This one is for saying what is
+    /// being *attempted*, which is a different and honest thing to show.
+    fileprivate var relayHandshakeDestination: String? {
+        switch netRomRelayPhase {
+        case let .awaitingBanner(destination, _, _),
+             let .awaitingConnected(destination, _, _):
+            return destination
+        case .established, nil:
+            return nil
+        }
+    }
+
+    /// Whether a relay is running but has not yet carried anything.
+    ///
+    /// Typed text must wait here. Sending it to the next hop would issue it as
+    /// a *node command* to DRLNOD rather than to KB5YZB-7, and sending it to
+    /// the destination opens the second link. Neither is what the operator
+    /// meant, so nothing goes out until the circuit is up.
+    fileprivate var relayIsHandshaking: Bool {
+        switch netRomRelayPhase {
+        case .awaitingBanner, .awaitingConnected: return true
+        case .established, nil: return false
+        }
+    }
 
     /// Called to send data frames produced by sessionManager.sendData (e.g. relay C command).
     var onSendFrames: (([OutboundFrame]) -> Void)?
@@ -178,10 +415,6 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     @Published var sessionNotification: SessionNotification?
     private var notificationTask: Task<Void, Never>?
 
-    /// Callback for sending response frames (RR, REJ, etc.)
-
-    /// Callback for sending response frames (RR, REJ, etc.)
-    var onSendResponseFrame: ((OutboundFrame) -> Void)?
 
     /// Callback when plain-text (non-AXDP) data is received from connected session.
     /// Used to add to console when sender uses plain text instead of AXDP.
@@ -362,7 +595,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                             "lineLength": line.count,
                             "preview": String(line.prefix(50))
                         ])
-                        self?.onPlainTextChatReceived?(session.remoteAddress, line, session.lastReceivedVia)
+                        self?.onPlainTextChatReceived?(self?.conversationPeer(for: session) ?? session.remoteAddress, line, session.lastReceivedVia)
                     }
                     self?.currentLineBuffers.removeValue(forKey: peerKey)
 
@@ -505,6 +738,9 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             bytesSent: 0,
             bytesAcked: 0,
             destination: destination,
+            // Acks come from whoever carries the frames — the next hop through a
+            // relay, the destination otherwise. See `OutboundMessageProgress.ackPeer`.
+            ackPeer: wireDestination.call.isEmpty ? destination : wireDestination.call,
             timestamp: Date(),
             hasAcks: hasAcks,
             startingVs: startingVs,
@@ -521,7 +757,9 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// digipeating is fire-and-forget; only the peer's ack proves receipt).
     func recordOutboundRelay(destination: String, digis: [String]) {
         guard var prog = currentOutboundProgress,
-              destination.uppercased() == prog.destination.uppercased(),
+              // Our outbound frames are addressed to whoever carries them, so a
+              // digipeat echo names the ack peer, not the final destination.
+              destination.uppercased() == prog.ackPeer.uppercased(),
               !(prog.hasAcks && prog.isComplete),
               digis.contains(where: { !prog.relayedDigis.contains($0) })
         else { return }
@@ -545,7 +783,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Correctly handles sequence number wraparound for messages spanning >7 frames.
     func updateOutboundBytesAcked(session: AX25Session, va: Int) {
         guard var prog = currentOutboundProgress, prog.hasAcks,
-              session.remoteAddress.display.uppercased() == prog.destination.uppercased()
+              session.remoteAddress.display.uppercased() == prog.ackPeer.uppercased()
         else { return }
         
         // Calculate delta using modulo-8 arithmetic
@@ -644,200 +882,12 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                 "length": trimmedText.count,
                 "preview": String(trimmedText.prefix(50))
             ])
-            onPlainTextChatReceived?(session.remoteAddress, trimmedText, session.lastReceivedVia)
+            onPlainTextChatReceived?(conversationPeer(for: session), trimmedText, session.lastReceivedVia)
             
             // Keep transcript bounded for performance
             if sessionTranscriptLines.count > 1000 {
                 sessionTranscriptLines.removeFirst(sessionTranscriptLines.count - 1000)
             }
-        }
-    }
-
-    /// Subscribe to incoming packets from PacketEngine
-    func subscribeToPackets(from client: PacketEngine) {
-        client.packetPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] packet in
-                self?.handleIncomingPacket(packet)
-            }
-            .store(in: &cancellables)
-    }
-
-    /// Process an incoming packet and route it to the session manager if relevant
-    private func handleIncomingPacket(_ packet: Packet) {
-        // Only process packets addressed to us
-        guard let from = packet.from, let to = packet.to else {
-            return
-        }
-
-        // Debug: show all packets and check if they're addressed to us
-        let decoded = AX25ControlFieldDecoder.decode(control: packet.control, controlByte1: packet.controlByte1)
-        let localAddress = sessionManager.localCallsign
-
-        // Log if it's a U-frame (which includes SABM)
-        if decoded.frameClass == .U {
-            print("[TerminalView.handleIncomingPacket] U-frame: from=\(from.display), to=\(to.display) local=\(localAddress.display) uType=\(decoded.uType?.rawValue ?? "nil")")
-        }
-
-        guard CallsignNormalizer.addressesMatch(to, localAddress) else {
-            // A digipeat echo of our own I-frame (H-bit set on a via) is
-            // evidence the frame cleared that hop — feed the outbound
-            // delivery indicator's "relayed" phase. Not delivery: only the
-            // peer's ack proves receipt.
-            if CallsignNormalizer.addressesMatch(from, localAddress), decoded.frameClass == .I {
-                let repeatedBy = packet.via.filter { $0.repeated }.map { $0.display }
-                if !repeatedBy.isEmpty {
-                    recordOutboundRelay(destination: to.display, digis: repeatedBy)
-                }
-            }
-            if decoded.frameClass == .U && (decoded.uType == .SABM || decoded.uType == .SABME) {
-                print("[TerminalView.handleIncomingPacket] SABM filtered: to=\(to.display) local=\(localAddress.display)")
-            }
-            return
-        }
-
-        print("[TerminalView.handleIncomingPacket] Packet addressed to us: from=\(from.display), frameClass=\(decoded.frameClass.rawValue), uType=\(decoded.uType?.rawValue ?? "nil")")
-
-        // Ignore frames still in transit through a digipeater (H bit not yet set on
-        // every via) — see Packet.isFullyDigipeated.
-        guard packet.isFullyDigipeated else {
-            TxLog.debug(.session, "Frame in transit via digipeater; awaiting repeated copy", [
-                "from": from.display,
-                "to": to.display,
-                "via": packet.viaDisplay
-            ])
-            return
-        }
-
-        // Use channel 0 for default KISS port
-        let channel: UInt8 = 0
-
-        switch decoded.frameClass {
-        case .U:
-            handleUFrame(packet: packet, from: from, uType: decoded.uType, channel: channel)
-        case .I:
-            handleIFrame(packet: packet, from: from, ns: decoded.ns ?? 0, nr: decoded.nr ?? 0, pf: (decoded.pf ?? 0) == 1, channel: channel)
-        case .S:
-            handleSFrame(packet: packet, from: from, sType: decoded.sType, nr: decoded.nr ?? 0, pf: decoded.pf ?? 0, channel: channel)
-        case .unknown:
-            break
-        }
-    }
-
-    private func handleUFrame(packet: Packet, from: AX25Address, uType: AX25UType?, channel: UInt8) {
-        guard let uType = uType else { return }
-
-        // Get the digipeater path from the packet
-        let path = DigiPath.from(packet.via.map { $0.display })
-
-        switch uType {
-        case .UA:
-            sessionManager.handleInboundUA(from: from, path: path, channel: channel)
-            updateCurrentSession()
-        case .DM:
-            sessionManager.handleInboundDM(from: from, path: path, channel: channel)
-            updateCurrentSession()
-        case .FRMR:
-            sessionManager.handleInboundFRMR(from: from, path: path, channel: channel)
-            updateCurrentSession()
-        case .DISC:
-            if let responseFrame = sessionManager.handleInboundDISC(from: from, path: path, channel: channel) {
-                sendResponseFrame(responseFrame)
-            }
-            updateCurrentSession()
-        case .SABM, .SABME:
-            // Respond with UA to accept the incoming connection
-            print("[TerminalView] Received SABM from \(from.display), calling handleInboundSABM")
-            if let uaFrame = sessionManager.handleInboundSABM(
-                from: from,
-                to: sessionManager.localCallsign,
-                path: path,
-                channel: channel
-            ) {
-                print("[TerminalView] Got UA frame back, calling sendResponseFrame")
-                sendResponseFrame(uaFrame)
-            } else {
-                print("[TerminalView] WARNING: handleInboundSABM returned nil!")
-            }
-            updateCurrentSession()
-        default:
-            break
-        }
-    }
-
-    private func handleIFrame(packet: Packet, from: AX25Address, ns: Int, nr: Int, pf: Bool, channel: UInt8) {
-        let path = DigiPath.from(packet.via.map { $0.display })
-        if let rrFrame = sessionManager.handleInboundIFrame(
-            from: from,
-            path: path,
-            channel: channel,
-            ns: ns,
-            nr: nr,
-            pf: pf,
-            payload: packet.info
-        ) {
-            // Send the RR/REJ acknowledgement frame
-            sendResponseFrame(rrFrame)
-        }
-    }
-
-    /// Send a response frame (RR, REJ, etc.) via the callback
-    private func sendResponseFrame(_ frame: OutboundFrame) {
-        print("[TerminalView.sendResponseFrame] Sending frame type=\(frame.frameType) to \(frame.destination.display)")
-        if onSendResponseFrame != nil {
-            print("[TerminalView.sendResponseFrame] Callback is set, calling it")
-            onSendResponseFrame?(frame)
-        } else {
-            print("[TerminalView.sendResponseFrame] WARNING: onSendResponseFrame callback is nil!")
-        }
-    }
-
-    private func handleSFrame(packet: Packet, from: AX25Address, sType: AX25SType?, nr: Int, pf: Int, channel: UInt8) {
-        guard let sType = sType else { return }
-        let path = DigiPath.from(packet.via.map { $0.display })
-        let pfSet = pf == 1
-
-        switch sType {
-        case .RR:
-            // Handle RR. A poll can require an RR(F=1) response and, if the
-            // peer reports no ACK progress while we have outstanding I-frames,
-            // a retransmission before T1 expires.
-            let responseFrames = sessionManager.handleInboundRRFrames(
-                from: from,
-                path: path,
-                channel: channel,
-                nr: nr,
-                pf: pfSet,
-                isCommand: packet.isCommand
-            )
-            for responseFrame in responseFrames {
-                sendResponseFrame(responseFrame)
-            }
-        case .REJ:
-            // REJ returns frames that need to be retransmitted
-            let retransmitFrames = sessionManager.handleInboundREJ(
-                from: from, path: path, channel: channel, nr: nr,
-                pf: pfSet, isCommand: packet.isCommand
-            )
-            for frame in retransmitFrames {
-                sendResponseFrame(frame)
-            }
-        case .RNR:
-            // Peer receiver busy: apply the ack it carries and enter the busy condition.
-            let responseFrames = sessionManager.handleInboundRNR(
-                from: from,
-                path: path,
-                channel: channel,
-                nr: nr,
-                pf: pfSet,
-                isCommand: packet.isCommand
-            )
-            for frame in responseFrames {
-                sendResponseFrame(frame)
-            }
-        case .SREJ:
-            // SREJ is optional in AX.25 2.2 and AXTerm never negotiates it.
-            break
         }
     }
 
@@ -983,30 +1033,35 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         // the data still falls through so the user sees all node text in the transcript.
         if let phase = netRomRelayPhase {
             switch phase {
-            case let .awaitingBanner(destination, nextHop) where peerKey == nextHop.uppercased():
-                // First I-frame from node — banner arrived; send relay connect command
-                netRomRelayPhase = .awaitingConnected(destination: destination, nextHop: nextHop)
-                sendRelayConnectCommand(destination: destination)
-                TxLog.outbound(.session, "NET/ROM relay: banner received, C command sent", [
-                    "destination": destination, "nextHop": nextHop
+            case let .awaitingBanner(destination, nextHop, remaining) where peerKey == nextHop.uppercased():
+                // A node greeted us. Ask it for the next thing in the
+                // chain — another node when the route needs one, else the
+                // destination itself.
+                let ask = remaining.first ?? destination
+                let speaker = (remaining.isEmpty ? nextHop : nextHop).uppercased()
+                netRomRelayPhase = .awaitingConnected(
+                    destination: destination, nextHop: nextHop, remaining: remaining)
+                // The chain moved: this node greeted and has now been asked
+                // for the next thing. Its answer gets its own budget.
+                noteRelayProgress(waitingOn: speaker)
+                onRelayNotice?("\(speaker) answered — asking it to connect to \(ask.uppercased()). "
+                               + "Anything below is a node talking, not \(destination.uppercased()).")
+                sendRelayConnectCommand(destination: ask)
+                TxLog.outbound(.session, "Node-prompt relay: banner received, C command sent", [
+                    "destination": destination, "asked": ask, "nextHop": nextHop,
+                    "remaining": remaining.joined(separator: ",")
                 ])
 
-            case let .awaitingConnected(destination, nextHop) where peerKey == nextHop.uppercased():
+            case let .awaitingConnected(destination, nextHop, remaining) where peerKey == nextHop.uppercased():
                 // Check node response for success/failure patterns
                 let text = String(data: data, encoding: .utf8) ?? ""
                 if NetRomRelayResponseParser.isSuccess(text) {
-                    netRomRelayPhase = .established(destination: destination, nextHop: nextHop)
-                    onNetRomRelayEstablished?(destination, nextHop)
-                    TxLog.inbound(.session, "NET/ROM relay established", [
-                        "destination": destination, "nextHop": nextHop
-                    ])
+                    advanceRelayPastHop(destination: destination, nextHop: nextHop,
+                                        remaining: remaining, evidence: "node said so")
                 } else if NetRomRelayResponseParser.isFailure(text) {
-                    netRomRelayPhase = nil
-                    onNetRomRelayFailed?(NetRomRelayResponseParser.failureDetail(text))
-                    TxLog.inbound(.session, "NET/ROM relay handshake failed", [
-                        "destination": destination, "nextHop": nextHop,
-                        "response": String(text.prefix(80))
-                    ])
+                    failRelay(detail: NetRomRelayResponseParser.failureDetail(text),
+                              destination: destination, nextHop: nextHop,
+                              evidence: String(text.prefix(80)))
                 }
                 // Fall through — node response text is shown in the transcript either way
 
@@ -1065,7 +1120,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                         "preview": String(line.prefix(50)),
                         "bufferLenBeforeFlush": bufferLen
                     ])
-                    onPlainTextChatReceived?(session.remoteAddress, line, session.lastReceivedVia)
+                    onPlainTextChatReceived?(conversationPeer(for: session), line, session.lastReceivedVia)
                     // Manual relay detection: inspect each received line for ###LINK MADE/FAILED / ENTER COMMAND
                     let prevRelayState = manualRelayDetector.state
                     manualRelayDetector.processIncoming(line)
@@ -1099,15 +1154,130 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     }
 
     /// Send a `C DESTINATION\r` command through the current AX.25 session to relay to a node.
-    private func sendRelayConnectCommand(destination: String) {
-        guard let session = currentSession else {
-            TxLog.error(.session, "NET/ROM relay: no current session to send C command through", ["destination": destination])
+    /// Does what an operator does when a node's greeting arrives mangled.
+    ///
+    /// Two different stalls, in the order they can be fixed. If frames are
+    /// stranded behind a lost one, nothing new can be delivered either — a CR
+    /// would just add another frame to the same queue — so the gap is cleared
+    /// first and the buffered greeting comes through, which is all the
+    /// handshake was waiting for. Only if nothing is stranded is the node
+    /// actually silent, and then a bare CR is the standard prod: every node
+    /// re-prints its prompt for one.
+    ///
+    /// - Returns: what was tried, for the operator's benefit.
+    fileprivate enum RelayNudge { case clearedGap, prompted, nothingToTry }
+
+    @discardableResult
+    fileprivate func nudgeStalledRelay() -> RelayNudge {
+        guard let session = currentSession else { return .nothingToTry }
+
+        let (frames, flushed) = sessionManager.flushReceiveGapForHandshake(for: session)
+        if flushed {
+            relayLostFrames = true
+            onSendFrames?(frames)
+            TxLog.outbound(.session, "Node-prompt relay: cleared a receive gap to read the banner", [
+                "nextHop": session.remoteAddress.display
+            ])
+            return .clearedGap
+        }
+
+        let cr = Data("\r".utf8)
+        let prompt = sessionManager.sendData(cr, to: session.remoteAddress,
+                                             path: session.path,
+                                             channel: session.channel, pid: 0xF0)
+        onSendFrames?(prompt)
+        TxLog.outbound(.session, "Node-prompt relay: prompted a silent node with CR", [
+            "nextHop": session.remoteAddress.display, "frames": prompt.count
+        ])
+        return .prompted
+    }
+
+    /// One hop of the chain is up: either the relay is done or the next node
+    /// is now on the far end and will greet in its own time.
+    ///
+    /// Shared because there are two ways to learn this and they must produce
+    /// the same state. The node's own announcement is the usual one; a UA
+    /// seen on the node's outward link is the one that still works when the
+    /// announcement is lost (`RelayLegWitness`).
+    fileprivate func advanceRelayPastHop(
+        destination: String, nextHop: String, remaining: [String], evidence: String
+    ) {
+        relayWitness.stopWatching()
+        guard let reached = remaining.first else {
+            netRomRelayPhase = .established(destination: destination, nextHop: nextHop)
+            onNetRomRelayEstablished?(destination, nextHop)
+            TxLog.inbound(.session, "Node-prompt relay established", [
+                "destination": destination, "nextHop": nextHop, "evidence": evidence
+            ])
             return
         }
+        let rest = Array(remaining.dropFirst())
+        netRomRelayPhase = .awaitingBanner(
+            destination: destination, nextHop: nextHop, remaining: rest)
+        // A hop was made. From here the station expected to speak is the one
+        // that just came on the link, not the L2 peer its bytes travel through.
+        noteRelayProgress(waitingOn: reached)
+        onRelayNotice?("\(reached.uppercased()) is on the link. "
+                       + "Waiting for its prompt before going further.")
+        TxLog.inbound(.session, "Node-prompt relay hop made", [
+            "destination": destination, "reached": reached,
+            "remaining": rest.joined(separator: ","), "evidence": evidence
+        ])
+    }
+
+    fileprivate func failRelay(
+        detail: String, destination: String, nextHop: String, evidence: String
+    ) {
+        relayWitness.stopWatching()
+        netRomRelayPhase = nil
+        onNetRomRelayFailed?(detail)
+        TxLog.inbound(.session, "Node-prompt relay handshake failed", [
+            "destination": destination, "nextHop": nextHop, "response": evidence
+        ])
+    }
+
+    /// A U-frame between two stations this one is not party to.
+    ///
+    /// Handed to the witness, which cares about exactly one conversation: the
+    /// node's outward connect for the hop we just asked for, dialled under our
+    /// own callsign with an SSID the node chose.
+    fileprivate func noteForeignUFrame(from: String, to: String, uType: AX25UType?) {
+        guard case let .awaitingConnected(destination, nextHop, remaining) = netRomRelayPhase,
+              let verdict = relayWitness.observe(from: from, to: to, uType: uType)
+        else { return }
+        switch verdict {
+        case let .made(hop):
+            // Said out loud because it contradicts what the operator can see:
+            // the node has not announced anything, and the transcript will
+            // look stalled right up until this line.
+            onRelayNotice?("\(hop) answered \(nextHop.uppercased())'s call with UA — "
+                           + "the hop is up. Read off the air, not from \(nextHop.uppercased()).")
+            advanceRelayPastHop(destination: destination, nextHop: nextHop,
+                                remaining: remaining, evidence: "UA on \(nextHop)'s outward link")
+        case let .refused(hop):
+            failRelay(detail: "\(hop) answered with DM — it is not accepting connections.",
+                      destination: destination, nextHop: nextHop,
+                      evidence: "DM on \(nextHop)'s outward link")
+        }
+    }
+
+    private func sendRelayConnectCommand(destination: String) {
+        guard let session = currentSession else {
+            TxLog.error(.session, "Node-prompt relay: no current session to send C command through", ["destination": destination])
+            return
+        }
+        // Armed here rather than at the phase change: this is the moment the
+        // node is asked, and the SABM it sends on our behalf follows within
+        // seconds. Arming earlier would watch a hop nobody has requested.
+        relayWitness = RelayLegWitness(
+            localCallsign: sessionManager.localCallsign.display,
+            answers: sessionManager.answeredAddresses.map(\.display))
+        relayWitness.expect(destination)
+
         let command = Data("C \(destination)\r".utf8)
         let frames = sessionManager.sendData(command, to: session.remoteAddress, path: session.path, channel: session.channel, pid: 0xF0)
         onSendFrames?(frames)
-        TxLog.outbound(.session, "NET/ROM relay connect command queued", [
+        TxLog.outbound(.session, "Node-prompt relay connect command queued", [
             "destination": destination,
             "nextHop": session.remoteAddress.display,
             "frames": frames.count
@@ -1205,8 +1375,11 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             }
         }
 
-        let dest = parseCallsign(viewModel.destinationCall)
-        let path = parsePath(viewModel.digiPath)
+        // Through a relay this is the next hop, not the destination — see
+        // `wireDestination`.
+        let wire = wireDestination
+        let dest = parseCallsign(wire.call)
+        let path = parsePath(wire.path)
 
         return sessionManager.sendData(
             payload,
@@ -1241,10 +1414,14 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Update the current session based on destination/path
     /// Also handles responder sessions where we might not have set a destination
     private func updateCurrentSession() {
-        // If we have a destination specified, look for that specific session
-        if !viewModel.destinationCall.isEmpty {
-            let dest = parseCallsign(viewModel.destinationCall)
-            let path = parsePath(viewModel.digiPath)
+        // If we have a destination specified, look for that specific session.
+        // Through a relay that is the next-hop link, not the destination — the
+        // circuit lives on the link to the node (see `wireDestination`), and so
+        // do its state, its timers, and what Disconnect has to tear down.
+        let wire = wireDestination
+        if !wire.call.isEmpty {
+            let dest = parseCallsign(wire.call)
+            let path = parsePath(wire.path)
 
             if let session = sessionManager.existingSession(for: dest, path: path) {
                 currentSession = session
@@ -1263,10 +1440,13 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         // but hasn't typed the destination callsign yet
         if let session = sessionManager.anyConnectedSession() {
             currentSession = session
-            // Auto-populate the destination field with the connected peer's callsign
-            // so the user can see who they're connected to
+            // Auto-populate from the session so the operator can see who they
+            // are connected to — the path as well as the callsign. Restoring
+            // the peer alone would redraw a session through DRLNOD as direct,
+            // and the next thing typed would go out the wrong way.
             if viewModel.destinationCall.isEmpty {
                 viewModel.destinationCall = session.remoteAddress.display
+                viewModel.digiPath = session.path.display
             }
             return
         }
@@ -1340,7 +1520,20 @@ struct TerminalView: View {
     @ObservedObject var client: PacketEngine
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var sessionCoordinator: SessionCoordinator
+    /// Text received from a connected station, with that station's callsign.
+    ///
+    /// One hook rather than several: node aliases and white pages facts are
+    /// both read out of the same bytes, and the owner of both lives above this
+    /// view. Nil on platforms with no mailbox UI.
+    let onSessionText: ((String, String) -> Void)?
     @ObservedObject var connectCoordinator: ConnectCoordinator
+    /// What nodes say they can reach, as a second source of connect routes.
+    ///
+    /// Without it the connect bar knows only the ten destinations this station
+    /// has measured a route to, so typing a name the operator just read on the
+    /// Nodes page answered "No known route" — the app holding the answer in
+    /// one screen and refusing it in another.
+    @ObservedObject var nodeAliases: NodeAliasStore
     @StateObject private var txViewModel: ObservableTerminalTxViewModel
     @StateObject private var connectBarViewModel: ConnectBarViewModel
     @ObservedObject var searchModel: AppToolbarSearchModel
@@ -1374,6 +1567,8 @@ struct TerminalView: View {
         settings: AppSettingsStore,
         sessionCoordinator: SessionCoordinator,
         connectCoordinator: ConnectCoordinator,
+        nodeAliases: NodeAliasStore,
+        onSessionText: ((String, String) -> Void)? = nil,
         searchModel: AppToolbarSearchModel,
         locationService: StationLocationService? = nil,
         onIdentity: ((String) -> Void)? = nil,
@@ -1385,6 +1580,8 @@ struct TerminalView: View {
         _settings = ObservedObject(wrappedValue: settings)
         _sessionCoordinator = ObservedObject(wrappedValue: sessionCoordinator)
         _connectCoordinator = ObservedObject(wrappedValue: connectCoordinator)
+        _nodeAliases = ObservedObject(wrappedValue: nodeAliases)
+        self.onSessionText = onSessionText
         self.searchModel = searchModel
         self.locationService = locationService
 
@@ -1403,6 +1600,14 @@ struct TerminalView: View {
                 txViewModel.updateSearchQuery(newValue)
             }
             .onAppear {
+                // Leaving Terminal destroys this view, and with it the view
+                // model holding `currentSession` — while the session itself
+                // carries on in the session manager. Coming back with no
+                // re-adoption showed "Not connected" over a live link that was
+                // still exchanging I-frames. Sessions outlive the UI
+                // (CLAUDE.md §5), so the view has to ask rather than assume.
+                txViewModel.refreshCurrentSession()
+
                 txViewModel.updateSearchQuery(searchModel.query)
                 lastObservedDestination = txViewModel.viewModel.destinationCall
                 cachedAutoPathSuggestions = buildAutoPathCandidates(for: txViewModel.viewModel.destinationCall)
@@ -1450,7 +1655,10 @@ struct TerminalView: View {
             .onChange(of: connectBarViewModel.toCall) { _, _ in syncAdaptiveSelection() }
             .onChange(of: connectBarViewModel.viaDigipeaters) { _, _ in syncAdaptiveSelection() }
             .onChange(of: sessionCoordinator.adaptiveTransmissionEnabled) { _, _ in syncAdaptiveSelection() }
-            .onChange(of: txViewModel.sessionState) { _, newState in
+            .onChange(of: sessionCoordinator.netRomDriver.circuits) { _, _ in
+                syncCircuitSessionRecords()
+            }
+            .onChange(of: txViewModel.sessionState) { oldState, newState in
                 switch newState {
                 case .connecting:
                     connectBarViewModel.markConnecting()
@@ -1459,6 +1667,26 @@ struct TerminalView: View {
                     // When a NET/ROM relay is in progress, L2 to the next-hop just became
                     // connected. Do not call markConnected yet — the relay handshake will
                     // call onNetRomRelayEstablished (→ markConnected) once the node confirms.
+                    if txViewModel.relayIsHandshaking {
+                        // Say which of the two connections just happened. Both
+                        // are "connected" and only one is what was asked for,
+                        // and the node's own text arrives next — without a line
+                        // marking the stage it reads as the destination
+                        // answering (reported 2026-08-27).
+                        if let hop = txViewModel.netRomRelayNextHop,
+                           let destination = txViewModel.relayHandshakeDestination {
+                            client.appendSystemNotification(
+                                "Link to \(hop.uppercased()) is up. Waiting for its prompt "
+                                + "before asking it to connect to \(destination.uppercased()) "
+                                + "— not connected to \(destination.uppercased()) yet.")
+                        }
+                        // The link to the node is up; its banner is what starts
+                        // the handshake. DRLNOD accepted the connect at 17:52:41
+                        // on 2026-08-26 and then said nothing for three minutes,
+                        // and the relay waited the whole time in silence.
+                        startRelayBannerWatchdog()
+                        break
+                    }
                     guard txViewModel.netRomRelayPhase == nil else { break }
                     connectBarViewModel.markConnected(
                         sourceCall: txViewModel.viewModel.sourceCall,
@@ -1474,9 +1702,22 @@ struct TerminalView: View {
                     connectBarViewModel.markDisconnecting()
                     updateActiveSessionRecordState("Disconnecting")
                 case .disconnected:
-                    // If a relay was active, abandon it on disconnect
-                    txViewModel.netRomRelayPhase = nil
-                    txViewModel.clearManualRelay()
+                    // Abandon a relay only when a link that existed went away.
+                    //
+                    // `.disconnected` is also the state a brand-new session sits
+                    // in between being created and its SABM going out, and XID
+                    // negotiation makes that window seconds long (8 s against
+                    // DRLNOD on 2026-08-26, which answers XID with DM). Clearing
+                    // on the level rather than the transition disarmed every
+                    // NET/ROM connect the moment its own session appeared: the
+                    // link to the next hop came up with nothing left to answer
+                    // the node's banner, and the operator was parked at
+                    // "ENTER COMMAND:" with a session labelled for a station it
+                    // had never asked for.
+                    if NetRomRelayLifecycle.abandonsRelay(onDisconnectFrom: oldState) {
+                        txViewModel.netRomRelayPhase = nil
+                        txViewModel.clearManualRelay()
+                    }
                     connectBarViewModel.markDisconnected()
                     updateActiveSessionRecordState("Disconnected")
                     if sessionCoordinator.connectedSessions.isEmpty {
@@ -1594,7 +1835,12 @@ struct TerminalView: View {
         }
 
         // Wire plain-text chat (non-AXDP) to console when sender uses plain text.
+        let observe = onSessionText
         txViewModel.onPlainTextChatReceived = { [weak client] from, text, via in
+            // A BBS session the operator opened themselves. Reading structure
+            // out of what already arrived costs nobody anything; asking the
+            // far end for it would spend their channel on our convenience.
+            observe?(text, from.display.uppercased())
             if let client = client {
                 TxLog.debug(.session, "onPlainTextChatReceived callback executing", [
                     "from": from.display,
@@ -1629,21 +1875,22 @@ struct TerminalView: View {
             }
         }
 
-        // Wire up response frame sending (for RR, REJ, etc.)
-        txViewModel.onSendResponseFrame = { [weak client] frame in
-            client?.send(frame: frame) { result in
-                Task { @MainActor in
-                    switch result {
-                    case .success:
-                        TxLog.outbound(.ax25, "Response frame sent", [
-                            "type": frame.frameType,
-                            "dest": frame.destination.display
-                        ])
-                    case .failure(let error):
-                        TxLog.error(.ax25, "Response frame send failed", error: error)
-                    }
-                }
-            }
+        // A digipeater repeating one of our own I-frames is evidence the frame
+        // cleared that hop. It advances the delivery indicator to "relayed" —
+        // never to "delivered": digipeating is fire-and-forget, and only the
+        // peer's ack proves receipt.
+        //
+        // Detected in SessionCoordinator because that is where inbound frames
+        // are seen. It used to live in this view model's own packet handler,
+        // which was superseded in February; nothing has set `relayedDigis`
+        // since, so OutboundProgressView's "Relayed by …" branch could not
+        // render.
+        sessionCoordinator.onForeignUFrame = { [weak txViewModel] from, to, uType in
+            txViewModel?.noteForeignUFrame(from: from, to: to, uType: uType)
+        }
+
+        sessionCoordinator.onOutboundRelayHeard = { [weak txViewModel] destination, digis in
+            txViewModel?.recordOutboundRelay(destination: destination, digis: digis)
         }
 
         // NET/ROM relay: send data frames produced by sessionManager.sendData (e.g. C command)
@@ -1652,7 +1899,7 @@ struct TerminalView: View {
                 client?.send(frame: frame) { result in
                     Task { @MainActor in
                         if case .failure(let error) = result {
-                            TxLog.error(.session, "NET/ROM relay frame send failed", error: error, [
+                            TxLog.error(.session, "Node-prompt relay frame send failed", error: error, [
                                 "type": frame.frameType,
                                 "dest": frame.destination.display
                             ])
@@ -1663,7 +1910,9 @@ struct TerminalView: View {
         }
 
         // NET/ROM relay: update connect bar when relay is established or fails.
-        txViewModel.onNetRomRelayEstablished = { [weak connectBarViewModel, weak txViewModel] destination, nextHop in
+        txViewModel.onNetRomRelayEstablished = { [weak connectBarViewModel, weak txViewModel, weak client] destination, nextHop in
+            client?.appendSystemNotification(
+                "NET/ROM circuit to \(destination.uppercased()) established via \(nextHop.uppercased()).")
             connectBarViewModel?.markConnected(
                 sourceCall: txViewModel?.viewModel.sourceCall,
                 destination: destination,
@@ -1672,7 +1921,11 @@ struct TerminalView: View {
                 forcedNextHop: nextHop
             )
         }
-        txViewModel.onNetRomRelayFailed = { [weak connectBarViewModel] detail in
+        txViewModel.onRelayNotice = { [weak client] note in
+            client?.appendSystemNotification(note)
+        }
+        txViewModel.onNetRomRelayFailed = { [weak connectBarViewModel, weak client] detail in
+            client?.appendSystemNotification("NET/ROM circuit refused: \(detail)")
             connectBarViewModel?.markFailed(reason: .connectRejected, detail: detail)
         }
 
@@ -1689,7 +1942,8 @@ struct TerminalView: View {
             neighbors: neighbors,
             routes: routes,
             packets: client.packets,
-            favorites: settings.watchCallsigns
+            favorites: settings.watchCallsigns,
+            directoryRoutes: nodeAliases.directory.connectRoutes()
         )
     }
 
@@ -1954,10 +2208,10 @@ struct TerminalView: View {
                 if txViewModel.viewModel.connectionMode == .connected {
                     ConnectionStatusStripView(
                         session: txViewModel.currentSession,
-                        sessionState: txViewModel.sessionState,
-                        destinationCall: connectBarViewModel.toCall,
-                        viaDigipeaters: connectBarViewModel.viaDigipeaters,
-                        connectionMode: connectBarViewModel.mode,
+                        sessionState: displayedSessionState,
+                        destinationCall: displayedDestination,
+                        viaDigipeaters: displayedVia,
+                        connectionMode: displayedConnectionMode,
                         isTNCConnected: client.status == .connected
                     )
                 }
@@ -2030,6 +2284,7 @@ struct TerminalView: View {
                 destinationCapability: client.capabilityStore.capabilities(for: txViewModel.viewModel.destinationCall),
                 capabilityStatus: sessionCoordinator.capabilityStatus(for: txViewModel.viewModel.destinationCall),
                 connectBarViewModel: connectBarViewModel,
+                relayDestination: txViewModel.relayConversation?.destination,
                 connectContext: connectCoordinator.activeContext,
                 autoPathSuggestions: autoPathSuggestions.map { suggestion in
                     AutoPathSuggestionItem(
@@ -2268,6 +2523,67 @@ struct TerminalView: View {
     // MARK: - Transmission
 
     /// Send the current composed message
+    /// Put the composed line on a NET/ROM circuit.
+    ///
+    /// The bytes we transmit are a datagram inside an I-frame addressed
+    /// to the *neighbor*, so nothing legible would ever appear in the
+    /// transcript on its own — the echo below is what makes the
+    /// conversation readable, the same role the raw console plays for
+    /// AX.25 text.
+    private func sendOnCircuit(_ circuitID: NetRomCircuitID) {
+        let text = txViewModel.viewModel.composeText
+        guard !text.isEmpty else { return }
+        var payload = Data(text.utf8)
+        payload.append(0x0D)  // CR, as node command lines expect
+        sessionCoordinator.netRomDriver.send(payload, on: circuitID)
+        client.appendSessionChatLine(from: settings.myCallsign, text: text)
+        txViewModel.clearCompose()
+    }
+
+    /// Mirror live circuits into the session picker so a circuit is
+    /// selectable, filterable, and typeable like any other session
+    /// (CLAUDE.md §5 lists NET/ROM circuits as a session type).
+    private func syncCircuitSessionRecords() {
+        let circuits = sessionCoordinator.netRomDriver.circuits
+        for circuit in circuits {
+            let key = NetRomCircuitSession.recordID(for: circuit.id)
+            let status = NetRomCircuitSession.statusText(for: circuit.state)
+            if let idx = sessionRecords.firstIndex(where: { $0.id == key }) {
+                sessionRecords[idx].statusText = status
+            } else {
+                let hop = circuit.neighbor.display == circuit.destination.display
+                    ? [] : [circuit.neighbor.display]
+                sessionRecords.insert(
+                    SessionRecord(
+                        id: key,
+                        // The name the operator used, with the callsign
+                        // actually on the air.
+                        destination: circuit.displayName,
+                        mode: .netrom,
+                        via: hop,
+                        statusText: status,
+                        relayDestination: nil
+                    ),
+                    at: 0
+                )
+                sessionRecords = Array(sessionRecords.prefix(20))
+                // Selecting it is the point: the operator asked for this
+                // circuit, so typing should reach it without a second step.
+                activeSessionRecordID = key
+            }
+        }
+        // A circuit that closed leaves its record behind, marked, the way
+        // a dropped AX.25 session does — the transcript above it is still
+        // worth reading.
+        let live = Set(circuits.map { NetRomCircuitSession.recordID(for: $0.id) })
+        for idx in sessionRecords.indices
+        where NetRomCircuitSession.isCircuitRecord(sessionRecords[idx].id)
+            && !live.contains(sessionRecords[idx].id)
+            && sessionRecords[idx].statusText != "Disconnected" {
+            sessionRecords[idx].statusText = "Disconnected"
+        }
+    }
+
     private func sendCurrentMessage() {
         let connectionMode = txViewModel.viewModel.connectionMode
 
@@ -2319,6 +2635,34 @@ struct TerminalView: View {
 
     /// Send message via connected session (I-frames)
     private func sendConnectedMessage() {
+        // A native NET/ROM circuit is its own session with its own
+        // transport; the AX.25 path below cannot carry it.
+        switch NetRomCircuitSession.sendTarget(
+            activeRecordID: activeSessionRecordID,
+            circuits: sessionCoordinator.netRomDriver.circuits
+        ) {
+        case .circuit(let circuitID):
+            sendOnCircuit(circuitID)
+            return
+        case .circuitNotReady(let reason):
+            client.appendSystemNotification(reason)
+            return
+        case .ax25:
+            break
+        }
+
+        // A circuit still being set up carries nothing yet. Holding the text in
+        // the composer is the honest answer: the operator's words are meant for
+        // the far end, and until the node says the link is made there is nowhere
+        // to put them that means that.
+        if txViewModel.relayIsHandshaking {
+            let hop = (txViewModel.netRomRelayNextHop ?? "the node").uppercased()
+            client.appendSystemNotification(
+                "Not sent — still waiting for \(hop) to make the circuit. "
+                + "Your message is still in the box.")
+            return
+        }
+
         // Build payload
         let text = txViewModel.viewModel.composeText
         let useAXDP = txViewModel.viewModel.useAXDP
@@ -2525,6 +2869,51 @@ struct TerminalView: View {
         }
     }
 
+    // MARK: - Displayed Identity
+
+    /// What the header and the composer should call the far end.
+    ///
+    /// Not the same question as where frames go. Bringing up a relay points the
+    /// connect bar at the next hop and leaves it there, so anything that reads
+    /// the connect bar for a name shows the node instead of the station the
+    /// operator is actually talking to.
+    private var displayedDestination: String {
+        if let handshaking = txViewModel.relayHandshakeDestination { return handshaking }
+        return NetRomRelayLifecycle.displayedDestination(
+            typed: connectBarViewModel.toCall,
+            establishedDestination: txViewModel.relayConversation?.destination)
+    }
+
+    /// The link state to show, which is not the same as the L2 link's state.
+    ///
+    /// The wire to the next hop is genuinely `.connected` the moment its UA
+    /// lands, but the operator asked for AGCHAT and AGCHAT is not connected
+    /// until the node says so. Reporting the L2 state put a green dot and
+    /// "KB5YZB-7" on screen while the thing that was asked for had not
+    /// happened — reported 2026-08-27 as "it looks like I am just connected to
+    /// kb5yzb".
+    private var displayedSessionState: AX25SessionState? {
+        txViewModel.relayIsHandshaking ? .connecting : txViewModel.sessionState
+    }
+
+    /// The relay's next hop reads as a via — which is what it is, one node
+    /// forwarding for another, even though AX.25 never saw a digipeater field.
+    private var displayedVia: [String] {
+        if let relay = txViewModel.relayConversation { return [relay.nextHop] }
+        if txViewModel.relayIsHandshaking, let hop = txViewModel.netRomRelayNextHop {
+            return [hop]
+        }
+        return connectBarViewModel.viaDigipeaters
+    }
+
+    /// A live circuit is NET/ROM however the L2 link beneath it was dialled.
+    private var displayedConnectionMode: ConnectBarMode {
+        if txViewModel.relayConversation != nil || txViewModel.relayIsHandshaking {
+            return .netrom
+        }
+        return connectBarViewModel.mode
+    }
+
     private func formatViaPath(_ digis: [String]) -> String {
         switch digis.count {
         case 0:
@@ -2651,7 +3040,242 @@ struct TerminalView: View {
         }
     }
 
+    /// How long a native circuit gets to answer before we fall back.
+    ///
+    /// Deliberately far short of the transport's own patience (T1 = 120 s,
+    /// N2 = 3, so a NET/ROM connect takes six minutes to fail on its own).
+    /// A CONACK that has not arrived in half a minute is not coming from a
+    /// node that speaks L4 at all, and the operator is better served by the
+    /// prompt relay than by watching a timer.
+    private static let nativeCircuitGrace: TimeInterval = 30
+
+    /// Try a real NET/ROM circuit — L3/L4 datagrams in PID-0xCF I-frames,
+    /// with the network doing the routing.
+    ///
+    /// This is what "NET/ROM" is supposed to mean, and what was missing:
+    /// the transport has been complete and tested for a while but reachable
+    /// only from the Routes page, so every connect from the connect bar fell
+    /// through to driving node command prompts instead. That method works,
+    /// but it is not NET/ROM — it types `C DRLNOD`, `C KB5YZB-7`, `C COSCO`
+    /// at three command interpreters in turn, which is why the field capture
+    /// of 2026-08-27 shows node menus scrolling past on the way to COSCO and
+    /// every frame carrying PID 0xF0.
+    ///
+    /// - Returns: the attempt's result, or nil meaning "fall back to the
+    ///   command-prompt relay" — no route known, or no answer in time.
+    private func attemptNativeNetRomCircuit(intent: ConnectIntent) async -> ConnectAttemptStepResult? {
+        let driver = sessionCoordinator.netRomDriver
+        let target = CallsignNormalizer.toAddress(intent.normalizedTo)
+
+        // A destination that has already proved it cannot carry a circuit
+        // is not worth another grace period this hour.
+        guard sessionCoordinator.shouldTryNativeNetRom(to: intent.normalizedTo) else {
+            TxLog.debug(.session, "Skipping native NET/ROM — it did not work here recently", [
+                "destination": intent.normalizedTo
+            ])
+            return nil
+        }
+
+        // Which peers we already held links to. Sampled *before* the
+        // attempt, because opening a circuit sends its CONREQ synchronously
+        // and brings the neighbor link up on the way — ask afterwards and
+        // every link looks pre-existing. Only a link this attempt opened may
+        // be torn down on the way out; one that was already carrying traffic
+        // is not ours to drop.
+        let linksBefore = Set(
+            txViewModel.sessionManager.sessions.values
+                .filter { $0.state == .connected || $0.state == .connecting }
+                .map { $0.remoteAddress.display.uppercased() }
+        )
+
+        // The address the L3 header will carry. The operator names a node
+        // by alias ("COSCO"); NET/ROM addresses by callsign (KE0GB-7), and
+        // the circuit list is keyed by the latter.
+        let resolved = driver.resolveDestination(intent.normalizedTo).address
+
+        switch driver.autoConnect(to: target) {
+        case .success:
+            break
+        case .failure(let reason):
+            // Not a failure of the connect — a failure to find a native
+            // route, which the prompt relay may still manage because it
+            // can ask a node to do the routing on our behalf.
+            TxLog.debug(.session, "Native NET/ROM unavailable, falling back to prompt relay", [
+                "destination": intent.normalizedTo, "reason": reason.operatorText
+            ])
+            client.appendSystemNotification(
+                reason.operatorText
+                + " Asking a node to connect on our behalf instead — its menus will "
+                + "appear below, because that method talks to node command prompts.")
+            return nil
+        }
+
+        connectBarViewModel.markConnecting()
+        updateActiveSessionRecordState("NET/ROM circuit…")
+
+        switch await waitForCircuitOutcome(to: resolved, timeoutSeconds: Self.nativeCircuitGrace) {
+        case .success:
+            let neighbor = driver.circuits.first {
+                CallsignNormalizer.addressesMatch($0.destination, resolved)
+                    && $0.state == .connected
+            }?.neighbor.display
+            connectBarViewModel.setMode(.netrom, for: intent.sourceContext)
+            connectBarViewModel.markConnected(
+                sourceCall: txViewModel.viewModel.sourceCall,
+                destination: intent.normalizedTo,
+                via: [],
+                transportMode: .netrom,
+                forcedNextHop: neighbor
+            )
+            connectBarViewModel.recordAttempt(intent: intent, result: .success)
+            updateActiveSessionRecordState("Connected")
+            sessionCoordinator.noteNativeNetRomSucceeded(to: intent.normalizedTo)
+            return .success
+
+        case .cancelled:
+            // Not evidence about the network — the operator stopped it.
+            abandonCircuits(to: resolved)
+            return .cancelled
+
+        case .failed(let detail), .timeout(let detail):
+            // Abandon whatever is still in flight before trying anything
+            // else. Left alone a connecting circuit keeps retransmitting
+            // CONREQ for six more minutes (T1 120 s, N2 3), keying the
+            // transmitter underneath the relay we are about to run.
+            let neighbor = driver.circuits.first {
+                CallsignNormalizer.addressesMatch($0.destination, resolved)
+                    && $0.state != .disconnected
+            }?.neighbor
+            abandonCircuits(to: resolved)
+            // And drop the L2 link the attempt opened, if it opened one and
+            // nothing else is using it. The relay that runs next asks a node
+            // for its prompt, and a node greets on *connect* — inheriting a
+            // link this attempt established means BPQ is already past its
+            // greeting and the relay waits for a banner that will never
+            // come. The same inherited-session trap as a failed relay
+            // leaving its link up (2026-08-27).
+            if let neighbor,
+               !linksBefore.contains(neighbor.display.uppercased()),
+               !driver.circuits.contains(where: {
+                   $0.state != .disconnected
+                       && CallsignNormalizer.addressesMatch($0.neighbor, neighbor)
+               }) {
+                disconnectSession(destination: neighbor.display, digis: [])
+            }
+            sessionCoordinator.noteNativeNetRomFailed(to: intent.normalizedTo)
+            TxLog.debug(.session, "Native NET/ROM circuit did not come up", [
+                "destination": intent.normalizedTo, "detail": detail
+            ])
+            // Name the most likely cause when it applies. A circuit's
+            // acknowledgement has to be *routed home*, and no node routes
+            // to a station it has never heard advertise itself — so with
+            // advertising off the reply has nowhere to go, however well the
+            // outbound half worked. That is a setting, not a fault, and the
+            // operator can only act on it if someone says so.
+            let advice = driver.advertisesItself ? ""
+                : " No node advertises a route back to this station, so a reply may "
+                    + "have nowhere to go — turn on \"Announce this station to the "
+                    + "network\" in Transmission settings if you want circuits to "
+                    + "work here."
+            client.appendSystemNotification(
+                "\(intent.normalizedTo.uppercased()) did not answer as a NET/ROM node "
+                + "(\(detail))." + advice
+                + " Asking a node to connect on our behalf instead — its menus will "
+                + "appear below.")
+            return nil
+        }
+    }
+
+    /// Close every live circuit to a destination.
+    ///
+    /// Plural because auto-try may have more than one in flight — it opens
+    /// a fresh circuit per hop, and the one whose ID `autoConnect` returned
+    /// is only the first of them.
+    private func abandonCircuits(to destination: AX25Address) {
+        let driver = sessionCoordinator.netRomDriver
+        for circuit in driver.circuits where
+            CallsignNormalizer.addressesMatch(circuit.destination, destination)
+            && circuit.state != .disconnected {
+            driver.disconnect(circuit.id)
+        }
+    }
+
+    /// Outcome of waiting on a native circuit. `timeout` carries a detail
+    /// too so the fallback notice can say what actually happened.
+    private enum CircuitWaitResult {
+        case success
+        case failed(String)
+        case timeout(String)
+        case cancelled
+    }
+
+    /// Poll until a circuit to `destination` connects, the attempt runs
+    /// out of routes, or the grace expires.
+    ///
+    /// Watches the **destination**, not one circuit ID, because auto-try
+    /// opens a fresh circuit per hop: watching the ID returned by
+    /// `autoConnect` would see hop one close, call the whole thing failed,
+    /// and abandon a campaign that was walking to hop two exactly as
+    /// designed. A campaign that is genuinely spent leaves no live circuit
+    /// behind, which is the condition below.
+    private func waitForCircuitOutcome(
+        to destination: AX25Address,
+        timeoutSeconds: TimeInterval
+    ) async -> CircuitWaitResult {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if Task.isCancelled { return .cancelled }
+            let live = sessionCoordinator.netRomDriver.circuits.filter {
+                CallsignNormalizer.addressesMatch($0.destination, destination)
+                    && $0.state != .disconnected
+            }
+            if live.contains(where: { $0.state == .connected }) { return .success }
+            if live.isEmpty {
+                // The driver's own operator note has already said why —
+                // refused, out of routes, neighbor link down.
+                return .failed("no route carried the circuit")
+            }
+            do { try await Task.sleep(nanoseconds: 250_000_000) }
+            catch { return .cancelled }
+        }
+        return .timeout("no answer in \(Int(timeoutSeconds))s")
+    }
+
     private func executeNETROMAutoAttempt(intent: ConnectIntent, override: String?) async -> ConnectAttemptStepResult {
+        // Real NET/ROM first. Only when the network cannot carry a circuit
+        // do we fall back to driving node command prompts.
+        if let native = await attemptNativeNetRomCircuit(intent: intent) { return native }
+
+        let first = await runNodePromptRelay(intent: intent, override: override)
+
+        // One retry, and only for the one failure that is not a failure: a
+        // handshake that stalled after we destroyed part of it ourselves.
+        //
+        // 2026-08-27, DRLNOD → KB5YZB-7 → COSCO. The frame carrying the last
+        // hop's verdict was lost, REJ went unanswered, the gap was flushed,
+        // and the attempt was reported as "the circuit was not made" — while
+        // the banner of a third node, which could only have come from COSCO,
+        // was already on screen. Nothing was wrong with the route; a hundred
+        // and twenty-eight bytes were wrong with the channel. The link is torn
+        // down by then, which is what makes a retry worth anything: a node
+        // greets on a fresh connect, so the second run gets the whole
+        // handshake again rather than inheriting a node with nothing left to
+        // say.
+        guard case .failed = first, txViewModel.relayLostFrames else { return first }
+        client.appendSystemNotification(
+            "Part of the node's answer was lost on air and it did not resend, so "
+            + "there is no way to tell whether that hop was made. Starting over on a "
+            + "fresh link rather than calling it a failure.")
+        return await runNodePromptRelay(intent: intent, override: override)
+    }
+
+    /// One run of the node-prompt chain: plan it, reach the first node, drive
+    /// its prompts. Separate from the caller so it can be run twice.
+    private func runNodePromptRelay(
+        intent: ConnectIntent, override: String?
+    ) async -> ConnectAttemptStepResult {
+        txViewModel.clearRelayFrameLoss()
+
         guard let nextHop = override ?? intent.routeHint?.nextHop, !nextHop.isEmpty else {
             let message = "No NET/ROM route to \(intent.normalizedTo)"
             upsertSessionRecord(intent: intent, statusText: "Failed")
@@ -2663,16 +3287,49 @@ struct TerminalView: View {
             return .unavailable(message: message)
         }
 
-        TxLog.outbound(.session, "NET/ROM relay auto-attempt", [
-            "destination": intent.normalizedTo, "nextHop": nextHop
+        // The station that lists the destination may not be one this
+        // station can reach directly. The route table knows who reaches
+        // it; chain through them rather than dialling a node that never
+        // answers (field capture 2026-08-27: KB5YZB-7 direct came up and
+        // stayed silent three times, while DRLNOD → KB5YZB-7 → COSCO
+        // worked by hand).
+        let plan = NetRomRelayPlan.plan(
+            destination: intent.normalizedTo,
+            teller: nextHop,
+            routeLookup: { [weak client] station in
+                client?.netRomIntegration?.bestRouteTo(station)?.origin
+            }
+        )
+        let linkTarget = plan.linkTarget
+
+        TxLog.outbound(.session, "Node-prompt relay auto-attempt", [
+            "destination": intent.normalizedTo,
+            "linkTarget": linkTarget,
+            "chain": plan.chain.joined(separator: "→")
         ])
+        client.appendSystemNotification(plan.operatorSummary)
 
         // Set relay phase so data interception is ready the moment UA arrives and data flows
-        txViewModel.netRomRelayPhase = .awaitingBanner(destination: intent.normalizedTo, nextHop: nextHop)
+        txViewModel.netRomRelayPhase = .awaitingBanner(
+            destination: intent.normalizedTo,
+            nextHop: linkTarget,
+            remaining: plan.intermediateHops)
 
-        // Redirect connect bar to the next-hop node for the L2 connect
-        connectBarViewModel.setMode(.ax25, for: intent.sourceContext)
-        connectBarViewModel.applySuggestedTo(nextHop)
+        // Reaching the node is its own problem, and this station may already
+        // know the answer. `digis: []` below used to dial every next hop
+        // direct, ignoring a measured route — KB5YZB-7 is in the route table
+        // *via DRLNOD*, and the direct path to it runs at 18% loss, which is
+        // what kept eating the node's greeting (2026-08-27).
+        let hopPath = bestPathToRelayNode(linkTarget)
+        connectBarViewModel.setMode(hopPath.isEmpty ? .ax25 : .ax25ViaDigi,
+                                    for: intent.sourceContext)
+        connectBarViewModel.applySuggestedTo(linkTarget)
+        if !hopPath.isEmpty {
+            connectBarViewModel.viaDigipeaters = hopPath
+            client.appendSystemNotification(
+                "Reaching \(linkTarget.uppercased()) via \(hopPath.joined(separator: " → ")) "
+                + "— that is how this station last heard it.")
+        }
         syncLegacyFieldsFromConnectBar()
         let nodeIntent = connectBarViewModel.buildIntent(sourceContext: intent.sourceContext)
         guard nodeIntent.validationErrors.isEmpty else {
@@ -2683,7 +3340,7 @@ struct TerminalView: View {
         }
 
         // Establish the L2 connection to the next-hop node
-        let l2Result = await executeAX25AutoAttempt(intent: nodeIntent, digis: [])
+        let l2Result = await executeAX25AutoAttempt(intent: nodeIntent, digis: hopPath)
         guard case .success = l2Result else {
             txViewModel.netRomRelayPhase = nil
             return l2Result
@@ -2713,6 +3370,20 @@ struct TerminalView: View {
             txViewModel.netRomRelayPhase = nil
             return .cancelled
         }
+    }
+
+    /// How this station last actually reached the node it is about to dial.
+    ///
+    /// The relay's first leg is an ordinary AX.25 connect and deserves the same
+    /// evidence any other connect gets. Empty means direct, which is both the
+    /// common case and the right fallback: a path nothing has observed is a
+    /// worse bet than the one the operator's own receiver has been hearing.
+    private func bestPathToRelayNode(_ nextHop: String) -> [String] {
+        let key = CallsignValidator.normalize(nextHop)
+        guard let station = client.stations.first(
+            where: { CallsignValidator.normalize($0.call) == key })
+        else { return [] }
+        return ConnectCoordinator.returnPath(heardVia: station.lastVia)
     }
 
     private enum AX25AutoWaitResult {
@@ -2842,12 +3513,30 @@ struct TerminalView: View {
         upsertSessionRecord(intent: intent, statusText: "Connecting")
         connectBarViewModel.markConnecting()
 
+        // Every connect starts from a clean relay state. A relay armed by an
+        // earlier attempt that died before its link ever reached `.connecting`
+        // is not cleared by the session-state transition, and would otherwise
+        // fire its `C <dest>` at the next node the operator dialled by hand.
+        txViewModel.netRomRelayPhase = nil
+
+        // Say out loud which route this connect took. Without it a NET/ROM
+        // circuit and a direct link are indistinguishable in the transcript
+        // until you read frame addresses, and the operator cannot tell whether
+        // the app did what they asked.
         switch intent.kind {
         case .ax25Direct:
+            client.appendSystemNotification("Connecting to \(intent.normalizedTo) — direct.")
             connectAX25AndRecord(intent: intent)
         case .ax25ViaDigis:
+            let digis = connectBarViewModel.viaDigipeaters.joined(separator: ", ")
+            client.appendSystemNotification("Connecting to \(intent.normalizedTo) — digipeating via \(digis).")
             connectAX25AndRecord(intent: intent)
         case let .netrom(nextHopOverride):
+            // Deliberately no "NET/ROM circuit through X" line here any
+            // more. Which of the two methods is about to be used is not
+            // known yet, and announcing the one we did not use is how the
+            // transcript came to claim NET/ROM over a chain of node
+            // command prompts. Each path below says what it actually did.
             connectNETROM(intent: intent, override: nextHopOverride)
         }
     }
@@ -2877,7 +3566,130 @@ struct TerminalView: View {
         }
     }
 
+    /// How long a next hop may hold the link without speaking.
+    ///
+    /// A node greets on connect; that greeting is what the handshake waits for.
+    /// Forty-five seconds is several times the slowest banner observed (11 s
+    /// through DRLNOD) and still far short of the operator giving up on their
+    /// own.
+    /// How long a node gets to greet us before we assume something was lost.
+    ///
+    /// Shorter than the old single 45 s wait because it is no longer the whole
+    /// budget — it is the point at which we try what an operator would, and
+    /// there is a second wait after that.
+    private static let relayBannerGrace: TimeInterval = 20
+    /// And how long the nudge gets to work before we give up.
+    private static let relayNudgeGrace: TimeInterval = 25
+
+    /// Gives up on a node that took the link and then went quiet.
+    ///
+    /// The budget is **per hop**, not per relay: each wait below restarts
+    /// whenever `relayProgressTick` moves, so a chain that is walking
+    /// normally is never interrupted. Only a hop that genuinely stops
+    /// speaking for its whole grace period is nudged, and only one that
+    /// stays silent through the nudge is abandoned.
+    private func startRelayBannerWatchdog() {
+        let armed = txViewModel.netRomRelayNextHop
+        Task { @MainActor in
+            /// Waits `grace`, restarting the clock on every relay
+            /// advance. Returns false when the relay ended or moved to a
+            /// different link — nothing left for this watchdog to judge.
+            @MainActor func waitForStall(_ grace: TimeInterval) async -> Bool {
+                var tick = txViewModel.relayProgressTick
+                while true {
+                    try? await Task.sleep(nanoseconds: UInt64(grace * 1_000_000_000))
+                    guard txViewModel.relayIsHandshaking,
+                          txViewModel.netRomRelayNextHop == armed else { return false }
+                    if txViewModel.relayProgressTick != tick {
+                        tick = txViewModel.relayProgressTick
+                        continue  // the chain moved; this hop gets its own budget
+                    }
+                    return true
+                }
+            }
+
+            guard let linkPeer = armed?.uppercased() else { return }
+            guard await waitForStall(Self.relayBannerGrace) else { return }
+            // Name the station that actually went quiet. After a hop is
+            // made every byte still arrives from the L2 peer, so naming
+            // that peer sends the operator to look at the wrong node.
+            let silent = txViewModel.relayWaitingOn ?? linkPeer
+
+            // Try what a human would before declaring failure.
+            switch txViewModel.nudgeStalledRelay() {
+            case .clearedGap:
+                client.appendSystemNotification(
+                    "\(silent)'s greeting was incomplete — a frame was lost on air and it "
+                    + "did not resend. Reading the rest and carrying on.")
+            case .prompted:
+                client.appendSystemNotification(
+                    "\(silent) has said nothing for \(Int(Self.relayBannerGrace)) seconds. "
+                    + "Sending a carriage return to ask it for its prompt.")
+            case .nothingToTry:
+                break
+            }
+
+            guard await waitForStall(Self.relayNudgeGrace) else { return }
+            let hop = txViewModel.relayWaitingOn ?? linkPeer
+            txViewModel.netRomRelayPhase = nil
+            // Silence and a sequence gap look the same from here and are not
+            // the same problem. On 2026-08-27 KB5YZB-7's banner arrived as
+            // N(S)=1 with N(S)=0 lost on air; we asked for the missing frame
+            // with REJ and it never came, so the prompt was sitting in the
+            // receive buffer undelivered. Reporting that as "never sent its
+            // prompt" sent the operator looking at the wrong station.
+            // Tear the link down rather than leaving it up "helpfully".
+            //
+            // A node greets on *connect*. Leaving a half-made link open means
+            // the next attempt's SABM resets an existing session rather than
+            // opening a new one (§4.3.3.1), and BPQ's command handler is
+            // already past the greeting — so it answers polls, acknowledges
+            // input, and never says anything again. Field capture 2026-08-27:
+            // the 09:27 failure left the link up, and the 10:03 retry inherited
+            // a session where KB5YZB-7 had nothing left to say. The advice to
+            // "try again" was causing the next failure.
+            // Two different stories end up here, and only one of them is the
+            // node's fault. If part of its answer was destroyed to clear a
+            // receive gap, "it did not answer" is this station describing its
+            // own data loss as somebody else's silence.
+            client.appendSystemNotification(
+                txViewModel.relayLostFrames
+                ? "\(hop)'s answer was cut short — a frame was lost on air and it did "
+                  + "not resend, so whether that hop was made is unknowable from here. "
+                  + "Dropping the link to \(linkPeer) to start over on a clean one."
+                : "\(hop) did not answer with a node prompt, even after being asked, so "
+                  + "the circuit was not made. Dropping the link to \(linkPeer) so the next "
+                  + "attempt starts clean — a node only greets on a fresh connect.")
+            // The link to tear down is always the L2 peer. `hop` may be a
+            // node further along the chain, which we hold no session to —
+            // disconnecting *that* name is a no-op that leaves the real
+            // link up, which is the exact state this branch exists to avoid.
+            disconnectSession(destination: linkPeer, digis: [])
+            connectBarViewModel.markFailed(
+                reason: .connectRejected,
+                detail: "\(hop) did not answer with a node prompt")
+            updateActiveSessionRecordState("Failed")
+        }
+    }
+
+    /// Connect in NET/ROM mode: a real circuit if the network can carry
+    /// one, otherwise a node's command prompt driven on our behalf.
+    ///
+    /// Same order as the auto path, for the same reason — the two are the
+    /// operator's one button and two buttons for the same intent, and it
+    /// would be strange for them to use different transports.
     private func connectNETROM(intent: ConnectIntent, override: CallsignSSID?) {
+        Task { @MainActor in
+            if await attemptNativeNetRomCircuit(intent: intent) != nil { return }
+            connectNETROMViaNodePrompts(intent: intent, override: override)
+        }
+    }
+
+    /// The fallback: open an AX.25 link to a node and type `C <somewhere>`
+    /// at its command interpreter, once per hop. Not NET/ROM, whatever the
+    /// mode is called — the node's menus are on the operator's screen
+    /// because the operator is, unavoidably, sitting in its shell.
+    private func connectNETROMViaNodePrompts(intent: ConnectIntent, override: CallsignSSID?) {
         guard let nextHop = override?.stringValue ?? intent.routeHint?.nextHop, !nextHop.isEmpty else {
             connectBarViewModel.recordAttempt(intent: intent, result: .failed)
             connectBarViewModel.markFailed(
@@ -2888,12 +3700,24 @@ struct TerminalView: View {
             return
         }
 
-        // Set relay phase BEFORE sending SABM so data interception is active when UA arrives
-        txViewModel.netRomRelayPhase = .awaitingBanner(destination: intent.normalizedTo, nextHop: nextHop)
+        let plan = NetRomRelayPlan.plan(
+            destination: intent.normalizedTo,
+            teller: nextHop,
+            routeLookup: { [weak client] station in
+                client?.netRomIntegration?.bestRouteTo(station)?.origin
+            }
+        )
+        client.appendSystemNotification(plan.operatorSummary)
 
-        // Redirect connect bar to the next-hop node for the L2 connect
+        // Set relay phase BEFORE sending SABM so data interception is active when UA arrives
+        txViewModel.netRomRelayPhase = .awaitingBanner(
+            destination: intent.normalizedTo,
+            nextHop: plan.linkTarget,
+            remaining: plan.intermediateHops)
+
+        // Redirect connect bar to the link target for the L2 connect
         connectBarViewModel.setMode(.ax25, for: intent.sourceContext)
-        connectBarViewModel.applySuggestedTo(nextHop)
+        connectBarViewModel.applySuggestedTo(plan.linkTarget)
         syncLegacyFieldsFromConnectBar()
 
         guard let frame = txViewModel.connect() else {
@@ -2915,8 +3739,16 @@ struct TerminalView: View {
                     self.connectBarViewModel.markFailed(reason: .connectRejected, detail: error.localizedDescription)
                     self.updateActiveSessionRecordState("Failed")
                 } else {
-                    TxLog.outbound(.session, "NET/ROM relay SABM sent", [
-                        "destination": intent.normalizedTo, "nextHop": nextHop
+                    // Not necessarily a SABM, and never to `nextHop`:
+                    // `txViewModel.connect()` opens the link to the plan's
+                    // *link target*, and against an unknown peer that
+                    // starts with XID. The old wording claimed both — the
+                    // 2026-08-27 capture logged "SABM sent … nextHop=
+                    // KB5YZB-7" for an XID addressed to DRLNOD.
+                    TxLog.outbound(.session, "Node-prompt relay link opening", [
+                        "destination": intent.normalizedTo,
+                        "linkTarget": plan.linkTarget,
+                        "chain": plan.chain.joined(separator: "\u{2192}")
                     ])
                 }
             }
@@ -2925,6 +3757,17 @@ struct TerminalView: View {
 
     /// Disconnect from current session
     private func disconnectFromDestination() {
+        // Closing a circuit is a DISCREQ on the circuit, not a DISC on
+        // the neighbor link — that link may be carrying other circuits.
+        if let activeSessionRecordID,
+           let summary = NetRomCircuitSession.circuit(
+                forRecordID: activeSessionRecordID,
+                among: sessionCoordinator.netRomDriver.circuits) {
+            sessionCoordinator.netRomDriver.disconnect(summary.id)
+            updateActiveSessionRecordState("Disconnecting…")
+            return
+        }
+
         guard let frame = txViewModel.disconnect() else {
             connectBarViewModel.markFailed(reason: .unknown, detail: "Unable to build DISC frame")
             updateActiveSessionRecordState("Failed")
@@ -3017,6 +3860,10 @@ struct TerminalView: View {
     }
 
     private func focusSessionRecord(id: String) {
+        // A circuit record is not a connect-bar draft: repointing the bar
+        // at its destination would make Connect start a *relay* to the
+        // same station, which is a different mechanism entirely.
+        guard !NetRomCircuitSession.isCircuitRecord(id) else { return }
         guard let record = sessionRecords.first(where: { $0.id == id }) else { return }
         connectBarViewModel.setMode(record.mode, for: connectCoordinator.activeContext)
         connectBarViewModel.applySuggestedTo(record.destination)
@@ -3245,6 +4092,7 @@ struct TerminalViewModifiers: ViewModifier {
         settings: settings,
         sessionCoordinator: coordinator,
         connectCoordinator: connectCoordinator,
+        nodeAliases: NodeAliasStore(),
         searchModel: searchModel
     )
     .frame(width: 800, height: 600)

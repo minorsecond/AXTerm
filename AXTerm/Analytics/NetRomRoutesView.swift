@@ -404,12 +404,27 @@ struct NetRomRoutesView: View {
                                 Button("Connect (NET/ROM)") {
                                     requestRouteConnect(route, action: .netrom)
                                 }
+                                .help("Connects to the next-hop node and drives its "
+                                      + "command prompt — the proven path on this network.")
                                 Button("Connect Direct (AX.25)") {
                                     requestRouteConnect(route, action: .ax25Direct)
                                 }
                                 Button("Connect via Digi (AX.25)") {
                                     requestRouteConnect(route, action: .ax25ViaDigi)
                                 }
+                                Divider()
+                                Button("Open NET/ROM Circuit (native)") {
+                                    openNativeCircuit(to: route.destination)
+                                }
+                                Button("Auto-try Every Known Route") {
+                                    autoTryCircuit(to: route.destination)
+                                }
+                                .help("Opens a NET/ROM circuit through the best route, and "
+                                      + "if that one goes unanswered, tries the next-best "
+                                      + "automatically. A station that answers 'no' ends it.")
+                                .help("Speaks the NET/ROM transport itself — one connect "
+                                      + "request the network routes, instead of typing at a "
+                                      + "node's prompt. New; not yet proven against these nodes.")
                             }
                     }
                     .width(min: 80, ideal: 100)
@@ -611,6 +626,27 @@ struct NetRomRoutesView: View {
         connectCoordinator.requestConnect(
             ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true)
         )
+    }
+
+    /// Open a native NET/ROM circuit. Distinct from `requestRouteConnect`
+    /// with `.netrom`, which drives a node's *command prompt* — this
+    /// speaks the transport nodes speak to each other, and the network
+    /// does the routing. See Docs/NetRomTransport.md.
+    private func openNativeCircuit(to destination: String) {
+        guard let coordinator = SessionCoordinator.shared else { return }
+        let target = CallsignNormalizer.toAddress(destination)
+        if case let .failure(reason) = coordinator.netRomDriver.openCircuit(to: target) {
+            coordinator.packetEngine?.appendSystemNotification(reason.operatorText)
+        }
+    }
+
+    /// Walk every known route to a destination until one comes up.
+    private func autoTryCircuit(to destination: String) {
+        guard let coordinator = SessionCoordinator.shared else { return }
+        let target = CallsignNormalizer.toAddress(destination)
+        if case let .failure(reason) = coordinator.netRomDriver.autoConnect(to: target) {
+            coordinator.packetEngine?.appendSystemNotification(reason.operatorText)
+        }
     }
 
     private func requestRouteConnect(_ route: RouteDisplayInfo, action: RouteConnectAction) {

@@ -95,7 +95,33 @@ struct NodeProfileView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
+            if !profile.reachVia.isEmpty {
+                reachLine
+            }
         }
+    }
+
+    /// How to get there — for a station harvested from a node's table this is
+    /// the only thing the profile actually knows, and it belongs beside the
+    /// callsign rather than buried below a page of empty sections.
+    private var reachLine: some View {
+        Label {
+            Text("Connect to ") + Text(profile.reachVia[0]).bold()
+                + Text(" and ask for \(profile.alias ?? profile.callsign)")
+                + Text(profile.reachVia.count > 1
+                       ? "  ·  or \(profile.reachVia.dropFirst().joined(separator: ", "))"
+                       : "")
+        } icon: {
+            Image(systemName: "arrow.triangle.branch")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.top, 2)
+        .help(profile.reachVia.count > 1
+              ? "These nodes listed this station, freshest claim first. Any of them "
+                + "should be able to connect you through."
+              : "This node listed the station, so it knows how to get there. "
+                + "A node's claim, not a route this station has measured.")
     }
 
     /// A destination, not a station.
@@ -430,7 +456,13 @@ struct NodeProfileView: View {
                                 .background(.quaternary, in: Capsule())
                         }
                         Spacer(minLength: 8)
-                        Text("\(sibling.heardCount) heard")
+                        // "0 heard" would be the same row as a station that
+                        // has gone quiet. These have never transmitted at
+                        // all — they are known only because their operator
+                        // named them in a beacon.
+                        Text(sibling.lastHeard == nil && sibling.heardCount == 0
+                             ? "announced, not heard"
+                             : "\(sibling.heardCount) heard")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
@@ -522,10 +554,19 @@ struct NodeProfileView: View {
                 Button {
                     onConnect()
                 } label: {
-                    Label("Connect", systemImage: "link")
+                    // Named with the route rather than a bare "Connect". For a
+                    // station nothing here has heard, the interesting part of
+                    // the action is which node it goes through, and the line
+                    // above already told the operator to do this by hand.
+                    Label(profile.reachVia.first.map { "Connect via \($0)" } ?? "Connect",
+                          systemImage: "link")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .help(profile.reachVia.first.map {
+                    "Connects to \($0), waits for its prompt, then asks it for "
+                    + "\(profile.alias ?? profile.callsign)."
+                } ?? "Opens an AX.25 connection to \(profile.callsign).")
             }
             HStack(spacing: 8) {
                 if let onShowOnMap, profile.isPlaced {
@@ -547,18 +588,24 @@ struct NodeProfileView: View {
                     .buttonStyle(.bordered)
                 }
             }
-            if presentation == .sheet, let onOpenFullPage {
+            // Offered only when the page has something the sheet does not.
+            // A full-width bordered button with a trailing chevron also read as
+            // a pop-up menu rather than a way onward, so it is a link now.
+            if presentation == .sheet, profile.hasDepth, let onOpenFullPage {
                 Button {
                     onOpenFullPage()
                 } label: {
-                    HStack {
+                    HStack(spacing: 3) {
                         Text("Full profile")
-                        Spacer()
                         Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
                     }
-                    .frame(maxWidth: .infinity)
+                    .font(.callout)
+                    .foregroundStyle(.tint)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.plain)
+                .padding(.top, 2)
+                .help("Measurements, history and neighbours, with room to read them.")
             }
         }
         .padding(.top, 4)

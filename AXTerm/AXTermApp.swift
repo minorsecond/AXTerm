@@ -14,6 +14,11 @@ struct AXTermApp: App {
     @NSApplicationDelegateAdaptor(AXTermAppDelegate.self) private var appDelegate
     @StateObject private var settings: AppSettingsStore
     @StateObject private var inspectionRouter: PacketInspectionRouter
+    /// Personal mailbox settings. Owned here rather than in ContentView so the
+    /// Settings scene and the BBS view observe the same object — two instances
+    /// would each read the same defaults and neither would see the other's
+    /// changes until relaunch.
+    @StateObject private var bbsSettings = BBSSettings()
     /// Controls MenuBarExtra visibility via @AppStorage to avoid feedback loops.
     /// @Published bindings to MenuBarExtra(isInserted:) cause SwiftUI scene updates
     /// to trigger Combine publishes, creating an infinite invalidation loop.
@@ -134,7 +139,7 @@ struct AXTermApp: App {
     var body: some Scene {
         let windowTitle = "AXTerm" + TestModeConfiguration.shared.windowTitleSuffix
         WindowGroup(windowTitle, id: "main") {
-            ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter, winlinkContext: winlinkContext)
+            ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter, winlinkContext: winlinkContext, bbsSettings: bbsSettings)
                 // Launch and every return to the foreground: pull whatever
                 // the operator's other devices did while this one was away.
                 .task { winlinkContext.appBecameActive() }
@@ -165,7 +170,8 @@ struct AXTermApp: App {
                 winlinkSettings: winlinkContext.settings,
                 stationProfile: winlinkContext.profile,
                 locationService: winlinkContext.locationService,
-                winlinkSync: winlinkContext.sync
+                winlinkSync: winlinkContext.sync,
+                bbsSettings: bbsSettings
             )
         }
 

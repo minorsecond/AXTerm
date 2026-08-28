@@ -158,6 +158,8 @@ final class PacketEngine: ObservableObject {
     /// Observed paths, kept across launches so the network graph does not
     /// start every session convinced the network is empty.
     private(set) var networkPaths: SQLiteNetworkPathStore?
+    /// The personal mailbox: messages left by callers, and who called.
+    private(set) var bbsMessages: SQLiteBBSMessageStore?
 
     /// NET/ROM persistence for saving/loading routing state.
     private var netRomPersistence: NetRomPersistence?
@@ -351,6 +353,7 @@ final class PacketEngine: ObservableObject {
                 self.stationNotes = SQLiteStationNoteStore(dbQueue: queue)
                 self.stationServices = SQLiteStationServiceStore(dbQueue: queue)
                 self.networkPaths = SQLiteNetworkPathStore(dbQueue: queue)
+                self.bbsMessages = SQLiteBBSMessageStore(dbQueue: queue)
                 // A path nobody has seen for a fortnight is not evidence any
                 // more; leaving it in would draw a neighbour that moved away.
                 try? self.networkPaths?.prune(
@@ -982,7 +985,8 @@ final class PacketEngine: ObservableObject {
             control: decoded.control,
             info: decoded.info,
             ownCallsign: settings.myCallsign,
-            frameType: decoded.frameType.rawValue) {
+            frameType: decoded.frameType.rawValue,
+            viaRepeated: decoded.via.contains { $0.repeated }) {
             identityCollision = collision
             addErrorLine("Another station is transmitting as \(collision.callsign) \u{2014} give one device a different SSID.",
                          category: .connection)
@@ -1103,8 +1107,22 @@ final class PacketEngine: ObservableObject {
 
     /// Build a human-readable control frame description for SYS logging.
     /// Examples: "SABM P", "UA F", "RR(3)", "I(1,3) P", "REJ(5) F"
-    private func describeControlFrame(_ decoded: AX25ControlFieldDecoded) -> String? {
+    /// - Parameter isCommand: whether the frame's address bits mark it a command.
+    ///   Nil where that is unknowable (an outbound frame we built, before the
+    ///   address is encoded), in which case the bit is shown as `P/F`.
+    private func describeControlFrame(_ decoded: AX25ControlFieldDecoded,
+                                      isCommand: Bool? = nil) -> String? {
         let pf = (decoded.pf ?? 0) == 1
+        // P on a command, F on a response. Printing `P/F` for both throws away
+        // the one bit that says whether the peer is *asking* us something or
+        // *answering* us — which is the whole difference between a poll and a
+        // final, and the first thing you need when a link is trading
+        // supervisory frames and getting nowhere.
+        let pfLabel: String = switch isCommand {
+        case .some(true): " P"
+        case .some(false): " F"
+        case .none: " P/F"
+        }
 
         switch decoded.frameClass {
         case .U:
@@ -1117,16 +1135,16 @@ final class PacketEngine: ObservableObject {
             case .XID:
                 // Command or response — P/F alone can't say which; the
                 // console line just names the negotiation frame.
-                return "XID\(pf ? " P/F" : "")"
+                return "XID\(pf ? pfLabel : "")"
             case .UA, .DM, .FRMR:
                 return "\(uType.rawValue)\(pf ? " F" : "")"
             case .UNKNOWN:
-                return "U?\(pf ? " P/F" : "")"
+                return "U?\(pf ? pfLabel : "")"
             }
         case .S:
             guard let sType = decoded.sType else { return nil }
             let nr = decoded.nr ?? 0
-            return "\(sType.rawValue)(\(nr))\(pf ? " P/F" : "")"
+            return "\(sType.rawValue)(\(nr))\(pf ? pfLabel : "")"
         case .I:
             let ns = decoded.ns ?? 0
             let nr = decoded.nr ?? 0
@@ -1139,7 +1157,7 @@ final class PacketEngine: ObservableObject {
     /// Log an RX control frame as a SYS line in the console.
     /// Called from handleIncomingPacket for all decoded frames.
     private func logRxControlFrame(_ packet: Packet, decoded: AX25ControlFieldDecoded) {
-        guard let description = describeControlFrame(decoded),
+        guard let description = describeControlFrame(decoded, isCommand: packet.isCommand),
               let from = packet.from, let to = packet.to else { return }
         // Preserve H-bit markers (`DRLNOD*`) so the console can tell a digipeated
         // copy from the original — plain `.display` drops the star, which made a
@@ -1159,7 +1177,10 @@ final class PacketEngine: ObservableObject {
     private func txControlFrameDescription(_ frame: OutboundFrame) -> String? {
         guard let controlByte = frame.controlByte else { return nil }
         let decoded = AX25ControlFieldDecoder.decode(control: controlByte, controlByte1: nil)
-        return describeControlFrame(decoded)
+        // `OutboundFrame` records which it built, so our own frames read the
+        // same way received ones do — a log where half the frames say `P/F` is
+        // only half legible.
+        return describeControlFrame(decoded, isCommand: frame.isCommand)
     }
 
     /// Append decoded AXDP/session chat to the console so it appears in the terminal.

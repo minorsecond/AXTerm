@@ -102,9 +102,26 @@ nonisolated final class StationIdentityMonitor: @unchecked Sendable {
     func inspectReceived(source: String?, destination: String?,
                          control: UInt8, info: Data,
                          ownCallsign: String, frameType: String,
+                         viaRepeated: Bool = false,
                          at now: Date = Date()) -> Collision? {
         let own = Self.normalize(ownCallsign)
         guard !own.isEmpty, let source, Self.normalize(source) == own else { return nil }
+
+        // Our address, arriving out of a digipeater that has already
+        // repeated it. Nothing else produces that combination in normal
+        // operation: a station transmits direct, and only a frame *we*
+        // originated gets carried by a digi under our callsign.
+        //
+        // Belt and braces over the fingerprint below, which is the precise
+        // test and ought to be sufficient — a beacon sent via DRLNOD on
+        // 2026-08-27 came back two seconds later and was reported as
+        // another station anyway, and a round-trip reproduction through the
+        // real builder, encoder and decoder could not reproduce it. Until
+        // that is understood, the cheap structural check stands in front of
+        // it: an operator who is warned every time they beacon through a
+        // digipeater learns to ignore the warning, and then it is no longer
+        // a warning about anything.
+        if viaRepeated { return nil }
 
         let key = Self.fingerprint(source: source, destination: destination ?? "",
                                    control: control, info: info)

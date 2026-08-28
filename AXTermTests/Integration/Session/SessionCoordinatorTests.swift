@@ -25,6 +25,47 @@ final class SessionCoordinatorTests: XCTestCase {
         super.tearDown()
     }
 
+    // MARK: - Native NET/ROM retry memory
+
+    /// A connect tries a real NET/ROM circuit first and falls back to
+    /// driving node command prompts. The fallback costs a full grace
+    /// period, and on a network where nothing advertises a route back to
+    /// this station a circuit can never complete — so the failure must be
+    /// remembered, or every connect pays that price again.
+    func testANativeFailureIsRememberedSoTheGraceIsPaidOnce() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        XCTAssertTrue(coordinator.shouldTryNativeNetRom(to: "COSCO"),
+                      "nothing known yet — worth trying")
+        coordinator.noteNativeNetRomFailed(to: "COSCO")
+        XCTAssertFalse(coordinator.shouldTryNativeNetRom(to: "COSCO"))
+        // SSID-normalized like every other destination key.
+        XCTAssertFalse(coordinator.shouldTryNativeNetRom(to: "cosco"))
+        // And scoped to the destination that actually failed.
+        XCTAssertTrue(coordinator.shouldTryNativeNetRom(to: "DRLNOD"))
+    }
+
+    /// Not permanent. Routes appear, advertising gets switched on, nodes
+    /// come back — a station written off forever would never be retried.
+    func testTheFailureIsForgottenAfterTheRetryInterval() {
+        XCTAssertGreaterThan(SessionCoordinator.netRomNativeRetryInterval, 0,
+                             "a zero interval would defeat the memory entirely")
+        XCTAssertLessThanOrEqual(SessionCoordinator.netRomNativeRetryInterval, 24 * 3600,
+                                 "a day is already longer than an operating session")
+    }
+
+    func testSuccessClearsTheMemory() {
+        let coordinator = SessionCoordinator()
+        defer { SessionCoordinator.shared = nil }
+
+        coordinator.noteNativeNetRomFailed(to: "COSCO")
+        XCTAssertFalse(coordinator.shouldTryNativeNetRom(to: "COSCO"))
+        coordinator.noteNativeNetRomSucceeded(to: "COSCO")
+        XCTAssertTrue(coordinator.shouldTryNativeNetRom(to: "COSCO"),
+                      "it worked; stop assuming it will not")
+    }
+
     // Note: AXDPCapabilityStore is tested in AXDPCapabilityTests.swift
     // using the AXDPCapabilityCache which has the same core functionality.
 

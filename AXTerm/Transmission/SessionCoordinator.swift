@@ -51,11 +51,119 @@ final class SessionCoordinator: ObservableObject {
     /// answer without SessionCoordinator knowing they exist.
     var onInboundSessionConnected: ((AX25Session) -> Void)?
 
+    /// Fired when a digipeater is heard repeating one of *our* outbound
+    /// I-frames — evidence the frame cleared that hop.
+    ///
+    /// Never evidence of delivery: digipeating is fire-and-forget, and only
+    /// the peer's ack proves receipt. Feeds the outbound delivery indicator's
+    /// "relayed" phase.
+    var onOutboundRelayHeard: ((_ destination: String, _ digis: [String]) -> Void)?
+
+    /// Fired for U-frames addressed to neither this station nor anything it
+    /// answers for.
+    ///
+    /// Almost all of it is other people's traffic. The exception is worth the
+    /// callback: a node asked to connect onward dials out *as us*, under an
+    /// SSID it assigned, so the handshake for our own relay hop is a
+    /// conversation between two addresses we do not own. Dropping every such
+    /// frame threw away the only independent evidence of whether the hop was
+    /// made. See `RelayLegWitness`, which is the one subscriber and ignores
+    /// everything that is not its own hop.
+    var onForeignUFrame: ((_ from: String, _ to: String, _ uType: AX25UType?) -> Void)?
+
+    /// Additional inbound-call subscribers.
+    ///
+    /// `onInboundSessionConnected` is a single slot, and a second feature
+    /// assigning it would silently unhook the first — two features that both
+    /// answer calls (Winlink P2P and the personal mailbox) would then depend
+    /// on which view was built last. Subscribers are additive; each decides
+    /// for itself whether the call is theirs.
+    private var inboundSubscribers: [UUID: (AX25Session) -> Void] = [:]
+    /// Sessions already reported as up-but-silent, so the notice appears once.
+    private var idleLinkReported: Set<UUID> = []
+
+    @discardableResult
+    func addInboundSessionSubscriber(
+        _ handler: @escaping (AX25Session) -> Void
+    ) -> UUID {
+        let token = UUID()
+        inboundSubscribers[token] = handler
+        return token
+    }
+
+    func removeInboundSessionSubscriber(_ token: UUID) {
+        inboundSubscribers[token] = nil
+    }
+
     /// Shared instance for settings integration (single coordinator for app lifecycle).
     /// This is assigned in `init` for the main `ContentView`-owned coordinator.
     static weak var shared: SessionCoordinator?
     /// The session manager for connected-mode operations
     let sessionManager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
+
+    /// Native NET/ROM transport (L3/L4). Distinct from the terminal
+    /// relay in `TerminalView`, which drives a node's *command prompt*;
+    /// this speaks the protocol nodes speak to each other.
+    /// See Docs/NetRomTransport.md.
+    private(set) lazy var netRomDriver: NetRomLinkDriver = makeNetRomDriver()
+
+    /// Destinations whose native NET/ROM circuit did not come up, and when.
+    ///
+    /// A connect tries a real circuit first and falls back to driving node
+    /// command prompts. Without this the fallback costs its full grace
+    /// period *every* time, and there is a common reason it always will:
+    /// a CONACK has to be routed home, and no node routes to a station it
+    /// has never heard advertise itself. With `netRomAdvertiseSelf` off —
+    /// the default, because advertising writes this station into other
+    /// people's routing tables — nothing knows the way back, so the
+    /// circuit can never complete on that network. Paying 30 s to learn
+    /// that once is reasonable; paying it on every connect is not.
+    ///
+    /// Deliberately time-boxed rather than permanent: routes appear,
+    /// advertising gets switched on, nodes come back. Re-testing costs one
+    /// grace period an hour per destination.
+    private var netRomNativeFailedAt: [String: Date] = [:]
+
+    /// How long a native failure is remembered before it is worth retrying.
+    static let netRomNativeRetryInterval: TimeInterval = 3600
+
+    /// Whether a native circuit is worth attempting to this destination.
+    func shouldTryNativeNetRom(to destination: String) -> Bool {
+        let key = canonicalDestination(destination)
+        guard let failedAt = netRomNativeFailedAt[key] else { return true }
+        guard Date().timeIntervalSince(failedAt) >= Self.netRomNativeRetryInterval else {
+            return false
+        }
+        netRomNativeFailedAt[key] = nil
+        return true
+    }
+
+    func noteNativeNetRomFailed(to destination: String) {
+        netRomNativeFailedAt[canonicalDestination(destination)] = Date()
+    }
+
+    func noteNativeNetRomSucceeded(to destination: String) {
+        netRomNativeFailedAt[canonicalDestination(destination)] = nil
+    }
+    private var netRomBroadcastTimer: Timer?
+    private var beaconTimer: Timer?
+
+    /// Asks stations whether they can hear us, on the operator's terms.
+    let pingProber = PingProber()
+
+    /// Stations overheard being called by somebody else, and when.
+    ///
+    /// A destination nobody here has heard, that a neighbour is talking to,
+    /// is the one candidate worth probing that passive listening can never
+    /// produce on its own.
+    private var overheardCallees: [String: Date] = [:]
+    /// Whether NET/ROM settings have been applied at least once this launch.
+    private var hasConfiguredNetRomOnce = false
+
+    /// Harvested node aliases, used to turn the names operators and node
+    /// tables use (COSCO, EVANS) into the callsigns NET/ROM addresses by.
+    /// Weak: the store is owned by the app shell, which outlives this.
+    weak var nodeAliases: NodeAliasStore?
 
     /// Bulk transfers in progress
     @Published var transfers: [BulkTransfer] = []
@@ -229,6 +337,7 @@ final class SessionCoordinator: ObservableObject {
     init() {
         SessionCoordinator.shared = self
         setupCallbacks()
+        wirePingProber()
         adaptiveStatusStore.updateGlobal(settings: globalAdaptiveSettings, lossRate: nil, etx: nil, srtt: nil)
     }
 
@@ -378,6 +487,8 @@ final class SessionCoordinator: ObservableObject {
     /// `retransmits: nil` — they influence the EWMAs but never the streaks.
     func applyLinkQualitySample(
         lossRate: Double,
+        forwardLoss: Double? = nil,
+        reverseLoss: Double? = nil,
         etx: Double,
         srtt: Double?,
         source: String = "session",
@@ -407,7 +518,7 @@ final class SessionCoordinator: ObservableObject {
             }
             let before = AdaptiveSnapshot(from: entry)
             let rollbacksBefore = entry.metrics.probeRollbacks
-            entry.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits)
+            entry.updateFromLinkQuality(lossRate: lossRate, forwardLoss: forwardLoss, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits)
             if Self.didCollapseToStopAndWait(beforeK: before.k, afterK: entry.windowSize.currentAdaptive) {
                 // Warning level: the collapse is the headline event of a
                 // degrading link, and debug-level Learning crumbs are exactly
@@ -446,6 +557,8 @@ final class SessionCoordinator: ObservableObject {
             TxLog.adaptiveLearning(
                 source: source,
                 lossRate: lossRate,
+                forwardLoss: forwardLoss,
+                reverseLoss: reverseLoss,
                 etx: etx,
                 srtt: srtt,
                 rto: a.currentRto,
@@ -459,7 +572,7 @@ final class SessionCoordinator: ObservableObject {
             }
         } else {
             let before = AdaptiveSnapshot(from: globalAdaptiveSettings)
-            globalAdaptiveSettings.updateFromLinkQuality(lossRate: lossRate, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits)
+            globalAdaptiveSettings.updateFromLinkQuality(lossRate: lossRate, forwardLoss: forwardLoss, etx: etx, srtt: srtt, newFrames: newFrames, retransmits: retransmits)
             if Self.didCollapseToStopAndWait(beforeK: before.k, afterK: globalAdaptiveSettings.windowSize.currentAdaptive) {
                 TxLog.warning(.adaptive, "Adaptive collapsed to stop-and-wait", [
                     "scope": "global",
@@ -478,6 +591,8 @@ final class SessionCoordinator: ObservableObject {
             TxLog.adaptiveLearning(
                 source: source,
                 lossRate: lossRate,
+                forwardLoss: forwardLoss,
+                reverseLoss: reverseLoss,
                 etx: etx,
                 srtt: srtt,
                 rto: a.currentRto,
@@ -658,6 +773,297 @@ final class SessionCoordinator: ObservableObject {
         #endif
     }
 
+    // MARK: - NET/ROM transport
+
+    private func makeNetRomDriver() -> NetRomLinkDriver {
+        let node = CallsignNormalizer.toAddress(localCallsign)
+        let driver = NetRomLinkDriver(
+            localNode: node,
+            localUser: node,
+            transport: nil
+        )
+        driver.setTransport(NetRomSessionTransport(coordinator: self))
+        driver.nextHopResolver = { [weak self] destination in
+            self?.packetEngine?.netRomIntegration?.bestRouteTo(destination)?.origin
+        }
+        // NET/ROM addresses by callsign; operators and node tables name
+        // stations by alias. The node directory holds the mapping.
+        driver.callsignForAliasResolver = { [weak self] alias in
+            self?.nodeAliases?.directory.callsign(for: alias)
+        }
+        driver.candidateHopsResolver = { [weak self] destination in
+            self?.packetEngine?.netRomIntegration?
+                .candidateRoutes(to: destination).map(\.origin) ?? []
+        }
+        // Only consulted while forwarding is on — and then filtered again,
+        // because "we believe this route" and "we could carry a packet
+        // over it right now" are different claims and only the second one
+        // is safe to broadcast. See `NetRomAdvertisableRoutes`.
+        driver.advertisableRoutesProvider = { [weak self] in
+            guard let self, let integration = self.packetEngine?.netRomIntegration else { return [] }
+            let decision = NetRomAdvertisableRoutes.decide(
+                routes: integration.currentRoutes(),
+                neighbors: integration.currentNeighbors(),
+                now: Date())
+            if !decision.withheld.isEmpty {
+                TxLog.debug(.session, "Routes withheld from NODES broadcast", [
+                    "count": decision.withheld.count,
+                    "detail": decision.withheld
+                        .map { "\($0.destination): \($0.reason)" }
+                        .joined(separator: "; ")
+                ])
+            }
+            return decision.advertisable.map { route in
+                NetRomNodesBroadcast.KnownRoute(
+                    destination: CallsignNormalizer.toAddress(route.destination),
+                    alias: "",
+                    nextHop: CallsignNormalizer.toAddress(route.origin),
+                    quality: UInt8(min(255, max(0, route.quality)))
+                )
+            }
+        }
+        driver.onOperatorNote = { [weak self] text in
+            self?.packetEngine?.appendSystemNotification(text)
+        }
+        driver.onCircuitsWillChange = { [weak self] in
+            self?.objectWillChange.send()
+        }
+        // Circuit payload is conversation, not protocol noise: it goes to
+        // the transcript attributed to the far station, the same way a
+        // node's text does. The neighbor carrying it is already visible
+        // in the session list, so the line itself says who is talking.
+        driver.onCircuitData = { [weak self] id, data in
+            guard let self else { return }
+            let peer = self.netRomDriver.circuit(for: id)?.destination.display
+                ?? "NET/ROM"
+            let text = String(decoding: data, as: UTF8.self)
+            guard !text.isEmpty else { return }
+            self.packetEngine?.appendSessionChatLine(from: peer, text: text)
+        }
+        return driver
+    }
+
+    /// Keeps the NET/ROM node identity in step with the station callsign.
+    private func syncNetRomIdentity() {
+        let node = CallsignNormalizer.toAddress(localCallsign)
+        netRomDriver.localNode = node
+        netRomDriver.localUser = node
+    }
+
+    /// Push the operator's NET/ROM node policy into the driver and start
+    /// or stop the announcement timer to match.
+    ///
+    /// Both switches default off and are only ever turned on by an
+    /// explicit setting: announcing writes this station into other
+    /// operators' routing tables, and forwarding commits this
+    /// transmitter to other people's traffic.
+    func applyNetRomNodeSettings(_ settings: AppSettingsStore) {
+        netRomDriver.advertisesItself = settings.netRomAdvertiseSelf
+        netRomDriver.forwardingEnabled = settings.netRomForwarding
+        // Six characters, uppercase, alphanumeric — the shape BPQ shows
+        // beside a callsign. Sanitised at the boundary because whatever
+        // is here goes into every neighbour's node list.
+        netRomDriver.localAlias = String(
+            settings.netRomNodeAlias
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .uppercased()
+                .filter { $0.isLetter || $0.isNumber }
+                .prefix(6))
+        scheduleNetRomBroadcasts(everyMinutes: settings.netRomBroadcastMinutes,
+                                 enabled: settings.netRomAdvertiseSelf)
+        scheduleBeacon(settings)
+        pingProber.apply(settings: settings.pingPolicySettings)
+    }
+
+    /// Remember a station somebody else was calling.
+    private func noteOverheardCallee(_ call: String) {
+        let key = PingPolicy.normalize(call)
+        // Broadcast and tactical destinations are addresses, not stations:
+        // nothing answers a connect request at NODES or BEACON.
+        guard CallsignQuery.isPlausible(key) else { return }
+        overheardCallees[key] = Date()
+        if overheardCallees.count > 200 {
+            let cutoff = Date().addingTimeInterval(-6 * 3600)
+            overheardCallees = overheardCallees.filter { $0.value > cutoff }
+        }
+    }
+
+    /// Stations worth asking, with where each came from.
+    private func pingCandidates() -> [PingPolicy.Candidate] {
+        let mine = Set(sessionManager.answeredAddresses.map { $0.display.uppercased() })
+        var seen = Set<String>()
+        var candidates: [PingPolicy.Candidate] = []
+
+        for station in packetEngine?.stations ?? [] {
+            let key = PingPolicy.normalize(station.call)
+            // Heard *directly*: a station only ever heard through a
+            // digipeater tells us nothing about a two-way path we could
+            // test with one frame.
+            guard station.lastVia.isEmpty, !mine.contains(key), !seen.contains(key) else { continue }
+            guard CallsignQuery.isPlausible(key) else { continue }
+            seen.insert(key)
+            candidates.append(PingPolicy.Candidate(
+                call: key, source: .heardDirect, lastActivity: station.lastHeard ?? .distantPast))
+        }
+        for (call, when) in overheardCallees where !mine.contains(call) && !seen.contains(call) {
+            seen.insert(call)
+            candidates.append(PingPolicy.Candidate(
+                call: call, source: .calledByOthers, lastActivity: when))
+        }
+        return candidates
+    }
+
+    private func wirePingProber() {
+        pingProber.sendFrame = { [weak self] frame in self?.sendFrame(frame) ?? false }
+        pingProber.localAddress = { [weak self] in
+            self?.sessionManager.localCallsign ?? AX25Address(call: "NOCALL", ssid: 0)
+        }
+        pingProber.candidateProvider = { [weak self] in self?.pingCandidates() ?? [] }
+        pingProber.connectedPeers = { [weak self] in
+            Set(self?.connectedCallsigns.map { PingPolicy.normalize($0) } ?? [])
+        }
+        pingProber.lastTrafficAt = { ChannelActivityMonitor.shared.samples.last?.date }
+        pingProber.onNote = { [weak self] note in
+            self?.packetEngine?.appendSystemNotification(note)
+        }
+    }
+
+    /// Arm the NODES timer, and announce immediately **only** when
+    /// announcing has just been switched on.
+    ///
+    /// It used to broadcast on every call, and every field in the
+    /// Transmission settings screen called it on change — so typing a
+    /// six-character node alias put six NODES broadcasts on the air, each
+    /// carrying a different prefix of the word (field capture 2026-08-27,
+    /// eight frames in two seconds). Every neighbour that heard them wrote
+    /// a different name for this station into its routing table. Settings
+    /// changes configure; only the transition transmits.
+    private func scheduleNetRomBroadcasts(everyMinutes minutes: Int, enabled: Bool) {
+        // Launch is not a decision. The first configure of a session restores
+        // a setting the operator made some other day, and announcing on it
+        // put a broadcast on the air before the radio was even wired —
+        // logged as sent, transmitted nowhere (2026-08-27). Arm the timer
+        // and let the interval do the talking.
+        let isFirstConfigure = !hasConfiguredNetRomOnce
+        hasConfiguredNetRomOnce = true
+        let wasAnnouncing = netRomBroadcastTimer != nil || isFirstConfigure
+        netRomBroadcastTimer?.invalidate()
+        netRomBroadcastTimer = nil
+        guard enabled else { return }
+        let interval = TimeInterval(max(5, minutes) * 60)
+        if !wasAnnouncing {
+            // Switched on just now: say so once, so enabling the setting
+            // does something visible.
+            _ = netRomDriver.broadcastNodes()
+        }
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                _ = self.netRomDriver.broadcastNodes()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        netRomBroadcastTimer = timer
+    }
+
+    /// Arm the beacon timer. Same rule as the NODES timer: configuring is
+    /// not transmitting. Unlike NODES, the first beacon waits for the
+    /// interval — an announcement nobody asked for should not be the
+    /// reward for ticking a checkbox.
+    private func scheduleBeacon(_ settings: AppSettingsStore) {
+        beaconTimer?.invalidate()
+        beaconTimer = nil
+        guard settings.beaconEnabled,
+              case .success = BeaconPlan.plan(text: settings.beaconText,
+                                              path: settings.beaconPath)
+        else { return }
+        let interval = TimeInterval(max(5, settings.beaconMinutes) * 60)
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.sendBeacon(settings)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        beaconTimer = timer
+    }
+
+    /// One beacon, now. Re-planned at send time rather than captured when
+    /// the timer was armed, so an edit takes effect at the next beacon
+    /// instead of at the next app launch.
+    func sendBeacon(_ settings: AppSettingsStore) {
+        guard case let .success(beacon) = BeaconPlan.plan(
+            text: settings.beaconText, path: settings.beaconPath) else { return }
+        let frame = AX25FrameBuilder.buildUI(
+            from: sessionManager.localCallsign,
+            to: AX25Address(call: BeaconPlan.destinationCall, ssid: 0),
+            via: DigiPath.from(beacon.digis),
+            pid: 0xF0,
+            payload: Data(beacon.text.utf8),
+            displayInfo: beacon.text)
+        sendFrame(frame)
+        let pathText = beacon.digis.isEmpty
+            ? "direct" : "via \(beacon.digis.joined(separator: " → "))"
+        packetEngine?.appendSystemNotification("Beacon sent \(pathText).")
+    }
+
+    /// Adapter giving the driver exactly the two things it needs from
+    /// the AX.25 layer, and nothing else.
+    /// `nonisolated` deliberately: an implicitly MainActor-isolated
+    /// class gets an isolated deinit, which aborts in libmalloc under
+    /// the test runner on this toolchain — and this one is owned by the
+    /// coordinator, so it would take every SessionCoordinator test with
+    /// it. Its methods hop with `assumeIsolated` instead.
+    private nonisolated final class NetRomSessionTransport: NetRomLinkTransport {
+        private weak var coordinator: SessionCoordinator?
+        init(coordinator: SessionCoordinator) { self.coordinator = coordinator }
+
+        func datagramCapacity(toNeighbor neighbor: AX25Address) -> Int? {
+            guard let coordinator else { return nil }
+            return MainActor.assumeIsolated {
+                coordinator.sessionManager
+                    .session(for: neighbor, path: DigiPath(), channel: 0)
+                    .stateMachine.config.paclen
+            }
+        }
+
+        /// A routing broadcast is unconnected by design: one UI frame to
+        /// "NODES" reaches every neighbor listening on the channel, with
+        /// no links to establish and nothing to acknowledge.
+        func sendNodesBroadcast(_ payload: Data, summary: String) -> Bool {
+            guard let coordinator else { return false }
+            return MainActor.assumeIsolated {
+                let frame = AX25FrameBuilder.buildUI(
+                    from: coordinator.sessionManager.localCallsign,
+                    to: AX25Address(call: NetRomNodesBroadcast.destinationCall, ssid: 0),
+                    via: DigiPath(),
+                    pid: NetRomWire.pid,
+                    payload: payload,
+                    displayInfo: "NODES: \(summary)"
+                )
+                return coordinator.sendFrame(frame)
+            }
+        }
+
+        func sendDatagram(_ data: Data, toNeighbor neighbor: AX25Address) -> Bool {
+            guard let coordinator else { return false }
+            return MainActor.assumeIsolated {
+                // sendData connects first when the link is down and
+                // queues the datagram behind the SABM; either way the
+                // bytes are accepted. It never fragments here because
+                // the driver has already checked the datagram fits.
+                let frames = coordinator.sessionManager.sendData(
+                    data,
+                    to: neighbor,
+                    path: DigiPath(),
+                    channel: 0,
+                    pid: NetRomWire.pid
+                )
+                for frame in frames { coordinator.sendFrame(frame) }
+                return true
+            }
+        }
+    }
+
     // MARK: - Setup
 
     private func setupCallbacks() {
@@ -668,6 +1074,13 @@ final class SessionCoordinator: ObservableObject {
 
         sessionManager.onLinkVizEvent = { [weak self] event in
             self?.linkVizMonitor.ingest(event)
+        }
+
+        // NET/ROM L4: PID 0xCF payloads are datagrams, not terminal text.
+        // The manager demuxes by PID before anything else sees the bytes.
+        sessionManager.onNetRomDatagram = { [weak self] session, data in
+            self?.netRomDriver.handleInboundDatagram(
+                data, fromNeighbor: session.remoteAddress)
         }
 
         // Wire up AXDP reassembly - must use in-order delivered data only.
@@ -690,6 +1103,8 @@ final class SessionCoordinator: ObservableObject {
             )
             self?.applyLinkQualitySample(
                 lossRate: sample.lossRate,
+                forwardLoss: sample.forwardLoss,
+                reverseLoss: sample.reverseLoss,
                 etx: sample.etx,
                 srtt: sample.srtt,
                 source: "session",
@@ -747,6 +1162,14 @@ final class SessionCoordinator: ObservableObject {
             // Force UI update for any session state change - ensures both stations update
             self.objectWillChange.send()
 
+            // A NET/ROM circuit rides an L2 link to its neighbor. When
+            // that link dies the circuit cannot be carried, and retrying
+            // into it until N2 just wastes airtime and lies to the
+            // operator about what is still up.
+            if newState == .disconnected, oldState != .disconnected {
+                self.netRomDriver.neighborLinkDropped(session.remoteAddress)
+            }
+
             if oldState != .connected && newState == .connected {
                 let axdpEnabled = self.globalAdaptiveSettings.axdpExtensionsEnabled
                 let autoNegotiate = self.globalAdaptiveSettings.autoNegotiateCapabilities
@@ -761,6 +1184,7 @@ final class SessionCoordinator: ObservableObject {
                     // subscriber, and it only acts when the operator has
                     // armed it.
                     self.onInboundSessionConnected?(session)
+                    for handler in self.inboundSubscribers.values { handler(session) }
                 } else {
                     PlatformSound.playOutboundConnection()
                 }
@@ -1257,6 +1681,7 @@ final class SessionCoordinator: ObservableObject {
         }
 
         sessionManager.localCallsign = newAddress
+        syncNetRomIdentity()
     }
 
     /// Subscribe to incoming packets from PacketEngine.
@@ -1307,7 +1732,13 @@ final class SessionCoordinator: ObservableObject {
     }
 
     /// Send a frame via PacketEngine
-    private func sendFrame(_ frame: OutboundFrame) {
+    /// - Returns: whether the frame was handed to the radio. Callers that
+    ///   report to the operator must check it: on 2026-08-27 a NODES
+    ///   broadcast was logged as "sent" in the same millisecond as
+    ///   "Frame NOT transmitted", because this returned nothing and the
+    ///   transport below assumed success.
+    @discardableResult
+    private func sendFrame(_ frame: OutboundFrame) -> Bool {
         // Outside tests this is a wiring fault, not a benign no-op: the state
         // machine believes it transmitted, so T1 keeps expiring against frames
         // that never reached the air and the session dies at N2 looking like a
@@ -1318,7 +1749,7 @@ final class SessionCoordinator: ObservableObject {
                 "destination": frame.destination.display,
                 "type": frame.frameType
             ])
-            return
+            return false
         }
         packetEngine.send(frame: frame) { result in
             Task { @MainActor in
@@ -1333,6 +1764,7 @@ final class SessionCoordinator: ObservableObject {
                 }
             }
         }
+        return true
     }
 
     // MARK: - Connected Sessions
@@ -1355,12 +1787,26 @@ final class SessionCoordinator: ObservableObject {
         }
 
         let decoded = AX25ControlFieldDecoder.decode(control: packet.control, controlByte1: packet.controlByte1)
-        // Only process packets addressed to us (call + SSID)
-        guard CallsignNormalizer.addressesMatch(to, sessionManager.localCallsign) else {
-            TxLog.debug(.session, "Packet not addressed to local callsign", [
+        // Only process packets addressed to us — the station callsign, or any
+        // address a service has registered (see `AX25SessionManager.answers`).
+        guard sessionManager.answers(to) else {
+            // A frame *from* one of our addresses, with a digi's has-been-repeated
+            // bit set, is our own I-frame coming back off that digipeater.
+            if sessionManager.answers(from), decoded.frameClass == .I {
+                let repeatedBy = packet.via.filter { $0.repeated }.map { $0.display }
+                if !repeatedBy.isEmpty {
+                    onOutboundRelayHeard?(to.display, repeatedBy)
+                }
+            }
+            if decoded.frameClass == .U {
+                onForeignUFrame?(from.display, to.display, decoded.uType)
+            }
+            noteOverheardCallee(to.display)
+            TxLog.debug(.session, "Packet not addressed to this station", [
                 "from": from.display,
                 "to": to.display,
                 "local": sessionManager.localCallsign.display,
+                "answers": sessionManager.answeredAddresses.map(\.display).joined(separator: ","),
                 "frameType": decoded.frameClass.rawValue,
                 "uType": decoded.uType?.rawValue ?? "N/A"
             ])
@@ -1402,12 +1848,25 @@ final class SessionCoordinator: ObservableObject {
     private func handleUFrame(packet: Packet, from: AX25Address, to: AX25Address, uType: AX25UType?, channel: UInt8) {
         guard let uType = uType else { return }
 
+        // An answer to a probe, for a peer we hold no session with. Taken
+        // here so the session layer never sees it: a DM means nothing to a
+        // layer with no link, but an XID would open a negotiation for a
+        // link nobody asked for.
+        let hasSession = sessionManager.connectedSession(withPeer: from) != nil
+        if pingProber.noteAnswer(from: from.display, uType: uType, hasSession: hasSession) {
+            return
+        }
+
         let path = DigiPath.from(packet.via.map { $0.display })
 
         switch uType {
         case .UA:
             sessionManager.handleInboundUA(from: from, path: path, channel: channel)
         case .DM:
+            // A DM answering our XID is a pre-2.2 peer saying "I hold no
+            // link to you", not a refusal. It resolves the negotiation and
+            // is consumed there — see handleInboundDMDuringNegotiation.
+            if sessionManager.handleInboundDMDuringNegotiation(from: from, channel: channel) { break }
             sessionManager.handleInboundDM(from: from, path: path, channel: channel)
         case .FRMR:
             // §6.3.2: during XID negotiation, FRMR is a pre-2.2 peer's
@@ -1460,7 +1919,8 @@ final class SessionCoordinator: ObservableObject {
             ns: ns,
             nr: nr,
             pf: pf,
-            payload: packet.info
+            payload: packet.info,
+            pid: packet.pid
         ) {
             sendFrame(response)
         }
@@ -2694,6 +3154,52 @@ final class SessionCoordinator: ObservableObject {
         return transferSessionIds[transferId]
     }
 
+    /// How many polls a peer may answerlessly send before the operator is told.
+    ///
+    /// Five is roughly half a minute of polling on a slow link — long enough
+    /// that a merely sluggish BBS is not reported, short enough that nobody
+    /// watches a dead session for two minutes believing it is working.
+    private static let idlePollNotice = 5
+
+    /// Says out loud when a session is up, being polled, and has never carried
+    /// a byte.
+    ///
+    /// Every frame in that exchange is correct AX.25 — the peer polls, we answer
+    /// — so nothing in the protocol layer objects. What is wrong is only visible
+    /// one level up: the session strip says "connected" and the far end has
+    /// never sent anything. Reported once per session; real data resets it.
+    private func reportIdleLinkIfNeeded(peer: AX25Address, channel: UInt8) {
+        guard let session = sessionManager.connectedSession(withPeer: peer, channel: channel)
+        else { return }
+        let polls = session.stateMachine.idlePollCount
+        guard polls >= Self.idlePollNotice else { return }
+        guard !idleLinkReported.contains(session.id) else { return }
+        // Keep the set to live sessions only — an app left running for days
+        // would otherwise accumulate one UUID per session forever (§12).
+        let live = Set(sessionManager.sessions.values.map(\.id))
+        idleLinkReported.formIntersection(live)
+        idleLinkReported.insert(session.id)
+
+        let display = peer.display.uppercased()
+        let route = session.path.display.isEmpty ? "direct" : "via \(session.path.display)"
+        // Whether anything of ours has been acknowledged decides what this
+        // silence actually means, and the two readings point opposite ways.
+        // An ack proves both directions carry frames, so a link that acks and
+        // then says nothing is a peer whose *application* is not answering —
+        // reporting that as a one-way path would send the operator hunting for
+        // a better route they do not need.
+        let weWereHeard = session.stateMachine.sequenceState.va > 0
+        let detail = weWereHeard
+            ? "\(display) (\(route)) acknowledged what you sent but has not answered "
+              + "in \(polls) polls. The link is good — the far end is not replying."
+            : "\(display) (\(route)) is connected and polling, but nothing has passed "
+              + "in either direction. The far end may not be answering on this path."
+        TxLog.warning(.session, "Link connected but carrying nothing", [
+            "peer": display, "polls": polls, "path": route, "acked": weWereHeard
+        ])
+        packetEngine?.appendSystemNotification(detail)
+    }
+
     private func handleSFrame(packet: Packet, from: AX25Address, sType: AX25SType?, nr: Int, pf: Int, channel: UInt8) {
         guard let sType = sType else { return }
         let path = DigiPath.from(packet.via.map { $0.display })
@@ -2712,6 +3218,7 @@ final class SessionCoordinator: ObservableObject {
             for response in responses {
                 sendFrame(response)
             }
+            reportIdleLinkIfNeeded(peer: from, channel: channel)
         case .REJ:
             let retransmits = sessionManager.handleInboundREJ(
                 from: from, path: path, channel: channel, nr: nr,

@@ -9,9 +9,11 @@ nonisolated enum NavigationItem: String, Hashable, CaseIterable {
     case terminal = "Terminal"
     case packets = "Packets"
     case routes = "Routes"
+    case nodes = "Nodes"
     case analytics = "Analytics"
     case map = "Map"
     case mail = "Mail"
+    case bbs = "BBS"
     //case raw = "Raw"
 }
 

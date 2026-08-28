@@ -25,19 +25,72 @@ nonisolated enum DatabaseManager {
         return folderURL.appendingPathComponent(databaseName)
     }
 
+    static let ephemeralFolderName = "AXTerm-Test"
+    static let ephemeralPrefix = "axterm-test-"
+
+    /// How long an ephemeral database may sit untouched before a later
+    /// test-mode launch reclaims it.
+    ///
+    /// Age is the only safe signal available here. Several AXTerm instances
+    /// share this folder during a multi-instance test, and nothing in the file
+    /// name says whether the process that owns it is still alive. A live
+    /// instance writes to its database continuously, so a window this wide
+    /// cannot mistake a working sibling for an abandoned run.
+    static let ephemeralRetention: TimeInterval = 24 * 60 * 60
+
+    static func ephemeralDatabaseFolder() throws -> URL {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent(ephemeralFolderName, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
     /// Creates a temporary database URL for test mode.
     /// Each instance gets a unique database based on the instance identifier.
     static func ephemeralDatabaseURL(instanceID: String) throws -> URL {
-        let tempDir = FileManager.default.temporaryDirectory
-        let testFolder = tempDir.appendingPathComponent("AXTerm-Test", isDirectory: true)
-        try FileManager.default.createDirectory(at: testFolder, withIntermediateDirectories: true)
+        let testFolder = try ephemeralDatabaseFolder()
 
         // Sanitize instance ID for use in filename
         let sanitizedID = instanceID
             .replacingOccurrences(of: " ", with: "_")
             .replacingOccurrences(of: "/", with: "_")
-        let dbName = "axterm-test-\(sanitizedID).sqlite"
+        let dbName = "\(ephemeralPrefix)\(sanitizedID).sqlite"
         return testFolder.appendingPathComponent(dbName)
+    }
+
+    /// Removes an ephemeral database together with the `-wal` and `-shm`
+    /// sidecars SQLite keeps beside it. Deleting the `.sqlite` alone strands
+    /// both sidecars, which nothing else ever collects.
+    static func removeEphemeralDatabase(at url: URL) {
+        for suffix in ["", "-wal", "-shm"] {
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: url.path + suffix))
+        }
+    }
+
+    /// Discards ephemeral databases left behind by test processes that have exited.
+    ///
+    /// Unit-test runs name their database after the process ID, so every run
+    /// coins a name no later run reuses. Without this sweep those files
+    /// accumulate for the life of the machine and can fill the volume — which
+    /// then surfaces as `SQLITE_FULL` in whichever unrelated write happens next.
+    static func sweepStaleEphemeralDatabases() {
+        guard let folder = try? ephemeralDatabaseFolder(),
+              let contents = try? FileManager.default.contentsOfDirectory(
+                  at: folder,
+                  includingPropertiesForKeys: [.contentModificationDateKey],
+                  options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+              )
+        else { return }
+
+        let cutoff = Date().addingTimeInterval(-ephemeralRetention)
+        for url in contents where url.lastPathComponent.hasPrefix(ephemeralPrefix) {
+            // Sidecars carry their own timestamps, so each file ages out on its
+            // own evidence rather than on a guess about its database.
+            let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate
+            guard let modified, modified < cutoff else { continue }
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     /// Creates a database queue for test mode with an ephemeral database.
@@ -47,8 +100,9 @@ nonisolated enum DatabaseManager {
         let url = try ephemeralDatabaseURL(instanceID: instanceID)
         let urlPath = url.path
 
-        // Delete any existing test database to start fresh
-        try? FileManager.default.removeItem(at: url)
+        // Reclaim whatever earlier runs abandoned, then start this one fresh.
+        sweepStaleEphemeralDatabases()
+        removeEphemeralDatabase(at: url)
 
         print("AXTerm Test Mode: Using ephemeral database at \(urlPath)")
 
@@ -577,6 +631,22 @@ nonisolated enum DatabaseManager {
         }
         registerReportedMigration(&migrator, version: 17, name: "createNetworkPaths") { db in
             try createNetworkPaths(db)
+        }
+        registerReportedMigration(&migrator, version: 18, name: "createBBSTables") { db in
+            try createBBSTables(db)
+        }
+        registerReportedMigration(&migrator, version: 19, name: "createBBSWhitePages") { db in
+            try createBBSWhitePages(db)
+        }
+        registerReportedMigration(&migrator, version: 20, name: "createBBSFileAreas") { db in
+            try createBBSFileAreas(db)
+        }
+        registerReportedMigration(&migrator, version: 21, name: "createBBSUploadInbox") { db in
+            try createBBSUploadInbox(db)
+        }
+        registerReportedMigration(&migrator, version: 22,
+                                  name: "dropBBSPersonalContactFields") { db in
+            try dropBBSPersonalContactFields(db)
         }
         return migrator
     }()

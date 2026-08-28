@@ -231,7 +231,7 @@ struct NodeProfileResolver {
         let wanted = base.uppercased()
         guard !wanted.isEmpty else { return [] }
 
-        return heardEntries.compactMap { entry in
+        let heard: [NodeProfile.Sibling] = heardEntries.compactMap { entry in
             let (entryBase, entrySSID) = CallsignNormalizer.parse(entry.callsign)
             guard entryBase.uppercased() == wanted else { return nil }
             let upper = entry.callsign.uppercased()
@@ -252,5 +252,38 @@ struct NodeProfileResolver {
                     },
                     winlink: linkQuality[upper]))
         }
+
+        // SSIDs this licence has *announced* but never transmitted from.
+        //
+        // KD0SSP beacons "Node:KD0SSP-7; PBBS:KD0SSP-1" every ten minutes
+        // and neither address has ever been on the air, so both were absent
+        // from a list built out of heard traffic — the app knew about them
+        // and showed nothing (2026-08-27). An announcement is weaker
+        // evidence than a frame, and the row says which it is.
+        let known = Set(heard.map(\.callsign))
+        let announced: [NodeProfile.Sibling] = declaredServices.compactMap { declaration in
+            let upper = declaration.callsign.uppercased()
+            let (declaredBase, declaredSSID) = CallsignNormalizer.parse(upper)
+            guard declaredBase.uppercased() == wanted, !known.contains(upper) else { return nil }
+            return NodeProfile.Sibling(
+                callsign: upper,
+                ssid: declaredSSID == 0 && !upper.contains("-") ? nil : declaredSSID,
+                heardCount: 0,
+                lastHeard: nil,
+                roles: NodeProfile.inferRoles(
+                    callsign: upper,
+                    localCallsign: localCallsign,
+                    heard: nil,
+                    isAlias: false,
+                    netRomDeclaration: netRomDeclaration(for: upper),
+                    digipeaterCallsigns: digipeaters,
+                    declaredServices: declaredServices.filter {
+                        $0.callsign.uppercased() == upper
+                    },
+                    winlink: linkQuality[upper]))
+        }
+        // One row per SSID even when several services name it.
+        var seen = Set<String>()
+        return (heard + announced).filter { seen.insert($0.callsign).inserted }
     }
 }

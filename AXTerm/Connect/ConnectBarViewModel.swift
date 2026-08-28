@@ -84,6 +84,18 @@ final class ConnectBarViewModel: ObservableObject {
         scheduleSuggestionsRefresh()
     }
 
+    /// Everything a node said it can reach, offered in every mode.
+    ///
+    /// Not gated on NET/ROM mode: an operator typing a name is asking "what can
+    /// I connect to", and answering only after they have already guessed the
+    /// right mode makes them solve the problem first. Picking one switches the
+    /// bar to the relay that reaches it.
+    private var reachableGroup: ConnectSuggestionGroup {
+        ConnectSuggestionGroup(
+            id: "reachable", title: "Reachable via nodes",
+            values: claimedRouteVia.keys.sorted())
+    }
+
     var toSuggestionGroups: [ConnectSuggestionGroup] {
         let recentByMode = recentCalls(for: mode)
         switch mode {
@@ -91,12 +103,14 @@ final class ConnectBarViewModel: ObservableObject {
             return [
                 ConnectSuggestionGroup(id: "recent", title: "Recent Heard", values: dedupe(recentByMode + stations).prefix(10).map { $0 }),
                 ConnectSuggestionGroup(id: "favorites", title: "Favorites", values: favoriteCalls().prefix(10).map { $0 }),
-                ConnectSuggestionGroup(id: "neighbors", title: "Neighbors", values: neighbors.prefix(10).map { $0 })
+                ConnectSuggestionGroup(id: "neighbors", title: "Neighbors", values: neighbors.prefix(10).map { $0 }),
+                reachableGroup
             ].filter { !$0.values.isEmpty }
         case .netrom:
             return [
                 ConnectSuggestionGroup(id: "routes", title: "Routes", values: dedupe(recentByMode + routeDestinations).prefix(20).map { $0 }),
-                ConnectSuggestionGroup(id: "neighbors", title: "Neighbors", values: neighbors.prefix(10).map { $0 })
+                ConnectSuggestionGroup(id: "neighbors", title: "Neighbors", values: neighbors.prefix(10).map { $0 }),
+                reachableGroup
             ].filter { !$0.values.isEmpty }
         }
     }
@@ -250,7 +264,7 @@ final class ConnectBarViewModel: ObservableObject {
         syncStateFromDraftIfEditable()
     }
 
-    func updateRuntimeData(stations: [Station], neighbors: [NeighborInfo], routes: [RouteInfo], packets: [Packet], favorites: [String]) {
+    func updateRuntimeData(stations: [Station], neighbors: [NeighborInfo], routes: [RouteInfo], packets: [Packet], favorites: [String], directoryRoutes: [String: [String]] = [:]) {
         self.stations = stations
             .map { CallsignValidator.normalize($0.call) }
             .filter { !$0.isEmpty }
@@ -309,6 +323,7 @@ final class ConnectBarViewModel: ObservableObject {
                 (hop, hintFor(route: route))
             })
         }
+        mergeDirectoryRoutes(directoryRoutes)
         routeDestinations = routeHintsByDestination.keys.sorted()
         routeFallbackDigisByDestination = fallbackDigisByDestination.mapValues { paths in
             var seen = Set<String>()
@@ -712,7 +727,14 @@ final class ConnectBarViewModel: ObservableObject {
 
         if let hint {
             let summary = hint.path.isEmpty ? destination : hint.path.joined(separator: " → ")
-            routePreview = "Best route: \(summary) (\(hint.hops) hops)"
+            if claimedRouteDestinations.contains(destination), let hop = hint.nextHop {
+                // Not "best route": nothing here has measured this one. Saying
+                // who claimed it is the whole difference between evidence and
+                // hearsay, and the operator can weigh it.
+                routePreview = "\(hop) lists \(destination): \(summary)"
+            } else {
+                routePreview = "Best route: \(summary) (\(hint.hops) hops)"
+            }
         } else {
             routePreview = "No known route"
         }
@@ -871,6 +893,55 @@ final class ConnectBarViewModel: ObservableObject {
 
     private func recentCalls(for mode: ConnectBarMode) -> [String] {
         dedupe(attemptHistory.filter { $0.mode == mode }.map(\.to))
+    }
+
+    /// Destinations whose only route is somebody's claim rather than measured.
+    ///
+    /// Tracked apart from the hints so the preview can say which it is. A node
+    /// listing a station in its table is good enough to try and not the same
+    /// thing as having watched a frame get there.
+    private(set) var claimedRouteDestinations: Set<String> = []
+
+    /// Destination → the node to go through, for routes nothing has measured.
+    ///
+    /// Published so the destination picker can name the route on the row. A
+    /// bare callsign in a list answers "can I?" but not "through whom?", which
+    /// is the only question these entries exist to answer.
+    @Published private(set) var claimedRouteVia: [String: String] = [:]
+
+    /// Folds in what nodes say they can reach, where nothing measured says so.
+    ///
+    /// Measured routes win outright: they are evidence this station got there,
+    /// with df/dr behind them, while a table entry is a third party's word. So
+    /// a claim only ever fills a gap — it never displaces an observed route,
+    /// and never replaces a per-hop route that was actually seen to work.
+    private func mergeDirectoryRoutes(_ directoryRoutes: [String: [String]]) {
+        claimedRouteDestinations.removeAll()
+        var via: [String: String] = [:]
+        for (rawDestination, rawTellers) in directoryRoutes {
+            let destination = canonicalCallsign(rawDestination)
+            guard !destination.isEmpty else { continue }
+            let tellers = rawTellers.map { canonicalCallsign($0) }.filter { !$0.isEmpty }
+            guard !tellers.isEmpty else { continue }
+
+            var perHop = routeHintsByDestinationAndNextHop[destination] ?? [:]
+            for teller in tellers where perHop[teller] == nil {
+                // Two hops by construction: the link to the node, then the node
+                // forwarding on. What lies beyond it is the node's business.
+                perHop[teller] = NetRomRouteHint(
+                    nextHop: teller, heardAs: nil,
+                    path: [teller, destination], hops: 2)
+            }
+            routeHintsByDestinationAndNextHop[destination] = perHop
+
+            if routeHintsByDestination[destination] == nil,
+               let freshest = tellers.first, let hint = perHop[freshest] {
+                routeHintsByDestination[destination] = hint
+                claimedRouteDestinations.insert(destination)
+                via[destination] = freshest
+            }
+        }
+        claimedRouteVia = via
     }
 
     private func hintFor(route: RouteInfo) -> NetRomRouteHint {

@@ -41,6 +41,17 @@ struct StationNotesSection: View {
                 .padding(8)
                 .background(Color(platform: .platformTextBackground),
                             in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                // A fill alone did not read as a field: against the card behind
+                // it the two tones are almost the same, so the placeholder
+                // looked like loose text on the sheet rather than something to
+                // type into. The border draws the edge; focus brightens it.
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(
+                            editing ? AnyShapeStyle(.tint)
+                                    : AnyShapeStyle(Color(platform: .platformSeparator)),
+                            lineWidth: editing ? 2 : 1)
+                }
                 .overlay(alignment: .topLeading) {
                     if body_.isEmpty {
                         Text("Antenna, hours, who runs it, which frequency actually answers\u{2026}")

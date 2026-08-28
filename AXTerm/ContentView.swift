@@ -25,6 +25,12 @@ struct ContentView: View {
     /// Learns node aliases (DRLNOD, HORSE) from ID beacons already
     /// arriving, so via-path hops can be placed.
     @StateObject private var nodeAliases = NodeAliasStore()
+    /// The Nodes page's search text, held here so the sidebar can point it at
+    /// one node's table.
+    @State private var nodeQuery: String = ""
+    /// The node whose table the Nodes page is restricted to, set by the
+    /// sidebar's "Reachable via" rows.
+    @State private var nodeRouteFilter: String?
     /// The Mac gets the same identity view the handheld does — a callsign in
     /// the console is the same question there as here.
     @StateObject private var profiles = NodeProfileCoordinator()
@@ -124,6 +130,9 @@ struct ContentView: View {
 
     @State private var selectedNav: NavigationItem = .terminal
     @StateObject private var searchModel = AppToolbarSearchModel()
+    @ObservedObject private var bbsSettings: BBSSettings
+    @StateObject private var bbsService: BBSService
+    @StateObject private var bbsLibrary: BBSFileLibrary
     @State private var filters = PacketFilters()
 
     @State private var selection = Set<Packet.ID>()
@@ -138,11 +147,8 @@ struct ContentView: View {
     @StateObject private var analyticsViewModel: AnalyticsDashboardViewModel
     @State private var lastTapTimes: [String: Date] = [:]
 
-    nonisolated static func stationDefaultConnectMode() -> ConnectBarMode {
-        .ax25
-    }
 
-    init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter, winlinkContext: WinlinkContext) {
+    init(client: PacketEngine, settings: AppSettingsStore, inspectionRouter: PacketInspectionRouter, winlinkContext: WinlinkContext, bbsSettings: BBSSettings) {
         _client = StateObject(wrappedValue: client)
         _settings = ObservedObject(wrappedValue: settings)
         _inspectionRouter = ObservedObject(wrappedValue: inspectionRouter)
@@ -197,11 +203,65 @@ struct ContentView: View {
         }
         coordinator.localCallsign = settings.myCallsign
         coordinator.appSettings = settings
+        // Restore the operator's NET/ROM node policy. Both switches
+        // default off, so on a station that has never enabled them this
+        // does nothing at all; on one that has, it resumes announcing at
+        // launch rather than waiting for a visit to Settings.
+        coordinator.applyNetRomNodeSettings(settings)
         coordinator.subscribeToPackets(from: client)
         _sessionCoordinator = StateObject(wrappedValue: coordinator)
-        _callsignLookup = StateObject(wrappedValue: CallsignLookupService(
+        // The personal mailbox. Built here because this is the one place that
+        // holds both the coordinator (which owns inbound calls) and the engine
+        // (which owns the database and the frame sink).
+        _bbsSettings = ObservedObject(wrappedValue: bbsSettings)
+        // Hoisted rather than inlined: as one expression the closures push the
+        // type checker past its budget.
+        let sendFrames: ([OutboundFrame]) -> Void = { [weak client] frames in
+            for frame in frames { client?.send(frame: frame) }
+        }
+        let stationCallsign: () -> String = { settings.myCallsign }
+        let winlinkArmed: () -> Bool = { winlinkContext.settings.p2pListenEnabled }
+        let winlinkCallsign: () -> String = {
+            winlinkContext.settings.effectiveP2PCallsign(stationCallsign: settings.myCallsign)
+        }
+        let contested: () -> String? = { winlinkContext.contestedIdentityHolder }
+        let library = BBSFileLibrary(store: client.bbsMessages)
+        _bbsLibrary = StateObject(wrappedValue: library)
+        let supportsAXDP: (String) -> Bool = { [weak client] callsign in
+            client?.capabilityStore.hasCapabilities(for: callsign) ?? false
+        }
+        // Built before the mailbox so the mailbox can read its cache.
+        let lookup = CallsignLookupService(
             store: winlinkContext.store,
-            isNetworkEnabled: winlinkContext.settings.callsignLookupEnabled))
+            isNetworkEnabled: winlinkContext.settings.callsignLookupEnabled)
+        _callsignLookup = StateObject(wrappedValue: lookup)
+        // Cached only: the mailbox answers calls unattended, and looking a
+        // caller up over the internet the moment they connect would tell a
+        // third party who is talking to this station.
+        let licence: (String) -> CallsignRecord? = { [weak lookup] callsign in
+            lookup?.cached(callsign)
+        }
+        let heard: () -> [BBSShell.HeardStation] = { [weak client] in
+            (client?.stations ?? []).compactMap { station in
+                guard let lastHeard = station.lastHeard else { return nil }
+                return BBSShell.HeardStation(callsign: station.call, lastHeard: lastHeard)
+            }
+        }
+        _bbsService = StateObject(wrappedValue: BBSService(
+            store: client.bbsMessages,
+            settings: bbsSettings,
+            coordinator: coordinator,
+            sendFrames: sendFrames,
+            stationCallsign: stationCallsign,
+            isWinlinkP2PArmed: winlinkArmed,
+            winlinkP2PCallsign: winlinkCallsign,
+            heardStations: heard,
+            library: library,
+            peerSupportsAXDP: supportsAXDP,
+            licenceRecord: licence,
+            announce: { [weak client] line in client?.appendSystemNotification(line) },
+            resolveLicences: { [weak lookup] callsigns in await lookup?.resolveAll(callsigns) },
+            contestedIdentityHolder: contested))
     }
 
     var body: some View {
@@ -211,6 +271,26 @@ struct ContentView: View {
             detailView
         }
         .accessibilityIdentifier("mainWindowRoot")
+        .task {
+            bbsService.attach()
+            syncServiceAddresses()
+            bbsLibrary.rescan()
+        }
+        // Which addresses this station accepts calls on. Watched as one value
+        // rather than five separate modifiers, which the type checker cannot
+        // afford on a body this size.
+        .onChange(of: serviceAddressSignature) { syncServiceAddresses() }
+        // Saying goodbye costs one frame. Vanishing mid-session leaves the
+        // caller's software retrying into an address that stopped existing,
+        // with no way to tell that from a bad path.
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.willTerminateNotification)) { _ in
+            bbsService.shutdown(reason: "AXTerm is closing")
+        }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(
+            for: NSWorkspace.willSleepNotification)) { _ in
+            bbsService.shutdown(reason: "this station is going to sleep")
+        }
         .searchable(text: $searchModel.query, prompt: searchPlaceholder)
         .searchFocused($isSearchFocused)
         .toolbar {
@@ -293,6 +373,11 @@ struct ContentView: View {
                 await Task.yield()
                 client.loadPersistedConsole()
             case .packets:
+                // Sweep stored beacons for aliases before anything renders. The
+                // sidebar names stations on every page, so waiting until the
+                // operator happens to open Map or Nodes left rows unnamed that
+                // the app already had the evidence to name.
+                nodeAliases.ingest(packets: client.packets)
                 // Load packets when navigating to Packets view
                 guard !didLoadPacketsHistory else { return }
                 didLoadPacketsHistory = true
@@ -308,14 +393,20 @@ struct ContentView: View {
             case .routes:
                 // Routes view handles its own data loading
                 return
-            case .map:
+            case .map, .nodes:
                 // Learn aliases from beacons already received. Cheap —
                 // only ID/beacon destinations are inspected — and it
-                // runs off the view-update path.
+                // runs off the view-update path. The directory page wants
+                // the same sweep for the same reason: an alias already sitting
+                // in a stored beacon should be on the list before the operator
+                // reads it, not after the next one happens to arrive.
                 nodeAliases.ingest(packets: client.packets)
                 return
             case .mail:
                 // Mail view loads its own data from the Winlink store
+                return
+            case .bbs:
+                bbsService.reload()
                 return
             }
         }
@@ -359,6 +450,10 @@ struct ContentView: View {
             syncConnectContext(for: newValue)
         }
         .onAppear {
+            // The node directory turns aliases (COSCO, EVANS) into the
+            // callsigns NET/ROM addresses by. Wired here rather than in
+            // init because the store is a @StateObject.
+            sessionCoordinator.nodeAliases = nodeAliases
             SettingsRouter.shared.openAction = { openSettings() }
             connectCoordinator.navigateToTerminal = {
                 selectedNav = .terminal
@@ -395,6 +490,8 @@ struct ContentView: View {
                     onFilterStation: { call in
                         client.selectedStationCall = call
                     },
+                    sourceAlsoKnownAs: nodeAliases.directory.otherName(for: packet.fromDisplay),
+                    destinationAlsoKnownAs: nodeAliases.directory.otherName(for: packet.toDisplay),
                     onClose: {
                         SentryManager.shared.addBreadcrumb(category: "ui.inspector", message: "Inspector closed", level: .info, data: ["packetID": selection.id.uuidString])
                         inspectorSelection = nil
@@ -404,6 +501,26 @@ struct ContentView: View {
                 Text("Packet unavailable")
                     .padding()
             }
+    }
+
+    /// Every callsign this station knows of, from any source.
+    ///
+    /// Deliberately wider than the heard list: a station named only in a route
+    /// or a neighbour record is still one this station knows about, and the
+    /// set is used to decide what may be forgotten. Erring wide keeps entries
+    /// that might still be resolving a name.
+    private var knownCallsigns: Set<String> {
+        var known = Set(client.stations.map(\.call))
+        if let integration = client.netRomIntegration {
+            let mode = integration.currentMode
+            known.formUnion(integration.currentNeighbors(forMode: mode).map(\.call))
+            for route in integration.currentRoutes(forMode: mode) {
+                known.insert(route.destination)
+                known.insert(route.origin)
+                known.formUnion(route.path)
+            }
+        }
+        return known
     }
 
     @ViewBuilder
@@ -416,15 +533,20 @@ struct ContentView: View {
                 }
                 .padding(12)
                 Divider()
+                let profile = macResolver.profile(for: presentation.callsign)
                 NodeProfileView(
-                    profile: macResolver.profile(for: presentation.callsign),
+                    profile: profile,
                     localCallsign: settings.myCallsign,
                     lookupEnabled: winlinkContext.settings.callsignLookupEnabled,
                     isLookingUp: lookingUpCallsign == presentation.callsign,
                     noteStore: client.stationNotes,
                     presentation: presentation.isPage ? .page : .sheet,
                     onOpenFullPage: presentation.isPage
-                        ? nil : { profiles.promoteSheetToPage() })
+                        ? nil : { profiles.promoteSheetToPage() },
+                    onConnect: {
+                        profiles.dismiss()
+                        connectFromProfile(profile)
+                    })
                     .task(id: presentation.callsign) {
                         guard winlinkContext.settings.callsignLookupEnabled else { return }
                         lookingUpCallsign = presentation.callsign
@@ -436,14 +558,36 @@ struct ContentView: View {
                    minHeight: presentation.isPage ? 620 : 500)
     }
 
+    /// Connects to whatever the profile is about, the way it is reachable.
+    ///
+    /// Two different connections behind one button. A station this receiver has
+    /// heard is called directly. One that only appears in a node's table has to
+    /// be asked for *through* that node, and the alias is what goes on the wire
+    /// — BPQ looks it up in its own table, and translating it here would fight
+    /// the node that owns the name.
+    private func connectFromProfile(_ profile: NodeProfile) {
+        if let via = profile.reachVia.first {
+            let asked = profile.resolvedFromAlias ?? profile.alias ?? profile.callsign
+            issueStationConnectRequest(
+                stationCall: asked, mode: .netrom,
+                nextHopOverride: via, executeImmediately: true)
+        } else {
+            issueStationConnectRequest(
+                stationCall: profile.callsign, mode: .ax25, executeImmediately: true)
+        }
+        selectedNav = .terminal
+    }
+
     private func syncSearchScope(for item: NavigationItem) {
         switch item {
         case .terminal: searchModel.scope = .terminal
         case .packets: searchModel.scope = .packets
         case .routes: searchModel.scope = .routes
+        case .nodes: searchModel.scope = .terminal  // the page filters in-pane
         case .analytics: searchModel.scope = .analytics
         case .map: searchModel.scope = .terminal
         case .mail: searchModel.scope = .terminal  // Mail has its own in-pane search
+        case .bbs: searchModel.scope = .terminal    // The mailbox filters in-pane
         //case .raw: searchModel.scope = .terminal // Fallback or new scope if needed
         }
     }
@@ -454,7 +598,7 @@ struct ContentView: View {
             connectCoordinator.activeContext = .terminal
         case .routes:
             connectCoordinator.activeContext = .routes
-        case .packets, .analytics, .mail, .map:
+        case .packets, .analytics, .mail, .map, .bbs, .nodes:
             connectCoordinator.activeContext = .unknown
         }
     }
@@ -468,6 +612,146 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Reachable through a node
+
+    /// A station some node said it can reach, and the node to ask.
+    struct ReachableTarget: Identifiable, Hashable {
+        let alias: String
+        let callsign: String
+        let via: String
+        var id: String { alias }
+    }
+
+    /// What the network says is reachable, grouped by the node to go through.
+    ///
+    /// Kept apart from Stations because the two are different kinds of fact.
+    /// A station in that list was *heard* — this receiver has its frames. An
+    /// entry here is a *claim*: a node published a table saying it can get
+    /// there, and nothing here has verified it. They also differ in what you
+    /// do with them: one you call directly, the other through somebody.
+    ///
+    /// A station appears under *every* node that listed it, so the groups
+    /// overlap. That is the honest shape: two nodes both carrying the same
+    /// eighty stations is a fact about the network, and filing each station
+    /// under only its freshest teller reported KB5YZB-7 as reaching one
+    /// station when its table listed eighty-eight — it had simply been
+    /// outbid on recency by COSCO, which changes nothing about what it
+    /// reaches (2026-08-27).
+    private var reachableByNode: [(via: String, targets: [ReachableTarget])] {
+        return nodeAliases.directory.entriesByTeller()
+            .map { via, entries in
+                (via: via, targets: entries.map {
+                    ReachableTarget(alias: $0.alias, callsign: $0.callsign, via: via)
+                })
+            }
+            .sorted {
+                if $0.targets.count != $1.targets.count {
+                    return $0.targets.count > $1.targets.count
+                }
+                return $0.via < $1.via
+            }
+    }
+
+    /// Distinct destinations, not the sum of the group counts — the groups
+    /// overlap, and adding them up would count a station once per node that
+    /// carries it.
+    private var reachableCount: Int {
+        Set(nodeAliases.directory.allEntries
+            .filter { !$0.reachableVia.isEmpty }
+            .map(\.alias)).count
+    }
+
+    /// The nodes that can reach things, and how many things each reaches.
+    ///
+    /// Deliberately not a browser. Expanding one node put eighty-five rows in
+    /// the sidebar and pushed the navigation itself off the top — the section
+    /// meant to orient the operator swallowed everything they were oriented by.
+    /// Browsing is the Nodes page's job, and it is built for it: sectioned by
+    /// route, searchable, sortable. Here a node is one line that says how much
+    /// it reaches and takes you there.
+    @ViewBuilder
+    private var reachableSection: some View {
+        if reachableCount > 0 {
+            Section("Reachable via nodes (\(reachableCount))") {
+                ForEach(reachableByNode, id: \.via) { group in
+                    Button {
+                        // A filter, not a search. Typing the node's name into
+                        // the search field matched every entry that mentioned
+                        // it anywhere and then re-filed those under whichever
+                        // node listed them last, so this row's count and the
+                        // page it opened disagreed by two orders of magnitude.
+                        nodeRouteFilter = group.via
+                        nodeQuery = ""
+                        selectedNav = .nodes
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(group.via)
+                                .font(.system(.subheadline, design: .monospaced))
+                            Spacer()
+                            Text("\(group.targets.count)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("\(group.via) published a table listing \(group.targets.count) "
+                          + "stations it can connect you through to. Its claim, not a "
+                          + "route this station has measured, and other nodes may "
+                          + "list the same ones. Opens its table in Nodes.")
+                }
+            }
+        }
+    }
+
+    /// Live NET/ROM circuits — the native transport, not the terminal
+    /// relay. Separate from Stations for the same reason Reachable is:
+    /// a circuit is a conversation this station is *holding*, not a
+    /// station it has heard, and it may be several hops away with no
+    /// direct evidence of the far end at all.
+    @ViewBuilder
+    private var circuitSection: some View {
+        if !sessionCoordinator.netRomDriver.circuits.isEmpty {
+            Section("NET/ROM circuits (\(sessionCoordinator.netRomDriver.circuits.count))") {
+                ForEach(sessionCoordinator.netRomDriver.circuits) { circuit in
+                    HStack(spacing: 6) {
+                        Image(systemName: circuit.state == .connected
+                              ? "point.3.connected.trianglepath.dotted"
+                              : "ellipsis.circle")
+                            .font(.caption)
+                            .foregroundStyle(circuit.state == .connected ? .green : .secondary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(circuit.displayName)
+                                .font(.system(.subheadline, design: .monospaced))
+                            if circuit.neighbor.display != circuit.destination.display {
+                                Text("via \(circuit.neighbor.display)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        Button {
+                            sessionCoordinator.netRomDriver.disconnect(circuit.id)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Close this circuit")
+                    }
+                    .help(circuit.statusLine)
+                }
+            }
+        }
+    }
+
     // MARK: - Sidebar
 
     private var sidebar: some View {
@@ -475,12 +759,19 @@ struct ContentView: View {
             Section("Views") {
                 ForEach(NavigationItem.allCases, id: \.self) { item in
                     Label(item.rawValue, systemImage: iconFor(item))
-                        .badge(item == .mail && winlinkContext.unreadCount > 0
-                               ? winlinkContext.unreadCount : 0)
+                        .badge(badgeCount(for: item))
                         .tag(item)
                         .accessibilityIdentifier("nav-\(item.rawValue.lowercased())")
                 }
             }
+
+            // Above Stations, not below it. Thirty heard stations scroll past
+            // before the section would appear, so the answer to "what can I
+            // reach" sat under the list of what was already reachable.
+            // Collapsed, it costs one line per node.
+            reachableSection
+
+            circuitSection
 
             Section("Stations (\(client.stations.count))") {
                 // "All" option
@@ -527,32 +818,43 @@ struct ContentView: View {
                     // hasRoute(to:) is an O(1) dict lookup; connectedCallsigns avoids an O(sessions)
                     // scan per row.
                     let integration = client.netRomIntegration
-                    let defaultStationMode = Self.stationDefaultConnectMode()
                     let connectedCallsigns = Set(
                         sessionCoordinator.connectedSessions
                             .map { CallsignValidator.normalize($0.remoteAddress.display) }
                     )
+                    // Same reason as the two above: a per-row lookup would scan
+                    // the whole alias directory once per station, every render.
+                    let alsoKnownAs = nodeAliases.directory.otherNames()
                     ForEach(client.stations) { station in
                         let normalizedCall = CallsignValidator.normalize(station.call)
                         let stationHasNetRomRoute = integration?.hasRoute(to: normalizedCall) ?? false
+                        // Was computed and then discarded: both the tap and the
+                        // plain "Connect" used a hardcoded AX.25 Direct, so a
+                        // station the row showed as "Via DRLNOD" was called
+                        // directly and never answered.
                         let preferredMode = connectCoordinator.preferredMode(
                             for: station.call,
-                            hasNetRomRoute: stationHasNetRomRoute
+                            hasNetRomRoute: stationHasNetRomRoute,
+                            heardVia: station.lastVia
                         )
+                        let preferredPath = ConnectCoordinator.returnPath(
+                            heardVia: station.lastVia)
                         let isConnectedStation = connectedCallsigns.contains(normalizedCall)
 
                         StationRowView(
                             station: station,
                             isSelected: client.selectedStationCall == station.call,
                             isConnected: isConnectedStation,
-                            capability: client.capabilityStore.capabilities(for: station.call)
+                            capability: client.capabilityStore.capabilities(for: station.call),
+                            alsoKnownAs: alsoKnownAs[station.call.uppercased()]
                         )
                         .contentShape(Rectangle())
                         .contextMenu {
                             Button("Connect") {
                                 issueStationConnectRequest(
                                     stationCall: station.call,
-                                    mode: defaultStationMode,
+                                    mode: preferredMode,
+                                    viaDigis: preferredPath,
                                     executeImmediately: true
                                 )
                             }
@@ -611,14 +913,21 @@ struct ContentView: View {
                             client.selectedStationCall = station.call
 
                             if isDoubleClick {
+                                // Start a fresh pair. Without this a run of
+                                // clicks chains into a double-click on every
+                                // second one, so an impatient operator issues
+                                // a connect request per pair rather than one.
+                                lastTapTimes[station.call] = .distantPast
                                 issueStationConnectRequest(
                                     stationCall: station.call,
-                                    mode: defaultStationMode,
+                                    mode: preferredMode,
+                                    viaDigis: preferredPath,
                                     executeImmediately: true
                                 )
                             } else {
                                 let capturedCall = station.call
-                                let capturedMode = defaultStationMode
+                                let capturedMode = preferredMode
+                                let capturedPath = preferredPath
                                 // Double-async ensures the checkmark renders before connect-bar cascade begins
                                 DispatchQueue.main.async {
                                     DispatchQueue.main.async {
@@ -639,26 +948,75 @@ struct ContentView: View {
         .frame(minWidth: 200)
     }
 
+    /// Every input deciding which addresses this station answers on, as one
+    /// value, so the view can watch a single thing.
+    private var serviceAddressSignature: String {
+        let winlink = winlinkContext.settings
+        return [settings.myCallsign,
+                bbsSettings.onAir ? "1" : "0",
+                bbsSettings.callsign,
+                winlink.p2pListenEnabled ? "1" : "0",
+                winlink.p2pListenCallsign].joined(separator: "|")
+    }
+
+    /// Registers every address a service answers on with the session layer.
+    ///
+    /// Frames not addressed to a registered address never reach the session
+    /// layer, so this is what makes a service SSID mean anything at all.
+    private func syncServiceAddresses() {
+        bbsService.syncServiceAddress()
+
+        let winlink = winlinkContext.settings
+        let address = winlink.p2pListenEnabled
+            ? winlink.effectiveP2PCallsign(stationCallsign: settings.myCallsign)
+            : ""
+        sessionCoordinator.sessionManager.setServiceAddress(
+            address.isEmpty ? nil : CallsignNormalizer.toAddress(address),
+            for: "winlink.p2p")
+    }
+
+    /// What each section is waiting on.
+    ///
+    /// The mailbox badges directory hints as well as unread mail: a fact
+    /// spotted in a terminal session lands in a view the operator is not
+    /// looking at, so something has to say it is there.
+    private func badgeCount(for item: NavigationItem) -> Int {
+        switch item {
+        case .mail: winlinkContext.unreadCount
+        case .bbs: bbsService.suggestions.count
+        default: 0
+        }
+    }
+
     private func iconFor(_ item: NavigationItem) -> String {
         switch item {
         case .terminal: return "terminal"
         case .packets: return "list.bullet.rectangle"
         case .routes: return "arrow.triangle.branch"
+        case .nodes: return "character.book.closed"
         case .analytics: return "chart.bar"
         case .map: return "map"
         case .mail: return "envelope"
+        case .bbs: return "tray.full"
         //case .raw: return "doc.text"
         }
     }
 
-    private func issueStationConnectRequest(stationCall: String, mode: ConnectBarMode, executeImmediately: Bool) {
+    private func issueStationConnectRequest(stationCall: String,
+                                            mode: ConnectBarMode,
+                                            viaDigis: [String] = [],
+                                            nextHopOverride: String? = nil,
+                                            executeImmediately: Bool) {
         connectCoordinator.activeContext = .stations
         let normalized = CallsignValidator.normalize(stationCall)
         let intent: ConnectIntent
         switch mode {
         case .netrom:
+            // A named next hop is how a directory entry connects: nothing here
+            // has measured a route to the station, but a node listed it, so
+            // that node is the one to ask.
             intent = ConnectIntent(
-                kind: .netrom(nextHopOverride: nil),
+                kind: .netrom(nextHopOverride: nextHopOverride.flatMap(CallsignSSID.init)),
                 to: normalized,
                 sourceContext: .stations,
                 suggestedRoutePreview: nil,
@@ -668,7 +1026,7 @@ struct ContentView: View {
             )
         case .ax25ViaDigi:
             intent = ConnectIntent(
-                kind: .ax25ViaDigis([]),
+                kind: .ax25ViaDigis(viaDigis.compactMap(CallsignSSID.init)),
                 to: normalized,
                 sourceContext: .stations,
                 suggestedRoutePreview: nil,
@@ -731,6 +1089,15 @@ struct ContentView: View {
                     settings: settings,
                     sessionCoordinator: sessionCoordinator,
                     connectCoordinator: connectCoordinator,
+                    nodeAliases: nodeAliases,
+                    onSessionText: { text, peer in
+                        // A node's `N` names its whole view of the network in
+                        // one reply; a BBS listing names a dozen operators'
+                        // home BBS. Both arrive because the operator went
+                        // there, so both are read rather than thrown away.
+                        nodeAliases.ingest(text: text, source: peer)
+                        bbsService.observeSessionText(text, from: peer)
+                    },
                     searchModel: searchModel,
                     locationService: winlinkContext.locationService,
                     onIdentity: { profiles.peek($0) },
@@ -745,6 +1112,19 @@ struct ContentView: View {
                     settings: settings,
                     connectCoordinator: connectCoordinator
                 )
+            case .nodes:
+                NodeDirectoryView(
+                    aliases: nodeAliases,
+                    query: $nodeQuery,
+                    routeFilter: $nodeRouteFilter,
+                    onSelect: { profiles.peek($0) },
+                    onConnect: { alias, via in
+                        issueStationConnectRequest(
+                            stationCall: alias, mode: .netrom,
+                            nextHopOverride: via, executeImmediately: true)
+                        selectedNav = .terminal
+                    },
+                    knownCallsigns: knownCallsigns)
             case .analytics:
                 AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel, connectCoordinator: connectCoordinator)
             case .map:
@@ -771,6 +1151,13 @@ struct ContentView: View {
                     sessionCoordinator: sessionCoordinator,
                     client: client,
                     onAddToMap: addSpatialAttachmentToMap
+                )
+            case .bbs:
+                BBSView(
+                    service: bbsService,
+                    settings: bbsSettings,
+                    library: bbsLibrary,
+                    stationCallsign: settings.myCallsign
                 )
             //case .raw:
             //    RawView(
@@ -1219,10 +1606,11 @@ struct ContentView: View {
 
 #Preview {
     let settings = AppSettingsStore()
-    return ContentView(
+    ContentView(
         client: PacketEngine(settings: settings),
         settings: settings,
         inspectionRouter: .shared,
-        winlinkContext: WinlinkContext(store: nil, settings: WinlinkSettings())
+        winlinkContext: WinlinkContext(store: nil, settings: WinlinkSettings()),
+        bbsSettings: BBSSettings()
     )
 }

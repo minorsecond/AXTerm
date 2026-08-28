@@ -341,6 +341,35 @@ nonisolated final class NetRomRouter {
         routesByDestination[normalizedDestination] = bucket
     }
 
+    /// Every next hop known for a destination, best first, deduplicated
+    /// by neighbor. Auto-try walks this: when the best route refuses or
+    /// times out, the second-best is the honest next thing to attempt.
+    func candidateRoutes(to destination: String, currentDate: Date = Date()) -> [RouteInfo] {
+        guard let normalized = normalize(destination),
+              let bucket = routesByDestination[normalized] else { return [] }
+        var seen = Set<String>()
+        return bucket
+            .sorted { lhs, rhs in
+                if lhs.quality != rhs.quality { return lhs.quality > rhs.quality }
+                // Deterministic tie-break (CLAUDE.md §9): freshest, then
+                // alphabetical, so the same table always yields the same
+                // attempt order.
+                if lhs.lastHeard != rhs.lastHeard { return lhs.lastHeard > rhs.lastHeard }
+                return lhs.origin < rhs.origin
+            }
+            .compactMap { route in
+                guard seen.insert(route.origin).inserted else { return nil }
+                return RouteInfo(
+                    destination: normalized,
+                    origin: route.origin,
+                    quality: route.quality,
+                    path: route.path,
+                    lastUpdated: route.lastHeard,
+                    sourceType: route.sourceType
+                )
+            }
+    }
+
     func bestPaths(from destination: String) -> [NetRomPath] {
         guard let normalized = normalize(destination),
               let routes = routesByDestination[normalized] else { return [] }

@@ -71,6 +71,45 @@ final class AppSettingsStore: ObservableObject {
 
     // AXDP / transmission extension settings keys
     static let axdpExtensionsEnabledKey = "axdpExtensionsEnabled"
+    static let netRomAdvertiseKey = "netRomAdvertiseSelf"
+    static let netRomForwardingKey = "netRomForwarding"
+    static let netRomNodeAliasKey = "netRomNodeAlias"
+    static let netRomBroadcastMinutesKey = "netRomBroadcastMinutes"
+
+    /// Announcing this station and carrying other people's traffic both
+    /// default OFF. Each changes what other operators' nodes do, so each
+    /// is the operator's deliberate decision, not an app upgrade's.
+    static let defaultNetRomAdvertise = false
+    static let defaultNetRomForwarding = false
+    /// BPQ's NODESINTERVAL is 60 minutes; that is the neighbourly rate.
+    static let defaultNetRomBroadcastMinutes = 60
+
+    // Beacon: what this station says about itself, unprompted.
+    static let beaconEnabledKey = "beaconEnabled"
+    static let beaconTextKey = "beaconText"
+    static let beaconMinutesKey = "beaconMinutes"
+    static let beaconPathKey = "beaconPath"
+
+    /// Off, and empty. A beacon is the operator's own words going out
+    /// over their licence; there is no default worth putting on the air
+    /// on their behalf.
+    static let defaultBeaconEnabled = false
+    /// Thirty minutes. Node beacons on a shared channel run anywhere from
+    /// ten to sixty; this errs toward the quiet end.
+    static let defaultBeaconMinutes = 30
+
+    // Ping: asking stations whether they can hear us.
+    static let pingEnabledKey = "pingEnabled"
+    static let pingWindowStartKey = "pingWindowStartHour"
+    static let pingWindowEndKey = "pingWindowEndHour"
+    static let pingSpacingKey = "pingMinSecondsBetween"
+    static let pingCooldownKey = "pingStationCooldownMinutes"
+    static let pingMaxPerHourKey = "pingMaxProbesPerHour"
+    static let pingProbeCalledKey = "pingProbeStationsOthersCall"
+
+    /// Off. Automatic transmission on a shared channel is the operator's
+    /// decision every time, and the defaults below are deliberately timid.
+    static let defaultPingEnabled = false
     static let axdpAutoNegotiateKey = "axdpAutoNegotiateCapabilities"
     static let axdpCompressionEnabledKey = "axdpCompressionEnabled"
     static let axdpCompressionAlgorithmKey = "axdpCompressionAlgorithm"
@@ -531,6 +570,106 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistAXDPExtensionsEnabled() }
     }
 
+    // MARK: - NET/ROM node settings
+
+    /// Announce this station in NODES broadcasts, so neighbors learn it
+    /// exists and can route to it. Off by default: this writes AXTerm
+    /// into other operators' routing tables.
+    @Published var netRomAdvertiseSelf: Bool {
+        didSet { defaults.set(netRomAdvertiseSelf, forKey: Self.netRomAdvertiseKey) }
+    }
+
+    /// Carry other stations' NET/ROM traffic. Off by default: transit
+    /// routing spends this station's airtime on other people's packets
+    /// and makes it answerable for delivering them.
+    @Published var netRomForwarding: Bool {
+        didSet { defaults.set(netRomForwarding, forKey: Self.netRomForwardingKey) }
+    }
+
+    /// Six-character node alias (BPQ's NODEALIAS). Empty means the
+    /// station announces with a blank mnemonic, which is legal but
+    /// unfriendly, so the UI should ask for one before enabling
+    /// announcements.
+    @Published var netRomNodeAlias: String {
+        didSet { defaults.set(netRomNodeAlias, forKey: Self.netRomNodeAliasKey) }
+    }
+
+    /// Minutes between NODES broadcasts.
+    @Published var netRomBroadcastMinutes: Int {
+        didSet { defaults.set(netRomBroadcastMinutes, forKey: Self.netRomBroadcastMinutesKey) }
+    }
+
+    // MARK: - Beacon
+
+    /// Transmit a periodic unconnected announcement. Off by default.
+    @Published var beaconEnabled: Bool {
+        didSet { defaults.set(beaconEnabled, forKey: Self.beaconEnabledKey) }
+    }
+
+    /// What the beacon says. The operator's own words, sent under their
+    /// callsign — nothing here writes it for them.
+    @Published var beaconText: String {
+        didSet { defaults.set(beaconText, forKey: Self.beaconTextKey) }
+    }
+
+    /// Minutes between beacons.
+    @Published var beaconMinutes: Int {
+        didSet { defaults.set(beaconMinutes, forKey: Self.beaconMinutesKey) }
+    }
+
+    /// Digipeaters to send the beacon through, as typed: `WIDE1-1`,
+    /// `DRL WIDE2-1`, `DRL,WIDE2-1`. Empty means direct.
+    ///
+    /// A beacon is exactly the traffic worth digipeating — its whole
+    /// purpose is to reach stations that cannot hear this one. The NODES
+    /// broadcast is the opposite case and stays direct; see
+    /// `SessionCoordinator.scheduleNetRomBroadcasts`.
+    @Published var beaconPath: String {
+        didSet { defaults.set(beaconPath, forKey: Self.beaconPathKey) }
+    }
+
+    // MARK: - Ping
+
+    @Published var pingEnabled: Bool {
+        didSet { defaults.set(pingEnabled, forKey: Self.pingEnabledKey) }
+    }
+    @Published var pingWindowStartHour: Int {
+        didSet { defaults.set(pingWindowStartHour, forKey: Self.pingWindowStartKey) }
+    }
+    @Published var pingWindowEndHour: Int {
+        didSet { defaults.set(pingWindowEndHour, forKey: Self.pingWindowEndKey) }
+    }
+    @Published var pingMinSecondsBetween: Int {
+        didSet { defaults.set(pingMinSecondsBetween, forKey: Self.pingSpacingKey) }
+    }
+    @Published var pingStationCooldownMinutes: Int {
+        didSet { defaults.set(pingStationCooldownMinutes, forKey: Self.pingCooldownKey) }
+    }
+    @Published var pingMaxProbesPerHour: Int {
+        didSet { defaults.set(pingMaxProbesPerHour, forKey: Self.pingMaxPerHourKey) }
+    }
+    /// Probe stations this receiver has never heard, but that neighbours
+    /// were heard calling. Off by default: a blind call to a station that
+    /// may be a hundred miles away is a transmission for a low chance of
+    /// an answer.
+    @Published var pingProbeStationsOthersCall: Bool {
+        didSet { defaults.set(pingProbeStationsOthersCall, forKey: Self.pingProbeCalledKey) }
+    }
+
+    /// The settings model the policy actually reads.
+    var pingPolicySettings: PingPolicy.Settings {
+        var sources: Set<PingPolicy.Source> = [.heardDirect]
+        if pingProbeStationsOthersCall { sources.insert(.calledByOthers) }
+        return PingPolicy.Settings(
+            enabled: pingEnabled,
+            windowStartHour: pingWindowStartHour,
+            windowEndHour: pingWindowEndHour,
+            minSecondsBetweenProbes: pingMinSecondsBetween,
+            stationCooldownMinutes: pingStationCooldownMinutes,
+            maxProbesPerHour: pingMaxProbesPerHour,
+            sources: sources)
+    }
+
     /// Whether to automatically negotiate AXDP capabilities on connect.
     @Published var axdpAutoNegotiateCapabilities: Bool {
         didSet { persistAXDPAutoNegotiateCapabilities() }
@@ -897,6 +1036,22 @@ final class AppSettingsStore: ObservableObject {
 
         // AXDP / transmission extension settings
         let storedAXDPExtensionsEnabled = defaults.object(forKey: Self.axdpExtensionsEnabledKey) as? Bool ?? Self.defaultAXDPExtensionsEnabled
+        let storedNetRomAdvertise = defaults.object(forKey: Self.netRomAdvertiseKey) as? Bool ?? Self.defaultNetRomAdvertise
+        let storedNetRomForwarding = defaults.object(forKey: Self.netRomForwardingKey) as? Bool ?? Self.defaultNetRomForwarding
+        let storedNetRomNodeAlias = defaults.string(forKey: Self.netRomNodeAliasKey) ?? ""
+        let storedNetRomBroadcastMinutes = defaults.object(forKey: Self.netRomBroadcastMinutesKey) as? Int ?? Self.defaultNetRomBroadcastMinutes
+        let storedBeaconEnabled = defaults.object(forKey: Self.beaconEnabledKey) as? Bool ?? Self.defaultBeaconEnabled
+        let storedBeaconText = defaults.string(forKey: Self.beaconTextKey) ?? ""
+        let storedBeaconMinutes = defaults.object(forKey: Self.beaconMinutesKey) as? Int ?? Self.defaultBeaconMinutes
+        let storedBeaconPath = defaults.string(forKey: Self.beaconPathKey) ?? ""
+        let pingDefaults = PingPolicy.Settings()
+        let storedPingEnabled = defaults.object(forKey: Self.pingEnabledKey) as? Bool ?? Self.defaultPingEnabled
+        let storedPingStart = defaults.object(forKey: Self.pingWindowStartKey) as? Int ?? pingDefaults.windowStartHour
+        let storedPingEnd = defaults.object(forKey: Self.pingWindowEndKey) as? Int ?? pingDefaults.windowEndHour
+        let storedPingSpacing = defaults.object(forKey: Self.pingSpacingKey) as? Int ?? pingDefaults.minSecondsBetweenProbes
+        let storedPingCooldown = defaults.object(forKey: Self.pingCooldownKey) as? Int ?? pingDefaults.stationCooldownMinutes
+        let storedPingMax = defaults.object(forKey: Self.pingMaxPerHourKey) as? Int ?? pingDefaults.maxProbesPerHour
+        let storedPingCalled = defaults.object(forKey: Self.pingProbeCalledKey) as? Bool ?? false
         let storedAXDPAutoNegotiate = defaults.object(forKey: Self.axdpAutoNegotiateKey) as? Bool ?? Self.defaultAXDPAutoNegotiate
         let storedAXDPCompressionEnabled = defaults.object(forKey: Self.axdpCompressionEnabledKey) as? Bool ?? Self.defaultAXDPCompressionEnabled
         let storedAXDPCompressionAlgorithm = (defaults.object(forKey: Self.axdpCompressionAlgorithmKey) as? Int).map { UInt8($0) } ?? Self.defaultAXDPCompressionAlgorithm
@@ -1002,6 +1157,21 @@ final class AppSettingsStore: ObservableObject {
 
         // AXDP / transmission extension settings
         self.axdpExtensionsEnabled = storedAXDPExtensionsEnabled
+        self.netRomAdvertiseSelf = storedNetRomAdvertise
+        self.netRomForwarding = storedNetRomForwarding
+        self.netRomNodeAlias = storedNetRomNodeAlias
+        self.netRomBroadcastMinutes = storedNetRomBroadcastMinutes
+        self.beaconEnabled = storedBeaconEnabled
+        self.beaconText = storedBeaconText
+        self.beaconMinutes = storedBeaconMinutes
+        self.beaconPath = storedBeaconPath
+        self.pingEnabled = storedPingEnabled
+        self.pingWindowStartHour = storedPingStart
+        self.pingWindowEndHour = storedPingEnd
+        self.pingMinSecondsBetween = storedPingSpacing
+        self.pingStationCooldownMinutes = storedPingCooldown
+        self.pingMaxProbesPerHour = storedPingMax
+        self.pingProbeStationsOthersCall = storedPingCalled
         self.axdpAutoNegotiateCapabilities = storedAXDPAutoNegotiate
         self.axdpCompressionEnabled = storedAXDPCompressionEnabled
         self.axdpCompressionAlgorithmRaw = storedAXDPCompressionAlgorithm
@@ -1410,6 +1580,11 @@ final class AppSettingsStore: ObservableObject {
             Self.neighborStaleTTLHoursKey: Self.defaultNeighborStaleTTLHours,
             Self.linkStatStaleTTLHoursKey: Self.defaultLinkStatStaleTTLHours,
             Self.axdpExtensionsEnabledKey: Self.defaultAXDPExtensionsEnabled,
+            Self.netRomAdvertiseKey: Self.defaultNetRomAdvertise,
+            Self.netRomForwardingKey: Self.defaultNetRomForwarding,
+            Self.beaconEnabledKey: Self.defaultBeaconEnabled,
+            Self.beaconMinutesKey: Self.defaultBeaconMinutes,
+            Self.netRomBroadcastMinutesKey: Self.defaultNetRomBroadcastMinutes,
             Self.axdpAutoNegotiateKey: Self.defaultAXDPAutoNegotiate,
             Self.axdpCompressionEnabledKey: Self.defaultAXDPCompressionEnabled,
             Self.axdpCompressionAlgorithmKey: Self.defaultAXDPCompressionAlgorithm,

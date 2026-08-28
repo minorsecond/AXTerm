@@ -24,6 +24,7 @@ struct SettingsView: View {
     var locationService: StationLocationService?
     /// Nil when the database failed to open — no mailbox, nothing to sync.
     var winlinkSync: WinlinkSyncController?
+    @ObservedObject var bbsSettings: BBSSettings
     
     // Inject the router for navigation
     @StateObject var router = SettingsRouter.shared
@@ -47,9 +48,19 @@ struct SettingsView: View {
                 .tag(SettingsTab.transmission)
 
             WinlinkSettingsTab(settings: winlinkSettings, profile: stationProfile,
+                               stationCallsign: settings.myCallsign,
                                locationService: locationService, sync: winlinkSync)
                 .tabItem { Label("Winlink", systemImage: "envelope") }
                 .tag(SettingsTab.winlink)
+
+            // The mailbox UI is macOS-only; see AXTerm/BBS/UI.
+            #if os(macOS)
+            BBSSettingsTab(settings: bbsSettings,
+                           stationCallsign: settings.myCallsign,
+                           isWinlinkP2PArmed: winlinkSettings.p2pListenEnabled)
+                .tabItem { Label("BBS", systemImage: "tray.full") }
+                .tag(SettingsTab.bbs)
+            #endif
             
             AdvancedSettingsView(
                 settings: settings,

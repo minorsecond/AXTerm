@@ -15,6 +15,15 @@ struct StationRowView: View {
     /// AXDP capability for this station (nil if not known)
     var capability: AXDPCapability?
 
+    /// The station's other name, when the network has published one.
+    ///
+    /// A row holds whatever the AX.25 address field carried, which for a node
+    /// is often the tactical alias. `DRLNOD` alone is unplaceable — it is not a
+    /// licence and no directory has it — and `N0HI-7` alone is unrecognisable
+    /// to an operator who only ever sees SOLBPQ in node tables. Showing both
+    /// costs one dim word and removes the need to go and look it up.
+    var alsoKnownAs: String?
+
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 1) {
@@ -23,6 +32,17 @@ struct StationRowView: View {
                         .font(.system(.subheadline, design: .monospaced))
                         .fontWeight(isSelected ? .semibold : .regular)
                         .help("Station callsign")
+
+                    if let alsoKnownAs, !alsoKnownAs.isEmpty {
+                        Text(alsoKnownAs)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .help("\(station.call) is also known as \(alsoKnownAs) — "
+                                  + "one of the two is a tactical node alias, the other the "
+                                  + "licence behind it. Learned from node tables and beacons; "
+                                  + "see Nodes for who announced it.")
+                    }
 
                     if isConnected {
                         Image(systemName: "link.circle.fill")

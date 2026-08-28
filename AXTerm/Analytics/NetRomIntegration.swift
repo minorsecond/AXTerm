@@ -359,6 +359,12 @@ final class NetRomIntegration {
         router.bestRouteTo(destination)
     }
 
+    /// Every known next hop for a destination, best first — the attempt
+    /// order for auto-try.
+    func candidateRoutes(to destination: String) -> [RouteInfo] {
+        router.candidateRoutes(to: destination)
+    }
+
     func linkQuality(from: String, to: String) -> Int {
         linkEstimator.linkQuality(from: from, to: to)
     }

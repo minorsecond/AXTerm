@@ -1355,6 +1355,11 @@ struct TerminalComposeView: View {
     /// AXDP capability negotiation status for the destination (if known)
     var capabilityStatus: SessionCoordinator.CapabilityStatus = .unknown
     @ObservedObject var connectBarViewModel: ConnectBarViewModel
+    /// Far end of an established NET/ROM circuit, when one is up.
+    ///
+    /// The connect bar holds the next hop while a relay runs — right for the
+    /// link, wrong as a name for whoever is on the other end of it.
+    var relayDestination: String?
     let connectContext: ConnectSourceContext
     let autoPathSuggestions: [AutoPathSuggestionItem]
     let onApplyAutoPath: (String) -> Void
@@ -1421,7 +1426,7 @@ struct TerminalComposeView: View {
                         if sessionState == .connected {
                             // Locked destination - callsign shown in header, no "Session:" label needed
                             HStack(spacing: 6) {
-                                Text(connectBarViewModel.toCall)
+                                Text(relayDestination ?? connectBarViewModel.toCall)
                                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                             }
                             .accessibilityIdentifier("connectBar.lockedDestination")
@@ -1431,6 +1436,7 @@ struct TerminalComposeView: View {
                                 viewModel: destinationPickerViewModel,
                                 externalText: connectBarViewModel.toCall,
                                 groups: connectBarViewModel.toSuggestionGroups,
+                                reachableVia: connectBarViewModel.claimedRouteVia,
                                 disabled: sessionState == .connecting || sessionState == .disconnecting,
                                 onDestinationChanged: { value in
                                     connectBarViewModel.applySuggestedTo(value)

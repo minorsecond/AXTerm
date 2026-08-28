@@ -13,6 +13,13 @@ struct PacketInspectorView: View {
     var isPinned: Bool
     var onTogglePin: (() -> Void)?
     var onFilterStation: ((String) -> Void)?
+    /// The other name each end of this packet answers to, when one is known.
+    ///
+    /// A header reading `DRLNOD → K0EPI-7` names one station by its tactical
+    /// alias and one by its callsign, and nothing on the page says the first is
+    /// KE0NCQ. Optional so callers without the directory — iOS — are unchanged.
+    var sourceAlsoKnownAs: String?
+    var destinationAlsoKnownAs: String?
     var onClose: (() -> Void)?
 
     private enum PayloadViewMode: String, CaseIterable {
@@ -32,12 +39,16 @@ struct PacketInspectorView: View {
         isPinned: Bool = false,
         onTogglePin: (() -> Void)? = nil,
         onFilterStation: ((String) -> Void)? = nil,
+        sourceAlsoKnownAs: String? = nil,
+        destinationAlsoKnownAs: String? = nil,
         onClose: (() -> Void)? = nil
     ) {
         self.packet = packet
         self.isPinned = isPinned
         self.onTogglePin = onTogglePin
         self.onFilterStation = onFilterStation
+        self.sourceAlsoKnownAs = sourceAlsoKnownAs
+        self.destinationAlsoKnownAs = destinationAlsoKnownAs
         self.onClose = onClose
     }
 
@@ -124,6 +135,12 @@ struct PacketInspectorView: View {
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
                         .help("Copy source callsign")
+                        if let sourceAlsoKnownAs, !sourceAlsoKnownAs.isEmpty {
+                            Text("(\(sourceAlsoKnownAs))")
+                                .font(.subheadline.weight(.regular))
+                                .foregroundStyle(.secondary)
+                                .help("\(packet.fromDisplay) is also known as \(sourceAlsoKnownAs)")
+                        }
                     }
                     Image(systemName: "arrow.right")
                         .font(.body.weight(.medium))
@@ -141,6 +158,12 @@ struct PacketInspectorView: View {
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
                         .help("Copy destination callsign")
+                        if let destinationAlsoKnownAs, !destinationAlsoKnownAs.isEmpty {
+                            Text("(\(destinationAlsoKnownAs))")
+                                .font(.subheadline.weight(.regular))
+                                .foregroundStyle(.secondary)
+                                .help("\(packet.toDisplay) is also known as \(destinationAlsoKnownAs)")
+                        }
                     }
                 }
 

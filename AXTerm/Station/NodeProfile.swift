@@ -174,6 +174,13 @@ nonisolated struct NodeProfile: Equatable, Sendable {
     var ssid: Int?
     /// A NET/ROM alias this callsign answers to (`DRLNOD`).
     var alias: String?
+    /// Nodes that have listed this station, freshest first.
+    ///
+    /// The only actionable thing a harvested entry carries: the node that named
+    /// a station is the node to connect through to reach it. Absent from the
+    /// profile at first, which left the sheet showing a station it had nothing
+    /// to say about while the one useful fact sat on the row behind it.
+    var reachVia: [String] = []
     /// Set when the operator tapped an *alias* and this is the station behind it.
     var resolvedFromAlias: String?
 
@@ -230,6 +237,19 @@ nonisolated struct NodeProfile: Equatable, Sendable {
         return nil
     }
 
+    /// Whether the full page would show anything the sheet does not already.
+    ///
+    /// The two render the same sections — the page only has more room. For a
+    /// station harvested from a node's table there is nothing to give room to,
+    /// so offering "Full profile" promised a second screen identical to the
+    /// first. The name and the route both fit in the sheet; measurements,
+    /// history and neighbours are what need the space.
+    var hasDepth: Bool {
+        placement != nil || activity != nil || netrom != nil || winlink != nil
+            || topology != nil || !links.isEmpty || !siblings.isEmpty
+            || !linkHistory.isEmpty || !declaredServices.isEmpty
+    }
+
     /// True when nothing beyond the callsign itself is known.
     ///
     /// Worth naming: a profile with no facts should say so plainly rather
@@ -238,7 +258,7 @@ nonisolated struct NodeProfile: Equatable, Sendable {
         name == nil && placement == nil && activity == nil
             && netrom == nil && winlink == nil && roles.isEmpty
             && links.isEmpty && siblings.isEmpty && linkHistory.isEmpty
-            && declaredServices.isEmpty
+            && declaredServices.isEmpty && reachVia.isEmpty
     }
 
     /// History for one direction, oldest first.
@@ -346,6 +366,7 @@ nonisolated struct NodeProfile: Equatable, Sendable {
             baseCallsign: base.uppercased(),
             ssid: ssid == 0 && !effective.contains("-") ? nil : ssid,
             alias: aliasFor(effective, in: aliasDirectory),
+            reachVia: aliasDirectory?.tellers(forCallsign: effective) ?? [],
             resolvedFromAlias: resolvedFromAlias)
 
         // Licence details. The heard entry may already carry a name from an
@@ -416,10 +437,11 @@ nonisolated struct NodeProfile: Equatable, Sendable {
 
     private static func aliasFor(_ callsign: String,
                                  in directory: NodeAliasDirectory?) -> String? {
-        guard let directory else { return nil }
-        return directory.allEntries
-            .first { $0.callsign.uppercased() == callsign }?
-            .alias
+        // Was a linear scan taking the first match in alias order, which for a
+        // station running several services returned whichever name sorted
+        // earliest — KE0NCQ came back as DRL, its digipeater, rather than
+        // DRLNOD, the node the operator actually connects through.
+        directory?.preferredAlias(for: callsign)
     }
 
     /// Roles are evidence, not configuration — each one has to be earned by

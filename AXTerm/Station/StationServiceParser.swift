@@ -119,6 +119,36 @@ nonisolated enum StationServiceParser {
                                           alias: nil, sourceText: text))
             }
         }
+
+        // "Digipeat Alias = DWARC", "Alias = DRL" — the tactical name the
+        // *sending* station answers to, written with an equals sign rather
+        // than a colon. The colon forms above name another callsign; this
+        // one names the beaconing station itself, which is why it produces
+        // a declaration for `source` rather than for anything it mentions
+        // (KD0SSP, on air 2026-08-27).
+        if let alias = aliasAfterEquals(in: upper) {
+            let owner = CallsignValidator.normalize(source)
+            let key = "\(owner)|\(Service.digipeater.rawValue)"
+            if seen.insert(key).inserted {
+                result.append(Declaration(callsign: owner, service: .digipeater,
+                                          alias: alias, sourceText: text))
+            }
+        }
         return result
+    }
+
+    /// The word after `ALIAS =`, when it looks like a tactical name.
+    ///
+    /// Deliberately not a callsign test: `DWARC` and `DRL` are exactly the
+    /// shape that fails one, and being unlike a callsign is what makes a
+    /// tactical alias useful.
+    private static func aliasAfterEquals(in upper: String) -> String? {
+        guard let marker = upper.range(of: "ALIAS") else { return nil }
+        var rest = upper[marker.upperBound...].drop { $0 == " " }
+        guard rest.first == "=" else { return nil }
+        rest = rest.dropFirst().drop { $0 == " " }
+        let name = String(rest.prefix { $0.isLetter || $0.isNumber || $0 == "-" })
+        guard (2...6).contains(name.count) else { return nil }
+        return name
     }
 }

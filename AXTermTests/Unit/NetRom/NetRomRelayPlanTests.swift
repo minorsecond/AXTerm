@@ -1,0 +1,133 @@
+import XCTest
+@testable import AXTerm
+
+/// Planning the chain of node prompts a terminal relay has to drive.
+///
+/// The case that forced this: COSCO is listed by KB5YZB-7, but this
+/// station cannot get a prompt out of KB5YZB-7 directly — the link comes
+/// up and the node stays silent, three separate times on 2026-08-27.
+/// The route table held the answer the whole time (`KB5YZB-7 via
+/// DRLNOD`), and driving DRLNOD → KB5YZB-7 → COSCO by hand worked.
+final class NetRomRelayPlanTests: XCTestCase {
+
+    /// The station's real route table from the field capture.
+    private let routes: [String: String] = [
+        "KB5YZB-7": "DRLNOD",
+        "KB5YZB-1": "DRLNOD",
+        "EVANS": "DRLNOD",
+        "KC0LDY-10": "DRLNOD",
+        "KN6VV-1": "HORSE"
+    ]
+
+    private func plan(_ destination: String, teller: String?,
+                      using table: [String: String]? = nil) -> NetRomRelayPlan.Plan {
+        let source = table ?? routes
+        return NetRomRelayPlan.plan(destination: destination, teller: teller) {
+            source[$0.uppercased()]
+        }
+    }
+
+    // MARK: - The COSCO case
+
+    func testTellerThatNeedsARelayIsReachedThroughIt() {
+        let result = plan("COSCO", teller: "KB5YZB-7")
+        XCTAssertEqual(result.linkTarget, "DRLNOD",
+                       "dial the station we can actually reach")
+        XCTAssertEqual(result.intermediateHops, ["KB5YZB-7"],
+                       "then ask it for the node that lists COSCO")
+        XCTAssertEqual(result.destination, "COSCO")
+        XCTAssertEqual(result.chain, ["DRLNOD", "KB5YZB-7"])
+    }
+
+    func testTheCOSCOChainReadsAsTheOperatorTypedIt() {
+        let summary = plan("COSCO", teller: "KB5YZB-7").operatorSummary
+        XCTAssertTrue(
+            summary.hasPrefix("Reaching COSCO the long way: DRLNOD → KB5YZB-7 → COSCO."),
+            summary)
+    }
+
+    /// The summary must not let this be mistaken for a NET/ROM circuit.
+    /// It is not one — it drives node command prompts, which is exactly
+    /// why the operator sees each node's menus (2026-08-27).
+    func testSummarySaysTheMenusAreComing() {
+        for teller in ["KB5YZB-7", "DRLNOD"] {
+            let summary = plan("COSCO", teller: teller).operatorSummary
+            XCTAssertTrue(summary.contains("command prompts"), summary)
+            XCTAssertTrue(summary.contains("menus"), summary)
+        }
+    }
+
+    // MARK: - One-hop stays one hop
+
+    func testDirectlyReachableTellerIsASingleHop() {
+        // DRLNOD is not in the route table as a destination — this
+        // station hears it directly — so nothing is prepended.
+        let result = plan("EVANS", teller: "DRLNOD")
+        XCTAssertEqual(result.linkTarget, "DRLNOD")
+        XCTAssertTrue(result.intermediateHops.isEmpty)
+        XCTAssertTrue(result.operatorSummary.hasPrefix(
+            "Asking DRLNOD to connect to EVANS."), result.operatorSummary)
+    }
+
+    func testNoTellerMeansDialTheDestination() {
+        let result = plan("DRLNOD", teller: nil)
+        XCTAssertEqual(result.linkTarget, "DRLNOD")
+        XCTAssertTrue(result.intermediateHops.isEmpty)
+    }
+
+    func testCaseAndWhitespaceAreNormalized() {
+        let result = plan("  cosco ", teller: " kb5yzb-7 ")
+        XCTAssertEqual(result.linkTarget, "DRLNOD")
+        XCTAssertEqual(result.intermediateHops, ["KB5YZB-7"])
+        XCTAssertEqual(result.destination, "COSCO")
+    }
+
+    // MARK: - Chains of more than two
+
+    func testAThreeNodeChainIsWalkedInOrder() {
+        let deep = ["FAR": "MIDDLE", "MIDDLE": "NEAR"]
+        let result = plan("TARGET", teller: "FAR", using: deep)
+        XCTAssertEqual(result.chain, ["NEAR", "MIDDLE", "FAR"])
+        XCTAssertEqual(result.linkTarget, "NEAR")
+        XCTAssertEqual(result.intermediateHops, ["MIDDLE", "FAR"])
+    }
+
+    func testChainLengthIsBounded() {
+        // A table that always has one more hop must not walk forever, and
+        // must not spend the operator's airtime on an absurd chain.
+        let endless = ["A": "B", "B": "C", "C": "D", "D": "E", "E": "F"]
+        let result = plan("TARGET", teller: "A", using: endless)
+        XCTAssertEqual(result.chain.count, NetRomRelayPlan.maxChainLength)
+    }
+
+    // MARK: - Tables that point in circles
+
+    func testASelfReferencingRouteIsNotAHop() {
+        let result = plan("TARGET", teller: "LOOPY", using: ["LOOPY": "LOOPY"])
+        XCTAssertEqual(result.linkTarget, "LOOPY")
+        XCTAssertTrue(result.intermediateHops.isEmpty,
+                      "a station that reaches itself is where the walk ends")
+    }
+
+    func testACycleTerminatesTheWalk() {
+        let cycle = ["A": "B", "B": "A"]
+        let result = plan("TARGET", teller: "A", using: cycle)
+        XCTAssertEqual(result.chain, ["B", "A"],
+                       "B is a real hop; going back to A would loop")
+    }
+
+    func testARouteThroughTheDestinationItselfIsNotChained() {
+        // If the table claims the teller is reached via the destination
+        // we are trying to get to, following it would be circular.
+        let odd = ["KB5YZB-7": "COSCO"]
+        let result = plan("COSCO", teller: "KB5YZB-7", using: odd)
+        XCTAssertEqual(result.linkTarget, "KB5YZB-7")
+        XCTAssertTrue(result.intermediateHops.isEmpty)
+    }
+
+    func testEmptyRouteEntryIsIgnored() {
+        let result = plan("COSCO", teller: "KB5YZB-7", using: ["KB5YZB-7": ""])
+        XCTAssertEqual(result.linkTarget, "KB5YZB-7")
+        XCTAssertTrue(result.intermediateHops.isEmpty)
+    }
+}

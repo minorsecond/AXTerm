@@ -77,6 +77,7 @@ nonisolated enum SettingsTab: Hashable {
     case network
     case transmission
     case winlink
+    case bbs
     case advanced
     case linkDebug
 }
@@ -86,5 +87,8 @@ nonisolated enum SettingsSection: Hashable {
     case linkLayer
     case adaptiveTransmission
     case axdpProtocol
+    case netRomNode
+    case beacon
+    case ping
     case fileTransfer
 }
