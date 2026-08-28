@@ -551,6 +551,18 @@ nonisolated struct AX25StateMachine: Sendable {
     /// leaves §6.7.1.1 intact.
     private(set) var unsatisfiableREJCount: Int = 0
 
+    /// Every I-frame the peer has sent while connected, deliverable or not.
+    ///
+    /// Exists so a watcher can tell "the peer went silent" from "the peer is
+    /// talking but nothing can be delivered yet" — during REJ recovery the
+    /// retransmissions arrive as I-frames that produce no delivery, which
+    /// from the outside looks identical to silence. Field capture 2026-08-28:
+    /// the relay's stall watchdog saw no delivered text for 20 s, flushed the
+    /// receive gap, and DRLNOD's retransmission of the missing frame — the
+    /// "Connected to COSCO" confirmation — arrived 240 ms later, too late to
+    /// accept. The peer had been retransmitting the whole time.
+    private(set) var inboundIFrameCount: Int = 0
+
     /// Record a retransmission cycle that produced no ack progress — e.g. the
     /// peer's RR command poll arrived with V(A) frozen and we are about to
     /// retransmit in response. Climbs the same N2 ladder as T1 expiry.
@@ -869,6 +881,7 @@ nonisolated struct AX25StateMachine: Sendable {
         case (.connected, .receivedIFrame(let ns, let nr, let pf, let payload, let pid)):
             // The link is carrying data after all.
             idlePollCount = 0
+            inboundIFrameCount &+= 1
             TxLog.inbound(.ax25, "I-frame received", ["ns": ns, "nr": nr, "pf": pf, "size": payload.count])
             return handleIFrame(ns: ns, nr: nr, pf: pf, payload: payload, pid: pid)
 

@@ -230,4 +230,78 @@ final class NetRomRelayLifecycleTests: XCTestCase {
                 typed: "DRLNOD", establishedDestination: ""),
             "DRLNOD")
     }
+
+    // MARK: - Telling REJ recovery from silence
+
+    /// The 2026-08-28 capture: the chain had reached COSCO, DRLNOD's frames 4
+    /// and 5 swapped on air, and frame 5 was being retransmitted while the
+    /// watchdog counted delivered-text silence. It flushed the gap 240 ms
+    /// before the resend of frame 4 — the "Connected to COSCO" confirmation —
+    /// arrived, and a connection that had succeeded on air was torn down.
+    /// I-frames still arriving means recovery is running: wait.
+    func testArrivingIFramesDeferTheStallVerdict() {
+        XCTAssertEqual(
+            NetRomRelayLifecycle.stallVerdict(
+                tickMoved: false, inboundIFramesMoved: true,
+                deferralSpent: 0, deferralBudget: 60),
+            .peerStillTransmitting)
+    }
+
+    /// The 2026-08-27 deadlock that motivated the flush: a peer that answers
+    /// every poll but never resends the missing frame produces no I-frames at
+    /// all. That is real silence and must still stall on schedule.
+    func testPollAnswersWithoutIFramesStillStall() {
+        XCTAssertEqual(
+            NetRomRelayLifecycle.stallVerdict(
+                tickMoved: false, inboundIFramesMoved: false,
+                deferralSpent: 0, deferralBudget: 60),
+            .stalled)
+    }
+
+    /// A peer resending the wrong frame forever must not hold the relay open:
+    /// once the deferral budget is spent, arriving I-frames stop counting.
+    func testTheDeferralIsBudgeted() {
+        XCTAssertEqual(
+            NetRomRelayLifecycle.stallVerdict(
+                tickMoved: false, inboundIFramesMoved: true,
+                deferralSpent: 60, deferralBudget: 60),
+            .stalled)
+    }
+
+    /// Delivered text is the strongest signal and resets everything — a chain
+    /// that is walking normally is never touched.
+    func testDeliveredTextOutranksEverything() {
+        XCTAssertEqual(
+            NetRomRelayLifecycle.stallVerdict(
+                tickMoved: true, inboundIFramesMoved: true,
+                deferralSpent: 999, deferralBudget: 60),
+            .chainAdvanced)
+    }
+
+    /// The counter the watchdog samples: every connected-mode I-frame counts,
+    /// deliverable or not — an out-of-sequence retransmission that only gets
+    /// buffered is exactly the arrival the deferral exists to notice.
+    func testUndeliverableIFramesStillMoveTheCounter() {
+        var sm = AX25StateMachine(config: AX25SessionConfig())
+        _ = sm.handle(event: .connectRequest)
+        _ = sm.handle(event: .receivedUA)
+        XCTAssertEqual(sm.inboundIFrameCount, 0)
+
+        // ns=1 with vr=0: out of sequence, buffered behind the gap, nothing
+        // delivered — the shape of the DRLNOD capture.
+        _ = sm.handle(event: .receivedIFrame(ns: 1, nr: 0, pf: false,
+                                             payload: Data("late".utf8)))
+        XCTAssertEqual(sm.inboundIFrameCount, 1)
+
+        // The retransmission of the same frame counts again: it is proof the
+        // peer is transmitting now, which is all the watchdog asks.
+        _ = sm.handle(event: .receivedIFrame(ns: 1, nr: 0, pf: false,
+                                             payload: Data("late".utf8)))
+        XCTAssertEqual(sm.inboundIFrameCount, 2)
+
+        // An RR is a poll answer, not recovery traffic — it must not count,
+        // or the 2026-08-27 poll-forever deadlock never stalls.
+        _ = sm.handle(event: .receivedRR(nr: 0, pf: true, isCommand: true))
+        XCTAssertEqual(sm.inboundIFrameCount, 2)
+    }
 }

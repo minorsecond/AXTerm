@@ -121,6 +121,44 @@ nonisolated enum NetRomRelayLifecycle {
         guard let nextHop = establishedNextHop, !nextHop.isEmpty else { return typed }
         return (nextHop, "")
     }
+
+    /// What the relay stall watchdog should do after a grace period.
+    enum StallCheck: Equatable {
+        /// The chain delivered something — this hop earned a fresh budget.
+        case chainAdvanced
+        /// Nothing was delivered, but I-frames from the peer kept arriving:
+        /// REJ recovery is filling a gap and the missing frame may be next.
+        /// Flushing now destroys data the peer is in the middle of resending.
+        case peerStillTransmitting
+        /// Genuine silence — nudge or give up.
+        case stalled
+    }
+
+    /// Distinguishes REJ recovery from real silence before the watchdog acts.
+    ///
+    /// Field capture 2026-08-28: the ASHCHT chain reached COSCO, DRLNOD's
+    /// frames 4 and 5 swapped on air, and while go-back-N recovery was
+    /// visibly running (frame 5 retransmitted twice) the watchdog counted
+    /// 20 s of no *delivered* text as silence and flushed the gap — 240 ms
+    /// before the retransmission of frame 4, which carried the "Connected
+    /// to COSCO" confirmation. The connection had succeeded on air and was
+    /// torn down here as unknowable.
+    ///
+    /// The deferral is budgeted: a peer that keeps transmitting without
+    /// ever filling the gap (resending the wrong frame forever) must not
+    /// hold the relay open past `deferralBudget`. The 2026-08-27 deadlock
+    /// that motivated the flush — a peer that answers polls but never
+    /// resends — produces no I-frames at all and still stalls on schedule.
+    static func stallVerdict(
+        tickMoved: Bool,
+        inboundIFramesMoved: Bool,
+        deferralSpent: TimeInterval,
+        deferralBudget: TimeInterval
+    ) -> StallCheck {
+        if tickMoved { return .chainAdvanced }
+        if inboundIFramesMoved && deferralSpent < deferralBudget { return .peerStillTransmitting }
+        return .stalled
+    }
 }
 
 /// Matches plain-text success/failure responses from BBS/NET/ROM nodes during relay handshake.
@@ -372,6 +410,12 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         case .awaitingBanner, .awaitingConnected: return true
         case .established, nil: return false
         }
+    }
+
+    /// I-frames the link peer has sent this session, deliverable or not.
+    /// The relay watchdog samples it to tell REJ recovery from real silence.
+    fileprivate var relayInboundIFrameCount: Int {
+        currentSession?.stateMachine.inboundIFrameCount ?? 0
     }
 
     /// Called to send data frames produced by sessionManager.sendData (e.g. relay C command).
@@ -3739,6 +3783,10 @@ struct TerminalView: View {
     private static let relayBannerGrace: TimeInterval = 20
     /// And how long the nudge gets to work before we give up.
     private static let relayNudgeGrace: TimeInterval = 25
+    /// Extra patience while the peer's I-frames keep arriving undelivered —
+    /// REJ recovery in flight. Bounded so a peer resending the wrong frame
+    /// forever cannot hold the relay open. See `NetRomRelayLifecycle.stallVerdict`.
+    private static let relayRecoveryDeferralBudget: TimeInterval = 60
 
     /// Gives up on a node that took the link and then went quiet.
     ///
@@ -3755,15 +3803,33 @@ struct TerminalView: View {
             /// different link — nothing left for this watchdog to judge.
             @MainActor func waitForStall(_ grace: TimeInterval) async -> Bool {
                 var tick = txViewModel.relayProgressTick
+                var inboundIFrames = txViewModel.relayInboundIFrameCount
+                var deferralSpent: TimeInterval = 0
                 while true {
                     try? await Task.sleep(nanoseconds: UInt64(grace * 1_000_000_000))
                     guard txViewModel.relayIsHandshaking,
                           txViewModel.netRomRelayNextHop == armed else { return false }
-                    if txViewModel.relayProgressTick != tick {
+                    let verdict = NetRomRelayLifecycle.stallVerdict(
+                        tickMoved: txViewModel.relayProgressTick != tick,
+                        inboundIFramesMoved: txViewModel.relayInboundIFrameCount != inboundIFrames,
+                        deferralSpent: deferralSpent,
+                        deferralBudget: Self.relayRecoveryDeferralBudget)
+                    switch verdict {
+                    case .chainAdvanced:
                         tick = txViewModel.relayProgressTick
+                        inboundIFrames = txViewModel.relayInboundIFrameCount
+                        deferralSpent = 0
                         continue  // the chain moved; this hop gets its own budget
+                    case .peerStillTransmitting:
+                        // Undelivered I-frames are still arriving — the peer is
+                        // retransmitting into a gap. Give recovery room, on a
+                        // budget, before treating the hop as silent.
+                        inboundIFrames = txViewModel.relayInboundIFrameCount
+                        deferralSpent += grace
+                        continue
+                    case .stalled:
+                        return true
                     }
-                    return true
                 }
             }
 
