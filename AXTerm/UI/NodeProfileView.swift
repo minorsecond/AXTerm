@@ -921,6 +921,9 @@ struct NodeProfileView: View {
                 let place = [profile.locality, profile.state, profile.country]
                     .compactMap { $0 }.filter { !$0.isEmpty }
                 if !place.isEmpty { row("Address", place.joined(separator: ", ")) }
+                if let expires = profile.licenseExpires, !expires.isEmpty {
+                    row("Expires", expires)
+                }
                 if let source = profile.directorySource {
                     Text("Looked up via \(source).")
                         .font(.caption2)

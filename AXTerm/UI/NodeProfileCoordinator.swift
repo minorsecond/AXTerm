@@ -122,7 +122,13 @@ struct NodeProfileResolver {
             localCallsign: localCallsign,
             aliasDirectory: aliases,
             heard: heard,
-            directory: directory[resolved] ?? directory[key],
+            // The directory is keyed by base callsign — one licence covers
+            // every SSID — so "N3HYM-15" must look up "N3HYM". Missing this
+            // showed a full record's station as a bare city: name and
+            // locality leaked in through the heard map, but state, country
+            // and licence class only live in the record itself.
+            directory: directory[resolved] ?? directory[key]
+                ?? directory[CallsignQuery.normalize(resolved)],
             neighbourQuality: neighbourQuality[resolved] ?? neighbourQuality[key],
             routesVia: routes.filter { $0.via.uppercased() == resolved }
                 .map(\.destination).sorted(),

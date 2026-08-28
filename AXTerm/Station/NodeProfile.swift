@@ -226,6 +226,8 @@ nonisolated struct NodeProfile: Equatable, Sendable {
     var state: String?
     var country: String?
     var licenseClass: String?
+    /// Expiry exactly as the directory printed it (see CallsignRecord.expires).
+    var licenseExpires: String?
     /// Which directory answered, so a stale or guessed record is attributable.
     var directorySource: String?
 
@@ -423,6 +425,7 @@ nonisolated struct NodeProfile: Equatable, Sendable {
         profile.state = directory?.state
         profile.country = directory?.country
         profile.licenseClass = directory?.licenseClass
+        profile.licenseExpires = directory?.expires
         profile.directorySource = directory?.source
 
         if let heard {
