@@ -28,6 +28,7 @@ struct AXTermiOSRootView: View {
     /// Learns node aliases (DRLNOD, HORSE) from ID beacons already arriving,
     /// so via-path hops can be placed on the map.
     @StateObject private var nodeAliases = NodeAliasStore()
+    @StateObject private var nodeCapabilities = NodeCapabilityStore()
     /// One door to the identity view, wherever a callsign is named.
     @StateObject private var profiles = NodeProfileCoordinator()
     @State private var profileMenuTarget: String?
@@ -301,6 +302,7 @@ struct AXTermiOSRootView: View {
         .onReceive(client.$packets.throttle(for: .seconds(5), scheduler: RunLoop.main, latest: true)) { packets in
             let recent = Array(packets.suffix(200))
             nodeAliases.ingest(packets: recent)
+            nodeCapabilities.ingest(packets: recent)
             // The network's own directory, harvested as it arrives: what
             // stations announced, and which digipeaters actually repeated a
             // frame while we listened.
@@ -637,6 +639,7 @@ struct AXTermiOSRootView: View {
             digipeaters: HeardStationMap.aliasesInUse(stations),
             linkStats: client.netRomIntegration?.exportLinkStats() ?? [],
             declaredServices: nodeAliases.declaredServices,
+            capabilities: nodeCapabilities.directory,
             networkPaths: rememberedNetworkPaths,
             serviceStore: client.stationServices,
             historyStore: client.linkQualityHistory)

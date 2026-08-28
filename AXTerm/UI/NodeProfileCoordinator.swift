@@ -90,6 +90,9 @@ struct NodeProfileResolver {
     var linkStats: [LinkStatRecord] = []
     /// What stations announced they run, heard in ID and beacon frames.
     var declaredServices: [StationServiceParser.Declaration] = []
+    /// Software fingerprints from connected sessions (see NodeCapability):
+    /// whether a "node" is BPQ (routes NET/ROM) or a KA-Node (cannot).
+    var capabilities: NodeCapabilityDirectory = NodeCapabilityDirectory()
     /// The observed network, for the questions only the graph can answer:
     /// what breaks without this station, and who it clusters with.
     var networkPaths: [NetworkPath] = []
@@ -128,7 +131,9 @@ struct NodeProfileResolver {
             linkHistory: history(for: resolved),
             siblings: siblings(of: resolved),
             topology: topology(for: resolved),
-            observer: observer)
+            observer: observer,
+            nodeSoftware: capabilities.family(for: resolved),
+            nodeSoftwareEvidence: capabilities.evidence(for: resolved))
     }
 
     /// This station's place in the graph of observed paths.
@@ -184,6 +189,16 @@ struct NodeProfileResolver {
             $0.via.uppercased() == callsign && $0.isBroadcast
         }) {
             return .nodesBroadcast
+        }
+        // A software fingerprint outranks an alias announcement: the banner
+        // is the running software speaking for itself, where an alias is a
+        // one-letter claim in a beacon. Only NET/ROM-capable verdicts belong
+        // here — a KA-Node fingerprint is carried by nodeSoftware instead,
+        // where it *blocks* the NET/ROM-node role rather than earning it.
+        if capabilities.canRouteNetRom(callsign) == true,
+           let family = capabilities.family(for: callsign),
+           let detail = capabilities.evidence(for: callsign) {
+            return .softwareFingerprint(family: family, detail: detail)
         }
         if let entry = aliases.allEntries.first(where: {
             $0.callsign.uppercased() == callsign

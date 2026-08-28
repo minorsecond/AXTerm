@@ -352,6 +352,9 @@ struct NodeProfileView: View {
         if role == .netromNode, let declaration = profile.netRomDeclaration {
             return declaration.evidence
         }
+        if role == .kaNodeRelay, let fingerprint = profile.nodeSoftwareEvidence {
+            return fingerprint
+        }
         return role.evidence
     }
 

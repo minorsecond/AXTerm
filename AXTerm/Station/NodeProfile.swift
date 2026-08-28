@@ -25,6 +25,10 @@ nonisolated struct NodeProfile: Equatable, Sendable {
         case nodesBroadcast
         /// Its ID or beacon announced a node alias, e.g. `Node:KD0SSP-7`.
         case aliasAnnouncement(String)
+        /// Its session output carried a software fingerprint that proves a
+        /// NET/ROM stack — e.g. BPQ's "Network Node Server" greeting. The
+        /// detail quotes the line that earned it (see NodeCapability).
+        case softwareFingerprint(family: NodeSoftwareFamily, detail: String)
 
         var evidence: String {
             switch self {
@@ -32,6 +36,8 @@ nonisolated struct NodeProfile: Equatable, Sendable {
                 return "It sent a NET/ROM routing broadcast (PID 0xCF to NODES). Only a node does that, so this is the station's own declaration rather than an inference."
             case .aliasAnnouncement(let alias):
                 return "Its identification announced the node alias \(alias), which is the station telling the network what it runs."
+            case .softwareFingerprint(_, let detail):
+                return detail
             }
         }
     }
@@ -42,6 +48,7 @@ nonisolated struct NodeProfile: Equatable, Sendable {
         case ourStation
         case nodeAlias
         case netromNode
+        case kaNodeRelay
         case digipeater
         case bulletinBoard
         case relay
@@ -52,6 +59,7 @@ nonisolated struct NodeProfile: Equatable, Sendable {
             case .ourStation: return "This station"
             case .nodeAlias: return "NET/ROM alias"
             case .netromNode: return "NET/ROM node"
+            case .kaNodeRelay: return "KA-Node relay"
             case .digipeater: return "Digipeater"
             case .bulletinBoard: return "Bulletin board"
             case .relay: return "Relay"
@@ -64,6 +72,7 @@ nonisolated struct NodeProfile: Equatable, Sendable {
             case .ourStation: return "antenna.radiowaves.left.and.right"
             case .nodeAlias: return "tag"
             case .netromNode: return "point.3.connected.trianglepath.dotted"
+            case .kaNodeRelay: return "arrow.left.arrow.right.circle"
             case .digipeater: return "arrow.triangle.2.circlepath"
             case .bulletinBoard: return "tray.full"
             case .relay: return "arrow.left.arrow.right"
@@ -82,6 +91,10 @@ nonisolated struct NodeProfile: Equatable, Sendable {
                 // Overridden per profile by the declaration that earned it;
                 // this is the fallback wording only.
                 return "The station declared itself a NET/ROM node."
+            case .kaNodeRelay:
+                // Overridden per profile by the fingerprint that earned it;
+                // this is the fallback wording only.
+                return "Its command menu is a Kantronics KA-Node. It relays connections and digipeats, but cannot route NET/ROM."
             case .digipeater:
                 return "Its callsign has been seen in the digipeater path of frames from other stations."
             case .bulletinBoard:
@@ -198,6 +211,12 @@ nonisolated struct NodeProfile: Equatable, Sendable {
     var netrom: NetRom?
     /// Present only when the station said so itself.
     var netRomDeclaration: NetRomDeclaration?
+    /// Software family proven by fingerprints (see NodeCapability). Matters
+    /// most when negative: a KA-Node verdict means "cannot route NET/ROM"
+    /// no matter what its ID beacon declares.
+    var nodeSoftware: NodeSoftwareFamily?
+    /// The prose behind that verdict, quoting the observed line.
+    var nodeSoftwareEvidence: String?
     /// Services this station announced in an ID or beacon.
     var declaredServices: [StationServiceParser.Declaration] = []
     var winlink: WinlinkLinkQuality?
@@ -345,7 +364,9 @@ nonisolated struct NodeProfile: Equatable, Sendable {
         linkHistory: [LinkQualityHistorySample] = [],
         siblings: [Sibling] = [],
         topology: Topology? = nil,
-        observer: GreatCircle.Point? = nil
+        observer: GreatCircle.Point? = nil,
+        nodeSoftware: NodeSoftwareFamily? = nil,
+        nodeSoftwareEvidence: String? = nil
     ) -> NodeProfile {
 
         let trimmed = rawCallsign.trimmingCharacters(in: .whitespaces).uppercased()
@@ -420,6 +441,8 @@ nonisolated struct NodeProfile: Equatable, Sendable {
             .sorted { ($0.ssid ?? -1) < ($1.ssid ?? -1) }
         profile.topology = topology
         profile.netRomDeclaration = netRomDeclaration
+        profile.nodeSoftware = nodeSoftware
+        profile.nodeSoftwareEvidence = nodeSoftwareEvidence
         profile.declaredServices = declaredServices.filter {
             $0.callsign.uppercased() == effective
         }
@@ -431,7 +454,8 @@ nonisolated struct NodeProfile: Equatable, Sendable {
             netRomDeclaration: netRomDeclaration,
             digipeaterCallsigns: digipeaterCallsigns,
             declaredServices: profile.declaredServices,
-            winlink: winlink)
+            winlink: winlink,
+            nodeSoftware: nodeSoftware)
         return profile
     }
 
@@ -454,7 +478,8 @@ nonisolated struct NodeProfile: Equatable, Sendable {
         netRomDeclaration: NetRomDeclaration?,
         digipeaterCallsigns: Set<String>,
         declaredServices: [StationServiceParser.Declaration] = [],
-        winlink: WinlinkLinkQuality?
+        winlink: WinlinkLinkQuality?,
+        nodeSoftware: NodeSoftwareFamily? = nil
     ) -> [Role] {
         var roles: [Role] = []
         let upper = callsign.uppercased()
@@ -468,8 +493,15 @@ nonisolated struct NodeProfile: Equatable, Sendable {
         }
         // Only on the station's own word. Neighbour-table membership is an
         // observation about traffic, not a claim about what the station is.
+        // A KA-Node fingerprint overrides both paths in: DRLNOD's ID beacon
+        // declares `/N`, and it is still a KA-Node — the observed menu is
+        // the stronger evidence, and "NET/ROM node" on a station that
+        // cannot route NET/ROM is exactly the label this view exists to
+        // stop applying.
         let declared = Set(declaredServices.map(\.service))
-        if netRomDeclaration != nil || declared.contains(.node) {
+        if nodeSoftware == .kaNode {
+            roles.append(.kaNodeRelay)
+        } else if netRomDeclaration != nil || declared.contains(.node) {
             roles.append(.netromNode)
         }
         if declared.contains(.bbs) {

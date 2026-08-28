@@ -25,6 +25,7 @@ struct ContentView: View {
     /// Learns node aliases (DRLNOD, HORSE) from ID beacons already
     /// arriving, so via-path hops can be placed.
     @StateObject private var nodeAliases = NodeAliasStore()
+    @StateObject private var nodeCapabilities = NodeCapabilityStore()
     /// The Nodes page's search text, held here so the sidebar can point it at
     /// one node's table.
     @State private var nodeQuery: String = ""
@@ -114,6 +115,7 @@ struct ContentView: View {
             digipeaters: HeardStationMap.aliasesInUse(stations),
             linkStats: client.netRomIntegration?.exportLinkStats() ?? [],
             declaredServices: nodeAliases.declaredServices,
+            capabilities: nodeCapabilities.directory,
             networkPaths: rememberedNetworkPaths,
             serviceStore: client.stationServices,
             historyStore: client.linkQualityHistory)
@@ -378,6 +380,7 @@ struct ContentView: View {
                 // operator happens to open Map or Nodes left rows unnamed that
                 // the app already had the evidence to name.
                 nodeAliases.ingest(packets: client.packets)
+                nodeCapabilities.ingest(packets: client.packets)
                 // Load packets when navigating to Packets view
                 guard !didLoadPacketsHistory else { return }
                 didLoadPacketsHistory = true
@@ -401,6 +404,7 @@ struct ContentView: View {
                 // in a stored beacon should be on the list before the operator
                 // reads it, not after the next one happens to arrive.
                 nodeAliases.ingest(packets: client.packets)
+                nodeCapabilities.ingest(packets: client.packets)
                 return
             case .mail:
                 // Mail view loads its own data from the Winlink store
@@ -1096,6 +1100,7 @@ struct ContentView: View {
                         // home BBS. Both arrive because the operator went
                         // there, so both are read rather than thrown away.
                         nodeAliases.ingest(text: text, source: peer)
+                        nodeCapabilities.ingest(line: text, peer: peer)
                         bbsService.observeSessionText(text, from: peer)
                     },
                     searchModel: searchModel,
