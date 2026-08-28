@@ -6,6 +6,10 @@ nonisolated enum ConnectAttemptStepResult: Equatable {
     case timeout
     case cancelled
     case unavailable(message: String)
+    /// The station answered and said no — a DM to our SABM, a node
+    /// reporting the downlink denied. Distinct from `failed` because an
+    /// answer ends the conversation: retrying a refusal is nagging.
+    case refused(detail: String)
 }
 
 nonisolated struct ConnectAttemptRunnerResult: Equatable {
@@ -76,6 +80,10 @@ nonisolated final class ConnectAttemptRunner {
                 return ConnectAttemptRunnerResult(outcome: .cancelled, attemptsExecuted: executed)
             case .unavailable(let message):
                 return ConnectAttemptRunnerResult(outcome: .unavailable(message: message), attemptsExecuted: executed)
+            case .refused(let detail):
+                // The station answered; further same-family attempts would
+                // just re-ask a question it already declined.
+                return ConnectAttemptRunnerResult(outcome: .unavailable(message: detail), attemptsExecuted: executed)
             case .failed, .timeout:
                 let isFinalAttempt = attemptIndex == totalAttempts
                 if isFinalAttempt {
