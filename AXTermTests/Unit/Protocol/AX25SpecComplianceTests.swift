@@ -29,7 +29,7 @@ final class AX25SpecComplianceTests: XCTestCase {
 
     private func extractDeliveredData(from actions: [AX25SessionAction]) -> [Data] {
         actions.compactMap { action in
-            if case .deliverData(let data) = action { return data }
+            if case .deliverData(let data, _) = action { return data }
             return nil
         }
     }

@@ -188,6 +188,7 @@ Don’t literally count 10 frames globally. Do it like this:
 	•	Then:
 	•	if failStreak >= 1 or loss_rate_EWMA > 0.2 or ETX_EWMA > 2.0 → decrease paclen
 	•	else if successStreak >= 10 → increase paclen (up to cap), reset successStreak to something like 5 (so it doesn’t rocket upward)
+	•	and only if SRTT ≤ 5 s. Clean and fast are different properties: loss says the path works, round trip says what a mistake on it costs. A 12-second link that never drops a frame still cannot afford a wider window, because every recovery on it takes a minute. The RTT test gates *upgrades only* — a slow but clean path keeps whatever it has already earned, since shrinking a working link helps nobody.
 
 This avoids oscillation.
 
@@ -1135,6 +1136,54 @@ LinkKey / PeerKey Definition:
 
 	•	PeerKey = destCall+ssid
 	•	LinkKey = (PeerKey, pathSignature, channel)
+
+---
+
+## 17) NET/ROM transport (L3/L4) over connected mode
+
+AXTerm speaks real NET/ROM — the L3 datagram format and the L4 circuit
+transport carried in I-frames with **PID `0xCF`** — as node-to-node
+protocol, distinct from the 0xF0 terminal relay ("connect and type
+`C <dest>`"). The wire format and state machine are transcribed from the
+Linux AF_NETROM reference (itself from the ARRL 7th CNC NET/ROM paper),
+with exactly three documented deviations.
+
+**Normative details live in `Docs/NetRomTransport.md`.** Summary of the
+rules that interact with this spec:
+
+- One L3 datagram per I-frame. PID is the demux: the session machinery
+  carries the PID with every delivered payload (including resequenced
+  ones), and `AX25SessionManager.onNetRomDatagram` receives 0xCF bytes
+  before delivery claims, terminal, or AXDP ever see them.
+- Never answer an unmatched NET/ROM frame with a reset — unsolicited
+  CONACK|CHOKE replies are documented (in the reference source) to kill
+  BPQ nodes.
+- Protocol-extension frames (opcode 0: INP3, L3RTT, IP) are carried
+  opaque and never interpreted.
+- A circuit rides an L2 link to its **next hop**, taken from the route
+  table (`bestRouteTo(_:)?.origin`) and **pinned** for the circuit's
+  life. The L3 destination is the far station; the AX.25 destination is
+  always the neighbor.
+- **One datagram, one I-frame.** Fragment size follows the neighbor's
+  paclen; an oversized datagram is refused, never split. Note the
+  interaction with §4.2: adaptive paclen collapse to 64 under loss
+  shrinks NET/ROM fragments accordingly.
+- A dropped L2 link fails every circuit pinned to it immediately, rather
+  than retrying to N2.
+- **Being a node** — announcing (NODES broadcasts) and forwarding
+  (transit routing) are both **off by default** and gated on explicit
+  settings. Announcing writes this station into other operators'
+  routing tables; forwarding commits this transmitter to other people's
+  packets. Neither may arrive as a side effect of an app update.
+- **Never advertise what this station will not carry.** With forwarding
+  off, a NODES broadcast contains exactly one entry: this station. A
+  node advertising routes it will not forward is a black hole.
+- The NODES destination field is a **callsign**; alias-shaped route
+  destinations (EVANS, DRLNOD) are skipped rather than encoded.
+- Code: `AXTerm/NetRom/` (codec, circuit state machine, endpoint, link
+  driver, circuit-as-session, NODES origination, forwarding, auto-try);
+  tests: `AXTermTests/Unit/NetRom/` and
+  `AXTermTests/Integration/Relay/NetRomTransportIntegrationTests.swift`.
 
 ---
 

@@ -444,7 +444,7 @@ nonisolated enum AX25SessionEvent: Sendable {
     case receivedREJ(nr: Int, pf: Bool = false, isCommand: Bool = false)
 
     // Received I-frame
-    case receivedIFrame(ns: Int, nr: Int, pf: Bool, payload: Data)
+    case receivedIFrame(ns: Int, nr: Int, pf: Bool, payload: Data, pid: UInt8? = nil)
 
     // Timeouts
     case t1Timeout
@@ -483,7 +483,7 @@ nonisolated enum AX25SessionAction: Sendable, Equatable {
     case stopT2
     case startT3
     case stopT3
-    case deliverData(Data)
+    case deliverData(Data, pid: UInt8? = nil)
     case notifyConnected
     case notifyDisconnected
     case notifyError(String)
@@ -498,6 +498,11 @@ nonisolated struct BufferedIFrame: Sendable {
     let ns: Int
     let nr: Int
     let payload: Data
+    /// AX.25 PID of the frame that carried this payload. Delivery keeps
+    /// it so the manager can demux by protocol (0xF0 terminal text vs
+    /// 0xCF NET/ROM datagrams) even for frames that sat in the
+    /// resequencing buffer.
+    var pid: UInt8? = nil
 }
 
 /// AX.25 connected-mode state machine
@@ -524,6 +529,28 @@ nonisolated struct AX25StateMachine: Sendable {
     /// Retry counter for current operation
     private(set) var retryCount: Int = 0
 
+    /// Consecutive polls from the peer answered while nothing was in flight in
+    /// either direction.
+    ///
+    /// Not a protocol condition — answering a poll is mandatory and every one of
+    /// these exchanges is correct. It is the *shape* that is wrong: a link that
+    /// is up, is being polled every few seconds, and has carried no data since it
+    /// opened is a link that is not working, and the operator sees only
+    /// "connected". Field capture 2026-08-26, KB5YZB-7 direct: ten polls in
+    /// ninety seconds, `vr` never left 0, the BBS never answered.
+    private(set) var idlePollCount: Int = 0
+
+    /// Consecutive REJs that acknowledged nothing new and asked for a frame we
+    /// have never sent.
+    ///
+    /// Counted apart from `retryCount` on purpose. §6.7.1.1 requires an F=1
+    /// answer to a poll to clear the retry count, and that rule is right — but
+    /// it is also what made this livelock permanent, because the peer's answer
+    /// is always F=1. Escaping it by refusing to clear `retryCount` would break
+    /// the spec rule to fix a case the spec does not cover; a separate count
+    /// leaves §6.7.1.1 intact.
+    private(set) var unsatisfiableREJCount: Int = 0
+
     /// Record a retransmission cycle that produced no ack progress — e.g. the
     /// peer's RR command poll arrived with V(A) frozen and we are about to
     /// retransmit in response. Climbs the same N2 ladder as T1 expiry.
@@ -547,6 +574,60 @@ nonisolated struct AX25StateMachine: Sendable {
             "vr": sequenceState.vr
         ])
         return [.stopT1, .stopT3, .notifyError("Link failure (no ACK progress after \(config.maxRetries) retries)")]
+    }
+
+    /// Advances V(R) past a frame that is not coming, delivering whatever was
+    /// buffered behind it. Returns no actions when there is no gap to skip.
+    ///
+    /// Permanently discards the missing frame's contents, so every caller must
+    /// have its own reason why that is the lesser loss. Shared so both reasons
+    /// discard identically and report identically.
+    private mutating func skipReceiveGap(reason: String) -> [AX25SessionAction] {
+        guard !receiveBuffer.isEmpty,
+              let lowestBuffered = receiveBuffer.keys
+                .min(by: { distanceFromVR($0) < distanceFromVR($1) })
+        else { return [] }
+
+        let skippedCount = (lowestBuffered - sequenceState.vr + config.modulo) % config.modulo
+        // First-class Sentry event, not just a breadcrumb: this is the one
+        // path that permanently discards received user data, and it resets
+        // retryCount below — which prevents the N2 link-failure event that
+        // would otherwise have been the only thing to ship the surrounding
+        // breadcrumbs.
+        TxLog.dataLoss(.session, "Receive-gap flush skipped lost frame(s)", [
+            "currentVR": sequenceState.vr,
+            "jumpingTo": lowestBuffered,
+            "skippedFrames": skippedCount,
+            "bufferedCount": receiveBuffer.count,
+            "reason": reason
+        ])
+
+        sequenceState.vr = lowestBuffered
+        var actions: [AX25SessionAction] = []
+        while let buffered = receiveBuffer.removeValue(forKey: sequenceState.vr) {
+            sequenceState.incrementVR()
+            actions.append(.deliverData(buffered.payload, pid: buffered.pid))
+        }
+        rejSent = false
+        retryCount = 0
+        return actions
+    }
+
+    /// Skips a gap on the caller's word that the lost bytes can be spared.
+    ///
+    /// Exists for one caller: a NET/ROM relay waiting on a node's greeting. The
+    /// T1-driven flush above is gated at the retry before link failure, which
+    /// at a 30 s RTO is minutes — far past any handshake — so a banner whose
+    /// first frame was lost deadlocks: the rest sits buffered, nothing is
+    /// delivered, and the handshake times out with the prompt in hand but
+    /// unread (KB5YZB-7, 2026-08-27).
+    ///
+    /// Safe *here* and nowhere else, because the discarded bytes are greeting
+    /// text. The handshake needs only to see that the node spoke, and a node
+    /// re-prompts on a bare CR anyway. Weighed against losing the connection
+    /// attempt entirely, part of a banner is the cheaper loss.
+    mutating func skipReceiveGapForHandshake() -> [AX25SessionAction] {
+        skipReceiveGap(reason: "relay-handshake")
     }
 
     /// Receive buffer for out-of-sequence I-frames
@@ -660,7 +741,7 @@ nonisolated struct AX25StateMachine: Sendable {
             // response to a DISC command."
             return [.sendDM]
 
-        case (.disconnected, .receivedIFrame(_, _, let pf, _)):
+        case (.disconnected, .receivedIFrame(_, _, let pf, _, _)):
             // §6.3.5: "Any TNC receiving a command frame other than a SABM(E) or UI
             // frame with the P bit set to '1' responds with a DM frame with the F bit
             // set to '1'. The offending frame is ignored."  I frames are always
@@ -785,9 +866,11 @@ nonisolated struct AX25StateMachine: Sendable {
             resetSessionState()
             return [.clearSendBuffer, .stopT1, .sendUA, .startT3]
 
-        case (.connected, .receivedIFrame(let ns, let nr, let pf, let payload)):
+        case (.connected, .receivedIFrame(let ns, let nr, let pf, let payload, let pid)):
+            // The link is carrying data after all.
+            idlePollCount = 0
             TxLog.inbound(.ax25, "I-frame received", ["ns": ns, "nr": nr, "pf": pf, "size": payload.count])
-            return handleIFrame(ns: ns, nr: nr, pf: pf, payload: payload)
+            return handleIFrame(ns: ns, nr: nr, pf: pf, payload: payload, pid: pid)
 
         case (.connected, .receivedRR(let nr, let pf, let isCommand)):
             return sequenceState.isValidNR(nr: nr) ? handleRR(nr: nr, pf: pf, isCommand: isCommand) : []
@@ -845,11 +928,13 @@ nonisolated struct AX25StateMachine: Sendable {
             if sequenceState.isValidNR(nr: nr) {
                 sequenceState.ackUpTo(nr: nr)
             }
-            if sequenceState.va != vaBeforeREJ {
+            let hadAckProgress = sequenceState.va != vaBeforeREJ
+            if hadAckProgress {
                 // Ack progress means the link is alive; reset retries for the same
                 // reason handleRR does. Without this, an REJ-heavy exchange kept the
                 // retry count from earlier T1 timeouts and failed the link early.
                 retryCount = 0
+                unsatisfiableREJCount = 0
             }
             if pf && !isCommand {
                 // §6.2 lists REJ among the valid F=1 answers to a poll — the peer is
@@ -860,6 +945,7 @@ nonisolated struct AX25StateMachine: Sendable {
             if sequenceState.outstandingCount > 0 {
                 // Frames remain unacked: the session manager will retransmit from nr,
                 // and T1 must protect those retransmissions.
+                unsatisfiableREJCount = 0
                 actions.append(.startT1)
             } else {
                 // The REJ acknowledged everything we sent, so there is nothing to
@@ -869,6 +955,34 @@ nonisolated struct AX25StateMachine: Sendable {
                 // outstanding, we poll RR(P=1), the peer answers REJ(F=1) because
                 // its reject condition only clears on the next NEW I-frame, and we
                 // start T1 again — forever. Mirror handleRR: stop T1, start T3.
+                //
+                // Stopping T1 keeps that loop off T1's cadence but does not end it:
+                // T3 still polls, the peer still answers REJ, and the exchange
+                // repeats until one side gives up. Nothing can satisfy it — the
+                // peer's reject clears only on the I-frame it is asking for, and we
+                // have none to send.
+                //
+                // §6.7.1.1: a link that cannot make progress climbs the N2 ladder and
+                // fails. Resetting `retryCount` here (as the F=1 rule above used to,
+                // unconditionally) pinned the count at zero and made the livelock
+                // permanent — the same defect `noteRetransmissionWithoutProgress`
+                // was written for, arriving through REJ instead of through polling.
+                if !hadAckProgress {
+                    unsatisfiableREJCount += 1
+                    if unsatisfiableREJCount > config.maxRetries {
+                        state = .error
+                        TxLog.error(.ax25, "Link failure", error: nil, [
+                            "reason": "peer rejected \(unsatisfiableREJCount) times asking "
+                                    + "for a frame that was never sent",
+                            "nr": nr,
+                            "vs": sequenceState.vs,
+                            "va": sequenceState.va
+                        ])
+                        return [.stopT1, .stopT3,
+                                .notifyError("Link failure (peer asking for a frame "
+                                             + "that was never sent)")]
+                    }
+                }
                 actions.append(.stopT1)
                 actions.append(.startT3)
             }
@@ -937,34 +1051,8 @@ nonisolated struct AX25StateMachine: Sendable {
             // frames the peer was still actively retransmitting.
             var actions: [AX25SessionAction] = []
             let flushThreshold = max(2, config.maxRetries - 1)
-            if retryCount >= flushThreshold && !receiveBuffer.isEmpty {
-                // Find the lowest buffered sequence number (closest gap to fill)
-                if let lowestBuffered = receiveBuffer.keys.min(by: { distanceFromVR($0) < distanceFromVR($1) }) {
-                    let skippedCount = (lowestBuffered - sequenceState.vr + config.modulo) % config.modulo
-                    // First-class Sentry event, not just a breadcrumb: this is
-                    // the one path that permanently discards received user
-                    // data, and it resets retryCount below — which prevents
-                    // the N2 link-failure event that would otherwise have been
-                    // the only thing to ship the surrounding breadcrumbs.
-                    TxLog.dataLoss(.session, "Receive-gap flush skipped lost frame(s)", [
-                        "currentVR": sequenceState.vr,
-                        "jumpingTo": lowestBuffered,
-                        "skippedFrames": skippedCount,
-                        "bufferedCount": receiveBuffer.count
-                    ])
-
-                    // Advance V(R) to the lowest buffered frame
-                    sequenceState.vr = lowestBuffered
-
-                    // Deliver consecutive buffered frames starting from the new V(R)
-                    while let buffered = receiveBuffer.removeValue(forKey: sequenceState.vr) {
-                        sequenceState.incrementVR()
-                        actions.append(.deliverData(buffered.payload))
-                    }
-
-                    rejSent = false
-                    retryCount = 0  // Reset retries since we made progress
-                }
+            if retryCount >= flushThreshold {
+                actions.append(contentsOf: skipReceiveGap(reason: "n2-exhaustion"))
             }
 
             // Per AX.25 spec §6.4.1: on T1 timeout, send RR with P=1 (poll)
@@ -1045,7 +1133,7 @@ nonisolated struct AX25StateMachine: Sendable {
             // down; the peer may retry SABM once teardown completes.
             return [.sendDM]
 
-        case (.disconnecting, .receivedIFrame(_, _, let pf, _)):
+        case (.disconnecting, .receivedIFrame(_, _, let pf, _, _)):
             // SDL awaiting-release (Figure C4.3): command frames with P=1 received
             // while a DISC is outstanding are answered with DM (F=1); everything
             // else is discarded. Mirrors the §6.3.5 disconnected-state rule.
@@ -1088,7 +1176,7 @@ nonisolated struct AX25StateMachine: Sendable {
 
     // MARK: - I-Frame Handling
 
-    private mutating func handleIFrame(ns: Int, nr: Int, pf: Bool, payload: Data) -> [AX25SessionAction] {
+    private mutating func handleIFrame(ns: Int, nr: Int, pf: Bool, payload: Data, pid: UInt8?) -> [AX25SessionAction] {
         var actions: [AX25SessionAction] = []
 
         // Process N(R) - acknowledge our sent frames
@@ -1101,11 +1189,11 @@ nonisolated struct AX25StateMachine: Sendable {
         if ns == sequenceState.vr {
             // In sequence - deliver this frame and any consecutive buffered frames
             // Pass the P/F bit so we can respond with F=1 if P=1
-            actions.append(contentsOf: deliverInSequenceFrame(ns: ns, nr: nr, pf: pf, payload: payload))
+            actions.append(contentsOf: deliverInSequenceFrame(ns: ns, nr: nr, pf: pf, payload: payload, pid: pid))
         } else if isWithinReceiveWindow(ns: ns) {
             // Out of sequence but within window - buffer for later delivery
 
-            bufferOutOfSequenceFrame(ns: ns, nr: nr, payload: payload)
+            bufferOutOfSequenceFrame(ns: ns, nr: nr, payload: payload, pid: pid)
 
             // Send REJ only once per gap (with F=1 if remote sent P=1).
             //
@@ -1181,7 +1269,7 @@ nonisolated struct AX25StateMachine: Sendable {
     ///   - nr: N(R) sequence number
     ///   - pf: P/F bit from incoming frame - if true, we must respond with F=1
     ///   - payload: Frame payload
-    private mutating func deliverInSequenceFrame(ns: Int, nr: Int, pf: Bool, payload: Data) -> [AX25SessionAction] {
+    private mutating func deliverInSequenceFrame(ns: Int, nr: Int, pf: Bool, payload: Data, pid: UInt8?) -> [AX25SessionAction] {
         var actions: [AX25SessionAction] = []
 
         // Clear REJ flag since we're receiving the expected frame
@@ -1190,13 +1278,13 @@ nonisolated struct AX25StateMachine: Sendable {
         // Deliver the current frame
         sequenceState.incrementVR()
 
-        actions.append(.deliverData(payload))
+        actions.append(.deliverData(payload, pid: pid))
 
         // Check for consecutive buffered frames and deliver them
         while let buffered = receiveBuffer.removeValue(forKey: sequenceState.vr) {
             sequenceState.incrementVR()
 
-            actions.append(.deliverData(buffered.payload))
+            actions.append(.deliverData(buffered.payload, pid: buffered.pid))
         }
 
         // A second gap can already be visible: frames beyond it are still
@@ -1234,7 +1322,7 @@ nonisolated struct AX25StateMachine: Sendable {
     }
 
     /// Buffer an out-of-sequence frame for later delivery
-    private mutating func bufferOutOfSequenceFrame(ns: Int, nr: Int, payload: Data) {
+    private mutating func bufferOutOfSequenceFrame(ns: Int, nr: Int, payload: Data, pid: UInt8?) {
         // Don't buffer duplicates
         guard receiveBuffer[ns] == nil else {
 
@@ -1254,7 +1342,7 @@ nonisolated struct AX25StateMachine: Sendable {
             }
         }
 
-        receiveBuffer[ns] = BufferedIFrame(ns: ns, nr: nr, payload: payload)
+        receiveBuffer[ns] = BufferedIFrame(ns: ns, nr: nr, payload: payload, pid: pid)
 
     }
 
@@ -1308,6 +1396,11 @@ nonisolated struct AX25StateMachine: Sendable {
         
         if pf && isCommand {
             actions.append(.sendRR(nr: sequenceState.vr, pf: true, isCommand: false))
+            // A poll answered while nothing is in flight either way. Data moving
+            // in either direction clears this; see `idlePollCount`.
+            if sequenceState.outstandingCount == 0 && sequenceState.vr == 0 {
+                idlePollCount += 1
+            }
         }
 
         // Reset retryCount when RR advances V(A) (peer acknowledged new frames).

@@ -1105,7 +1105,7 @@ final class AX25SessionTests: XCTestCase {
         let actions = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, pf: false, payload: payload))
 
         XCTAssertTrue(actions.contains { action in
-            if case .deliverData(let data) = action { return data == payload }
+            if case .deliverData(let data, _) = action { return data == payload }
             return false
         })
         // P=0 → the ack is owed on T2, cumulatively.
@@ -1150,7 +1150,7 @@ final class AX25SessionTests: XCTestCase {
         let actions1 = sm.handle(event: .receivedIFrame(ns: 0, nr: 0, pf: false, payload: payload1))
         XCTAssertEqual(sm.sequenceState.vr, 1)
         XCTAssertTrue(actions1.contains { action in
-            if case .deliverData(let data) = action { return data == payload1 }
+            if case .deliverData(let data, _) = action { return data == payload1 }
             return false
         })
 
@@ -1158,7 +1158,7 @@ final class AX25SessionTests: XCTestCase {
         let actions2 = sm.handle(event: .receivedIFrame(ns: 1, nr: 0, pf: false, payload: payload2))
         XCTAssertEqual(sm.sequenceState.vr, 2)
         XCTAssertTrue(actions2.contains { action in
-            if case .deliverData(let data) = action { return data == payload2 }
+            if case .deliverData(let data, _) = action { return data == payload2 }
             return false
         })
 

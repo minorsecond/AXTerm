@@ -219,8 +219,21 @@ nonisolated struct TxAdaptiveSettings: Sendable {
     // which flapped K 1↔3 within seconds on marginal links (field captures
     // 2026-08-22).
 
-    /// EWMA of per-sample loss rate. Nil until the first sample arrives.
+    /// EWMA of per-sample loss rate, worse direction. Nil until the first
+    /// sample arrives. This is the link's overall condition — what route
+    /// ranking and the operator's readout want.
     var lossRateEWMA: Double? = nil
+
+    /// EWMA of loss on frames **we sent**. Nil until the first sample
+    /// arrives, and until then `lossRateEWMA` stands in.
+    ///
+    /// Separate from `lossRateEWMA` because paclen and K are transmit-side
+    /// knobs and only forward loss answers for them. A receive-heavy
+    /// session makes the difference stark: on 2026-08-27 AXTerm sent five
+    /// I-frames with zero retransmissions while sending 17 REJs against
+    /// 109 inbound frames, and the composite loss walked the link down to
+    /// paclen 64, K=1 — shrinking our frames to fix damage to theirs.
+    var forwardLossEWMA: Double? = nil
 
     /// EWMA of per-sample ETX. Nil until the first sample arrives.
     var etxEWMA: Double? = nil
@@ -291,11 +304,26 @@ nonisolated struct TxAdaptiveSettings: Sendable {
         }
     }
 
+    /// Above this round trip, no upgrade is attempted however clean the samples.
+    ///
+    /// A healthy 1200-baud VHF path measures 1–3 s; anything past five is a
+    /// marginal link that a wider window would only make harder to recover.
+    /// Deliberately a ceiling on *upgrades* only — a slow link is not downgraded
+    /// on RTT alone, because a slow-but-clean path still carries traffic.
+    static let upgradeSrttCeiling: Double = 5.0
+
     /// Update adaptive values from link quality (spec Sections 4.2 / 4.4 / 7.3).
     ///
     /// - Parameters:
-    ///   - lossRate: this SAMPLE's loss fraction in [0, 1].
-    ///   - etx: this sample's expected transmissions (≥ 1).
+    ///   - lossRate: this SAMPLE's loss fraction in [0, 1], worse direction.
+    ///   - forwardLoss: this sample's loss on frames *we sent*. Sizes paclen
+    ///     and K, which are transmit-side knobs — reverse loss is real
+    ///     evidence about the path but nothing we send can mend it, and
+    ///     treating it as a reason to back off spends throughput on a
+    ///     problem at the other end. Nil (aggregate sources, older
+    ///     callers) falls back to `lossRate`, the previous behaviour.
+    ///   - etx: this sample's expected transmissions (≥ 1). Both directions,
+    ///     per CLAUDE.md §8 — unchanged, and still what ranks routes.
     ///   - srtt: smoothed RTT if known.
     ///   - newFrames: I-frames newly delivered in this sample (evidence weight).
     ///   - retransmits: retransmissions observed in this sample. Pass nil for
@@ -307,6 +335,7 @@ nonisolated struct TxAdaptiveSettings: Sendable {
     /// keep the user's choice via effectiveValue.
     mutating func updateFromLinkQuality(
         lossRate: Double,
+        forwardLoss: Double? = nil,
         etx: Double,
         srtt: Double?,
         newFrames: Int = 1,
@@ -316,14 +345,23 @@ nonisolated struct TxAdaptiveSettings: Sendable {
         guard lossRate.isFinite, etx.isFinite else { return }
         let loss = min(max(lossRate, 0.0), 1.0)
         let sampleEtx = min(max(etx, 1.0), 100.0)
+        // An unusable forward figure degrades to the composite, which is
+        // what every caller got before this parameter existed.
+        let forward = forwardLoss.flatMap { $0.isFinite ? min(max($0, 0.0), 1.0) : nil } ?? loss
 
         metrics.samplesSeen += 1
 
         // EWMA update (spec 4.2: "Keep an EWMA of loss_rate …").
         lossRateEWMA = Self.blend(lossRateEWMA, sample: loss)
+        forwardLossEWMA = Self.blend(forwardLossEWMA, sample: forward)
         etxEWMA = Self.blend(etxEWMA, sample: sampleEtx)
-        let smoothedLoss = lossRateEWMA ?? loss
         let smoothedEtx = etxEWMA ?? sampleEtx
+        // What paclen and K are *backed off* from. Upgrades still consult
+        // `smoothedLoss`, and so do route ranking and the operator's
+        // readout — both directions matter for judging a link, only the
+        // forward one for judging our own frames.
+        let smoothedLoss = lossRateEWMA ?? loss
+        let smoothedForward = forwardLossEWMA ?? forward
 
         // Streaks (spec 4.2) and the probation trial: only evidence-bearing
         // samples move either. Aggregate sources can neither pass nor fail a
@@ -357,24 +395,32 @@ nonisolated struct TxAdaptiveSettings: Sendable {
 
         // Paclen (spec 4.2): degrade immediately, recover only on sustained
         // evidence. Between triggers the value HOLDS — no per-sample rewrite.
+        //
+        // Sized from FORWARD loss. The composite ETX term that used to sit
+        // in this condition is gone rather than converted: for a symmetric
+        // link it never fired on its own (ETX > 2 needs ~29% each way,
+        // well past the 20% below), so it was load-bearing only for
+        // asymmetric ones — precisely the links where it was wrong.
         let paclenBefore = paclen.currentAdaptive
-        if smoothedLoss >= 0.2 || smoothedEtx > 2.0 {
+        if smoothedForward >= 0.2 {
             paclen.currentAdaptive = Self.paclenLadder[0]
-            paclen.adaptiveReason = "Loss \(Int(smoothedLoss * 100))%, ETX \(String(format: "%.1f", smoothedEtx))"
+            paclen.adaptiveReason = "Our frames losing \(Int(smoothedForward * 100))%"
         } else if freshFailure {
             paclen.currentAdaptive = Self.stepDown(paclen.currentAdaptive, ladder: Self.paclenLadder)
             paclen.adaptiveReason = "Retransmission — backing off"
-        } else if smoothedLoss > 0.1 {
+        } else if smoothedForward > 0.1 {
             paclen.currentAdaptive = min(paclen.currentAdaptive, 128)
-            paclen.adaptiveReason = "Moderate loss (\(Int(smoothedLoss * 100))%)"
+            paclen.adaptiveReason = "Moderate loss on our frames (\(Int(smoothedForward * 100))%)"
         }
 
         // Window size K (spec 4.4 Dynamic K, link level): multiplicative
         // decrease on loss. A single good sample never raises K.
+        // Also forward-only: collapsing to stop-and-wait halves our own
+        // throughput and does nothing about frames arriving damaged.
         let windowBefore = windowSize.currentAdaptive
-        if smoothedLoss >= 0.2 {
+        if smoothedForward >= 0.2 {
             windowSize.currentAdaptive = 1
-            windowSize.adaptiveReason = "High loss - stop-and-wait"
+            windowSize.adaptiveReason = "Our frames losing \(Int(smoothedForward * 100))% — stop-and-wait"
         } else if freshFailure {
             windowSize.currentAdaptive = max(1, windowSize.currentAdaptive / 2)
             windowSize.adaptiveReason = "Retransmission — halving window"
@@ -401,8 +447,28 @@ nonisolated struct TxAdaptiveSettings: Sendable {
         // Upgrades (spec 4.2/4.4): only after the required clean streak, only
         // one probe at a time, and never in the same sample a trial ended —
         // a confirmation call must not immediately stack the next probe.
+        // A very long round trip is itself evidence of a poor link, whatever the
+        // loss figure says. Field capture 2026-08-26, KB5YZB-7 direct: one frame
+        // acknowledged with no retransmission read as loss=0.00, etx=1.00 and
+        // bought K 1→2 and paclen 64→128 — on a path whose measured SRTT was
+        // **12 seconds**, eight times the healthy 1.5 s to DRLNOD on the same
+        // radio at the same moment.
+        //
+        // More frames in flight and larger frames both make that worse: longer
+        // to notice a loss, and more of a shared channel held per exchange. So
+        // an upgrade needs a round trip that plausibly belongs to a working
+        // link, not merely a sample that happened not to fail.
+        let srttPermitsUpgrade = (srtt ?? 0) <= Self.upgradeSrttCeiling
+        // Note the asymmetry with the downgrades above, which is deliberate:
+        // **back off on forward evidence, grow only when both directions
+        // look good.** Backing off is an attempt to fix something, and only
+        // forward loss is something our frames can fix. Growing is the app
+        // choosing to spend more airtime, and a channel that is damaging
+        // the other end's frames is not the place to spend it — 13% inbound
+        // loss with a clean forward path is a busy or marginal channel, not
+        // an invitation to put four frames in flight instead of two.
         if !freshFailure, !wasProbing, successStreak >= upgradeStreakRequirement,
-           smoothedLoss <= 0.1 {
+           smoothedLoss <= 0.1, srttPermitsUpgrade {
             let priorWindow = windowSize.currentAdaptive
             let priorPaclen = paclen.currentAdaptive
             var upgraded = false
@@ -479,6 +545,7 @@ nonisolated struct TxAdaptiveSettings: Sendable {
         currentRto = nil
 
         lossRateEWMA = nil
+        forwardLossEWMA = nil
         etxEWMA = nil
         successStreak = 0
         failStreak = 0

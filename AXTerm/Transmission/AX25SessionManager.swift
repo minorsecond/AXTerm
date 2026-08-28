@@ -45,7 +45,17 @@ nonisolated struct SessionDeliveryClaim: Sendable {
 /// `newFrames` and `retransmits` are DELTAS since the previous sample, so the
 /// link controller's EWMA sees time-local evidence (spec 4.2).
 nonisolated struct LinkQualitySample: Sendable {
+    /// The worse of the two directions. Route ranking and anything that
+    /// asks "is this path any good" wants this.
     let lossRate: Double
+    /// Loss on frames **we sent** — retransmissions over transmissions.
+    /// The only direction our own paclen and window can affect, and so
+    /// the only one allowed to shrink them.
+    let forwardLoss: Double
+    /// Loss on frames **sent at us** — REJs over inbound frames plus gaps.
+    /// Real evidence about the path, and worth showing the operator, but
+    /// making our frames smaller cannot mend it.
+    let reverseLoss: Double
     let etx: Double
     let srtt: Double?
     let newFrames: Int
@@ -466,11 +476,51 @@ final class AX25SessionManager: ObservableObject {
     /// Local callsign (from settings)
     var localCallsign: AX25Address
 
+    /// Extra addresses this station answers on, keyed by the service owning each.
+    ///
+    /// A node answers on several addresses at once — a mailbox, a Winlink P2P
+    /// listener and the operator's own terminal are three services sharing one
+    /// radio, told apart by the callsign the caller dialed. That is how packet
+    /// radio has always separated services, and it is the only thing that lets
+    /// two of them run at the same time.
+    ///
+    /// Nothing reaches the session layer unless it is addressed to one of these,
+    /// so a service that does not register here is unreachable however carefully
+    /// it is configured.
+    ///
+    /// Keyed by service rather than held as a set, so re-registering replaces:
+    /// an operator editing the mailbox SSID must not leave the old one answering.
+    private var serviceAddresses: [String: AX25Address] = [:]
+
+    /// Registers the address a service answers on; nil withdraws it.
+    func setServiceAddress(_ address: AX25Address?, for service: String) {
+        serviceAddresses[service] = address
+    }
+
+    /// Whether a frame addressed to `address` belongs to this station at all.
+    func answers(_ address: AX25Address) -> Bool {
+        if CallsignNormalizer.addressesMatch(address, localCallsign) { return true }
+        return serviceAddresses.values.contains {
+            CallsignNormalizer.addressesMatch(address, $0)
+        }
+    }
+
+    /// Every address currently answered, station callsign first. For diagnostics.
+    var answeredAddresses: [AX25Address] {
+        [localCallsign] + serviceAddresses.values.sorted { $0.display < $1.display }
+    }
+
     /// Callback when frames need to be sent
     var onSendFrame: ((OutboundFrame) -> Void)?
 
     /// Callback when data is received from a connected session
     var onDataReceived: ((AX25Session, Data) -> Void)?
+
+    /// One complete NET/ROM L3 datagram arrived in a PID-0xCF I-frame on
+    /// a connected session (one I-frame = one datagram). The link driver
+    /// feeds these to the NetRomEndpoint. PID-demuxed before terminal,
+    /// AXDP, and delivery claims ever see the bytes.
+    var onNetRomDatagram: ((AX25Session, Data) -> Void)?
 
     /// Lightweight link-visualization event stream (window state, deliveries,
     /// REJ/retransmit markers). See LinkVizMonitor.
@@ -1055,6 +1105,20 @@ final class AX25SessionManager: ObservableObject {
             return nil
         }
 
+        // A negotiation in flight is a connect in flight.
+        //
+        // While an XID is outstanding the session is still `.disconnected` —
+        // it has not sent SABM yet — so neither guard above sees it, and every
+        // further attempt put another XID on the air. An operator clicking a
+        // station that was slow to answer produced a frame per click, for the
+        // whole RTO, which on a marginal path is tens of seconds.
+        if pendingXID[destination.display] != nil {
+            TxLog.warning(.session, "Cannot connect: already negotiating with peer", [
+                "peer": destination.display
+            ])
+            return nil
+        }
+
         // Never reconnect through a dead session's carcass: its config (and
         // therefore the learned-RTO seed) was baked in at creation, and its
         // timers still hold the backed-off RTO it died with — after N2
@@ -1175,6 +1239,10 @@ final class AX25SessionManager: ObservableObject {
             TxLog.debug(.session, "XID timeout — peer treated as pre-2.2", ["peer": peerKey])
             self.resolveXID(peer: peerKey, status: .unsupported)
         }
+        // Belt and braces now that `connect` refuses a duplicate: an
+        // overwritten entry would leave its timeout running, and that stray
+        // task resolves whichever negotiation is current when it fires.
+        pendingXID[peerKey]?.task?.cancel()
         pendingXID[peerKey] = (key: sessionKey, task: task)
         session.touch()
         return frame
@@ -1274,6 +1342,30 @@ final class AX25SessionManager: ObservableObject {
     func handleInboundFRMRDuringNegotiation(from source: AX25Address, channel: UInt8) {
         guard pendingXID[source.display] != nil else { return }
         resolveXID(peer: source.display, status: .unsupported)
+    }
+
+    /// The other pre-2.2 answer, and the common one on this network: DM.
+    ///
+    /// §6.3.2 names FRMR, but a node that does not implement XID has no
+    /// connection to the station that sent it and so replies "no such
+    /// link" — which is exactly what DM means. BPQ does this. Without
+    /// this case the DM landed on a `.disconnected` session, the state
+    /// machine no-opped, and the negotiation ran out its full RTO before
+    /// sending SABM: DRLNOD answered in 2.1 s on 2026-08-27 and the
+    /// connect still waited until 8 s had elapsed. A definite answer is
+    /// not something to keep waiting through.
+    ///
+    /// - Returns: true when the DM was consumed by the negotiation. The
+    ///   caller must then NOT run normal DM handling: resolving sends the
+    ///   deferred SABM, and a DM arriving at a `.connecting` session reads
+    ///   as "connection refused" — the negotiation's own answer would
+    ///   cancel the connect it just started.
+    @discardableResult
+    func handleInboundDMDuringNegotiation(from source: AX25Address, channel: UInt8) -> Bool {
+        guard pendingXID[source.display] != nil else { return false }
+        TxLog.debug(.session, "XID answered with DM — peer treated as pre-2.2", ["peer": source.display])
+        resolveXID(peer: source.display, status: .unsupported)
+        return true
     }
 
     // MARK: - Data Transmission
@@ -1928,7 +2020,8 @@ final class AX25SessionManager: ObservableObject {
         ns: Int,
         nr: Int,
         pf: Bool = false,
-        payload: Data
+        payload: Data,
+        pid: UInt8? = nil
     ) -> OutboundFrame? {
         debugTrace("I-frame received", [
             "from": source.display,
@@ -2011,7 +2104,7 @@ final class AX25SessionManager: ObservableObject {
             // Stale remote state: the peer is sending numbered traffic before
             // accepting our SABM. Let the state machine emit DM to reset the
             // remote phantom session while our connect attempt continues.
-            let actions = session.stateMachine.handle(event: .receivedIFrame(ns: ns, nr: nr, pf: pf, payload: payload))
+            let actions = session.stateMachine.handle(event: .receivedIFrame(ns: ns, nr: nr, pf: pf, payload: payload, pid: pid))
             session.touch()
             return processActions(actions, for: session).first
         }
@@ -2027,7 +2120,7 @@ final class AX25SessionManager: ObservableObject {
         let vaBefore = session.va
 
         let oldState = session.state
-        let actions = session.stateMachine.handle(event: .receivedIFrame(ns: ns, nr: nr, pf: pf, payload: payload))
+        let actions = session.stateMachine.handle(event: .receivedIFrame(ns: ns, nr: nr, pf: pf, payload: payload, pid: pid))
 
         if oldState != session.state {
             debugTrace("state change (I-frame)", [
@@ -2355,12 +2448,17 @@ final class AX25SessionManager: ObservableObject {
         // look symmetric, which is the one case where it matters most.
         let etx = min(20.0, max(1.0, 1.0 / (max(df, 0.05) * max(dr, 0.05))))
 
-        // The controller's single "loss" input is the worse direction:
-        // whichever way frames are being lost, the link needs backing off.
-        let lossRate = min(1.0, max(forwardLoss, 1.0 - dr))
+        // Both directions travel, separately. The composite below is the
+        // worse of the two and still answers "is this path any good" for
+        // route ranking; sizing our own frames and window is a different
+        // question and must read `forwardLoss`.
+        let reverseLoss = min(1.0, max(0.0, 1.0 - dr))
+        let lossRate = min(1.0, max(forwardLoss, reverseLoss))
 
         onLinkQualitySample?(session, LinkQualitySample(
             lossRate: lossRate,
+            forwardLoss: forwardLoss,
+            reverseLoss: reverseLoss,
             etx: etx,
             srtt: session.timers.srtt,
             newFrames: deltaSent,
@@ -3114,6 +3212,20 @@ final class AX25SessionManager: ObservableObject {
     }
 
     /// Process actions from the state machine and return frames to send
+    /// Unsticks a session whose receive window is blocked behind a lost frame,
+    /// for a caller that knows the missing bytes can be spared.
+    ///
+    /// Returns the frames to send and whether anything was actually stranded,
+    /// so the caller can tell "the banner was stuck" from "the node is silent"
+    /// — two failures that look identical from outside and need different
+    /// advice.
+    @discardableResult
+    func flushReceiveGapForHandshake(for session: AX25Session) -> (frames: [OutboundFrame], flushed: Bool) {
+        let actions = session.stateMachine.skipReceiveGapForHandshake()
+        guard !actions.isEmpty else { return ([], false) }
+        return (processActions(actions, for: session), true)
+    }
+
     private func processActions(_ actions: [AX25SessionAction], for session: AX25Session) -> [OutboundFrame] {
         var frames: [OutboundFrame] = []
 
@@ -3223,7 +3335,18 @@ final class AX25SessionManager: ObservableObject {
                 debugTrace("TX I", ["frame": describeFrame(frame)])
                 frames.append(frame)
 
-            case .deliverData(let data):
+            case .deliverData(let data, let pid):
+                // PID is the protocol demux (AX.25 §3.3): 0xCF payloads
+                // are NET/ROM L3 datagrams for the transport engine —
+                // never terminal text, never AXDP, never a claim's bytes.
+                if pid == NetRomWire.pid {
+                    TxLog.debug(.session, "NET/ROM datagram delivered from L2", [
+                        "peer": session.remoteAddress.display,
+                        "size": data.count
+                    ])
+                    onNetRomDatagram?(session, data)
+                    continue
+                }
                 let prefixHex = data.prefix(8).map { String(format: "%02X", $0) }.joined()
                 let hasMagic = AXDP.hasMagic(data)
                 axDebugPrint("[DEBUG:AX25:DELIVER] I-frame payload to reassembly | from=\(session.remoteAddress.display) size=\(data.count) hasMagic=\(hasMagic) prefix=\(prefixHex)")

@@ -17,6 +17,15 @@ nonisolated struct OutboundMessageProgress: Identifiable, Equatable {
     var bytesSent: Int
     var bytesAcked: Int
     let destination: String
+    /// The peer whose acknowledgements advance this progress.
+    ///
+    /// Normally the destination itself. Through a NET/ROM circuit the two are
+    /// different stations: the operator is sending to KB5YZB-7, but the frames
+    /// ride the link to DRLNOD and it is DRLNOD's RRs that come back. Matching
+    /// acks against the destination there matches nothing, and the indicator
+    /// reads "Sending…" forever while the reply is already on screen
+    /// (2026-08-26).
+    let ackPeer: String
     let timestamp: Date
     /// True for AXDP/connected mode (has ACKs); false for UI/datagram (fire-and-forget)
     let hasAcks: Bool

@@ -238,8 +238,12 @@ final class AdaptiveSettingsTests: XCTestCase {
         settings.updateFromLinkQuality(lossRate: 0.3, etx: 2.5, srtt: nil)
         XCTAssertEqual(settings.paclen.currentAdaptive, 64)
         XCTAssertEqual(settings.windowSize.currentAdaptive, 1)
-        XCTAssertTrue(settings.paclen.adaptiveReason?.contains("Loss") ?? false)
-        XCTAssertEqual(settings.windowSize.adaptiveReason, "High loss - stop-and-wait")
+        // The reasons name the direction now, because the direction is
+        // what decides whether backing off can help at all.
+        XCTAssertTrue(settings.paclen.adaptiveReason?.contains("Our frames losing") ?? false,
+                      settings.paclen.adaptiveReason ?? "nil")
+        XCTAssertEqual(settings.windowSize.adaptiveReason,
+                       "Our frames losing 30% — stop-and-wait")
     }
 
     /// Spec 4.2/4.4: parameters must not move on a single good sample — the

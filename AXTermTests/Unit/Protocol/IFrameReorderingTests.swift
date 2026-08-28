@@ -479,7 +479,7 @@ final class IFrameReorderingTests: XCTestCase {
 
     private func extractDeliveredData(from actions: [AX25SessionAction]) -> [Data] {
         actions.compactMap { action in
-            if case .deliverData(let data) = action {
+            if case .deliverData(let data, _) = action {
                 return data
             }
             return nil

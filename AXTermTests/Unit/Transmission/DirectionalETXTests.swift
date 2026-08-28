@@ -143,4 +143,75 @@ final class DirectionalETXTests: XCTestCase {
         XCTAssertEqual(samples[1].lossRate, 0.0, accuracy: 0.0001,
                        "the second window was clean and must report clean")
     }
+
+    // MARK: - The two directions travel separately
+
+    /// Knowing the link is bad is not the same as knowing what to do about
+    /// it, and only the direction says which.
+    ///
+    /// The composite `lossRate` is the worse of the two and still ranks
+    /// routes. `forwardLoss` is what sizes paclen and K, because those are
+    /// transmit-side knobs: on 2026-08-27 a session that sent five
+    /// I-frames with zero retransmissions, while answering 109 inbound
+    /// frames with 17 REJs, was walked down to paclen 64 and K=1 —
+    /// shrinking our frames to mend theirs.
+    func testForwardAndReverseLossAreReportedApart() {
+        let session = connectedSession()
+        // Everything we sent landed first try; a sixth of what arrived
+        // needed asking for again.
+        emit(session: session, sent: 5, retransmits: 0, received: 109, rejSent: 17)
+
+        guard let sample = samples.last else { return XCTFail("no sample") }
+        XCTAssertEqual(sample.forwardLoss, 0.0, accuracy: 0.0001,
+                       "our frames were not the ones being lost")
+        XCTAssertEqual(sample.reverseLoss, 17.0 / 126.0, accuracy: 0.001)
+        XCTAssertEqual(sample.lossRate, sample.reverseLoss, accuracy: 0.0001,
+                       "the composite is the worse direction")
+    }
+
+    func testForwardLossIsReportedWhenWeAreTheOnesRetransmitting() {
+        let session = connectedSession()
+        emit(session: session, sent: 8, retransmits: 4, received: 20, rejSent: 0)
+
+        guard let sample = samples.last else { return XCTFail("no sample") }
+        XCTAssertEqual(sample.forwardLoss, 4.0 / 12.0, accuracy: 0.001)
+        XCTAssertEqual(sample.reverseLoss, 0.0, accuracy: 0.0001)
+        XCTAssertEqual(sample.lossRate, sample.forwardLoss, accuracy: 0.0001)
+    }
+
+    /// End to end: the receive-heavy session must leave our own transmit
+    /// parameters where it found them.
+    ///
+    /// Neither shrunk nor grown. Backing off is forward-only because only
+    /// forward loss is something smaller frames can mend; growing consults
+    /// both directions, because putting more frames on a channel that is
+    /// damaging the other end's is not an improvement either.
+    func testReverseLossAloneDoesNotShrinkOurFrames() {
+        let session = connectedSession()
+        var settings = TxAdaptiveSettings()
+        let paclenBefore = settings.paclen.currentAdaptive
+        let windowBefore = settings.windowSize.currentAdaptive
+
+        // Ten windows of the 2026-08-27 shape, enough for the EWMA to
+        // settle well past every downgrade threshold.
+        for round in 1...10 {
+            emit(session: session,
+                 sent: 5 * round, retransmits: 0,
+                 received: 109 * round, rejSent: 17 * round)
+            guard let sample = samples.last else { return XCTFail("no sample") }
+            settings.updateFromLinkQuality(
+                lossRate: sample.lossRate,
+                forwardLoss: sample.forwardLoss,
+                etx: sample.etx,
+                srtt: sample.srtt,
+                newFrames: sample.newFrames,
+                retransmits: sample.retransmits)
+        }
+
+        XCTAssertEqual(settings.paclen.currentAdaptive, paclenBefore)
+        XCTAssertEqual(settings.windowSize.currentAdaptive, windowBefore)
+        XCTAssertGreaterThan(settings.lossRateEWMA ?? 0, 0.1,
+                             "the link's real condition is still recorded")
+        XCTAssertEqual(settings.forwardLossEWMA ?? 1, 0.0, accuracy: 0.0001)
+    }
 }

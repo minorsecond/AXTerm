@@ -27,6 +27,7 @@ final class OutboundDeliveryPhaseTests: XCTestCase {
             bytesSent: bytesSent,
             bytesAcked: bytesAcked,
             destination: "KB5YZB-7",
+            ackPeer: "KB5YZB-7",
             timestamp: Date(),
             hasAcks: hasAcks,
             startingVs: 0,

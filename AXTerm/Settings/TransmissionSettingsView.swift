@@ -123,6 +123,208 @@ struct TransmissionSettingsView: View {
                 }
             }
 
+            PreferencesSection("NET/ROM Node", id: .netRomNode) {
+                Text("AXTerm always listens to NET/ROM and learns routes from what it hears. "
+                     + "These switches decide whether it also speaks — both change what other "
+                     + "operators' nodes do, so both start off.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                LabeledContent("Node alias") {
+                    // Applied on commit, never per keystroke: this used to
+                    // push a NODES broadcast on every character typed.
+                    TextField("e.g. EPINOD", text: $settings.netRomNodeAlias)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 160)
+                        .onSubmit { applyNetRomSettings() }
+                }
+                .help("Six characters, the mnemonic other nodes show beside this station's "
+                      + "callsign. BPQ calls it NODEALIAS.")
+
+                Toggle("Announce this station to the network", isOn: $settings.netRomAdvertiseSelf)
+                    .onChange(of: settings.netRomAdvertiseSelf) { _, _ in applyNetRomSettings() }
+                    .help("Sends NODES broadcasts so neighbours learn this station exists and "
+                          + "can route to it. Every node that hears one writes this station "
+                          + "into its own routing table.")
+
+                if settings.netRomAdvertiseSelf {
+                    Stepper(
+                        "Announce every \(settings.netRomBroadcastMinutes) min",
+                        value: $settings.netRomBroadcastMinutes,
+                        in: 5...240, step: 5
+                    )
+                    .onChange(of: settings.netRomBroadcastMinutes) { _, _ in applyNetRomSettings() }
+                    .help("BPQ's default is 60 minutes. Shorter intervals spend more of a "
+                          + "shared channel on routing overhead.")
+
+                    if settings.netRomNodeAlias.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Text("Set a node alias — announcing without one is legal but leaves "
+                             + "a blank name in every neighbour's node list.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Toggle("Carry other stations' traffic (transit routing)",
+                       isOn: $settings.netRomForwarding)
+                    .onChange(of: settings.netRomForwarding) { _, _ in applyNetRomSettings() }
+                    .help("Forwards NET/ROM datagrams addressed to other nodes. This spends "
+                          + "this station's airtime on other people's packets and makes it "
+                          + "answerable for delivering them.")
+
+                if settings.netRomForwarding && !settings.netRomAdvertiseSelf {
+                    Text("Forwarding without announcing has little effect: no other node knows "
+                         + "to route through this station.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            PreferencesSection("Beacon", id: .beacon) {
+                Text("An unconnected announcement on a timer — what every other "
+                     + "node on the channel sends, and how a station that has never "
+                     + "heard this one learns it exists. Separate from the NET/ROM "
+                     + "announcement above: this one is words, that one is a routing table.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Toggle("Send a beacon", isOn: $settings.beaconEnabled)
+                    .onChange(of: settings.beaconEnabled) { _, _ in applyNetRomSettings() }
+
+                if settings.beaconEnabled {
+                    VStack(alignment: .leading, spacing: 4) {
+                        // Short prompts on purpose. In a settings row a
+                        // TextField renders its prompt as a label beside the
+                        // field as well as inside it, so a sentence-long
+                        // placeholder wraps and the row grows to three lines.
+                        TextField("Beacon text", text: $settings.beaconText, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .lineLimit(1...3)
+                            .onSubmit { applyNetRomSettings() }
+                        Text("\(settings.beaconText.utf8.count) of "
+                             + "\(BeaconPlan.maxTextBytes) bytes · sent to BEACON as "
+                             + "an unconnected frame")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    LabeledContent("Via digipeaters") {
+                        TextField("direct", text: $settings.beaconPath)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 160)
+                            .onSubmit { applyNetRomSettings() }
+                    }
+                    .help("Up to \(BeaconPlan.maxDigis) hops, comma or space separated. "
+                          + "A beacon is the one thing worth digipeating — its whole "
+                          + "purpose is to reach stations that cannot hear this one "
+                          + "directly. Each hop is another transmission on a shared "
+                          + "channel, so two is usually plenty.")
+
+                    Stepper("Send every \(settings.beaconMinutes) min",
+                            value: $settings.beaconMinutes, in: 10...240, step: 5)
+                        .onChange(of: settings.beaconMinutes) { _, _ in applyNetRomSettings() }
+
+                    if case let .failure(problem) = BeaconPlan.plan(
+                        text: settings.beaconText, path: settings.beaconPath) {
+                        Text(problem.operatorText)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        HStack {
+                            Button("Send one now") {
+                                SessionCoordinator.shared?.sendBeacon(settings)
+                            }
+                            Text("Goes out on the air immediately.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+
+            PreferencesSection("Ping", id: .ping) {
+                Text("Asks stations whether they can hear this one, using a frame "
+                     + "any AX.25 station answers — no connection, nothing opened. "
+                     + "An answer proves radio works both ways right now; it does "
+                     + "not mean the station will route or accept a call.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Toggle("Ping stations automatically", isOn: $settings.pingEnabled)
+                    .onChange(of: settings.pingEnabled) { _, _ in applyNetRomSettings() }
+
+                if settings.pingEnabled {
+                    LabeledContent("Only between") {
+                        HStack(spacing: 6) {
+                            Picker("", selection: $settings.pingWindowStartHour) {
+                                ForEach(0..<24, id: \.self) { Text(Self.hourLabel($0)).tag($0) }
+                            }
+                            .labelsHidden().frame(width: 96)
+                            Text("and")
+                            Picker("", selection: $settings.pingWindowEndHour) {
+                                ForEach(0..<24, id: \.self) { Text(Self.hourLabel($0)).tag($0) }
+                            }
+                            .labelsHidden().frame(width: 96)
+                        }
+                    }
+                    .onChange(of: settings.pingWindowStartHour) { _, _ in applyNetRomSettings() }
+                    .onChange(of: settings.pingWindowEndHour) { _, _ in applyNetRomSettings() }
+                    .help("Local time, and it may wrap past midnight. Set both the "
+                          + "same for any hour.")
+
+                    Stepper("At most \(settings.pingMaxProbesPerHour) per hour",
+                            value: $settings.pingMaxProbesPerHour, in: 1...60)
+                        .onChange(of: settings.pingMaxProbesPerHour) { _, _ in applyNetRomSettings() }
+                        .help("A hard ceiling, whatever the spacing below would allow.")
+
+                    Stepper("At least \(settings.pingMinSecondsBetween) s apart",
+                            value: $settings.pingMinSecondsBetween, in: 30...900, step: 30)
+                        .onChange(of: settings.pingMinSecondsBetween) { _, _ in applyNetRomSettings() }
+                        .help("Between any two probes, whoever they are for.")
+
+                    Stepper("Each station at most every \(settings.pingStationCooldownMinutes) min",
+                            value: $settings.pingStationCooldownMinutes, in: 10...720, step: 10)
+                        .onChange(of: settings.pingStationCooldownMinutes) { _, _ in applyNetRomSettings() }
+                        .help("Doubles each time a station does not answer, up to a day, "
+                              + "so a silent station is asked less and less rather than more.")
+
+                    Toggle("Also stations others are calling",
+                           isOn: $settings.pingProbeStationsOthersCall)
+                        .onChange(of: settings.pingProbeStationsOthersCall) { _, _ in applyNetRomSettings() }
+                        .help("Stations this receiver has never heard, but that a "
+                              + "neighbour was heard calling. Asks whether this station "
+                              + "can reach what its neighbours reach — a longer shot, "
+                              + "and a transmission either way.")
+
+                    Text("Never while a session is running, never within 10 s of other "
+                         + "traffic, and never a station already connected.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let coordinator = SessionCoordinator.shared,
+                   !coordinator.pingProber.recent.isEmpty {
+                    Divider()
+                    ForEach(coordinator.pingProber.recent.prefix(8), id: \.call) { record in
+                        HStack {
+                            Text(record.call)
+                                .font(.system(.caption, design: .monospaced))
+                            Spacer()
+                            Text(Self.outcome(record))
+                                .font(.caption2)
+                                .foregroundStyle(record.lastAnswered == nil ? .secondary : .primary)
+                        }
+                    }
+                }
+            }
+
             PreferencesSection("AXDP Protocol", id: .axdpProtocol) {
                 Toggle("Enable AXDP Extensions", isOn: $txAdaptiveSettings.axdpExtensionsEnabled)
                     .onChange(of: txAdaptiveSettings.axdpExtensionsEnabled) { _, _ in
@@ -199,6 +401,12 @@ struct TransmissionSettingsView: View {
         .onAppear {
             seedAdaptiveSettings()
         }
+        // Text fields apply on commit, and an operator who types an alias
+        // and closes the window has committed. Safe to call now that
+        // applying settings no longer transmits by itself.
+        .onDisappear {
+            applyNetRomSettings()
+        }
         .textEntryPrompt($prompt)
     }
     
@@ -207,6 +415,22 @@ struct TransmissionSettingsView: View {
     // ... Copying existing helpers (seedAdaptiveSettings, syncAdaptiveSettingsToSessionCoordinator) ...
     // Since we are overwriting the file structure, we need to ensure we include these.
     
+    private static func hourLabel(_ hour: Int) -> String {
+        String(format: "%02d:00", hour)
+    }
+
+    /// What a station's probing history amounts to, in a phrase.
+    private static func outcome(_ record: PingProber.Record) -> String {
+        guard let answered = record.lastAnswered else {
+            return record.consecutiveSilences > 0
+                ? "no answer (\(record.consecutiveSilences)×)" : "asked, waiting"
+        }
+        let rtt = record.lastRTT.map { String(format: "%.1f s", $0) } ?? "—"
+        let kind = record.lastAnswerKind ?? "answered"
+        let stamp = answered.formatted(date: .omitted, time: .shortened)
+        return "\(rtt) · \(kind) · \(stamp)"
+    }
+
     private func seedAdaptiveSettings() {
         txAdaptiveSettings.axdpExtensionsEnabled = settings.axdpExtensionsEnabled
         txAdaptiveSettings.autoNegotiateCapabilities = settings.axdpAutoNegotiateCapabilities
@@ -224,6 +448,13 @@ struct TransmissionSettingsView: View {
         }
     }
     
+    /// Push the NET/ROM node policy into the live coordinator. Both
+    /// switches change what goes on the air, so they take effect the
+    /// moment the operator sets them rather than at next launch.
+    private func applyNetRomSettings() {
+        SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+    }
+
     private func syncAdaptiveSettingsToSessionCoordinator() {
         guard let coordinator = SessionCoordinator.shared else { return }
         

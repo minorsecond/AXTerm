@@ -449,7 +449,11 @@ final class TxLog {
 
     // MARK: - Adaptive transmission logging (always to console in DEBUG so user can verify it's working)
 
-    nonisolated static func adaptiveLearning(source: String, lossRate: Double, etx: Double, srtt: Double?, rto: Double?, window: Int, paclen: Int, maxRetries: Int, reason: String) {
+    /// `forwardLoss`/`reverseLoss` are recorded separately because they are
+    /// acted on separately, and because a line reading `loss=0.25` gave no
+    /// way to tell a link dropping our frames from one merely being shouted
+    /// at — the two call for opposite responses.
+    nonisolated static func adaptiveLearning(source: String, lossRate: Double, forwardLoss: Double? = nil, reverseLoss: Double? = nil, etx: Double, srtt: Double?, rto: Double?, window: Int, paclen: Int, maxRetries: Int, reason: String) {
         var data: [String: Any] = [
             "source": source,
             "loss": String(format: "%.2f", lossRate),
@@ -459,10 +463,14 @@ final class TxLog {
             "maxRetries": maxRetries,
             "reason": reason
         ]
+        if let f = forwardLoss { data["lossOut"] = String(format: "%.2f", f) }
+        if let r = reverseLoss { data["lossIn"] = String(format: "%.2f", r) }
         if let s = srtt { data["srtt"] = String(format: "%.2fs", s) }
         if let r = rto { data["rto"] = String(format: "%.2fs", r) }
         #if DEBUG
-        print("[ADAPTIVE] 📊 Learning | \(source) | loss=\(String(format: "%.2f", lossRate)) etx=\(String(format: "%.2f", etx))\(srtt.map { " srtt=\(String(format: "%.2fs", $0))" } ?? "")\(rto.map { " rto=\(String(format: "%.2fs", $0))" } ?? "") → K=\(window) P=\(paclen) N2=\(maxRetries) | \(reason)")
+        let direction = (forwardLoss.map { " out=\(String(format: "%.2f", $0))" } ?? "")
+            + (reverseLoss.map { " in=\(String(format: "%.2f", $0))" } ?? "")
+        print("[ADAPTIVE] 📊 Learning | \(source) | loss=\(String(format: "%.2f", lossRate))\(direction) etx=\(String(format: "%.2f", etx))\(srtt.map { " srtt=\(String(format: "%.2fs", $0))" } ?? "")\(rto.map { " rto=\(String(format: "%.2fs", $0))" } ?? "") → K=\(window) P=\(paclen) N2=\(maxRetries) | \(reason)")
         #endif
         debug(.adaptive, "Learning", data)
     }

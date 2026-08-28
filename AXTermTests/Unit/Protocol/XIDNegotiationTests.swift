@@ -95,6 +95,38 @@ final class XIDNegotiationTests: XCTestCase {
         XCTAssertFalse(session.stateMachine.config.srejEnabled)
     }
 
+    /// The other pre-2.2 answer, and the one BPQ actually gives: DM.
+    ///
+    /// A node with no XID implementation holds no link to us, so it says
+    /// "no such link". Before this was handled the DM landed on a session
+    /// still in `.disconnected`, the state machine no-opped, and the
+    /// connect sat out its whole RTO anyway: on 2026-08-27 DRLNOD answered
+    /// in 2.1 s and AXTerm did not send SABM until 8 s had passed.
+    func testDMFallsBackToPlainSABMWithoutWaitingOutTheRTO() {
+        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        XCTAssertFalse(sent.contains { $0.displayInfo == "SABM" })
+
+        XCTAssertTrue(manager.handleInboundDMDuringNegotiation(from: peer, channel: 0),
+                      "the DM belongs to the negotiation and is consumed by it")
+
+        XCTAssertTrue(sent.contains { $0.displayInfo == "SABM" },
+                      "the answer arrived; there is nothing left to wait for")
+        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        XCTAssertFalse(session.stateMachine.config.srejEnabled)
+        XCTAssertEqual(session.state, .connecting)
+    }
+
+    /// The SABM the negotiation just sent must survive. A DM consumed here
+    /// and *also* run through normal handling would reach a `.connecting`
+    /// session as "connection refused" and cancel the connect it started.
+    func testDMOutsideNegotiationIsNotConsumed() {
+        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        _ = manager.handleInboundDMDuringNegotiation(from: peer, channel: 0)
+
+        XCTAssertFalse(manager.handleInboundDMDuringNegotiation(from: peer, channel: 0),
+                       "negotiation is over; a later DM is a real refusal")
+    }
+
     func testSilentPeerTimesOutOnceAndIsCached() {
         _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
         XCTAssertFalse(sent.contains { $0.displayInfo == "SABM" })
