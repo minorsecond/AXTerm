@@ -2786,8 +2786,32 @@ struct TerminalView: View {
     private func disconnectSession(destination: String, digis: [String]) {
         let address = CallsignNormalizer.toAddress(destination)
         let path = DigiPath.from(digis)
-        if let session = txViewModel.sessionManager.existingSession(for: address, path: path)
-            ?? txViewModel.sessionManager.connectedSession(withPeer: address) {
+        guard let session = txViewModel.sessionManager.existingSession(for: address, path: path)
+            ?? txViewModel.sessionManager.connectedSession(withPeer: address) else { return }
+
+        // Dropping the link "so the next attempt starts clean" is only true
+        // if the peer hears about it. Torn down silently, BPQ keeps the
+        // session and treats the next SABM as a reset of it — already past
+        // its greeting, so the banner the relay waits on never comes (field
+        // capture 2026-08-28: KB5YZB-7 RR-polled a half-open session before
+        // our SABM, then never greeted). See `LinkTeardownPolicy`.
+        switch LinkTeardownPolicy.action(for: session.state) {
+        case .sendDISC:
+            if let disc = txViewModel.sessionManager.disconnect(session: session) {
+                client.send(frame: disc) { result in
+                    if case .failure(let error) = result {
+                        TxLog.warning(.session, "DISC send failed on link teardown", [
+                            "peer": address.display,
+                            "error": error.localizedDescription
+                        ])
+                    }
+                }
+            } else {
+                // The state moved under us between the policy check and the
+                // disconnect call. Don't leave the session dangling.
+                txViewModel.sessionManager.forceDisconnect(session: session)
+            }
+        case .dropLocally:
             txViewModel.sessionManager.forceDisconnect(session: session)
         }
     }
