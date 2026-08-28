@@ -16,6 +16,9 @@ struct ConnectionStatusStripView: View {
     let viaDigipeaters: [String]
     let connectionMode: ConnectBarMode
     let isTNCConnected: Bool
+    /// Hop-by-hop position of a node-prompt relay, when one is walking a
+    /// chain. Empty for every ordinary connect.
+    var relayHops: [NetRomRelayProgress.Hop] = []
     
     private var isConnected: Bool {
         sessionState == .connected
@@ -61,8 +64,79 @@ struct ConnectionStatusStripView: View {
             .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(Color(platform: .platformCardBackground).opacity(0.5))
+
+            // Where the relay stands, hop by hop. Only while the chain is
+            // being walked — once the circuit is up, "via <node>" above
+            // says everything this row would.
+            if isConnecting, !relayHops.isEmpty {
+                relayProgressRow
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 6)
+                    .background(Color(platform: .platformCardBackground).opacity(0.5))
+            }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - Relay hop progress
+
+    /// You → DRLNOD ✓ → KB5YZB-7 (spinner) → COSCO → ASHCHT — the answer to
+    /// "which node is being negotiated with right now", read off the relay's
+    /// own phase so it cannot drift from what the relay is doing.
+    private var relayProgressRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 5) {
+                Text("You")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                ForEach(relayHops) { hop in
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.quaternary)
+                    relayHopChip(hop)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(relayAccessibilitySummary)
+    }
+
+    @ViewBuilder
+    private func relayHopChip(_ hop: NetRomRelayProgress.Hop) -> some View {
+        HStack(spacing: 3) {
+            switch hop.state {
+            case .done:
+                Image(systemName: "checkmark")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.green)
+            case .active:
+                ProgressView()
+                    .controlSize(.mini)
+            case .pending:
+                EmptyView()
+            }
+            Text(hop.name)
+                .font(hop.state == .active ? .caption.weight(.semibold) : .caption)
+                .foregroundStyle(hop.state == .pending ? .tertiary : .primary)
+        }
+        .help(relayHopHelp(hop))
+    }
+
+    private func relayHopHelp(_ hop: NetRomRelayProgress.Hop) -> String {
+        switch hop.state {
+        case .done: return "\(hop.name) answered — the chain is past it."
+        case .active: return "Negotiating with \(hop.name) right now."
+        case .pending: return "\(hop.name) has not been reached yet."
+        }
+    }
+
+    private var relayAccessibilitySummary: String {
+        guard let active = relayHops.first(where: { $0.state == .active }) else {
+            return "Relay chain complete"
+        }
+        let done = relayHops.filter { $0.state == .done }.count
+        return "Relay progress: negotiating with \(active.name), "
+            + "\(done) of \(relayHops.count) hops made"
     }
     
     // MARK: - Connected Status

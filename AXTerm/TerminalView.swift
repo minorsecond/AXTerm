@@ -252,9 +252,13 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                 relayWaitingOn = nextHop.uppercased()
             case .awaitingConnected:
                 break
-            case .established, nil:
+            case .established:
                 relayWaitingOn = nil
                 relayWitness.stopWatching()
+            case nil:
+                relayWaitingOn = nil
+                relayWitness.stopWatching()
+                relayPlannedChain = []
             }
         }
     }
@@ -304,6 +308,43 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     fileprivate func noteRelayProgress(waitingOn: String?) {
         relayProgressTick &+= 1
         relayWaitingOn = waitingOn?.uppercased()
+    }
+
+    /// The full chain the relay set out to walk, link target first.
+    ///
+    /// The phase's `remaining` list shrinks as hops are made, so by itself
+    /// it cannot say which nodes are already behind us. This is the fixed
+    /// frame the status strip lays the relay's position over. Set when the
+    /// relay arms, cleared with the phase.
+    @Published fileprivate private(set) var relayPlannedChain: [String] = []
+
+    fileprivate func armRelayChain(_ chain: [String]) {
+        relayPlannedChain = chain.map { $0.uppercased() }
+    }
+
+    /// Where the relay currently stands, hop by hop, for the status strip.
+    fileprivate var relayProgressHops: [NetRomRelayProgress.Hop] {
+        guard let phase = netRomRelayPhase else { return [] }
+        switch phase {
+        case let .awaitingBanner(destination, nextHop, remaining):
+            return NetRomRelayProgress.hops(
+                chain: relayPlannedChain.isEmpty ? [nextHop.uppercased()] : relayPlannedChain,
+                destination: destination.uppercased(),
+                remainingCount: remaining.count,
+                askInFlight: false, established: false)
+        case let .awaitingConnected(destination, nextHop, remaining):
+            return NetRomRelayProgress.hops(
+                chain: relayPlannedChain.isEmpty ? [nextHop.uppercased()] : relayPlannedChain,
+                destination: destination.uppercased(),
+                remainingCount: remaining.count,
+                askInFlight: true, established: false)
+        case let .established(destination, nextHop):
+            return NetRomRelayProgress.hops(
+                chain: relayPlannedChain.isEmpty ? [nextHop.uppercased()] : relayPlannedChain,
+                destination: destination.uppercased(),
+                remainingCount: 0,
+                askInFlight: false, established: true)
+        }
     }
 
     /// Called when relay handshake succeeds (destination, nextHop).
@@ -2261,7 +2302,8 @@ struct TerminalView: View {
                         destinationCall: displayedDestination,
                         viaDigipeaters: displayedVia,
                         connectionMode: displayedConnectionMode,
-                        isTNCConnected: client.status == .connected
+                        isTNCConnected: client.status == .connected,
+                        relayHops: txViewModel.relayProgressHops
                     )
                 }
 
@@ -3500,6 +3542,7 @@ struct TerminalView: View {
         client.appendSystemNotification(plan.operatorSummary)
 
         // Set relay phase so data interception is ready the moment UA arrives and data flows
+        txViewModel.armRelayChain(plan.chain)
         txViewModel.netRomRelayPhase = .awaitingBanner(
             destination: intent.normalizedTo,
             nextHop: linkTarget,
@@ -3947,6 +3990,7 @@ struct TerminalView: View {
         client.appendSystemNotification(plan.operatorSummary)
 
         // Set relay phase BEFORE sending SABM so data interception is active when UA arrives
+        txViewModel.armRelayChain(plan.chain)
         txViewModel.netRomRelayPhase = .awaitingBanner(
             destination: intent.normalizedTo,
             nextHop: plan.linkTarget,
