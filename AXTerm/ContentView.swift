@@ -561,8 +561,13 @@ struct ContentView: View {
                         await callsignLookup.resolve(presentation.callsign)
                     }
             }
-            .frame(minWidth: presentation.isPage ? 560 : 440,
-                   minHeight: presentation.isPage ? 620 : 500)
+            // The page earns its name with width: two columns of section
+            // cards (330pt minimum each, plus padding) instead of the
+            // sheet's single tall stack scrolling off the screen.
+            .frame(minWidth: presentation.isPage ? 880 : 440,
+                   idealWidth: presentation.isPage ? 920 : 460,
+                   minHeight: presentation.isPage ? 600 : 500,
+                   idealHeight: presentation.isPage ? 740 : 560)
     }
 
     /// Connects to whatever the profile is about, the way it is reachable.

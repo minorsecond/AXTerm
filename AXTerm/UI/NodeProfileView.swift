@@ -57,20 +57,27 @@ struct NodeProfileView: View {
                     }
                 } else {
                     statTiles
-                    if !profile.roles.isEmpty { rolesSection }
-                    if let activity = profile.activity,
-                       activity.lastHeard != nil || !activity.lastVia.isEmpty {
-                        activitySection(activity)
+                    // The page is given real width, so the sections flow into
+                    // columns instead of one tall stack — a narrow window (or
+                    // iOS) collapses back to a single column on its own.
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 330),
+                                                 spacing: 16, alignment: .top)],
+                              alignment: .leading, spacing: 16) {
+                        if !profile.roles.isEmpty { rolesSection }
+                        if let activity = profile.activity,
+                           activity.lastHeard != nil || !activity.lastVia.isEmpty {
+                            activitySection(activity)
+                        }
+                        if let placement = profile.placement { placementSection(placement) }
+                        if !profile.links.isEmpty { linkSection }
+                        if let topology = profile.topology, !topology.isEmpty {
+                            topologySection(topology)
+                        }
+                        if !profile.siblings.isEmpty { siblingSection }
+                        if let netrom = profile.netrom { netromSection(netrom) }
+                        if let winlink = profile.winlink { winlinkSection(winlink) }
+                        if profile.name != nil || profile.licenseClass != nil { licenceSection }
                     }
-                    if let placement = profile.placement { placementSection(placement) }
-                    if !profile.links.isEmpty { linkSection }
-                    if let topology = profile.topology, !topology.isEmpty {
-                        topologySection(topology)
-                    }
-                    if !profile.siblings.isEmpty { siblingSection }
-                    if let netrom = profile.netrom { netromSection(netrom) }
-                    if let winlink = profile.winlink { winlinkSection(winlink) }
-                    if profile.name != nil || profile.licenseClass != nil { licenceSection }
                 }
                 // Offered even for a bare callsign: knowing nothing about a
                 // station is exactly when an operator most wants to write
