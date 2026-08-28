@@ -114,6 +114,13 @@ nonisolated enum CallsignRegion {
         "2": "United Kingdom",
     ]
 
+    /// The country alone, refinement stripped — what domestic-suppression
+    /// compares, so two Australians in different states still read as
+    /// compatriots.
+    static func country(for callsign: String) -> String? {
+        region(for: callsign).map { $0.components(separatedBy: " \u{00B7} ")[0] }
+    }
+
     /// The licensing country for a callsign, nil when the prefix is not in
     /// the table (or the string is not a callsign at all).
     static func region(for callsign: String) -> String? {
@@ -131,9 +138,65 @@ nonisolated enum CallsignRegion {
         }
         let two = String(base.prefix(2))
         if let match = twoCharBlocks.first(where: { $0.0.contains(two) }) {
-            return match.1
+            return refined(base, country: match.1) ?? match.1
         }
         guard let first = base.first else { return nil }
-        return oneCharBlocks[first]
+        guard let country = oneCharBlocks[first] else { return nil }
+        return refined(base, country: country) ?? country
+    }
+
+    /// Sub-national refinement, only where the allocation is official and
+    /// binding. Australian and Canadian call areas follow the station;
+    /// UK secondary letters name the nation. US call areas are deliberately
+    /// absent — a licensee keeps the call when they move, so the digit
+    /// says where they lived once, which is not context, it is a trap.
+    private static func refined(_ base: String, country: String) -> String? {
+        switch country {
+        case "Australia":
+            guard base.hasPrefix("VK"), base.count > 2 else { return nil }
+            let areas: [Character: String] = [
+                "1": "Australian Capital Territory", "2": "New South Wales",
+                "3": "Victoria", "4": "Queensland", "5": "South Australia",
+                "6": "Western Australia", "7": "Tasmania", "8": "Northern Territory"]
+            return areas[base[base.index(base.startIndex, offsetBy: 2)]]
+                .map { "\(country) \u{00B7} \($0)" }
+        case "Canada":
+            let prefix2 = String(base.prefix(2))
+            guard base.count > 2 else { return nil }
+            let digit = base[base.index(base.startIndex, offsetBy: 2)]
+            let provinces: [Character: String] = [
+                "1": "Nova Scotia", "2": "Quebec", "3": "Ontario",
+                "4": "Manitoba", "5": "Saskatchewan", "6": "Alberta",
+                "7": "British Columbia", "8": "Northwest Territories",
+                "9": "New Brunswick"]
+            switch prefix2 {
+            case "VE", "VA":
+                return provinces[digit].map { "\(country) \u{00B7} \($0)" }
+            case "VO":
+                return "\(country) \u{00B7} Newfoundland and Labrador"
+            case "VY":
+                let territories: [Character: String] = [
+                    "0": "Nunavut", "1": "Yukon", "2": "Prince Edward Island"]
+                return territories[digit].map { "\(country) \u{00B7} \($0)" }
+            default:
+                return nil
+            }
+        case "United Kingdom":
+            guard let first = base.first, "GM".contains(first),
+                  base.count > 1 else { return nil }
+            let second = base[base.index(after: base.startIndex)]
+            let nations: [Character: String] = [
+                "M": "Scotland", "W": "Wales", "I": "Northern Ireland",
+                "D": "Isle of Man", "J": "Jersey", "U": "Guernsey"]
+            if let nation = nations[second] {
+                return "\(country) \u{00B7} \(nation)"
+            }
+            // A digit second character (G4ABC, M0XYZ) is England; any
+            // other letter (GB special events, GX clubs) is UK-wide and
+            // stays unrefined.
+            return second.isNumber ? "\(country) \u{00B7} England" : nil
+        default:
+            return nil
+        }
     }
 }

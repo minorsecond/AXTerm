@@ -466,8 +466,10 @@ struct NodeDirectoryView: View {
     /// own — nil for domestic rows and unknown prefixes alike.
     private func foreignRegion(_ callsign: String) -> String? {
         guard let region = CallsignRegion.region(for: callsign) else { return nil }
-        let home = CallsignRegion.region(for: localCallsign)
-        return region == home ? nil : region
+        // Compared by country, not by refined region — two Australians in
+        // different states are compatriots, not foreigners to each other.
+        let home = CallsignRegion.country(for: localCallsign)
+        return CallsignRegion.country(for: callsign) == home ? nil : region
     }
 
     /// The nodes that listed this station apart from the one heading its

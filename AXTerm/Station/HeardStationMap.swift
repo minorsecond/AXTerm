@@ -87,6 +87,7 @@ nonisolated enum HeardStationMap {
     static func entries(stations: [Station],
                         directory: [String: CallsignRecord],
                         gatewayGrids: [String: String],
+                        announcedGrids: [String: String] = [:],
                         excluding ownCallsign: String = "") -> [Entry] {
         let own = CallsignQuery.normalize(ownCallsign)
         return stations.filter {
@@ -142,6 +143,23 @@ nonisolated enum HeardStationMap {
                     positionSource: "RMS directory grid square",
                     confidence: .gridSquare,
                     gridSquare: grid.uppercased(),
+                    name: record?.name, locality: record?.locality)
+            }
+            // The station's own beacon, when it carried a locator. This is
+            // the placement most of the world gets — no directory covers
+            // it, but the station said where it is, over the air. Below
+            // the registries above (both are vetted claims about the same
+            // station), above the licensee fallbacks below (which describe
+            // the operator, not the station).
+            if let announced = announcedGrids[call],
+               let center = Maidenhead.center(of: announced) {
+                return Entry(
+                    callsign: call, heardCount: station.heardCount,
+                    lastHeard: station.lastHeard, lastVia: station.lastVia,
+                    position: GreatCircle.Point(center),
+                    positionSource: "locator announced in its own beacon",
+                    confidence: .gridSquare,
+                    gridSquare: announced.uppercased(),
                     name: record?.name, locality: record?.locality)
             }
             if let record, let position = record.position {

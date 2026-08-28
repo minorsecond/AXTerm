@@ -152,7 +152,8 @@ struct NodeProfileView: View {
                     // still printed in the callsign itself.
                     if profile.country == nil, !profile.isServiceEndpoint,
                        let region = CallsignRegion.region(for: profile.baseCallsign),
-                       region != CallsignRegion.region(for: localCallsign) {
+                       CallsignRegion.country(for: profile.baseCallsign)
+                           != CallsignRegion.country(for: localCallsign) {
                         Text("Licensed in \(region), by callsign prefix")
                             .font(.caption)
                             .foregroundStyle(.tertiary)

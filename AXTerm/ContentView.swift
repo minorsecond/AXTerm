@@ -26,6 +26,9 @@ struct ContentView: View {
     /// arriving, so via-path hops can be placed.
     @StateObject private var nodeAliases = NodeAliasStore()
     @StateObject private var nodeCapabilities = NodeCapabilityStore()
+    /// Locators stations announce in their own beacons — the placement
+    /// source for the part of the world no directory covers.
+    @StateObject private var announcedGrids = AnnouncedGridStore()
     /// Reads BPQ ROUTES tables out of session transcripts; its rows become
     /// harvested routes when the capability verdict allows it.
     @State private var routesScraper = BpqRoutesScraper()
@@ -74,8 +77,9 @@ struct ContentView: View {
     }
 
     private func harvestServices(from packets: [Packet]) {
-        guard let services = client.stationServices else { return }
         let recent = Array(packets.suffix(400))
+        announcedGrids.ingest(packets: recent)
+        guard let services = client.stationServices else { return }
         try? services.record(
             StationServiceHarvester.declarations(in: recent)
                 + StationServiceHarvester.demonstratedDigipeaters(in: recent))
@@ -102,6 +106,7 @@ struct ContentView: View {
             stations: stations,
             directory: callsignLookup.records,
             gatewayGrids: gatewayGrids,
+            announcedGrids: announcedGrids.grids,
             excluding: settings.myCallsign)
         let aliasEntries = HeardStationMap.aliasEntries(
             aliases: nodeAliases.directory,
@@ -1249,6 +1254,7 @@ struct ContentView: View {
                     stations: client.stations,
                 recentPackets: Array(client.packets.suffix(600)),
                     gatewayGrids: gatewayGrids,
+                    announcedGrids: announcedGrids.grids,
                     observerGrid: winlinkContext.settings.gridSquare,
                     myCallsign: settings.myCallsign,
                     lookup: callsignLookup,

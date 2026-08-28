@@ -17,6 +17,8 @@ struct StationsMapView: View {
     var recentPackets: [Packet] = []
     /// Grid squares for RMS gateways, keyed by full callsign with SSID.
     let gatewayGrids: [String: String]
+    /// Locators stations beaconed about themselves, per full callsign.
+    var announcedGrids: [String: String] = [:]
     let observerGrid: String
     /// Excluded from the heard list and used to label the centre marker.
     let myCallsign: String
@@ -225,6 +227,7 @@ struct StationsMapView: View {
             stations: stations,
             directory: lookup.records,
             gatewayGrids: gatewayGrids,
+            announcedGrids: announcedGrids,
             excluding: myCallsign)
         // Aliases used in via paths, placed through their operator.
         // Appended rather than merged: a node is its own thing, and its

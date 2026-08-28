@@ -29,6 +29,9 @@ struct AXTermiOSRootView: View {
     /// so via-path hops can be placed on the map.
     @StateObject private var nodeAliases = NodeAliasStore()
     @StateObject private var nodeCapabilities = NodeCapabilityStore()
+    /// Locators stations announce in their own beacons; the placement
+    /// source for callsigns no directory covers.
+    @StateObject private var announcedGrids = AnnouncedGridStore()
     /// Reads BPQ ROUTES tables out of session transcripts — same wiring as
     /// the Mac shell; the iPad learns routes from its own sessions too.
     @State private var routesScraper = BpqRoutesScraper()
@@ -314,6 +317,7 @@ struct AXTermiOSRootView: View {
             // The network's own directory, harvested as it arrives: what
             // stations announced, and which digipeaters actually repeated a
             // frame while we listened.
+            announcedGrids.ingest(packets: recent)
             if let services = client.stationServices {
                 try? services.record(
                     StationServiceHarvester.declarations(in: recent)
@@ -641,6 +645,7 @@ struct AXTermiOSRootView: View {
             stations: stations,
             directory: callsignLookup.records,
             gatewayGrids: gatewayGrids,
+            announcedGrids: announcedGrids.grids,
             excluding: settings.myCallsign)
         let aliasEntries = HeardStationMap.aliasEntries(
             aliases: nodeAliases.directory,
