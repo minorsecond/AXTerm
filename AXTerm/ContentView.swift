@@ -616,10 +616,11 @@ struct ContentView: View {
                         await callsignLookup.resolve(profile.baseCallsign)
                     }
             }
-            // A record arriving from the network (or a late measurement)
-            // reflows the page; animating the change makes it read as the
-            // profile filling in rather than elements popping into place.
-            .animation(.easeOut(duration: 0.2), value: size)
+            // Deliberately NOT animated: animating the frame on `size`
+            // made the first presentation glide its contents in from the
+            // top-left as the fallback frame settled into the fitted one.
+            // macOS animates the sheet window's own resize; the content
+            // should just be laid out where it belongs.
             .frame(width: size.width, height: size.height)
     }
 
