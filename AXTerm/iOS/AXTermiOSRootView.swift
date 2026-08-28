@@ -29,6 +29,9 @@ struct AXTermiOSRootView: View {
     /// so via-path hops can be placed on the map.
     @StateObject private var nodeAliases = NodeAliasStore()
     @StateObject private var nodeCapabilities = NodeCapabilityStore()
+    /// Reads BPQ ROUTES tables out of session transcripts — same wiring as
+    /// the Mac shell; the iPad learns routes from its own sessions too.
+    @State private var routesScraper = BpqRoutesScraper()
     /// One door to the identity view, wherever a callsign is named.
     @StateObject private var profiles = NodeProfileCoordinator()
     @State private var profileMenuTarget: String?
@@ -339,6 +342,26 @@ struct AXTermiOSRootView: View {
                 connectCoordinator: connectCoordinator,
                 nodeAliases: nodeAliases,
                 nodeCapabilities: nodeCapabilities,
+                onSessionText: { text, peer in
+                    // Same harvest as the Mac shell: aliases, software
+                    // fingerprints, and ROUTES rows all arrive because the
+                    // operator went there, so all are read. This hook was
+                    // missing on iOS — the iPad scraped packets only.
+                    nodeAliases.ingest(text: text, source: peer)
+                    nodeCapabilities.ingest(line: text, peer: peer)
+                    if let row = routesScraper.ingest(line: text, peer: peer, at: Date()) {
+                        let decision = HarvestedRoutePolicy.decide(
+                            rows: [row],
+                            anchorCanRouteNetRom: nodeCapabilities.canRouteNetRom(peer),
+                            localCallsign: settings.myCallsign)
+                        if !decision.accepted.isEmpty {
+                            client.netRomIntegration?.harvestedRoutes(
+                                from: peer,
+                                destinations: decision.accepted,
+                                timestamp: row.observedAt)
+                        }
+                    }
+                },
                 searchModel: searchModel,
                 locationService: context.locationService,
                 onIdentity: { profiles.peek($0) },
