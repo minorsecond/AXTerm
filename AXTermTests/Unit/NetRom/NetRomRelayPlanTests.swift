@@ -130,4 +130,37 @@ final class NetRomRelayPlanTests: XCTestCase {
         XCTAssertEqual(result.linkTarget, "KB5YZB-7")
         XCTAssertTrue(result.intermediateHops.isEmpty)
     }
+
+    // MARK: - The ASHCHT case (field capture 2026-08-28)
+
+    /// A teller that is a node *name* must be resolved to its callsign
+    /// before the route table is consulted. ASHCHT's teller is COSCO; the
+    /// route lives under KE0GB-7 (harvested, via KB5YZB-7), and KB5YZB-7
+    /// itself is filed via DRLNOD. Without the resolution the walk ended
+    /// at COSCO and the relay dialled a node it cannot hear.
+    func testAnAliasTellerResolvesThroughItsCallsign() {
+        let routes = ["KE0GB-7": "KB5YZB-7", "KB5YZB-7": "DRLNOD"]
+        let aliases = ["COSCO": "KE0GB-7"]
+        let result = NetRomRelayPlan.plan(
+            destination: "ASHCHT",
+            teller: "COSCO",
+            routeLookup: { routes[$0.uppercased()] },
+            aliasResolve: { aliases[$0.uppercased()] })
+        XCTAssertEqual(result.chain, ["DRLNOD", "KB5YZB-7", "COSCO"],
+                       "the by-hand chain: C KB5YZB-7 at DRLNOD, C COSCO at YZB, "
+                       + "C ASHCHT at COSCO")
+        XCTAssertEqual(result.linkTarget, "DRLNOD")
+        XCTAssertEqual(result.destination, "ASHCHT")
+    }
+
+    /// The default resolver resolves nothing, so existing callers keep
+    /// exactly the old behaviour.
+    func testWithoutAResolverTheAliasEndsTheWalk() {
+        let routes = ["KE0GB-7": "KB5YZB-7"]
+        let result = NetRomRelayPlan.plan(
+            destination: "ASHCHT",
+            teller: "COSCO",
+            routeLookup: { routes[$0.uppercased()] })
+        XCTAssertEqual(result.chain, ["COSCO"])
+    }
 }

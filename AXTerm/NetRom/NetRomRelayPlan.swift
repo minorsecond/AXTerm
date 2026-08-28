@@ -76,10 +76,17 @@ nonisolated enum NetRomRelayPlan {
     ///     directory. Nil when the destination is reached directly.
     ///   - routeLookup: station → the neighbour that reaches it, from the
     ///     NET/ROM route table (`bestRouteTo(_:)?.origin`).
+    ///   - aliasResolve: node name → the callsign behind it. The route
+    ///     table files routes by callsign, but a teller is usually a node
+    ///     *name* — ASHCHT's teller is COSCO, and COSCO's route lives
+    ///     under KE0GB-7. Without this the walk ended at the alias and the
+    ///     relay dialled COSCO direct into silence (field capture
+    ///     2026-08-28).
     static func plan(
         destination: String,
         teller: String?,
-        routeLookup: (String) -> String?
+        routeLookup: (String) -> String?,
+        aliasResolve: (String) -> String? = { _ in nil }
     ) -> Plan {
         let target = normalize(destination)
         let start = teller.map(normalize) ?? target
@@ -92,7 +99,9 @@ nonisolated enum NetRomRelayPlan {
         var cursor = start
 
         while chain.count < maxChainLength {
-            guard let hopText = routeLookup(cursor), !hopText.isEmpty else { break }
+            let resolved = routeLookup(cursor)
+                ?? aliasResolve(cursor).flatMap { routeLookup(normalize($0)) }
+            guard let hopText = resolved, !hopText.isEmpty else { break }
             let hop = normalize(hopText)
             // A station that reaches itself is the end of the walk, not a
             // hop; so is one already in the chain (that would loop).

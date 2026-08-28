@@ -3432,7 +3432,8 @@ struct TerminalView: View {
             teller: nextHop,
             routeLookup: { [weak client] station in
                 client?.netRomIntegration?.bestRouteTo(station)?.origin
-            }
+            },
+            aliasResolve: { nodeAliases.directory.callsign(for: $0) }
         )
         let linkTarget = plan.linkTarget
 
@@ -3852,7 +3853,8 @@ struct TerminalView: View {
             teller: nextHop,
             routeLookup: { [weak client] station in
                 client?.netRomIntegration?.bestRouteTo(station)?.origin
-            }
+            },
+            aliasResolve: { nodeAliases.directory.callsign(for: $0) }
         )
         client.appendSystemNotification(plan.operatorSummary)
 
