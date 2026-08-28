@@ -96,11 +96,16 @@ nonisolated struct NodeProfile: Equatable, Sendable {
                 // this is the fallback wording only.
                 return "Its command menu is a Kantronics KA-Node. It relays connections and digipeats, but cannot route NET/ROM."
             case .digipeater:
-                return "Its callsign has been seen in the digipeater path of frames from other stations."
+                return "Its callsign has been seen in the digipeater path of frames from "
+                    + "other stations. A digipeater repeats frames addressed via it — no "
+                    + "session, no acknowledgement of its own — so the sender's retries "
+                    + "still span the whole path."
             case .bulletinBoard:
                 return "It identified itself as running a bulletin board."
             case .relay:
-                return "It identified itself as a relay."
+                return "It declared itself a relay (/R): connect to it, then ask it to "
+                    + "connect onward, each hop running its own acknowledgements. Unlike "
+                    + "a digipeater, it carries the connection, not just the frames."
             case .winlinkGateway:
                 return "A Winlink session has been attempted or completed with it."
             }
