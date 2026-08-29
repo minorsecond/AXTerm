@@ -36,7 +36,12 @@ struct SettingsView: View {
         // services running on it, and the machinery underneath — in a
         // window the operator can finally resize.
         NavigationSplitView {
-            List(selection: $router.selectedTab) {
+            // Optional-selection binding: the non-optional List selection
+            // initialiser is macOS-only, and this file compiles into the
+            // iOS target even though the iOS shell composes pages directly.
+            List(selection: Binding<SettingsTab?>(
+                get: { router.selectedTab },
+                set: { if let tab = $0 { router.selectedTab = tab } })) {
                 Section("Station") {
                     sidebarRow(.general)
                     sidebarRow(.notifications)
