@@ -11,6 +11,8 @@ struct StationScopeView: View {
     let scope: StationScope
     @Binding var selection: String?
     var legend: MapLegend.Kind = .recency
+    /// Distances read in the operator's unit; miles when unset.
+    var distanceInMiles: Bool = true
 
     private let rimInset: CGFloat = 34
 
@@ -206,10 +208,10 @@ struct StationScopeView: View {
     }
 
     private func rangeText(_ kilometres: Double) -> String {
-        let miles = GreatCircle.miles(fromKilometres: kilometres)
-        return miles < 10
-            ? String(format: "%.1f mi", miles)
-            : "\(Int(miles.rounded())) mi"
+        let value = DistanceDisplay.value(kilometres: kilometres, inMiles: distanceInMiles)
+        return DistanceDisplay.string(
+            kilometres: kilometres, inMiles: distanceInMiles,
+            format: value < 10 ? "%.1f" : "%.0f")
     }
 
     private func color(for signal: StationScope.Signal) -> Color {

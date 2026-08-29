@@ -91,7 +91,8 @@ nonisolated enum NetRomRelayPlan {
         destination: String,
         teller: String?,
         routeLookup: (String) -> String?,
-        aliasResolve: (String) -> String? = { _ in nil }
+        aliasResolve: (String) -> String? = { _ in nil },
+        maxChainLength: Int = NetRomRelayPlan.maxChainLength
     ) -> Plan {
         let target = normalize(destination)
         let start = teller.map(normalize) ?? target
@@ -103,7 +104,7 @@ nonisolated enum NetRomRelayPlan {
         var seen: Set<String> = [start, target]
         var cursor = start
 
-        while chain.count < maxChainLength {
+        while chain.count < max(1, maxChainLength) {
             let resolved = routeLookup(cursor)
                 ?? aliasResolve(cursor).flatMap { routeLookup(normalize($0)) }
             guard let hopText = resolved, !hopText.isEmpty else { break }

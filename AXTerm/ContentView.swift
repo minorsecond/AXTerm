@@ -127,6 +127,7 @@ struct ContentView: View {
         let routes = client.netRomIntegration?.currentRoutes() ?? []
 
         return NodeProfileResolver(
+            maxChainLength: settings.autoRouteMaxChainLength,
             localCallsign: settings.myCallsign,
             aliases: nodeAliases.directory,
             heardEntries: heard + aliasEntries,

@@ -60,6 +60,9 @@ nonisolated enum ConsoleVisibilityFilter {
 }
 
 struct ConsoleView: View {
+    /// Console text size, from the operator's setting. Eleven points is
+    /// the historical default, not everyone's eyes.
+    var fontSize: Double = 11
     let lines: [ConsoleLine]
     let showDaySeparators: Bool
     @Binding var clearedAt: Date?
@@ -186,7 +189,7 @@ struct ConsoleView: View {
                                         .padding(.vertical, 4)
 
                                     ForEach(section.items) { group in
-                                        ConsoleLineGroupView(group: group, localCallsign: localCallsign,
+                                        ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
                                                              onIdentity: onIdentity,
                                                              onIdentityMenu: onIdentityMenu)
                                             .id(group.id)
@@ -194,7 +197,7 @@ struct ConsoleView: View {
                                 }
                             } else {
                                 ForEach(groupedLines) { group in
-                                    ConsoleLineGroupView(group: group, localCallsign: localCallsign,
+                                    ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
                                                              onIdentity: onIdentity,
                                                              onIdentityMenu: onIdentityMenu)
                                         .id(group.id)
@@ -450,6 +453,7 @@ nonisolated struct ConsoleLineGroup: Identifiable {
 
 /// View for a grouped console line (primary + collapsed duplicates)
 struct ConsoleLineGroupView: View {
+    var fontSize: Double = 11
     let group: ConsoleLineGroup
     var localCallsign: String = ""
     var onIdentity: ((String) -> Void)?
@@ -459,6 +463,7 @@ struct ConsoleLineGroupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ConsoleLineView(
+                fontSize: fontSize,
                 line: group.primary,
                 duplicateCount: group.duplicateCount,
                 allViaPaths: group.allViaPaths,
@@ -474,16 +479,16 @@ struct ConsoleLineGroupView: View {
                     HStack(spacing: 4) {
                         Text("├")
                             .foregroundStyle(.tertiary)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: fontSize, design: .monospaced))
                         Text("via")
                             .foregroundStyle(.tertiary)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: fontSize, design: .monospaced))
                         Text(group.primary.viaDisplay)
                             .foregroundStyle(.purple)
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .font(.system(size: fontSize, weight: .medium, design: .monospaced))
                         Text("at \(group.primary.timestampString)")
                             .foregroundStyle(.tertiary)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: fontSize, design: .monospaced))
                     }
                     .padding(.leading, 20)
                     .padding(.vertical, 1)
@@ -495,24 +500,24 @@ struct ConsoleLineGroupView: View {
                     HStack(spacing: 4) {
                         Text(isLast ? "└" : "├")
                             .foregroundStyle(.tertiary)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: fontSize, design: .monospaced))
 
                         if !dup.via.isEmpty {
                             Text("via")
                                 .foregroundStyle(.tertiary)
-                                .font(.system(size: 11, design: .monospaced))
+                                .font(.system(size: fontSize, design: .monospaced))
                             Text(dup.viaDisplay)
                                 .foregroundStyle(.purple)
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .font(.system(size: fontSize, weight: .medium, design: .monospaced))
                         } else if group.primary.kind == .packet {
                             Text("(no digi path recorded)")
                                 .foregroundStyle(.tertiary)
-                                .font(.system(size: 11, design: .monospaced))
+                                .font(.system(size: fontSize, design: .monospaced))
                         }
 
                         Text("at \(dup.timestampString)")
                             .foregroundStyle(.tertiary)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: fontSize, design: .monospaced))
                     }
                     .padding(.leading, 20)
                     .padding(.vertical, 1)
@@ -550,6 +555,7 @@ private struct ExpandDuplicatesTap: ViewModifier {
 }
 
 struct ConsoleLineView: View {
+    var fontSize: Double = 11
     let line: ConsoleLine
     var duplicateCount: Int = 0
     var allViaPaths: [[String]] = []
@@ -577,7 +583,7 @@ struct ConsoleLineView: View {
             // Timestamp
             Text(line.timestampString)
                 .foregroundStyle(.tertiary)
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: fontSize, design: .monospaced))
 
             // Digipeat-echo marker: this row is the digi re-transmitting our
             // frame, so name the digi inline — that's the interesting fact.
@@ -586,7 +592,7 @@ struct ConsoleLineView: View {
                     Image(systemName: "arrow.triangle.2.circlepath")
                         .font(.system(size: 10, weight: .semibold))
                     Text(line.repeatedDigis.joined(separator: ","))
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .font(.system(size: fontSize, weight: .medium, design: .monospaced))
                 }
                 .foregroundStyle(.indigo)
                 .help("Digipeated copy — repeated by \(line.repeatedDigis.joined(separator: ", "))")

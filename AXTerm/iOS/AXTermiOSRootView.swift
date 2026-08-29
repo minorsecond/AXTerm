@@ -570,7 +570,8 @@ struct AXTermiOSRootView: View {
     private func settingsScreen(_ destination: SettingsDestination) -> some View {
         switch destination {
         case .identity:
-            GeneralSettingsView(settings: settings, client: client)
+            GeneralSettingsView(settings: settings, client: client,
+                                winlinkSettings: context.settings)
                 .navigationTitle("Identity")
                 .navigationBarTitleDisplayMode(.inline)
         case .winlink:
@@ -657,6 +658,7 @@ struct AXTermiOSRootView: View {
         let routes = client.netRomIntegration?.currentRoutes() ?? []
 
         return NodeProfileResolver(
+            maxChainLength: settings.autoRouteMaxChainLength,
             localCallsign: settings.myCallsign,
             aliases: nodeAliases.directory,
             heardEntries: heard + aliasEntries,

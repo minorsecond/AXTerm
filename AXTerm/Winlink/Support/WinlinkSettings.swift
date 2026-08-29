@@ -13,6 +13,7 @@ final class WinlinkSettings: ObservableObject {
     static let antennaHeightMetresKey = "stationAntennaHeightMetres"
     static let assumedRemoteHeightMetresKey = "stationAssumedRemoteHeightMetres"
     static let heightUnitIsFeetKey = "stationHeightUnitIsFeet"
+    static let distanceUnitIsMilesKey = "displayDistanceUnitIsMiles"
     static let shareStationActivityKey = "winlinkShareStationActivity"
     static let maxDistanceMilesKey = "winlinkMaxDistanceMiles"
     static let historyHoursKey = "winlinkHistoryHours"
@@ -95,6 +96,14 @@ final class WinlinkSettings: ObservableObject {
     /// their head is how a 40 ft mast gets entered as 40 m.
     @Published var heightUnitIsFeet: Bool {
         didSet { defaults.set(heightUnitIsFeet, forKey: Self.heightUnitIsFeetKey) }
+    }
+
+    /// Distances on maps, cards and coverage rings. Miles by default —
+    /// the app grew up on a US channel — but the directory reaches
+    /// operators who think in kilometres, and a unit is a preference,
+    /// not an assumption.
+    @Published var distanceUnitIsMiles: Bool {
+        didSet { defaults.set(distanceUnitIsMiles, forKey: Self.distanceUnitIsMilesKey) }
     }
 
     /// Publish what this station hears to the operator's other stations.
@@ -309,6 +318,7 @@ final class WinlinkSettings: ObservableObject {
             as? Double) ?? 10
         heightUnitIsFeet = (defaults.object(forKey: Self.heightUnitIsFeetKey)
             as? Bool) ?? true
+        distanceUnitIsMiles = defaults.object(forKey: Self.distanceUnitIsMilesKey) as? Bool ?? true
         shareStationActivity = defaults.bool(forKey: Self.shareStationActivityKey)
         maxDistanceMiles = defaults.object(forKey: Self.maxDistanceMilesKey) as? Int ?? Self.defaultMaxDistanceMiles
         historyHours = defaults.object(forKey: Self.historyHoursKey) as? Int ?? Self.defaultHistoryHours

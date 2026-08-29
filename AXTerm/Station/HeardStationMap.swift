@@ -305,7 +305,8 @@ nonisolated enum HeardStationMap {
     static func scope(observerLabel: String,
                       observer: GreatCircle.Point,
                       entries: [Entry],
-                      now: Date) -> StationScope {
+                      now: Date,
+                      distanceInMiles: Bool = true) -> StationScope {
         let positions = fannedPositions(entries)
         let shared = sharedPositionCounts(entries)
         return StationScope.build(
@@ -313,7 +314,8 @@ nonisolated enum HeardStationMap {
             observer: observer,
             entries: entries.compactMap { entry in
                 guard let position = positions[entry.callsign] else { return nil }
-                var text = detail(for: entry, observer: observer, now: now)
+                var text = detail(for: entry, observer: observer, now: now,
+                                  distanceInMiles: distanceInMiles)
                 if let others = shared[entry.callsign], others > 0 {
                     text += entry.isExactPosition
                         ? "\n\nShares an exact position with "
@@ -351,7 +353,8 @@ nonisolated enum HeardStationMap {
         return now.timeIntervalSince(lastHeard) > staleWindow
     }
 
-    static func detail(for entry: Entry, observer: GreatCircle.Point, now: Date) -> String {
+    static func detail(for entry: Entry, observer: GreatCircle.Point, now: Date,
+                       distanceInMiles: Bool = true) -> String {
         var lines = [entry.callsign]
         // A node wears two names and the operator needs both: the alias is
         // what the network answers to (`C INRMS` at a prompt), the
@@ -368,8 +371,9 @@ nonisolated enum HeardStationMap {
         if let position = entry.position {
             let kilometres = GreatCircle.kilometres(from: observer, to: position)
             let bearing = GreatCircle.bearingDegrees(from: observer, to: position)
-            lines.append(String(format: "%.0f mi at %.0f° (%@)",
-                                GreatCircle.miles(fromKilometres: kilometres),
+            lines.append(String(format: "%@ at %.0f° (%@)",
+                                DistanceDisplay.string(
+                                    kilometres: kilometres, inMiles: distanceInMiles),
                                 bearing, GreatCircle.compassPoint(bearing)))
         }
         lines.append("\(entry.heardCount) packet\(entry.heardCount == 1 ? "" : "s") heard")

@@ -242,4 +242,17 @@ final class NetRomRelayPlanTests: XCTestCase {
             for: "COSCO", claims: claims,
             canRouteNetRom: { $0 == "DRLNOD" ? false : nil }))
     }
+
+    /// The operator's airtime budget is a hard ceiling: with the cap at
+    /// two, a chain the tables could extend to four stops at two.
+    func testTheChainStopsAtTheOperatorsCap() {
+        let routes = ["D": "C", "C": "B", "B": "A"]
+        let plan = NetRomRelayPlan.plan(
+            destination: "D",
+            teller: nil,
+            routeLookup: { routes[$0] },
+            maxChainLength: 2)
+        XCTAssertEqual(plan.chain.count, 2,
+                       "the ladder respects the budget even when knowledge runs deeper")
+    }
 }

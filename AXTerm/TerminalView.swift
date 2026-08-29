@@ -2114,7 +2114,7 @@ struct TerminalView: View {
     /// the pre-connect preview walk this, so the path shown and the path
     /// driven are one computation (see NetRomRelayKnowledge).
     private var relayKnowledge: NetRomRelayKnowledge {
-        NetRomRelayKnowledge(
+        var knowledge = NetRomRelayKnowledge(
             freshRouteOrigin: { [weak client] in
                 client?.netRomIntegration?.bestRouteTo($0)?.origin
             },
@@ -2127,6 +2127,9 @@ struct TerminalView: View {
             tellerClaims: { nodeAliases.directory.tellerClaims(for: $0) },
             canRouteNetRom: { nodeCapabilities?.canRouteNetRom($0) ?? nil }
         )
+        // The operator's airtime budget bounds every walk this view does.
+        knowledge.maxChainLength = settings.autoRouteMaxChainLength
+        return knowledge
     }
 
     /// The chain a relay would walk to the destination in the bar, shown
@@ -2647,6 +2650,7 @@ struct TerminalView: View {
         let lines = displayedSessionLines
         ZStack {
             ConsoleView(
+                fontSize: settings.terminalFontSize,
                 lines: lines,
                 showDaySeparators: settings.showConsoleDaySeparators,
                 clearedAt: $settings.terminalClearedAt,
@@ -3650,7 +3654,8 @@ struct TerminalView: View {
             destination: intent.normalizedTo,
             teller: relayKnowledge.resolve(intent.normalizedTo)?.origin ?? nextHop,
             routeLookup: { relayKnowledge.routeLookup($0) },
-            aliasResolve: { relayKnowledge.aliasCallsign($0) }
+            aliasResolve: { relayKnowledge.aliasCallsign($0) },
+            maxChainLength: settings.autoRouteMaxChainLength
         )
         let linkTarget = plan.linkTarget
 
@@ -4100,7 +4105,8 @@ struct TerminalView: View {
             destination: intent.normalizedTo,
             teller: relayKnowledge.resolve(intent.normalizedTo)?.origin ?? nextHop,
             routeLookup: { relayKnowledge.routeLookup($0) },
-            aliasResolve: { relayKnowledge.aliasCallsign($0) }
+            aliasResolve: { relayKnowledge.aliasCallsign($0) },
+            maxChainLength: settings.autoRouteMaxChainLength
         )
         client.appendSystemNotification(plan.operatorSummary)
 

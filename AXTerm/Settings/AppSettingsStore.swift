@@ -86,6 +86,8 @@ final class AppSettingsStore: ObservableObject {
 
     // Beacon: what this station says about itself, unprompted.
     static let beaconEnabledKey = "beaconEnabled"
+    static let autoRouteMaxChainLengthKey = "autoRouteMaxChainLength"
+    static let terminalFontSizeKey = "terminalFontSize"
     static let beaconTextKey = "beaconText"
     static let beaconMinutesKey = "beaconMinutes"
     static let beaconPathKey = "beaconPath"
@@ -606,6 +608,28 @@ final class AppSettingsStore: ObservableObject {
         didSet { defaults.set(beaconEnabled, forKey: Self.beaconEnabledKey) }
     }
 
+    /// How many nodes the Auto ladder may chain through. An operator's
+    /// airtime judgment, not ours: a four-hop prompt relay can hold the
+    /// channel for minutes, and courtesy differs by channel.
+    @Published var autoRouteMaxChainLength: Int {
+        didSet {
+            let clamped = min(6, max(1, autoRouteMaxChainLength))
+            if clamped != autoRouteMaxChainLength { autoRouteMaxChainLength = clamped; return }
+            defaults.set(autoRouteMaxChainLength, forKey: Self.autoRouteMaxChainLengthKey)
+        }
+    }
+
+    /// Terminal console text size. A packet terminal is stared at for
+    /// hours, in the field, at 2 AM — eleven points is not everyone's
+    /// eleven points.
+    @Published var terminalFontSize: Double {
+        didSet {
+            let clamped = min(18, max(9, terminalFontSize))
+            if clamped != terminalFontSize { terminalFontSize = clamped; return }
+            defaults.set(terminalFontSize, forKey: Self.terminalFontSizeKey)
+        }
+    }
+
     /// What the beacon says. The operator's own words, sent under their
     /// callsign — nothing here writes it for them.
     @Published var beaconText: String {
@@ -1041,6 +1065,8 @@ final class AppSettingsStore: ObservableObject {
         let storedNetRomNodeAlias = defaults.string(forKey: Self.netRomNodeAliasKey) ?? ""
         let storedNetRomBroadcastMinutes = defaults.object(forKey: Self.netRomBroadcastMinutesKey) as? Int ?? Self.defaultNetRomBroadcastMinutes
         let storedBeaconEnabled = defaults.object(forKey: Self.beaconEnabledKey) as? Bool ?? Self.defaultBeaconEnabled
+        autoRouteMaxChainLength = defaults.object(forKey: Self.autoRouteMaxChainLengthKey) as? Int ?? 4
+        terminalFontSize = defaults.object(forKey: Self.terminalFontSizeKey) as? Double ?? 11
         let storedBeaconText = defaults.string(forKey: Self.beaconTextKey) ?? ""
         let storedBeaconMinutes = defaults.object(forKey: Self.beaconMinutesKey) as? Int ?? Self.defaultBeaconMinutes
         let storedBeaconPath = defaults.string(forKey: Self.beaconPathKey) ?? ""

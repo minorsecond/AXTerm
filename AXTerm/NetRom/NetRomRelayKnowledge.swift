@@ -98,6 +98,11 @@ struct NetRomRelayKnowledge {
     /// The chain a node-prompt relay would walk to `destination`, each hop
     /// carrying the evidence that put it there. Empty when nothing is known
     /// about the destination — which is itself the honest preview.
+    /// How far the walk may chain. Defaults to the planner's own cap;
+    /// builders set it from the operator's setting so the preview, the
+    /// profile chain and the dial all obey the same budget.
+    var maxChainLength: Int = NetRomRelayPlan.maxChainLength
+
     func plannedPath(to destination: String) -> [PlannedRelayHop] {
         let target = destination.trimmingCharacters(in: .whitespaces).uppercased()
         guard !target.isEmpty, let seed = resolve(target) else { return [] }
@@ -110,7 +115,8 @@ struct NetRomRelayKnowledge {
                 evidence[hit.origin.uppercased()] = hit.evidence
                 return hit.origin
             },
-            aliasResolve: aliasCallsign)
+            aliasResolve: aliasCallsign,
+            maxChainLength: maxChainLength)
         return plan.chain.map { name in
             PlannedRelayHop(
                 name: name,

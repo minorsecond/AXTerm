@@ -76,7 +76,8 @@ struct SettingsView: View {
     private var detail: some View {
         switch router.selectedTab {
         case .general:
-            GeneralSettingsView(settings: settings, client: client)
+            GeneralSettingsView(settings: settings, client: client,
+                                winlinkSettings: winlinkSettings)
         case .notifications:
             NotificationSettingsView(settings: settings, notificationManager: notificationManager)
         case .network:

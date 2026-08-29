@@ -14,6 +14,11 @@ import ServiceManagement
 struct GeneralSettingsView: View {
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var client: PacketEngine
+    /// Unit and online-lookup choices live on the Winlink store for
+    /// historical reasons (same keys, no migration) but they are
+    /// app-wide behaviour, so their controls live here. Nil hides them —
+    /// the caller that cannot supply the store keeps the old page.
+    var winlinkSettings: WinlinkSettings?
     @EnvironmentObject var router: SettingsRouter
 
     @State private var launchAtLoginFeedback: String?
@@ -49,6 +54,34 @@ struct GeneralSettingsView: View {
 
                 Toggle("Show day separators in Console", isOn: $settings.showConsoleDaySeparators)
                 Toggle("Show day separators in Raw Data", isOn: $settings.showRawDaySeparators)
+
+                if let winlink = winlinkSettings {
+                    unitsControls(winlink)
+                }
+
+                Stepper(value: $settings.terminalFontSize, in: 9...18, step: 1) {
+                    HStack {
+                        Text("Terminal text size")
+                        Spacer()
+                        Text("\(Int(settings.terminalFontSize)) pt")
+                            .foregroundStyle(.secondary)
+                            .font(.system(size: settings.terminalFontSize,
+                                          design: .monospaced))
+                    }
+                }
+                .help("Console text in the Terminal. The sample shows the "
+                      + "size you are choosing.")
+            }
+
+            // App-wide network behaviour, surfaced where a non-Winlink
+            // operator will actually find it — this one toggle gates the
+            // map's position lookups and the node directory's, not just
+            // Winlink's (field ask 2026-08-29: "winlink settings contained
+            // settings that were more general").
+            if let winlink = winlinkSettings {
+                PreferencesSection("Online") {
+                    OnlineLookupToggle(settings: winlink)
+                }
             }
             
             PreferencesSection("System") {
@@ -90,6 +123,28 @@ struct GeneralSettingsView: View {
     /// launched by the operator or by a notification, never at boot. The
     /// control that calls this is hidden on iOS rather than being shown and
     /// doing nothing.
+    @ViewBuilder
+    private func unitsControls(_ winlink: WinlinkSettings) -> some View {
+        Picker("Distances", selection: Binding(
+            get: { winlink.distanceUnitIsMiles },
+            set: { winlink.distanceUnitIsMiles = $0 })) {
+            Text("Miles").tag(true)
+            Text("Kilometres").tag(false)
+        }
+        .help("Coverage rings, map cards, profiles and range labels. "
+              + "Values are measured in kilometres and converted for "
+              + "display, so switching loses nothing.")
+
+        Picker("Heights", selection: Binding(
+            get: { winlink.heightUnitIsFeet },
+            set: { winlink.heightUnitIsFeet = $0 })) {
+            Text("Feet").tag(true)
+            Text("Metres").tag(false)
+        }
+        .help("Antenna heights on station pages and in terrain forecasts. "
+              + "Stored in metres; entered and read back in your unit.")
+    }
+
     private func updateLaunchAtLogin(enabled: Bool) {
         #if os(macOS)
         launchAtLoginFeedback = nil
@@ -106,5 +161,28 @@ struct GeneralSettingsView: View {
             }
         }
         #endif
+    }
+}
+
+/// The one switch that causes background internet traffic, with the
+/// disclosure spelled out. Bound to the live Winlink store so the
+/// map's auto-lookup reacts immediately.
+private struct OnlineLookupToggle: View {
+    @ObservedObject var settings: WinlinkSettings
+
+    var body: some View {
+        Toggle("Look up callsigns online", isOn: $settings.callsignLookupEnabled)
+            .help("Resolves heard and claimed callsigns to a name and "
+                  + "location via hamdb.org so they can be placed on the "
+                  + "map \u{2014} this gates the map's automatic lookups and "
+                  + "the node directory's, not just Winlink. Answers are "
+                  + "cached permanently and stay usable offline.\n\nOff by "
+                  + "default: a lookup tells a third party which stations "
+                  + "you are hearing. Public licence data, but still a "
+                  + "disclosure.")
+        Text("Gates every automatic position lookup in the app \u{2014} the "
+             + "map, the node directory and Winlink alike.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 }

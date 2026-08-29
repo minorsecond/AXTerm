@@ -36,17 +36,19 @@ nonisolated enum CoverageEstimate {
         var farthestCallsign: String
 
         /// Tooltip prose: what the rings mean and where they came from.
-        var summary: String {
-            let reachMiles = GreatCircle.miles(fromKilometres: reachKm)
-            let typicalMiles = GreatCircle.miles(fromKilometres: typicalKm)
+        var summary: String { summary(inMiles: true) }
+
+        func summary(inMiles: Bool) -> String {
+            let reach = DistanceDisplay.string(kilometres: reachKm, inMiles: inMiles)
+            let typical = DistanceDisplay.string(kilometres: typicalKm, inMiles: inMiles)
             return String(
                 format: "Estimated coverage, measured from the %d station%@ that "
                 + "answered this station directly (a UA, DM or FRMR to our frames "
                 + "proves they decoded us). Inner ring: half of them are within "
-                + "%.0f mi. Outer ring: the farthest answer came from %@ at %.0f mi. "
+                + "%@. Outer ring: the farthest answer came from %@ at %@. "
                 + "Measurements, not a propagation model — terrain will bend both.",
                 stationCount, stationCount == 1 ? "" : "s",
-                typicalMiles, farthestCallsign, reachMiles)
+                typical, farthestCallsign, reach)
         }
     }
 

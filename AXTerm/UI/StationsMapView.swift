@@ -462,7 +462,8 @@ struct StationsMapView: View {
         guard let observer else { return StationScope.build(observerLabel: "", sites: []) }
         return HeardStationMap.scope(
             observerLabel: observerGrid.uppercased(),
-            observer: observer, entries: visibleEntries, now: Date())
+            observer: observer, entries: visibleEntries, now: Date(),
+            distanceInMiles: settings.distanceUnitIsMiles)
     }
 
     /// The same positions the scope uses, fanned so stations sharing a
@@ -878,14 +879,16 @@ struct StationsMapView: View {
             } else if modeRaw == "Map" {
                 mapWithDrawing(observer: observer)
             } else {
-                StationScopeView(scope: scope, selection: $selection, legend: .recency)
+                StationScopeView(scope: scope, selection: $selection, legend: .recency,
+                                 distanceInMiles: settings.distanceUnitIsMiles)
             }
         }
     }
 
     private func mapWithDrawing(observer: GreatCircle.Point) -> some View {
         ZStack(alignment: .top) {
-            StationMapView(scope: scope, observer: observer,
+            StationMapView(scope: scope, distanceInMiles: settings.distanceUnitIsMiles,
+                           observer: observer,
                                coordinates: coordinates,
                                observerCallsign: myCallsign,
                                basemap: basemap, legend: .recency,
@@ -1090,7 +1093,8 @@ struct StationsMapView: View {
         .help(HeardStationMap.detail(
             for: entry,
             observer: observer ?? .init(latitude: 0, longitude: 0),
-            now: Date()))
+            now: Date(),
+            distanceInMiles: settings.distanceUnitIsMiles))
     }
 
     // MARK: - Actions

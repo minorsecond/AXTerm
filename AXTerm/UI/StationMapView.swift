@@ -14,6 +14,8 @@ import MapKit
 struct StationMapView: View {
 
     let scope: StationScope
+    /// Distances read in the operator's unit; miles when unset.
+    var distanceInMiles: Bool = true
     /// Needed to place markers — the scope model carries range and
     /// bearing, but a map wants coordinates.
     let observer: GreatCircle.Point
@@ -192,15 +194,15 @@ struct StationMapView: View {
     @ViewBuilder
     private var coverageChip: some View {
         if let coverage {
-            Label(String(format: "Coverage ~%.0f mi",
-                         GreatCircle.miles(fromKilometres: coverage.reachKm)),
+            Label("Coverage ~" + DistanceDisplay.string(
+                    kilometres: coverage.reachKm, inMiles: distanceInMiles),
                   systemImage: "dot.radiowaves.left.and.right")
                 .font(.caption)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(.regularMaterial, in: Capsule())
                 .padding(8)
-                .help(coverage.summary)
+                .help(coverage.summary(inMiles: distanceInMiles))
                 .accessibilityLabel(coverage.summary)
         }
     }

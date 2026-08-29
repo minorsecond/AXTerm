@@ -48,6 +48,9 @@ struct NodeProfileView: View {
     /// Mirrors the settings choice so a height typed on a station page reads
     /// back in the same unit everywhere else.
     @AppStorage(WinlinkSettings.heightUnitIsFeetKey) private var heightUnitIsFeet = true
+    /// Same pattern for distances — the AppStorage mirror keeps the page
+    /// in the operator's unit without threading a settings object in.
+    @AppStorage(WinlinkSettings.distanceUnitIsMilesKey) private var distanceUnitIsMiles = true
     var presentation: Presentation = .page
     /// Offered only in the sheet, and only when there is somewhere to go.
     var onOpenFullPage: (() -> Void)?
@@ -545,8 +548,10 @@ struct NodeProfileView: View {
                 .map { " \u{00B7} " + GreatCircle.compassPoint($0) } ?? ""
             tiles.append(StatTile(
                 id: "distance", label: "Distance",
-                value: String(format: "%.1f mi", GreatCircle.miles(fromKilometres: km)),
-                detail: String(format: "%.0f km%@", km, compass),
+                value: DistanceDisplay.string(
+                    kilometres: km, inMiles: distanceUnitIsMiles, format: "%.1f"),
+                detail: DistanceDisplay.string(
+                    kilometres: km, inMiles: !distanceUnitIsMiles) + compass,
                 symbol: "location.north.line", tint: .purple))
         }
         if let quality = headlineQuality {

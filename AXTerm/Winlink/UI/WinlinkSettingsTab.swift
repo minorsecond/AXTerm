@@ -63,8 +63,16 @@ struct WinlinkSettingsTab: View {
             }
 
             Section("Callsign directory") {
-                Toggle("Look up callsigns online", isOn: $settings.callsignLookupEnabled)
-                    .help("Resolves heard callsigns to a name and location via hamdb.org so they can be placed on the map. Answers are cached permanently and stay usable offline \u{2014} so this is worth turning on while you have a path, even if you will not have one later.\n\nOff by default: a lookup tells a third party which stations you are hearing. That is public licence data, but it is still a disclosure.")
+                // The control moved to General → Online: it gates the
+                // map's and node directory's lookups too, and a
+                // non-Winlink operator was never going to find it here.
+                LabeledContent("Online callsign lookups") {
+                    Text(settings.callsignLookupEnabled ? "On" : "Off")
+                        .foregroundStyle(.secondary)
+                }
+                Text("Controlled in General settings — it gates every automatic position lookup in the app, not just Winlink\u{2019}s.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Unified mailbox") {

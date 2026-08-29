@@ -71,6 +71,9 @@ final class NodeProfileCoordinator: ObservableObject {
 @MainActor
 struct NodeProfileResolver {
 
+    /// The operator's chain budget — see NodeProfileCoordinator.maxChainLength.
+    var maxChainLength: Int = NetRomRelayPlan.maxChainLength
+
     var localCallsign: String = ""
     var aliases: NodeAliasDirectory = NodeAliasDirectory()
     var heardEntries: [HeardStationMap.Entry] = []
@@ -165,12 +168,13 @@ struct NodeProfileResolver {
             let capabilityDirectory = capabilities
             // The resolver's snapshot routes are already TTL-free, so they
             // stand in for both freshness tiers of the shared walk.
-            let knowledge = NetRomRelayKnowledge(
+            var knowledge = NetRomRelayKnowledge(
                 freshRouteOrigin: { routesByDestination[$0.uppercased()] },
                 anyRouteOrigin: { _ in nil },
                 aliasCallsign: { aliasDirectory.callsign(for: $0) },
                 tellerClaims: { aliasDirectory.tellerClaims(for: $0) },
                 canRouteNetRom: { capabilityDirectory.canRouteNetRom($0) })
+            knowledge.maxChainLength = maxChainLength
             // Seeded by the walk's own resolution, never by the newest
             // teller. Field capture 2026-08-29 05:07: one `N` at SOLBPQ
             // made it the freshest teller for its whole 233-entry table,

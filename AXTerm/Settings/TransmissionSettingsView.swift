@@ -282,6 +282,22 @@ struct TransmissionSettingsView: View {
             }
 
             PreferencesSection("NET/ROM Node", id: .netRomNode) {
+                Stepper(value: $settings.autoRouteMaxChainLength, in: 1...6) {
+                    HStack {
+                        Text("Auto-routing may chain up to")
+                        Spacer()
+                        Text("\(settings.autoRouteMaxChainLength) node"
+                             + "\(settings.autoRouteMaxChainLength == 1 ? "" : "s")")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .help("The airtime budget for the Auto ladder\u{2019}s node-prompt "
+                      + "relays. Each hop is a full connected-mode leg the "
+                      + "whole channel shares — four hops can hold the "
+                      + "frequency for minutes. The pre-connect preview, the "
+                      + "profile page\u{2019}s planned path and the dial all obey "
+                      + "the same cap.")
+
                 Text("AXTerm always listens to NET/ROM and learns routes from what it hears. "
                      + "These switches decide whether it also speaks — both change what other "
                      + "operators' nodes do, so both start off.")
