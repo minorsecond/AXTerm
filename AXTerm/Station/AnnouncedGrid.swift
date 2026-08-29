@@ -69,7 +69,7 @@ final class AnnouncedGridStore: ObservableObject {
     private static let defaultsKey = "station.announcedGrids"
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = AppEnvironment.defaults) {
         self.defaults = defaults
         if let data = defaults.data(forKey: Self.defaultsKey),
            let stored = try? JSONDecoder().decode([String: Announcement].self, from: data) {

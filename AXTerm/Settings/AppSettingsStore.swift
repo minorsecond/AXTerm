@@ -999,7 +999,7 @@ final class AppSettingsStore: ObservableObject {
 
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = AppEnvironment.defaults) {
         self.defaults = defaults
         Self.registerDefaultsIfNeeded(on: defaults)
         let storedHost = defaults.string(forKey: Self.hostKey) ?? Self.defaultHost

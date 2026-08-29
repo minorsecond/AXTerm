@@ -234,7 +234,7 @@ final class LiveIdentityStore: WinlinkIdentitySyncSource.Store {
     private static let stampKey = "identity.updatedAt"
 
     init(settings: AppSettingsStore, profile: StationProfile,
-         defaults: UserDefaults = .standard) {
+         defaults: UserDefaults = AppEnvironment.defaults) {
         self.settings = settings
         self.profile = profile
         self.defaults = defaults

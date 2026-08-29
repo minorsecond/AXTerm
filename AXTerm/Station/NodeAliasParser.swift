@@ -623,7 +623,7 @@ final class NodeAliasStore: ObservableObject {
     private let defaults: UserDefaults
     private let key = "station.nodeAliases"
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = AppEnvironment.defaults) {
         self.defaults = defaults
         load()
     }

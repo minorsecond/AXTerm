@@ -115,7 +115,7 @@ final class DestinationPickerViewModel: ObservableObject {
     /// where isolated deallocating deinit triggers task-local scope corruption.
     nonisolated deinit {}
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = AppEnvironment.defaults) {
         self.defaults = defaults
         loadPersistedFavorites()
         loadPersistedAliasEvidence()

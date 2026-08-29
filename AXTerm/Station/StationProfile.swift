@@ -36,7 +36,7 @@ final class StationProfile: ObservableObject {
 
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = AppEnvironment.defaults) {
         self.defaults = defaults
         realName = defaults.string(forKey: Self.realNameKey) ?? ""
         positionTitle = defaults.string(forKey: Self.positionTitleKey) ?? ""

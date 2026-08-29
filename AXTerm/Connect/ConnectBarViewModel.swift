@@ -77,7 +77,7 @@ final class ConnectBarViewModel: ObservableObject {
     // The deinit touches no isolated state, so opt it out.
     nonisolated deinit {}
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = AppEnvironment.defaults) {
         self.defaults = defaults
         self.barState = .disconnectedDraft(.empty())
         loadPersistence()

@@ -80,7 +80,12 @@ final class WinlinkContext: ObservableObject {
         // AppSettingsStore and StationProfile, not the mailbox — so the sync
         // engine is handed a way to reach them. Without it a second device
         // asks for a callsign it could have inherited.
-        self.sync = WinlinkSyncController.cloudKit(
+        // No CloudKit under test mode. An isolated instance (the docker
+        // rig) must never reach the operator's iCloud — UserDefaults and
+        // the database can be redirected, but a shared cloud account
+        // cannot, so sync is simply absent. (Found the hard way: a first
+        // rig launch ran one sync pass before this guard existed.)
+        self.sync = AppEnvironment.isTestMode ? nil : WinlinkSyncController.cloudKit(
             store: store as? WinlinkSyncStore,
             identityStore: appSettings.map {
                 LiveIdentityStore(settings: $0, profile: resolvedProfile)

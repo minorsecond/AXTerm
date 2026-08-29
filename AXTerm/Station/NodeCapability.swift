@@ -345,7 +345,7 @@ final class NodeCapabilityStore: ObservableObject {
     private let defaults: UserDefaults
     private let key = "station.nodeCapabilities"
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = AppEnvironment.defaults) {
         self.defaults = defaults
         load()
         loadBorrowedLegs()

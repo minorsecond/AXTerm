@@ -39,7 +39,7 @@ nonisolated enum TimeDisplay {
 
     static let formatKey = "display.timeFormat"
 
-    static func format(from defaults: UserDefaults = .standard) -> TimeDisplayFormat {
+    static func format(from defaults: UserDefaults = AppEnvironment.defaults) -> TimeDisplayFormat {
         defaults.string(forKey: formatKey).flatMap(TimeDisplayFormat.init) ?? .system
     }
 

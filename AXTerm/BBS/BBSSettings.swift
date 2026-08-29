@@ -101,7 +101,7 @@ final class BBSSettings: ObservableObject {
         didSet { defaults.set(uploadQuotaBytes, forKey: Self.uploadQuotaBytesKey) }
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = AppEnvironment.defaults) {
         self.defaults = defaults
         self.onAir = defaults.bool(forKey: Self.onAirKey)
         self.callsign = defaults.string(forKey: Self.callsignKey) ?? ""

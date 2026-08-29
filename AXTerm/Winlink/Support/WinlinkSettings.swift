@@ -303,7 +303,7 @@ final class WinlinkSettings: ObservableObject {
 
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard, keychain: KeychainStore = KeychainStore()) {
+    init(defaults: UserDefaults = AppEnvironment.defaults, keychain: KeychainStore = KeychainStore()) {
         self.defaults = defaults
         self.keychain = keychain
 

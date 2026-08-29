@@ -44,7 +44,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     init(client: PacketEngine,
          settings: AppSettingsStore,
          inspectionRouter: PacketInspectionRouter,
-         defaults: UserDefaults = .standard) {
+         defaults: UserDefaults = AppEnvironment.defaults) {
         self.client = client
         self.settings = settings
         self.inspectionRouter = inspectionRouter

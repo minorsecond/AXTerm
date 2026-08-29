@@ -64,7 +64,7 @@ nonisolated enum WinlinkSyncDevice {
 
     static let defaultsKey = "winlink.sync.deviceID"
 
-    static func identifier(defaults: UserDefaults = .standard) -> String {
+    static func identifier(defaults: UserDefaults = AppEnvironment.defaults) -> String {
         if let existing = defaults.string(forKey: defaultsKey), !existing.isEmpty {
             return existing
         }

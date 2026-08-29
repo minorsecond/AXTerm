@@ -42,7 +42,7 @@ nonisolated struct XIDAnswerMemory {
 
     private var unsupported: [String: Date]
 
-    init(defaults: UserDefaults = .standard, now: Date = Date()) {
+    init(defaults: UserDefaults = AppEnvironment.defaults, now: Date = Date()) {
         self.defaults = defaults
         if let data = defaults.data(forKey: Self.key),
            let stored = try? JSONDecoder().decode([String: Date].self, from: data) {

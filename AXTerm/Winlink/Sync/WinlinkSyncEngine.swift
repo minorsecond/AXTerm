@@ -158,7 +158,7 @@ nonisolated struct WinlinkDefaultsTokenStore: WinlinkSyncTokenStore {
     let defaults: UserDefaults
     let key: String
 
-    init(defaults: UserDefaults = .standard, key: String = "winlink.sync.token") {
+    init(defaults: UserDefaults = AppEnvironment.defaults, key: String = "winlink.sync.token") {
         self.defaults = defaults
         self.key = key
     }

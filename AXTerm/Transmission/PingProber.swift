@@ -101,7 +101,7 @@ nonisolated final class PingProber: ObservableObject {
     private let defaults: UserDefaults
     private static let storageKey = "ping.records"
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = AppEnvironment.defaults) {
         self.defaults = defaults
         if let data = defaults.data(forKey: Self.storageKey),
            let stored = try? JSONDecoder().decode([String: Record].self, from: data) {

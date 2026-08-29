@@ -159,6 +159,10 @@ struct AXTermApp: App {
                     .frame(width: 200, height: 40)
             } else {
                 ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter, winlinkContext: winlinkContext, bbsSettings: bbsSettings)
+                    // @AppStorage follows the isolated suite under test
+                    // mode; in production this is .standard, so it is a
+                    // no-op. Belt-and-suspenders with AppEnvironment.defaults.
+                    .defaultAppStorage(AppEnvironment.defaults)
                     // Launch and every return to the foreground: pull whatever
                     // the operator's other devices did while this one was away.
                     .task { winlinkContext.appBecameActive() }
