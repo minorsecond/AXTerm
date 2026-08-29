@@ -70,3 +70,35 @@ everything above the modem, which is everything AXTerm implements.
 - `scripts/smoke.py` is the rig's own regression test: NODES heard,
   SABM answered, CTEXT received. If it passes and AXTerm misbehaves,
   the bug is AXTerm's.
+
+## Chaos tools
+
+The rig can be turned hostile — for testing how AXTerm behaves when the
+channel, the neighbours, and the digipeaters are all against it.
+
+```bash
+# Hostile frames: malformed, truncated, oversized, wrong-PID, digi-path
+# storms, KISS-escape abuse. A station hears garbage on a shared
+# frequency; it must shrug it off.
+python3 scripts/fuzz_channel.py --seconds 120 --rate 25
+
+# A digipeater that misbehaves every documented way — pick your poison:
+python3 scripts/bad_digipeater.py --alias RELAY --dupe 0.3       # stuck PTT
+python3 scripts/bad_digipeater.py --alias RELAY --delay 300      # slow S&F
+python3 scripts/bad_digipeater.py --alias RELAY --corrupt 0.2    # marginal copy
+python3 scripts/bad_digipeater.py --alias RELAY --drop 0.4       # deaf on TX
+python3 scripts/bad_digipeater.py --alias RELAY --reorder        # batching digi
+python3 scripts/bad_digipeater.py --alias RELAY --no-hbit        # LOOP flooder
+
+# Everything at once — rough channel + fuzzer + bad digi for two minutes.
+scripts/chaos.sh
+```
+
+Connect AXTerm to a destination `VIA RELAY` while `bad_digipeater.py`
+runs to see how retries survive duplicates, delays and corruption. Both
+fuzzers are seeded and print their seed, so any fault reproduces.
+
+These live tools are the sibling of the deterministic Swift fuzz suite
+(`NodeSurfaceFuzzTests`, `AX25FuzzTests`, `AX25SessionFuzzTests`): the
+Swift ones gate every build; these prove the whole app survives the
+same abuse as a running process.
