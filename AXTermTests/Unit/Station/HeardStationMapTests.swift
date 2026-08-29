@@ -477,6 +477,21 @@ final class HeardStationMapTests: XCTestCase {
             stations: []).isEmpty)
     }
 
+    /// ZIABBS resolves to K0ZIA-1 while the heard station is K0ZIA-14 —
+    /// sibling SSIDs of one box (field capture 2026-08-29 05:24). A heard
+    /// station under *any* SSID of a base owns that box's marker.
+    func testDirectoryLayerSkipsSiblingSSIDsOfHeardStations() {
+        var aliases = NodeAliasDirectory()
+        aliases.record(.init(alias: "ZIABBS", callsign: "K0ZIA-1", service: "N"), at: now)
+        XCTAssertTrue(HeardStationMap.directoryNodeEntries(
+            aliases: aliases,
+            alreadyShown: [],
+            shownCallsigns: ["K0ZIA-14"],
+            directory: ["K0ZIA": record("K0ZIA", latitude: 38.9, longitude: -104.7)],
+            announcedGrids: [:],
+            stations: []).isEmpty)
+    }
+
     /// The ZI* family: four aliases resolving to four SSIDs of K0ZIA —
     /// one box whose services live on different SSIDs, which drew four
     /// diamonds at one address (field capture 2026-08-29 05:16). Grouped

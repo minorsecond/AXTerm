@@ -467,14 +467,19 @@ nonisolated enum HeardStationMap {
                                      stations: [Station],
                                      excluding ownCallsign: String = "") -> [Entry] {
         let own = CallsignQuery.normalize(ownCallsign)
+        let shownBases = Set(shownCallsigns.map(CallsignQuery.normalize))
         let all = Set(aliases.allEntries.map { $0.alias.uppercased() })
         let candidates = all.subtracting(alreadyShown).filter { name in
-            // An alias whose station is already on the map under its
-            // callsign is the same box wearing another hat: YZBBPQ drawn
-            // beside the heard KB5YZB-7 read as two stations (field
-            // capture 2026-08-29 04:55).
+            // An alias of a station already on the map — under *any* SSID
+            // of the same base — is the same box wearing another hat.
+            // YZBBPQ beside the heard KB5YZB-7 read as two stations
+            // (2026-08-29 04:55), and ZIABBS (→ K0ZIA-1) still stood
+            // beside the heard K0ZIA-14 after full-callsign matching
+            // (05:24): a node's services live on sibling SSIDs of one
+            // box, so the heard station owns the marker and this layer
+            // draws only stations never heard at all.
             if let call = aliases.callsign(for: name),
-               shownCallsigns.contains(call.uppercased()) { return false }
+               shownBases.contains(CallsignQuery.normalize(call)) { return false }
             guard !own.isEmpty else { return true }
             // Our own node alias resolves to our own callsign — the centre
             // marker already is this station.

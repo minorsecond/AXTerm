@@ -443,6 +443,23 @@ struct ContentView: View {
             guard let packetID = inspectionRouter.requestedPacketID else { return }
             await openInspectorFromRouterRequest(packetID: packetID)
         }
+        // Positions arrive when stations do, not when the operator happens
+        // to open the Map (field ask 2026-08-29 05:24 — the auto-lookup
+        // lived on the map view, so a station heard while on Terminal
+        // stayed unplaced until someone visited a map). Keyed on the set
+        // of heard callsigns: each new station triggers one pass, the
+        // service's own attempted-set means at most one network try per
+        // callsign per launch, and the whole thing is inert unless the
+        // operator opted in to online lookups.
+        .task(id: stationLookupKey) {
+            guard winlinkContext.settings.callsignLookupEnabled else { return }
+            callsignLookup.isNetworkEnabled = true
+            let unknown = Set(client.stations.map { CallsignQuery.normalize($0.call) })
+                .filter { CallsignQuery.isPlausible($0) && callsignLookup.cached($0) == nil }
+                .sorted()
+            guard !unknown.isEmpty else { return }
+            await callsignLookup.resolveAll(unknown)
+        }
         .focusedValue(\.searchFocus, SearchFocusAction { isSearchFocused = true })
         .focusedValue(\.toggleConnection, ToggleConnectionAction { toggleConnection() })
         .focusedValue(\.inspectPacket, InspectPacketAction { inspectSelectedPacket() })
@@ -750,6 +767,19 @@ struct ContentView: View {
     /// Distinct destinations, not the sum of the group counts — the groups
     /// overlap, and adding them up would count a station once per node that
     /// carries it.
+    /// Changes when a station is heard for the first time (or the lookup
+    /// opt-in flips), and not on every packet.
+    private struct StationLookupKey: Hashable {
+        let enabled: Bool
+        let calls: [String]
+    }
+
+    private var stationLookupKey: StationLookupKey {
+        StationLookupKey(
+            enabled: winlinkContext.settings.callsignLookupEnabled,
+            calls: Set(client.stations.map { CallsignQuery.normalize($0.call) }).sorted())
+    }
+
     private var reachableCount: Int {
         Set(nodeAliases.directory.allEntries
             .filter { !$0.reachableVia.isEmpty }
