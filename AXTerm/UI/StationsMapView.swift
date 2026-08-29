@@ -237,7 +237,10 @@ struct StationsMapView: View {
         Maidenhead.center(of: observerGrid).map(GreatCircle.Point.init)
     }
 
-    private var entries: [HeardStationMap.Entry] {
+    /// Stations the radio has actually met: heard stations plus the
+    /// via-path aliases. These are the entries the *analysis* layers
+    /// (paths, terrain, coverage) are allowed to see.
+    private var coreEntries: [HeardStationMap.Entry] {
         let heard = HeardStationMap.entries(
             stations: stations,
             directory: lookup.records,
@@ -253,19 +256,6 @@ struct StationsMapView: View {
             directory: lookup.records,
             stations: stations)
         guard showsDirectoryNodes else { return heard + nodes }
-        // The rest of the node directory — placeable entries only, no
-        // lookups triggered, names already on the map left to the layers
-        // that know more about them.
-        let shown = Set((heard + nodes).map { $0.callsign.uppercased() })
-            .union(stations.map { $0.call.uppercased() })
-        let directoryNodes = HeardStationMap.directoryNodeEntries(
-            aliases: aliases.directory,
-            alreadyShown: shown,
-            shownCallsigns: shown,
-            directory: lookup.records,
-            announcedGrids: announcedGrids,
-            stations: stations,
-            excluding: myCallsign)
         // A heard station that IS a node says so, instead of the fold
         // being silent: the ZI* diamonds vanish because K0ZIA-14's dot
         // owns the box — so the dot's detail must carry the node names.
@@ -280,7 +270,28 @@ struct StationsMapView: View {
             entry.name = entry.name.map { "\($0) · \(badge)" } ?? badge
             return entry
         }
-        return annotated + nodes + directoryNodes
+        return annotated + nodes
+    }
+
+    /// The rest of the node directory — placeable entries only, drawn
+    /// but deliberately invisible to the analysis layers.
+    private func directoryEntries(core: [HeardStationMap.Entry]) -> [HeardStationMap.Entry] {
+        guard showsDirectoryNodes else { return [] }
+        let shown = Set(core.map { $0.callsign.uppercased() })
+            .union(stations.map { $0.call.uppercased() })
+        return HeardStationMap.directoryNodeEntries(
+            aliases: aliases.directory,
+            alreadyShown: shown,
+            shownCallsigns: shown,
+            directory: lookup.records,
+            announcedGrids: announcedGrids,
+            stations: stations,
+            excluding: myCallsign)
+    }
+
+    private var entries: [HeardStationMap.Entry] {
+        let core = coreEntries
+        return core + directoryEntries(core: core)
     }
 
     /// How many heard stations carry folded-in node identities.
@@ -346,9 +357,22 @@ struct StationsMapView: View {
     }
 
     /// Positions for everything the graph might mention, us included.
+    ///
+    /// Built from `coreEntries`, never the directory layer: a directory
+    /// placement is an operator's licence address, not a station at a
+    /// radio, so terrain forecasts and path links over it would be
+    /// analysing a mailing address (the same reason camera framing skips
+    /// node sites). This is also what keeps the map responsive — these
+    /// keys feed `insightKey`, and when every trickled-in directory
+    /// position changed it, each one re-fired the full graph-and-terrain
+    /// pass and the main thread never drained (field capture 2026-08-29
+    /// 05:59: opening the map froze the app while lookups landed).
     private var networkPositions: [String: GreatCircle.Point] {
         var positions: [String: GreatCircle.Point] = [:]
-        for entry in placed {
+        let core = hidesDistantStations
+            ? StationPlausibility.partition(coreEntries, observer: observer).shown
+            : coreEntries
+        for entry in core where entry.isPlaced {
             positions[entry.callsign.uppercased()] = entry.position
         }
         if let observer, !myCallsign.isEmpty {
@@ -364,12 +388,34 @@ struct StationsMapView: View {
     /// transitive inferences are derived *after* the merge, so a digipeater
     /// heard last week can still imply a path today.
     private var networkPaths: [NetworkPath] {
-        let live = NetworkPathObserver.paths(in: recentPackets, localCallsign: myCallsign)
-        let remembered = (try? pathStore?.paths(
-            since: Date().addingTimeInterval(-SQLiteNetworkPathStore.retention))) ?? []
-        let observed = NetworkPath.merging(live + remembered)
-        return observed + NetworkPathObserver.transitivePaths(from: observed)
+        // Assembled at most once per 15 seconds, NOT per body evaluation.
+        // The full assembly is a store read of every remembered path plus
+        // a transitive closure — fine when bodies were rare, fatal once
+        // the directory trickle started publishing a position every
+        // couple of seconds: each publish re-evaluated this, each
+        // evaluation outlived the publish interval, and the main thread
+        // never came back (field capture 2026-08-29 05:59 — opening the
+        // map froze the app). A 15 s lag on a map layer is invisible;
+        // a synchronous graph rebuild per redraw is not.
+        let now = Date()
+        if now.timeIntervalSince(pathCache.loadedAt) > 15 {
+            let live = NetworkPathObserver.paths(in: recentPackets, localCallsign: myCallsign)
+            let remembered = (try? pathStore?.paths(
+                since: now.addingTimeInterval(-SQLiteNetworkPathStore.retention))) ?? []
+            let observed = NetworkPath.merging(live + remembered)
+            pathCache.paths = observed + NetworkPathObserver.transitivePaths(from: observed)
+            pathCache.loadedAt = now
+        }
+        return pathCache.paths
     }
+
+    /// Reference box so the cache survives body evaluations without being
+    /// SwiftUI state — mutating it must never invalidate the view.
+    final class PathAssemblyCache {
+        var paths: [NetworkPath] = []
+        var loadedAt = Date.distantPast
+    }
+    @State private var pathCache = PathAssemblyCache()
     private var unplaced: [HeardStationMap.Entry] { visibleEntries.filter { !$0.isPlaced } }
 
     private var scope: StationScope {
