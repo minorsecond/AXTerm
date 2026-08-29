@@ -909,7 +909,20 @@ final class SessionCoordinator: ObservableObject {
             candidates.append(PingPolicy.Candidate(
                 call: key, source: .heardDirect, lastActivity: station.lastHeard ?? .distantPast))
         }
-        for (call, when) in overheardCallees where !mine.contains(call) && !seen.contains(call) {
+        // Digipeater bases join the yield set: nobody has heard bare
+        // W2CRS transmit, but W2CRS-7 repeats half the channel — a bare
+        // address someone was overheard calling is that box's other name,
+        // not a new station (field capture 2026-08-29 05:32, an XID sent
+        // to W2CRS). The policy applies the same rule against heard
+        // stations; the digipeaters are only visible from here.
+        let digiBases = Set((packetEngine?.stations ?? []).flatMap { station in
+            station.lastVia.map {
+                CallsignQuery.normalize(
+                    $0.trimmingCharacters(in: CharacterSet(charactersIn: "*")))
+            }
+        })
+        for (call, when) in overheardCallees where !mine.contains(call) && !seen.contains(call)
+            && !digiBases.contains(CallsignQuery.normalize(call)) {
             seen.insert(call)
             candidates.append(PingPolicy.Candidate(
                 call: call, source: .calledByOthers, lastActivity: when))

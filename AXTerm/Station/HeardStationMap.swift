@@ -553,17 +553,44 @@ nonisolated enum HeardStationMap {
     /// each station, because "look up everything" is the bulk-fetch
     /// runaway the terrain downloader taught. Only runs on the operator's
     /// explicit Find Positions press, never automatically.
+    ///
+    /// Bases already heard are excluded: their boxes fold into the heard
+    /// markers and can never draw a diamond, so a lookup for them spends
+    /// the press's budget on nothing visible (field capture 2026-08-29
+    /// 05:35 — the first batches went to local well-vouched families and
+    /// the layer ended up nearly empty).
     static func directoryLookupCandidates(aliases: NodeAliasDirectory,
                                           cachedCallsigns: Set<String>,
+                                          heardBases: Set<String> = [],
                                           limit: Int = 40) -> [String] {
         aliases.allEntries
             .sorted { ($0.tellers.count, $1.alias) > ($1.tellers.count, $0.alias) }
             .map { CallsignQuery.normalize($0.callsign) }
-            .filter { CallsignQuery.isPlausible($0) && !cachedCallsigns.contains($0) }
+            .filter { CallsignQuery.isPlausible($0) && !cachedCallsigns.contains($0)
+                && !heardBases.contains($0) }
             .reduce(into: [String]()) { unique, call in
                 if !unique.contains(call) { unique.append(call) }
             }
             .prefix(limit).map { $0 }
+    }
+
+    /// The directory aliases that fold into heard stations, by base
+    /// callsign — so the heard marker can *say* it is the node instead of
+    /// the fold being silent. ZIABBS and friends vanished from the layer
+    /// when K0ZIA-14 was heard, correctly — but nothing then told the
+    /// operator that the yellow dot IS the ZIA node.
+    static func nodeAliasesByHeardBase(aliases: NodeAliasDirectory,
+                                       heardCalls: Set<String>) -> [String: [String]] {
+        let bases = Set(heardCalls.map(CallsignQuery.normalize))
+        var result: [String: [String]] = [:]
+        for entry in aliases.allEntries {
+            let base = CallsignQuery.normalize(entry.callsign)
+            guard bases.contains(base),
+                  entry.alias.uppercased() != entry.callsign.uppercased()
+            else { continue }
+            result[base, default: []].append(entry.alias.uppercased())
+        }
+        return result.mapValues { $0.sorted() }
     }
 
     /// Aliases appearing in the via paths of stations actually heard.

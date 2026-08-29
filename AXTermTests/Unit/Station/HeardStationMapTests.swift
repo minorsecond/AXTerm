@@ -477,6 +477,25 @@ final class HeardStationMapTests: XCTestCase {
             stations: []).isEmpty)
     }
 
+    /// When a heard station absorbs its box's aliases, the fold must not
+    /// be silent: the heard marker carries the node names, and the
+    /// Find Positions budget skips bases that could never draw.
+    func testFoldedNodeIdentitiesAreNamedAndNotLookedUp() {
+        var aliases = NodeAliasDirectory()
+        aliases.record(.init(alias: "ZIABBS", callsign: "K0ZIA-1", service: "N"), at: now)
+        aliases.record(.init(alias: "ZIACHT", callsign: "K0ZIA-7", service: "N"), at: now)
+        aliases.record(.init(alias: "INRMS", callsign: "W9OTR", service: "N"), at: now)
+
+        let badges = HeardStationMap.nodeAliasesByHeardBase(
+            aliases: aliases, heardCalls: ["K0ZIA-14"])
+        XCTAssertEqual(badges, ["K0ZIA": ["ZIABBS", "ZIACHT"]])
+
+        let candidates = HeardStationMap.directoryLookupCandidates(
+            aliases: aliases, cachedCallsigns: [], heardBases: ["K0ZIA"])
+        XCTAssertEqual(candidates, ["W9OTR"],
+                       "the press's budget goes to claims that can actually draw")
+    }
+
     /// ZIABBS resolves to K0ZIA-1 while the heard station is K0ZIA-14 —
     /// sibling SSIDs of one box (field capture 2026-08-29 05:24). A heard
     /// station under *any* SSID of a base owns that box's marker.

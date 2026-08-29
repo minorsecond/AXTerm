@@ -266,7 +266,28 @@ struct StationsMapView: View {
             announcedGrids: announcedGrids,
             stations: stations,
             excluding: myCallsign)
-        return heard + nodes + directoryNodes
+        // A heard station that IS a node says so, instead of the fold
+        // being silent: the ZI* diamonds vanish because K0ZIA-14's dot
+        // owns the box — so the dot's detail must carry the node names.
+        let badges = HeardStationMap.nodeAliasesByHeardBase(
+            aliases: aliases.directory,
+            heardCalls: Set(stations.map { $0.call.uppercased() }))
+        let annotated = heard.map { entry -> HeardStationMap.Entry in
+            guard let names = badges[CallsignQuery.normalize(entry.callsign)]
+            else { return entry }
+            var entry = entry
+            let badge = "Node — \(names.joined(separator: ", "))"
+            entry.name = entry.name.map { "\($0) · \(badge)" } ?? badge
+            return entry
+        }
+        return annotated + nodes + directoryNodes
+    }
+
+    /// How many heard stations carry folded-in node identities.
+    private var mergedNodeBoxCount: Int {
+        HeardStationMap.nodeAliasesByHeardBase(
+            aliases: aliases.directory,
+            heardCalls: Set(stations.map { $0.call.uppercased() })).count
     }
 
     /// How much of the alias directory the map can currently place.
@@ -566,13 +587,14 @@ struct StationsMapView: View {
                 Toggle("Node Directory", isOn: $showsDirectoryNodes)
                     .help("Draw every station the network has claimed reachable — node tables, ROUTES scrapes, made relay hops — that can be placed from cached positions. Indigo markers, dashed when the position is the operator's address rather than the node's own. Nothing is looked up online for this layer.")
                 if showsDirectoryNodes {
-                    // Why the layer looks thin: it draws only what the
-                    // position cache can place, and says so where the
-                    // toggle is instead of leaving "enabled but invisible"
-                    // to be reported as a bug (field capture 2026-08-29).
-                    Text("\(placedDirectoryCount) of \(aliases.directory.allEntries.count) "
-                         + "in the directory can be placed so far — "
-                         + "Find Positions adds up to 40 more per press")
+                    // Why the layer looks the way it does, stated where
+                    // the toggle is: what draws, what folded into heard
+                    // stations, and how to grow it — "enabled but
+                    // invisible" was reported as a bug twice (2026-08-29
+                    // 05:07 and 05:35) before this line said so.
+                    Text("\(placedDirectoryCount) drawn · \(mergedNodeBoxCount) folded "
+                         + "into heard stations · \(aliases.directory.allEntries.count) known — "
+                         + "Find Positions places up to 40 more per press")
                 }
                 Toggle("Coverage Rings", isOn: $showsCoverageRing)
                     .help("Rings around your station drawn from the stations that answered you directly — a UA, DM or FRMR to your frames proves they decoded you. Inner ring: half of them are closer than this. Outer ring: the farthest answer. Measurements, not a propagation model.")
@@ -1022,8 +1044,10 @@ struct StationsMapView: View {
         // cache can place, and nothing was feeding the cache.
         if showsDirectoryNodes {
             let cached = Set(lookup.records.keys.map { $0.uppercased() })
+            let heardBases = Set(stations.map { CallsignQuery.normalize($0.call) })
             for call in HeardStationMap.directoryLookupCandidates(
-                aliases: aliases.directory, cachedCallsigns: cached)
+                aliases: aliases.directory, cachedCallsigns: cached,
+                heardBases: heardBases)
             where !candidates.contains(call) {
                 candidates.append(call)
             }

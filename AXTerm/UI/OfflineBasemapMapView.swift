@@ -269,10 +269,10 @@ struct OfflineBasemapMapView {
                     let renderer = MKCircleRenderer(circle: circle)
                     let dashed = dashedCoverageIDs.contains(ObjectIdentifier(circle))
                     renderer.strokeColor = PlatformColor.systemBlue
-                        .withAlphaComponent(dashed ? 0.45 : 0.6)
-                    renderer.lineWidth = 1.5
+                        .withAlphaComponent(dashed ? 0.6 : 0.8)
+                    renderer.lineWidth = 2.5
                     renderer.fillColor = dashed
-                        ? nil : PlatformColor.systemBlue.withAlphaComponent(0.07)
+                        ? nil : PlatformColor.systemBlue.withAlphaComponent(0.08)
                     if dashed { renderer.lineDashPattern = [6, 5] }
                     return renderer
                 }
@@ -615,6 +615,16 @@ struct OfflineBasemapMapView {
 
     /// Adds or replaces the coverage rings when the estimate changes.
     private func applyCoverage(to mapView: MKMapView, coordinator: Coordinator) {
+        // Self-healing: if anything swept the circles off — a basemap
+        // swap, an overlay path this function does not own — re-add
+        // rather than trusting the bookkeeping. Field capture 2026-08-29
+        // 05:37: the chip said ~48 mi while the map drew nothing.
+        if !coordinator.coverageCircles.isEmpty,
+           !coordinator.coverageCircles.allSatisfy({ circle in
+               mapView.overlays.contains { $0 === circle }
+           }) {
+            coordinator.installedCoverage = nil
+        }
         guard coordinator.installedCoverage != coverage else { return }
         coordinator.installedCoverage = coverage
         mapView.removeOverlays(coordinator.coverageCircles)
