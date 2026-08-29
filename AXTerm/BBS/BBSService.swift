@@ -879,11 +879,16 @@ extension BBSService {
     /// one caller at a time. File transfer protocols are declined
     /// honestly for now: they own a byte stream, and a circuit caller's
     /// bytes are owned by the node host.
-    @MainActor
-    final class CircuitSession: NodeMailboxSession {
+    // nonisolated class, MainActor methods — see NodeMailboxSession.
+    nonisolated final class CircuitSession: NodeMailboxSession {
         private var shell: BBSShell
-        private unowned let service: BBSService
+        // weak, not unowned: an unowned stored property in a FAILABLE
+        // init corrupts the heap when the guard returns nil (the
+        // partially-initialised object's teardown double-releases it) —
+        // found the hard way by this class's own tests.
+        private weak var service: BBSService?
 
+        @MainActor
         fileprivate init?(service: BBSService, caller: String) {
             guard service.settings.onAir else { return nil }
             self.service = service
@@ -895,14 +900,18 @@ extension BBSService {
                 publishesWhitePages: service.settings.publishWhitePages)
         }
 
+        @MainActor
         func greeting() -> (lines: [String], prompt: String?) {
+            guard let service else { return ([], nil) }
             let output = shell.greeting(
                 mailbox: service.currentMailbox(), now: Date())
             return (output.lines, output.prompt)
         }
 
         /// Feeds one line; applies the safe effects through the service.
+        @MainActor
         func handle(line: String) -> (lines: [String], prompt: String?, closed: Bool) {
+            guard let service else { return ([], nil, true) }
             var output = shell.handle(
                 line: line, mailbox: service.currentMailbox(), now: Date())
             var closed = false

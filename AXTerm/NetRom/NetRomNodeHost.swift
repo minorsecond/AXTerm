@@ -27,10 +27,13 @@ import Foundation
 
 /// What the host needs from a mailbox session — a seam so tests can
 /// fake the BBS. BBSService.CircuitSession is the real conformer.
-@MainActor
-protocol NodeMailboxSession: AnyObject {
-    func greeting() -> (lines: [String], prompt: String?)
-    func handle(line: String) -> (lines: [String], prompt: String?, closed: Bool)
+// Isolation lives on the METHODS, not the protocol: a MainActor class
+// hits the module's isolated-deinit trap (here it corrupted malloc,
+// not just aborted — CircuitSession.__deallocating_deinit →
+// swift_task_deinitOnExecutorImpl, crash report 2026-08-29 09:17).
+nonisolated protocol NodeMailboxSession: AnyObject {
+    @MainActor func greeting() -> (lines: [String], prompt: String?)
+    @MainActor func handle(line: String) -> (lines: [String], prompt: String?, closed: Bool)
 }
 
 /// What the host needs from the circuit layer — a seam so tests can

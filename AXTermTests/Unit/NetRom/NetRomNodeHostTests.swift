@@ -27,13 +27,13 @@ final class NetRomNodeHostTests: XCTestCase {
         }
     }
 
-    final class FakeMailbox: NodeMailboxSession {
-        var handled: [String] = []
-        var closeOnNext = false
-        func greeting() -> (lines: [String], prompt: String?) {
+    nonisolated final class FakeMailbox: NodeMailboxSession {
+        nonisolated(unsafe) var handled: [String] = []
+        nonisolated(unsafe) var closeOnNext = false
+        @MainActor func greeting() -> (lines: [String], prompt: String?) {
             (["Mailbox open."], "BBS> ")
         }
-        func handle(line: String) -> (lines: [String], prompt: String?, closed: Bool) {
+        @MainActor func handle(line: String) -> (lines: [String], prompt: String?, closed: Bool) {
             handled.append(line)
             return closeOnNext ? (["73."], nil, true) : (["ok"], "BBS> ", false)
         }
