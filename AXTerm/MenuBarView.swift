@@ -6,13 +6,30 @@
 //
 
 import SwiftUI
+import Combine
 
 struct MenuBarView: View {
-    @ObservedObject var client: PacketEngine
+    /// Deliberately NOT @ObservedObject. The menu content view is always
+    /// mounted, and observing the packet engine re-rendered it on every
+    /// received packet; each render re-set the status item's button
+    /// image, and a burst of packets in one display cycle tripped
+    /// AppKit's update-constraints loop guard on the status bar window —
+    /// thrown as an NSException that killed the app (sampled live
+    /// 2026-08-29 06:30: main thread in -[NSApplication
+    /// _crashOnException:] via MenuBarExtraController.updateButton).
+    /// The pulse below re-renders this menu at most every five seconds,
+    /// and only when what it displays actually changed.
+    let client: PacketEngine
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var inspectionRouter: PacketInspectionRouter
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
+
+    /// The slow clock that stands in for live observation.
+    @StateObject private var pulse = MenuBarPulse()
+    @MainActor final class MenuBarPulse: ObservableObject {
+        @Published var fingerprint = ""
+    }
 
     var body: some View {
         VStack(alignment: .leading) {
@@ -52,6 +69,14 @@ struct MenuBarView: View {
         .task(id: inspectionRouter.shouldOpenMainWindow) {
             guard inspectionRouter.shouldOpenMainWindow else { return }
             await handleOpenWindowRequest()
+        }
+        .task {
+            while !Task.isCancelled {
+                let now = "\(client.status)|\(client.packets.count)|"
+                    + "\(client.connectedHost ?? "")|\(client.connectedPort ?? 0)"
+                if pulse.fingerprint != now { pulse.fingerprint = now }
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
         }
     }
 
