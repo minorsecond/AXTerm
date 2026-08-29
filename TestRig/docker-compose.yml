@@ -63,6 +63,18 @@ services:
         ipv4_address: 172.28.99.23
     restart: unless-stopped
 
+  nodefarm:
+    profiles: ["multi", "farm"]
+    build: ./nodefarm
+    depends_on:
+      - kisshub
+    environment:
+      FARM_SEED: "${FARM_SEED:-1}"
+    networks:
+      channel:
+        ipv4_address: 172.28.99.40
+    restart: unless-stopped
+
   direwolf-rf:
     profiles: ["rf"]
     build: ./direwolf

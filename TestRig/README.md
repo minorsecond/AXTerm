@@ -102,6 +102,53 @@ Adds two more stations to the frequency:
 connected-mode station) also run standalone against the hub if you want
 to script your own node behaviours.
 
+## The node farm — many nodes, seed-driven (`farm` / `multi` profile)
+
+`scripts/nodefarm.py` puts a whole mixed neighbourhood on the channel:
+5-10 stations of DIFFERENT packet-OS families, chosen deterministically
+from a seed so a run reproduces, and differently across seeds so
+coverage broadens. Every family AXTerm must cope with in the wild:
+
+| Personality | What it is |
+|---|---|
+| `bpq` | NET/ROM node — real NODES broadcasts (PID 0xCF), NODES/ROUTES/MH shell |
+| `thenet` | NET/ROM node, TheNet-flavour banner |
+| `kanode` | Kantronics KA-Node — `###CONNECTED` / `ENTER COMMAND`, **never** NODES |
+| `digi` | pure digipeater — repeats via-addressed frames, refuses connects (DM) |
+| `bbs` | a mailbox answered directly, no node level |
+| `beacon` | beacons status, refuses connects — a station running no service |
+
+```bash
+FARM_SEED=42 docker compose --profile multi up -d   # farm + 2 real BPQ + KA-node
+python3 scripts/nodefarm.py --seed 42 --list         # see a population without running
+```
+
+Every seed always includes at least one NET/ROM node and one KA-Node,
+so the capability classifier's two poles are present every run. The
+farm's NODES broadcasts are byte-identical to AXTerm's own wire format —
+**pinned in CI** by `RigFarmWireCompatibilityTests`, which parses the
+exact bytes `netrom.py` emits through AXTerm's real
+`NetRomBroadcastParser`. If the encoder ever drifts, that test fails.
+
+## Validating the fixture
+
+The rig checks *itself* — because a test against an invalid fixture is
+worse than no test:
+
+```bash
+FARM_SEED=42 docker compose --profile multi up -d
+sleep 15                                   # let the channel fill
+python3 scripts/validate.py --seed 42
+```
+
+It asserts: NET/ROM nodes broadcast NODES that decode cleanly; KA-Nodes
+and digipeaters NEVER broadcast NODES; every station in the population
+is responsive (actively probed, with retries, because a saturated
+channel eats single frames); and collisions actually occur. Exit 0 only
+if the fixture is what it claims to be. Validated across seeds 1, 7, 42,
+500 — and it caught a real bug on the way (garbage frames crashing
+digipeater threads), which is exactly what a fixture validator is for.
+
 ## The `rf` profile (experimental)
 
 For modulated-audio realism — real AFSK 1200, real DCD, real TXDELAY,
