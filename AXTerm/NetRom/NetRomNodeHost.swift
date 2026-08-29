@@ -25,6 +25,32 @@
 
 import Foundation
 
+/// What the host needs from a mailbox session — a seam so tests can
+/// fake the BBS. BBSService.CircuitSession is the real conformer.
+@MainActor
+protocol NodeMailboxSession: AnyObject {
+    func greeting() -> (lines: [String], prompt: String?)
+    func handle(line: String) -> (lines: [String], prompt: String?, closed: Bool)
+}
+
+/// What the host needs from the circuit layer — a seam so tests can
+/// fake the driver. NetRomLinkDriver is the real conformer.
+nonisolated protocol NodeCircuitOps: AnyObject {
+    func send(_ data: Data, on id: NetRomCircuitID)
+    func disconnect(_ id: NetRomCircuitID)
+    /// Nil when no route exists — the only distinction the host acts on.
+    func openNodeCircuit(to destination: AX25Address) -> NetRomCircuitID?
+}
+
+extension NetRomLinkDriver: NodeCircuitOps {
+    func openNodeCircuit(to destination: AX25Address) -> NetRomCircuitID? {
+        switch openCircuit(to: destination) {
+        case .success(let id): return id
+        case .failure: return nil
+        }
+    }
+}
+
 nonisolated final class NetRomNodeHost {
 
     /// How a caller reached us, and therefore how bytes go back.
@@ -36,7 +62,7 @@ nonisolated final class NetRomNodeHost {
     /// A caller mid-session.
     private enum Mode {
         case node(NetRomNodeShell)
-        case bbs(BBSService.CircuitSession)
+        case bbs(NodeMailboxSession)
         /// C issued; outbound circuit dialing.
         case dialing(target: String, outbound: NetRomCircuitID)
         /// Transparent pipe to the far station.
@@ -60,14 +86,14 @@ nonisolated final class NetRomNodeHost {
     var identityProvider: () -> (alias: String, call: String, version: String) =
         { ("NODE", "N0CALL", "AXTerm") }
     var snapshotProvider: () -> NetRomNodeShell.Snapshot = { .init() }
-    var bbsSessionFactory: (@MainActor (String) -> BBSService.CircuitSession?)?
+    var bbsSessionFactory: (@MainActor (String) -> NodeMailboxSession?)?
     var onOperatorNote: ((String) -> Void)?
     /// Test seam for the dial timeout.
     var scheduleTimeout: (_ seconds: Double, _ work: @escaping () -> Void) -> Void = { seconds, work in
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
     }
 
-    private weak var driver: NetRomLinkDriver?
+    private weak var circuitOps: (any NodeCircuitOps)?
     private var callers: [CallerKey: Caller] = [:]
     /// Inbound circuits accepted but not yet connected — greeting waits
     /// for CONACK.
@@ -81,7 +107,7 @@ nonisolated final class NetRomNodeHost {
     /// coordinator's own wiring so the previous data consumer is
     /// preserved for circuits this host does not own.
     func install(on driver: NetRomLinkDriver) {
-        self.driver = driver
+        self.circuitOps = driver
 
         driver.endpoint.inboundAcceptor = { [weak self] user, _ in
             guard let self else { return false }
@@ -96,7 +122,7 @@ nonisolated final class NetRomNodeHost {
             return accept
         }
         driver.endpoint.onInboundCircuitOpened = { [weak self] id, user, _ in
-            self?.pending[id] = user.display
+            self?.inboundCircuitOpened(id, caller: user.display)
         }
         driver.hostedCircuitCheck = { [weak self] id in
             guard let self else { return false }
@@ -145,7 +171,18 @@ nonisolated final class NetRomNodeHost {
 
     // MARK: - Circuit lifecycle
 
-    private func circuitConnected(_ id: NetRomCircuitID) {
+    /// Endpoint callback; also the test seam for inbound arrival.
+    func inboundCircuitOpened(_ id: NetRomCircuitID, caller: String) {
+        pending[id] = caller
+    }
+
+    /// Test seam: lets a fake circuit layer stand in for the driver.
+    func useCircuitOps(_ ops: any NodeCircuitOps) {
+        circuitOps = ops
+    }
+
+    /// Driver callback; also the test seam for circuit lifecycle.
+    func circuitConnected(_ id: NetRomCircuitID) {
         if let callsign = pending.removeValue(forKey: id) {
             let identity = identityProvider()
             let shell = NetRomNodeShell(
@@ -154,8 +191,8 @@ nonisolated final class NetRomNodeHost {
             let key = CallerKey.circuit(id)
             callers[key] = Caller(
                 callsign: callsign, mode: .node(shell),
-                send: { [weak self] data in self?.driver?.send(data, on: id) },
-                hangUp: { [weak self] in self?.driver?.disconnect(id) })
+                send: { [weak self] data in self?.circuitOps?.send(data, on: id) },
+                hangUp: { [weak self] in self?.circuitOps?.disconnect(id) })
             write(shell.greeting(), to: key)
             onOperatorNote?("\(callsign) connected to this node over NET/ROM.")
             return
@@ -169,7 +206,8 @@ nonisolated final class NetRomNodeHost {
         }
     }
 
-    private func circuitClosed(_ id: NetRomCircuitID) {
+    /// Driver callback; also the test seam for circuit lifecycle.
+    func circuitClosed(_ id: NetRomCircuitID) {
         pending.removeValue(forKey: id)
         if callers[.circuit(id)] != nil {
             callerLeft(.circuit(id))
@@ -204,7 +242,7 @@ nonisolated final class NetRomNodeHost {
         switch caller.mode {
         case .dialing(_, let outbound), .bridged(_, let outbound):
             bridges.removeValue(forKey: outbound)
-            driver?.disconnect(outbound)
+            circuitOps?.disconnect(outbound)
         default:
             break
         }
@@ -213,7 +251,9 @@ nonisolated final class NetRomNodeHost {
 
     // MARK: - Data
 
-    private func consumeCircuit(id: NetRomCircuitID, data: Data) -> Bool {
+    /// Driver callback; also the test seam for circuit data.
+    @discardableResult
+    func consumeCircuit(id: NetRomCircuitID, data: Data) -> Bool {
         if callers[.circuit(id)] != nil {
             consume(key: .circuit(id), data: data)
             return true
@@ -231,7 +271,7 @@ nonisolated final class NetRomNodeHost {
         // Bridged callers are a transparent pipe — no line assembly, no
         // command interception; BYE belongs to the far node now.
         if case .bridged(_, let outbound) = caller.mode {
-            driver?.send(data, on: outbound)
+            circuitOps?.send(data, on: outbound)
             return
         }
         // While dialing, keystrokes have nowhere meaningful to go; a
@@ -295,10 +335,10 @@ nonisolated final class NetRomNodeHost {
     // MARK: - C: onward connects
 
     private func dial(_ target: String, for key: CallerKey) {
-        guard let driver else { return }
+        guard let ops = circuitOps else { return }
         let address = CallsignNormalizer.toAddress(target)
-        switch driver.openCircuit(to: address) {
-        case .success(let outbound):
+        switch ops.openNodeCircuit(to: address) {
+        case .some(let outbound):
             bridges[outbound] = key
             callers[key]?.mode = .dialing(target: target, outbound: outbound)
             onOperatorNote?("\(callers[key]?.callsign ?? "A caller") is being "
@@ -310,10 +350,10 @@ nonisolated final class NetRomNodeHost {
                       let caller = self.callers[key],
                       case .dialing(_, let pendingOutbound) = caller.mode,
                       pendingOutbound == outbound else { return }
-                self.driver?.disconnect(outbound)
+                self.circuitOps?.disconnect(outbound)
                 // circuitClosed delivers "*** Failure with …".
             }
-        case .failure:
+        case .none:
             let identity = identityProvider()
             writeLines(["*** No route to \(target)"],
                        prompt: "\(identity.alias):\(identity.call)} ", to: key)

@@ -149,14 +149,24 @@ struct AXTermApp: App {
     var body: some Scene {
         let windowTitle = "AXTerm" + TestModeConfiguration.shared.windowTitleSuffix
         WindowGroup(windowTitle, id: "main") {
-            ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter, winlinkContext: winlinkContext, bbsSettings: bbsSettings)
-                // Launch and every return to the foreground: pull whatever
-                // the operator's other devices did while this one was away.
-                .task { winlinkContext.appBecameActive() }
-                .onReceive(NotificationCenter.default.publisher(
-                    for: NSApplication.didBecomeActiveNotification)) { _ in
-                    winlinkContext.appBecameActive()
-                }
+            // The unit-test host mounts no UI at all: the full
+            // ContentView spins up the map pre-warm, sync passes and
+            // lookup tasks underneath five thousand tests that
+            // construct their own worlds — churn, sockets and (until
+            // 2026-08-29) a visible window over the operator's editor.
+            if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+                Text("AXTerm unit-test host")
+                    .frame(width: 200, height: 40)
+            } else {
+                ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter, winlinkContext: winlinkContext, bbsSettings: bbsSettings)
+                    // Launch and every return to the foreground: pull whatever
+                    // the operator's other devices did while this one was away.
+                    .task { winlinkContext.appBecameActive() }
+                    .onReceive(NotificationCenter.default.publisher(
+                        for: NSApplication.didBecomeActiveNotification)) { _ in
+                        winlinkContext.appBecameActive()
+                    }
+            }
         }
         .commands {
             CommandGroup(after: .windowArrangement) {

@@ -316,8 +316,15 @@ extension View {
 /// sounds; iOS plays the corresponding system alert IDs.
 nonisolated enum PlatformSound {
 
+    /// Silent under XCTest: five thousand unit tests do not get to ping
+    /// the operator's speakers. A test that genuinely exercises audio
+    /// can flip this back on for its own duration.
+    nonisolated(unsafe) static var isMuted =
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
     /// Somebody connected to us.
     static func playInboundConnection() {
+        guard !isMuted else { return }
         #if os(macOS)
         NSSound(named: "Glass")?.play()
         #else
@@ -327,6 +334,7 @@ nonisolated enum PlatformSound {
 
     /// Our own outbound connection came up.
     static func playOutboundConnection() {
+        guard !isMuted else { return }
         #if os(macOS)
         NSSound(named: "Ping")?.play()
         #else

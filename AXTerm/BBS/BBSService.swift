@@ -880,7 +880,7 @@ extension BBSService {
     /// honestly for now: they own a byte stream, and a circuit caller's
     /// bytes are owned by the node host.
     @MainActor
-    final class CircuitSession {
+    final class CircuitSession: NodeMailboxSession {
         private var shell: BBSShell
         private unowned let service: BBSService
 

@@ -14,9 +14,22 @@ final class AXTermAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         UNUserNotificationCenter.current().delegate = notificationHandler
+        // The unit-test host must not flash a window or steal focus:
+        // stay a background process and put away anything SwiftUI
+        // already ordered in. UI tests keep the real app.
+        // .accessory, not .prohibited: the harder policy interferes
+        // with XCTest's runner bootstrap on some clones.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            NSApp.setActivationPolicy(.accessory)
+            for window in NSApp.windows { window.orderOut(nil) }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // The test host hides its window; that must never read as "quit".
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            return false
+        }
         guard let settings else { return false }
         return !settings.runInMenuBar
     }
