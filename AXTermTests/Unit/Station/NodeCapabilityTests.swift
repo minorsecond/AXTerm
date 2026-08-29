@@ -133,6 +133,48 @@ final class NodeCapabilityTests: XCTestCase {
                        "ground truth plus BPQ fingerprints resolves to BPQ")
     }
 
+    /// The exact store found on the operator's machine, 2026-08-28 18:39.
+    /// KB5YZB-7's banner and menu rode the DRLNOD link during a relay and
+    /// were credited to DRLNOD; the conflict blanked its verdict and a
+    /// poisoned teller claim slipped past the KA-Node filter. The borrowed
+    /// banner *names another station* — identity travels with the words,
+    /// not the link — so DRLNOD's verdict must stay KA-Node even with the
+    /// poison still stored.
+    func testABannerNamingAnotherStationIsNotEvidenceHere() {
+        let dir = directory(recording: [
+            (.kaNodeLinkBanner, "###CONNECTED TO NODE DRLNOD(KE0NCQ) CHANNEL A"),
+            (.kaNodeMenu, "ENTER COMMAND: B,C,J,N, or Help ?"),
+            (.bpqBanner, "Welcome to YZBBPQ:KB5YZB-7 Network Node Server, Aurora, CO."),
+            (.bpqMenu, "BBS, BYE, CHAT, SYSOP, CONNECT, INFO, NODES, PORTS, RMS, ROUTES, USERS, MHEARD (port #)")
+        ], for: "DRLNOD")
+        XCTAssertEqual(dir.family(for: "DRLNOD"), .kaNode,
+                       "the KA banner names DRLNOD; the BPQ banner names KB5YZB-7")
+        XCTAssertEqual(dir.canRouteNetRom("DRLNOD"), false)
+    }
+
+    /// The same banner filed under its rightful owner is decisive the other
+    /// way — and outranks an anonymous KA menu that might itself be a
+    /// mis-attribution.
+    func testABannerNamingThisStationOutranksAnonymousContraryEvidence() {
+        let dir = directory(recording: [
+            (.bpqBanner, "Welcome to YZBBPQ:KB5YZB-7 Network Node Server, Aurora, CO."),
+            (.kaNodeMenu, "ENTER COMMAND: B,C,J,N, or Help ?")
+        ], for: "KB5YZB-7")
+        XCTAssertEqual(dir.family(for: "KB5YZB-7"), .bpq)
+        XCTAssertEqual(dir.canRouteNetRom("KB5YZB-7"), true)
+    }
+
+    /// Identity-bearing evidence on both sides is a genuine conflict —
+    /// refusing to guess still applies.
+    func testIdentityBearingEvidenceOnBothSidesStillConflicts() {
+        let dir = directory(recording: [
+            (.kaNodeLinkBanner, "###CONNECTED TO NODE N0CONF CHANNEL A"),
+            (.bpqPrompt, "CONF:N0CONF}")
+        ], for: "N0CONF")
+        XCTAssertNil(dir.family(for: "N0CONF"))
+        XCTAssertNil(dir.canRouteNetRom("N0CONF"))
+    }
+
     /// A borrowed-SSID dial can come from a crossband arrangement too, so it
     /// corroborates but never decides.
     func testBorrowedSsidDialAloneDecidesNothing() {

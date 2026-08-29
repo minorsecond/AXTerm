@@ -182,7 +182,12 @@ nonisolated struct NetRomRelayResponseParser {
         "no route", "not found", "invalid command", "busy", "*** busy",
         "rejected", "failure",
         "downlink denied",  // BPQ, when the node will not connect outward
-        "no connection"
+        "no connection",
+        // KA-Node, when its own connect attempt exhausted retries:
+        // "###RETRIED OUT AT NODE DRLNOD" (field capture 2026-08-28
+        // 18:40). Unrecognised, the relay sat through the node's clear
+        // answer until the stall watchdog gave up 40 s later.
+        "retried out"
     ]
 
     static func isSuccess(_ text: String) -> Bool {
@@ -3543,25 +3548,32 @@ struct TerminalView: View {
             destination: intent.normalizedTo,
             teller: nextHop,
             routeLookup: { [weak client] station in
-                if let origin = client?.netRomIntegration?.bestRouteTo(station)?.origin {
-                    return origin
+                // Routes are filed by callsign, tellers by node *name* —
+                // COSCO's route lives under KE0GB-7. Try both names against
+                // the route table before any hearsay. bestRouteTo filters
+                // by TTL, right for live routing and wrong for planning:
+                // the harvested KE0GB-7 route was "expired" by evening and
+                // the walk fell through to hearsay, which a relay session
+                // had poisoned (field captures 2026-08-28, 18:28 and
+                // 18:39). A stale signpost beats none — the relay proves
+                // every hop live anyway — and the profile resolver already
+                // plans TTL-free, so this keeps picture and behaviour equal.
+                let names = [station, nodeAliases.directory.callsign(for: station)]
+                    .compactMap { $0?.uppercased() }
+                for name in names {
+                    if let origin = client?.netRomIntegration?.bestRouteTo(name)?.origin {
+                        return origin
+                    }
                 }
-                // A measured route filed under the station's callsign beats
-                // hearsay filed under its name — tellers are node *names*,
-                // routes are callsigns (COSCO's route lives under KE0GB-7).
-                if let callsign = nodeAliases.directory.callsign(for: station),
-                   let origin = client?.netRomIntegration?.bestRouteTo(callsign)?.origin {
-                    return origin
+                for name in names {
+                    if let origin = client?.netRomIntegration?.currentRoutes()
+                        .filter({ $0.destination.uppercased() == name })
+                        .max(by: { $0.quality < $1.quality })?.origin {
+                        return origin
+                    }
                 }
-                // bestRouteTo filters by TTL — right for routing, wrong for
-                // chain planning: the harvested COSCO route scraped this
-                // morning is "expired" by evening, and the walk found
-                // nothing behind the alias (field capture 2026-08-28,
-                // second run). The alias directory still remembers who
-                // *listed* the station, and a remembered signpost beats
-                // dialling a name we cannot hear — the relay proves every
-                // hop live anyway. `tellerFallback` filters the hearsay a
-                // relay session can poison the directory with.
+                // Hearsay last, filtered: `tellerFallback` skips the claims
+                // a relay session can poison the directory with.
                 return NetRomRelayPlan.tellerFallback(
                     for: station,
                     claims: nodeAliases.directory.tellerClaims(for: station),
@@ -4009,25 +4021,32 @@ struct TerminalView: View {
             destination: intent.normalizedTo,
             teller: nextHop,
             routeLookup: { [weak client] station in
-                if let origin = client?.netRomIntegration?.bestRouteTo(station)?.origin {
-                    return origin
+                // Routes are filed by callsign, tellers by node *name* —
+                // COSCO's route lives under KE0GB-7. Try both names against
+                // the route table before any hearsay. bestRouteTo filters
+                // by TTL, right for live routing and wrong for planning:
+                // the harvested KE0GB-7 route was "expired" by evening and
+                // the walk fell through to hearsay, which a relay session
+                // had poisoned (field captures 2026-08-28, 18:28 and
+                // 18:39). A stale signpost beats none — the relay proves
+                // every hop live anyway — and the profile resolver already
+                // plans TTL-free, so this keeps picture and behaviour equal.
+                let names = [station, nodeAliases.directory.callsign(for: station)]
+                    .compactMap { $0?.uppercased() }
+                for name in names {
+                    if let origin = client?.netRomIntegration?.bestRouteTo(name)?.origin {
+                        return origin
+                    }
                 }
-                // A measured route filed under the station's callsign beats
-                // hearsay filed under its name — tellers are node *names*,
-                // routes are callsigns (COSCO's route lives under KE0GB-7).
-                if let callsign = nodeAliases.directory.callsign(for: station),
-                   let origin = client?.netRomIntegration?.bestRouteTo(callsign)?.origin {
-                    return origin
+                for name in names {
+                    if let origin = client?.netRomIntegration?.currentRoutes()
+                        .filter({ $0.destination.uppercased() == name })
+                        .max(by: { $0.quality < $1.quality })?.origin {
+                        return origin
+                    }
                 }
-                // bestRouteTo filters by TTL — right for routing, wrong for
-                // chain planning: the harvested COSCO route scraped this
-                // morning is "expired" by evening, and the walk found
-                // nothing behind the alias (field capture 2026-08-28,
-                // second run). The alias directory still remembers who
-                // *listed* the station, and a remembered signpost beats
-                // dialling a name we cannot hear — the relay proves every
-                // hop live anyway. `tellerFallback` filters the hearsay a
-                // relay session can poison the directory with.
+                // Hearsay last, filtered: `tellerFallback` skips the claims
+                // a relay session can poison the directory with.
                 return NetRomRelayPlan.tellerFallback(
                     for: station,
                     claims: nodeAliases.directory.tellerClaims(for: station),

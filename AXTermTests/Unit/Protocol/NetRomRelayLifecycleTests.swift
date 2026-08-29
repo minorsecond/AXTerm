@@ -81,6 +81,15 @@ final class NetRomRelayLifecycleTests: XCTestCase {
         }
     }
 
+    /// A KA-Node whose own connect attempt exhausted retries says so
+    /// plainly (field capture 2026-08-28 18:40). Unrecognised, the relay
+    /// sat through the answer for another 40 s of watchdog grace.
+    func testRetriedOutIsAFailure() {
+        let reply = "###RETRIED OUT AT NODE DRLNOD"
+        XCTAssertTrue(NetRomRelayResponseParser.isFailure(reply))
+        XCTAssertFalse(NetRomRelayResponseParser.isSuccess(reply))
+    }
+
     /// The node's own welcome banner is neither — it arrives before the connect
     /// command is even sent, and reading it either way would decide the
     /// handshake on the wrong frame.

@@ -138,6 +138,48 @@ nonisolated enum NodeSoftwareClassifier {
         )
         return words.intersection(bpqMenuWords).count >= 3
     }
+
+    /// The station tokens an observation's own words name — nil for
+    /// anonymous lines (menus, bare prompts we could not parse).
+    ///
+    /// Identity travels with the words, not the link. During a prompt relay
+    /// every downstream node's output rides the L2 peer's frames, and until
+    /// 2026-08-28 the harvester credited that peer: DRLNOD's record ended
+    /// up holding "Welcome to YZBBPQ:KB5YZB-7 Network Node Server" as its
+    /// own BPQ banner, the verdict became a conflict, and a poisoned teller
+    /// claim slipped past the KA-Node filter (18:39 field capture). A
+    /// banner that names a station was necessarily spoken by that station,
+    /// however its bytes arrived.
+    static func namedStations(in observation: NodeSoftwareObservation) -> Set<String>? {
+        let upper = observation.sourceText.uppercased()
+        switch observation.kind {
+        case .bpqBanner, .bpqPrompt:
+            // "Welcome to YZBBPQ:KB5YZB-7 …" / "YZBBPQ:KB5YZB-7}" — the
+            // ALIAS:CALL pair names the node both ways.
+            return firstMatchTokens(
+                pattern: "([A-Z][A-Z0-9-]{1,8}):([A-Z0-9][A-Z0-9-]{1,8})", in: upper)
+        case .kaNodeLinkBanner:
+            // "###CONNECTED TO NODE DRLNOD(KE0NCQ) CHANNEL A" — the node's
+            // name, with its callsign in parentheses when it prints one.
+            return firstMatchTokens(
+                pattern: "NODE ([A-Z0-9-]{2,9})(?:\\(([A-Z0-9-]{2,9})\\))?", in: upper)
+        case .nodesBroadcast, .bpqMenu, .kaNodeMenu, .borrowedSsidDial:
+            return nil
+        }
+    }
+
+    private static func firstMatchTokens(pattern: String, in upper: String) -> Set<String>? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(
+                in: upper, range: NSRange(upper.startIndex..., in: upper))
+        else { return nil }
+        var tokens: Set<String> = []
+        for group in 1..<match.numberOfRanges {
+            guard let range = Range(match.range(at: group), in: upper) else { continue }
+            tokens.insert(String(upper[range]))
+        }
+        return tokens.isEmpty ? nil : tokens
+    }
 }
 
 /// Everything observed about node software, with derived verdicts.
@@ -209,12 +251,34 @@ nonisolated struct NodeCapabilityDirectory: Equatable, Sendable, Codable {
     /// `.borrowedSsidDial` never decides anything by itself.
     func family(for callsign: String) -> NodeSoftwareFamily? {
         guard let entry = entries[CallsignValidator.normalize(callsign)] else { return nil }
-        let kinds = Set(entry.observations.map(\.kind))
+        let own = CallsignValidator.normalize(entry.callsign)
+
+        // An observation whose own words name a *different* station is not
+        // evidence about this one, however it arrived — during a prompt
+        // relay, downstream banners ride the link peer's frames. Field
+        // capture 2026-08-28 18:39: KB5YZB-7's banner filed under DRLNOD
+        // turned its verdict into a conflict and let a poisoned teller
+        // claim through. Anonymous lines are kept.
+        let observations = entry.observations.filter { obs in
+            guard let named = NodeSoftwareClassifier.namedStations(in: obs) else { return true }
+            return named.contains(own)
+        }
+        let kinds = Set(observations.map(\.kind))
         let hasBpq = !kinds.isDisjoint(with: Self.bpqKinds)
         let hasKa = !kinds.isDisjoint(with: Self.kaKinds)
         if kinds.contains(.nodesBroadcast) {
             return hasBpq ? .bpq : .netromOther
         }
+        // Identity-bearing evidence outranks anonymous: a menu with no name
+        // in it is exactly the line a relay can mis-attribute, while a
+        // banner that names this station was necessarily spoken by it.
+        let identityBpq = observations.contains {
+            NodeSoftwareClassifier.namedStations(in: $0) != nil && Self.bpqKinds.contains($0.kind)
+        }
+        let identityKa = observations.contains {
+            NodeSoftwareClassifier.namedStations(in: $0) != nil && Self.kaKinds.contains($0.kind)
+        }
+        if identityBpq != identityKa { return identityBpq ? .bpq : .kaNode }
         if hasBpq && hasKa { return nil }
         if hasBpq { return .bpq }
         if hasKa { return .kaNode }
