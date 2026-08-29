@@ -25,6 +25,9 @@ struct ContentView: View {
     /// Learns node aliases (DRLNOD, HORSE) from ID beacons already
     /// arriving, so via-path hops can be placed.
     @StateObject private var nodeAliases = NodeAliasStore()
+    // Same key the map's layers menu writes — the trickle lookup below
+    // follows the operator's layer choice from anywhere in the app.
+    @AppStorage("stations.showsDirectoryNodes") private var showsDirectoryNodes = false
     @StateObject private var nodeCapabilities = NodeCapabilityStore()
     /// Locators stations announce in their own beacons — the placement
     /// source for the part of the world no directory covers.
@@ -457,8 +460,31 @@ struct ContentView: View {
             let unknown = Set(client.stations.map { CallsignQuery.normalize($0.call) })
                 .filter { CallsignQuery.isPlausible($0) && callsignLookup.cached($0) == nil }
                 .sorted()
-            guard !unknown.isEmpty else { return }
-            await callsignLookup.resolveAll(unknown)
+            if !unknown.isEmpty {
+                await callsignLookup.resolveAll(unknown)
+            }
+            // With the directory layer on, the harvested list trickles
+            // through the same pipe — nobody should have to press
+            // Find Positions a dozen times to see what the toggle
+            // already promises (field capture 2026-08-29 05:47: 4 of
+            // 533 placed after three presses). Bounded by the list
+            // itself: one paced attempt per callsign per launch, results
+            // persisted, heard bases skipped because they fold anyway.
+            guard showsDirectoryNodes else { return }
+            let directory = HeardStationMap.directoryLookupCandidates(
+                aliases: nodeAliases.directory,
+                cachedCallsigns: Set(callsignLookup.records.keys.map { $0.uppercased() }),
+                heardBases: Set(client.stations.map { CallsignQuery.normalize($0.call) }),
+                limit: Int.max)
+            for call in directory {
+                guard !Task.isCancelled, !callsignLookup.isCoolingDown else { return }
+                _ = await callsignLookup.resolve(call)
+                // A courtesy gap: this is someone's free service and the
+                // radio is in no hurry. ~40/minute, and the service's
+                // breaker stops the whole pass the moment the far end
+                // answers 429 or falls over.
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+            }
         }
         .focusedValue(\.searchFocus, SearchFocusAction { isSearchFocused = true })
         .focusedValue(\.toggleConnection, ToggleConnectionAction { toggleConnection() })
@@ -771,13 +797,17 @@ struct ContentView: View {
     /// opt-in flips), and not on every packet.
     private struct StationLookupKey: Hashable {
         let enabled: Bool
+        let showsDirectory: Bool
         let calls: [String]
+        let directorySize: Int
     }
 
     private var stationLookupKey: StationLookupKey {
         StationLookupKey(
             enabled: winlinkContext.settings.callsignLookupEnabled,
-            calls: Set(client.stations.map { CallsignQuery.normalize($0.call) }).sorted())
+            showsDirectory: showsDirectoryNodes,
+            calls: Set(client.stations.map { CallsignQuery.normalize($0.call) }).sorted(),
+            directorySize: nodeAliases.directory.allEntries.count)
     }
 
     private var reachableCount: Int {

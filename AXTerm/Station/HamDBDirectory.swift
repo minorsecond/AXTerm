@@ -15,6 +15,10 @@ import Foundation
 ///
 /// Decoding is separated from fetching so the awkward parts are testable
 /// against captured payloads with no network involved.
+enum CallsignDirectoryError: Error {
+    /// 429 or 5xx — the far end wants us to stop, not to be told again.
+    case serverUnavailable(status: Int)
+}
 nonisolated struct HamDBDirectory: CallsignDirectory {
 
     let sourceName = "HamDB"
@@ -36,7 +40,15 @@ nonisolated struct HamDBDirectory: CallsignDirectory {
 
     func lookup(_ callsign: String) async throws -> CallsignRecord? {
         guard let url = url(for: callsign) else { return nil }
-        let (data, _) = try await session.data(from: url)
+        let (data, response) = try await session.data(from: url)
+        // A throttle or an outage is not a miss: a miss is cached as
+        // "attempted" and never retried this launch, which is exactly
+        // wrong for "try again in a minute". Surface it as an error so
+        // the service can open its breaker instead.
+        if let http = response as? HTTPURLResponse,
+           http.statusCode == 429 || http.statusCode >= 500 {
+            throw CallsignDirectoryError.serverUnavailable(status: http.statusCode)
+        }
         return Self.decode(data, now: Date())
     }
 

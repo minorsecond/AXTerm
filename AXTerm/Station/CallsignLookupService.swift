@@ -25,6 +25,17 @@ final class CallsignLookupService: ObservableObject {
     /// entirely cache-backed.
     var isNetworkEnabled: Bool
 
+    /// While set in the future, no network lookup runs at all — the
+    /// breaker a throttled or unreachable directory opens. Bulk callers
+    /// check `isCoolingDown` and stop their pass instead of spinning
+    /// through a list that cannot resolve.
+    private var cooldownUntil: Date = .distantPast
+    var isCoolingDown: Bool { cooldownUntil > Date() }
+    /// How long one refusal silences the network. Five minutes is long
+    /// enough to be polite and short enough that the map still fills in
+    /// this session.
+    var cooldownSeconds: TimeInterval = 300
+
     /// Callsigns already attempted this session, so a miss is not retried
     /// on every redraw.
     private var attempted = Set<String>()
@@ -71,14 +82,24 @@ final class CallsignLookupService: ObservableObject {
             records[key] = record
             return record
         }
-        guard isNetworkEnabled, !attempted.contains(key) else { return nil }
+        guard isNetworkEnabled, !attempted.contains(key), !isCoolingDown
+        else { return nil }
         attempted.insert(key)
 
-        guard let record = try? await remote.lookup(key) else { return nil }
-        records[key] = record
-        // Write through so this survives the network going away.
-        try? store?.saveCallsignRecord(Self.stored(from: record))
-        return record
+        do {
+            guard let record = try await remote.lookup(key) else { return nil }
+            records[key] = record
+            // Write through so this survives the network going away.
+            try? store?.saveCallsignRecord(Self.stored(from: record))
+            return record
+        } catch {
+            // The directory refused or is unreachable. Open the breaker
+            // and give this callsign back — it was never answered, so
+            // "attempted" would wrongly turn a throttle into a miss.
+            attempted.remove(key)
+            cooldownUntil = Date().addingTimeInterval(cooldownSeconds)
+            return nil
+        }
     }
 
     /// Resolves several callsigns, skipping anything already known.
@@ -86,6 +107,7 @@ final class CallsignLookupService: ObservableObject {
     /// else's free service, not a workload to parallelise.
     func resolveAll(_ callsigns: [String]) async {
         for callsign in callsigns {
+            if isCoolingDown { return }
             _ = await resolve(callsign)
         }
     }
