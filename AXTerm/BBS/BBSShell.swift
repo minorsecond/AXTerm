@@ -150,6 +150,9 @@ nonisolated struct BBSShell {
     /// Whether `J` answers. A heard list says what this receiver can hear,
     /// which is a statement about where it is — the operator's call to make.
     let publishesHeardList: Bool
+    /// Whether WP answers with the directory. Same disclosure family as
+    /// the heard list — names and QTHs of everyone who registered.
+    let publishesWhitePages: Bool
 
     /// Bounds on a single message, because this runs unattended. A caller who
     /// cannot stop typing should cost one session, not the mailbox.
@@ -180,6 +183,7 @@ nonisolated struct BBSShell {
          banner: String = "",
          calendar: Calendar = Calendar(identifier: .gregorian),
          publishesHeardList: Bool = true,
+         publishesWhitePages: Bool = true,
          maxBodyLines: Int = 100,
          maxBodyBytes: Int = 8 * 1024,
          maxSubjectLength: Int = 60,
@@ -192,6 +196,7 @@ nonisolated struct BBSShell {
         self.banner = banner
         self.calendar = calendar
         self.publishesHeardList = publishesHeardList
+        self.publishesWhitePages = publishesWhitePages
         self.maxBodyLines = maxBodyLines
         self.maxBodyBytes = maxBodyBytes
         self.maxSubjectLength = maxSubjectLength
@@ -294,7 +299,13 @@ nonisolated struct BBSShell {
             return Output(lines: [Self.version])
         case "I", "INFO":
             return Output(lines: info(rest, mailbox: mailbox))
-        case "J", "HEARD":
+        // Cross-dialect courtesy: BPQ operators type MH, Kantronics
+        // operators JHEARD — a lifetime habit deserves an answer, not
+        // "? MH". Understanding more dialects costs nothing; SPEAKING
+        // another node's dialect (banners, prompts) is a different thing
+        // entirely and deliberately not done — it would poison the
+        // capability fingerprints other stations route by.
+        case "J", "HEARD", "MH", "MHEARD", "JHEARD":
             return Output(lines: heardList(mailbox: mailbox))
         case "WP":
             return Output(lines: directory(mailbox: mailbox))
@@ -404,6 +415,9 @@ nonisolated struct BBSShell {
     }
 
     private func directory(mailbox: Mailbox) -> [String] {
+        guard publishesWhitePages else {
+            return ["The directory is not published by this station."]
+        }
         let entries = mailbox.whitePages.values
             .filter { !$0.isEmpty }
             .sorted { $0.callsign < $1.callsign }

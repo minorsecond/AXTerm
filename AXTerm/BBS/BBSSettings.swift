@@ -18,6 +18,7 @@ final class BBSSettings: ObservableObject {
     static let idleTimeoutKey = "bbsIdleTimeoutSeconds"
     static let stationInfoKey = "bbsStationInfo"
     static let publishHeardListKey = "bbsPublishHeardList"
+    static let publishWhitePagesKey = "bbsPublishWhitePages"
     static let acceptUploadsKey = "bbsAcceptUploads"
     static let maxUploadBytesKey = "bbsMaxUploadBytes"
     static let uploadQuotaBytesKey = "bbsUploadQuotaBytes"
@@ -74,6 +75,12 @@ final class BBSSettings: ObservableObject {
         didSet { defaults.set(publishHeardList, forKey: Self.publishHeardListKey) }
     }
 
+    /// Whether WP answers with the directory — names and QTHs callers
+    /// registered here. The heard list's disclosure sibling.
+    @Published var publishWhitePages: Bool {
+        didSet { defaults.set(publishWhitePages, forKey: Self.publishWhitePagesKey) }
+    }
+
     /// Whether callers may send files to this station.
     ///
     /// A separate decision from sharing files out, and off by default:
@@ -106,6 +113,8 @@ final class BBSSettings: ObservableObject {
         // from a deliberate off, which `bool(forKey:)` cannot.
         self.publishHeardList =
             defaults.object(forKey: Self.publishHeardListKey) as? Bool ?? true
+        self.publishWhitePages =
+            defaults.object(forKey: Self.publishWhitePagesKey) as? Bool ?? true
         self.acceptUploads = defaults.bool(forKey: Self.acceptUploadsKey)
         let maxUpload = defaults.integer(forKey: Self.maxUploadBytesKey)
         self.maxUploadBytes = maxUpload > 0 ? maxUpload : 100 * 1024

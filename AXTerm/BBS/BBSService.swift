@@ -289,6 +289,7 @@ final class BBSService: ObservableObject {
             sysop: answeringCallsign,
             banner: settings.banner,
             publishesHeardList: settings.publishHeardList,
+            publishesWhitePages: settings.publishWhitePages,
             bytesPerSecond: linkBytesPerSecond())
 
         let callId = (store.flatMap { try? $0.beginCall(callsign: caller, at: at) }) ?? -1

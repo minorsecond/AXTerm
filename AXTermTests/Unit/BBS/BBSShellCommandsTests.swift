@@ -16,8 +16,11 @@ final class BBSShellCommandsTests: XCTestCase {
 
     private func shell(caller: String = "K0XYZ",
                        sysop: String = "K0EPI-2",
-                       heardList: Bool = true) -> BBSShell {
-        BBSShell(caller: caller, sysop: sysop, calendar: utc, publishesHeardList: heardList)
+                       heardList: Bool = true,
+                       whitePages: Bool = true) -> BBSShell {
+        BBSShell(caller: caller, sysop: sysop, calendar: utc,
+                 publishesHeardList: heardList,
+                 publishesWhitePages: whitePages)
     }
 
     private func message(_ id: Int64,
@@ -384,5 +387,30 @@ final class BBSShellCommandsTests: XCTestCase {
         for command in ["LM", "LL", "RM", "SB", "KM", "I CALL", "WP", "J", "N name", "NH", "NQ", "NZ", "V", "W", "WN", "D <name>", "U", "A"] {
             XCTAssertTrue(help.contains(command), "help does not mention \(command)")
         }
+    }
+
+    /// Cross-dialect courtesy: a BPQ-fluent caller types MH, a
+    /// Kantronics-fluent one JHEARD — both mean J, and a mailbox that
+    /// answers "? MH" to a lifetime habit is being rude for no reason.
+    func testHeardListSynonymsFromOtherDialects() {
+        var mailbox = BBSShell.Mailbox()
+        mailbox.heard = [.init(callsign: "W0ARP", lastHeard: t(0))]
+        for verb in ["J", "MH", "MHEARD", "JHEARD"] {
+            var sut = shell()
+            let out = sut.handle(line: verb, mailbox: mailbox, now: t(60))
+            XCTAssertTrue(out.lines.contains { $0.contains("W0ARP") },
+                          "\(verb) should answer with the heard list")
+        }
+    }
+
+    /// White pages disclose names and QTHs — the same disclosure family
+    /// as the heard list, with the same off switch.
+    func testWhitePagesCanBeWithheld() {
+        var mailbox = BBSShell.Mailbox()
+        var sut = shell(whitePages: false)
+        let out = sut.handle(line: "WP", mailbox: mailbox, now: t(0))
+        XCTAssertTrue(out.lines.contains { $0.lowercased().contains("not published") },
+                      "a withheld directory says so instead of pretending to be empty")
+        _ = mailbox
     }
 }

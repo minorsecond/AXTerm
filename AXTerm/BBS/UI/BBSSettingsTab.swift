@@ -94,7 +94,17 @@ struct BBSSettingsTab: View {
                 Text("A heard list is standard on a BBS, and the stations in it are "
                      + "transmitting on the same channel your caller is already listening "
                      + "to. It does say what this antenna reaches, which is a rough "
-                     + "statement about where you are — so you can turn it off.")
+                     + "statement about where you are — so you can turn it off. "
+                     + "Callers can also ask with MH or JHEARD, the BPQ and "
+                     + "Kantronics spellings of the same question.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Answer WP with the caller directory", isOn: $settings.publishWhitePages)
+                Text("White pages list the name, town and home BBS of everyone "
+                     + "who has registered here — information they gave this "
+                     + "station, republished to anyone who asks. Off answers "
+                     + "honestly that the directory is not published.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
