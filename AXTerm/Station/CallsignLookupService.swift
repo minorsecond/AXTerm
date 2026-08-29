@@ -40,6 +40,23 @@ final class CallsignLookupService: ObservableObject {
     /// on every redraw.
     private var attempted = Set<String>()
 
+    /// Records resolved during a quiet bulk pass, held out of the
+    /// @Published dictionary until `flushStaged()`. Every publish
+    /// re-renders every view observing this service — the whole
+    /// ContentView tree, and through scene updates the menu-bar extra,
+    /// which AppKit answers with an update-constraints storm when poked
+    /// often enough (field capture 2026-08-29 06:12: the terminal froze
+    /// at launch while the directory trickle published a record every
+    /// couple of seconds).
+    private var staged: [String: CallsignRecord] = [:]
+
+    /// Publishes everything a quiet pass has accumulated, in one change.
+    func flushStaged() {
+        guard !staged.isEmpty else { return }
+        records.merge(staged) { _, new in new }
+        staged = [:]
+    }
+
     init(store: WinlinkStore?,
          remote: any CallsignDirectory = HamDBDirectory(),
          isNetworkEnabled: Bool = false) {
@@ -53,7 +70,8 @@ final class CallsignLookupService: ObservableObject {
     /// a view update is exactly the "Publishing changes from within view
     /// updates" hazard. Use `preload(_:)` to fill memory from the store.
     func cached(_ callsign: String) -> CallsignRecord? {
-        records[CallsignQuery.normalize(callsign)]
+        let key = CallsignQuery.normalize(callsign)
+        return records[key] ?? staged[key]
     }
 
     /// Fills memory from the persistent cache. Call from `.task`, never
@@ -71,7 +89,8 @@ final class CallsignLookupService: ObservableObject {
     /// Resolves a callsign, consulting the network only if enabled and
     /// only if the cache has nothing. Returns nil for a miss.
     @discardableResult
-    func resolve(_ callsign: String) async -> CallsignRecord? {
+    func resolve(_ callsign: String,
+                 publishImmediately: Bool = true) async -> CallsignRecord? {
         let key = CallsignQuery.normalize(callsign)
         guard CallsignQuery.isPlausible(key) else { return nil }
         if let record = cached(key) { return record }
@@ -79,7 +98,7 @@ final class CallsignLookupService: ObservableObject {
         // cold — check it before spending a network round trip.
         if let stored = try? store?.callsignRecord(callsign: key) {
             let record = Self.record(from: stored)
-            records[key] = record
+            if publishImmediately { records[key] = record } else { staged[key] = record }
             return record
         }
         guard isNetworkEnabled, !attempted.contains(key), !isCoolingDown
@@ -88,7 +107,7 @@ final class CallsignLookupService: ObservableObject {
 
         do {
             guard let record = try await remote.lookup(key) else { return nil }
-            records[key] = record
+            if publishImmediately { records[key] = record } else { staged[key] = record }
             // Write through so this survives the network going away.
             try? store?.saveCallsignRecord(Self.stored(from: record))
             return record

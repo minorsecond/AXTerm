@@ -476,9 +476,22 @@ struct ContentView: View {
                 cachedCallsigns: Set(callsignLookup.records.keys.map { $0.uppercased() }),
                 heardBases: Set(client.stations.map { CallsignQuery.normalize($0.call) }),
                 limit: Int.max)
+            // Quiet resolves, published in batches: one @Published
+            // change per record re-rendered the whole app every couple
+            // of seconds and drove the menu-bar extra into an AppKit
+            // update-constraints storm that froze the terminal at launch
+            // (field capture 2026-08-29 06:12). A map layer that fills
+            // in every half minute is the same feature without the storm.
+            defer { callsignLookup.flushStaged() }
+            var sinceFlush = 0
             for call in directory {
                 guard !Task.isCancelled, !callsignLookup.isCoolingDown else { return }
-                _ = await callsignLookup.resolve(call)
+                _ = await callsignLookup.resolve(call, publishImmediately: false)
+                sinceFlush += 1
+                if sinceFlush >= 15 {
+                    callsignLookup.flushStaged()
+                    sinceFlush = 0
+                }
                 // A courtesy gap: this is someone's free service and the
                 // radio is in no hurry. ~40/minute, and the service's
                 // breaker stops the whole pass the moment the far end

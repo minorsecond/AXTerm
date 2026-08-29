@@ -54,6 +54,25 @@ final class CallsignLookupThrottleTests: XCTestCase {
                        "a throttle must not consume the one attempt per launch")
     }
 
+    /// A quiet resolve must not touch the @Published dictionary — that
+    /// publish is what re-rendered the app per record and froze it —
+    /// while still being visible through cached() so nothing re-fetches.
+    func testQuietResolvesStayStagedUntilFlushed() async {
+        let remote = FlakyDirectory()
+        remote.failing = false
+        let service = CallsignLookupService(
+            store: nil, remote: remote, isNetworkEnabled: true)
+
+        _ = await service.resolve("W9OTR", publishImmediately: false)
+        XCTAssertTrue(service.records.isEmpty,
+                      "nothing published until the batch flush")
+        XCTAssertEqual(service.cached("W9OTR")?.gridSquare, "DM79",
+                       "but the staged record still counts as known")
+
+        service.flushStaged()
+        XCTAssertEqual(service.records["W9OTR"]?.gridSquare, "DM79")
+    }
+
     func testHamDBSurfacesServerRefusalsAsErrorsNotMisses() {
         // 429/5xx classification lives in lookup(); decode() itself must
         // stay a pure miss-vs-record function so an HTML error page (not
