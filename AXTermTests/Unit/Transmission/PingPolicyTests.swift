@@ -141,6 +141,30 @@ final class PingPolicyTests: XCTestCase {
             .probe("AB0VZ"))
     }
 
+    /// DRLNOD addresses its node link to bare KB5YZB, so the prober
+    /// overheard a "station" that never transmits under that name — while
+    /// KB5YZB-7, the box's real voice, was already in the rotation (field
+    /// capture 2026-08-29 05:19: XID sent to KB5YZB).
+    func testASilentAlternateAddressOfAKnownStationIsNotProbed() {
+        let both = [candidate("KB5YZB-7"),
+                    candidate("KB5YZB", source: .calledByOthers)]
+        let s = settings { $0.sources = [.heardDirect, .calledByOthers] }
+        XCTAssertEqual(
+            PingPolicy.decide(candidates: both, histories: [:],
+                              settings: s, conditions: conditions()),
+            .probe("KB5YZB-7"))
+        // A callee nobody of that base was heard from is still genuinely
+        // new — WN6OTL only ever appears as a destination.
+        XCTAssertEqual(
+            PingPolicy.decide(candidates: [candidate("K0NTS-10"),
+                                           candidate("WN6OTL", source: .calledByOthers)],
+                              histories: ["K0NTS-10": PingPolicy.History(
+                                lastProbed: noon.addingTimeInterval(-60),
+                                lastAnswered: nil, consecutiveSilences: 0)],
+                              settings: s, conditions: conditions()),
+            .probe("WN6OTL"))
+    }
+
     /// Already connected: it is demonstrably hearing us.
     func testAConnectedStationIsNotProbed() {
         let c = conditions { $0.connectedPeers = ["DRLNOD"] }

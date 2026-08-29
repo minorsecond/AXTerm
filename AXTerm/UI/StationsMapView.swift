@@ -263,6 +263,11 @@ struct StationsMapView: View {
         return heard + nodes + directoryNodes
     }
 
+    /// How much of the alias directory the map can currently place.
+    private var placedDirectoryCount: Int {
+        entries.filter { $0.isNodeAlias && $0.isPlaced }.count
+    }
+
     /// Measured coverage, or nil when the toggle is off or nothing has
     /// answered this station directly.
     private var coverageRing: CoverageEstimate.Ring? {
@@ -554,14 +559,24 @@ struct StationsMapView: View {
                 Divider()
                 Toggle("Node Directory", isOn: $showsDirectoryNodes)
                     .help("Draw every station the network has claimed reachable — node tables, ROUTES scrapes, made relay hops — that can be placed from cached positions. Indigo markers, dashed when the position is the operator's address rather than the node's own. Nothing is looked up online for this layer.")
+                if showsDirectoryNodes {
+                    // Why the layer looks thin: it draws only what the
+                    // position cache can place, and says so where the
+                    // toggle is instead of leaving "enabled but invisible"
+                    // to be reported as a bug (field capture 2026-08-29).
+                    Text("\(placedDirectoryCount) of \(aliases.directory.allEntries.count) "
+                         + "in the directory can be placed so far — "
+                         + "Find Positions adds up to 40 more per press")
+                }
                 Toggle("Coverage Rings", isOn: $showsCoverageRing)
                     .help("Rings around your station drawn from the stations that answered you directly — a UA, DM or FRMR to your frames proves they decoded you. Inner ring: half of them are closer than this. Outer ring: the farthest answer. Measurements, not a propagation model.")
             } label: {
-                Image(systemName: showsPaths || showsPredictedPaths || showsDirectoryNodes
+                Label("Layers", systemImage: showsPaths || showsPredictedPaths || showsDirectoryNodes
                       ? "point.topleft.down.to.point.bottomright.curvepath.fill"
                       : "point.topleft.down.to.point.bottomright.curvepath")
-                    .iconHitTarget(iconHitTarget)
             }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
             .help("Choose what the map draws: paths observed between stations, paths the terrain says are possible, the node directory, and your station's measured coverage.")
             if !distantStations.isEmpty {
                 Button {
@@ -607,9 +622,10 @@ struct StationsMapView: View {
                     Text("No terrain data yet")
                 }
             } label: {
-                Image(systemName: terrainStyle == nil ? "mountain.2" : "mountain.2.fill")
-                    .iconHitTarget(iconHitTarget)
+                Label("Terrain", systemImage: terrainStyle == nil ? "mountain.2" : "mountain.2.fill")
             }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
             .help("Draws the stored elevation data over the basemap. Hillshade lights the ground from the north-west so ridge lines read as ridges \u{2014} the feature that actually blocks a path. Elevation colours absolute height on a fixed scale, so the same colour means the same altitude on every tile. This is the very data the path forecasts are computed from.")
 
             if serviceStore != nil {

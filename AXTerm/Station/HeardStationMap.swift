@@ -484,13 +484,17 @@ nonisolated enum HeardStationMap {
             return true
         }
 
-        // One marker per physical station: DRL, DRLBBS and DRLNOD are one
-        // box offering three services, and three diamonds at one address
-        // read as three stations. The first alias stands for the box; the
-        // others ride along in its detail text.
+        // One marker per physical station — grouped by *base* callsign,
+        // because a node's services live on different SSIDs of one box:
+        // ZIARMS, ZIABBS, ZIACHT and ZIABPQ resolve to K0ZIA-10, -1, -7
+        // and -2 and drew four diamonds at one address (field capture
+        // 2026-08-29 05:16). All of these place at the same operator
+        // address anyway, so collapsing by base loses no position. The
+        // first alias stands for the box; the others ride along in its
+        // detail text.
         var byCallsign: [String: [String]] = [:]
         for name in candidates {
-            let key = aliases.callsign(for: name)?.uppercased() ?? name
+            let key = aliases.callsign(for: name).map(CallsignQuery.normalize) ?? name
             byCallsign[key, default: []].append(name)
         }
         var representatives: Set<String> = []

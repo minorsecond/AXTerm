@@ -477,6 +477,26 @@ final class HeardStationMapTests: XCTestCase {
             stations: []).isEmpty)
     }
 
+    /// The ZI* family: four aliases resolving to four SSIDs of K0ZIA —
+    /// one box whose services live on different SSIDs, which drew four
+    /// diamonds at one address (field capture 2026-08-29 05:16). Grouped
+    /// by *base* callsign: one diamond.
+    func testDirectoryLayerCollapsesSSIDsOfOneBase() throws {
+        var aliases = NodeAliasDirectory()
+        aliases.record(.init(alias: "ZIARMS", callsign: "K0ZIA-10", service: "N"), at: now)
+        aliases.record(.init(alias: "ZIABBS", callsign: "K0ZIA-1", service: "N"), at: now)
+        aliases.record(.init(alias: "ZIACHT", callsign: "K0ZIA-7", service: "N"), at: now)
+        let entries = HeardStationMap.directoryNodeEntries(
+            aliases: aliases,
+            alreadyShown: [],
+            directory: ["K0ZIA": record("K0ZIA", latitude: 38.9, longitude: -104.7)],
+            announcedGrids: [:],
+            stations: [])
+        XCTAssertEqual(entries.count, 1)
+        let name = try XCTUnwrap(entries.first?.name)
+        XCTAssertTrue(name.contains("ZIACHT") && name.contains("ZIARMS"), name)
+    }
+
     /// DRL, DRLBBS and DRLNOD are one box offering three services — one
     /// diamond, with the other names riding along in its detail.
     func testDirectoryLayerDrawsOneMarkerPerBox() throws {

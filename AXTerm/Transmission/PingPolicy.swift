@@ -161,10 +161,23 @@ nonisolated enum PingPolicy {
         }
 
         let ownBase = CallsignQuery.normalize(conditions.localCallsign)
+        // An address only ever *called* by others earns a probe only when
+        // no station of the same base callsign was actually heard: DRLNOD
+        // addresses its node-to-node link to bare KB5YZB, so the prober
+        // overheard a "station" that never transmits under that name and
+        // sent it an XID (field capture 2026-08-29 05:19) — while
+        // KB5YZB-7 and KB5YZB-1, the box's real voices, were already in
+        // the rotation. A silent alternate address of a known station is
+        // not a new station.
+        let heardBases = Set(candidates
+            .filter { $0.source != .calledByOthers }
+            .map { CallsignQuery.normalize($0.call) })
         let eligible = candidates
             .filter { settings.sources.contains($0.source) }
             .filter { !conditions.connectedPeers.contains(normalize($0.call)) }
             .filter { ownBase.isEmpty || CallsignQuery.normalize($0.call) != ownBase }
+            .filter { $0.source != .calledByOthers
+                || !heardBases.contains(CallsignQuery.normalize($0.call)) }
             .filter { isDue($0, histories: histories, settings: settings, now: conditions.now) }
 
         guard !eligible.isEmpty else { return .hold("nothing is due") }
