@@ -42,6 +42,8 @@ struct ContentView: View {
     /// next keystroke; focus cannot drive this, because clicking a
     /// result would blur the field before the click lands.
     @State private var searchPanelDismissed = false
+    /// Once true, the map stays mounted for the life of the window.
+    @State private var mapKeptAlive = false
     /// Mail summaries for the universal search, loaded once per launch
     /// the first time a query needs them — not per keystroke.
     @State private var mailSearchIndex: [WinlinkMessageSummary] = []
@@ -1275,7 +1277,60 @@ struct ContentView: View {
         VStack(spacing: 0) {
             banners
 
-            switch selectedNav {
+            ZStack {
+                detailSwitch
+                // The map lives OUTSIDE the switch: mounted on first
+                // visit or three seconds after launch (whichever comes
+                // first) and never unmounted, so tiles, Metal state and
+                // the camera are warm before the operator clicks Map —
+                // and still where they left them when they come back.
+                if mapKeptAlive || selectedNav == .map {
+                    stationsMapDetail
+                        .opacity(selectedNav == .map ? 1 : 0)
+                        .allowsHitTesting(selectedNav == .map)
+                        .accessibilityHidden(selectedNav != .map)
+                }
+            }
+        }
+        .onChange(of: selectedNav) { _, nav in
+            if nav == .map { mapKeptAlive = true }
+        }
+        .task {
+            // Pre-warm after the launch flood has settled: mounting the
+            // map costs one Metal init and a screen of tile fetches,
+            // which is exactly the work we do not want on first click.
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            mapKeptAlive = true
+        }
+    }
+
+    private var stationsMapDetail: some View {
+        StationsMapView(
+            stations: client.stations,
+            recentPackets: Array(client.packets.suffix(600)),
+            gatewayGrids: gatewayGrids,
+            announcedGrids: announcedGrids.grids,
+            observerGrid: winlinkContext.settings.gridSquare,
+            myCallsign: settings.myCallsign,
+            lookup: callsignLookup,
+            aliases: nodeAliases,
+            settings: winlinkContext.settings,
+            noteStore: client.stationNotes,
+            pathStore: client.networkPaths,
+            serviceStore: client.stationServices,
+            onOpenProfile: { profiles.openPage($0) },
+            plannedChainFor: { macResolver.profile(for: $0).plannedChain },
+            onConnect: { call in
+                connectFromProfile(macResolver.profile(for: call))
+            },
+            focusCallsign: .constant(nil),
+            overlayStore: overlayStore,
+            onSendLayer: layerSendAction)
+    }
+
+    @ViewBuilder
+    private var detailSwitch: some View {
+        switch selectedNav {
             case .terminal:
                 TerminalView(
                     client: client,
@@ -1357,27 +1412,12 @@ struct ContentView: View {
             case .analytics:
                 AnalyticsDashboardView(packetEngine: client, settings: settings, viewModel: analyticsViewModel, connectCoordinator: connectCoordinator)
             case .map:
-                StationsMapView(
-                    stations: client.stations,
-                recentPackets: Array(client.packets.suffix(600)),
-                    gatewayGrids: gatewayGrids,
-                    announcedGrids: announcedGrids.grids,
-                    observerGrid: winlinkContext.settings.gridSquare,
-                    myCallsign: settings.myCallsign,
-                    lookup: callsignLookup,
-                    aliases: nodeAliases,
-                    settings: winlinkContext.settings,
-                    noteStore: client.stationNotes,
-                    pathStore: client.networkPaths,
-                    serviceStore: client.stationServices,
-                    onOpenProfile: { profiles.openPage($0) },
-                    plannedChainFor: { macResolver.profile(for: $0).plannedChain },
-                    onConnect: { call in
-                        connectFromProfile(macResolver.profile(for: call))
-                    },
-                    focusCallsign: .constant(nil),
-                    overlayStore: overlayStore,
-                    onSendLayer: layerSendAction)
+                // Rendered by the persistent layer below, so the map view
+                // — its MKMapView, tile cache, Metal state and camera —
+                // survives tab switches instead of cold-starting on each
+                // visit (field ask 2026-08-29: "map tiles are missing for
+                // a few seconds").
+                Color.clear
             case .mail:
                 WinlinkMailView(
                     context: winlinkContext,
@@ -1400,7 +1440,6 @@ struct ContentView: View {
             //        clearedAt: $settings.rawClearedAt
             //    )
             }
-        }
     }
 
     private var packetsView: some View {

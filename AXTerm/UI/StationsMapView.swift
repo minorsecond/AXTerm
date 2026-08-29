@@ -299,7 +299,11 @@ struct StationsMapView: View {
     /// far the window never finished laying out. Marker recency and
     /// counts lagging up to 15 s is invisible; a body evaluation that
     /// takes seconds is a frozen app.
-    final class EntriesCache {
+    // nonisolated: a MainActor-isolated class aborts if deallocated off
+    // the main actor, and SwiftUI tears views down wherever it likes —
+    // the module's known deinit trap. This is a plain value box; it
+    // needs no isolation.
+    nonisolated final class EntriesCache {
         var key = ""
         var core: [HeardStationMap.Entry] = []
         var coreVisible: [HeardStationMap.Entry] = []
@@ -451,7 +455,7 @@ struct StationsMapView: View {
 
     /// Reference box so the cache survives body evaluations without being
     /// SwiftUI state — mutating it must never invalidate the view.
-    final class PathAssemblyCache {
+    nonisolated final class PathAssemblyCache {
         var paths: [NetworkPath] = []
         var loadedAt = Date.distantPast
     }

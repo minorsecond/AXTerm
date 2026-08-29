@@ -11,6 +11,10 @@ import SwiftUI
 /// comes from the grid square already in the cache.
 struct WinlinkScopeWindow: View {
 
+    /// The operator's distance unit, mirrored live from the same key the
+    /// General settings picker writes.
+    @AppStorage(WinlinkSettings.distanceUnitIsMilesKey) private var distanceUnitIsMiles = true
+
     let stations: [WinlinkRMSStationRecord]
     /// Keyed by `WinlinkLinkQuality.linkKey`.
     let linkQuality: [String: WinlinkLinkQuality]
@@ -67,7 +71,8 @@ struct WinlinkScopeWindow: View {
                 switch mode {
                 case .map:
                     StationMapView(
-                        scope: scope, observer: observer,
+                        scope: scope, distanceInMiles: distanceUnitIsMiles,
+                        observer: observer,
                         coordinates: coordinates,
                         observerCallsign: "", basemap: basemap,
                         legend: .linkQuality,
@@ -77,7 +82,8 @@ struct WinlinkScopeWindow: View {
                         .frame(minHeight: 340)
                 case .scope:
                     StationScopeView(scope: scope, selection: $selection,
-                                     legend: .linkQuality)
+                                     legend: .linkQuality,
+                                     distanceInMiles: distanceUnitIsMiles)
                         .frame(minHeight: 340)
                 }
                 Divider()
@@ -192,8 +198,9 @@ struct WinlinkScopeWindow: View {
 
         var lines = [
             "\(callsign) — \(grid.uppercased())",
-            String(format: "%.0f mi at %.0f° (%@)",
-                   GreatCircle.miles(fromKilometres: kilometres),
+            String(format: "%@ at %.0f° (%@)",
+                   DistanceDisplay.string(kilometres: kilometres,
+                                          inMiles: distanceUnitIsMiles),
                    bearing, GreatCircle.compassPoint(bearing)),
             "Frequencies: \(frequencyList(rows)) MHz",
         ]
@@ -276,8 +283,9 @@ struct WinlinkScopeWindow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text(site.label).font(.headline)
-                    Text(String(format: "%.0f mi · %.0f° %@",
-                                GreatCircle.miles(fromKilometres: site.kilometres),
+                    Text(String(format: "%@ · %.0f° %@",
+                                DistanceDisplay.string(kilometres: site.kilometres,
+                                                       inMiles: distanceUnitIsMiles),
                                 site.bearingDegrees, site.compassPoint))
                         .font(.callout.monospacedDigit())
                         .foregroundStyle(.secondary)
