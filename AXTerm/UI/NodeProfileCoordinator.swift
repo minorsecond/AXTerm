@@ -163,23 +163,19 @@ struct NodeProfileResolver {
             }
             let aliasDirectory = aliases
             let capabilityDirectory = capabilities
+            // The resolver's snapshot routes are already TTL-free, so they
+            // stand in for both freshness tiers of the shared walk.
+            let knowledge = NetRomRelayKnowledge(
+                freshRouteOrigin: { routesByDestination[$0.uppercased()] },
+                anyRouteOrigin: { _ in nil },
+                aliasCallsign: { aliasDirectory.callsign(for: $0) },
+                tellerClaims: { aliasDirectory.tellerClaims(for: $0) },
+                canRouteNetRom: { capabilityDirectory.canRouteNetRom($0) })
             profile.plannedChain = NetRomRelayPlan.plan(
                 destination: key,
                 teller: teller,
-                routeLookup: { station in
-                    if let via = routesByDestination[station.uppercased()] { return via }
-                    // Routes are filed by callsign, tellers by name — resolve
-                    // before falling back to hearsay, exactly as the relay does.
-                    if let callsign = aliasDirectory.callsign(for: station),
-                       let via = routesByDestination[callsign.uppercased()] {
-                        return via
-                    }
-                    return NetRomRelayPlan.tellerFallback(
-                        for: station,
-                        claims: aliasDirectory.tellerClaims(for: station),
-                        canRouteNetRom: { capabilityDirectory.canRouteNetRom($0) })
-                },
-                aliasResolve: { aliasDirectory.callsign(for: $0) }
+                routeLookup: { knowledge.routeLookup($0) },
+                aliasResolve: { knowledge.aliasCallsign($0) }
             ).chain
         }
         return profile

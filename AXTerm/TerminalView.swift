@@ -2110,6 +2110,54 @@ struct TerminalView: View {
 
     private var autoPathSuggestions: [TerminalAutoPathCandidate] { cachedAutoPathSuggestions }
 
+    /// The single source of chain-planning truth — both relay call sites and
+    /// the pre-connect preview walk this, so the path shown and the path
+    /// driven are one computation (see NetRomRelayKnowledge).
+    private var relayKnowledge: NetRomRelayKnowledge {
+        NetRomRelayKnowledge(
+            freshRouteOrigin: { [weak client] in
+                client?.netRomIntegration?.bestRouteTo($0)?.origin
+            },
+            anyRouteOrigin: { [weak client] name in
+                client?.netRomIntegration?.currentRoutes()
+                    .filter { $0.destination.uppercased() == name }
+                    .max(by: { $0.quality < $1.quality })?.origin
+            },
+            aliasCallsign: { nodeAliases.directory.callsign(for: $0) },
+            tellerClaims: { nodeAliases.directory.tellerClaims(for: $0) },
+            canRouteNetRom: { nodeCapabilities?.canRouteNetRom($0) ?? nil }
+        )
+    }
+
+    /// The chain a relay would walk to the destination in the bar, shown
+    /// before any dial so "connect to anyone" is legible in advance.
+    ///
+    /// Empty — and therefore invisible — when nothing is known about the
+    /// destination, when a session is already underway (the live hop map
+    /// takes over), or when the station was heard direct recently: a relay
+    /// preview for a station the ladder will dial direct would promise the
+    /// wrong thing.
+    private var plannedRelayPathPreview: [PlannedRelayHop] {
+        guard displayedSessionState == nil || displayedSessionState == .disconnected
+        else { return [] }
+        let destination = txViewModel.viewModel.destinationCall
+            .trimmingCharacters(in: .whitespaces).uppercased()
+        guard !destination.isEmpty else { return [] }
+        let knowledge = relayKnowledge
+        var names: Set<String> = [destination]
+        if let callsign = knowledge.aliasCallsign(destination) {
+            names.insert(callsign.uppercased())
+        }
+        let cutoff = Date().addingTimeInterval(-2 * 3600)
+        let heardDirect = client.stations.contains { station in
+            names.contains(station.call.uppercased())
+                && station.lastVia.isEmpty
+                && (station.lastHeard ?? .distantPast) > cutoff
+        }
+        guard !heardDirect else { return [] }
+        return knowledge.plannedPath(to: destination)
+    }
+
     private func refreshConnectBarData() {
         let neighbors = client.netRomIntegration?.currentNeighbors(forMode: .hybrid) ?? []
         let routes = client.netRomIntegration?.currentRoutes(forMode: .hybrid) ?? []
@@ -2384,7 +2432,8 @@ struct TerminalView: View {
                         viaDigipeaters: displayedVia,
                         connectionMode: displayedConnectionMode,
                         isTNCConnected: client.status == .connected,
-                        relayHops: txViewModel.relayProgressHops
+                        relayHops: txViewModel.relayProgressHops,
+                        plannedHops: plannedRelayPathPreview
                     )
                 }
 
@@ -3592,39 +3641,8 @@ struct TerminalView: View {
         let plan = NetRomRelayPlan.plan(
             destination: intent.normalizedTo,
             teller: nextHop,
-            routeLookup: { [weak client] station in
-                // Routes are filed by callsign, tellers by node *name* —
-                // COSCO's route lives under KE0GB-7. Try both names against
-                // the route table before any hearsay. bestRouteTo filters
-                // by TTL, right for live routing and wrong for planning:
-                // the harvested KE0GB-7 route was "expired" by evening and
-                // the walk fell through to hearsay, which a relay session
-                // had poisoned (field captures 2026-08-28, 18:28 and
-                // 18:39). A stale signpost beats none — the relay proves
-                // every hop live anyway — and the profile resolver already
-                // plans TTL-free, so this keeps picture and behaviour equal.
-                let names = [station, nodeAliases.directory.callsign(for: station)]
-                    .compactMap { $0?.uppercased() }
-                for name in names {
-                    if let origin = client?.netRomIntegration?.bestRouteTo(name)?.origin {
-                        return origin
-                    }
-                }
-                for name in names {
-                    if let origin = client?.netRomIntegration?.currentRoutes()
-                        .filter({ $0.destination.uppercased() == name })
-                        .max(by: { $0.quality < $1.quality })?.origin {
-                        return origin
-                    }
-                }
-                // Hearsay last, filtered: `tellerFallback` skips the claims
-                // a relay session can poison the directory with.
-                return NetRomRelayPlan.tellerFallback(
-                    for: station,
-                    claims: nodeAliases.directory.tellerClaims(for: station),
-                    canRouteNetRom: { nodeCapabilities?.canRouteNetRom($0) ?? nil })
-            },
-            aliasResolve: { nodeAliases.directory.callsign(for: $0) }
+            routeLookup: { relayKnowledge.routeLookup($0) },
+            aliasResolve: { relayKnowledge.aliasCallsign($0) }
         )
         let linkTarget = plan.linkTarget
 
@@ -4065,39 +4083,8 @@ struct TerminalView: View {
         let plan = NetRomRelayPlan.plan(
             destination: intent.normalizedTo,
             teller: nextHop,
-            routeLookup: { [weak client] station in
-                // Routes are filed by callsign, tellers by node *name* —
-                // COSCO's route lives under KE0GB-7. Try both names against
-                // the route table before any hearsay. bestRouteTo filters
-                // by TTL, right for live routing and wrong for planning:
-                // the harvested KE0GB-7 route was "expired" by evening and
-                // the walk fell through to hearsay, which a relay session
-                // had poisoned (field captures 2026-08-28, 18:28 and
-                // 18:39). A stale signpost beats none — the relay proves
-                // every hop live anyway — and the profile resolver already
-                // plans TTL-free, so this keeps picture and behaviour equal.
-                let names = [station, nodeAliases.directory.callsign(for: station)]
-                    .compactMap { $0?.uppercased() }
-                for name in names {
-                    if let origin = client?.netRomIntegration?.bestRouteTo(name)?.origin {
-                        return origin
-                    }
-                }
-                for name in names {
-                    if let origin = client?.netRomIntegration?.currentRoutes()
-                        .filter({ $0.destination.uppercased() == name })
-                        .max(by: { $0.quality < $1.quality })?.origin {
-                        return origin
-                    }
-                }
-                // Hearsay last, filtered: `tellerFallback` skips the claims
-                // a relay session can poison the directory with.
-                return NetRomRelayPlan.tellerFallback(
-                    for: station,
-                    claims: nodeAliases.directory.tellerClaims(for: station),
-                    canRouteNetRom: { nodeCapabilities?.canRouteNetRom($0) ?? nil })
-            },
-            aliasResolve: { nodeAliases.directory.callsign(for: $0) }
+            routeLookup: { relayKnowledge.routeLookup($0) },
+            aliasResolve: { relayKnowledge.aliasCallsign($0) }
         )
         client.appendSystemNotification(plan.operatorSummary)
 

@@ -19,6 +19,10 @@ struct ConnectionStatusStripView: View {
     /// Hop-by-hop position of a node-prompt relay, when one is walking a
     /// chain. Empty for every ordinary connect.
     var relayHops: [NetRomRelayProgress.Hop] = []
+    /// The chain a relay *would* walk to the destination in the bar, shown
+    /// while disconnected so the operator sees the path — and, per hop, the
+    /// evidence behind it — before committing airtime. Empty hides it.
+    var plannedHops: [PlannedRelayHop] = []
     
     private var isConnected: Bool {
         sessionState == .connected
@@ -274,9 +278,16 @@ struct ConnectionStatusStripView: View {
             Text("Not connected")
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
-            
-            // Hint when TNC is ready but no session is active
-            if isTNCConnected {
+
+            if !plannedHops.isEmpty, !destinationCall.isEmpty {
+                // The destination is only reachable through nodes, and the
+                // app knows which: say so here, where the decision to dial
+                // is made, not only on the profile page.
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                plannedPathRow
+            } else if isTNCConnected {
+                // Hint when TNC is ready but no session is active
                 Text("·")
                     .foregroundStyle(.tertiary)
 
@@ -284,8 +295,53 @@ struct ConnectionStatusStripView: View {
                     .font(.subheadline)
                     .foregroundStyle(.tertiary)
             }
-            
+
             Spacer()
         }
+    }
+
+    // MARK: - Planned path preview
+
+    /// You › DRLNOD › KB5YZB-7 › COSCO › SOLBPQ › **W9GM-7** — the walk a
+    /// node-prompt relay would take, before it is asked to. Each hop's
+    /// tooltip states the evidence that put it there (a measured route, a
+    /// stale route kept as a signpost, or a node's directory listing), per
+    /// the rule that every derived value explains its own derivation.
+    private var plannedPathRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 5) {
+                Text("planned path")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .help("How a connect to \(destinationCall) would be relayed, "
+                          + "from what this station has learned — measured routes "
+                          + "first, then each node's own directory. Hover each hop "
+                          + "for its evidence. Every hop is proven live during the "
+                          + "connect before the next is asked.")
+                Text("You")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                ForEach(plannedHops) { hop in
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.quaternary)
+                    Text(hop.name)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help(hop.evidence)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(.quaternary)
+                Text(destinationCall)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "Planned relay path: you, then "
+            + plannedHops.map(\.name).joined(separator: ", ")
+            + ", then \(destinationCall)")
     }
 }

@@ -57,6 +57,23 @@ final class NodeProfilePlannedChainTests: XCTestCase {
         XCTAssertTrue(profile.plannedChain.isEmpty)
     }
 
+    /// A station known only from SOLBPQ's scraped table, with SOLBPQ itself
+    /// known only from a made relay hop ("COSCO connected us to it") — the
+    /// profile must draw the same four-node chain the relay would walk.
+    @MainActor
+    func testAStationBehindTheDeepChainShowsFourNodes() async {
+        var resolver = makeResolver()
+        var aliases = resolver.aliases
+        aliases.record(.init(alias: "SOLBPQ", callsign: "N0HI-7", service: ""),
+                       at: Date(), from: "COSCO")
+        aliases.record(.init(alias: "W9GM-7", callsign: "W9GM-7", service: ""),
+                       at: Date(), from: "SOLBPQ")
+        resolver.aliases = aliases
+        let profile = resolver.profile(for: "W9GM-7")
+        XCTAssertEqual(profile.plannedChain,
+                       ["DRLNOD", "KB5YZB-7", "COSCO", "SOLBPQ"])
+    }
+
     /// The 18:28 field capture, 2026-08-28: a relayed session mis-credited
     /// DRLNOD with listing COSCO (its banner rode the DRLNOD link), and the
     /// fresher hearsay shortened the chain to DRLNOD→COSCO. The measured
