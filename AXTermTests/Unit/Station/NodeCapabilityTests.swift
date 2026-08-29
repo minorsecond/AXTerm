@@ -185,6 +185,29 @@ final class NodeCapabilityTests: XCTestCase {
         XCTAssertNil(dir.canRouteNetRom("KB5YZB-7"))
     }
 
+    // MARK: - Borrowed relay legs
+
+    /// K0EPI-6 in the station list is DRLNOD dialing out as the operator
+    /// (field question 2026-08-28 18:53). The store remembers whose leg it
+    /// is, across launches, without the observation deciding any verdict.
+    @MainActor
+    func testABorrowedLegIsRememberedAndNamed() async {
+        let defaults = UserDefaults(suiteName: "NodeCapabilityTests.\(UUID().uuidString)")!
+        let store = NodeCapabilityStore(defaults: defaults)
+        store.recordBorrowedLeg("K0EPI-6", node: "DRLNOD", toward: "KB5YZB-7")
+
+        XCTAssertEqual(store.borrowedLegOwner("K0EPI-6"), "DRLNOD")
+        XCTAssertEqual(store.borrowedLegOwner("k0epi-6 "), "DRLNOD",
+                       "lookup is case- and padding-insensitive")
+        XCTAssertNil(store.borrowedLegOwner("K0EPI-7"))
+        XCTAssertNil(store.directory.family(for: "DRLNOD"),
+                     "a borrowed-SSID dial corroborates but never decides")
+
+        let reloaded = NodeCapabilityStore(defaults: defaults)
+        XCTAssertEqual(reloaded.borrowedLegOwner("K0EPI-6"), "DRLNOD",
+                       "the sidebar entry lingers between launches; so must its explanation")
+    }
+
     func testUnknownStationHasNoVerdict() {
         XCTAssertNil(NodeCapabilityDirectory().canRouteNetRom("W1ABC"))
     }

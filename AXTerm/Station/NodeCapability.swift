@@ -348,6 +348,7 @@ final class NodeCapabilityStore: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         load()
+        loadBorrowedLegs()
     }
 
     private func load() {
@@ -399,5 +400,56 @@ final class NodeCapabilityStore: ObservableObject {
 
     func canRouteNetRom(_ callsign: String) -> Bool? {
         directory.canRouteNetRom(callsign)
+    }
+
+    // MARK: - Borrowed relay legs
+
+    /// Which node each borrowed SSID belongs to: `"K0EPI-6" → "DRLNOD"`.
+    ///
+    /// When a node is asked to connect onward it dials as the *operator*,
+    /// under a free SSID of their callsign — so the station list grows an
+    /// entry that looks like a stranger transmitting under the operator's
+    /// licence (field question 2026-08-28 18:53). RelayLegWitness identifies
+    /// the borrower off the SABM; this map remembers it so the UI can say
+    /// "that station is DRLNOD dialing out as you" for as long as the entry
+    /// lingers in the sidebar.
+    @Published private(set) var borrowedLegs: [String: String] = [:]
+
+    private var legsKey: String { "station.borrowedRelayLegs" }
+
+    /// A node was witnessed dialing `hop` under `leg`, an SSID of our own
+    /// callsign. Records the corroborating `.borrowedSsidDial` observation
+    /// on the node (never decisive by itself — a crossband arrangement can
+    /// produce the same shape) and remembers the leg→node identity.
+    func recordBorrowedLeg(_ leg: String, node: String, toward hop: String,
+                           at time: Date = Date()) {
+        var updated = directory
+        updated.record(.borrowedSsidDial, callsign: node,
+                       sourceText: "SABM as \(leg.uppercased()) toward \(hop.uppercased())",
+                       at: time)
+        if updated != directory {
+            directory = updated
+            save()
+        }
+        let legKey = leg.trimmingCharacters(in: .whitespaces).uppercased()
+        let owner = CallsignValidator.normalize(node)
+        guard !legKey.isEmpty, !owner.isEmpty, borrowedLegs[legKey] != owner else { return }
+        borrowedLegs[legKey] = owner
+        if let data = try? JSONEncoder().encode(borrowedLegs) {
+            defaults.set(data, forKey: legsKey)
+        }
+    }
+
+    /// The node this callsign is a dial-out leg of, or nil for any station
+    /// never witnessed as one.
+    func borrowedLegOwner(_ callsign: String) -> String? {
+        borrowedLegs[callsign.trimmingCharacters(in: .whitespaces).uppercased()]
+    }
+
+    fileprivate func loadBorrowedLegs() {
+        guard let data = defaults.data(forKey: legsKey),
+              let legs = try? JSONDecoder().decode([String: String].self, from: data)
+        else { return }
+        borrowedLegs = legs
     }
 }

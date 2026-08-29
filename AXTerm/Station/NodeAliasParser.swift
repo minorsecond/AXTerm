@@ -660,6 +660,33 @@ final class NodeAliasStore: ObservableObject {
         return doomed.count
     }
 
+    /// Records one teller claim that arrived already parsed — a scraped
+    /// ROUTES row, or a relay hop that demonstrably worked — rather than as
+    /// announcement text.
+    ///
+    /// This is how reachability learned the hard way becomes plannable:
+    /// "SOLBPQ's table lists W9GM-7" and "COSCO connected us to SOLBPQ" are
+    /// exactly the who-can-reach-whom edges the relay planner walks, and
+    /// before this they evaporated with the session (field question
+    /// 2026-08-28 18:52 — five scraped routes that "didn't pop up anywhere").
+    ///
+    /// The claim carries no service code (a table row does not say what the
+    /// station *is* — see the node-table-is-not-a-census rule) and never
+    /// overwrites a known alias→callsign mapping: recording COSCO by name
+    /// must not clobber COSCO→KE0GB-7.
+    func recordClaim(station: String, teller: String, at time: Date = Date()) {
+        let name = station.trimmingCharacters(in: .whitespaces).uppercased()
+        guard !name.isEmpty else { return }
+        let callsign = directory.callsign(for: name) ?? name
+        var updated = directory
+        updated.record(
+            NodeAliasParser.Announcement(alias: name, callsign: callsign, service: ""),
+            at: time, from: teller)
+        guard updated != directory else { return }
+        directory = updated
+        save()
+    }
+
     /// Learns from one frame. Cheap enough to call per packet.
     func ingest(text: String, source: String, at time: Date = Date()) {
         let found = NodeAliasParser.parse(text, source: source)

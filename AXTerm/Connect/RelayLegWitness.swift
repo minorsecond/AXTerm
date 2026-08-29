@@ -51,8 +51,14 @@ nonisolated struct RelayLegWitness {
     private var target: String?
 
     /// The SSID the node assigned, learned from its outgoing SABM. Nil until
-    /// that frame is heard — and it may never be.
-    private var leg: String?
+    /// that frame is heard — and it may never be. Readable so the UI can
+    /// name the borrowed station for what it is: the operator watching
+    /// `K0EPI-6 → KB5YZB-7 SABM` scroll by has every reason to think a
+    /// stranger is using their callsign (field question 2026-08-28 18:53).
+    private(set) var leg: String?
+
+    /// The hop currently watched for, for labeling the leg when it appears.
+    var expectedHop: String? { target }
 
     init(localCallsign: String, answers: [String]) {
         base = CallsignQuery.normalize(localCallsign)

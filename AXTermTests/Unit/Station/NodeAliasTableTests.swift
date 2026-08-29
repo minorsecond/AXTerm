@@ -488,6 +488,31 @@ final class NodeAliasTableTests: XCTestCase {
         return suite
     }
 
+    // MARK: - Claims recorded directly (scraped rows, made hops)
+
+    /// SOLBPQ's ROUTES table, scraped three hops out (2026-08-28 18:52),
+    /// could not become router routes — but "SOLBPQ lists W9GM-7" is a
+    /// reachability edge the relay planner walks, recorded as a claim.
+    @MainActor
+    func testARecordedClaimIsWalkableHearsay() async {
+        let store = NodeAliasStore(defaults: isolatedDefaults())
+        store.recordClaim(station: "W9GM-7", teller: "SOLBPQ")
+        XCTAssertEqual(store.directory.tellerClaims(for: "W9GM-7").first?.teller, "SOLBPQ")
+    }
+
+    /// Recording a claim about a station whose alias→callsign mapping is
+    /// already known must not clobber it: a made hop says "COSCO connected
+    /// us to SOLBPQ", not "SOLBPQ's callsign is SOLBPQ".
+    @MainActor
+    func testARecordedClaimPreservesTheKnownCallsign() async {
+        let store = NodeAliasStore(defaults: isolatedDefaults())
+        store.ingest(text: "SOLBPQ:N0HI-7", source: "COSCO",
+                     at: Date(timeIntervalSinceNow: -3600))
+        store.recordClaim(station: "SOLBPQ", teller: "COSCO")
+        XCTAssertEqual(store.directory.callsign(for: "SOLBPQ"), "N0HI-7")
+        XCTAssertEqual(store.directory.tellerClaims(for: "SOLBPQ").first?.teller, "COSCO")
+    }
+
     // MARK: - A node's table is not a claim about what each station is
 
     /// The table lists what the network can reach — BBSes, chat servers, RMS

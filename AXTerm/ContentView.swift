@@ -941,7 +941,8 @@ struct ContentView: View {
                             isSelected: client.selectedStationCall == station.call,
                             isConnected: isConnectedStation,
                             capability: client.capabilityStore.capabilities(for: station.call),
-                            alsoKnownAs: alsoKnownAs[station.call.uppercased()]
+                            alsoKnownAs: alsoKnownAs[station.call.uppercased()],
+                            relayLegOf: nodeCapabilities.borrowedLegOwner(station.call)
                         )
                         .contentShape(Rectangle())
                         .contextMenu {
@@ -1200,6 +1201,15 @@ struct ContentView: View {
                         // routes only through the capability gate: a KA-Node's
                         // table can never anchor a circuit.
                         if let row = routesScraper.ingest(line: text, peer: peer, at: Date()) {
+                            // Whatever the router does with the row, the fact
+                            // itself — "this node's table lists that station" —
+                            // is a reachability edge the relay planner can walk.
+                            // Routes need the anchor to be a dialable neighbor;
+                            // a teller claim needs only the telling, so a table
+                            // scraped three hops out (SOLBPQ, 2026-08-28 18:52)
+                            // still teaches the planner a path.
+                            nodeAliases.recordClaim(
+                                station: row.neighbor, teller: peer, at: row.observedAt)
                             let decision = HarvestedRoutePolicy.decide(
                                 rows: [row],
                                 anchorCanRouteNetRom: nodeCapabilities.canRouteNetRom(peer),

@@ -23,6 +23,20 @@ final class RelayLegWitnessTests: XCTestCase {
                        .made(hop: "KB5YZB-7"))
     }
 
+    /// The learned leg is readable, so the UI can explain the "stranger"
+    /// transmitting under the operator's callsign (field question
+    /// 2026-08-28 18:53: "k0epi-6 is what drlnod assigned to me").
+    func testTheLearnedLegIsReadable() {
+        var w = witness()
+        w.expect("KB5YZB-7")
+        XCTAssertNil(w.leg)
+        _ = w.observe(from: "K0EPI-6", to: "KB5YZB-7", uType: .SABM)
+        XCTAssertEqual(w.leg, "K0EPI-6")
+        XCTAssertEqual(w.expectedHop, "KB5YZB-7")
+        w.stopWatching()
+        XCTAssertNil(w.leg)
+    }
+
     /// DM is a refusal in the protocol itself — no node's wording required.
     func testDMIsARefusal() {
         var w = witness()

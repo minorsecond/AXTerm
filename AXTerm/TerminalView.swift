@@ -366,6 +366,21 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// link — the same screenshot could mean four different things.
     var onRelayNotice: ((String) -> Void)?
 
+    /// A node was witnessed dialing outward under a borrowed SSID of our own
+    /// callsign: (leg, node, hop). The view records the identity so the
+    /// station list can name the leg for what it is instead of listing an
+    /// apparent stranger transmitting under the operator's licence.
+    var onRelayLegIdentified: ((String, String, String) -> Void)?
+
+    /// A relay hop demonstrably worked: (station, teller) — `teller`
+    /// connected us to `station`. First-hand who-can-reach-whom knowledge,
+    /// recorded so the planner can walk it next time.
+    var onRelayHopKnowledge: ((String, String) -> Void)?
+
+    /// The node the last `C <hop>` was typed at — the greeting node, which
+    /// is the station that dials the hop and the teller a made hop credits.
+    fileprivate var relayAskedNode: String?
+
     /// Who the operator is actually conversing with on this session.
     ///
     /// The inverse of `wireDestination`. Frames on a NET/ROM circuit genuinely
@@ -1309,6 +1324,13 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         destination: String, nextHop: String, remaining: [String], evidence: String
     ) {
         relayWitness.stopWatching()
+        // A hop that worked is first-hand who-can-reach-whom knowledge —
+        // stronger than any scraped table, because it was just demonstrated
+        // on the air. Recorded as a teller claim so the next plan toward
+        // this station (or anything it lists) can walk the same edge.
+        if let teller = relayAskedNode {
+            onRelayHopKnowledge?(remaining.first ?? destination, teller)
+        }
         guard let reached = remaining.first else {
             netRomRelayPhase = .established(destination: destination, nextHop: nextHop)
             onNetRomRelayEstablished?(destination, nextHop)
@@ -1348,9 +1370,21 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// node's outward connect for the hop we just asked for, dialled under our
     /// own callsign with an SSID the node chose.
     fileprivate func noteForeignUFrame(from: String, to: String, uType: AX25UType?) {
-        guard case let .awaitingConnected(destination, nextHop, remaining) = netRomRelayPhase,
-              let verdict = relayWitness.observe(from: from, to: to, uType: uType)
+        guard case let .awaitingConnected(destination, nextHop, remaining) = netRomRelayPhase
         else { return }
+        let legAlreadyKnown = relayWitness.leg != nil
+        let verdict = relayWitness.observe(from: from, to: to, uType: uType)
+        if !legAlreadyKnown, let leg = relayWitness.leg,
+           let hop = relayWitness.expectedHop {
+            // The frame that taught us the SSID also explains the "stranger"
+            // now in the station list — say so once, while it is on screen.
+            let node = (relayAskedNode ?? nextHop).uppercased()
+            onRelayNotice?("\(leg) is \(node) dialing \(hop) on your behalf — "
+                           + "a node connects onward as the operator, under a "
+                           + "borrowed SSID of your own callsign.")
+            onRelayLegIdentified?(leg, node, hop)
+        }
+        guard let verdict else { return }
         switch verdict {
         case let .made(hop):
             // Said out loud because it contradicts what the operator can see:
@@ -1379,6 +1413,9 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             localCallsign: sessionManager.localCallsign.display,
             answers: sessionManager.answeredAddresses.map(\.display))
         relayWitness.expect(destination)
+        // The greeting node executes this C command: it is the borrower of
+        // any leg SSID the witness spots, and the teller a made hop credits.
+        relayAskedNode = relayWaitingOn ?? session.remoteAddress.display
 
         let command = Data("C \(destination)\r".utf8)
         let frames = sessionManager.sendData(command, to: session.remoteAddress, path: session.path, channel: session.channel, pid: 0xF0)
@@ -2058,6 +2095,14 @@ struct TerminalView: View {
         txViewModel.onNetRomRelayFailed = { [weak connectBarViewModel, weak client] detail in
             client?.appendSystemNotification("NET/ROM circuit refused: \(detail)")
             connectBarViewModel?.markFailed(reason: .connectRejected, detail: detail)
+        }
+
+        txViewModel.onRelayLegIdentified = { [weak nodeCapabilities] leg, node, hop in
+            nodeCapabilities?.recordBorrowedLeg(leg, node: node, toward: hop)
+        }
+
+        txViewModel.onRelayHopKnowledge = { [weak nodeAliases] station, teller in
+            nodeAliases?.recordClaim(station: station, teller: teller)
         }
 
         // onSessionStateChanged is now handled inside txViewModel.setupSessionCallbacks()

@@ -24,6 +24,14 @@ struct StationRowView: View {
     /// costs one dim word and removes the need to go and look it up.
     var alsoKnownAs: String?
 
+    /// The node this station is a dial-out leg of, when it is one.
+    ///
+    /// A node asked to connect onward dials as the *operator*, under a free
+    /// SSID of their own callsign — so `K0EPI-6` appears in this list looking
+    /// like a stranger transmitting under the operator's licence, when it is
+    /// DRLNOD carrying their own session (field question 2026-08-28 18:53).
+    var relayLegOf: String?
+
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 1) {
@@ -67,6 +75,16 @@ struct StationRowView: View {
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                         .help("Last heard digipeater path")
+                }
+
+                if let relayLegOf, !relayLegOf.isEmpty {
+                    Label("\(relayLegOf) dialing out as you", systemImage: "arrow.uturn.right")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .labelStyle(.titleAndIcon)
+                        .help("This is not another station: \(relayLegOf) connects "
+                              + "onward on your behalf using a spare SSID of your own "
+                              + "callsign. Its traffic is your session's downstream leg.")
                 }
             }
 

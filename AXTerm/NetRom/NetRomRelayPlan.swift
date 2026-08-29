@@ -64,9 +64,14 @@ nonisolated enum NetRomRelayPlan {
     }
 
     /// Guard against a routing table that points in circles, and against
-    /// spending the operator's airtime on an absurdly long chain. Three
-    /// node hops is already more than this network needs.
-    static let maxChainLength = 3
+    /// spending the operator's airtime on an absurdly long chain.
+    ///
+    /// Four, because the field needs four: SOLBPQ sits behind
+    /// DRLNOD → KB5YZB-7 → COSCO (walked live 2026-08-28 18:51), so a
+    /// station SOLBPQ's own table lists needs SOLBPQ as a fourth chain
+    /// node. Anything longer is past what the per-hop watchdogs can babysit
+    /// inside the relay's ladder budget.
+    static let maxChainLength = 4
 
     /// Build the chain to `destination` given the station that lists it.
     ///

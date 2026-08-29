@@ -100,6 +100,30 @@ final class NetRomRelayPlanTests: XCTestCase {
         XCTAssertEqual(result.chain.count, NetRomRelayPlan.maxChainLength)
     }
 
+    /// The field's deepest real case (2026-08-28): SOLBPQ sits behind
+    /// DRLNOD → KB5YZB-7 → COSCO, and its scraped table lists W9GM-7. With
+    /// the made-hop claim ("COSCO connected us to SOLBPQ") and the scraped
+    /// claim ("SOLBPQ lists W9GM-7") both recorded, a connect to W9GM-7
+    /// must plan the full four-node chain.
+    func testAStationBehindTheDeepChainPlansFourNodes() {
+        // What the production routeLookup closure resolves to: measured
+        // routes first (by callsign), then recorded teller claims.
+        let knowledge = [
+            "SOLBPQ": "COSCO",      // made-hop claim
+            "KE0GB-7": "KB5YZB-7",  // harvested route
+            "KB5YZB-7": "DRLNOD"    // measured route
+        ]
+        let aliases = ["COSCO": "KE0GB-7"]
+        let result = NetRomRelayPlan.plan(
+            destination: "W9GM-7",
+            teller: "SOLBPQ",
+            routeLookup: { knowledge[$0.uppercased()] },
+            aliasResolve: { aliases[$0.uppercased()] })
+        XCTAssertEqual(result.chain, ["DRLNOD", "KB5YZB-7", "COSCO", "SOLBPQ"])
+        XCTAssertEqual(result.linkTarget, "DRLNOD")
+        XCTAssertEqual(result.destination, "W9GM-7")
+    }
+
     // MARK: - Tables that point in circles
 
     func testASelfReferencingRouteIsNotAHop() {
