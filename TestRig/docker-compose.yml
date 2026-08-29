@@ -1,0 +1,65 @@
+# The AXTerm test rig: a real LinBPQ node on a simulated shared channel.
+#
+#   default:  kisshub (perfect channel, degradable via env) + linbpq
+#   rf:       direwolf with a PulseAudio loopback — every frame is
+#             genuinely AFSK-modulated and demodulated (experimental)
+#
+#   docker compose up -d          # the deterministic rig
+#   docker compose --profile rf up -d direwolf-rf linbpq-rf
+#
+# Point AXTerm's Connection at 127.0.0.1:8010 (hub) or :8012 (rf).
+
+networks:
+  channel:
+    ipam:
+      config:
+        - subnet: 172.28.99.0/24
+
+services:
+  kisshub:
+    build: ./kisshub
+    networks:
+      channel:
+        ipv4_address: 172.28.99.10
+    ports:
+      - "8010:8010"
+    environment:
+      LOSS: "0"
+      DELAY_MS: "0"
+      JITTER_MS: "0"
+
+  linbpq:
+    build: ./linbpq
+    platform: linux/arm/v7
+    depends_on:
+      - kisshub
+    networks:
+      channel:
+        ipv4_address: 172.28.99.20
+    ports:
+      - "8011:8011"
+    restart: unless-stopped
+
+  direwolf-rf:
+    profiles: ["rf"]
+    build: ./direwolf
+    networks:
+      channel:
+        ipv4_address: 172.28.99.30
+    ports:
+      - "8012:8001"
+
+  linbpq-rf:
+    profiles: ["rf"]
+    build:
+      context: ./linbpq
+      dockerfile: Dockerfile
+    platform: linux/arm/v7
+    depends_on:
+      - direwolf-rf
+    networks:
+      channel:
+        ipv4_address: 172.28.99.21
+    volumes:
+      - ./direwolf/bpq32-rf.cfg:/opt/bpq/bpq32.cfg:ro
+    restart: unless-stopped
