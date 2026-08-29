@@ -289,9 +289,49 @@ struct StationsMapView: View {
             excluding: myCallsign)
     }
 
+    /// One derivation of the entry pipeline per ~15 seconds, not one per
+    /// computed property per body evaluation. A live sample of the frozen
+    /// app (field capture 2026-08-29 06:19) showed the main thread
+    /// spending an entire layout pass inside this view's body: the
+    /// header, coverage chip, banners, map pane and station list each
+    /// re-derived the full alias-directory walk and plausibility
+    /// partition, and one body evaluation outgrew the frame budget so
+    /// far the window never finished laying out. Marker recency and
+    /// counts lagging up to 15 s is invisible; a body evaluation that
+    /// takes seconds is a frozen app.
+    final class EntriesCache {
+        var key = ""
+        var core: [HeardStationMap.Entry] = []
+        var coreVisible: [HeardStationMap.Entry] = []
+        var all: [HeardStationMap.Entry] = []
+        var shown: [HeardStationMap.Entry] = []
+        var hidden: [HeardStationMap.Entry] = []
+    }
+    @State private var entriesCache = EntriesCache()
+
     private var entries: [HeardStationMap.Entry] {
-        let core = coreEntries
-        return core + directoryEntries(core: core)
+        // Counts change when anything structural changes; the time
+        // bucket bounds staleness for everything else (recency tints,
+        // last-heard text). Deliberately NOT per-packet: that cadence is
+        // what this cache exists to absorb.
+        let bucket = Int(Date().timeIntervalSince1970 / 15)
+        let key = "\(stations.count)|\(lookup.records.count)|"
+            + "\(aliases.directory.allEntries.count)|\(showsDirectoryNodes)|"
+            + "\(hidesDistantStations)|\(myCallsign)|\(observerGrid)|\(bucket)"
+        if entriesCache.key != key {
+            let core = coreEntries
+            let all = core + directoryEntries(core: core)
+            let partition = StationPlausibility.partition(all, observer: observer)
+            entriesCache.core = core
+            entriesCache.coreVisible = hidesDistantStations
+                ? StationPlausibility.partition(core, observer: observer).shown
+                : core
+            entriesCache.all = all
+            entriesCache.shown = partition.shown
+            entriesCache.hidden = partition.hidden
+            entriesCache.key = key
+        }
+        return entriesCache.all
     }
 
     /// How many heard stations carry folded-in node identities.
@@ -323,13 +363,15 @@ struct StationsMapView: View {
     /// there are rather than the operator discovering the feature by
     /// accident.
     private var distantStations: [HeardStationMap.Entry] {
-        StationPlausibility.partition(entries, observer: observer).hidden
+        _ = entries
+        return entriesCache.hidden
     }
 
     /// Entries after the distance filter, if it is on.
     private var visibleEntries: [HeardStationMap.Entry] {
         guard hidesDistantStations else { return entries }
-        return StationPlausibility.partition(entries, observer: observer).shown
+        _ = entries
+        return entriesCache.shown
     }
 
     private var placed: [HeardStationMap.Entry] { visibleEntries.filter(\.isPlaced) }
@@ -369,10 +411,8 @@ struct StationsMapView: View {
     /// 05:59: opening the map froze the app while lookups landed).
     private var networkPositions: [String: GreatCircle.Point] {
         var positions: [String: GreatCircle.Point] = [:]
-        let core = hidesDistantStations
-            ? StationPlausibility.partition(coreEntries, observer: observer).shown
-            : coreEntries
-        for entry in core where entry.isPlaced {
+        _ = entries
+        for entry in entriesCache.coreVisible where entry.isPlaced {
             positions[entry.callsign.uppercased()] = entry.position
         }
         if let observer, !myCallsign.isEmpty {
