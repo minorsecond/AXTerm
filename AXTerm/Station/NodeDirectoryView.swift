@@ -55,6 +55,12 @@ struct NodeDirectoryView: View {
     var localCallsign: String = ""
 
     @State private var confirmingForget = false
+    /// Row whose evidence popover is open.
+    @State private var evidenceAlias: String?
+    /// Entry awaiting "forget?" confirmation.
+    @State private var confirmForgetEntry: String?
+    /// Node awaiting "forget entirely?" confirmation.
+    @State private var confirmForgetNode: String?
 
     @State private var order: Order = .alias
     /// Hides rows nothing has offered a way to reach.
@@ -155,6 +161,42 @@ struct NodeDirectoryView: View {
         }
         .background(Color(platform: .platformWindowBackground))
         .confirmationDialog(
+            "Forget \(confirmForgetEntry ?? "")?",
+            isPresented: Binding(
+                get: { confirmForgetEntry != nil },
+                set: { if !$0 { confirmForgetEntry = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Forget It", role: .destructive) {
+                if let alias = confirmForgetEntry { aliases.removeEntry(alias: alias) }
+                confirmForgetEntry = nil
+            }
+            Button("Keep It", role: .cancel) { confirmForgetEntry = nil }
+        } message: {
+            Text("Removes the entry and every node's claim to it. The next "
+                 + "announcement that lists it re-learns it from scratch.")
+        }
+        .confirmationDialog(
+            "Forget \(confirmForgetNode ?? "") entirely?",
+            isPresented: Binding(
+                get: { confirmForgetNode != nil },
+                set: { if !$0 { confirmForgetNode = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Forget the Node", role: .destructive) {
+                if let node = confirmForgetNode {
+                    aliases.removeNode(node)
+                    if routeFilter == node { routeFilter = nil }
+                }
+                confirmForgetNode = nil
+            }
+            Button("Keep It", role: .cancel) { confirmForgetNode = nil }
+        } message: {
+            Text("Removes its directory entry and every claim it made about "
+                 + "other stations — under both of its names. Its next "
+                 + "announcement re-learns it from scratch.")
+        }
+        .confirmationDialog(
             "Forget \(forgettable.count) entries?",
             isPresented: $confirmingForget, titleVisibility: .visible
         ) {
@@ -214,6 +256,16 @@ struct NodeDirectoryView: View {
                 .help("Showing only what \(node) listed. Others may list the same "
                       + "stations — click to drop the restriction and see every "
                       + "node's table.")
+
+                Button { confirmForgetNode = node } label: {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Forget \(node) entirely: its own entry and every claim "
+                      + "it made about other stations. Re-learned from scratch "
+                      + "the next time it announces.")
             }
 
             Picker("Sort", selection: $order) {
@@ -324,6 +376,12 @@ struct NodeDirectoryView: View {
                                     .buttonStyle(.plain)
                                     .help("Open \(entry.callsign)")
                                     .contextMenu { rowActions(entry, under: group.teller) }
+                                    .popover(
+                                        isPresented: Binding(
+                                            get: { evidenceAlias == entry.alias },
+                                            set: { if !$0 { evidenceAlias = nil } }),
+                                        arrowEdge: .leading
+                                    ) { evidenceView(entry) }
                             } else {
                                 row(entry, under: group.teller)
                             }
@@ -531,8 +589,60 @@ struct NodeDirectoryView: View {
         if let onSelect {
             Button("Open Profile") { onSelect(entry.alias) }
         }
+        Button("Why Is This Here?") { evidenceAlias = entry.alias }
         Button("Copy Alias") { ClipboardWriter.copy(entry.alias) }
         Button("Copy Callsign") { ClipboardWriter.copy(entry.callsign) }
+        Divider()
+        // Pruning, narrowest first: one node's claim, then the whole
+        // entry. Anything removed is re-learned from the next
+        // announcement — this clears data, not the willingness to listen.
+        if let teller {
+            Button("Remove \(teller)'s Claim", role: .destructive) {
+                aliases.removeClaim(teller: teller, fromAlias: entry.alias)
+            }
+        }
+        Button("Forget \(entry.alias)\u{2026}", role: .destructive) {
+            confirmForgetEntry = entry.alias
+        }
+    }
+
+    /// The receipts behind a row: who said it, when, how often.
+    private func evidenceView(_ entry: NodeAliasDirectory.Entry) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(entry.alias):\(entry.callsign)")
+                .font(.system(.headline, design: .monospaced))
+            Text("Announced \(entry.announcements) time\(entry.announcements == 1 ? "" : "s") \u{2014} "
+                 + "last \(entry.heardAt.formatted(date: .abbreviated, time: .shortened))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if entry.tellers.isEmpty {
+                Text("No node has claimed a route here. The entry only resolves "
+                     + "the name, for the map and via paths.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Divider()
+                Text("Vouched for by")
+                    .font(.caption.weight(.semibold))
+                ForEach(entry.tellers.sorted(by: { $0.value > $1.value }), id: \.key) { teller, when in
+                    HStack {
+                        Text(teller)
+                            .font(.system(.caption, design: .monospaced))
+                        Spacer(minLength: 16)
+                        Text(when.formatted(date: .abbreviated, time: .shortened))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Divider()
+            Text("Everything here was heard over the air \u{2014} a node's table "
+                 + "is its claim, not a route this station has measured.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: 260, alignment: .leading)
+        }
+        .padding(12)
     }
 
     /// Last-heard and corroboration in one tooltip.

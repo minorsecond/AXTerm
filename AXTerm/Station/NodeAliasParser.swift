@@ -494,6 +494,44 @@ nonisolated struct NodeAliasDirectory: Equatable, Sendable {
     }
 
     /// Everything one node has claimed it can reach, by alias.
+    /// Drops one node's claim from one entry. The entry itself stays —
+    /// it still resolves a name for the map and via paths.
+    mutating func removeClaim(teller: String, fromAlias alias: String) {
+        let key = alias.trimmingCharacters(in: .whitespaces).uppercased()
+        let doomed = teller.trimmingCharacters(in: .whitespaces).uppercased()
+        guard var entry = entries[key] else { return }
+        entry.tellers.removeValue(forKey: doomed)
+        entries[key] = entry
+    }
+
+    /// Deletes one entry entirely.
+    mutating func removeEntry(alias: String) {
+        entries.removeValue(forKey: alias.trimmingCharacters(in: .whitespaces).uppercased())
+    }
+
+    /// Removes a node wholesale: its claims from every entry — under
+    /// BOTH of its names, because DRLNOD's table and KE0NCQ's beacons
+    /// are the same box talking — plus its own directory row. Sibling
+    /// aliases of the same callsign are left alone: forgetting ZIABBS
+    /// must not take ZIACHT with it. Returns what went, so the caller
+    /// can say so.
+    mutating func removeNode(_ name: String) -> (claims: Int, entries: Int) {
+        let key = name.trimmingCharacters(in: .whitespaces).uppercased()
+        var doomedNames: Set<String> = [key]
+        if let call = callsign(for: key) { doomedNames.insert(call.uppercased()) }
+
+        var claims = 0
+        for (alias, var entry) in entries {
+            let before = entry.tellers.count
+            entry.tellers = entry.tellers.filter { !doomedNames.contains($0.key) }
+            claims += before - entry.tellers.count
+            entries[alias] = entry
+        }
+        var removedEntries = 0
+        if entries.removeValue(forKey: key) != nil { removedEntries = 1 }
+        return (claims, removedEntries)
+    }
+
     func entries(reachableVia teller: String) -> [Entry] {
         let key = teller.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard !key.isEmpty else { return [] }
@@ -685,6 +723,37 @@ final class NodeAliasStore: ObservableObject {
         guard updated != directory else { return }
         directory = updated
         save()
+    }
+
+    /// Drops one node's claim from one entry, persisted.
+    func removeClaim(teller: String, fromAlias alias: String) {
+        var updated = directory
+        updated.removeClaim(teller: teller, fromAlias: alias)
+        guard updated != directory else { return }
+        directory = updated
+        save()
+    }
+
+    /// Deletes one entry entirely, persisted.
+    func removeEntry(alias: String) {
+        var updated = directory
+        updated.removeEntry(alias: alias)
+        guard updated != directory else { return }
+        directory = updated
+        save()
+    }
+
+    /// Removes a node and everything it claimed, persisted. Clears the
+    /// data, not the willingness to listen: the node's next announcement
+    /// re-learns it from scratch.
+    @discardableResult
+    func removeNode(_ name: String) -> (claims: Int, entries: Int) {
+        var updated = directory
+        let removed = updated.removeNode(name)
+        guard updated != directory else { return removed }
+        directory = updated
+        save()
+        return removed
     }
 
     /// Learns from one frame. Cheap enough to call per packet.
