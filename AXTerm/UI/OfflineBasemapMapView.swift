@@ -53,6 +53,8 @@ struct OfflineBasemapMapView {
     /// Region to show. Changes here move the camera; the operator panning
     /// does not write back, so the map does not fight them.
     var region: MKCoordinateRegion?
+    /// Measured coverage rings around the observer. Nil draws none.
+    var coverage: CoverageEstimate.Ring?
 
     // MARK: - Annotations
 
@@ -65,10 +67,11 @@ struct OfflineBasemapMapView {
         let signal: StationScope.Signal
         let isApproximate: Bool
         let isObserver: Bool
+        let isNode: Bool
 
         init(id: String, coordinate: CLLocationCoordinate2D, title: String?,
              subtitle: String?, signal: StationScope.Signal,
-             isApproximate: Bool, isObserver: Bool) {
+             isApproximate: Bool, isObserver: Bool, isNode: Bool = false) {
             self.id = id
             self.coordinate = coordinate
             self.title = title
@@ -76,6 +79,7 @@ struct OfflineBasemapMapView {
             self.signal = signal
             self.isApproximate = isApproximate
             self.isObserver = isObserver
+            self.isNode = isNode
         }
     }
 
@@ -149,7 +153,8 @@ struct OfflineBasemapMapView {
                 subtitle: site.subtitle,
                 signal: site.signal,
                 isApproximate: site.isApproximate,
-                isObserver: false))
+                isObserver: false,
+                isNode: site.isNode))
         }
         return result
     }
@@ -173,6 +178,11 @@ struct OfflineBasemapMapView {
         var previewAnnotations: [MKAnnotation] = []
         /// Basemap currently installed, so it is only swapped when it changes.
         var installedBasemap: String?
+        /// Coverage circles currently on the map, and which of them is the
+        /// dashed outer ring.
+        var coverageCircles: [MKCircle] = []
+        var dashedCoverageIDs: Set<ObjectIdentifier> = []
+        var installedCoverage: CoverageEstimate.Ring?
 
         init(_ parent: OfflineBasemapMapView) { self.parent = parent }
 
@@ -253,6 +263,19 @@ struct OfflineBasemapMapView {
                 renderer.lineWidth = 2
                 return renderer
             case let circle as MKCircle:
+                // Coverage rings: measured footprint, drawn quietly under
+                // the network. Inner ring filled faintly; outer dashed.
+                if coverageCircles.contains(where: { $0 === circle }) {
+                    let renderer = MKCircleRenderer(circle: circle)
+                    let dashed = dashedCoverageIDs.contains(ObjectIdentifier(circle))
+                    renderer.strokeColor = PlatformColor.systemBlue
+                        .withAlphaComponent(dashed ? 0.45 : 0.6)
+                    renderer.lineWidth = 1.5
+                    renderer.fillColor = dashed
+                        ? nil : PlatformColor.systemBlue.withAlphaComponent(0.07)
+                    if dashed { renderer.lineDashPattern = [6, 5] }
+                    return renderer
+                }
                 let renderer = MKCircleRenderer(circle: circle)
                 renderer.fillColor = color.withAlphaComponent(0.5)
                 renderer.strokeColor = color
@@ -317,6 +340,7 @@ struct OfflineBasemapMapView {
             view.configure(tint: Self.tint(for: site),
                            isObserver: site.isObserver,
                            approximate: site.isApproximate,
+                           isNode: site.isNode,
                            callsign: site.title)
             // The callout has to earn the tap: a bubble carrying only the
             // callsign already on the label says nothing the map did not.
@@ -358,6 +382,9 @@ struct OfflineBasemapMapView {
 
         private static func tint(for site: SiteAnnotation) -> PlatformColor {
             if site.isObserver { return .systemBlue }
+            // Infrastructure wears one colour so it reads apart from
+            // traffic; recency still shows through the label and callout.
+            if site.isNode { return .systemIndigo }
             switch site.signal {
             case .good: return .systemGreen
             case .fair: return .systemYellow
@@ -406,6 +433,7 @@ struct OfflineBasemapMapView {
 
         applyBasemap(to: mapView, coordinator: context.coordinator)
         applyVectorOverlays(to: mapView, coordinator: context.coordinator)
+        applyCoverage(to: mapView, coordinator: context.coordinator)
 
         // A tap recogniser rather than MapKit's own selection handling: in a
         // drawing mode the tap must become a vertex, and MapKit gives no way
@@ -505,8 +533,10 @@ struct OfflineBasemapMapView {
         guard terrainChanged || coordinator.installedOverlayIDs != wanted else { return }
         coordinator.installedOverlayIDs = wanted
 
+        let coverageIDs = Set(coordinator.coverageCircles.map(ObjectIdentifier.init))
         let existing = mapView.overlays.filter {
             !($0 is MKTileOverlay) && !($0 is ElevationOverlay)
+                && !coverageIDs.contains(ObjectIdentifier($0))
         }
         mapView.removeOverlays(existing)
         coordinator.overlayColors.removeAll()
@@ -548,6 +578,24 @@ struct OfflineBasemapMapView {
         return true
     }
 
+    /// Adds or replaces the coverage rings when the estimate changes.
+    private func applyCoverage(to mapView: MKMapView, coordinator: Coordinator) {
+        guard coordinator.installedCoverage != coverage else { return }
+        coordinator.installedCoverage = coverage
+        mapView.removeOverlays(coordinator.coverageCircles)
+        coordinator.coverageCircles = []
+        coordinator.dashedCoverageIDs = []
+        guard let coverage else { return }
+        let inner = MKCircle(center: observer.clCoordinate,
+                             radius: coverage.typicalKm * 1000)
+        let outer = MKCircle(center: observer.clCoordinate,
+                             radius: coverage.reachKm * 1000)
+        coordinator.coverageCircles = [inner, outer]
+        coordinator.dashedCoverageIDs = [ObjectIdentifier(outer)]
+        mapView.addOverlay(inner, level: .aboveRoads)
+        mapView.addOverlay(outer, level: .aboveRoads)
+    }
+
     /// Evidence decides the colour, so the map reads at a glance: green has
     /// been proven end to end, grey has only been inferred.
     static func linkColor(for link: MapPathLink) -> PlatformColor {
@@ -583,6 +631,7 @@ struct OfflineBasemapMapView {
         // panning.
         applyBasemap(to: mapView, coordinator: context.coordinator)
         applyVectorOverlays(to: mapView, coordinator: context.coordinator)
+        applyCoverage(to: mapView, coordinator: context.coordinator)
         applyDrawingPreview(to: mapView, coordinator: context.coordinator)
 
         // Compared as *sets*: `mapView.annotations` is unordered, so an

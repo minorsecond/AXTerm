@@ -142,7 +142,8 @@ nonisolated final class PingProber: ObservableObject {
                 lastProbeAt: probeTimestamps.last,
                 probesInLastHour: probeTimestamps,
                 lastTrafficAt: lastTrafficAt?(),
-                connectedPeers: connectedPeers?() ?? []))
+                connectedPeers: connectedPeers?() ?? [],
+                spacingJitter: Double.random(in: 0...1)))
 
         guard case let .probe(call) = decision else { return }
         send(.xid, to: call, now: now)

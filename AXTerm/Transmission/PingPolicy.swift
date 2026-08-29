@@ -101,6 +101,15 @@ nonisolated enum PingPolicy {
         /// Callsigns this station currently holds a session with. They are
         /// already answering us; probing them is noise for no information.
         var connectedPeers: Set<String>
+        /// 0…1, supplied by the caller per tick. Stretches the spacing
+        /// between probes by up to half again, so the prober never becomes
+        /// a metronome the whole channel can hear ticking — and never
+        /// falls into lockstep with somebody's beacon interval. Timing is
+        /// the only thing randomised: *which* station is probed stays the
+        /// deterministic longest-unprobed rotation, because a prober whose
+        /// target varies with a dice roll is one nobody can reason about
+        /// from a log, and the rotation is already fair.
+        var spacingJitter: Double = 0
     }
 
     enum Decision: Equatable {
@@ -137,9 +146,10 @@ nonisolated enum PingPolicy {
         guard recent.count < settings.maxProbesPerHour else {
             return .hold("hourly budget spent")
         }
+        let jitteredSpacing = TimeInterval(settings.minSecondsBetweenProbes)
+            * (1 + 0.5 * min(max(conditions.spacingJitter, 0), 1))
         if let lastProbe = conditions.lastProbeAt,
-           conditions.now.timeIntervalSince(lastProbe)
-            < TimeInterval(settings.minSecondsBetweenProbes) {
+           conditions.now.timeIntervalSince(lastProbe) < jitteredSpacing {
             return .hold("too soon after the last probe")
         }
 

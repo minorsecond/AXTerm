@@ -346,8 +346,43 @@ final class ConnectBarViewModel: ObservableObject {
 
     func applySuggestedTo(_ value: String) {
         toCall = CallsignValidator.normalize(value)
+        autoRouteModeForDestination()
         validate()
         syncStateFromDraftIfEditable()
+    }
+
+    /// The last destination the mode was auto-routed for, so an operator
+    /// who flips the mode back by hand is not overridden on the next
+    /// keystroke or re-commit of the same callsign.
+    private var lastAutoRoutedDestination = ""
+
+    /// Picking a destination the network only knows through nodes arms the
+    /// transport that can actually reach it.
+    ///
+    /// Field capture 2026-08-28 19:20: AA3RG-7 chosen from "Reachable via
+    /// nodes", the status strip drew the full DRLNOD → KB5YZB-7 → COSCO
+    /// relay path — and the bar, still set to AX.25 Direct, dialled
+    /// AA3RG-7 into fifteen retries of silence. The picture and the dial
+    /// must come from the same knowledge: a station with a NET/ROM route
+    /// or a directory claim, never heard on the air, switches the bar to
+    /// NET/ROM, whose executor falls back to the node-prompt relay when no
+    /// native circuit exists. A station actually heard keeps whatever mode
+    /// is set — a direct dial to it is a reasonable ask.
+    private func autoRouteModeForDestination() {
+        let destination = toCall.uppercased()
+        guard !destination.isEmpty, destination != lastAutoRoutedDestination
+        else { return }
+        guard !stations.contains(destination) else { return }
+        let hasRoute = routeDestinations.contains(destination)
+        let hasClaim = claimedRouteVia[destination] != nil
+        guard hasRoute || hasClaim else { return }
+        lastAutoRoutedDestination = destination
+        guard mode != .netrom else { return }
+        setMode(.netrom, for: activeDraftContext)
+        applyInlineNote(hasRoute
+            ? "Routed via NET/ROM — a route to \(destination) is known."
+            : "\(destination) is only known through node directories — "
+              + "connecting through the node chain.")
     }
 
     func applyInlineNote(_ note: String?) {

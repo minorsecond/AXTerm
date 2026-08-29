@@ -46,6 +46,43 @@ final class XIDAnswerMemoryTests: XCTestCase {
         XCTAssertFalse(memory.isKnownUnsupported("W0ARP-7"),
                        "the -7 box may run different firmware than the -10 box")
     }
+
+    /// Firmware gets upgraded even without an XID exchange to prove it:
+    /// after a month plus a per-station jitter the memory expires and the
+    /// probe is asked once more.
+    func testARejectionExpiresAfterItsJitteredLifetime() {
+        var memory = XIDAnswerMemory(defaults: isolatedDefaults())
+        let remembered = Date()
+        memory.remember("W0ARP-10", unsupported: true, at: remembered)
+
+        let lifetime = XIDAnswerMemory.revalidateAfter
+            + XIDAnswerMemory.jitter(for: "W0ARP-10")
+        XCTAssertTrue(memory.isKnownUnsupported(
+            "W0ARP-10", now: remembered.addingTimeInterval(lifetime - 60)))
+        XCTAssertFalse(memory.isKnownUnsupported(
+            "W0ARP-10", now: remembered.addingTimeInterval(lifetime + 60)))
+    }
+
+    /// The jitter is deterministic per station and spreads stations apart,
+    /// so a directory learned in one evening does not all come due for
+    /// re-probing in the same evening a month later.
+    func testExpiryJitterIsDeterministicAndSpread() {
+        XCTAssertEqual(XIDAnswerMemory.jitter(for: "W0ARP-10"),
+                       XIDAnswerMemory.jitter(for: "w0arp-10 "))
+        XCTAssertNotEqual(XIDAnswerMemory.jitter(for: "W0ARP-10"),
+                          XIDAnswerMemory.jitter(for: "AB0VZ"))
+        XCTAssertLessThan(XIDAnswerMemory.jitter(for: "AB0VZ"),
+                          XIDAnswerMemory.revalidateJitterSpan)
+    }
+
+    /// The V1 store was a bare list; it migrates rather than being lost.
+    func testLegacyListMigrates() {
+        let defaults = isolatedDefaults()
+        defaults.set(["AB0VZ"], forKey: "transmission.xidUnsupportedPeers")
+        let memory = XIDAnswerMemory(defaults: defaults)
+        XCTAssertTrue(memory.isKnownUnsupported("AB0VZ"))
+        XCTAssertNil(defaults.stringArray(forKey: "transmission.xidUnsupportedPeers"))
+    }
 }
 
 /// The ping prober's XID probes get the same DM/FRMR answers a connect's

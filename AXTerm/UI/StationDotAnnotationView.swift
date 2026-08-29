@@ -109,8 +109,11 @@ final class StationDotAnnotationView: MKAnnotationView {
     /// - Parameter approximate: a grid-square lead rather than a measured fix.
     ///   Drawn hollow and dashed, keeping the scope's convention, so an
     ///   inferred position can never be mistaken for a reported one.
+    /// - Parameter isNode: NET/ROM infrastructure rather than a heard
+    ///   station — drawn as a diamond, so the network's fixtures read apart
+    ///   from the traffic at any zoom.
     func configure(tint: PlatformColor, isObserver: Bool, approximate: Bool,
-                   callsign: String?) {
+                   isNode: Bool = false, callsign: String?) {
         let diameter = isObserver ? Self.observerSize : Self.size
         let ringWidth: CGFloat = isObserver ? 3 : 2
 
@@ -125,8 +128,10 @@ final class StationDotAnnotationView: MKAnnotationView {
             x: (Self.hitWidth - diameter) / 2,
             y: (Self.hitHeight - diameter) / 2,
             width: diameter, height: diameter)
-        let path = CGPath(ellipseIn: dotRect.insetBy(dx: ringWidth / 2, dy: ringWidth / 2),
-                          transform: nil)
+        let shapeRect = dotRect.insetBy(dx: ringWidth / 2, dy: ringWidth / 2)
+        let path = isNode
+            ? Self.diamondPath(in: shapeRect)
+            : CGPath(ellipseIn: shapeRect, transform: nil)
         fill.path = path
         ring.path = path
         fill.frame = bounds
@@ -164,6 +169,17 @@ final class StationDotAnnotationView: MKAnnotationView {
         // the header contradicts it. Overlapping labels are a legibility
         // problem the operator can solve by zooming; a hidden station is not.
         displayPriority = .required
+    }
+
+    /// A rotated square, point-up — the node marker's silhouette.
+    private static func diamondPath(in rect: CGRect) -> CGPath {
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
+        path.closeSubpath()
+        return path
     }
 
     private func setLabel(_ callsign: String?, below dot: CGRect) {

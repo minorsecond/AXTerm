@@ -102,6 +102,29 @@ final class PingPolicyTests: XCTestCase {
             .hold("too soon after the last probe"))
     }
 
+    /// Jitter stretches the spacing by up to half again, so the prober is
+    /// never a metronome — and never in lockstep with someone's beacon.
+    func testSpacingJitterStretchesTheGap() {
+        let s = settings { $0.minSecondsBetweenProbes = 120 }
+        // 150 s since the last probe: past the base spacing, inside the
+        // fully-jittered one (180 s).
+        let c = conditions {
+            $0.lastProbeAt = self.noon.addingTimeInterval(-150)
+            $0.spacingJitter = 1
+        }
+        XCTAssertEqual(
+            PingPolicy.decide(candidates: [candidate("K0NTS-10")], histories: [:],
+                              settings: s, conditions: c),
+            .hold("too soon after the last probe"))
+
+        var relaxed = c
+        relaxed.spacingJitter = 0
+        XCTAssertEqual(
+            PingPolicy.decide(candidates: [candidate("K0NTS-10")], histories: [:],
+                              settings: s, conditions: relaxed),
+            .probe("K0NTS-10"))
+    }
+
     /// Already connected: it is demonstrably hearing us.
     func testAConnectedStationIsNotProbed() {
         let c = conditions { $0.connectedPeers = ["DRLNOD"] }

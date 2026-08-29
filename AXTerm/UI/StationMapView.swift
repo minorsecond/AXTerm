@@ -85,11 +85,13 @@ struct StationMapView: View {
             drawing: drawing ?? .constant(MapDrawingSession()),
             onDrawTap: onDrawTap,
             selection: $selection,
-            region: MapRegionFit.region(covering: [observer] + Array(coordinates.values))?.mkRegion)
+            region: MapRegionFit.region(covering: framingPoints)?.mkRegion,
+            coverage: coverage)
         .overlay(alignment: .bottomLeading) {
             MapLegend(kind: legend, overDarkBasemap: false)
                 .padding(10)
         }
+        .overlay(alignment: .topTrailing) { coverageChip }
         .overlay(alignment: .bottomTrailing) {
             Text(store == nil ? "" : tileSource.attribution)
                 .font(.system(size: 9))
@@ -158,22 +160,7 @@ struct StationMapView: View {
                 // back, or the legend sits on the home indicator.
                 .padding(.bottom, safeAreaBottomInset)
         }
-        .overlay(alignment: .topTrailing) {
-            // The rings' own explanation — MapKit overlays cannot carry a
-            // tooltip, so the chip does, and states the derivation.
-            if let coverage {
-                Label(String(format: "Coverage ~%.0f mi",
-                             GreatCircle.miles(fromKilometres: coverage.reachKm)),
-                      systemImage: "dot.radiowaves.left.and.right")
-                    .font(.caption)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.regularMaterial, in: Capsule())
-                    .padding(8)
-                    .help(coverage.summary)
-                    .accessibilityLabel(coverage.summary)
-            }
-        }
+        .overlay(alignment: .topTrailing) { coverageChip }
         .onAppear(perform: frameEverything)
         .onChange(of: scope.sites.count) { _, _ in frameEverything() }
     }
@@ -195,11 +182,46 @@ struct StationMapView: View {
         #endif
     }
 
+    /// The rings' own explanation — a map overlay cannot carry a tooltip,
+    /// so the chip does, and states the derivation. Shared by both map
+    /// paths so the offline basemap explains itself the same way.
+    @ViewBuilder
+    private var coverageChip: some View {
+        if let coverage {
+            Label(String(format: "Coverage ~%.0f mi",
+                         GreatCircle.miles(fromKilometres: coverage.reachKm)),
+                  systemImage: "dot.radiowaves.left.and.right")
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.regularMaterial, in: Capsule())
+                .padding(8)
+                .help(coverage.summary)
+                .accessibilityLabel(coverage.summary)
+        }
+    }
+
+    /// What the camera frames: the observer and the *heard* stations.
+    ///
+    /// The directory layer must not drive the camera — a harvested node
+    /// table legitimately reaches stations half a continent away, and
+    /// framing them shrank the operator's own network to a dot cluster
+    /// (field capture 2026-08-28 19:36). The nodes stay on the map; the
+    /// camera just does not chase them. When only nodes are placed, they
+    /// are all there is to frame.
+    private var framingPoints: [GreatCircle.Point] {
+        let stationPoints = scope.sites.filter { !$0.isNode }
+            .compactMap { coordinates[$0.id] }
+        if stationPoints.isEmpty {
+            return [observer] + scope.sites.compactMap { coordinates[$0.id] }
+        }
+        return [observer] + stationPoints
+    }
+
     /// Frame the observer *and* every station, so nothing sits off the
     /// edge on open.
     private func frameEverything() {
-        var points = [observer]
-        points.append(contentsOf: scope.sites.compactMap { coordinates[$0.id] })
+        let points = framingPoints
         guard let region = MapRegionFit.region(covering: points) else { return }
         camera = .region(MKCoordinateRegion(
             center: CLLocationCoordinate2D(
