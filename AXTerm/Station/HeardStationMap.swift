@@ -461,6 +461,7 @@ nonisolated enum HeardStationMap {
     /// more about them.
     static func directoryNodeEntries(aliases: NodeAliasDirectory,
                                      alreadyShown: Set<String>,
+                                     shownCallsigns: Set<String> = [],
                                      directory: [String: CallsignRecord],
                                      announcedGrids: [String: String],
                                      stations: [Station],
@@ -468,6 +469,12 @@ nonisolated enum HeardStationMap {
         let own = CallsignQuery.normalize(ownCallsign)
         let all = Set(aliases.allEntries.map { $0.alias.uppercased() })
         let candidates = all.subtracting(alreadyShown).filter { name in
+            // An alias whose station is already on the map under its
+            // callsign is the same box wearing another hat: YZBBPQ drawn
+            // beside the heard KB5YZB-7 read as two stations (field
+            // capture 2026-08-29 04:55).
+            if let call = aliases.callsign(for: name),
+               shownCallsigns.contains(call.uppercased()) { return false }
             guard !own.isEmpty else { return true }
             // Our own node alias resolves to our own callsign — the centre
             // marker already is this station.
@@ -476,11 +483,36 @@ nonisolated enum HeardStationMap {
                CallsignQuery.normalize(call) == own { return false }
             return true
         }
+
+        // One marker per physical station: DRL, DRLBBS and DRLNOD are one
+        // box offering three services, and three diamonds at one address
+        // read as three stations. The first alias stands for the box; the
+        // others ride along in its detail text.
+        var byCallsign: [String: [String]] = [:]
+        for name in candidates {
+            let key = aliases.callsign(for: name)?.uppercased() ?? name
+            byCallsign[key, default: []].append(name)
+        }
+        var representatives: Set<String> = []
+        var siblings: [String: [String]] = [:]
+        for names in byCallsign.values {
+            let sorted = names.sorted()
+            representatives.insert(sorted[0])
+            if sorted.count > 1 {
+                siblings[sorted[0]] = Array(sorted.dropFirst())
+            }
+        }
+
         return aliasEntries(aliases: aliases,
-                            usedAliases: candidates,
+                            usedAliases: representatives,
                             directory: directory,
                             stations: stations)
             .compactMap { entry -> Entry? in
+                var entry = entry
+                if let others = siblings[entry.callsign] {
+                    let base = entry.name ?? "Node"
+                    entry.name = "\(base) — also \(others.joined(separator: ", "))"
+                }
                 if entry.isPlaced { return entry }
                 // Second chance before dropping: the entry's own callsign
                 // may have beaconed a locator, which places the station
@@ -488,13 +520,30 @@ nonisolated enum HeardStationMap {
                 let call = aliases.callsign(for: entry.callsign)?.uppercased()
                 guard let grid = call.flatMap({ announcedGrids[$0] }),
                       let center = Maidenhead.center(of: grid) else { return nil }
-                var placed = entry
-                placed.position = GreatCircle.Point(center)
-                placed.positionSource = "locator announced in its own beacon"
-                placed.confidence = .gridSquare
-                placed.gridSquare = grid.uppercased()
-                return placed
+                entry.position = GreatCircle.Point(center)
+                entry.positionSource = "locator announced in its own beacon"
+                entry.confidence = .gridSquare
+                entry.gridSquare = grid.uppercased()
+                return entry
             }
+    }
+
+    /// Operator callsigns worth asking a directory about to place more of
+    /// the node layer — bounded and ordered by how many nodes vouch for
+    /// each station, because "look up everything" is the bulk-fetch
+    /// runaway the terrain downloader taught. Only runs on the operator's
+    /// explicit Find Positions press, never automatically.
+    static func directoryLookupCandidates(aliases: NodeAliasDirectory,
+                                          cachedCallsigns: Set<String>,
+                                          limit: Int = 40) -> [String] {
+        aliases.allEntries
+            .sorted { ($0.tellers.count, $1.alias) > ($1.tellers.count, $0.alias) }
+            .map { CallsignQuery.normalize($0.callsign) }
+            .filter { CallsignQuery.isPlausible($0) && !cachedCallsigns.contains($0) }
+            .reduce(into: [String]()) { unique, call in
+                if !unique.contains(call) { unique.append(call) }
+            }
+            .prefix(limit).map { $0 }
     }
 
     /// Aliases appearing in the via paths of stations actually heard.

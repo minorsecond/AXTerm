@@ -45,6 +45,8 @@ struct StationMapView: View {
     var coverage: CoverageEstimate.Ring?
     @Binding var selection: String?
 
+    private var hasNodeSites: Bool { scope.sites.contains(where: \.isNode) }
+
     private var observerLabel: String {
         observerCallsign.isEmpty ? scope.observerLabel : observerCallsign.uppercased()
     }
@@ -88,7 +90,8 @@ struct StationMapView: View {
             region: MapRegionFit.region(covering: framingPoints)?.mkRegion,
             coverage: coverage)
         .overlay(alignment: .bottomLeading) {
-            MapLegend(kind: legend, overDarkBasemap: false)
+            MapLegend(kind: legend, overDarkBasemap: false,
+                      showsCoverage: coverage != nil, showsNodes: hasNodeSites)
                 .padding(10)
         }
         .overlay(alignment: .topTrailing) { coverageChip }
@@ -153,7 +156,8 @@ struct StationMapView: View {
             #endif
         }
         .overlay(alignment: .bottomLeading) {
-            MapLegend(kind: legend, overDarkBasemap: basemap.isDark)
+            MapLegend(kind: legend, overDarkBasemap: basemap.isDark,
+                      showsCoverage: coverage != nil, showsNodes: hasNodeSites)
                 .padding(10)
                 // The map ignores the safe area so the terrain runs to the
                 // edges; anything floating on top of it must put the inset

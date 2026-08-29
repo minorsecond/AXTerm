@@ -121,6 +121,12 @@ struct MapLegend: View {
     let kind: Kind
     /// Drawn over imagery needs a stronger backing than over a light map.
     var overDarkBasemap = false
+    /// True when coverage rings are on the map, so the legend explains
+    /// what each ring means without the operator having to find the chip.
+    var showsCoverage = false
+    /// True when the node directory layer is drawn, so the diamond shape
+    /// is explained where the colours are.
+    var showsNodes = false
     @State private var isExpanded = false
 
     var body: some View {
@@ -160,6 +166,42 @@ struct MapLegend: View {
                 Spacer(minLength: 0)
             }
             .help("A hollow marker is a lead, not a fix: the position comes from a different entity than the thing shown \u{2014} typically a NET/ROM node placed at its operator's licence address. Nodes usually sit on a hilltop or a repeater site, not at the operator's house.")
+
+            if showsNodes {
+                HStack(spacing: 5) {
+                    Rectangle()
+                        .fill(Color.indigo)
+                        .frame(width: 7, height: 7)
+                        .rotationEffect(.degrees(45))
+                    Text("Node / directory")
+                        .font(.caption2)
+                    Spacer(minLength: 0)
+                }
+                .help("A diamond is NET/ROM infrastructure — a node or a station harvested from a node's directory — rather than a station heard on the air.")
+            }
+
+            if showsCoverage {
+                Divider().padding(.vertical, 1)
+                HStack(spacing: 5) {
+                    Circle()
+                        .strokeBorder(.blue.opacity(0.8), lineWidth: 1.5)
+                        .frame(width: 8, height: 8)
+                    Text("Typical coverage")
+                        .font(.caption2)
+                    Spacer(minLength: 0)
+                }
+                .help("The inner ring: half the stations that answered you directly are inside it. An answer \u{2014} a UA, DM or FRMR to your frames \u{2014} proves that station decoded your transmitter, so it is a measured point in your footprint. Where your signal reliably works.")
+                HStack(spacing: 5) {
+                    Circle()
+                        .strokeBorder(.blue.opacity(0.6),
+                                      style: StrokeStyle(lineWidth: 1.2, dash: [2, 1.5]))
+                        .frame(width: 8, height: 8)
+                    Text("Farthest answer")
+                        .font(.caption2)
+                    Spacer(minLength: 0)
+                }
+                .help("The dashed outer ring: the most distant station that has demonstrably decoded you in the last two weeks. Your best proven reach \u{2014} not a promise, and not a propagation model. Terrain will bend both rings.")
+            }
 
             if isExpanded {
                 Text(kind.footnote)

@@ -255,6 +255,7 @@ struct StationsMapView: View {
         let directoryNodes = HeardStationMap.directoryNodeEntries(
             aliases: aliases.directory,
             alreadyShown: shown,
+            shownCallsigns: shown,
             directory: lookup.records,
             announcedGrids: announcedGrids,
             stations: stations,
@@ -476,7 +477,7 @@ struct StationsMapView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if !unplaced.isEmpty {
+            if !unplaced.isEmpty || showsDirectoryNodes {
                 Button {
                     Task { await lookUpUnplaced() }
                 } label: {
@@ -488,7 +489,14 @@ struct StationsMapView: View {
                 }
                 .disabled(isLookingUp || !settings.callsignLookupEnabled)
                 .help(settings.callsignLookupEnabled
-                      ? "Tries the \(HeardStationMap.lookupCandidates(unplaced, aliases: aliases.directory).count) unplaced callsigns again. Lookups run on their own as stations are heard; this is for retrying the ones that failed — after the network came back, say. Answers are cached permanently and keep working offline."
+                      ? "Tries the \(HeardStationMap.lookupCandidates(unplaced, aliases: aliases.directory).count) unplaced callsigns again."
+                        + (showsDirectoryNodes
+                           ? " With the node directory shown, each press also looks up "
+                             + "as many as forty directory operators — the ones most nodes "
+                             + "vouch for first — so the layer fills in a batch at a time "
+                             + "rather than flooding the lookup service."
+                           : "")
+                        + " Lookups run on their own as stations are heard; this is for retrying the ones that failed — after the network came back, say. Answers are cached permanently and keep working offline."
                       : "Turn on \u{201C}Look up callsigns online\u{201D} in Settings \u{2192} Winlink first. It is off by default because a lookup tells a third party which stations you are hearing.")
             }
             if modeRaw == "Map" {
@@ -957,7 +965,22 @@ struct StationsMapView: View {
         isLookingUp = true
         defer { isLookingUp = false }
         lookup.isNetworkEnabled = settings.callsignLookupEnabled
-        await lookup.resolveAll(HeardStationMap.lookupCandidates(unplaced, aliases: aliases.directory))
+        var candidates = HeardStationMap.lookupCandidates(unplaced, aliases: aliases.directory)
+        // With the directory layer on, the button also chips away at the
+        // unplaced directory — up to forty operators per press, the ones
+        // most nodes vouch for first, never automatically. "47 of 51
+        // placed" while the layer showed a dozen diamonds was the gap
+        // (field capture 2026-08-29 04:55): the layer only draws what the
+        // cache can place, and nothing was feeding the cache.
+        if showsDirectoryNodes {
+            let cached = Set(lookup.records.keys.map { $0.uppercased() })
+            for call in HeardStationMap.directoryLookupCandidates(
+                aliases: aliases.directory, cachedCallsigns: cached)
+            where !candidates.contains(call) {
+                candidates.append(call)
+            }
+        }
+        await lookup.resolveAll(candidates)
     }
 
     // MARK: - Empty states

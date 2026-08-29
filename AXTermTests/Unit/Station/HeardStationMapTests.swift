@@ -462,6 +462,63 @@ final class HeardStationMapTests: XCTestCase {
             announcedGrids: [:], stations: [], excluding: "K0EPI-7").isEmpty)
     }
 
+    /// YZBBPQ beside the heard KB5YZB-7 read as two stations (field
+    /// capture 2026-08-29 04:55) — an alias whose callsign is already on
+    /// the map is the same box wearing another hat.
+    func testDirectoryLayerSkipsAliasesOfStationsAlreadyShown() {
+        var aliases = NodeAliasDirectory()
+        aliases.record(.init(alias: "YZBBPQ", callsign: "KB5YZB-7", service: "N"), at: now)
+        XCTAssertTrue(HeardStationMap.directoryNodeEntries(
+            aliases: aliases,
+            alreadyShown: [],
+            shownCallsigns: ["KB5YZB-7"],
+            directory: ["KB5YZB": record("KB5YZB", latitude: 39.6, longitude: -104.8)],
+            announcedGrids: [:],
+            stations: []).isEmpty)
+    }
+
+    /// DRL, DRLBBS and DRLNOD are one box offering three services — one
+    /// diamond, with the other names riding along in its detail.
+    func testDirectoryLayerDrawsOneMarkerPerBox() throws {
+        var aliases = NodeAliasDirectory()
+        for name in ["DRLNOD", "DRLBBS", "DRL"] {
+            aliases.record(.init(alias: name, callsign: "KE0NCQ", service: "N"), at: now)
+        }
+        let entries = HeardStationMap.directoryNodeEntries(
+            aliases: aliases,
+            alreadyShown: [],
+            directory: ["KE0NCQ": record("KE0NCQ", latitude: 39.65, longitude: -104.98)],
+            announcedGrids: [:],
+            stations: [])
+        XCTAssertEqual(entries.map(\.callsign), ["DRL"],
+                       "alphabetically first alias stands for the box")
+        let name = try XCTUnwrap(entries.first?.name)
+        XCTAssertTrue(name.contains("DRLBBS") && name.contains("DRLNOD"), name)
+    }
+
+    /// Lookups for the directory layer are bounded and ordered by how
+    /// many nodes vouch for each station — never "look up everything".
+    func testDirectoryLookupCandidatesAreBoundedAndRanked() {
+        var aliases = NodeAliasDirectory()
+        for index in 0..<60 {
+            aliases.record(.init(alias: "N\(index)X", callsign: "N\(index)XA", service: "N"),
+                           at: now, from: "COSCO")
+        }
+        aliases.record(.init(alias: "POPULAR", callsign: "W0POP-1", service: "N"),
+                       at: now, from: "COSCO")
+        aliases.record(.init(alias: "POPULAR", callsign: "W0POP-1", service: "N"),
+                       at: now.addingTimeInterval(1), from: "SOLBPQ")
+
+        let candidates = HeardStationMap.directoryLookupCandidates(
+            aliases: aliases, cachedCallsigns: [], limit: 40)
+        XCTAssertEqual(candidates.count, 40, "hard cap per press")
+        XCTAssertEqual(candidates.first, "W0POP",
+                       "two nodes vouch for it; everything else has one")
+        XCTAssertTrue(HeardStationMap.directoryLookupCandidates(
+            aliases: aliases, cachedCallsigns: ["W0POP"], limit: 40)
+            .allSatisfy { $0 != "W0POP" }, "already-cached callsigns are not re-fetched")
+    }
+
     /// A station that beaconed its own locator is placed by it — the
     /// station's own claim about itself, better than nothing cached.
     func testDirectoryLayerFallsBackToTheStationsOwnBeacon() throws {
