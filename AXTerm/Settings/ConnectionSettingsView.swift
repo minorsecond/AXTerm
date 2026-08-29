@@ -42,6 +42,49 @@ struct ConnectionSettingsView: View {
             Section {
                 ConnectionStatusView(status: viewModel.connectionStatus)
 
+                // What is on the other end of the link. Direwolf answers
+                // the in-band KISS hardware query with its name and
+                // version; a silent TNC is plain KISS, which is itself
+                // the answer — the protocol has no other telemetry to
+                // offer, and pretending otherwise would be decoration.
+                if viewModel.connectionStatus == .connected,
+                   viewModel.selectedTransport == .network {
+                    if let identity = viewModel.tncIdentity {
+                        LabeledContent {
+                            HStack(spacing: 6) {
+                                Text(identity)
+                                    .font(.system(.body, design: .monospaced))
+                                if TNCIdentifier.isDirewolf(identity) {
+                                    Text("Direwolf")
+                                        .font(.caption2.weight(.semibold))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 1)
+                                        .background(Capsule().fill(Color.green.opacity(0.2)))
+                                        .foregroundStyle(.green)
+                                }
+                            }
+                        } label: {
+                            Text("Software")
+                        }
+                        .help("The TNC named itself over the KISS hardware "
+                              + "query — asked and answered on this TCP link, "
+                              + "nothing transmitted on the air.")
+                    } else {
+                        LabeledContent {
+                            Button("Ask") { viewModel.identifyTNC() }
+                                .controlSize(.small)
+                        } label: {
+                            Text("Software")
+                            Text("Has not identified itself — plain KISS, "
+                                 + "or the query went unanswered.")
+                        }
+                        .help("Sends the KISS SetHardware \u{201C}TNC:\u{201D} query. "
+                              + "Direwolf answers with its version; hardware "
+                              + "TNCs that don't implement the extension "
+                              + "ignore it. Nothing is transmitted on RF.")
+                    }
+                }
+
                 // The only way to open the link on a handheld: every other
                 // connect action lives in the macOS menu bar or main-window
                 // toolbar, neither of which exists on iOS. Offered on both

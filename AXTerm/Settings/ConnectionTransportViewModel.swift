@@ -22,6 +22,8 @@ enum TransportSelection: String, CaseIterable, Identifiable {
 final class ConnectionTransportViewModel: ObservableObject {
     private let settings: AppSettingsStore
     private let packetEngine: PacketEngine
+    /// What the TNC said it is — see PacketEngine.tncIdentity.
+    @Published var tncIdentity: String?
     
     // MARK: - State
     
@@ -83,6 +85,8 @@ final class ConnectionTransportViewModel: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
     private var serialGraceTimer: Timer?
     
+    func identifyTNC() { packetEngine.identifyTNC() }
+
     init(settings: AppSettingsStore, packetEngine: PacketEngine) {
         self.settings = settings
         self.packetEngine = packetEngine
@@ -128,6 +132,10 @@ final class ConnectionTransportViewModel: ObservableObject {
             .store(in: &cancellables)
         
         // Bind Mobilinkd Battery Level
+        packetEngine.$tncIdentity
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$tncIdentity)
+
         packetEngine.$mobilinkdBatteryLevel
             .receive(on: RunLoop.main)
             .sink { [weak self] level in

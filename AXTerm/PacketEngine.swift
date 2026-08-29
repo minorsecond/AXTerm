@@ -222,6 +222,10 @@ final class PacketEngine: ObservableObject {
     
     // Mobilinkd Telemetry
     @Published var mobilinkdBatteryLevel: Int?
+    /// What the TNC said it is, when it answered the in-band KISS
+    /// hardware query ("direwolf 1.7"). Nil until it answers; most
+    /// hardware TNCs never do, which is itself the honest answer.
+    @Published private(set) var tncIdentity: String?
     @Published var mobilinkdInputLevel: MobilinkdInputLevel?
 
     @Published var selectedStationCall: String?
@@ -603,6 +607,7 @@ final class PacketEngine: ObservableObject {
         connection = nil
         parser.reset()
         status = .disconnected
+        tncIdentity = nil
         connectedHost = nil
         connectedPort = nil
         addSystemLine("Disconnected (reason: \(reason))", category: .connection)
@@ -788,6 +793,15 @@ final class PacketEngine: ObservableObject {
         activeLink.send(frame) { _ in }
     }
 
+    /// Asks the TNC to name itself via the in-band KISS hardware query.
+    /// Safe on the wire (SetHardware is advisory and never leaves the
+    /// TNC); the answer, if any, lands in `tncIdentity`.
+    func identifyTNC() {
+        guard let activeLink = link else { return }
+        activeLink.send(TNCIdentifier.queryFrame()) { _ in }
+        debugTrace("TNC identity query sent", [:])
+    }
+
     /// Sends RESET to restart the TNC4 demodulator.
     func sendMobilinkdReset() {
         guard let activeLink = link else { return }
@@ -803,6 +817,14 @@ final class PacketEngine: ObservableObject {
             eventLogger?.log(level: .info, category: .connection, message: "Connected to \(host):\(port)", metadata: nil)
             SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Connected", level: .info, data: nil)
             startReceiving()
+            // Ask the TNC to name itself — an advisory SetHardware frame
+            // on the TCP link, never transmitted on RF. Direwolf answers;
+            // anything that does not implement the extension ignores it.
+            // Network transport only: poking hardware-dependent commands
+            // at serial or BLE TNCs is Mobilinkd's lane.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.identifyTNC()
+            }
 
         case .failed(let error):
             status = .failed
@@ -813,6 +835,7 @@ final class PacketEngine: ObservableObject {
 
         case .cancelled:
             status = .disconnected
+        tncIdentity = nil
             addSystemLine("Disconnected", category: .connection)
             eventLogger?.log(level: .info, category: .connection, message: "Disconnected", metadata: nil)
             SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Cancelled", level: .info, data: nil)
@@ -887,7 +910,16 @@ final class PacketEngine: ObservableObject {
 
             case .mobilinkdTelemetry(let telemetryData):
                 frameStats.recordFrame(type: "Telemetry", size: telemetryData.count)
-                if let inputLevel = MobilinkdTNC.parseInputLevel(telemetryData) {
+                if let identity = TNCIdentifier.identity(fromTelemetryFrame: telemetryData) {
+                    // The TNC answered the hardware query with its name —
+                    // Direwolf does; this rides the same SetHardware
+                    // command Mobilinkd telemetry uses, so it is checked
+                    // first and everything else falls through unchanged.
+                    DispatchQueue.main.async {
+                        self.tncIdentity = identity
+                    }
+                    debugTrace("TNC identified itself", ["identity": identity])
+                } else if let inputLevel = MobilinkdTNC.parseInputLevel(telemetryData) {
                     DispatchQueue.main.async {
                         self.mobilinkdInputLevel = inputLevel
                     }
