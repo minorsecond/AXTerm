@@ -131,7 +131,9 @@ final class StationDotAnnotationView: MKAnnotationView {
     ///   from the traffic at any zoom.
     func configure(tint: PlatformColor, isObserver: Bool, approximate: Bool,
                    isNode: Bool = false, callsign: String?) {
-        let diameter = isObserver ? Self.observerSize : Self.size
+        // A diamond reads at a slightly smaller size than a circle of the
+        // same box, and infrastructure should sit quietly under traffic.
+        let diameter = isObserver ? Self.observerSize : (isNode ? 13 : Self.size)
         let ringWidth: CGFloat = isObserver ? 3 : 2
 
         frame = CGRect(x: 0, y: 0, width: Self.hitWidth, height: Self.hitHeight)

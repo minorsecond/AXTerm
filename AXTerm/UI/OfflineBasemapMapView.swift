@@ -386,7 +386,7 @@ struct OfflineBasemapMapView {
             if site.isObserver { return .systemBlue }
             // Infrastructure wears one colour so it reads apart from
             // traffic; recency still shows through the label and callout.
-            if site.isNode { return .systemIndigo }
+            if site.isNode { return .systemPurple }
             switch site.signal {
             case .good: return .systemGreen
             case .fair: return .systemYellow

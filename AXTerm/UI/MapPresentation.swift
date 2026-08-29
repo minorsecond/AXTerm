@@ -195,7 +195,7 @@ struct MapLegend: View {
             if showsNodes {
                 HStack(spacing: 5) {
                     Rectangle()
-                        .fill(Color.indigo)
+                        .fill(Color.purple)
                         .frame(width: 7, height: 7)
                         .rotationEffect(.degrees(45))
                     Text("Node / directory")

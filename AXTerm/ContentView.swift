@@ -1304,6 +1304,10 @@ struct ContentView: View {
                     pathStore: client.networkPaths,
                     serviceStore: client.stationServices,
                     onOpenProfile: { profiles.openPage($0) },
+                    plannedChainFor: { macResolver.profile(for: $0).plannedChain },
+                    onConnect: { call in
+                        connectFromProfile(macResolver.profile(for: call))
+                    },
                     focusCallsign: .constant(nil),
                     overlayStore: overlayStore,
                     onSendLayer: layerSendAction)

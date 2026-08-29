@@ -62,6 +62,9 @@ nonisolated enum HeardStationMap {
         var locality: String?
         /// A NET/ROM alias (`DRLNOD`) rather than a station callsign.
         var isNodeAlias: Bool = false
+        /// The callsign behind a node alias, when the directory knows it —
+        /// the licence the network's tactical name resolves to.
+        var nodeCallsign: String?
 
         var id: String { callsign }
         var isPlaced: Bool { position != nil }
@@ -350,6 +353,12 @@ nonisolated enum HeardStationMap {
 
     static func detail(for entry: Entry, observer: GreatCircle.Point, now: Date) -> String {
         var lines = [entry.callsign]
+        // A node wears two names and the operator needs both: the alias is
+        // what the network answers to (`C INRMS` at a prompt), the
+        // callsign is who is licensed to be there.
+        if entry.isNodeAlias, let call = entry.nodeCallsign, call != entry.callsign {
+            lines.append("Alias of \(call)")
+        }
         if let name = entry.name { lines.append(name) }
         if let locality = entry.locality, let grid = entry.gridSquare {
             lines.append("\(locality) · \(grid)")
@@ -430,7 +439,8 @@ nonisolated enum HeardStationMap {
                     positionSource: nil,
                     gridSquare: nil,
                     name: "Node operated by \(entry.callsign)",
-                    isNodeAlias: true)
+                    isNodeAlias: true,
+                    nodeCallsign: entry.callsign.uppercased())
             }
             return Entry(
                 callsign: key,
@@ -443,7 +453,8 @@ nonisolated enum HeardStationMap {
                 gridSquare: record.gridSquare?.uppercased(),
                 name: record.name,
                 locality: record.locality,
-                isNodeAlias: true)
+                isNodeAlias: true,
+                nodeCallsign: entry.callsign.uppercased())
         }
         .sorted { $0.callsign < $1.callsign }
     }

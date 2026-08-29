@@ -276,7 +276,7 @@ struct StationMapView: View {
         // them, so the eye separates the network's fixtures from the
         // stations moving through it. Recency still shows through the
         // stale fade.
-        let tint = site.isNode ? Color.indigo : color(for: site.signal)
+        let tint = site.isNode ? Color.purple : color(for: site.signal)
         let diameter = Self.markerDiameter
 
         return VStack(spacing: 2) {

@@ -39,6 +39,12 @@ struct StationsMapView: View {
     var serviceStore: StationServiceStore?
     /// Opens an identity page from a directory row.
     var onOpenProfile: ((String) -> Void)?
+    /// The node-prompt chain a connect to this name would walk, from the
+    /// same planner the relay uses. Nil hides the path row.
+    var plannedChainFor: ((String) -> [String])?
+    /// Starts a connect to this name and carries the operator to the
+    /// Terminal. Nil hides the button.
+    var onConnect: ((String) -> Void)?
 
 
     @State private var selection: String?
@@ -803,7 +809,7 @@ struct StationsMapView: View {
                 HStack(spacing: 6) {
                     if site.isNode {
                         Image(systemName: "point.3.connected.trianglepath.dotted")
-                            .foregroundStyle(.indigo)
+                            .foregroundStyle(.purple)
                             .help("A NET/ROM node or directory entry, not a heard station.")
                     }
                     Text(site.label)
@@ -822,14 +828,40 @@ struct StationsMapView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if let onOpenProfile {
-                    Button {
-                        onOpenProfile(site.id)
-                    } label: {
-                        Label("Open Profile", systemImage: "person.text.rectangle")
+                if let chain = plannedChainFor?(site.id), !chain.isEmpty {
+                    // The whole route, in the card where the decision to
+                    // connect is made — same planner the relay drives, so
+                    // this cannot promise a path the dial will not take.
+                    Label("You › \(chain.joined(separator: " › ")) › \(site.label)",
+                          systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .help("The node-prompt chain a connect would walk: measured "
+                              + "routes first, then node directories. Every hop is "
+                              + "proven live during the connect before the next is asked.")
+                }
+                HStack(spacing: 8) {
+                    if let onConnect {
+                        Button {
+                            onConnect(site.id)
+                        } label: {
+                            Label("Connect", systemImage: "link")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .help("Opens the Terminal and starts the connect — relayed "
+                              + "through the chain above when one is needed.")
                     }
-                    .controlSize(.small)
-                    .help("Everything known about \(site.label): identity, roles, links, and the chain a connect would walk.")
+                    if let onOpenProfile {
+                        Button {
+                            onOpenProfile(site.id)
+                        } label: {
+                            Label("Open Profile", systemImage: "person.text.rectangle")
+                        }
+                        .controlSize(.small)
+                        .help("Everything known about \(site.label): identity, roles, links, and the chain a connect would walk.")
+                    }
                 }
             }
             .padding(12)
