@@ -3638,9 +3638,17 @@ struct TerminalView: View {
         // answers (field capture 2026-08-27: KB5YZB-7 direct came up and
         // stayed silent three times, while DRLNOD → KB5YZB-7 → COSCO
         // worked by hand).
+        // Seeded by the walk's own resolution rather than the hint's
+        // teller: the hint carries newest-first hearsay, and one `N` at a
+        // distant node makes it the freshest teller for its whole table
+        // (field capture 2026-08-29 05:07 — a chain seeded that way read
+        // "SOLBPQ → COSCO" through a node that sits *behind* COSCO, while
+        // the measured route via KB5YZB-7 sat unconsulted). Routes outrank
+        // hearsay at the seed exactly as at every later hop; the hint is
+        // the fallback when the walk knows nothing.
         let plan = NetRomRelayPlan.plan(
             destination: intent.normalizedTo,
-            teller: nextHop,
+            teller: relayKnowledge.resolve(intent.normalizedTo)?.origin ?? nextHop,
             routeLookup: { relayKnowledge.routeLookup($0) },
             aliasResolve: { relayKnowledge.aliasCallsign($0) }
         )
@@ -4080,9 +4088,17 @@ struct TerminalView: View {
             return
         }
 
+        // Seeded by the walk's own resolution rather than the hint's
+        // teller: the hint carries newest-first hearsay, and one `N` at a
+        // distant node makes it the freshest teller for its whole table
+        // (field capture 2026-08-29 05:07 — a chain seeded that way read
+        // "SOLBPQ → COSCO" through a node that sits *behind* COSCO, while
+        // the measured route via KB5YZB-7 sat unconsulted). Routes outrank
+        // hearsay at the seed exactly as at every later hop; the hint is
+        // the fallback when the walk knows nothing.
         let plan = NetRomRelayPlan.plan(
             destination: intent.normalizedTo,
-            teller: nextHop,
+            teller: relayKnowledge.resolve(intent.normalizedTo)?.origin ?? nextHop,
             routeLookup: { relayKnowledge.routeLookup($0) },
             aliasResolve: { relayKnowledge.aliasCallsign($0) }
         )

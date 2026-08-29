@@ -57,6 +57,23 @@ final class NodeProfilePlannedChainTests: XCTestCase {
         XCTAssertTrue(profile.plannedChain.isEmpty)
     }
 
+    /// The 05:07 field capture, 2026-08-29: one `N` at SOLBPQ made it the
+    /// freshest teller for its whole 233-entry table, COSCO included — and
+    /// a chain seeded from the newest teller read "You → SOLBPQ → COSCO",
+    /// through a node that sits *behind* COSCO. The measured route via
+    /// KB5YZB-7 must win the seed, exactly as it wins every later hop.
+    @MainActor
+    func testTheFreshestTellerDoesNotOutrankTheMeasuredRouteAtTheSeed() async {
+        var resolver = makeResolver()
+        var aliases = resolver.aliases
+        aliases.record(.init(alias: "COSCO", callsign: "KE0GB-7", service: ""),
+                       at: Date(), from: "SOLBPQ")  // newest teller — and wrong seed
+        resolver.aliases = aliases
+        let profile = resolver.profile(for: "COSCO")
+        XCTAssertEqual(profile.plannedChain, ["DRLNOD", "KB5YZB-7"],
+                       "seeded by the route table, not by whoever spoke last")
+    }
+
     /// A station known only from SOLBPQ's scraped table, with SOLBPQ itself
     /// known only from a made relay hop ("COSCO connected us to it") — the
     /// profile must draw the same four-node chain the relay would walk.

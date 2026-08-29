@@ -1000,14 +1000,17 @@ struct NodeProfileView: View {
                 } label: {
                     // Named with the route rather than a bare "Connect". For a
                     // station nothing here has heard, the interesting part of
-                    // the action is which node it goes through, and the line
-                    // above already told the operator to do this by hand.
-                    Label(profile.reachVia.first.map { "Connect via \($0)" } ?? "Connect",
+                    // the action is which node it goes through — the planned
+                    // chain's first hop, the one this station actually dials,
+                    // not the newest teller (which can sit *behind* the
+                    // destination; field capture 2026-08-29 05:07).
+                    Label((profile.plannedChain.first ?? profile.reachVia.first)
+                              .map { "Connect via \($0)" } ?? "Connect",
                           systemImage: "link")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .help(profile.reachVia.first.map {
+                .help((profile.plannedChain.first ?? profile.reachVia.first).map {
                     "Connects to \($0), waits for its prompt, then asks it for "
                     + "\(profile.alias ?? profile.callsign)."
                 } ?? "Opens an AX.25 connection to \(profile.callsign).")

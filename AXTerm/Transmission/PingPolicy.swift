@@ -101,6 +101,13 @@ nonisolated enum PingPolicy {
         /// Callsigns this station currently holds a session with. They are
         /// already answering us; probing them is noise for no information.
         var connectedPeers: Set<String>
+        /// This station's callsign. Any candidate sharing its base is
+        /// never probed: a station transmitting under your own callsign
+        /// is either you, or a node dialing out *as* you under a borrowed
+        /// SSID — K0EPI-6 is DRLNOD's transmitter wearing this station's
+        /// licence (field capture 2026-08-29 05:05, a ping sent to it).
+        /// Either way the answer teaches nothing about anyone's coverage.
+        var localCallsign: String = ""
         /// 0…1, supplied by the caller per tick. Stretches the spacing
         /// between probes by up to half again, so the prober never becomes
         /// a metronome the whole channel can hear ticking — and never
@@ -153,9 +160,11 @@ nonisolated enum PingPolicy {
             return .hold("too soon after the last probe")
         }
 
+        let ownBase = CallsignQuery.normalize(conditions.localCallsign)
         let eligible = candidates
             .filter { settings.sources.contains($0.source) }
             .filter { !conditions.connectedPeers.contains(normalize($0.call)) }
+            .filter { ownBase.isEmpty || CallsignQuery.normalize($0.call) != ownBase }
             .filter { isDue($0, histories: histories, settings: settings, now: conditions.now) }
 
         guard !eligible.isEmpty else { return .hold("nothing is due") }

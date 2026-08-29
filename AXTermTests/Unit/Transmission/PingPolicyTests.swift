@@ -125,6 +125,22 @@ final class PingPolicyTests: XCTestCase {
             .probe("K0NTS-10"))
     }
 
+    /// K0EPI-6 is DRLNOD's transmitter wearing this station's licence — a
+    /// node's borrowed dial-out leg. A ping to any SSID of our own base
+    /// callsign teaches nothing about anyone's coverage (field capture
+    /// 2026-08-29 05:05: XID sent to K0EPI-6).
+    func testOurOwnBaseCallsignIsNeverProbed() {
+        let c = conditions { $0.localCallsign = "K0EPI-7" }
+        XCTAssertEqual(
+            PingPolicy.decide(candidates: [candidate("K0EPI-6")], histories: [:],
+                              settings: settings(), conditions: c),
+            .hold("nothing is due"))
+        XCTAssertEqual(
+            PingPolicy.decide(candidates: [candidate("K0EPI-6"), candidate("AB0VZ")],
+                              histories: [:], settings: settings(), conditions: c),
+            .probe("AB0VZ"))
+    }
+
     /// Already connected: it is demonstrably hearing us.
     func testAConnectedStationIsNotProbed() {
         let c = conditions { $0.connectedPeers = ["DRLNOD"] }

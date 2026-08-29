@@ -156,7 +156,7 @@ struct NodeProfileResolver {
         // Routes here are deliberately unfiltered by TTL: for planning, a
         // stale signpost beats none, and the teller fallback covers the
         // rest — same policy as the relay itself.
-        if let teller = profile.reachVia.first {
+        if !profile.reachVia.isEmpty {
             var routesByDestination: [String: String] = [:]
             for route in routes where routesByDestination[route.destination] == nil {
                 routesByDestination[route.destination] = route.via
@@ -171,12 +171,15 @@ struct NodeProfileResolver {
                 aliasCallsign: { aliasDirectory.callsign(for: $0) },
                 tellerClaims: { aliasDirectory.tellerClaims(for: $0) },
                 canRouteNetRom: { capabilityDirectory.canRouteNetRom($0) })
-            profile.plannedChain = NetRomRelayPlan.plan(
-                destination: key,
-                teller: teller,
-                routeLookup: { knowledge.routeLookup($0) },
-                aliasResolve: { knowledge.aliasCallsign($0) }
-            ).chain
+            // Seeded by the walk's own resolution, never by the newest
+            // teller. Field capture 2026-08-29 05:07: one `N` at SOLBPQ
+            // made it the freshest teller for its whole 233-entry table,
+            // and a chain seeded from `reachVia.first` read "You → SOLBPQ
+            // → COSCO" — through a node that sits *behind* COSCO — while
+            // the measured route via KB5YZB-7 sat unconsulted. Routes
+            // outrank hearsay at the seed exactly as they do at every
+            // later hop.
+            profile.plannedChain = knowledge.plannedPath(to: key).map(\.name)
         }
         return profile
     }
