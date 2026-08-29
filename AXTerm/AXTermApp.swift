@@ -19,10 +19,8 @@ struct AXTermApp: App {
     /// would each read the same defaults and neither would see the other's
     /// changes until relaunch.
     @StateObject private var bbsSettings = BBSSettings()
-    /// Controls MenuBarExtra visibility via @AppStorage to avoid feedback loops.
-    /// @Published bindings to MenuBarExtra(isInserted:) cause SwiftUI scene updates
-    /// to trigger Combine publishes, creating an infinite invalidation loop.
-    @AppStorage(AppSettingsStore.runInMenuBarKey) private var runInMenuBar = AppSettingsStore.defaultRunInMenuBar
+    // The menu bar item's visibility is read straight from UserDefaults
+    // by StatusItemController; no scene state is involved any more.
     private let packetStore: PacketStore?
     private let consoleStore: ConsoleStore?
     private let rawStore: RawStore?
@@ -134,6 +132,18 @@ struct AXTermApp: App {
             }
         }
         appDelegate.settings = settingsStore
+
+        // The menu bar item lives in AppKit — see StatusItemController's
+        // header for why SwiftUI's MenuBarExtra had to go. Skipped in
+        // unit tests: the test host has no business inserting status
+        // items, and tests construct their own controllers.
+        if !isUnitTests, StatusItemController.shared == nil {
+            StatusItemController.shared = StatusItemController(
+                client: client,
+                settings: settingsStore,
+                inspectionRouter: router,
+                defaults: defaults)
+        }
     }
 
     var body: some Scene {
@@ -212,19 +222,11 @@ struct AXTermApp: App {
         }
         .defaultSize(width: 820, height: 700)
 
-        MenuBarExtra("AXTerm", systemImage: "antenna.radiowaves.left.and.right", isInserted: $runInMenuBar) {
-            MenuBarView(
-                client: client,
-                settings: settings,
-                inspectionRouter: inspectionRouter
-            )
-
-            #if DEBUG
-            Divider()
-            Button("Send Test Event to Sentry") {
-                SentryManager.shared.sendTestEvent()
-            }
-            #endif
-        }
+        // No MenuBarExtra scene: the menu bar item is an AppKit
+        // NSStatusItem owned by StatusItemController (created in init).
+        // SwiftUI's MenuBarExtraController re-set the status button
+        // image during every window's render flush, and a packet flood
+        // tripped AppKit's constraint-loop guard on the status window —
+        // thrown as an NSException that froze the app (2026-08-29).
     }
 }

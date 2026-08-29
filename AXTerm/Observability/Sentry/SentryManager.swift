@@ -169,6 +169,19 @@ final class SentryManager {
         // Crash handling
         options.enableCrashHandler = true
 
+        #if os(macOS)
+        // AppKit catches NSExceptions at the run-loop boundary and only
+        // logs them, so the crash handler never sees an exception like
+        // the status-bar constraint storm of 2026-08-29 — the app hung
+        // instead of crashing and Sentry recorded nothing but an
+        // abnormal session. This opt-in makes swallowed NSExceptions
+        // reportable events, and app-hang tracking reports the stalls
+        // themselves.
+        options.enableUncaughtNSExceptionReporting = true
+        options.enableAppHangTracking = true
+        options.appHangTimeoutInterval = 3
+        #endif
+
         // BeforeSend hook for redaction
         options.beforeSend = { [weak self] event in
             self?.redactSensitiveData(from: event)

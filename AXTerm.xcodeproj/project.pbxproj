@@ -65,7 +65,6 @@
 				AXTermCommands.swift,
 				ContentView.swift,
 				Info.plist,
-				MenuBarView.swift,
 				PacketNSTableView.swift,
 				PacketTableCoordinator.swift,
 				PacketTableNSTableView.swift,
