@@ -87,6 +87,7 @@ final class AppSettingsStore: ObservableObject {
     // Beacon: what this station says about itself, unprompted.
     static let beaconEnabledKey = "beaconEnabled"
     static let autoRouteMaxChainLengthKey = "autoRouteMaxChainLength"
+    static let netRomAcceptInboundKey = "netRomAcceptInbound"
     static let terminalFontSizeKey = "terminalFontSize"
     static let beaconTextKey = "beaconText"
     static let beaconMinutesKey = "beaconMinutes"
@@ -608,6 +609,13 @@ final class AppSettingsStore: ObservableObject {
         didSet { defaults.set(beaconEnabled, forKey: Self.beaconEnabledKey) }
     }
 
+    /// Answer inbound NET/ROM circuits with the node shell. Off by
+    /// default like every on-air switch: accepting circuits commits
+    /// this transmitter to serving other people\u{2019}s sessions.
+    @Published var netRomAcceptInbound: Bool {
+        didSet { defaults.set(netRomAcceptInbound, forKey: Self.netRomAcceptInboundKey) }
+    }
+
     /// How many nodes the Auto ladder may chain through. An operator's
     /// airtime judgment, not ours: a four-hop prompt relay can hold the
     /// channel for minutes, and courtesy differs by channel.
@@ -1066,6 +1074,7 @@ final class AppSettingsStore: ObservableObject {
         let storedNetRomBroadcastMinutes = defaults.object(forKey: Self.netRomBroadcastMinutesKey) as? Int ?? Self.defaultNetRomBroadcastMinutes
         let storedBeaconEnabled = defaults.object(forKey: Self.beaconEnabledKey) as? Bool ?? Self.defaultBeaconEnabled
         autoRouteMaxChainLength = defaults.object(forKey: Self.autoRouteMaxChainLengthKey) as? Int ?? 4
+        netRomAcceptInbound = defaults.object(forKey: Self.netRomAcceptInboundKey) as? Bool ?? false
         terminalFontSize = defaults.object(forKey: Self.terminalFontSizeKey) as? Double ?? 11
         let storedBeaconText = defaults.string(forKey: Self.beaconTextKey) ?? ""
         let storedBeaconMinutes = defaults.object(forKey: Self.beaconMinutesKey) as? Int ?? Self.defaultBeaconMinutes

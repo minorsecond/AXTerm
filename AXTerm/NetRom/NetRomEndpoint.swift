@@ -99,6 +99,12 @@ nonisolated final class NetRomEndpoint {
     /// everything is refused — the honest default for a station running
     /// no services yet.
     var inboundAcceptor: ((_ user: AX25Address, _ originNode: AX25Address) -> Bool)?
+
+    /// Fired when an accepted CONREQ has become a circuit, before the
+    /// CONACK goes out — the node service records the id here so it can
+    /// greet on `onCircuitConnected` and route the caller's data to its
+    /// shell instead of the operator's transcript.
+    var onInboundCircuitOpened: ((NetRomCircuitID, _ user: AX25Address, _ originNode: AX25Address) -> Void)?
     /// Diagnostic tap for frames that matched nothing.
     var onUnmatchedFrame: ((NetRomDatagram, _ neighbor: AX25Address) -> Void)?
     /// A datagram addressed to some other node. Returning without acting
@@ -305,6 +311,7 @@ nonisolated final class NetRomEndpoint {
             )
         )
         circuits[box.id] = box
+        onInboundCircuitOpened?(box.id, user, originNode)
         dispatch(box, event: .acceptInbound(
             theirIndex: theirIndex, theirId: theirId,
             proposedWindow: proposedWindow,

@@ -106,6 +106,9 @@ final class SessionCoordinator: ObservableObject {
     /// this speaks the protocol nodes speak to each other.
     /// See Docs/NetRomTransport.md.
     private(set) lazy var netRomDriver: NetRomLinkDriver = makeNetRomDriver()
+    /// The service behind inbound circuits — providers injected by
+    /// ContentView, which owns the stores (same pattern as nodeAliases).
+    let netRomNodeHost = NetRomNodeHost()
 
     /// Destinations whose native NET/ROM circuit did not come up, and when.
     ///
@@ -844,6 +847,13 @@ final class SessionCoordinator: ObservableObject {
             guard !text.isEmpty else { return }
             self.packetEngine?.appendSessionChatLine(from: peer, text: text)
         }
+        // AFTER the transcript consumer, so the host can wrap it: hosted
+        // circuits' keystrokes go to the node shell, everything else
+        // still reaches the operator's transcript.
+        netRomNodeHost.install(on: driver)
+        netRomNodeHost.onOperatorNote = { [weak self] text in
+            self?.packetEngine?.appendSystemNotification(text)
+        }
         return driver
     }
 
@@ -864,6 +874,7 @@ final class SessionCoordinator: ObservableObject {
     func applyNetRomNodeSettings(_ settings: AppSettingsStore) {
         netRomDriver.advertisesItself = settings.netRomAdvertiseSelf
         netRomDriver.forwardingEnabled = settings.netRomForwarding
+        netRomNodeHost.isEnabled = settings.netRomAcceptInbound
         // Six characters, uppercase, alphanumeric — the shape BPQ shows
         // beside a callsign. Sanitised at the boundary because whatever
         // is here goes into every neighbour's node list.

@@ -597,6 +597,7 @@ struct ContentView: View {
             // callsigns NET/ROM addresses by. Wired here rather than in
             // init because the store is a @StateObject.
             sessionCoordinator.nodeAliases = nodeAliases
+            wireNetRomNodeHost()
             SettingsRouter.shared.openAction = { openSettings() }
             connectCoordinator.navigateToTerminal = {
                 selectedNav = .terminal
@@ -765,6 +766,54 @@ struct ContentView: View {
                 stationCall: profile.callsign, mode: .ax25, executeImmediately: true)
         }
         selectedNav = .terminal
+    }
+
+    /// The node service behind inbound NET/ROM circuits: identity, what
+    /// it may say, and the mailbox to hand callers to. Wired on appear
+    /// for the same @StateObject reason as nodeAliases.
+    private func wireNetRomNodeHost() {
+        let host = sessionCoordinator.netRomNodeHost
+        host.identityProvider = { [weak settings] in
+            let alias = settings?.netRomNodeAlias
+                .trimmingCharacters(in: .whitespaces).uppercased() ?? ""
+            return (alias.isEmpty ? "NODE" : alias,
+                    settings?.myCallsign.uppercased() ?? "N0CALL",
+                    "AXTerm")
+        }
+        host.snapshotProvider = { [weak client, weak nodeAliases, weak bbsSettings] in
+            var snapshot = NetRomNodeShell.Snapshot()
+            if let integration = client?.netRomIntegration {
+                let aliasFor = { (call: String) -> String in
+                    nodeAliases?.directory.allEntries.first {
+                        $0.callsign.uppercased() == call.uppercased()
+                    }?.alias ?? ""
+                }
+                snapshot.routes = integration.currentRoutes().map { route in
+                    NetRomNodeShell.Snapshot.Route(
+                        destination: route.destination,
+                        alias: aliasFor(route.destination),
+                        nextHop: route.origin,
+                        quality: route.quality)
+                }
+                snapshot.neighbors = integration.currentNeighbors().map { neighbor in
+                    NetRomNodeShell.Snapshot.Neighbor(
+                        callsign: neighbor.call,
+                        quality: neighbor.quality,
+                        count: max(1, neighbor.obsolescenceCount))
+                }
+            }
+            snapshot.heard = (client?.stations ?? []).compactMap { station in
+                station.lastHeard.map {
+                    NetRomNodeShell.Snapshot.Heard(callsign: station.call, lastHeard: $0)
+                }
+            }
+            snapshot.stationInfo = bbsSettings?.stationInfo ?? ""
+            snapshot.bbsAvailable = bbsSettings?.onAir ?? false
+            return snapshot
+        }
+        host.bbsSessionFactory = { [weak bbsService] caller in
+            bbsService?.beginCircuitSession(caller: caller)
+        }
     }
 
     private func syncSearchScope(for item: NavigationItem) {

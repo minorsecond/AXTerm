@@ -868,3 +868,62 @@ nonisolated final class BBSTransferBridge: FileTransferProtocolDelegate {
     func transferProtocol(_ transfer: FileTransferProtocol,
                           stateChanged newState: TransferProtocolState) {}
 }
+
+// MARK: - NET/ROM circuit sessions
+
+extension BBSService {
+
+    /// One mailbox caller arriving over a NET/ROM circuit instead of an
+    /// AX.25 link. Same shell, same store, same effects — but its own
+    /// state, because circuits multiplex where the AX.25 listener serves
+    /// one caller at a time. File transfer protocols are declined
+    /// honestly for now: they own a byte stream, and a circuit caller's
+    /// bytes are owned by the node host.
+    @MainActor
+    final class CircuitSession {
+        private var shell: BBSShell
+        private unowned let service: BBSService
+
+        fileprivate init?(service: BBSService, caller: String) {
+            guard service.settings.onAir else { return nil }
+            self.service = service
+            self.shell = BBSShell(
+                caller: caller,
+                sysop: service.answeringCallsign,
+                banner: service.settings.banner,
+                publishesHeardList: service.settings.publishHeardList,
+                publishesWhitePages: service.settings.publishWhitePages)
+        }
+
+        func greeting() -> (lines: [String], prompt: String?) {
+            let output = shell.greeting(
+                mailbox: service.currentMailbox(), now: Date())
+            return (output.lines, output.prompt)
+        }
+
+        /// Feeds one line; applies the safe effects through the service.
+        func handle(line: String) -> (lines: [String], prompt: String?, closed: Bool) {
+            var output = shell.handle(
+                line: line, mailbox: service.currentMailbox(), now: Date())
+            var closed = false
+            for effect in output.effects {
+                switch effect {
+                case .store, .kill, .markRead, .learnWhitePages:
+                    service.apply(effect)
+                case .viewFile, .sendFile, .beginUpload, .abortTransfer:
+                    output.lines.append(
+                        "File transfers are not available over a NET/ROM "
+                        + "circuit yet — sorry.")
+                case .disconnect:
+                    closed = true
+                }
+            }
+            return (output.lines, output.prompt, closed)
+        }
+    }
+
+    /// Nil when the mailbox is off the air.
+    func beginCircuitSession(caller: String) -> CircuitSession? {
+        CircuitSession(service: self, caller: caller)
+    }
+}

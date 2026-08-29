@@ -282,6 +282,17 @@ struct TransmissionSettingsView: View {
             }
 
             PreferencesSection("NET/ROM Node", id: .netRomNode) {
+                Toggle("Answer inbound circuits with the node shell",
+                       isOn: $settings.netRomAcceptInbound)
+                    .help("Accept NET/ROM connect requests from other "
+                          + "stations. Callers land at an AXTerm node prompt "
+                          + "with NODES, ROUTES, MH and INFO, and BBS drops "
+                          + "them into the mailbox when it is on the air. "
+                          + "Off answers every request with the standard "
+                          + "refusal. Up to three callers at once.\n\n"
+                          + "If you advertise this station (below), turning "
+                          + "this on is what makes the advertisement honest.")
+
                 Stepper(value: $settings.autoRouteMaxChainLength, in: 1...6) {
                     HStack {
                         Text("Auto-routing may chain up to")

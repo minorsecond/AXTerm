@@ -154,6 +154,16 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
     var onOperatorNote: ((String) -> Void)?
     /// Payload delivered on a circuit.
     var onCircuitData: ((NetRomCircuitID, Data) -> Void)?
+
+    /// The node service claims circuits it hosts: while this returns
+    /// true for an id, the driver's own operator notes and campaign
+    /// bookkeeping stand aside — "Connected to W0ARP-1 over NET/ROM"
+    /// is the wrong sentence when W0ARP-1 connected to US.
+    var hostedCircuitCheck: ((NetRomCircuitID) -> Bool)?
+    /// Fired after a circuit reaches connected, hosted or not.
+    var onCircuitBecameConnected: ((NetRomCircuitID) -> Void)?
+    /// Fired after a circuit is torn down, hosted or not.
+    var onCircuitTornDown: ((NetRomCircuitID) -> Void)?
     /// Fired just before `circuits` changes. A nested ObservableObject
     /// does not republish through its owner, so the owner forwards this
     /// to its own `objectWillChange` — otherwise the sidebar would hold
@@ -635,6 +645,9 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
         endpoint.onCircuitConnected = { [weak self] id, window in
             guard let self else { return }
             self.refreshCircuits()
+            let hosted = self.hostedCircuitCheck?(id) ?? false
+            defer { self.onCircuitBecameConnected?(id) }
+            if hosted { return }
             if let summary = self.circuit(for: id) {
                 self.campaignSucceeded(circuitID: id, destination: summary.destination)
                 self.onOperatorNote?(
@@ -654,6 +667,11 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
                 self.releasePinIfUnused(for: summary.destination, excluding: id)
             }
             self.refreshCircuits()
+            if self.hostedCircuitCheck?(id) ?? false {
+                self.onCircuitTornDown?(id)
+                return
+            }
+            defer { self.onCircuitTornDown?(id) }
             if let summary,
                self.campaignHandled(circuitID: id,
                                     destination: summary.destination,
