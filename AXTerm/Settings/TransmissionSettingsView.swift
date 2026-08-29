@@ -123,6 +123,22 @@ struct TransmissionSettingsView: View {
                 )
             }
 
+            PreferencesSection("Digipeater") {
+                Toggle("Repeat frames addressed via this station", isOn: $settings.digipeatEnabled)
+                    .help("Classic AX.25 digipeating: a frame whose via path "
+                          + "names this station (H bit clear) is retransmitted "
+                          + "with that one bit set, nothing else changed. Off "
+                          + "by default \u{2014} it volunteers your transmitter for "
+                          + "other people\u{2019}s traffic.")
+                if settings.digipeatEnabled {
+                    TextField("Also answer to alias", text: $settings.digipeatAlias,
+                              prompt: Text("optional \u{2014} e.g. DWARC"))
+                        .help("A second name the digipeater responds to, the way "
+                              + "clubs publish a memorable digi alias. Leave empty "
+                              + "to answer on the station callsign only.")
+                }
+            }
+
             PreferencesSection("Beacon", id: .beacon) {
                 Text("An unconnected announcement on a timer — what every other "
                      + "node on the channel sends, and how a station that has never "
@@ -282,16 +298,18 @@ struct TransmissionSettingsView: View {
             }
 
             PreferencesSection("NET/ROM Node", id: .netRomNode) {
-                Toggle("Answer inbound circuits with the node shell",
+                Toggle("Run the node — answer callers with the node shell",
                        isOn: $settings.netRomAcceptInbound)
-                    .help("Accept NET/ROM connect requests from other "
-                          + "stations. Callers land at an AXTerm node prompt "
-                          + "with NODES, ROUTES, MH and INFO, and BBS drops "
-                          + "them into the mailbox when it is on the air. "
-                          + "Off answers every request with the standard "
-                          + "refusal. Up to three callers at once.\n\n"
-                          + "If you advertise this station (below), turning "
-                          + "this on is what makes the advertisement honest.")
+                    .help("Accept NET/ROM circuits AND plain AX.25 connects "
+                          + "to the node alias. Callers land at an AXTerm "
+                          + "node prompt with NODES, ROUTES, MH, INFO; BBS "
+                          + "drops them into the mailbox when it is on the "
+                          + "air; C bridges them onward through this "
+                          + "station\u{2019}s own circuits. Off answers every "
+                          + "request with the standard refusal. Up to three "
+                          + "callers at once.\n\nIf you advertise this "
+                          + "station (below), turning this on is what makes "
+                          + "the advertisement honest.")
 
                 Stepper(value: $settings.autoRouteMaxChainLength, in: 1...6) {
                     HStack {

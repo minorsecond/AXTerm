@@ -961,6 +961,7 @@ final class PacketEngine: ObservableObject {
 
     private func processAX25Frame(_ ax25Data: Data) {
         debugTrace("processAX25Frame called", ["len": ax25Data.count, "hex": hexPrefix(ax25Data)])
+        digipeatIfAsked(ax25Data)
         TxLog.hexDump(.ax25, "Received AX.25 frame", data: ax25Data)
         debugTrace("RX AX.25 raw", [
             "len": ax25Data.count,
@@ -1111,6 +1112,41 @@ final class PacketEngine: ObservableObject {
     private func appendRawChunk(_ chunk: RawChunk) {
         CappedArray.append(chunk, to: &rawChunks, max: maxRawChunks)
         persistRawChunk(chunk)
+    }
+
+    // MARK: - Digipeating
+
+    /// Recently repeated frames, so two paths delivering the same
+    /// original do not become two transmissions. Keyed by frame hash;
+    /// eight seconds outlives any sane duplicate delivery.
+    private var recentDigipeats: [Int: Date] = [:]
+
+    /// Repeats a frame addressed via this station, when the operator
+    /// has switched digipeating on. One bit changes; see AX25Digipeater.
+    private func digipeatIfAsked(_ raw: Data) {
+        guard settings.digipeatEnabled, let activeLink = link else { return }
+        var addresses = [settings.myCallsign]
+        let alias = settings.digipeatAlias
+            .trimmingCharacters(in: .whitespaces).uppercased()
+        if !alias.isEmpty { addresses.append(alias) }
+        guard let repeated = AX25Digipeater.repeatFrame(raw, myAddresses: addresses)
+        else { return }
+
+        let key = raw.hashValue
+        let now = Date()
+        recentDigipeats = recentDigipeats.filter { now.timeIntervalSince($0.value) < 8 }
+        guard recentDigipeats[key] == nil else { return }
+        recentDigipeats[key] = now
+
+        activeLink.send(KISS.encodeFrame(payload: repeated)) { _ in }
+        let who = AX25.decodeFrame(ax25: raw).map {
+            "\($0.from?.display ?? "?") \u{2192} \($0.to?.display ?? "?")"
+        } ?? "frame"
+        addSystemLine("\u{21bb} Digipeated \(who)", category: .connection)
+        TxLog.outbound(.ax25, "Digipeated", ["frame": who, "bytes": repeated.count])
+        SentryManager.shared.addBreadcrumb(
+            category: "ax25.digipeat", message: "Repeated a frame",
+            level: .info, data: ["frame": who])
     }
 
     private func addSystemLine(_ text: String, category: ConsoleEntryRecord.Category) {

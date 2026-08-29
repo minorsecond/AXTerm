@@ -67,12 +67,24 @@ final class NetRomNodeShellTests: XCTestCase {
         }
     }
 
-    func testConnectIsRefusedHonestly() {
+    func testConnectEmitsTheOnwardEffect() {
         var shell = makeShell()
-        let out = shell.handle(line: "C COSCO", snapshot: snapshot, now: now)
-        XCTAssertTrue(out.lines.joined().lowercased().contains("does not connect onward"),
-                      "no onward connects yet — say so, never pretend to try")
-        XCTAssertTrue(out.effects.isEmpty)
+        let out = shell.handle(line: "C cosco", snapshot: snapshot, now: now)
+        XCTAssertEqual(out.effects, [.connectOnward("COSCO")])
+        XCTAssertTrue(out.lines.contains { $0.contains("Trying COSCO") })
+        XCTAssertNil(out.prompt, "no prompt while the node is dialing")
+    }
+
+    func testConnectRefusesItselfAndTeachesUsage() {
+        var shell = makeShell()
+        let selfTry = shell.handle(line: "C EPINOD", snapshot: snapshot, now: now)
+        XCTAssertTrue(selfTry.effects.isEmpty)
+        XCTAssertTrue(selfTry.lines.contains { $0.contains("this node") })
+
+        var shell2 = makeShell()
+        let bare = shell2.handle(line: "C", snapshot: snapshot, now: now)
+        XCTAssertTrue(bare.effects.isEmpty)
+        XCTAssertTrue(bare.lines.contains { $0.contains("C <call") })
     }
 
     func testBBSHandsOffAndByeDisconnects() {

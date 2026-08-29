@@ -875,6 +875,17 @@ final class SessionCoordinator: ObservableObject {
         netRomDriver.advertisesItself = settings.netRomAdvertiseSelf
         netRomDriver.forwardingEnabled = settings.netRomForwarding
         netRomNodeHost.isEnabled = settings.netRomAcceptInbound
+        // The L2 door: a KA-node neighbor cannot open circuits, so the
+        // node alias also answers plain AX.25 connects while the node
+        // service is on. Same shell, same rules, different transport.
+        let aliasAddress: AX25Address? = {
+            guard settings.netRomAcceptInbound else { return nil }
+            let alias = netRomDriver.localAlias
+            guard !alias.isEmpty else { return nil }
+            return CallsignNormalizer.toAddress(alias)
+        }()
+        sessionManager.setServiceAddress(aliasAddress, for: "netromNodeL2")
+        ensureNodeL2Subscription()
         // Six characters, uppercase, alphanumeric — the shape BPQ shows
         // beside a callsign. Sanitised at the boundary because whatever
         // is here goes into every neighbour's node list.
@@ -888,6 +899,80 @@ final class SessionCoordinator: ObservableObject {
                                  enabled: settings.netRomAdvertiseSelf)
         scheduleBeacon(settings)
         pingProber.apply(settings: settings.pingPolicySettings)
+    }
+
+    // MARK: - Node service over AX.25
+
+    private var nodeL2Token: UUID?
+    private var nodeL2Claims: [SessionKey: SessionDeliveryClaim] = [:]
+
+    private func ensureNodeL2Subscription() {
+        guard nodeL2Token == nil else { return }
+        nodeL2Token = addInboundSessionSubscriber { [weak self] session in
+            self?.answerNodeL2(session)
+        }
+    }
+
+    /// Answers an inbound AX.25 session addressed to the node alias with
+    /// the same shell a circuit caller gets.
+    private func answerNodeL2(_ session: AX25Session) {
+        guard !session.isInitiator, netRomNodeHost.isEnabled else { return }
+        let alias = netRomDriver.localAlias
+        guard !alias.isEmpty,
+              session.localAddress.display.uppercased() == alias.uppercased()
+        else { return }
+
+        let write: (Data) -> Void = { [weak self] data in
+            guard let self else { return }
+            let frames = self.sessionManager.sendData(
+                data,
+                to: session.remoteAddress,
+                path: session.path,
+                channel: session.channel,
+                pid: 0xF0,
+                displayInfo: "Node (\(data.count) bytes)")
+            for frame in frames { _ = self.sendFrame(frame) }
+        }
+
+        guard NetRomInboundPolicy.shouldAccept(
+            enabled: true, activeCallers: netRomNodeHost.activeCallerCount)
+        else {
+            write(Data("This node is at capacity — try again shortly.\r".utf8))
+            if let disc = sessionManager.disconnect(session: session) {
+                _ = sendFrame(disc)
+            }
+            return
+        }
+
+        let hostKey = "\(session.key)"
+        guard let claim = sessionManager.claimDelivery(
+            for: session.key,
+            handler: { [weak self] _, data in
+                self?.netRomNodeHost.ax25CallerReceived(key: hostKey, data: data)
+            },
+            stateHandler: { [weak self] _, _, newState in
+                guard newState == .disconnected || newState == .error else { return }
+                self?.netRomNodeHost.ax25CallerClosed(key: hostKey)
+                self?.nodeL2Claims.removeValue(forKey: session.key)
+            }
+        ) else {
+            TxLog.debug(.session, "Node L2 caller lost to another claimant", [
+                "caller": session.remoteAddress.display
+            ])
+            return
+        }
+        nodeL2Claims[session.key] = claim
+
+        netRomNodeHost.attachAX25Caller(
+            key: hostKey,
+            callsign: session.remoteAddress.display.uppercased(),
+            send: write,
+            hangUp: { [weak self] in
+                guard let self else { return }
+                if let disc = self.sessionManager.disconnect(session: session) {
+                    _ = self.sendFrame(disc)
+                }
+            })
     }
 
     /// Remember a station somebody else was calling.

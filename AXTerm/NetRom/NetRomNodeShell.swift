@@ -16,9 +16,9 @@
 //  the exact shape our own BpqRoutesScraper harvests (test-pinned), so
 //  other AXTerms can learn from us with the tools they already have.
 //
-//  No onward connects (`C`) yet: bridging an inbound circuit to an
-//  outbound one couples two flow-control domains and deserves its own
-//  careful landing. The shell says so honestly instead of trying.
+//  C is an effect, not a promise: the shell announces the attempt and
+//  the host does the bridging — an outbound circuit piped transparently
+//  to the caller, with failures spoken and the prompt returned.
 //
 
 import Foundation
@@ -51,6 +51,9 @@ nonisolated struct NetRomNodeShell {
     enum Effect: Equatable {
         case disconnect
         case enterBBS
+        /// Open an outbound circuit to this name and bridge the caller
+        /// through — the node's whole reason to exist.
+        case connectOnward(String)
     }
 
     struct Output: Equatable {
@@ -95,10 +98,24 @@ nonisolated struct NetRomNodeShell {
             }
             return Output(lines: [], prompt: nil, effects: [.enterBBS])
         case "C", "CONNECT":
-            return Output(
-                lines: ["This node does not connect onward yet. "
-                        + "Ask for NODES, ROUTES, MH, INFO or BBS."],
-                prompt: prompt)
+            let target = parts.count > 1
+                ? String(parts[1]).trimmingCharacters(in: .whitespaces)
+                    .split(separator: " ").first.map(String.init) ?? ""
+                : ""
+            guard !target.isEmpty else {
+                return Output(lines: ["C <call or alias> — connect through this node."],
+                              prompt: prompt)
+            }
+            let upper = target.uppercased()
+            guard upper != nodeAlias.uppercased(), upper != nodeCall.uppercased() else {
+                return Output(lines: ["That is this node."], prompt: prompt)
+            }
+            // No prompt: the caller is in the node's hands until the
+            // attempt resolves, and a prompt would invite typing into
+            // the gap.
+            return Output(lines: ["Trying \(upper)\u{2026}"],
+                          prompt: nil,
+                          effects: [.connectOnward(upper)])
         case "B", "BYE", "Q", "QUIT":
             return Output(lines: ["73 de \(nodeAlias)"],
                           prompt: nil, effects: [.disconnect])
@@ -113,6 +130,7 @@ nonisolated struct NetRomNodeShell {
 
     private func help(_ snapshot: Snapshot) -> [String] {
         var lines = [
+            "C CALL  connect onward through this node",
             "NODES   stations this node knows a route to",
             "ROUTES  neighbors heard directly, with link quality",
             "MH      stations heard here recently (also J)",

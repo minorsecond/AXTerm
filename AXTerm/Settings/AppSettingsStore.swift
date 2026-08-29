@@ -88,6 +88,8 @@ final class AppSettingsStore: ObservableObject {
     static let beaconEnabledKey = "beaconEnabled"
     static let autoRouteMaxChainLengthKey = "autoRouteMaxChainLength"
     static let netRomAcceptInboundKey = "netRomAcceptInbound"
+    static let digipeatEnabledKey = "digipeatEnabled"
+    static let digipeatAliasKey = "digipeatAlias"
     static let terminalFontSizeKey = "terminalFontSize"
     static let beaconTextKey = "beaconText"
     static let beaconMinutesKey = "beaconMinutes"
@@ -609,6 +611,19 @@ final class AppSettingsStore: ObservableObject {
         didSet { defaults.set(beaconEnabled, forKey: Self.beaconEnabledKey) }
     }
 
+    /// Repeat frames addressed via this station. Off by default: a
+    /// digipeater volunteers this transmitter for other people\u{2019}s
+    /// traffic on every frame that names it.
+    @Published var digipeatEnabled: Bool {
+        didSet { defaults.set(digipeatEnabled, forKey: Self.digipeatEnabledKey) }
+    }
+
+    /// An additional name the digipeater answers to (like DWARC), or
+    /// empty for the station callsign only.
+    @Published var digipeatAlias: String {
+        didSet { defaults.set(digipeatAlias, forKey: Self.digipeatAliasKey) }
+    }
+
     /// Answer inbound NET/ROM circuits with the node shell. Off by
     /// default like every on-air switch: accepting circuits commits
     /// this transmitter to serving other people\u{2019}s sessions.
@@ -1075,6 +1090,8 @@ final class AppSettingsStore: ObservableObject {
         let storedBeaconEnabled = defaults.object(forKey: Self.beaconEnabledKey) as? Bool ?? Self.defaultBeaconEnabled
         autoRouteMaxChainLength = defaults.object(forKey: Self.autoRouteMaxChainLengthKey) as? Int ?? 4
         netRomAcceptInbound = defaults.object(forKey: Self.netRomAcceptInboundKey) as? Bool ?? false
+        digipeatEnabled = defaults.object(forKey: Self.digipeatEnabledKey) as? Bool ?? false
+        digipeatAlias = defaults.string(forKey: Self.digipeatAliasKey) ?? ""
         terminalFontSize = defaults.object(forKey: Self.terminalFontSizeKey) as? Double ?? 11
         let storedBeaconText = defaults.string(forKey: Self.beaconTextKey) ?? ""
         let storedBeaconMinutes = defaults.object(forKey: Self.beaconMinutesKey) as? Int ?? Self.defaultBeaconMinutes

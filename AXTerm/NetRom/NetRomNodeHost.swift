@@ -2,11 +2,12 @@
 //  NetRomNodeHost.swift
 //  AXTerm
 //
-//  The service behind the acceptor: inbound circuits land in a
-//  NetRomNodeShell, BBS drops them into the mailbox, and everything
-//  the caller types stays out of the operator's transcript. Owned by
-//  SessionCoordinator; providers are injected by the shell that has
-//  the stores (ContentView), following the nodeAliases pattern.
+//  The service behind the acceptor: callers land in a NetRomNodeShell,
+//  BBS drops them into the mailbox, C bridges them onward through an
+//  outbound circuit, and everything they type stays out of the
+//  operator's transcript. Callers arrive two ways — inbound NET/ROM
+//  circuits, and plain AX.25 sessions to the node alias (a KA-node
+//  neighbor cannot open circuits; L2 is the only door it has).
 //
 //  Runs on the main thread by convention, not isolation: the transport
 //  delivers frames there (the same assumption the coordinator's own
@@ -14,21 +15,42 @@
 //  abort in deinit when tests tear the coordinator down off-main — the
 //  module's documented trap. BBS touch points re-assert isolation.
 //
+//  Bridging discipline: one caller may hold one outbound circuit; the
+//  pipe is transparent both ways; either side dying returns the caller
+//  to the node prompt (their link) or tears the outbound down (ours).
+//  A dial that has not connected in 60 seconds is abandoned — the
+//  circuit layer would otherwise retry CONREQ for six minutes under a
+//  caller who has long concluded nothing is happening.
+//
 
 import Foundation
 
 nonisolated final class NetRomNodeHost {
 
-    /// A caller mid-session: at the node prompt, or handed to the BBS.
+    /// How a caller reached us, and therefore how bytes go back.
+    enum CallerKey: Hashable {
+        case circuit(NetRomCircuitID)
+        case ax25(String)
+    }
+
+    /// A caller mid-session.
     private enum Mode {
         case node(NetRomNodeShell)
         case bbs(BBSService.CircuitSession)
+        /// C issued; outbound circuit dialing.
+        case dialing(target: String, outbound: NetRomCircuitID)
+        /// Transparent pipe to the far station.
+        case bridged(target: String, outbound: NetRomCircuitID)
     }
 
     private struct Caller {
         var callsign: String
         var mode: Mode
         var buffer = Data()
+        /// How to write to this caller. Circuits use the driver; AX.25
+        /// callers carry their own writer from the coordinator.
+        var send: (Data) -> Void
+        var hangUp: () -> Void
     }
 
     /// The operator's switch, pushed from settings.
@@ -40,11 +62,18 @@ nonisolated final class NetRomNodeHost {
     var snapshotProvider: () -> NetRomNodeShell.Snapshot = { .init() }
     var bbsSessionFactory: (@MainActor (String) -> BBSService.CircuitSession?)?
     var onOperatorNote: ((String) -> Void)?
+    /// Test seam for the dial timeout.
+    var scheduleTimeout: (_ seconds: Double, _ work: @escaping () -> Void) -> Void = { seconds, work in
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
 
     private weak var driver: NetRomLinkDriver?
-    private var callers: [NetRomCircuitID: Caller] = [:]
-    /// Accepted but not yet connected — the greeting waits for CONACK.
+    private var callers: [CallerKey: Caller] = [:]
+    /// Inbound circuits accepted but not yet connected — greeting waits
+    /// for CONACK.
     private var pending: [NetRomCircuitID: String] = [:]
+    /// Outbound bridge circuits, back to the caller that owns each.
+    private var bridges: [NetRomCircuitID: CallerKey] = [:]
 
     var activeCallerCount: Int { callers.count + pending.count }
 
@@ -71,7 +100,9 @@ nonisolated final class NetRomNodeHost {
         }
         driver.hostedCircuitCheck = { [weak self] id in
             guard let self else { return false }
-            return self.callers[id] != nil || self.pending[id] != nil
+            return self.callers[.circuit(id)] != nil
+                || self.pending[id] != nil
+                || self.bridges[id] != nil
         }
         driver.onCircuitBecameConnected = { [weak self] id in
             self?.circuitConnected(id)
@@ -82,72 +113,169 @@ nonisolated final class NetRomNodeHost {
 
         let previousData = driver.onCircuitData
         driver.onCircuitData = { [weak self] id, data in
-            if self?.consume(id: id, data: data) ?? false { return }
+            if self?.consumeCircuit(id: id, data: data) ?? false { return }
             previousData?(id, data)
         }
     }
 
-    // MARK: - Lifecycle
+    // MARK: - AX.25 callers (the KA-node neighbor's door)
 
-    private func circuitConnected(_ id: NetRomCircuitID) {
-        guard let callsign = pending.removeValue(forKey: id) else { return }
+    /// The coordinator answered a SABM at the node alias and claimed the
+    /// session; from here the caller is ours.
+    func attachAX25Caller(key: String, callsign: String,
+                          send: @escaping (Data) -> Void,
+                          hangUp: @escaping () -> Void) {
         let identity = identityProvider()
         let shell = NetRomNodeShell(
             nodeAlias: identity.alias, nodeCall: identity.call,
             version: identity.version, caller: callsign)
-        callers[id] = Caller(callsign: callsign, mode: .node(shell))
-        write(shell.greeting(), to: id)
-        onOperatorNote?("\(callsign) connected to this node over NET/ROM.")
+        callers[.ax25(key)] = Caller(
+            callsign: callsign, mode: .node(shell), send: send, hangUp: hangUp)
+        write(shell.greeting(), to: .ax25(key))
+        onOperatorNote?("\(callsign) connected to this node over AX.25.")
+    }
+
+    func ax25CallerReceived(key: String, data: Data) {
+        consume(key: .ax25(key), data: data)
+    }
+
+    func ax25CallerClosed(key: String) {
+        callerLeft(.ax25(key))
+    }
+
+    // MARK: - Circuit lifecycle
+
+    private func circuitConnected(_ id: NetRomCircuitID) {
+        if let callsign = pending.removeValue(forKey: id) {
+            let identity = identityProvider()
+            let shell = NetRomNodeShell(
+                nodeAlias: identity.alias, nodeCall: identity.call,
+                version: identity.version, caller: callsign)
+            let key = CallerKey.circuit(id)
+            callers[key] = Caller(
+                callsign: callsign, mode: .node(shell),
+                send: { [weak self] data in self?.driver?.send(data, on: id) },
+                hangUp: { [weak self] in self?.driver?.disconnect(id) })
+            write(shell.greeting(), to: key)
+            onOperatorNote?("\(callsign) connected to this node over NET/ROM.")
+            return
+        }
+        // An outbound bridge came up: the caller is through.
+        if let owner = bridges[id], var caller = callers[owner],
+           case .dialing(let target, let outbound) = caller.mode, outbound == id {
+            caller.mode = .bridged(target: target, outbound: id)
+            callers[owner] = caller
+            writeLines(["*** Connected to \(target)"], prompt: nil, to: owner)
+        }
     }
 
     private func circuitClosed(_ id: NetRomCircuitID) {
         pending.removeValue(forKey: id)
-        if let caller = callers.removeValue(forKey: id) {
-            onOperatorNote?("\(caller.callsign) left this node.")
+        if callers[.circuit(id)] != nil {
+            callerLeft(.circuit(id))
+            return
         }
+        // An outbound bridge died. The caller comes back to the prompt.
+        if let owner = bridges.removeValue(forKey: id), var caller = callers[owner] {
+            let identity = identityProvider()
+            let shell = NetRomNodeShell(
+                nodeAlias: identity.alias, nodeCall: identity.call,
+                version: identity.version, caller: caller.callsign)
+            switch caller.mode {
+            case .dialing(let target, _):
+                caller.mode = .node(shell)
+                callers[owner] = caller
+                writeLines(["*** Failure with \(target)"],
+                           prompt: shell.greeting().prompt, to: owner)
+            case .bridged(let target, _):
+                caller.mode = .node(shell)
+                callers[owner] = caller
+                writeLines(["*** Disconnected from \(target) — back at the node."],
+                           prompt: shell.greeting().prompt, to: owner)
+            default:
+                break
+            }
+        }
+    }
+
+    private func callerLeft(_ key: CallerKey) {
+        guard let caller = callers.removeValue(forKey: key) else { return }
+        // Take any bridge down with its owner.
+        switch caller.mode {
+        case .dialing(_, let outbound), .bridged(_, let outbound):
+            bridges.removeValue(forKey: outbound)
+            driver?.disconnect(outbound)
+        default:
+            break
+        }
+        onOperatorNote?("\(caller.callsign) left this node.")
     }
 
     // MARK: - Data
 
-    /// Returns true when this host owns the circuit and consumed the
-    /// bytes; false hands them to whoever was wired before us.
-    private func consume(id: NetRomCircuitID, data: Data) -> Bool {
-        guard callers[id] != nil else { return false }
-        callers[id]?.buffer.append(data)
-        drainLines(id)
-        return true
+    private func consumeCircuit(id: NetRomCircuitID, data: Data) -> Bool {
+        if callers[.circuit(id)] != nil {
+            consume(key: .circuit(id), data: data)
+            return true
+        }
+        // Data from the far side of a bridge flows straight to the caller.
+        if let owner = bridges[id], let caller = callers[owner] {
+            caller.send(data)
+            return true
+        }
+        return false
     }
 
-    private func drainLines(_ id: NetRomCircuitID) {
-        while var caller = callers[id],
+    private func consume(key: CallerKey, data: Data) {
+        guard var caller = callers[key] else { return }
+        // Bridged callers are a transparent pipe — no line assembly, no
+        // command interception; BYE belongs to the far node now.
+        if case .bridged(_, let outbound) = caller.mode {
+            driver?.send(data, on: outbound)
+            return
+        }
+        // While dialing, keystrokes have nowhere meaningful to go; a
+        // caller mashing Return must not leak into the far session that
+        // is about to exist.
+        if case .dialing = caller.mode { return }
+
+        caller.buffer.append(data)
+        callers[key] = caller
+        drainLines(key)
+    }
+
+    private func drainLines(_ key: CallerKey) {
+        while var caller = callers[key],
               let index = caller.buffer.firstIndex(where: { $0 == 0x0D || $0 == 0x0A }) {
             let lineBytes = caller.buffer[caller.buffer.startIndex..<index]
             caller.buffer.removeSubrange(caller.buffer.startIndex...index)
-            callers[id] = caller
+            callers[key] = caller
             let line = String(decoding: lineBytes, as: UTF8.self)
-            process(line: line, on: id)
+            process(line: line, on: key)
         }
     }
 
-    private func process(line: String, on id: NetRomCircuitID) {
-        guard let caller = callers[id] else { return }
+    private func process(line: String, on key: CallerKey) {
+        guard let caller = callers[key] else { return }
         switch caller.mode {
         case .node(var shell):
             let output = shell.handle(
                 line: line, snapshot: snapshotProvider(), now: Date())
-            callers[id]?.mode = .node(shell)
-            write(output, to: id)
+            callers[key]?.mode = .node(shell)
+            write(output, to: key)
             for effect in output.effects {
                 switch effect {
                 case .disconnect:
-                    driver?.disconnect(id)
+                    callers[key]?.hangUp()
                 case .enterBBS:
-                    enterBBS(id, caller: caller.callsign)
+                    enterBBS(key, caller: caller.callsign)
+                case .connectOnward(let target):
+                    dial(target, for: key)
                 }
             }
         case .bbs(let session):
             let result = MainActor.assumeIsolated { session.handle(line: line) }
-            writeLines(result.lines, prompt: result.prompt, to: id)
+            writeLines(result.lines, prompt: result.prompt, to: key)
             if result.closed {
                 // Leaving the mailbox returns to the node level, the way
                 // BPQ does — the caller said BYE to the BBS, not to us.
@@ -155,37 +283,70 @@ nonisolated final class NetRomNodeHost {
                 let shell = NetRomNodeShell(
                     nodeAlias: identity.alias, nodeCall: identity.call,
                     version: identity.version, caller: caller.callsign)
-                callers[id]?.mode = .node(shell)
-                writeLines(["Back at the node."], prompt: shell.greeting().prompt, to: id)
+                callers[key]?.mode = .node(shell)
+                writeLines(["Back at the node."],
+                           prompt: shell.greeting().prompt, to: key)
             }
+        case .dialing, .bridged:
+            break // handled byte-wise in consume()
         }
     }
 
-    private func enterBBS(_ id: NetRomCircuitID, caller: String) {
+    // MARK: - C: onward connects
+
+    private func dial(_ target: String, for key: CallerKey) {
+        guard let driver else { return }
+        let address = CallsignNormalizer.toAddress(target)
+        switch driver.openCircuit(to: address) {
+        case .success(let outbound):
+            bridges[outbound] = key
+            callers[key]?.mode = .dialing(target: target, outbound: outbound)
+            onOperatorNote?("\(callers[key]?.callsign ?? "A caller") is being "
+                            + "bridged toward \(target).")
+            // The circuit layer retries CONREQ for minutes; a caller
+            // staring at silence deserves an answer sooner.
+            scheduleTimeout(60) { [weak self] in
+                guard let self,
+                      let caller = self.callers[key],
+                      case .dialing(_, let pendingOutbound) = caller.mode,
+                      pendingOutbound == outbound else { return }
+                self.driver?.disconnect(outbound)
+                // circuitClosed delivers "*** Failure with …".
+            }
+        case .failure:
+            let identity = identityProvider()
+            writeLines(["*** No route to \(target)"],
+                       prompt: "\(identity.alias):\(identity.call)} ", to: key)
+        }
+    }
+
+    // MARK: - BBS
+
+    private func enterBBS(_ key: CallerKey, caller: String) {
         let session = MainActor.assumeIsolated { bbsSessionFactory?(caller) }
         guard let session else {
             // The shell only offers BBS when the snapshot said it was on
             // the air, but the mailbox can wink out between keystrokes.
             let identity = identityProvider()
             writeLines(["The mailbox is not on the air."],
-                       prompt: "\(identity.alias):\(identity.call)} ", to: id)
+                       prompt: "\(identity.alias):\(identity.call)} ", to: key)
             return
         }
-        callers[id]?.mode = .bbs(session)
+        callers[key]?.mode = .bbs(session)
         let greeting = MainActor.assumeIsolated { session.greeting() }
-        writeLines(greeting.lines, prompt: greeting.prompt, to: id)
+        writeLines(greeting.lines, prompt: greeting.prompt, to: key)
     }
 
     // MARK: - Output
 
-    private func write(_ output: NetRomNodeShell.Output, to id: NetRomCircuitID) {
-        writeLines(output.lines, prompt: output.prompt, to: id)
+    private func write(_ output: NetRomNodeShell.Output, to key: CallerKey) {
+        writeLines(output.lines, prompt: output.prompt, to: key)
     }
 
-    private func writeLines(_ lines: [String], prompt: String?, to id: NetRomCircuitID) {
+    private func writeLines(_ lines: [String], prompt: String?, to key: CallerKey) {
         var text = lines.map { $0 + "\r" }.joined()
         if let prompt { text += prompt }
-        guard !text.isEmpty, let driver else { return }
-        driver.send(Data(text.utf8), on: id)
+        guard !text.isEmpty, let caller = callers[key] else { return }
+        caller.send(Data(text.utf8))
     }
 }
