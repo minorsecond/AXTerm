@@ -56,4 +56,21 @@ final class NodeProfilePlannedChainTests: XCTestCase {
         let profile = NodeProfileResolver().profile(for: "AB0VZ")
         XCTAssertTrue(profile.plannedChain.isEmpty)
     }
+
+    /// The 18:28 field capture, 2026-08-28: a relayed session mis-credited
+    /// DRLNOD with listing COSCO (its banner rode the DRLNOD link), and the
+    /// fresher hearsay shortened the chain to DRLNOD→COSCO. The measured
+    /// route filed under KE0GB-7 must outrank any claim, so the poisoned
+    /// directory still plans the full chain.
+    @MainActor
+    func testFreshMisattributedHearsayDoesNotShortenTheChain() async {
+        var resolver = makeResolver()
+        var aliases = resolver.aliases
+        aliases.record(.init(alias: "COSCO", callsign: "KE0GB-7", service: "node"),
+                       at: Date(), from: "DRLNOD")  // newest — and wrong
+        resolver.aliases = aliases
+        let profile = resolver.profile(for: "ASHCHT")
+        XCTAssertEqual(profile.plannedChain, ["DRLNOD", "KB5YZB-7", "COSCO"],
+                       "a measured route outranks freshly poisoned hearsay")
+    }
 }

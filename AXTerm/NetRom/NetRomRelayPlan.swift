@@ -118,6 +118,33 @@ nonisolated enum NetRomRelayPlan {
         )
     }
 
+    /// Picks the node to ask for a station when no measured route exists —
+    /// hearsay, with the two lies filtered out.
+    ///
+    /// Never the station's own claim about itself: a banner harvested
+    /// mid-relay reads as self-listing, and a self-claim ends the walk at a
+    /// node we cannot hear. And never a claim credited to a node that
+    /// cannot route NET/ROM — a KA-Node prints no node table, so a claim
+    /// with one as teller is a mis-attribution, not knowledge. Field
+    /// capture 2026-08-28 18:28: COSCO's banner rode the L2 link from
+    /// DRLNOD, "DRLNOD lists COSCO" was recorded as the freshest claim,
+    /// and the next plan asked a KA-Node for a station it cannot hear —
+    /// KB5YZB-7, the node that genuinely lists COSCO, was sitting right
+    /// behind it in the claim list.
+    ///
+    /// Unknown capability (nil) passes: refusing to guess is the
+    /// classifier's discipline, and most tellers are unclassified.
+    static func tellerFallback(
+        for station: String,
+        claims: [(teller: String, claimedAt: Date)],
+        canRouteNetRom: (String) -> Bool?
+    ) -> String? {
+        let key = normalize(station)
+        return claims.first {
+            normalize($0.teller) != key && canRouteNetRom($0.teller) != false
+        }?.teller
+    }
+
     private static func normalize(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespaces).uppercased()
     }

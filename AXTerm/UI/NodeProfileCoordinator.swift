@@ -162,12 +162,22 @@ struct NodeProfileResolver {
                 routesByDestination[route.destination] = route.via
             }
             let aliasDirectory = aliases
+            let capabilityDirectory = capabilities
             profile.plannedChain = NetRomRelayPlan.plan(
                 destination: key,
                 teller: teller,
                 routeLookup: { station in
-                    routesByDestination[station.uppercased()]
-                        ?? aliasDirectory.tellerClaims(for: station).first?.teller
+                    if let via = routesByDestination[station.uppercased()] { return via }
+                    // Routes are filed by callsign, tellers by name — resolve
+                    // before falling back to hearsay, exactly as the relay does.
+                    if let callsign = aliasDirectory.callsign(for: station),
+                       let via = routesByDestination[callsign.uppercased()] {
+                        return via
+                    }
+                    return NetRomRelayPlan.tellerFallback(
+                        for: station,
+                        claims: aliasDirectory.tellerClaims(for: station),
+                        canRouteNetRom: { capabilityDirectory.canRouteNetRom($0) })
                 },
                 aliasResolve: { aliasDirectory.callsign(for: $0) }
             ).chain

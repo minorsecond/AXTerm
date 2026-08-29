@@ -163,4 +163,59 @@ final class NetRomRelayPlanTests: XCTestCase {
             routeLookup: { routes[$0.uppercased()] })
         XCTAssertEqual(result.chain, ["COSCO"])
     }
+
+    // MARK: - Hearsay filtering (field capture 2026-08-28 18:28)
+
+    /// The poisoning: COSCO's banner rode the L2 link from DRLNOD during a
+    /// relayed session, the harvester credited DRLNOD with listing COSCO,
+    /// and — being freshest — that claim shortened the next chain to
+    /// DRLNOD→COSCO. DRLNOD is a KA-Node: it prints no node table, so a
+    /// claim with it as teller is a mis-attribution and must be skipped in
+    /// favour of the node that genuinely lists the station.
+    func testAKaNodeTellerClaimIsMisattributionAndSkipped() {
+        let claims: [(teller: String, claimedAt: Date)] = [
+            (teller: "DRLNOD", claimedAt: Date()),
+            (teller: "KB5YZB-7", claimedAt: Date(timeIntervalSinceNow: -3600))
+        ]
+        let picked = NetRomRelayPlan.tellerFallback(
+            for: "COSCO", claims: claims,
+            canRouteNetRom: { $0 == "DRLNOD" ? false : nil })
+        XCTAssertEqual(picked, "KB5YZB-7")
+    }
+
+    /// The other lie the same mis-attribution produces: once the banner is
+    /// credited to the node itself, "COSCO lists COSCO" is the freshest
+    /// claim — following it would end the walk at a node we cannot hear.
+    func testAStationsOwnClaimAboutItselfIsSkipped() {
+        let claims: [(teller: String, claimedAt: Date)] = [
+            (teller: "COSCO", claimedAt: Date()),
+            (teller: "KB5YZB-7", claimedAt: Date(timeIntervalSinceNow: -3600))
+        ]
+        let picked = NetRomRelayPlan.tellerFallback(
+            for: "COSCO", claims: claims, canRouteNetRom: { _ in nil })
+        XCTAssertEqual(picked, "KB5YZB-7")
+    }
+
+    /// Unknown capability passes — most tellers are unclassified, and
+    /// refusing to guess is the classifier's job, not the planner's.
+    func testUnclassifiedTellersAreStillTrusted() {
+        let claims: [(teller: String, claimedAt: Date)] = [
+            (teller: "KB5YZB-7", claimedAt: Date())
+        ]
+        XCTAssertEqual(
+            NetRomRelayPlan.tellerFallback(for: "COSCO", claims: claims,
+                                           canRouteNetRom: { _ in nil }),
+            "KB5YZB-7")
+    }
+
+    /// Every claim filtered means no hearsay to offer — nil, not a lie.
+    func testAllClaimsFilteredYieldsNothing() {
+        let claims: [(teller: String, claimedAt: Date)] = [
+            (teller: "COSCO", claimedAt: Date()),
+            (teller: "DRLNOD", claimedAt: Date())
+        ]
+        XCTAssertNil(NetRomRelayPlan.tellerFallback(
+            for: "COSCO", claims: claims,
+            canRouteNetRom: { $0 == "DRLNOD" ? false : nil }))
+    }
 }

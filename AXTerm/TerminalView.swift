@@ -1123,7 +1123,13 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                 // chain — another node when the route needs one, else the
                 // destination itself.
                 let ask = remaining.first ?? destination
-                let speaker = (remaining.isEmpty ? nextHop : nextHop).uppercased()
+                // The node that greeted is the one the relay was waiting on —
+                // mid-chain that is the node that just came onto the link, not
+                // the L2 peer its bytes travel through. Field capture
+                // 2026-08-28 18:26: COSCO's banner was announced as "DRLNOD
+                // answered", because both arms of the old conditional said
+                // `nextHop`.
+                let speaker = (relayWaitingOn ?? nextHop).uppercased()
                 netRomRelayPhase = .awaitingConnected(
                     destination: destination, nextHop: nextHop, remaining: remaining)
                 // The chain moved: this node greeted and has now been asked
@@ -1265,6 +1271,16 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             ])
             return .clearedGap
         }
+
+        // A CR is the standard prod for a node that owes us its prompt — every
+        // node reprints one for a bare line. But while a `C` command is out
+        // the node is not at its prompt: it is dialling on our behalf. BPQ
+        // queues the byte and forwards it to the destination as an empty
+        // first command; a KA-Node aborts a pending connect on any input.
+        // Either way the CR cannot produce the answer being waited for, so
+        // mid-connect the only correct nudge is patience (field capture
+        // 2026-08-28 18:27: the CR went out while COSCO was still dialling).
+        if case .awaitingConnected = netRomRelayPhase { return .nothingToTry }
 
         let cr = Data("\r".utf8)
         let prompt = sessionManager.sendData(cr, to: session.remoteAddress,
@@ -1881,18 +1897,29 @@ struct TerminalView: View {
 
     private var mainLayout: some View {
         VStack(spacing: 0) {
-            // Tab picker
-            Picker("", selection: $selectedTab) {
-                ForEach(TerminalTab.allCases, id: \.self) { tab in
-                    Text(tab.rawValue).tag(tab)
+            // One row of chrome: which pane, and — on the session pane —
+            // which session. These were two stacked full-width bars; the
+            // terminal's vertical space is worth more than either needed.
+            HStack(spacing: 12) {
+                Picker("", selection: $selectedTab) {
+                    ForEach(TerminalTab.allCases, id: \.self) { tab in
+                        Text(tab.rawValue).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+
+                if selectedTab == .session, !sessionRecords.isEmpty {
+                    Divider().frame(height: 14)
+                    sessionSelectorView
+                } else {
+                    Spacer(minLength: 0)
                 }
             }
-            .pickerStyle(.segmented)
             .padding(.horizontal, 12)
-            .padding(.top, 8)
+            .padding(.vertical, 6)
 
             Divider()
-                .padding(.top, 8)
 
             // Content based on tab
             switch selectedTab {
@@ -1926,11 +1953,20 @@ struct TerminalView: View {
 
         // Wire plain-text chat (non-AXDP) to console when sender uses plain text.
         let observe = onSessionText
-        txViewModel.onPlainTextChatReceived = { [weak client] from, text, via in
+        txViewModel.onPlainTextChatReceived = { [weak client, weak txViewModel] from, text, via in
             // A BBS session the operator opened themselves. Reading structure
             // out of what already arrived costs nobody anything; asking the
             // far end for it would spend their channel on our convenience.
-            observe?(text, from.display.uppercased())
+            //
+            // The structure must be credited to the node actually speaking,
+            // not the L2 peer its bytes ride through. During a relay the
+            // link peer forwards everything downstream nodes say — COSCO's
+            // "Welcome to COSCO:KE0GB-7" arrived from=DRLNOD (2026-08-28
+            // 18:26), the harvester recorded "DRLNOD lists COSCO", and the
+            // next connect plan asked a KA-Node for a station it cannot
+            // hear. The relay already tracks who is expected to speak.
+            let speaker = txViewModel?.relayWaitingOn ?? from.display.uppercased()
+            observe?(text, speaker)
             if let client = client {
                 TxLog.debug(.session, "onPlainTextChatReceived callback executing", [
                     "from": from.display,
@@ -2289,11 +2325,6 @@ struct TerminalView: View {
                         .accessibilityHidden(false)
                 }
 
-                // Session output (reuse console view for now, filtered by session)
-                if !sessionRecords.isEmpty {
-                    sessionSelectorView
-                }
-
                 // Session status pill (shown during active session lifecycle)
                 if txViewModel.viewModel.connectionMode == .connected {
                     ConnectionStatusStripView(
@@ -2471,12 +2502,10 @@ struct TerminalView: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: txViewModel.sessionNotification)
     }
 
+    // Inlined into the tab-picker row — carries no padding or background of
+    // its own, so it must be placed inside a padded container.
     private var sessionSelectorView: some View {
         HStack(spacing: 8) {
-            Label("Sessions", systemImage: "rectangle.stack")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
             Picker("Sessions", selection: $activeSessionRecordID) {
                 Text("All Traffic").tag(Optional<String>.none)
                 ForEach(sessionRecords) { record in
@@ -2503,9 +2532,6 @@ struct TerminalView: View {
             .controlSize(.mini)
             .disabled(sessionRecords.allSatisfy { $0.statusText != "Disconnected" && $0.statusText != "Failed" })
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(Color(platform: .platformCardBackground).opacity(0.5))
     }
 
     private var connectionMessage: String {
@@ -3520,6 +3546,13 @@ struct TerminalView: View {
                 if let origin = client?.netRomIntegration?.bestRouteTo(station)?.origin {
                     return origin
                 }
+                // A measured route filed under the station's callsign beats
+                // hearsay filed under its name — tellers are node *names*,
+                // routes are callsigns (COSCO's route lives under KE0GB-7).
+                if let callsign = nodeAliases.directory.callsign(for: station),
+                   let origin = client?.netRomIntegration?.bestRouteTo(callsign)?.origin {
+                    return origin
+                }
                 // bestRouteTo filters by TTL — right for routing, wrong for
                 // chain planning: the harvested COSCO route scraped this
                 // morning is "expired" by evening, and the walk found
@@ -3527,8 +3560,12 @@ struct TerminalView: View {
                 // second run). The alias directory still remembers who
                 // *listed* the station, and a remembered signpost beats
                 // dialling a name we cannot hear — the relay proves every
-                // hop live anyway.
-                return nodeAliases.directory.tellerClaims(for: station).first?.teller
+                // hop live anyway. `tellerFallback` filters the hearsay a
+                // relay session can poison the directory with.
+                return NetRomRelayPlan.tellerFallback(
+                    for: station,
+                    claims: nodeAliases.directory.tellerClaims(for: station),
+                    canRouteNetRom: { nodeCapabilities?.canRouteNetRom($0) ?? nil })
             },
             aliasResolve: { nodeAliases.directory.callsign(for: $0) }
         )
@@ -3975,6 +4012,13 @@ struct TerminalView: View {
                 if let origin = client?.netRomIntegration?.bestRouteTo(station)?.origin {
                     return origin
                 }
+                // A measured route filed under the station's callsign beats
+                // hearsay filed under its name — tellers are node *names*,
+                // routes are callsigns (COSCO's route lives under KE0GB-7).
+                if let callsign = nodeAliases.directory.callsign(for: station),
+                   let origin = client?.netRomIntegration?.bestRouteTo(callsign)?.origin {
+                    return origin
+                }
                 // bestRouteTo filters by TTL — right for routing, wrong for
                 // chain planning: the harvested COSCO route scraped this
                 // morning is "expired" by evening, and the walk found
@@ -3982,8 +4026,12 @@ struct TerminalView: View {
                 // second run). The alias directory still remembers who
                 // *listed* the station, and a remembered signpost beats
                 // dialling a name we cannot hear — the relay proves every
-                // hop live anyway.
-                return nodeAliases.directory.tellerClaims(for: station).first?.teller
+                // hop live anyway. `tellerFallback` filters the hearsay a
+                // relay session can poison the directory with.
+                return NetRomRelayPlan.tellerFallback(
+                    for: station,
+                    claims: nodeAliases.directory.tellerClaims(for: station),
+                    canRouteNetRom: { nodeCapabilities?.canRouteNetRom($0) ?? nil })
             },
             aliasResolve: { nodeAliases.directory.callsign(for: $0) }
         )

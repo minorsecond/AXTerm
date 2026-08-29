@@ -64,25 +64,20 @@ struct ConnectionStatusStripView: View {
             .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(Color(platform: .platformCardBackground).opacity(0.5))
-
-            // Where the relay stands, hop by hop. Only while the chain is
-            // being walked — once the circuit is up, "via <node>" above
-            // says everything this row would.
-            if isConnecting, !relayHops.isEmpty {
-                relayProgressRow
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 6)
-                    .background(Color(platform: .platformCardBackground).opacity(0.5))
-            }
         }
         .frame(maxWidth: .infinity)
     }
 
     // MARK: - Relay hop progress
 
-    /// You → DRLNOD ✓ → KB5YZB-7 (spinner) → COSCO → ASHCHT — the answer to
+    /// You 🔗 DRLNOD 🔗 KB5YZB-7 (spinner) COSCO › ASHCHT — the answer to
     /// "which node is being negotiated with right now", read off the relay's
     /// own phase so it cannot drift from what the relay is doing.
+    ///
+    /// The connector carries the state, not the node: what a hop produces
+    /// is a *link made* between two stations, so a made segment shows a
+    /// chain link, the segment being negotiated shows a spinner, and one
+    /// not yet attempted stays a dim chevron.
     private var relayProgressRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 5) {
@@ -90,10 +85,11 @@ struct ConnectionStatusStripView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                 ForEach(relayHops) { hop in
-                    Image(systemName: "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(.quaternary)
-                    relayHopChip(hop)
+                    relayEdge(into: hop)
+                    Text(hop.name)
+                        .font(hop.state == .active ? .caption.weight(.semibold) : .caption)
+                        .foregroundStyle(hop.state == .pending ? .tertiary : .primary)
+                        .help(relayHopHelp(hop))
                 }
             }
         }
@@ -102,31 +98,29 @@ struct ConnectionStatusStripView: View {
     }
 
     @ViewBuilder
-    private func relayHopChip(_ hop: NetRomRelayProgress.Hop) -> some View {
-        HStack(spacing: 3) {
-            switch hop.state {
-            case .done:
-                Image(systemName: "checkmark")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.green)
-            case .active:
-                ProgressView()
-                    .controlSize(.mini)
-            case .pending:
-                EmptyView()
-            }
-            Text(hop.name)
-                .font(hop.state == .active ? .caption.weight(.semibold) : .caption)
-                .foregroundStyle(hop.state == .pending ? .tertiary : .primary)
+    private func relayEdge(into hop: NetRomRelayProgress.Hop) -> some View {
+        switch hop.state {
+        case .done:
+            Image(systemName: "link")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.green)
+                .help("The link to \(hop.name) is made.")
+        case .active:
+            ProgressView()
+                .controlSize(.mini)
+                .help("Negotiating the link to \(hop.name) right now.")
+        case .pending:
+            Image(systemName: "chevron.right")
+                .font(.caption2)
+                .foregroundStyle(.quaternary)
         }
-        .help(relayHopHelp(hop))
     }
 
     private func relayHopHelp(_ hop: NetRomRelayProgress.Hop) -> String {
         switch hop.state {
-        case .done: return "\(hop.name) answered — the chain is past it."
+        case .done: return "\(hop.name) is on the chain — the link to it is made."
         case .active: return "Negotiating with \(hop.name) right now."
-        case .pending: return "\(hop.name) has not been reached yet."
+        case .pending: return "\(hop.name) has not been linked yet."
         }
     }
 
@@ -223,7 +217,13 @@ struct ConnectionStatusStripView: View {
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
 
-                if !viaDigipeaters.isEmpty {
+                if !relayHops.isEmpty {
+                    // A relay walking a chain: the hop map says everything
+                    // "via <node>" would and more, on the same line.
+                    Text("\u{00B7}")
+                        .foregroundStyle(.tertiary)
+                    relayProgressRow
+                } else if !viaDigipeaters.isEmpty {
                     Text("\u{00B7}")
                         .foregroundStyle(.tertiary)
 
