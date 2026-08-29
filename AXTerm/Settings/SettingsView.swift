@@ -30,38 +30,68 @@ struct SettingsView: View {
     @StateObject var router = SettingsRouter.shared
 
     var body: some View {
-        TabView(selection: $router.selectedTab) {
+        // A sidebar, not a tab strip: eight tabs crammed into a 550-point
+        // toolbar read as clutter and hid what the pages had in common.
+        // Grouped the way the app thinks — who you are, the radio, the
+        // services running on it, and the machinery underneath — in a
+        // window the operator can finally resize.
+        NavigationSplitView {
+            List(selection: $router.selectedTab) {
+                Section("Station") {
+                    sidebarRow(.general)
+                    sidebarRow(.notifications)
+                }
+                Section("Radio") {
+                    sidebarRow(.network)
+                    sidebarRow(.transmission)
+                }
+                Section("Services") {
+                    sidebarRow(.winlink)
+                    #if os(macOS)
+                    sidebarRow(.bbs)
+                    #endif
+                }
+                Section("Maintenance") {
+                    sidebarRow(.advanced)
+                    sidebarRow(.linkDebug)
+                }
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 185, ideal: 200, max: 240)
+        } detail: {
+            detail
+                .navigationTitle(router.selectedTab.settingsTitle)
+        }
+        .environmentObject(router) // Provide router to all tabs
+        .frame(minWidth: 760, idealWidth: 800, minHeight: 560, idealHeight: 660)
+        .accessibilityIdentifier("settingsView")
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        switch router.selectedTab {
+        case .general:
             GeneralSettingsView(settings: settings, client: client)
-                .tabItem { Label("General", systemImage: "gear") }
-                .tag(SettingsTab.general)
-            
+        case .notifications:
             NotificationSettingsView(settings: settings, notificationManager: notificationManager)
-                .tabItem { Label("Notifications", systemImage: "bell.badge") }
-                .tag(SettingsTab.notifications)
-
+        case .network:
             ConnectionSettingsView(settings: settings, packetEngine: client)
-                .tabItem { Label("Connection", systemImage: "cable.connector") }
-                .tag(SettingsTab.network)
-            
+        case .transmission:
             TransmissionSettingsView(settings: settings, client: client)
-                .tabItem { Label("Transmission", systemImage: "antenna.radiowaves.left.and.right") }
-                .tag(SettingsTab.transmission)
-
+        case .winlink:
             WinlinkSettingsTab(settings: winlinkSettings, profile: stationProfile,
                                stationCallsign: settings.myCallsign,
                                locationService: locationService, sync: winlinkSync)
-                .tabItem { Label("Winlink", systemImage: "envelope") }
-                .tag(SettingsTab.winlink)
-
+        case .bbs:
             // The mailbox UI is macOS-only; see AXTerm/BBS/UI.
             #if os(macOS)
             BBSSettingsTab(settings: bbsSettings,
                            stationCallsign: settings.myCallsign,
                            isWinlinkP2PArmed: winlinkSettings.p2pListenEnabled)
-                .tabItem { Label("BBS", systemImage: "tray.full") }
-                .tag(SettingsTab.bbs)
+            #else
+            EmptyView()
             #endif
-            
+        case .advanced:
             AdvancedSettingsView(
                 settings: settings,
                 client: client,
@@ -70,15 +100,65 @@ struct SettingsView: View {
                 rawStore: rawStore,
                 eventLogger: eventLogger
             )
-            .tabItem { Label("Advanced", systemImage: "wrench.and.screwdriver") }
-            .tag(SettingsTab.advanced)
-
+        case .linkDebug:
             LinkDebugView(packetEngine: client)
-                .tabItem { Label("Link Debug", systemImage: "ant") }
-                .tag(SettingsTab.linkDebug)
         }
-        .environmentObject(router) // Provide router to all tabs
-        .frame(width: 550, height: 700)
-        .accessibilityIdentifier("settingsView")
+    }
+
+    /// One sidebar row, System Settings style: a tinted icon tile so the
+    /// eye can navigate by colour before it reads a word.
+    private func sidebarRow(_ tab: SettingsTab) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: tab.settingsIcon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 22, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(tab.settingsTint.gradient))
+            Text(tab.settingsTitle)
+        }
+        .tag(tab)
+    }
+}
+
+extension SettingsTab {
+    var settingsTitle: String {
+        switch self {
+        case .general: return "General"
+        case .notifications: return "Notifications"
+        case .network: return "Connection"
+        case .transmission: return "Transmission"
+        case .winlink: return "Winlink"
+        case .bbs: return "BBS"
+        case .advanced: return "Advanced"
+        case .linkDebug: return "Link Debug"
+        }
+    }
+
+    var settingsIcon: String {
+        switch self {
+        case .general: return "gearshape.fill"
+        case .notifications: return "bell.badge.fill"
+        case .network: return "cable.connector"
+        case .transmission: return "antenna.radiowaves.left.and.right"
+        case .winlink: return "envelope.fill"
+        case .bbs: return "tray.full.fill"
+        case .advanced: return "wrench.and.screwdriver.fill"
+        case .linkDebug: return "ant.fill"
+        }
+    }
+
+    var settingsTint: Color {
+        switch self {
+        case .general: return .gray
+        case .notifications: return .red
+        case .network: return .blue
+        case .transmission: return .orange
+        case .winlink: return .teal
+        case .bbs: return .indigo
+        case .advanced: return .brown
+        case .linkDebug: return .purple
+        }
     }
 }

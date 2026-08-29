@@ -21,15 +21,6 @@ struct TransmissionSettingsView: View {
 
     var body: some View {
         Form {
-            // Link Layer Section (Deep Link Target from Adaptive Chip)
-            PreferencesSection("Link Layer (AX.25 Connected Mode)", id: .linkLayer) {
-                LinkLayerSettingsView(
-                    settings: settings,
-                    txAdaptiveSettings: $txAdaptiveSettings,
-                    syncToCoordinator: syncAdaptiveSettingsToSessionCoordinator
-                )
-            }
-
             // Adaptive Transmission Section (Deep Link Target)
             PreferencesSection("Adaptive Transmission", id: .adaptiveTransmission) {
                 Toggle("Enable Adaptive Transmission", isOn: Binding(
@@ -123,65 +114,13 @@ struct TransmissionSettingsView: View {
                 }
             }
 
-            PreferencesSection("NET/ROM Node", id: .netRomNode) {
-                Text("AXTerm always listens to NET/ROM and learns routes from what it hears. "
-                     + "These switches decide whether it also speaks — both change what other "
-                     + "operators' nodes do, so both start off.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                LabeledContent("Node alias") {
-                    // Applied on commit, never per keystroke: this used to
-                    // push a NODES broadcast on every character typed.
-                    TextField("e.g. EPINOD", text: $settings.netRomNodeAlias)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 160)
-                        .onSubmit { applyNetRomSettings() }
-                }
-                .help("Six characters, the mnemonic other nodes show beside this station's "
-                      + "callsign. BPQ calls it NODEALIAS.")
-
-                Toggle("Announce this station to the network", isOn: $settings.netRomAdvertiseSelf)
-                    .onChange(of: settings.netRomAdvertiseSelf) { _, _ in applyNetRomSettings() }
-                    .help("Sends NODES broadcasts so neighbours learn this station exists and "
-                          + "can route to it. Every node that hears one writes this station "
-                          + "into its own routing table.")
-
-                if settings.netRomAdvertiseSelf {
-                    durationRow(
-                        "Announce every",
-                        value: $settings.netRomBroadcastMinutes,
-                        presets: [5, 10, 15, 20, 30, 45, 60, 90, 120, 240],
-                        label: Self.minutesLabel
-                    )
-                    .onChange(of: settings.netRomBroadcastMinutes) { _, _ in applyNetRomSettings() }
-                    .help("BPQ's default is 60 minutes. Shorter intervals spend more of a "
-                          + "shared channel on routing overhead.")
-
-                    if settings.netRomNodeAlias.trimmingCharacters(in: .whitespaces).isEmpty {
-                        Text("Set a node alias — announcing without one is legal but leaves "
-                             + "a blank name in every neighbour's node list.")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-
-                Toggle("Carry other stations' traffic (transit routing)",
-                       isOn: $settings.netRomForwarding)
-                    .onChange(of: settings.netRomForwarding) { _, _ in applyNetRomSettings() }
-                    .help("Forwards NET/ROM datagrams addressed to other nodes. This spends "
-                          + "this station's airtime on other people's packets and makes it "
-                          + "answerable for delivering them.")
-
-                if settings.netRomForwarding && !settings.netRomAdvertiseSelf {
-                    Text("Forwarding without announcing has little effect: no other node knows "
-                         + "to route through this station.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            // Link Layer Section (Deep Link Target from Adaptive Chip)
+            PreferencesSection("Link Layer (AX.25 Connected Mode)", id: .linkLayer) {
+                LinkLayerSettingsView(
+                    settings: settings,
+                    txAdaptiveSettings: $txAdaptiveSettings,
+                    syncToCoordinator: syncAdaptiveSettingsToSessionCoordinator
+                )
             }
 
             PreferencesSection("Beacon", id: .beacon) {
@@ -339,6 +278,67 @@ struct TransmissionSettingsView: View {
                                 .foregroundStyle(record.lastAnswered == nil ? .secondary : .primary)
                         }
                     }
+                }
+            }
+
+            PreferencesSection("NET/ROM Node", id: .netRomNode) {
+                Text("AXTerm always listens to NET/ROM and learns routes from what it hears. "
+                     + "These switches decide whether it also speaks — both change what other "
+                     + "operators' nodes do, so both start off.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                LabeledContent("Node alias") {
+                    // Applied on commit, never per keystroke: this used to
+                    // push a NODES broadcast on every character typed.
+                    TextField("e.g. EPINOD", text: $settings.netRomNodeAlias)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 160)
+                        .onSubmit { applyNetRomSettings() }
+                }
+                .help("Six characters, the mnemonic other nodes show beside this station's "
+                      + "callsign. BPQ calls it NODEALIAS.")
+
+                Toggle("Announce this station to the network", isOn: $settings.netRomAdvertiseSelf)
+                    .onChange(of: settings.netRomAdvertiseSelf) { _, _ in applyNetRomSettings() }
+                    .help("Sends NODES broadcasts so neighbours learn this station exists and "
+                          + "can route to it. Every node that hears one writes this station "
+                          + "into its own routing table.")
+
+                if settings.netRomAdvertiseSelf {
+                    durationRow(
+                        "Announce every",
+                        value: $settings.netRomBroadcastMinutes,
+                        presets: [5, 10, 15, 20, 30, 45, 60, 90, 120, 240],
+                        label: Self.minutesLabel
+                    )
+                    .onChange(of: settings.netRomBroadcastMinutes) { _, _ in applyNetRomSettings() }
+                    .help("BPQ's default is 60 minutes. Shorter intervals spend more of a "
+                          + "shared channel on routing overhead.")
+
+                    if settings.netRomNodeAlias.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Text("Set a node alias — announcing without one is legal but leaves "
+                             + "a blank name in every neighbour's node list.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Toggle("Carry other stations' traffic (transit routing)",
+                       isOn: $settings.netRomForwarding)
+                    .onChange(of: settings.netRomForwarding) { _, _ in applyNetRomSettings() }
+                    .help("Forwards NET/ROM datagrams addressed to other nodes. This spends "
+                          + "this station's airtime on other people's packets and makes it "
+                          + "answerable for delivering them.")
+
+                if settings.netRomForwarding && !settings.netRomAdvertiseSelf {
+                    Text("Forwarding without announcing has little effect: no other node knows "
+                         + "to route through this station.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 

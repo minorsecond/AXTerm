@@ -23,23 +23,20 @@ struct ConnectionSettingsView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden() // Hide label for segmented control to save space/clean look
                 
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 12) {
-                        switch viewModel.selectedTransport {
-                        case .network:
-                            NetworkSettingsContent(viewModel: viewModel)
-                        case .serial:
-                            SerialSettingsContent(viewModel: viewModel)
-                        case .ble:
-                            BLESettingsContent(viewModel: viewModel)
-                        }
-                    }
-                    .padding(4)
-                } label: {
-                    Text(viewModel.selectedTransport.rawValue)
+                // No GroupBox: a box-in-a-box inside a grouped Form drew a
+                // second border around content the section already frames,
+                // re-labelled with the transport the segmented control
+                // directly above already names.
+                switch viewModel.selectedTransport {
+                case .network:
+                    NetworkSettingsContent(viewModel: viewModel)
+                case .serial:
+                    SerialSettingsContent(viewModel: viewModel)
+                case .ble:
+                    BLESettingsContent(viewModel: viewModel)
                 }
             } header: {
-                Text("Connection")
+                Text("Transport")
             }
             
             Section {
