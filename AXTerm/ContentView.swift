@@ -38,6 +38,13 @@ struct ContentView: View {
     /// The Nodes page's search text, held here so the sidebar can point it at
     /// one node's table.
     @State private var nodeQuery: String = ""
+    /// The universal-search panel's explicit close state. Reset by the
+    /// next keystroke; focus cannot drive this, because clicking a
+    /// result would blur the field before the click lands.
+    @State private var searchPanelDismissed = false
+    /// Mail summaries for the universal search, loaded once per launch
+    /// the first time a query needs them — not per keystroke.
+    @State private var mailSearchIndex: [WinlinkMessageSummary] = []
     /// The node whose table the Nodes page is restricted to, set by the
     /// sidebar's "Reachable via" rows.
     @State private var nodeRouteFilter: String?
@@ -328,6 +335,27 @@ struct ContentView: View {
         // universal search doesn't seem to be working on this page").
         .onChange(of: searchModel.query) { _, text in
             if selectedNav == .nodes { nodeQuery = text }
+            // A fresh keystroke reopens the panel a click dismissed, and
+            // lazily loads the mail index the first time it is needed.
+            searchPanelDismissed = false
+            if !text.isEmpty, mailSearchIndex.isEmpty { loadMailSearchIndex() }
+        }
+        // Every category the query matched, floating under the field —
+        // "universal" meaning universal (field ask 2026-08-29 07:07).
+        // Dismissal is explicit state rather than field focus, because a
+        // click inside the panel would drop focus before the click lands.
+        .overlay(alignment: .topTrailing) {
+            let trimmed = searchModel.query.trimmingCharacters(in: .whitespaces)
+            if !searchPanelDismissed,
+               trimmed.count >= UniversalSearchIndex.minimumQueryLength {
+                UniversalSearchPanel(
+                    results: universalSearchResults,
+                    query: trimmed,
+                    onOpen: { openSearchResult($0) },
+                    onDismiss: { searchPanelDismissed = true })
+                .padding(.top, 2)
+                .padding(.trailing, 12)
+            }
         }
         .searchFocused($isSearchFocused)
         .toolbar {
@@ -1663,6 +1691,55 @@ struct ContentView: View {
               + "stations it can connect you through to. Its claim, not a "
               + "route this station has measured, and other nodes may "
               + "list the same ones. Opens its table in Nodes.")
+    }
+
+    /// One query across every category the app knows.
+    private var universalSearchResults: UniversalSearchResults {
+        let aka = nodeAliases.directory.otherNames()
+        return UniversalSearchIndex.search(
+            searchModel.query,
+            stations: client.stations.map {
+                ($0.call, aka[$0.call.uppercased()], $0.heardCount,
+                 $0.lastHeard ?? .distantPast)
+            },
+            directory: nodeAliases.directory.allEntries,
+            routes: client.netRomIntegration?.currentRoutes() ?? [],
+            packets: client.packets.suffix(1500).map {
+                ($0.fromDisplay, $0.toDisplay, $0.infoPreview)
+            },
+            consoleLines: Array(client.consoleLines.suffix(4000)),
+            mail: mailSearchIndex,
+            now: Date())
+    }
+
+    private func loadMailSearchIndex() {
+        guard let store = winlinkContext.store else { return }
+        let folders = (try? store.folders()) ?? []
+        mailSearchIndex = folders.compactMap(\.id).flatMap { id in
+            (try? store.messages(inFolder: id)) ?? []
+        }
+    }
+
+    /// A panel click: land on the thing, with the search still applied
+    /// wherever the destination filters by it.
+    private func openSearchResult(_ destination: UniversalSearchResults.Destination) {
+        searchPanelDismissed = true
+        switch destination {
+        case .profile(let call):
+            profiles.openPage(call)
+        case .nodes(let query):
+            nodeRouteFilter = nil
+            nodeQuery = query
+            selectedNav = .nodes
+        case .routes:
+            selectedNav = .routes
+        case .mail:
+            selectedNav = .mail
+        case .packets:
+            selectedNav = .packets
+        case .terminal:
+            selectedNav = .terminal
+        }
     }
 
     private var searchPlaceholder: String {
