@@ -59,7 +59,11 @@ final class StationDotAnnotationView: MKAnnotationView {
 
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
-        canShowCallout = true
+        // No MapKit callout: selecting a station opens the selection
+        // card, which carries the full detail, planned route and
+        // Connect. The built-in bubble showed beside it as a second,
+        // poorer popup (field capture 2026-08-29 06:48).
+        canShowCallout = false
         // A dot is centred on its coordinate; a pin is anchored at its tip.
         centerOffset = .zero
         // Two stations close together should both stay tappable rather than
