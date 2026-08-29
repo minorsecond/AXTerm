@@ -899,6 +899,17 @@ struct ContentView: View {
 
     // MARK: - Sidebar
 
+    /// Whether the station filter drives the frontmost page. The filter
+    /// shapes the Terminal, Packets and Analytics views; everywhere else
+    /// its selection styling is quieted so the sidebar shows one "you
+    /// are here" at a time.
+    private var stationFilterApplies: Bool {
+        switch selectedNav {
+        case .terminal, .packets, .analytics: return true
+        default: return false
+        }
+    }
+
     private var sidebar: some View {
         List(selection: $selectedNav) {
             Section("Views") {
@@ -919,21 +930,27 @@ struct ContentView: View {
             circuitSection
 
             Section("Stations (\(client.stations.count))") {
-                // "All" option
+                // "All" option. The accent treatment appears only while a
+                // page this filter actually drives is frontmost — on the
+                // Nodes or Map page a lit "All Packets" beside the lit
+                // page item read as three simultaneous locations (field
+                // ask 2026-08-29 06:59). The checkmark alone remembers
+                // the choice everywhere.
                 HStack {
                     Text("All Packets")
-                        .fontWeight(client.selectedStationCall == nil ? .semibold : .regular)
+                        .fontWeight(client.selectedStationCall == nil
+                                    && stationFilterApplies ? .semibold : .regular)
                     Spacer()
                     if client.selectedStationCall == nil {
                         Image(systemName: "checkmark")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(stationFilterApplies ? .secondary : .tertiary)
                     }
                 }
                 .padding(.vertical, 4)
                 .padding(.horizontal, 6)
                 .background(
                     Group {
-                        if client.selectedStationCall == nil {
+                        if client.selectedStationCall == nil, stationFilterApplies {
                             Color.accentColor.opacity(0.15)
                         } else {
                             Color.clear
@@ -988,7 +1005,8 @@ struct ContentView: View {
 
                         StationRowView(
                             station: station,
-                            isSelected: client.selectedStationCall == station.call,
+                            isSelected: client.selectedStationCall == station.call
+                                && stationFilterApplies,
                             isConnected: isConnectedStation,
                             capability: client.capabilityStore.capabilities(for: station.call),
                             alsoKnownAs: alsoKnownAs[station.call.uppercased()],
