@@ -7,10 +7,18 @@ the rig is fictional and never leaves the compose network.
 
 ```
 AXTerm (this Mac) ──┐
-                    ├── kisshub :8010  ← the shared frequency
-LinBPQ  BPQTST-7 ───┘      (every frame heard by every station)
-(TSTNOD)   └─ telnet sysop console :8011
+LinBPQ  BPQTST-7 ────┤   kisshub :8010  ← a real half-duplex medium:
+(TSTNOD, sysop :8011)│      airtime, collisions, bit errors
+LinBPQ  BPQTX2-7 ────┤      (multi profile)
+(FARNOD)             │
+KA-Node K0EPI-6 ─────┘      (multi profile — a Kantronics node,
+(DRL)                        NOT a NET/ROM router)
 ```
+
+Every frame takes real airtime (1200 baud: a 100-byte frame is 0.67s),
+and two stations keying up at once **collide** — both destroyed, the
+way real RF works. Turn it off with `COLLISIONS=0 BAUD=0` for the old
+instant, perfect channel.
 
 ## Run it
 
@@ -43,6 +51,56 @@ one connection.
 
 The hub log (`docker compose logs -f kisshub`) shows every frame on
 the channel as `src>dst (n bytes)` — the rig's own monitor.
+
+## The physics (default hub)
+
+The channel is half-duplex and lossy on purpose. Env vars on the
+`kisshub` service:
+
+| Knob | Default | What it models |
+|---|---|---|
+| `BAUD` | 1200 | airtime per frame; set 0 for instant |
+| `COLLISIONS` | 1 | overlapping transmissions destroy each other |
+| `CAPTURE` | 0 | if 1, the first (stronger) frame survives a collision |
+| `BER` | 0 | per-bit errors inside a delivered frame (marginal copy) |
+| `LOSS` | 0 | whole-frame fade, independent of collisions |
+| `DELAY_MS`/`JITTER_MS` | 0 | extra propagation latency |
+
+```bash
+# A busy, marginal channel: collisions + 0.1% bit errors + 10% fade.
+BER=0.001 LOSS=0.1 docker compose up -d kisshub
+```
+
+The hub logs `## COLLISION`, `* N bit error(s)`, and a rolling channel
+tally every 30s. Collisions are the hidden-node problem by construction:
+TCP-KISS carries no carrier sense back to the stations, so they cannot
+hear each other and must recover from the wreck — which is exactly the
+retry/backoff behaviour worth testing.
+
+## The multi-node network (`multi` profile)
+
+```bash
+docker compose --profile multi up -d
+```
+
+Adds two more stations to the frequency:
+
+- **BPQTX2-7 (FARNOD)** — a second real BPQ node. Now AXTerm sees two
+  nodes advertising NODES, competing route qualities, and multi-hop
+  paths (reach FARNOD *through* TSTNOD). Tests route selection, tie-
+  breaking, and the "best route wins" logic against a real second node.
+- **K0EPI-6 (DRL) — a Kantronics KA-Node**, the crucial counter-example.
+  It answers connects with `###CONNECTED TO NODE DRL(K0EPI-6)` and
+  `ENTER COMMAND: B,C,J,N,?`, runs the KA verbs (C/J/N/B), beacons an
+  ID with the `/N` flag — and **never broadcasts a NODES table**. This
+  is what the capability classifier exists to tell apart from BPQ:
+  DRL's profile must classify as a KA-Node (not NET/ROM-capable), with
+  the menu quoted as evidence. Mis-classifying it is the poisoned-route
+  bug the classifier was built to prevent.
+
+`scripts/ka_node.py` and `scripts/ax25station.py` (a minimal AX.25
+connected-mode station) also run standalone against the hub if you want
+to script your own node behaviours.
 
 ## The `rf` profile (experimental)
 

@@ -40,6 +40,29 @@ services:
       - "8011:8011"
     restart: unless-stopped
 
+  linbpq-far:
+    profiles: ["multi"]
+    build: ./linbpq
+    platform: linux/arm/v7
+    depends_on:
+      - kisshub
+    networks:
+      channel:
+        ipv4_address: 172.28.99.22
+    volumes:
+      - ./linbpq/bpq32-far.cfg:/opt/bpq/bpq32.cfg:ro
+    restart: unless-stopped
+
+  kanode:
+    profiles: ["multi"]
+    build: ./kanode
+    depends_on:
+      - kisshub
+    networks:
+      channel:
+        ipv4_address: 172.28.99.23
+    restart: unless-stopped
+
   direwolf-rf:
     profiles: ["rf"]
     build: ./direwolf
