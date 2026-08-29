@@ -75,6 +75,15 @@ struct StationsMapView: View {
     /// far coast stretches the map's zoom until every local station is a
     /// cluster of dots, so the toggle earns its place.
     @AppStorage("stations.hidesDistantStations") private var hidesDistantStations = false
+    /// The whole node directory on the map — every station the network
+    /// claims reachable that can be placed from what is already cached.
+    /// Off by default: a harvested directory runs to hundreds of names,
+    /// and the map's first job is what was actually heard.
+    @AppStorage("stations.showsDirectoryNodes") private var showsDirectoryNodes = false
+    /// Measured coverage rings around this station. On by default: they
+    /// draw only when at least one station has answered us directly, and
+    /// knowing one's own footprint is half of why a coverage map exists.
+    @AppStorage("stations.showsCoverageRing") private var showsCoverageRing = true
     @StateObject private var insights = NetworkInsightModel()
     /// Stored elevation grids. Terrain forecasts read this and nothing else,
     /// so the feature works with the network down, and is honestly
@@ -237,7 +246,31 @@ struct StationsMapView: View {
             usedAliases: HeardStationMap.aliasesInUse(stations),
             directory: lookup.records,
             stations: stations)
-        return heard + nodes
+        guard showsDirectoryNodes else { return heard + nodes }
+        // The rest of the node directory — placeable entries only, no
+        // lookups triggered, names already on the map left to the layers
+        // that know more about them.
+        let shown = Set((heard + nodes).map { $0.callsign.uppercased() })
+            .union(stations.map { $0.call.uppercased() })
+        let directoryNodes = HeardStationMap.directoryNodeEntries(
+            aliases: aliases.directory,
+            alreadyShown: shown,
+            directory: lookup.records,
+            announcedGrids: announcedGrids,
+            stations: stations,
+            excluding: myCallsign)
+        return heard + nodes + directoryNodes
+    }
+
+    /// Measured coverage, or nil when the toggle is off or nothing has
+    /// answered this station directly.
+    private var coverageRing: CoverageEstimate.Ring? {
+        guard showsCoverageRing, let observer else { return nil }
+        return CoverageEstimate.ring(
+            paths: networkPaths,
+            ownAddresses: [myCallsign],
+            positions: networkPositions,
+            observer: observer)
     }
 
     /// Stations set aside as impossible to have heard over the air.
@@ -510,13 +543,18 @@ struct StationsMapView: View {
                     Divider()
                     Text(summary)
                 }
+                Divider()
+                Toggle("Node Directory", isOn: $showsDirectoryNodes)
+                    .help("Draw every station the network has claimed reachable — node tables, ROUTES scrapes, made relay hops — that can be placed from cached positions. Indigo markers, dashed when the position is the operator's address rather than the node's own. Nothing is looked up online for this layer.")
+                Toggle("Coverage Rings", isOn: $showsCoverageRing)
+                    .help("Rings around your station drawn from the stations that answered you directly — a UA, DM or FRMR to your frames proves they decoded you. Inner ring: half of them are closer than this. Outer ring: the farthest answer. Measurements, not a propagation model.")
             } label: {
-                Image(systemName: showsPaths || showsPredictedPaths
+                Image(systemName: showsPaths || showsPredictedPaths || showsDirectoryNodes
                       ? "point.topleft.down.to.point.bottomright.curvepath.fill"
                       : "point.topleft.down.to.point.bottomright.curvepath")
                     .iconHitTarget(iconHitTarget)
             }
-            .help("Choose what the map draws between stations: paths already observed, and paths the terrain says are possible but nobody has tried.")
+            .help("Choose what the map draws: paths observed between stations, paths the terrain says are possible, the node directory, and your station's measured coverage.")
             if !distantStations.isEmpty {
                 Button {
                     hidesDistantStations.toggle()
@@ -720,12 +758,63 @@ struct StationsMapView: View {
                                overlays: overlayStore.visibleLayers,
                                drawing: $drawing,
                                onDrawTap: handleDrawTap,
+                               coverage: coverageRing,
                                selection: $selection)
+            .overlay(alignment: .bottomTrailing) { selectionCard }
 
             MapDrawingToolbar(session: $drawing, onComplete: finishShape)
                 .padding(.top, 8)
         }
         .textEntryPrompt($drawPrompt)
+    }
+
+    /// A floating card for the selected marker: what the tooltip says, in
+    /// a form a click can reach — hover is a pointer affordance, and the
+    /// card also carries the way into the full identity page.
+    @ViewBuilder
+    private var selectionCard: some View {
+        if let selected = selection, selected != "__observer__",
+           let site = scope.sites.first(where: { $0.id == selected }) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    if site.isNode {
+                        Image(systemName: "point.3.connected.trianglepath.dotted")
+                            .foregroundStyle(.indigo)
+                            .help("A NET/ROM node or directory entry, not a heard station.")
+                    }
+                    Text(site.label)
+                        .font(.system(.headline, design: .monospaced))
+                    Spacer(minLength: 12)
+                    Button {
+                        selection = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Dismiss")
+                }
+                Text(site.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let onOpenProfile {
+                    Button {
+                        onOpenProfile(site.id)
+                    } label: {
+                        Label("Open Profile", systemImage: "person.text.rectangle")
+                    }
+                    .controlSize(.small)
+                    .help("Everything known about \(site.label): identity, roles, links, and the chain a connect would walk.")
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: 300, alignment: .leading)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
+            .padding(12)
+            .transition(.opacity)
+        }
     }
 
     /// A tap on the map while drawing.

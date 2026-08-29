@@ -88,6 +88,12 @@ nonisolated final class PingProber: ObservableObject {
     var lastTrafficAt: (() -> Date?)?
     /// Operator-facing note.
     var onNote: ((String) -> Void)?
+    /// An XID probe drew a definitive firmware answer: (callsign,
+    /// unsupported). DM or FRMR answering XID means a pre-2.2 stack
+    /// (unsupported: true); an XID answer means v2.2 (false). Fired only
+    /// for the XID probe — DM answering the DISC fallback is the *normal*
+    /// §6.3.4 reply and says nothing about XID.
+    var onXIDVerdict: ((String, Bool) -> Void)?
 
     private var outstanding: Outstanding?
     private var probeTimestamps: [Date] = []
@@ -205,6 +211,17 @@ nonisolated final class PingProber: ObservableObject {
         records[key] = record
         outstanding = nil
         persist()
+
+        // The answer to an XID probe is a firmware fingerprint worth
+        // keeping: the session layer can skip its own XID dance for a
+        // station that already said no (or refresh one that said yes).
+        if !pending.escalated {
+            switch uType {
+            case .DM, .FRMR: onXIDVerdict?(key, true)
+            case .XID: onXIDVerdict?(key, false)
+            default: break
+            }
+        }
 
         onNote?(String(format: "%@ answered in %.1f s (%@) — it hears this station.",
                        key, rtt, uType.rawValue))

@@ -930,6 +930,9 @@ final class SessionCoordinator: ObservableObject {
         pingProber.onNote = { [weak self] note in
             self?.packetEngine?.appendSystemNotification(note)
         }
+        pingProber.onXIDVerdict = { [weak self] call, unsupported in
+            self?.sessionManager.rememberXIDAnswer(peer: call, unsupported: unsupported)
+        }
     }
 
     /// Arm the NODES timer, and announce immediately **only** when

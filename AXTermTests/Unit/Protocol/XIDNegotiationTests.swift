@@ -29,6 +29,11 @@ final class XIDNegotiationTests: XCTestCase {
         super.setUp()
         clock = AX25VirtualClock()
         manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7), clock: clock)
+        // Isolated: the persistent XID memory would otherwise carry a
+        // verdict remembered by an earlier test (or an earlier run) into
+        // this one, and "first connect probes with XID" stops being true.
+        manager.xidMemory = XIDAnswerMemory(
+            defaults: UserDefaults(suiteName: "XIDNegotiationTests.\(UUID().uuidString)")!)
         manager.defaultConfig = AX25SessionConfig(
             windowSize: 4, paclen: 128, rtoMin: 2.0, rtoMax: 8.0, initialRto: 2.0)
         manager.negotiateV22 = true
@@ -58,6 +63,24 @@ final class XIDNegotiationTests: XCTestCase {
         XCTAssertEqual(frame?.controlByte, 0xBF, "XID command with P=1")
         XCTAssertFalse(sent.contains { $0.displayInfo == "SABM" },
                        "SABM waits for the XID answer")
+    }
+
+    /// A peer that answered DM or FRMR in a previous launch already told
+    /// us its firmware generation — the probe is skipped and the connect
+    /// goes straight to SABM instead of re-spending a frame and an RTO.
+    func testARememberedRejectionSkipsTheProbeEntirely() {
+        manager.rememberXIDAnswer(peer: peer.display, unsupported: true)
+        let frame = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        XCTAssertEqual(frame?.displayInfo, "SABM",
+                       "the answer is remembered; the question is not re-asked")
+    }
+
+    /// The memory itself is written by the negotiation's answers: a DM
+    /// during this launch means no probe next launch.
+    func testADMAnswerWritesTheMemory() {
+        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundDMDuringNegotiation(from: peer, channel: 0)
+        XCTAssertTrue(manager.xidMemory.isKnownUnsupported(peer.display))
     }
 
     func testXIDResponseEnablesSREJAndMinimumsThenSABM() {

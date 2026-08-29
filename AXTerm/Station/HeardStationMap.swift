@@ -328,7 +328,8 @@ nonisolated enum HeardStationMap {
                     subtitle: entry.gridSquare ?? "",
                     detail: text,
                     isStale: isStale(entry, now: now),
-                    isApproximate: entry.confidence == .inferredFromOperator)
+                    isApproximate: entry.confidence == .inferredFromOperator,
+                    isNode: entry.isNodeAlias)
             })
     }
 
@@ -445,6 +446,55 @@ nonisolated enum HeardStationMap {
                 isNodeAlias: true)
         }
         .sorted { $0.callsign < $1.callsign }
+    }
+
+    /// Entries for the whole node directory — every station the network
+    /// has claimed reachable, not only aliases seen in via paths.
+    ///
+    /// The directory is harvested hearsay and can run to hundreds of
+    /// names, so this layer is deliberately bounded: only entries that can
+    /// be *placed with what is already cached* are returned. No lookups
+    /// are triggered — feeding five hundred harvested names to an online
+    /// directory is exactly the bulk-fetch runaway the terrain downloader
+    /// once had. Names that collide with a heard station or with the
+    /// operator's own callsign are left to the heard layer, which knows
+    /// more about them.
+    static func directoryNodeEntries(aliases: NodeAliasDirectory,
+                                     alreadyShown: Set<String>,
+                                     directory: [String: CallsignRecord],
+                                     announcedGrids: [String: String],
+                                     stations: [Station],
+                                     excluding ownCallsign: String = "") -> [Entry] {
+        let own = CallsignQuery.normalize(ownCallsign)
+        let all = Set(aliases.allEntries.map { $0.alias.uppercased() })
+        let candidates = all.subtracting(alreadyShown).filter { name in
+            guard !own.isEmpty else { return true }
+            // Our own node alias resolves to our own callsign — the centre
+            // marker already is this station.
+            if CallsignQuery.normalize(name) == own { return false }
+            if let call = aliases.callsign(for: name),
+               CallsignQuery.normalize(call) == own { return false }
+            return true
+        }
+        return aliasEntries(aliases: aliases,
+                            usedAliases: candidates,
+                            directory: directory,
+                            stations: stations)
+            .compactMap { entry -> Entry? in
+                if entry.isPlaced { return entry }
+                // Second chance before dropping: the entry's own callsign
+                // may have beaconed a locator, which places the station
+                // itself — better than the operator's address.
+                let call = aliases.callsign(for: entry.callsign)?.uppercased()
+                guard let grid = call.flatMap({ announcedGrids[$0] }),
+                      let center = Maidenhead.center(of: grid) else { return nil }
+                var placed = entry
+                placed.position = GreatCircle.Point(center)
+                placed.positionSource = "locator announced in its own beacon"
+                placed.confidence = .gridSquare
+                placed.gridSquare = grid.uppercased()
+                return placed
+            }
     }
 
     /// Aliases appearing in the via paths of stations actually heard.

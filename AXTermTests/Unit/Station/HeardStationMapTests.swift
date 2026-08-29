@@ -424,6 +424,58 @@ final class HeardStationMapTests: XCTestCase {
             "DM79QL", .init(latitude: 51.5074, longitude: -0.1278)))
     }
 
+    // MARK: - The directory layer
+
+    /// The whole directory on the map — but only what can be placed with
+    /// what is already cached. No entry may trigger a lookup: a harvested
+    /// directory runs to hundreds of names, and bulk-fetching them is the
+    /// runaway the terrain downloader once had.
+    func testDirectoryLayerShowsOnlyThePlaceable() {
+        var aliases = NodeAliasDirectory()
+        aliases.record(.init(alias: "DRLNOD", callsign: "KE0NCQ", service: "N"), at: now)
+        aliases.record(.init(alias: "SOLBPQ", callsign: "N0HI-7", service: "N"), at: now)
+
+        let entries = HeardStationMap.directoryNodeEntries(
+            aliases: aliases,
+            alreadyShown: [],
+            directory: ["KE0NCQ": record("KE0NCQ", latitude: 39.65, longitude: -104.98)],
+            announcedGrids: [:],
+            stations: [])
+        XCTAssertEqual(entries.map(\.callsign), ["DRLNOD"],
+                       "N0HI has never been looked up — SOLBPQ stays off the layer")
+        XCTAssertTrue(entries.allSatisfy(\.isPlaced))
+    }
+
+    /// A name already on the map belongs to the layer that knows more
+    /// about it; the operator's own callsign is the centre marker.
+    func testDirectoryLayerYieldsToExistingMarkersAndSelf() {
+        var aliases = NodeAliasDirectory()
+        aliases.record(.init(alias: "DRLNOD", callsign: "KE0NCQ", service: "N"), at: now)
+        aliases.record(.init(alias: "EPINOD", callsign: "K0EPI-7", service: "N"), at: now)
+        let directory = [
+            "KE0NCQ": record("KE0NCQ", latitude: 39.65, longitude: -104.98),
+            "K0EPI": record("K0EPI", latitude: 39.0, longitude: -105.0)
+        ]
+
+        XCTAssertTrue(HeardStationMap.directoryNodeEntries(
+            aliases: aliases, alreadyShown: ["DRLNOD"], directory: directory,
+            announcedGrids: [:], stations: [], excluding: "K0EPI-7").isEmpty)
+    }
+
+    /// A station that beaconed its own locator is placed by it — the
+    /// station's own claim about itself, better than nothing cached.
+    func testDirectoryLayerFallsBackToTheStationsOwnBeacon() throws {
+        var aliases = NodeAliasDirectory()
+        aliases.record(.init(alias: "SOLBPQ", callsign: "N0HI-7", service: "N"), at: now)
+        let entry = try XCTUnwrap(HeardStationMap.directoryNodeEntries(
+            aliases: aliases, alreadyShown: [], directory: [:],
+            announcedGrids: ["N0HI-7": "DM79LQ"], stations: []).first)
+        XCTAssertEqual(entry.callsign, "SOLBPQ")
+        XCTAssertTrue(entry.isPlaced)
+        XCTAssertEqual(entry.gridSquare, "DM79LQ")
+        XCTAssertTrue(entry.positionSource?.contains("beacon") == true)
+    }
+
     // MARK: - Node aliases
 
     /// The whole point: DRLNOD is not a licence, so no directory has it,

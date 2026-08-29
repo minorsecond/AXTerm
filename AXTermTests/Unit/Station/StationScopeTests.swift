@@ -168,10 +168,10 @@ final class StationScopeTests: XCTestCase {
                 (id: "known", label: "W0ARP-10",
                  position: .init(latitude: 39.6, longitude: -104.9),
                  signal: .good, subtitle: "", detail: "", isStale: false,
-                 isApproximate: false),
+                 isApproximate: false, isNode: false),
                 (id: "unknown", label: "N0XYZ", position: nil,
                  signal: .unknown, subtitle: "", detail: "", isStale: false,
-                 isApproximate: false),
+                 isApproximate: false, isNode: false),
             ])
         XCTAssertEqual(scope.sites.map(\.id), ["known"])
     }
@@ -184,7 +184,7 @@ final class StationScopeTests: XCTestCase {
             entries: [
                 (id: "north", label: "N", position: .init(latitude: 1, longitude: 0),
                  signal: .good, subtitle: "", detail: "", isStale: false,
-                 isApproximate: false),
+                 isApproximate: false, isNode: false),
             ])
         let site = try XCTUnwrap(scope.sites.first)
         XCTAssertEqual(site.bearingDegrees, 0, accuracy: 0.01)
@@ -203,7 +203,7 @@ final class StationScopeTests: XCTestCase {
             entries: [
                 (id: "W0ARP-10", label: "W0ARP-10", position: .init(gateway),
                  signal: .fair, subtitle: "145.050", detail: "", isStale: false,
-                 isApproximate: false),
+                 isApproximate: false, isNode: false),
             ])
         let site = try XCTUnwrap(scope.sites.first)
         // Both squares are in DM79, so this is a short hop.

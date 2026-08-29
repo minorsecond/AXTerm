@@ -43,6 +43,10 @@ nonisolated struct StationScope: Equatable, Sendable {
         /// The position is a lead rather than a location — drawn hollow
         /// so it can never be mistaken for a fix.
         var isApproximate: Bool = false
+        /// A NET/ROM node or directory entry rather than a heard station —
+        /// drawn in its own colour and glyph so infrastructure reads apart
+        /// from traffic.
+        var isNode: Bool = false
 
         var compassPoint: String { GreatCircle.compassPoint(bearingDegrees) }
 
@@ -112,7 +116,7 @@ nonisolated struct StationScope: Equatable, Sendable {
         observer: GreatCircle.Point,
         entries: [(id: String, label: String, position: GreatCircle.Point?,
                    signal: Signal, subtitle: String, detail: String,
-                   isStale: Bool, isApproximate: Bool)]
+                   isStale: Bool, isApproximate: Bool, isNode: Bool)]
     ) -> StationScope {
         let sites = entries.compactMap { entry -> Site? in
             guard let position = entry.position else { return nil }
@@ -125,7 +129,8 @@ nonisolated struct StationScope: Equatable, Sendable {
                 subtitle: entry.subtitle,
                 detail: entry.detail,
                 isStale: entry.isStale,
-                isApproximate: entry.isApproximate)
+                isApproximate: entry.isApproximate,
+                isNode: entry.isNode)
         }
         return build(observerLabel: observerLabel, sites: sites)
     }

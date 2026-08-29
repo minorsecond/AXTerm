@@ -568,6 +568,16 @@ final class AX25SessionManager: ObservableObject {
     /// belong to the station, not to any particular path or session.
     private(set) var peerXIDStatus: [String: PeerXIDStatus] = [:]
 
+    /// Answered XID verdicts, persisted — see XIDAnswerMemory. The
+    /// in-memory cache above answers "this launch"; this answers "ever".
+    var xidMemory = XIDAnswerMemory()
+
+    /// Records an XID verdict learned outside a negotiation — the ping
+    /// prober's XID probes get the same DM/FRMR answers a connect would.
+    func rememberXIDAnswer(peer: String, unsupported: Bool) {
+        xidMemory.remember(peer, unsupported: unsupported)
+    }
+
     /// XID commands in flight: peer callsign → the half-open session key
     /// and the timeout that resolves a silent peer as pre-2.2.
     private var pendingXID: [String: (key: SessionKey, task: AnyCancellableTask?)] = [:]
@@ -1153,7 +1163,18 @@ final class AX25SessionManager: ObservableObject {
         if negotiateV22 {
             switch peerXIDStatus[destination.display] {
             case .none:
-                return beginXIDNegotiation(session: session)
+                // A remembered DM or FRMR is this peer's firmware speaking —
+                // an answered rejection from a previous launch. Skip the
+                // probe and go straight to SABM instead of re-spending a
+                // frame and up to an RTO to relearn it.
+                if xidMemory.isKnownUnsupported(destination.display) {
+                    debugTrace("XID probe skipped — peer answered DM/FRMR before", [
+                        "peer": destination.display
+                    ])
+                    peerXIDStatus[destination.display] = .unsupported
+                } else {
+                    return beginXIDNegotiation(session: session)
+                }
             case .supported(let params):
                 applyNegotiatedConfig(params, to: session)
             case .unsupported:
@@ -1340,6 +1361,7 @@ final class AX25SessionManager: ObservableObject {
 
         debugTrace("RX XID response", ["peer": peerKey, "parsed": parsed != nil ? 1 : 0])
         if let parsed {
+            xidMemory.remember(peerKey, unsupported: false)
             resolveXID(peer: peerKey, status: .supported(parsed))
         } else {
             resolveXID(peer: peerKey, status: .unsupported)
@@ -1351,6 +1373,7 @@ final class AX25SessionManager: ObservableObject {
     /// negotiation that is the documented "use defaults" — never an error.
     func handleInboundFRMRDuringNegotiation(from source: AX25Address, channel: UInt8) {
         guard pendingXID[source.display] != nil else { return }
+        xidMemory.remember(source.display, unsupported: true)
         resolveXID(peer: source.display, status: .unsupported)
     }
 
@@ -1374,6 +1397,7 @@ final class AX25SessionManager: ObservableObject {
     func handleInboundDMDuringNegotiation(from source: AX25Address, channel: UInt8) -> Bool {
         guard pendingXID[source.display] != nil else { return false }
         TxLog.debug(.session, "XID answered with DM — peer treated as pre-2.2", ["peer": source.display])
+        xidMemory.remember(source.display, unsupported: true)
         resolveXID(peer: source.display, status: .unsupported)
         return true
     }

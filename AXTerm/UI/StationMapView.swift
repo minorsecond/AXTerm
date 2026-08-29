@@ -40,6 +40,9 @@ struct StationMapView: View {
     /// which is the only one that can host overlays and intercept taps.
     var drawing: Binding<MapDrawingSession>?
     var onDrawTap: (CLLocationCoordinate2D) -> Void = { _ in }
+    /// Measured coverage around the observer, drawn as two rings. Nil
+    /// draws nothing — no evidence, no ring.
+    var coverage: CoverageEstimate.Ring?
     @Binding var selection: String?
 
     private var observerLabel: String {
@@ -105,6 +108,21 @@ struct StationMapView: View {
         // `.annotationTitles(.hidden)` on each annotation suppress the
         // second copy.
         Map(position: $camera, selection: $selection) {
+            // Coverage rings under everything: measured footprint, drawn
+            // from the stations that answered us direct. Inner ring is
+            // the median answered distance, outer the farthest.
+            if let coverage {
+                MapCircle(center: observer.clCoordinate,
+                          radius: coverage.typicalKm * 1000)
+                    .foregroundStyle(.tint.opacity(0.08))
+                    .stroke(.tint.opacity(0.55), lineWidth: 1.5)
+                MapCircle(center: observer.clCoordinate,
+                          radius: coverage.reachKm * 1000)
+                    .foregroundStyle(.clear)
+                    .stroke(.tint.opacity(0.4),
+                            style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
+            }
+
             Annotation("", coordinate: observer.clCoordinate, anchor: .center) {
                 observerMarker
             }
@@ -139,6 +157,22 @@ struct StationMapView: View {
                 // edges; anything floating on top of it must put the inset
                 // back, or the legend sits on the home indicator.
                 .padding(.bottom, safeAreaBottomInset)
+        }
+        .overlay(alignment: .topTrailing) {
+            // The rings' own explanation — MapKit overlays cannot carry a
+            // tooltip, so the chip does, and states the derivation.
+            if let coverage {
+                Label(String(format: "Coverage ~%.0f mi",
+                             GreatCircle.miles(fromKilometres: coverage.reachKm)),
+                      systemImage: "dot.radiowaves.left.and.right")
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(8)
+                    .help(coverage.summary)
+                    .accessibilityLabel(coverage.summary)
+            }
         }
         .onAppear(perform: frameEverything)
         .onChange(of: scope.sites.count) { _, _ in frameEverything() }
@@ -212,7 +246,11 @@ struct StationMapView: View {
 
     private func marker(for site: StationScope.Site) -> some View {
         let isSelected = site.id == selection
-        let tint = color(for: site.signal)
+        // A node is infrastructure, not traffic: one colour for all of
+        // them, so the eye separates the network's fixtures from the
+        // stations moving through it. Recency still shows through the
+        // stale fade.
+        let tint = site.isNode ? Color.indigo : color(for: site.signal)
         let diameter = Self.markerDiameter
 
         return VStack(spacing: 2) {
@@ -238,6 +276,11 @@ struct StationMapView: View {
                     Circle()
                         .stroke(.white, lineWidth: 2.5)
                         .frame(width: diameter, height: diameter)
+                }
+                if site.isNode {
+                    Image(systemName: "point.3.connected.trianglepath.dotted")
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(site.isApproximate ? tint : .white)
                 }
                 // Selection is shown by a ring drawn inside the fixed
                 // footprint, never by resizing it.
