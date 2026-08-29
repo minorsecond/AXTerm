@@ -389,20 +389,29 @@ struct NodeDirectoryView: View {
             + "on the map and in via paths.")
     }
 
+    /// ALIAS:CALL as one selectable run of text, alias carrying the weight.
+    private func identityText(_ entry: NodeAliasDirectory.Entry) -> Text {
+        let alias: Text = Text(entry.alias).fontWeight(.medium)
+        let colon: Text = Text(":").foregroundColor(.secondary)
+        let call: Text = Text(entry.callsign).foregroundColor(.secondary)
+        return alias + colon + call
+    }
+
     private func row(_ entry: NodeAliasDirectory.Entry, under teller: String?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(entry.alias)
-                .font(.system(.body, design: .monospaced).weight(.medium))
-                .frame(width: 84, alignment: .leading)
-
-            Image(systemName: "arrow.right")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-
-            Text(entry.callsign)
+            // Written the way every node prints it: ALIAS:CALL. The old
+            // alias → callsign arrow read as "connects to", as if the
+            // alias were a hop toward the callsign — it is one station
+            // with two names, and the colon is the convention operators
+            // already know from BPQ prompts and NODES tables.
+            identityText(entry)
                 .font(.system(.body, design: .monospaced))
-                .frame(width: 110, alignment: .leading)
+                .frame(width: 208, alignment: .leading)
                 .textSelection(.enabled)
+                .help("One station, two names — not a route. \(entry.alias) is "
+                      + "the name the network answers to (what you type at a "
+                      + "node prompt); \(entry.callsign) is the licensed "
+                      + "station behind it.")
 
             // Only when the station itself declared one. Shown inline rather
             // than in a column of its own: fewer than one row in thirty has a

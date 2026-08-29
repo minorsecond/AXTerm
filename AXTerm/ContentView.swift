@@ -322,6 +322,13 @@ struct ContentView: View {
             bbsService.shutdown(reason: "this station is going to sleep")
         }
         .searchable(text: $searchModel.query, prompt: searchPlaceholder)
+        // The toolbar search field is THE search field — on pages that
+        // filter in-pane it must drive that filter, not silently sift a
+        // pane the operator cannot see (field ask 2026-08-29 06:51: "the
+        // universal search doesn't seem to be working on this page").
+        .onChange(of: searchModel.query) { _, text in
+            if selectedNav == .nodes { nodeQuery = text }
+        }
         .searchFocused($isSearchFocused)
         .toolbar {
             toolbarContent
@@ -734,7 +741,7 @@ struct ContentView: View {
         case .terminal: searchModel.scope = .terminal
         case .packets: searchModel.scope = .packets
         case .routes: searchModel.scope = .routes
-        case .nodes: searchModel.scope = .terminal  // the page filters in-pane
+        case .nodes: searchModel.scope = .terminal  // mirrored into nodeQuery below
         case .analytics: searchModel.scope = .analytics
         case .map: searchModel.scope = .terminal
         case .mail: searchModel.scope = .terminal  // Mail has its own in-pane search
@@ -842,37 +849,7 @@ struct ContentView: View {
         if reachableCount > 0 {
             Section("Reachable via nodes (\(reachableCount))") {
                 ForEach(reachableByNode, id: \.via) { group in
-                    Button {
-                        // A filter, not a search. Typing the node's name into
-                        // the search field matched every entry that mentioned
-                        // it anywhere and then re-filed those under whichever
-                        // node listed them last, so this row's count and the
-                        // page it opened disagreed by two orders of magnitude.
-                        nodeRouteFilter = group.via
-                        nodeQuery = ""
-                        selectedNav = .nodes
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "arrow.triangle.branch")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(group.via)
-                                .font(.system(.subheadline, design: .monospaced))
-                            Spacer()
-                            Text("\(group.targets.count)")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                            Image(systemName: "chevron.right")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("\(group.via) published a table listing \(group.targets.count) "
-                          + "stations it can connect you through to. Its claim, not a "
-                          + "route this station has measured, and other nodes may "
-                          + "list the same ones. Opens its table in Nodes.")
+                    reachableRow(via: group.via, count: group.targets.count)
                 }
             }
         }
@@ -1628,12 +1605,56 @@ struct ContentView: View {
 
     // MARK: - Computed Properties
 
+    /// One node's claim in the sidebar. Lit while the page shows this
+    /// node's table, so the sidebar answers "where am I?" the way the
+    /// Views section does (field ask 2026-08-29 06:51: "I am on the
+    /// COSCO page, why isn't COSCO highlighted?").
+    private func reachableRow(via: String, count: Int) -> some View {
+        let isActive = selectedNav == .nodes && nodeRouteFilter == via
+        return Button {
+            // A filter, not a search. Typing the node's name into the
+            // search field matched every entry that mentioned it
+            // anywhere and then re-filed those under whichever node
+            // listed them last, so this row's count and the page it
+            // opened disagreed by two orders of magnitude.
+            nodeRouteFilter = via
+            nodeQuery = ""
+            selectedNav = .nodes
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.caption)
+                    .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+                Text(via)
+                    .font(.system(.subheadline, design: .monospaced))
+                Spacer()
+                Text("\(count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.accentColor.opacity(isActive ? 0.22 : 0)))
+        .help("\(via) published a table listing \(count) "
+              + "stations it can connect you through to. Its claim, not a "
+              + "route this station has measured, and other nodes may "
+              + "list the same ones. Opens its table in Nodes.")
+    }
+
     private var searchPlaceholder: String {
         switch selectedNav {
         case .terminal:
             return "Filter terminal output"
         case .packets:
             return "Search packets"
+        case .nodes:
+            return "Search aliases, callsigns, nodes"
         default:
             return "Search"
         }
