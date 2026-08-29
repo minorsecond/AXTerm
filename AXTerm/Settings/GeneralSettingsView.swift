@@ -18,6 +18,7 @@ struct GeneralSettingsView: View {
 
     @State private var launchAtLoginFeedback: String?
     @AppStorage(AppSettingsStore.runInMenuBarKey) private var runInMenuBar = AppSettingsStore.defaultRunInMenuBar
+    @AppStorage(TimeDisplay.formatKey) private var timeFormatRaw = TimeDisplayFormat.system.rawValue
 
     var body: some View {
         Form {
@@ -30,6 +31,22 @@ struct GeneralSettingsView: View {
             }
             
             PreferencesSection("Display") {
+                Picker("Time format", selection: $timeFormatRaw) {
+                    ForEach(TimeDisplayFormat.allCases) { format in
+                        Text(format.label).tag(format.rawValue)
+                    }
+                }
+                .help("How timestamps are written in the terminal, station "
+                      + "lists and logs. System follows this Mac's locale and "
+                      + "12/24-hour preference; the other two pin one style "
+                      + "regardless. Dates elsewhere always follow the system "
+                      + "locale. Protocol content, debug traces and chart axes "
+                      + "keep their own conventions.")
+
+                Text("Now: \(TimeDisplay.timeString(Date(), format: TimeDisplayFormat(rawValue: timeFormatRaw)))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Toggle("Show day separators in Console", isOn: $settings.showConsoleDaySeparators)
                 Toggle("Show day separators in Raw Data", isOn: $settings.showRawDaySeparators)
             }

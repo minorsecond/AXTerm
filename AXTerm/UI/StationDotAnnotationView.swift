@@ -6,6 +6,23 @@ import UIKit
 import AppKit
 #endif
 
+/// When callsign labels are worth their ink.
+///
+/// At metro zoom every marker's label is legible and wanted; zoomed out
+/// to a state, thirty labels pile onto a few square centimetres and bury
+/// both each other and the place names under them (field capture
+/// 2026-08-29: "the cartography is pretty rough"). Below the threshold
+/// the dots alone carry the picture — colour and shape still read — and
+/// the labels return as the operator zooms in.
+nonisolated enum MapLabelPolicy {
+    /// Roughly a 50-mile-tall viewport. Wider than that, labels come off.
+    static let labelSpanThresholdDegrees = 0.7
+
+    static func showsLabels(latitudeDelta: Double) -> Bool {
+        latitudeDelta < labelSpanThresholdDegrees
+    }
+}
+
 /// A station on the map, drawn as a dot rather than a pin.
 ///
 /// `MKMarkerAnnotationView` draws a balloon roughly 40pt tall with a shadow.
@@ -65,17 +82,17 @@ final class StationDotAnnotationView: MKAnnotationView {
     /// light and the dark basemap without boxing in the terrain.
     private func configureLabel() {
         #if os(iOS)
-        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.font = .systemFont(ofSize: 10, weight: .medium)
         label.textColor = .white
         label.textAlignment = .center
         label.numberOfLines = 1
         label.lineBreakMode = .byTruncatingTail
         label.layer.shadowColor = PlatformColor.black.cgColor
-        label.layer.shadowOpacity = 0.9
-        label.layer.shadowRadius = 2
+        label.layer.shadowOpacity = 0.85
+        label.layer.shadowRadius = 1.5
         label.layer.shadowOffset = .zero
         #else
-        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.font = .systemFont(ofSize: 10, weight: .medium)
         label.textColor = .white
         label.alignment = .center
         label.isBezeled = false
@@ -84,8 +101,8 @@ final class StationDotAnnotationView: MKAnnotationView {
         label.lineBreakMode = .byTruncatingTail
         label.wantsLayer = true
         label.layer?.shadowColor = PlatformColor.black.cgColor
-        label.layer?.shadowOpacity = 0.9
-        label.layer?.shadowRadius = 2
+        label.layer?.shadowOpacity = 0.85
+        label.layer?.shadowRadius = 1.5
         label.layer?.shadowOffset = .zero
         #endif
     }
@@ -182,8 +199,18 @@ final class StationDotAnnotationView: MKAnnotationView {
         return path
     }
 
+    /// Whether this marker has a label at all — distinct from whether the
+    /// zoom level currently shows it.
+    private var hasLabelText = false
+
+    /// Zoom-driven visibility: the dot stays, the label comes and goes.
+    func setLabelVisible(_ visible: Bool) {
+        label.isHidden = !visible || !hasLabelText
+    }
+
     private func setLabel(_ callsign: String?, below dot: CGRect) {
         let text = callsign ?? ""
+        hasLabelText = !text.isEmpty
         #if os(iOS)
         label.text = text
         #else

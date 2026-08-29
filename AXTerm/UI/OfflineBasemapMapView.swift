@@ -342,6 +342,8 @@ struct OfflineBasemapMapView {
                            approximate: site.isApproximate,
                            isNode: site.isNode,
                            callsign: site.title)
+            view.setLabelVisible(
+                labelsVisible || site.isObserver || site.id == parent.selection)
             // The callout has to earn the tap: a bubble carrying only the
             // callsign already on the label says nothing the map did not.
             view.detailCalloutAccessoryView = Self.calloutDetail(for: site)
@@ -398,9 +400,35 @@ struct OfflineBasemapMapView {
         /// operator dismissing a selection.
         var isRebuildingAnnotations = false
 
+        /// Whether callsign labels are shown at the current zoom — see
+        /// MapLabelPolicy. The observer's and the selection's labels stay
+        /// regardless: "where am I" and "what did I just click" are the
+        /// two names worth ink at any zoom.
+        var labelsVisible = true
+
+        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            let shows = MapLabelPolicy.showsLabels(
+                latitudeDelta: mapView.region.span.latitudeDelta)
+            guard shows != labelsVisible else { return }
+            labelsVisible = shows
+            applyLabelVisibility(on: mapView)
+        }
+
+        func applyLabelVisibility(on mapView: MKMapView) {
+            for annotation in mapView.annotations {
+                guard let site = annotation as? SiteAnnotation,
+                      let view = mapView.view(for: annotation) as? StationDotAnnotationView
+                else { continue }
+                view.setLabelVisible(
+                    labelsVisible || site.isObserver || site.id == parent.selection)
+            }
+        }
+
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
             guard !isRebuildingAnnotations,
                   let site = view.annotation as? SiteAnnotation else { return }
+            // A selected station's name is always worth ink, even zoomed out.
+            (view as? StationDotAnnotationView)?.setLabelVisible(true)
             let next = site.isObserver ? nil : site.id
             // Written only when it changes: an unconditional write feeds a
             // SwiftUI update back into the map, which re-selects, which calls
@@ -411,6 +439,10 @@ struct OfflineBasemapMapView {
 
         func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
             guard !isRebuildingAnnotations else { return }
+            if let site = view.annotation as? SiteAnnotation {
+                (view as? StationDotAnnotationView)?.setLabelVisible(
+                    labelsVisible || site.isObserver)
+            }
             guard parent.selection != nil else { return }
             parent.selection = nil
         }
@@ -474,7 +506,10 @@ struct OfflineBasemapMapView {
             coordinator.overlay = overlay
             mapView.addOverlay(overlay, level: .aboveLabels)
         } else {
-            mapView.mapType = basemap.mkMapType
+            // The modern configuration rather than mapType: muted emphasis
+            // pulls Apple's palette back to greys, so the recency colours,
+            // node diamonds and coverage rings own the map's colour.
+            mapView.preferredConfiguration = basemap.mkConfiguration
         }
     }
 

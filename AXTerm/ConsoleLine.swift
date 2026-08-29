@@ -106,7 +106,7 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
     }
 
     var timestampString: String {
-        Self.timeFormatter.string(from: timestamp)
+        TimeDisplay.timeString(timestamp)
     }
 
     var formattedLine: String {
@@ -121,12 +121,6 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         parts.append(text)
         return parts.joined(separator: " ")
     }
-
-    private static let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
-        return f
-    }()
 
     // MARK: - Convenience Initializers
 

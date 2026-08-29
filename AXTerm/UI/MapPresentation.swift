@@ -30,17 +30,23 @@ nonisolated enum MapBasemap: String, CaseIterable, Identifiable, Sendable {
 
     /// Terrain is what matters for RF, so elevation is kept flat but
     /// points of interest are dropped — a coffee shop is noise here.
+    /// Emphasis is muted: Apple's palette pulled back to greys is the
+    /// difference between a street map with dots on it and a purpose-built
+    /// RF map whose colour all belongs to the data.
     var mapStyle: MapStyle {
         switch self {
-        case .standard: .standard(elevation: .flat, pointsOfInterest: .excludingAll)
+        case .standard: .standard(elevation: .flat, emphasis: .muted,
+                                  pointsOfInterest: .excludingAll)
         case .hybrid: .hybrid(elevation: .flat, pointsOfInterest: .excludingAll)
         case .satellite: .imagery(elevation: .flat)
         // Never rendered by SwiftUI's Map: the offline mode is drawn by
         // OfflineBasemapMapView, which is the only thing that can host a
         // tile overlay. Kept exhaustive so a new case cannot silently fall
         // through to Apple's basemap.
-        case .offline: .standard(elevation: .flat, pointsOfInterest: .excludingAll)
-        case .none: .standard(elevation: .flat, pointsOfInterest: .excludingAll)
+        case .offline: .standard(elevation: .flat, emphasis: .muted,
+                                 pointsOfInterest: .excludingAll)
+        case .none: .standard(elevation: .flat, emphasis: .muted,
+                              pointsOfInterest: .excludingAll)
         }
     }
 
@@ -49,6 +55,25 @@ nonisolated enum MapBasemap: String, CaseIterable, Identifiable, Sendable {
         case .standard, .none, .offline: .standard
         case .hybrid: .hybridFlyover
         case .satellite: .satellite
+        }
+    }
+
+    /// The same choices for the MKMapView path, which is the one the
+    /// stations screen actually renders through.
+    var mkConfiguration: MKMapConfiguration {
+        switch self {
+        case .standard, .none, .offline:
+            let configuration = MKStandardMapConfiguration(
+                elevationStyle: .flat, emphasisStyle: .muted)
+            configuration.pointOfInterestFilter = .excludingAll
+            configuration.showsTraffic = false
+            return configuration
+        case .hybrid:
+            let configuration = MKHybridMapConfiguration(elevationStyle: .flat)
+            configuration.pointOfInterestFilter = .excludingAll
+            return configuration
+        case .satellite:
+            return MKImageryMapConfiguration(elevationStyle: .flat)
         }
     }
 

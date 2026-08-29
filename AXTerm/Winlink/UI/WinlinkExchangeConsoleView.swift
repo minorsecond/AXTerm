@@ -24,12 +24,6 @@ struct WinlinkExchangeConsoleView: View {
     @State private var showReplay = false
     @State private var showDashboard = false
 
-    private static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter
-    }()
-
     var body: some View {
         VStack(spacing: 0) {
             #if os(iOS)
@@ -201,7 +195,7 @@ struct WinlinkExchangeConsoleView: View {
 
     private func row(_ entry: WinlinkTranscriptEntry) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(Self.timeFormatter.string(from: entry.timestamp))
+            Text(TimeDisplay.timeString(entry.timestamp))
                 .font(.caption2.monospaced())
                 .foregroundStyle(.quaternary)
 

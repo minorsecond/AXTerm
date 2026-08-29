@@ -9,12 +9,6 @@ struct WinlinkExchangeReplayView: View {
     let gatewayName: String
     @Environment(\.dismiss) private var dismiss
 
-    private static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter
-    }()
-
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -157,7 +151,7 @@ struct WinlinkExchangeReplayView: View {
 
     private func arrowRow(time: Date, label: String, color: Color, pointsRight: Bool, thick: Bool) -> some View {
         HStack(spacing: 8) {
-            Text(Self.timeFormatter.string(from: time))
+            Text(TimeDisplay.timeString(time))
                 .font(.caption2.monospaced())
                 .foregroundStyle(.quaternary)
                 .frame(width: 52, alignment: .leading)
