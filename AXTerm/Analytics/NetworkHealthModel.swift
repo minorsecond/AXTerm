@@ -715,7 +715,9 @@ nonisolated enum NetworkHealthCalculator {
         if breakdown.c1MainClusterPct >= 80 {
             reasons.append("Well-connected network\(tfLabel)")
         } else if breakdown.c1MainClusterPct >= 50 {
-            reasons.append("Moderately connected (\(Int(breakdown.c1MainClusterPct))%\(tfLabel))")
+            // Round, matching the metric card's formatPercent — truncating here
+            // made the same value read "55%" in the reason and "56%" on the card.
+            reasons.append("Moderately connected (\(Int(breakdown.c1MainClusterPct.rounded()))%\(tfLabel))")
         }
 
         // Activity reason
@@ -805,7 +807,7 @@ nonisolated enum NetworkHealthCalculator {
                 id: "fragmented",
                 severity: .caution,
                 title: "Fragmented network\(tfLabel)",
-                detail: "Only \(Int(metrics.largestComponentPercent))% of stations in main cluster"
+                detail: "Only \(Int(metrics.largestComponentPercent.rounded()))% of stations in main cluster"
             ))
         }
 

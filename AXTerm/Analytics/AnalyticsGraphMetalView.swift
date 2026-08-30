@@ -416,17 +416,16 @@ private struct NodeLabelsOverlay: View {
 
             var drawnRects: [CGRect] = []
 
-            // Suffix labels ("EPI", "TX") save space when zoomed out, but carry
-            // almost no information; once the user zooms in, show full callsigns.
-            let useFullCallsigns = cameraState.scale >= 1.15
-
+            // Always the full callsign. Suffix labels ("TST", "PI") once saved
+            // space when zoomed out, but a station you cannot name is a station
+            // you cannot act on — and clutter is already handled below by
+            // dropping any label that would collide with one already drawn, so
+            // abbreviating bought nothing but confusion (rig review 2026-08-29).
             for node in sortedNodes.prefix(maxLabels) {
                 guard let position = positionMap[node.id] else { continue }
                 guard CallsignValidator.isValidRoutingNode(node.callsign) else { continue }
 
-                let suffix = useFullCallsigns
-                    ? node.callsign
-                    : CallsignValidator.extractSuffix(node.callsign)
+                let labelText = node.callsign
 
                 // Calculate screen position
                 let screenPos = normalizedToScreen(
@@ -462,7 +461,7 @@ private struct NodeLabelsOverlay: View {
                 }
 
                 let font = Font.system(size: fontSize, weight: isSelected || isHovered ? .semibold : .regular)
-                var text = Text(suffix).font(font)
+                var text = Text(labelText).font(font)
 
                 if isSelected {
                     text = text.foregroundColor(Color(platform: .platformAccent))

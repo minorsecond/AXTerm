@@ -1530,21 +1530,26 @@ extension AnalyticsDashboardView {
     }
 
     private var graphViewSummaryText: String {
+        // Each line leads with what the SOURCE means (heard-talking vs
+        // can-route), then what the LENS narrows it to — so the caption alone
+        // tells the operator which question the graph is answering.
+        let packetSource = "Packets: who was heard talking on the air."
+        let netromSource = "NET/ROM: who can route to whom."
         switch viewModel.graphViewMode {
         case .connectivity:
-            return "Packet source. Direct shows direct peer traffic and direct-heard RF evidence."
+            return "\(packetSource) Direct — direct peer traffic and direct-heard RF evidence only."
         case .routing:
-            return "Packet source. Routed shows digipeater-mediated paths plus direct peers."
+            return "\(packetSource) Routed — digipeater-mediated paths plus direct peers."
         case .all:
             return viewModel.includeViaDigipeaters
-                ? "Packet source. Combined includes all packet-derived relationship evidence."
-                : "Packet source. Combined omits digipeater-mediated paths while this toggle is off."
+                ? "\(packetSource) Combined — all packet-derived relationship evidence."
+                : "\(packetSource) Combined — digipeater-mediated paths omitted while that toggle is off."
         case .netromClassic:
-            return "NET/ROM source. Classic uses broadcast routing tables with direct neighbors."
+            return "\(netromSource) Classic — broadcast NODES tables with direct neighbors."
         case .netromInferred:
-            return "NET/ROM source. Inferred uses passive route discovery from observed traffic."
+            return "\(netromSource) Inferred — routes discovered passively from observed traffic."
         case .netromHybrid:
-            return "NET/ROM source. Hybrid merges classic broadcasts with inferred routes."
+            return "\(netromSource) Hybrid — broadcast NODES tables merged with inferred routes."
         }
     }
 
