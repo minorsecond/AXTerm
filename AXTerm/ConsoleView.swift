@@ -83,6 +83,8 @@ struct ConsoleView: View {
     @State private var scrollToBottomToken = 0
     /// Pending debounced write of `isUserNearBottom` from the bottom sentinel.
     @State private var nearBottomWork: DispatchWorkItem?
+    /// Pending debounced re-pin after the console is resized (see `scheduleRepin`).
+    @State private var repinWork: DispatchWorkItem?
 
     // Message type filters — persisted across view switches and app restarts
     @AppStorage("consoleFilter_showID") private var showID = true
@@ -160,6 +162,26 @@ struct ConsoleView: View {
         }
         nearBottomWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
+    /// Re-pin the transcript to the bottom AFTER a resize settles.
+    ///
+    /// Toggling the compose bar between Broadcast and Session animates its height
+    /// (`.snappy`) AND swaps the line filter, so the console resizes and its
+    /// content changes at the same time. A `scrollTo` fired mid-animation resolves
+    /// the bottom against a transient layout and overshoots — the newest lines end
+    /// up above the viewport with blank space below, and nothing corrects it once
+    /// the animation settles. `geo.size.height` changes every frame of that
+    /// animation, so cancel-and-reschedule here means the bump lands ONCE, ~0.2 s
+    /// after the final frame, when layout is stable. The handler then pins to the
+    /// last real line (not the phantom "bottom" the overshoot lives in). Only while
+    /// Auto-scroll is on, so a reader who scrolled up is left alone.
+    private func scheduleRepin() {
+        guard autoScroll else { return }
+        repinWork?.cancel()
+        let work = DispatchWorkItem { scrollToBottomToken += 1 }
+        repinWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
     /// The scrolling transcript. Extracted from `body` so the view compiler can
@@ -257,7 +279,14 @@ struct ConsoleView: View {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
                     .onChange(of: scrollToBottomToken) { _, _ in
-                        withAnimation(.easeOut(duration: 0.2)) {
+                        // Pin to the last real line, not the phantom "bottom"
+                        // sentinel below the padding — anchoring to the sentinel is
+                        // what a resize overshoots into. No animation: this fires
+                        // after a settle (`scheduleRepin`) or on appear, where a
+                        // slide would just look like the overshoot we're fixing.
+                        if let lastId = groupedLines.last?.id {
+                            proxy.scrollTo(lastId, anchor: .bottom)
+                        } else {
                             proxy.scrollTo("bottom", anchor: .bottom)
                         }
                     }
@@ -285,12 +314,7 @@ struct ConsoleView: View {
                     .background(
                         GeometryReader { geo in
                             Color.clear.onChange(of: geo.size.height) { _, _ in
-                                guard autoScroll else { return }
-                                if let lastId = groupedLines.last?.id {
-                                    proxy.scrollTo(lastId, anchor: .bottom)
-                                } else {
-                                    proxy.scrollTo("bottom", anchor: .bottom)
-                                }
+                                scheduleRepin()
                             }
                         }
                     )
