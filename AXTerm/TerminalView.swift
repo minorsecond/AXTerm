@@ -2656,10 +2656,14 @@ struct TerminalView: View {
                 clearedAt: $settings.terminalClearedAt,
                 localCallsign: settings.myCallsign,
                 onIdentity: onIdentity,
-                onIdentityMenu: onIdentityMenu
+                onIdentityMenu: onIdentityMenu,
+                // Flips on every Broadcast⇄Session toggle so the console re-pins
+                // to the bottom even when the line set doesn't change (and no
+                // incoming packet would otherwise trigger a re-pin).
+                repinSignal: txViewModel.viewModel.connectionMode == .connected ? 1 : 0
             )
             .opacity(lines.isEmpty ? 0 : 1)
-            
+
             if lines.isEmpty {
                 emptyStateView
             }

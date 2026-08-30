@@ -73,6 +73,12 @@ struct ConsoleView: View {
     /// read-only, which is what the Mac wants.
     var onIdentity: ((String) -> Void)?
     var onIdentityMenu: ((String) -> Void)?
+    /// Bump from the parent to force a bottom re-pin even when the line set is
+    /// unchanged. The Broadcast⇄Session toggle re-lays-out this ScrollView
+    /// without changing its content, which can strand the newest lines above the
+    /// viewport; on a quiet channel no incoming packet rebuilds the list to fix
+    /// it, so the parent signals the toggle here directly. See `scheduleRepin`.
+    var repinSignal: Int = 0
 
     @State private var autoScroll = true
     @State private var isUserNearBottom = true
@@ -83,6 +89,8 @@ struct ConsoleView: View {
     @State private var scrollToBottomToken = 0
     /// Pending debounced write of `isUserNearBottom` from the bottom sentinel.
     @State private var nearBottomWork: DispatchWorkItem?
+    /// Pending debounced re-pin after the visible line set changes (see `scheduleRepin`).
+    @State private var repinWork: DispatchWorkItem?
 
     // Message type filters — persisted across view switches and app restarts
     @AppStorage("consoleFilter_showID") private var showID = true
@@ -145,6 +153,13 @@ struct ConsoleView: View {
         let groups = ConsoleLineGrouper.group(typeFilteredLines)
         groupedLines = groups
         dayGroupedLines = DayGrouping.group(items: groups, date: { $0.primary.timestamp })
+        // Any change to the visible line set can leave the ScrollView holding an
+        // offset that no longer matches the content — most visibly when the
+        // Session⇄Broadcast toggle swaps in a different filtered set (its peer
+        // filter turns on with an active session), stranding the newest lines
+        // above the viewport with blank space below. Re-pin AFTER the rebuild
+        // settles. See `scheduleRepin`.
+        scheduleRepin()
     }
 
     /// Coalesce the bottom sentinel's near-bottom signal. Cancels any pending
@@ -160,6 +175,30 @@ struct ConsoleView: View {
         }
         nearBottomWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
+    /// Re-pin the transcript to the bottom AFTER the visible line set settles.
+    ///
+    /// The Session⇄Broadcast toggle does NOT change the compose bar's height —
+    /// both layouts are two rows — so the console is not resized. What changes is
+    /// its CONTENT: `connectionMode` drives the session-peer filter, so toggling
+    /// can swap in a different (often much shorter) filtered set. `.onChange(of:
+    /// groupedLines.count)` misses this when the count happens to match, and even
+    /// when it fires, a `scrollTo` in the same pass resolves the bottom against a
+    /// half-applied layout and can overshoot — an intermittent, timing-dependent
+    /// strand of the newest lines above the viewport.
+    ///
+    /// Deferring past the settle removes the race: the scroll runs after the new
+    /// content is laid out. Cancel-and-reschedule collapses a burst of rebuilds
+    /// (live packets) to a single re-pin once they stop. It targets the last real
+    /// line, never the phantom "bottom" sentinel an overshoot would land past.
+    /// Only while Auto-scroll is on, so a reader who scrolled up is left alone.
+    private func scheduleRepin() {
+        guard autoScroll else { return }
+        repinWork?.cancel()
+        let work = DispatchWorkItem { scrollToBottomToken += 1 }
+        repinWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
     var body: some View {
@@ -254,7 +293,14 @@ struct ConsoleView: View {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
                     .onChange(of: scrollToBottomToken) { _, _ in
-                        withAnimation(.easeOut(duration: 0.2)) {
+                        // Pin to the last real line, not the phantom "bottom"
+                        // sentinel below the padding — anchoring to the sentinel is
+                        // what an overshoot lands past. No animation: this fires
+                        // after a settle (`scheduleRepin`) or on appear, where a
+                        // slide would just look like the overshoot we're correcting.
+                        if let lastId = groupedLines.last?.id {
+                            proxy.scrollTo(lastId, anchor: .bottom)
+                        } else {
                             proxy.scrollTo("bottom", anchor: .bottom)
                         }
                     }
@@ -267,6 +313,9 @@ struct ConsoleView: View {
                     }
                     .onAppear {
                         scrollToBottomToken += 1
+                    }
+                    .onChange(of: repinSignal) { _, _ in
+                        scheduleRepin()
                     }
                 }
                 .background(.background)
