@@ -41,6 +41,28 @@ final class NodeCapabilityTests: XCTestCase {
         XCTAssertEqual(NodeSoftwareClassifier.classify(line: "KB5YZB-7:YZBBPQ}"), .bpqPrompt)
     }
 
+    /// Real BPQ prints its prompt ALIAS:CALL — the callsign is on the RIGHT
+    /// of the colon, the opposite of the shape above. Field capture
+    /// 2026-08-29 (docker rig): "FARNOD:BPQTX2-7}", and the KB5YZB-7 node's
+    /// own "YZBBPQ:KB5YZB-7}". The classifier decides which half is the
+    /// callsign by shape, not by position, so both orders are the prompt.
+    /// (The one-sided check that missed this let every scraped ROUTES row be
+    /// refused, because the anchor never earned a BPQ verdict.)
+    func testBpqPromptAliasFirstShapeIsRecognized() {
+        XCTAssertEqual(NodeSoftwareClassifier.classify(line: "YZBBPQ:KB5YZB-7}"), .bpqPrompt)
+        XCTAssertEqual(NodeSoftwareClassifier.classify(line: "FARNOD:BPQTX2-7}"), .bpqPrompt)
+    }
+
+    /// BPQ glues the prompt to the command it just echoed, so the ROUTES
+    /// table arrives behind "ALIAS:CALL} Routes" on one line. The prompt is
+    /// still the leading token — the same gluing the ROUTES scraper was
+    /// hardened against in c362f6a, and the reason a live scrape against the
+    /// rig learned the node's identity but not its capability.
+    func testBpqPromptGluedToEchoedCommandIsRecognized() {
+        XCTAssertEqual(NodeSoftwareClassifier.classify(line: "YZBBPQ:KB5YZB-7} Routes"), .bpqPrompt)
+        XCTAssertEqual(NodeSoftwareClassifier.classify(line: "FARNOD:BPQTX2-7} ROUTES"), .bpqPrompt)
+    }
+
     func testKaNodeMenuIsRecognized() {
         XCTAssertEqual(
             NodeSoftwareClassifier.classify(line: "ENTER COMMAND: B,C,J,N, or Help ?"),

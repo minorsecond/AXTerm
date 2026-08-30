@@ -116,20 +116,33 @@ nonisolated enum NodeSoftwareClassifier {
         return nil
     }
 
-    /// `CALL:ALIAS}` on a line of its own — e.g. `K0EPI-7:DRLNOD}` is what
-    /// BPQ prints while waiting for a command. Side shapes decided the same
-    /// way NodeAliasParser.parseNodeTable decides: by what each half looks
-    /// like, not by position.
+    /// The BPQ command prompt — an `ALIAS:CALL}` / `CALL:ALIAS}` pair
+    /// followed by `}` — as the leading token of a line.
+    ///
+    /// Two things real BPQ does that the first cut of this check missed,
+    /// both caught by a live scrape against the docker rig (2026-08-29):
+    ///
+    ///  1. The callsign sits on the RIGHT: nodes print `TSTNOD:BPQTST-7}`,
+    ///     `YZBBPQ:KB5YZB-7}` — alias first. Deciding by `isPlausible(left)`
+    ///     alone never fired on a real prompt, so the anchor never earned a
+    ///     BPQ verdict and every scraped ROUTES row was refused. Which half
+    ///     is the callsign is decided by shape, not position — as the old
+    ///     comment already claimed it should be.
+    ///  2. BPQ glues the prompt to the command it just echoed
+    ///     (`…} Routes`), so the whole line is not the bare prompt. The
+    ///     prompt is still the leading whitespace-delimited token, so test
+    ///     that, not the entire line.
     private static func isBpqPrompt(_ upper: String) -> Bool {
-        guard upper.hasSuffix("}"), !upper.contains(" ") else { return false }
-        let body = String(upper.dropLast())
-        let parts = body.split(separator: ":")
+        guard let token = upper.split(separator: " ").first,
+              token.hasSuffix("}") else { return false }
+        let parts = token.dropLast().split(separator: ":")
         guard parts.count == 2 else { return false }
-        let left = String(parts[0])
-        let right = String(parts[1])
-        guard CallsignQuery.isPlausible(left) else { return false }
-        return (1...8).contains(right.count)
-            && right.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" }
+        let a = String(parts[0])
+        let b = String(parts[1])
+        // One half is a plausible callsign, the other a plausible alias —
+        // in whichever order this BPQ prints them.
+        return (CallsignQuery.isPlausible(a) && NodeAliasParser.isPlausibleAlias(b))
+            || (CallsignQuery.isPlausible(b) && NodeAliasParser.isPlausibleAlias(a))
     }
 
     private static func isBpqMenu(_ upper: String) -> Bool {
