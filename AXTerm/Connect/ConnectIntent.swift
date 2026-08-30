@@ -23,6 +23,44 @@ nonisolated enum ConnectBarMode: String, Codable, CaseIterable, Hashable {
             return .ax25
         }
     }
+
+    /// Whether the bar starts in Auto-routing rather than a forced protocol.
+    ///
+    /// Picking a station should just connect the best way it knows — direct if
+    /// we've heard it direct, else a digi path, else a NET/ROM circuit, else a
+    /// node prompt-relay — without the operator first guessing a protocol. Auto
+    /// is the default everywhere except the Routes page, where the operator has
+    /// already pointed at one specific NET/ROM route and means it.
+    static func defaultAutoRouting(for context: ConnectSourceContext) -> Bool {
+        switch context {
+        case .routes:
+            return false
+        case .neighbors, .stations, .terminal, .unknown:
+            return true
+        }
+    }
+}
+
+/// What the visible routing switch offers: Auto, or one forced protocol. Auto is
+/// its own choice rather than a `ConnectBarMode` case so the mode enum — and the
+/// seventeen files that switch on it — stay untouched; `autoRouting` rides
+/// alongside `mode`, which remains the fallback the Auto ladder falls through to.
+nonisolated enum ConnectRoutingChoice: String, CaseIterable, Hashable, Identifiable {
+    case auto
+    case direct
+    case digi
+    case netrom
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .auto: return "Auto"
+        case .direct: return "Direct"
+        case .digi: return "Digi"
+        case .netrom: return "NET/ROM"
+        }
+    }
 }
 
 nonisolated enum ConnectKind: Equatable, Hashable {

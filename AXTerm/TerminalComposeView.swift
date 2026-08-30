@@ -1381,6 +1381,13 @@ struct TerminalComposeView: View {
     @State private var showRoutingChangeConfirmation = false
     @StateObject private var destinationPickerViewModel = DestinationPickerViewModel()
 
+    private var routingChoiceBinding: Binding<ConnectRoutingChoice> {
+        Binding(
+            get: { connectBarViewModel.routingChoice },
+            set: { connectBarViewModel.setRoutingChoice($0, for: connectContext) }
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Divider()
@@ -1451,14 +1458,36 @@ struct TerminalComposeView: View {
                             .frame(maxWidth: 290)
                         }
 
-                        RoutingCapsuleButton(
-                            viewModel: connectBarViewModel,
-                            onAutoConnect: onAutoConnect,
-                            isLocked: sessionState == .connected,
-                            onRequestChange: sessionState == .connected ? {
-                                showRoutingChangeConfirmation = true
-                            } : nil
-                        )
+                        // The visible routing switch. Auto is the default — pick
+                        // a station and Connect just routes the best way it knows.
+                        // Forcing a protocol is one click, not a buried popover.
+                        Picker("Routing", selection: routingChoiceBinding) {
+                            ForEach(ConnectRoutingChoice.allCases) { choice in
+                                Text(choice.label).tag(choice)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .fixedSize()
+                        .disabled(sessionState == .connected)
+                        .help("Auto tries the best route it knows — direct, then a digipeater, then a NET/ROM circuit, then a node relay. Or force one.")
+                        .accessibilityIdentifier("connectBar.routingChoice")
+
+                        // Path / next-hop details — only when a protocol that has
+                        // them is forced, or while a session is locked in.
+                        if sessionState == .connected
+                            || connectBarViewModel.routingChoice == .digi
+                            || connectBarViewModel.routingChoice == .netrom {
+                            RoutingCapsuleButton(
+                                viewModel: connectBarViewModel,
+                                onAutoConnect: onAutoConnect,
+                                isLocked: sessionState == .connected,
+                                onRequestChange: sessionState == .connected ? {
+                                    showRoutingChangeConfirmation = true
+                                } : nil
+                            )
+                        }
 
                         Spacer()
 
@@ -1591,7 +1620,7 @@ struct TerminalComposeView: View {
         case .connecting, .disconnecting:
             return "Cancel"
         case .disconnected, .error, .none:
-            return "Connect"
+            return connectBarViewModel.autoRouting ? "Auto Connect" : "Connect"
         }
     }
 
@@ -1629,9 +1658,11 @@ struct TerminalComposeView: View {
         case .connecting, .disconnecting:
             onForceDisconnect()
         case .disconnected, .error, .none:
-            // If digi mode with no explicit path, use auto-connect
-            if connectBarViewModel.mode == .ax25ViaDigi,
-               connectBarViewModel.viaDigipeaters.isEmpty {
+            // Auto-routing (the default) runs the cross-family ladder. A forced
+            // Digi with no path typed is still ambiguous enough to auto-route.
+            if connectBarViewModel.autoRouting
+                || (connectBarViewModel.mode == .ax25ViaDigi
+                    && connectBarViewModel.viaDigipeaters.isEmpty) {
                 onAutoConnect()
             } else {
                 onConnectBarConnect()

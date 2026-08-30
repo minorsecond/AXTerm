@@ -132,6 +132,59 @@ final class ConnectBarViewModelTests: XCTestCase {
         XCTAssertEqual(vm.mode, .ax25ViaDigi)
     }
 
+    // MARK: - Auto-routing default + the visible routing switch
+
+    /// Picking a station should just route the best way — Auto is the default
+    /// everywhere except the Routes page, where the operator pointed at one route.
+    func testDefaultAutoRoutingByContext() {
+        XCTAssertTrue(ConnectBarMode.defaultAutoRouting(for: .stations))
+        XCTAssertTrue(ConnectBarMode.defaultAutoRouting(for: .neighbors))
+        XCTAssertTrue(ConnectBarMode.defaultAutoRouting(for: .terminal))
+        XCTAssertFalse(ConnectBarMode.defaultAutoRouting(for: .routes))
+    }
+
+    func testApplyContextSeedsAutoRouting() {
+        let vm = makeViewModel()
+        vm.applyContext(.terminal)
+        XCTAssertTrue(vm.autoRouting)
+        XCTAssertEqual(vm.routingChoice, .auto)
+        vm.applyContext(.routes)
+        XCTAssertFalse(vm.autoRouting, "Routes page means a specific NET/ROM route")
+        XCTAssertEqual(vm.routingChoice, .netrom)
+    }
+
+    func testRoutingChoiceMapsToModeAndAutoRouting() {
+        let vm = makeViewModel()
+        vm.applyContext(.terminal)
+
+        vm.setRoutingChoice(.direct, for: .terminal)
+        XCTAssertFalse(vm.autoRouting)
+        XCTAssertEqual(vm.mode, .ax25)
+        XCTAssertEqual(vm.routingChoice, .direct)
+
+        vm.setRoutingChoice(.digi, for: .terminal)
+        XCTAssertEqual(vm.mode, .ax25ViaDigi)
+        XCTAssertEqual(vm.routingChoice, .digi)
+
+        vm.setRoutingChoice(.netrom, for: .terminal)
+        XCTAssertEqual(vm.mode, .netrom)
+        XCTAssertEqual(vm.routingChoice, .netrom)
+
+        vm.setRoutingChoice(.auto, for: .terminal)
+        XCTAssertTrue(vm.autoRouting)
+        XCTAssertEqual(vm.routingChoice, .auto)
+    }
+
+    func testForcedProtocolPersistsPerContext() {
+        let vm = makeViewModel()
+        vm.applyContext(.terminal)
+        vm.setRoutingChoice(.direct, for: .terminal)   // force off Auto here
+        vm.applyContext(.routes)                        // its own default
+        vm.applyContext(.terminal)                      // return
+        XCTAssertFalse(vm.autoRouting, "a forced protocol is remembered per context")
+        XCTAssertEqual(vm.routingChoice, .direct)
+    }
+
     func testAutoAttemptStatusLifecycle() {
         let vm = makeViewModel()
         vm.beginAutoAttempting()

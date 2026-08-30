@@ -22,6 +22,10 @@ nonisolated struct ConnectDigiPathSection: Identifiable, Hashable {
 final class ConnectBarViewModel: ObservableObject {
     @Published private(set) var barState: ConnectBarState
     @Published var mode: ConnectBarMode = .ax25
+    /// True when the bar routes automatically (the Auto ladder) rather than
+    /// forcing `mode`. This is the default for picking a station; forcing a
+    /// protocol turns it off. `mode` still tracks the forced choice underneath.
+    @Published var autoRouting: Bool = true
     @Published var toCall: String = ""
     @Published var viaDigipeaters: [String] = []
     @Published var pendingViaTokenInput: String = ""
@@ -43,9 +47,11 @@ final class ConnectBarViewModel: ObservableObject {
     private let recentAttemptsKey = "connectBar.recentAttempts"
     private let recentDigiPathsKey = "connectBar.recentDigiPaths"
     private let contextModeKey = "connectBar.contextModes"
+    private let contextAutoRoutingKey = "connectBar.contextAutoRouting"
     private var activeDraftContext: ConnectSourceContext = .terminal
 
     private var contextModes: [ConnectSourceContext: ConnectBarMode] = [:]
+    private var contextAutoRouting: [ConnectSourceContext: Bool] = [:]
     private var attemptHistory: [ConnectAttemptRecord] = []
     private var recentDigiPaths: [RecentDigiPath] = []
 
@@ -242,8 +248,45 @@ final class ConnectBarViewModel: ObservableObject {
         activeDraftContext = context
         let resolved = contextModes[context] ?? ConnectBarMode.defaultMode(for: context)
         mode = resolved
+        autoRouting = contextAutoRouting[context] ?? ConnectBarMode.defaultAutoRouting(for: context)
         validate()
         syncStateFromDraftIfEditable()
+    }
+
+    /// What the visible routing switch reads: Auto when auto-routing, otherwise
+    /// the forced protocol.
+    var routingChoice: ConnectRoutingChoice {
+        guard !autoRouting else { return .auto }
+        switch mode {
+        case .ax25: return .direct
+        case .ax25ViaDigi: return .digi
+        case .netrom: return .netrom
+        }
+    }
+
+    /// Drive the routing switch. Auto flips on auto-routing (leaving `mode` as
+    /// the fallback the ladder falls through to); any protocol forces it off and
+    /// sets `mode`.
+    func setRoutingChoice(_ choice: ConnectRoutingChoice, for context: ConnectSourceContext?) {
+        switch choice {
+        case .auto:
+            autoRouting = true
+        case .direct:
+            autoRouting = false
+            setMode(.ax25, for: context)
+        case .digi:
+            autoRouting = false
+            setMode(.ax25ViaDigi, for: context)
+        case .netrom:
+            autoRouting = false
+            setMode(.netrom, for: context)
+        }
+        if let context {
+            activeDraftContext = context
+            contextAutoRouting[context] = autoRouting
+            persistContextAutoRouting()
+        }
+        validate()
     }
 
     func setMode(_ newMode: ConnectBarMode, for context: ConnectSourceContext?) {
@@ -1105,6 +1148,11 @@ final class ConnectBarViewModel: ObservableObject {
             contextModes = decoded.values
         }
 
+        if let data = defaults.data(forKey: contextAutoRoutingKey),
+           let decoded = try? JSONDecoder().decode([ConnectSourceContext: Bool].self, from: data) {
+            contextAutoRouting = decoded
+        }
+
         if let data = defaults.data(forKey: recentAttemptsKey),
            let decoded = try? JSONDecoder().decode([ConnectAttemptRecord].self, from: data) {
             attemptHistory = decoded
@@ -1120,6 +1168,12 @@ final class ConnectBarViewModel: ObservableObject {
         let envelope = ConnectModeContextDefaults(values: contextModes)
         if let data = try? JSONEncoder().encode(envelope) {
             defaults.set(data, forKey: contextModeKey)
+        }
+    }
+
+    private func persistContextAutoRouting() {
+        if let data = try? JSONEncoder().encode(contextAutoRouting) {
+            defaults.set(data, forKey: contextAutoRoutingKey)
         }
     }
 
