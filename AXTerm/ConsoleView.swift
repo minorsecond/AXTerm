@@ -206,6 +206,23 @@ struct ConsoleView: View {
                             Color.clear
                                 .frame(height: 10)
                                 .id("bottom")
+                                // These fire from inside SwiftUI's update pass
+                                // (Update.dispatchActions → _AppearanceActionModifier),
+                                // and set `isUserNearBottom`. That is only safe
+                                // because the flag no longer perturbs layout (see the
+                                // Jump-to-Bottom button below): the write cannot move
+                                // this sentinel, so the appearance action cannot re-
+                                // fire, so `propagate_dirty` cannot recurse. When the
+                                // flag *did* drive layout, this exact write recursed
+                                // without unwinding — an 11k-frame stack pegged at
+                                // 100% (sampled 2026-08-29, leaf at this line).
+                                //
+                                // Deferring the write (Task/async) is deliberately
+                                // NOT done: in any residual-oscillation scenario a
+                                // deferred write re-schedules itself every turn into a
+                                // 100% async loop instead — worse than the synchronous
+                                // form, which SwiftUI at least coalesces (measured
+                                // while investigating this hang).
                                 .onAppear { isUserNearBottom = true }
                                 .onDisappear { isUserNearBottom = false }
                         }
@@ -248,33 +265,48 @@ struct ConsoleView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            // Jump to Bottom Button
-            if !isUserNearBottom {
-                VStack {
+            // Jump to Bottom Button.
+            //
+            // Always in the tree, shown/hidden by opacity + scale — never by
+            // `if`, and animated by a modifier scoped to the button alone.
+            //
+            // Why: this button's visibility is driven by `isUserNearBottom`,
+            // which the bottom sentinel flips from its onAppear/onDisappear. If
+            // toggling the button reflowed the ScrollView — or if an animation
+            // on the whole ZStack animated the ScrollView on each flip — the
+            // reflow moved the sentinel across its own visibility boundary,
+            // flipped the flag again, and re-armed the animation: a self-
+            // sustaining 100% main-thread layout loop that beach-balled the app
+            // (sampled 2026-08-29; kicked off by any layout nudge, e.g. opening
+            // the routing popover). Kept as a pure overlay and animating only
+            // opacity/scale (render transforms, not layout), the flag can no
+            // longer feed back into layout, so it cannot oscillate.
+            VStack {
+                Spacer()
+                HStack {
                     Spacer()
-                    HStack {
-                        Spacer()
-                        Button {
-                            isUserNearBottom = true // Optimistic update
-                            autoScroll = true
-                            scrollToBottomToken += 1
-                        } label: {
-                            Image(systemName: "arrow.down.circle.fill")
-                                .resizable()
-                                .frame(width: 32, height: 32)
-                                .foregroundStyle(.secondary, .regularMaterial)
-                                .background(Circle().fill(.background))
-                                .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
-                        }
-                        .buttonStyle(.plain)
-                        .padding([.bottom, .trailing], 20)
-                        .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                    Button {
+                        isUserNearBottom = true // Optimistic update
+                        autoScroll = true
+                        scrollToBottomToken += 1
+                    } label: {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .resizable()
+                            .frame(width: 32, height: 32)
+                            .foregroundStyle(.secondary, .regularMaterial)
+                            .background(Circle().fill(.background))
+                            .shadow(color: .black.opacity(0.15), radius: 4, x: 0, y: 2)
                     }
+                    .buttonStyle(.plain)
+                    .padding([.bottom, .trailing], 20)
                 }
             }
+            .opacity(isUserNearBottom ? 0 : 1)
+            .scaleEffect(isUserNearBottom ? 0.8 : 1, anchor: .bottomTrailing)
+            .allowsHitTesting(!isUserNearBottom)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isUserNearBottom)
         }
         .animation(.easeInOut(duration: 0.2), value: showUndoClear)
-        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isUserNearBottom)
     }
 
     // MARK: - Filter Toggles

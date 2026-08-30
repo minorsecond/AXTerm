@@ -157,6 +157,11 @@ struct AXTermApp: App {
             if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
                 Text("AXTerm unit-test host")
                     .frame(width: 200, height: 40)
+            } else if ProcessInfo.processInfo.arguments.contains("--console-hang-repro") {
+                // Isolated reproduction of the ConsoleView layout-loop hang.
+                // Hosts the real ConsoleView and self-terminates; see
+                // ConsoleHangReproHarness.
+                ConsoleHangReproHarness()
             } else {
                 ContentView(client: client, settings: settings, inspectionRouter: inspectionRouter, winlinkContext: winlinkContext, bbsSettings: bbsSettings)
                     // @AppStorage follows the isolated suite under test
