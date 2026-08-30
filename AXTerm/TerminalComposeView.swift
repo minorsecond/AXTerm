@@ -1414,8 +1414,11 @@ struct TerminalComposeView: View {
                 .background(Color.yellow.opacity(0.15))
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                // Row 0: Mode toggle (compact, left-aligned)
+            VStack(alignment: .leading, spacing: 6) {
+                // Row 0 — setup. The mode toggle, then (Session) the routing
+                // switch + destination + Connect, or (Broadcast) the unproto
+                // pill. Folding these up beside the toggle keeps the bar two
+                // rows instead of three.
                 HStack(spacing: 8) {
                     ConnectionModeToggle(
                         mode: $connectionMode,
@@ -1424,21 +1427,26 @@ struct TerminalComposeView: View {
                         onForceDisconnect: onForceDisconnect
                     )
 
-                    Spacer()
-                }
-
-                if connectionMode == .connected {
-                    // Row 1: Destination + Routing + Action (session mode)
-                    HStack(spacing: 8) {
-                        if sessionState == .connected {
-                            // Locked destination - callsign shown in header, no "Session:" label needed
-                            HStack(spacing: 6) {
-                                Text(relayDestination ?? connectBarViewModel.toCall)
-                                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    if connectionMode == .connected {
+                        // The visible routing switch, right beside the mode toggle.
+                        Picker("Routing", selection: routingChoiceBinding) {
+                            ForEach(ConnectRoutingChoice.allCases) { choice in
+                                Text(choice.label).tag(choice)
                             }
-                            .accessibilityIdentifier("connectBar.lockedDestination")
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .fixedSize()
+                        .disabled(sessionState == .connected)
+                        .help("Auto tries the best route it knows — direct, then a digipeater, then a NET/ROM circuit, then a node relay. Or force one.")
+                        .accessibilityIdentifier("connectBar.routingChoice")
+
+                        if sessionState == .connected {
+                            Text(relayDestination ?? connectBarViewModel.toCall)
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .accessibilityIdentifier("connectBar.lockedDestination")
                         } else {
-                            // Editable destination
                             DestinationPickerControl(
                                 viewModel: destinationPickerViewModel,
                                 externalText: connectBarViewModel.toCall,
@@ -1455,24 +1463,8 @@ struct TerminalComposeView: View {
                                     }
                                 }
                             )
-                            .frame(maxWidth: 290)
+                            .frame(maxWidth: 260)
                         }
-
-                        // The visible routing switch. Auto is the default — pick
-                        // a station and Connect just routes the best way it knows.
-                        // Forcing a protocol is one click, not a buried popover.
-                        Picker("Routing", selection: routingChoiceBinding) {
-                            ForEach(ConnectRoutingChoice.allCases) { choice in
-                                Text(choice.label).tag(choice)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .controlSize(.small)
-                        .fixedSize()
-                        .disabled(sessionState == .connected)
-                        .help("Auto tries the best route it knows — direct, then a digipeater, then a NET/ROM circuit, then a node relay. Or force one.")
-                        .accessibilityIdentifier("connectBar.routingChoice")
 
                         // Path / next-hop details — only when a protocol that has
                         // them is forced, or while a session is locked in.
@@ -1489,9 +1481,9 @@ struct TerminalComposeView: View {
                             )
                         }
 
-                        Spacer()
+                        Spacer(minLength: 8)
 
-                        // Validation (subtle, only when relevant)
+                        // Validation / auto-routing status (subtle, only when relevant)
                         if let validation = nonDestinationValidationError,
                            sessionState != .connected,
                            !connectBarViewModel.isAutoAttemptInProgress {
@@ -1506,7 +1498,6 @@ struct TerminalComposeView: View {
                                 .lineLimit(1)
                         }
 
-                        // Session action button
                         if sessionState == .connected {
                             Button(sessionActionTitle) {
                                 handleSessionAction()
@@ -1523,10 +1514,16 @@ struct TerminalComposeView: View {
                             .disabled(sessionActionDisabled)
                             .accessibilityIdentifier(connectBarViewModel.isAutoAttemptInProgress ? "connectBar.stopAutoButton" : "connectBar.connectButton")
                         }
+                    } else {
+                        // Broadcast — the unproto pill inline, not a separate row.
+                        if case let .broadcastComposer(broadcast) = connectBarViewModel.barState {
+                            BroadcastComposerStrip(unprotoPath: broadcast.unprotoPath)
+                        }
+                        Spacer(minLength: 8)
                     }
                 }
 
-                // Row 2: Message field + Send (primary row)
+                // Row 1 — compose. The message/broadcast field + Send.
                 HStack(spacing: 8) {
                     TextField(connectionMode == .connected ? "Message" : "Broadcast message", text: $composeText)
                         .textFieldStyle(.roundedBorder)
@@ -1572,11 +1569,6 @@ struct TerminalComposeView: View {
                     .controlSize(.regular)
                     .disabled(!canSendMessage || !isConnected)
                     .keyboardShortcut(.return, modifiers: [])
-                }
-
-                if connectionMode == .datagram,
-                   case let .broadcastComposer(broadcast) = connectBarViewModel.barState {
-                    BroadcastComposerStrip(unprotoPath: broadcast.unprotoPath)
                 }
             }
             .padding(.horizontal, 14)
