@@ -1428,7 +1428,35 @@ struct TerminalComposeView: View {
                     )
 
                     if connectionMode == .connected {
-                        // The visible routing switch, right beside the mode toggle.
+                        // Destination first — the primary input, kept left and
+                        // vertically centred with its neighbours (no reserved
+                        // error row in the compact bar).
+                        if sessionState == .connected {
+                            Text(relayDestination ?? connectBarViewModel.toCall)
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .accessibilityIdentifier("connectBar.lockedDestination")
+                        } else {
+                            DestinationPickerControl(
+                                viewModel: destinationPickerViewModel,
+                                externalText: connectBarViewModel.toCall,
+                                groups: connectBarViewModel.toSuggestionGroups,
+                                reachableVia: connectBarViewModel.claimedRouteVia,
+                                disabled: sessionState == .connecting || sessionState == .disconnecting,
+                                showsInlineError: false,
+                                onDestinationChanged: { value in
+                                    connectBarViewModel.applySuggestedTo(value)
+                                },
+                                onDestinationCommitted: { value in
+                                    connectBarViewModel.applySuggestedTo(value)
+                                    if !primaryActionDisabled {
+                                        handlePrimaryAction()
+                                    }
+                                }
+                            )
+                            .frame(maxWidth: 240)
+                        }
+
+                        // The visible routing switch — how to reach that station.
                         Picker("Routing", selection: routingChoiceBinding) {
                             ForEach(ConnectRoutingChoice.allCases) { choice in
                                 Text(choice.label).tag(choice)
@@ -1441,30 +1469,6 @@ struct TerminalComposeView: View {
                         .disabled(sessionState == .connected)
                         .help("Auto tries the best route it knows — direct, then a digipeater, then a NET/ROM circuit, then a node relay. Or force one.")
                         .accessibilityIdentifier("connectBar.routingChoice")
-
-                        if sessionState == .connected {
-                            Text(relayDestination ?? connectBarViewModel.toCall)
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .accessibilityIdentifier("connectBar.lockedDestination")
-                        } else {
-                            DestinationPickerControl(
-                                viewModel: destinationPickerViewModel,
-                                externalText: connectBarViewModel.toCall,
-                                groups: connectBarViewModel.toSuggestionGroups,
-                                reachableVia: connectBarViewModel.claimedRouteVia,
-                                disabled: sessionState == .connecting || sessionState == .disconnecting,
-                                onDestinationChanged: { value in
-                                    connectBarViewModel.applySuggestedTo(value)
-                                },
-                                onDestinationCommitted: { value in
-                                    connectBarViewModel.applySuggestedTo(value)
-                                    if !primaryActionDisabled {
-                                        handlePrimaryAction()
-                                    }
-                                }
-                            )
-                            .frame(maxWidth: 260)
-                        }
 
                         // Path / next-hop details — only when a protocol that has
                         // them is forced, or while a session is locked in.

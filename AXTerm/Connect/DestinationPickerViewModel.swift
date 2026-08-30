@@ -385,27 +385,76 @@ final class DestinationPickerViewModel: ObservableObject {
             fallbackSecondary: "Neighbor node"
         )
 
-        // The route is the point of these, so it replaces the generic subtitle
-        // rather than sitting behind an "aka" the way a heard station's alias
-        // does. "AGCHAT — via KB5YZB-7" answers the question in one line.
-        let reachableRows = Self.rankedSuggestions(query: query, candidates: reachableValues)
-            .map { candidate in
-                DestinationSuggestionRow(
-                    callsign: candidate,
-                    secondaryText: reachableVia[candidate].map { "via \($0)" } ?? "Listed by a node",
-                    section: .reachable,
-                    isFavorite: isFavorite(candidate),
-                    aliasText: nil)
-            }
+        // Reachable-via-node destinations, GROUPED by the node that lists them.
+        // Flat, this was every destination every node advertises — 500+ rows in
+        // one scroll, laggy to render and impossible to choose from. Local
+        // sections above always win (direct is what you usually want); these are
+        // the further hops, one section per relay ("Via COSCO"), capped while
+        // browsing and opened up once the operator is actually filtering.
+        let reachableSections = buildReachableSections(query: query)
 
         let sections = [
             DestinationSuggestionSection(id: DestinationSuggestionRow.Section.favorites.rawValue, title: DestinationSuggestionRow.Section.favorites.title, rows: favoritesRows),
             DestinationSuggestionSection(id: DestinationSuggestionRow.Section.recent.rawValue, title: DestinationSuggestionRow.Section.recent.title, rows: recentRows),
-            DestinationSuggestionSection(id: DestinationSuggestionRow.Section.neighbors.rawValue, title: DestinationSuggestionRow.Section.neighbors.title, rows: neighborRows),
-            DestinationSuggestionSection(id: DestinationSuggestionRow.Section.reachable.rawValue, title: DestinationSuggestionRow.Section.reachable.title, rows: reachableRows)
-        ]
+            DestinationSuggestionSection(id: DestinationSuggestionRow.Section.neighbors.rawValue, title: DestinationSuggestionRow.Section.neighbors.title, rows: neighborRows)
+        ] + reachableSections
 
         return sections.filter { !$0.rows.isEmpty }
+    }
+
+    /// While browsing (no query): a few relays, a few each — a taster, not a
+    /// firehose. While filtering: every relay that has a match, generously,
+    /// because the query has already cut the set to something choosable.
+    private static let maxReachableNodesBrowsing = 6
+    private static let maxReachablePerNodeBrowsing = 6
+    private static let maxReachablePerNodeFiltering = 25
+    private static let maxReachableRowsTotal = 60
+
+    private func buildReachableSections(query: String) -> [DestinationSuggestionSection] {
+        let matches = Self.rankedSuggestions(query: query, candidates: reachableValues)
+        guard !matches.isEmpty else { return [] }
+
+        // Bucket destinations under the node that reaches them.
+        var byNode: [String: [String]] = [:]
+        var nodeOrder: [String] = []
+        for dest in matches {
+            let via = reachableVia[dest] ?? "a node"
+            if byNode[via] == nil { nodeOrder.append(via) }
+            byNode[via, default: []].append(dest)
+        }
+
+        let filtering = !query.isEmpty
+        let perNodeCap = filtering ? Self.maxReachablePerNodeFiltering : Self.maxReachablePerNodeBrowsing
+        // Relays that reach more get listed first — the big hubs are the ones
+        // an operator scans for. Ties broken by name so it never reshuffles.
+        let orderedNodes = nodeOrder.sorted { lhs, rhs in
+            let l = byNode[lhs]?.count ?? 0, r = byNode[rhs]?.count ?? 0
+            return l != r ? l > r : lhs < rhs
+        }
+        let nodeCap = filtering ? orderedNodes.count : Self.maxReachableNodesBrowsing
+
+        var sections: [DestinationSuggestionSection] = []
+        var total = 0
+        for node in orderedNodes.prefix(nodeCap) {
+            guard total < Self.maxReachableRowsTotal, let dests = byNode[node] else { break }
+            let room = Self.maxReachableRowsTotal - total
+            let shown = Array(dests.prefix(min(perNodeCap, room)))
+            guard !shown.isEmpty else { continue }
+            let rows = shown.map { dest in
+                DestinationSuggestionRow(
+                    callsign: dest,
+                    secondaryText: "via \(node)",
+                    section: .reachable,
+                    isFavorite: isFavorite(dest),
+                    aliasText: nil)
+            }
+            // Header carries the true count so "Via COSCO (516)" tells the
+            // operator to narrow with a few keystrokes rather than scroll.
+            let title = dests.count > shown.count ? "Via \(node) (\(dests.count))" : "Via \(node)"
+            sections.append(DestinationSuggestionSection(id: "reachable::\(node)", title: title, rows: rows))
+            total += rows.count
+        }
+        return sections
     }
 
     private func buildRows(

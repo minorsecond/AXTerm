@@ -9,6 +9,12 @@ struct DestinationPickerControl: View {
     var reachableVia: [String: String] = [:]
     var disabled: Bool
     var compactLabel: Bool = true
+    /// Reserve a row beneath the field for the inline validation error. Off in
+    /// the compact connect bar, where that always-present (even if invisible)
+    /// row made the control taller than its neighbours and pushed the field
+    /// above their vertical centre — the red border already flags an invalid
+    /// callsign there.
+    var showsInlineError: Bool = true
     let onDestinationChanged: (String) -> Void
     let onDestinationCommitted: (String) -> Void
     var onViewStationDetails: ((String) -> Void)? = nil
@@ -16,6 +22,18 @@ struct DestinationPickerControl: View {
     @FocusState private var textFieldFocused: Bool
     @State private var showPopover = false
     @State private var userInitiatedPopover = false
+
+    /// The reserved inline-error row, omitted entirely in compact mode.
+    @ViewBuilder private var inlineErrorRow: some View {
+        if showsInlineError {
+            Text(viewModel.validationState.inlineError ?? " ")
+                .font(.caption2)
+                .foregroundStyle(.red.opacity(0.85))
+                .lineLimit(1)
+                .frame(height: 12, alignment: .leading)
+                .opacity(viewModel.validationState.inlineError == nil ? 0 : 1)
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -105,13 +123,9 @@ struct DestinationPickerControl: View {
                 }
                 #endif
             }
+            .help(viewModel.validationState.inlineError ?? "")
 
-            Text(viewModel.validationState.inlineError ?? " ")
-                .font(.caption2)
-                .foregroundStyle(.red.opacity(0.85))
-                .lineLimit(1)
-                .frame(height: 12, alignment: .leading)
-                .opacity(viewModel.validationState.inlineError == nil ? 0 : 1)
+            inlineErrorRow
                 .accessibilityHidden(viewModel.validationState.inlineError == nil)
         }
         .disabled(disabled)
