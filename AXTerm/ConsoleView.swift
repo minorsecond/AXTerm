@@ -81,6 +81,8 @@ struct ConsoleView: View {
     @State private var undoClearTask: Task<Void, Never>?
     @State private var previousClearedAt: Date?
     @State private var scrollToBottomToken = 0
+    /// Pending debounced write of `isUserNearBottom` from the bottom sentinel.
+    @State private var nearBottomWork: DispatchWorkItem?
 
     // Message type filters — persisted across view switches and app restarts
     @AppStorage("consoleFilter_showID") private var showID = true
@@ -145,6 +147,21 @@ struct ConsoleView: View {
         dayGroupedLines = DayGrouping.group(items: groups, date: { $0.primary.timestamp })
     }
 
+    /// Coalesce the bottom sentinel's near-bottom signal. Cancels any pending
+    /// write and schedules a fresh one a short quiet-window later, so a burst of
+    /// appear/disappear flips (rapid appends + scroll-to-bottom) collapses to a
+    /// single write once the scrolling settles — never a per-flip write storm
+    /// inside the update pass. The write runs on a later main-queue turn, so it
+    /// also can't recurse synchronously through `propagate_dirty`.
+    private func scheduleNearBottom(_ value: Bool) {
+        nearBottomWork?.cancel()
+        let work = DispatchWorkItem {
+            if isUserNearBottom != value { isUserNearBottom = value }
+        }
+        nearBottomWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
     var body: some View {
         ZStack(alignment: .topTrailing) {
             VStack(spacing: 0) {
@@ -206,25 +223,27 @@ struct ConsoleView: View {
                             Color.clear
                                 .frame(height: 10)
                                 .id("bottom")
-                                // These fire from inside SwiftUI's update pass
-                                // (Update.dispatchActions → _AppearanceActionModifier),
-                                // and set `isUserNearBottom`. That is only safe
-                                // because the flag no longer perturbs layout (see the
-                                // Jump-to-Bottom button below): the write cannot move
-                                // this sentinel, so the appearance action cannot re-
-                                // fire, so `propagate_dirty` cannot recurse. When the
-                                // flag *did* drive layout, this exact write recursed
-                                // without unwinding — an 11k-frame stack pegged at
-                                // 100% (sampled 2026-08-29, leaf at this line).
+                                // DEBOUNCED, never a synchronous write. These
+                                // appearance actions fire from inside SwiftUI's
+                                // update pass; a burst of console appends with the
+                                // scroll-to-bottom below makes this sentinel flip
+                                // appeared/disappeared many times per pass, and
+                                // writing `isUserNearBottom` on each flip re-dirties
+                                // the attribute graph inside the same pass —
+                                // `propagate_dirty` recursing into a 100% main-thread
+                                // stack (sampled twice, 2026-08-29/30, leaf here).
                                 //
-                                // Deferring the write (Task/async) is deliberately
-                                // NOT done: in any residual-oscillation scenario a
-                                // deferred write re-schedules itself every turn into a
-                                // 100% async loop instead — worse than the synchronous
-                                // form, which SwiftUI at least coalesces (measured
-                                // while investigating this hang).
-                                .onAppear { isUserNearBottom = true }
-                                .onDisappear { isUserNearBottom = false }
+                                // The write is coalesced through `scheduleNearBottom`,
+                                // which cancels-and-reschedules: during a flip storm
+                                // every scheduled write is cancelled by the next flip,
+                                // so ZERO writes land until the scrolling settles, when
+                                // one final write applies the real value. (A naive
+                                // deferred write — schedule on every flip without
+                                // cancelling — is the opposite trap: it re-fires every
+                                // turn into a 100% async loop. Cancel-and-reschedule is
+                                // the difference.)
+                                .onAppear { scheduleNearBottom(true) }
+                                .onDisappear { scheduleNearBottom(false) }
                         }
                         .padding()
                         .frame(maxWidth: .infinity, alignment: .leading)

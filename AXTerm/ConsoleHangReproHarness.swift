@@ -132,14 +132,21 @@ struct ConsoleHangReproHarness: View {
         }
     }
 
-    /// One line every ~0.3 s. Each append scrolls to bottom, nudging the sentinel
-    /// across its boundary. Runs on the main queue, so if the main thread wedges
-    /// these stop — itself a signal, alongside the external CPU sample.
-    private func feedLine() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+    /// A BOUNDED burst then stop — the shape of a connect ladder dumping its
+    /// reasons/attempts (a few dozen lines over a second or two) and then going
+    /// quiet. Each append scrolls to bottom, flipping the bottom sentinel across
+    /// its boundary; the question the measurement answers is whether CPU *stays*
+    /// pegged after the burst ends (a self-sustaining sentinel storm) or settles.
+    /// Runs on the main queue, so if the main thread wedges these stop.
+    private func feedLine(remaining: Int = 30) {
+        guard remaining > 0 else {
+            FileHandle.standardError.write(Data("REPRO: burst done, measuring settle\n".utf8))
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             lines.append(ConsoleLine(kind: .packet, from: "K0RPO-\(lines.count % 9)",
                                      to: "NODES", text: "live feed line \(lines.count)"))
-            feedLine()
+            feedLine(remaining: remaining - 1)
         }
     }
 }
