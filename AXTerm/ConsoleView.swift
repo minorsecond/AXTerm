@@ -162,6 +162,56 @@ struct ConsoleView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
     }
 
+    /// The scrolling transcript. Extracted from `body` so the view compiler can
+    /// type-check each in reasonable time — `body` is already at the edge of the
+    /// solver's budget.
+    @ViewBuilder private var messageList: some View {
+        LazyVStack(alignment: .leading, spacing: 2) {
+            if showDaySeparators {
+                ForEach(dayGroupedLines) { section in
+                    DaySeparatorView(date: section.date)
+                        .padding(.vertical, 4)
+
+                    ForEach(section.items) { group in
+                        ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
+                                             onIdentity: onIdentity,
+                                             onIdentityMenu: onIdentityMenu)
+                            .id(group.id)
+                    }
+                }
+            } else {
+                ForEach(groupedLines) { group in
+                    ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
+                                             onIdentity: onIdentity,
+                                             onIdentityMenu: onIdentityMenu)
+                        .id(group.id)
+                }
+            }
+            Color.clear
+                .frame(height: 10)
+                .id("bottom")
+                // DEBOUNCED, never a synchronous write. These appearance actions
+                // fire from inside SwiftUI's update pass; a burst of console
+                // appends with the scroll-to-bottom below makes this sentinel flip
+                // appeared/disappeared many times per pass, and writing
+                // `isUserNearBottom` on each flip re-dirties the attribute graph
+                // inside the same pass — `propagate_dirty` recursing into a 100%
+                // main-thread stack (sampled twice, 2026-08-29/30, leaf here).
+                //
+                // The write is coalesced through `scheduleNearBottom`, which
+                // cancels-and-reschedules: during a flip storm every scheduled
+                // write is cancelled by the next flip, so ZERO writes land until
+                // the scrolling settles, when one final write applies the real
+                // value. (A naive deferred write — schedule on every flip without
+                // cancelling — is the opposite trap: it re-fires every turn into a
+                // 100% async loop. Cancel-and-reschedule is the difference.)
+                .onAppear { scheduleNearBottom(true) }
+                .onDisappear { scheduleNearBottom(false) }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     var body: some View {
         ZStack(alignment: .topTrailing) {
             VStack(spacing: 0) {
@@ -199,54 +249,7 @@ struct ConsoleView: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 2) {
-                            if showDaySeparators {
-                                ForEach(dayGroupedLines) { section in
-                                    DaySeparatorView(date: section.date)
-                                        .padding(.vertical, 4)
-
-                                    ForEach(section.items) { group in
-                                        ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
-                                                             onIdentity: onIdentity,
-                                                             onIdentityMenu: onIdentityMenu)
-                                            .id(group.id)
-                                    }
-                                }
-                            } else {
-                                ForEach(groupedLines) { group in
-                                    ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
-                                                             onIdentity: onIdentity,
-                                                             onIdentityMenu: onIdentityMenu)
-                                        .id(group.id)
-                                }
-                            }
-                            Color.clear
-                                .frame(height: 10)
-                                .id("bottom")
-                                // DEBOUNCED, never a synchronous write. These
-                                // appearance actions fire from inside SwiftUI's
-                                // update pass; a burst of console appends with the
-                                // scroll-to-bottom below makes this sentinel flip
-                                // appeared/disappeared many times per pass, and
-                                // writing `isUserNearBottom` on each flip re-dirties
-                                // the attribute graph inside the same pass —
-                                // `propagate_dirty` recursing into a 100% main-thread
-                                // stack (sampled twice, 2026-08-29/30, leaf here).
-                                //
-                                // The write is coalesced through `scheduleNearBottom`,
-                                // which cancels-and-reschedules: during a flip storm
-                                // every scheduled write is cancelled by the next flip,
-                                // so ZERO writes land until the scrolling settles, when
-                                // one final write applies the real value. (A naive
-                                // deferred write — schedule on every flip without
-                                // cancelling — is the opposite trap: it re-fires every
-                                // turn into a 100% async loop. Cancel-and-reschedule is
-                                // the difference.)
-                                .onAppear { scheduleNearBottom(true) }
-                                .onDisappear { scheduleNearBottom(false) }
-                        }
-                        .padding()
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        messageList
                     }
                     .defaultScrollAnchor(.bottom)
                     .onChange(of: groupedLines.count) { _, _ in
@@ -268,6 +271,29 @@ struct ConsoleView: View {
                     .onAppear {
                         scrollToBottomToken += 1
                     }
+                    // Re-pin to the bottom when the console's own height changes.
+                    //
+                    // The bar below grows and shrinks between modes (the
+                    // Broadcast↔Session toggle is the easy repro), which resizes
+                    // this ScrollView. `.defaultScrollAnchor(.bottom)` re-anchors
+                    // on that resize but overshoots into the trailing sentinel +
+                    // padding, stranding the newest lines above the viewport with
+                    // blank space below. Re-pinning to the LAST REAL line (not the
+                    // phantom "bottom" the overshoot lands in) puts it flush at the
+                    // bottom again — only while Auto-scroll is on, so a reader who
+                    // has scrolled up is left where they were.
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.onChange(of: geo.size.height) { _, _ in
+                                guard autoScroll else { return }
+                                if let lastId = groupedLines.last?.id {
+                                    proxy.scrollTo(lastId, anchor: .bottom)
+                                } else {
+                                    proxy.scrollTo("bottom", anchor: .bottom)
+                                }
+                            }
+                        }
+                    )
                 }
                 .background(.background)
                 // Rebuilt here rather than read from `body`: see
