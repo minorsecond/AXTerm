@@ -363,6 +363,12 @@ final class DestinationPickerViewModel: ObservableObject {
     private func buildSections() -> [DestinationSuggestionSection] {
         let query = Self.normalizeCandidate(typedText)
 
+        // While just browsing (no query), keep the local sections short so the
+        // list opens instantly on a channel that has heard hundreds of stations;
+        // a query lifts the cap because it has already narrowed the set.
+        let browsing = query.isEmpty
+        let localLimit = browsing ? Self.maxLocalRowsBrowsing : nil
+
         let effectiveFavorites = dedupeNormalized(Array(baseFavorites) + Array(userFavorites))
         let favoritesRows = buildRows(
             values: effectiveFavorites,
@@ -375,22 +381,24 @@ final class DestinationPickerViewModel: ObservableObject {
             values: recentValues,
             section: .recent,
             query: query,
-            fallbackSecondary: "Recently heard"
+            fallbackSecondary: "Recently heard",
+            limit: localLimit
         )
 
         let neighborRows = buildRows(
             values: neighborValues,
             section: .neighbors,
             query: query,
-            fallbackSecondary: "Neighbor node"
+            fallbackSecondary: "Neighbor node",
+            limit: localLimit
         )
 
-        // Reachable-via-node destinations, GROUPED by the node that lists them.
-        // Flat, this was every destination every node advertises — 500+ rows in
-        // one scroll, laggy to render and impossible to choose from. Local
-        // sections above always win (direct is what you usually want); these are
-        // the further hops, one section per relay ("Via COSCO"), capped while
-        // browsing and opened up once the operator is actually filtering.
+        // Reachable-via-node destinations — the far hops. Hidden entirely while
+        // browsing (the local sections above are what you almost always want,
+        // and 500 relayed nodes buried the handful you can reach directly), and
+        // revealed the moment you type, grouped one section per relay
+        // ("Via COSCO"). So they stay reachable from here without cluttering the
+        // default view.
         let reachableSections = buildReachableSections(query: query)
 
         let sections = [
@@ -402,15 +410,18 @@ final class DestinationPickerViewModel: ObservableObject {
         return sections.filter { !$0.rows.isEmpty }
     }
 
-    /// While browsing (no query): a few relays, a few each — a taster, not a
-    /// firehose. While filtering: every relay that has a match, generously,
-    /// because the query has already cut the set to something choosable.
-    private static let maxReachableNodesBrowsing = 6
-    private static let maxReachablePerNodeBrowsing = 6
+    /// The most recent/near local destinations shown before any query is typed.
+    private static let maxLocalRowsBrowsing = 12
+    /// While filtering: every relay that has a match, generously, because the
+    /// query has already cut the set to something choosable.
     private static let maxReachablePerNodeFiltering = 25
     private static let maxReachableRowsTotal = 60
 
     private func buildReachableSections(query: String) -> [DestinationSuggestionSection] {
+        // Only on an actual query — while browsing, the far hops stay hidden so
+        // the local list is clean and instant.
+        guard !query.isEmpty else { return [] }
+
         let matches = Self.rankedSuggestions(query: query, candidates: reachableValues)
         guard !matches.isEmpty else { return [] }
 
@@ -423,22 +434,19 @@ final class DestinationPickerViewModel: ObservableObject {
             byNode[via, default: []].append(dest)
         }
 
-        let filtering = !query.isEmpty
-        let perNodeCap = filtering ? Self.maxReachablePerNodeFiltering : Self.maxReachablePerNodeBrowsing
         // Relays that reach more get listed first — the big hubs are the ones
         // an operator scans for. Ties broken by name so it never reshuffles.
         let orderedNodes = nodeOrder.sorted { lhs, rhs in
             let l = byNode[lhs]?.count ?? 0, r = byNode[rhs]?.count ?? 0
             return l != r ? l > r : lhs < rhs
         }
-        let nodeCap = filtering ? orderedNodes.count : Self.maxReachableNodesBrowsing
 
         var sections: [DestinationSuggestionSection] = []
         var total = 0
-        for node in orderedNodes.prefix(nodeCap) {
+        for node in orderedNodes {
             guard total < Self.maxReachableRowsTotal, let dests = byNode[node] else { break }
             let room = Self.maxReachableRowsTotal - total
-            let shown = Array(dests.prefix(min(perNodeCap, room)))
+            let shown = Array(dests.prefix(min(Self.maxReachablePerNodeFiltering, room)))
             guard !shown.isEmpty else { continue }
             let rows = shown.map { dest in
                 DestinationSuggestionRow(
@@ -461,12 +469,14 @@ final class DestinationPickerViewModel: ObservableObject {
         values: [String],
         section: DestinationSuggestionRow.Section,
         query: String,
-        fallbackSecondary: String
+        fallbackSecondary: String,
+        limit: Int? = nil
     ) -> [DestinationSuggestionRow] {
         let ranked = Self.rankedSuggestions(query: query, candidates: values)
         guard !ranked.isEmpty else { return [] }
+        let capped = limit.map { Array(ranked.prefix($0)) } ?? ranked
 
-        return ranked.map { candidate in
+        return capped.map { candidate in
             let alias = linkedAlias(for: candidate)
             let aliasText = alias.map { "aka \($0)" }
             return DestinationSuggestionRow(

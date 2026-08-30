@@ -51,35 +51,33 @@ final class DestinationPickerViewModelTests: XCTestCase {
         XCTAssertFalse(vm.hasAliasLink(between: "DRL", and: "DRLNODE"))
     }
 
-    /// A big relay neighbourhood must not flatten into one endless scroll: the
-    /// reachable destinations are grouped per via-node and capped while browsing.
-    func testReachableDestinationsAreGroupedAndCappedWhenBrowsing() {
+    /// Browsing (no query) shows only local — the far reachable-via-node hops
+    /// stay hidden so hundreds of relayed nodes don't bury the local list, and
+    /// the local sections themselves are capped so a busy channel opens fast.
+    func testBrowsingHidesReachableAndCapsLocal() {
         let vm = DestinationPickerViewModel()
 
-        // 8 relays, 10 destinations each = 80 reachable destinations.
         var reachableVia: [String: String] = [:]
-        var all: [String] = []
-        let nodes = ["COSCO", "SOLBPQ", "KB5YZB-7", "DRLNOD", "RELAY5", "RELAY6", "RELAY7", "RELAY8"]
-        for (n, node) in nodes.enumerated() {
-            for i in 0..<10 {
-                let dest = "N\(n)DEST\(i)"
-                reachableVia[dest] = node
-                all.append(dest)
-            }
+        var reachable: [String] = []
+        for i in 0..<80 {
+            let dest = "COSCODEST\(i)"
+            reachableVia[dest] = "COSCO"
+            reachable.append(dest)
         }
+        // 40 recently-heard local stations (a busy channel).
+        let recents = (0..<40).map { "LOCAL\($0)" }
 
         vm.updateDataSources(
-            groups: [ConnectSuggestionGroup(id: "reachable", title: "Reachable via nodes", values: all)],
+            groups: [
+                ConnectSuggestionGroup(id: "recent", title: "Recent Heard", values: recents),
+                ConnectSuggestionGroup(id: "reachable", title: "Reachable via nodes", values: reachable)
+            ],
             reachableVia: reachableVia)
 
         let reachableSections = vm.visibleSections.filter { $0.id.hasPrefix("reachable::") }
-        XCTAssertLessThanOrEqual(reachableSections.count, 6, "browsing shows a taster of relays, not all 8")
-        XCTAssertTrue(reachableSections.allSatisfy { $0.rows.count <= 6 }, "each relay is capped while browsing")
-        let totalRows = reachableSections.reduce(0) { $0 + $1.rows.count }
-        XCTAssertLessThanOrEqual(totalRows, 60, "total reachable rows are bounded")
-        XCTAssertTrue(reachableSections.allSatisfy { $0.title.hasPrefix("Via ") }, "grouped under the reaching node")
-        // A capped relay's header carries its true count so the operator narrows.
-        XCTAssertTrue(reachableSections.contains { $0.title.contains("(10)") })
+        XCTAssertTrue(reachableSections.isEmpty, "relayed hops are hidden until the operator types")
+        let recentRows = vm.visibleSections.first { $0.id == "recent" }?.rows.count ?? 0
+        XCTAssertLessThanOrEqual(recentRows, 12, "the local list is capped while browsing")
     }
 
     /// Filtering opens the set back up — the query has already made it choosable.
