@@ -18,6 +18,7 @@ struct OfflineMapsView: View {
     /// the same operator question from the other side: the basemap shows
     /// where a ridge is, this says whether it is in the way.
     @ObservedObject var elevation: ElevationStorage
+    @AppStorage(ElevationStorage.autoFetchEnabledKey) private var autoFetchHome = true
     /// The operator's own position. Terrain is fetched around *this*, never
     /// around a bounding box of everyone heard — one distant station makes
     /// that box a continent.
@@ -166,6 +167,18 @@ struct OfflineMapsView: View {
                     .foregroundStyle(.secondary)
             }
             .help("Elevation grids covering one degree of latitude and longitude each, about 100 m between samples. A path profile normally touches one or two tiles.")
+
+            Toggle("Keep terrain for my area", isOn: $autoFetchHome)
+                .help("Fetches the nine tiles around your grid square once, so path profiles "
+                      + "work without you having to come here first. Skipped on cellular, "
+                      + "personal hotspots and low data mode, and outside the United States, "
+                      + "where the source has no data. Turning this off does not delete "
+                      + "anything already stored.")
+            Text("On, terrain for your own area arrives without being asked \u{2014} about "
+                 + "36 MB, once. A path to a station outside it is still one or two tiles, "
+                 + "and the station's page offers those where you notice they are missing.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             if elevation.downloader == nil {
                 Text("The elevation store could not be opened, so terrain analysis is unavailable.")

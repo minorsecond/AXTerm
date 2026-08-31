@@ -186,6 +186,54 @@ final class ElevationStorage: ObservableObject {
             tiles: ElevationDownloader.tiles(alongPathFrom: origin, to: destination))
     }
 
+    /// Whether the automatic home fetch is allowed. On by default; the
+    /// Settings toggle writes here.
+    static let autoFetchEnabledKey = "elevation.autoFetchHome"
+
+    /// Fetches terrain around home once, without being asked.
+    ///
+    /// Making terrain work required knowing that a map page had an offline
+    /// menu with a terrain section in it. That is not a feature an operator
+    /// discovers; it is one they are told about. VHF packet is local — nine
+    /// tiles around the station cover every path it will realistically be
+    /// asked about — so the honest default is to have them.
+    ///
+    /// **Why this fetch needs no permission and a per-path fetch does.** This
+    /// one sends the grid square the operator typed into settings and beacons
+    /// on the air anyway. A fetch along a path to a named station additionally
+    /// says *which station this operator is interested in*, which is the same
+    /// disclosure that keeps callsign lookups off by default. So this is
+    /// automatic and that one stays a button.
+    ///
+    /// Runs once per grid square. An operator who deletes their terrain has
+    /// said something, and re-downloading it the next morning would be
+    /// arguing with them.
+    func fetchHomeTerrainIfNeeded(around observer: GreatCircle.Point,
+                                  gridSquare: String,
+                                  defaults: UserDefaults = .standard) {
+        let key = "elevation.autoFetchedForGrid"
+        let grid = gridSquare.trimmingCharacters(in: .whitespaces).uppercased()
+        guard !grid.isEmpty, store != nil else { return }
+        // Switched off means switched off — checked before the "have we
+        // already done this" bookkeeping, so turning it back on later still
+        // runs.
+        guard defaults.object(forKey: Self.autoFetchEnabledKey) as? Bool ?? true else { return }
+        // The source only has the United States. Elsewhere this would spend
+        // tens of megabytes storing NaN and tell a US government service
+        // where the operator is, for nothing.
+        guard ElevationDownloader.sourceHasCoverage(at: observer) else { return }
+        guard defaults.string(forKey: key) != grid else { return }
+        defaults.set(grid, forKey: key)
+
+        // Only what is missing, so a move to a neighbouring grid re-uses the
+        // overlap rather than re-fetching it.
+        let wanted = Self.tilesWorthFetching(around: observer).filter { tile in
+            (try? store?.hasTile(lat: tile.lat, lon: tile.lon)) != true
+        }
+        guard !wanted.isEmpty else { return }
+        downloader?.download(tiles: wanted, automatic: true)
+    }
+
     func cancelDownload() {
         downloader?.cancel()
     }

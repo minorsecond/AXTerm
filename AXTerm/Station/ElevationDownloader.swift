@@ -60,6 +60,30 @@ final class ElevationDownloader: ObservableObject {
         return latRange.flatMap { lat in lonRange.map { (lat: lat, lon: $0) } }
     }
 
+    /// Whether the source has any data here.
+    ///
+    /// 3DEP is a USGS product and covers the United States and its
+    /// territories. Outside that it answers politely with a tile of NaN, so
+    /// an unasked-for fetch abroad would spend tens of megabytes to store
+    /// nothing and tell a US government service where the operator is, for
+    /// no benefit whatsoever. A fetch the operator *asked* for is still
+    /// allowed to fail and say so — this gate is only for the automatic one.
+    static func sourceHasCoverage(at point: GreatCircle.Point) -> Bool {
+        let lat = point.latitude, lon = point.longitude
+        // Deliberately coarse. The cost of being slightly generous is one
+        // wasted request; the cost of being tight is a silent hole in
+        // coverage for someone on the edge of it.
+        let boxes: [(south: Double, north: Double, west: Double, east: Double)] = [
+            (24, 50, -125, -66),        // contiguous states
+            (51, 72, -170, -129),       // Alaska
+            (18, 23, -161, -154),       // Hawaii
+            (17, 19, -68, -64),         // Puerto Rico and the Virgin Islands
+            (13, 21, 144, 146),         // Guam and the Northern Marianas
+        ]
+        return boxes.contains { lat >= $0.south && lat <= $0.north
+                                && lon >= $0.west && lon <= $0.east }
+    }
+
     /// Every tile along a path, which is what a single profile actually needs.
     ///
     /// Far cheaper than a bounding box for a long path: a 100 km link across
@@ -77,12 +101,17 @@ final class ElevationDownloader: ObservableObject {
         return result
     }
 
-    func download(tiles: [(lat: Int, lon: Int)]) {
+    /// - Parameter automatic: true for a fetch the operator did not ask for.
+    ///   Those refuse expensive and constrained networks — nobody consents to
+    ///   36 MB of terrain by opening an app on a phone tethered to a hotspot.
+    ///   A fetch the operator pressed a button for uses whatever connection
+    ///   they have, because they asked.
+    func download(tiles: [(lat: Int, lon: Int)], automatic: Bool = false) {
         cancel()
-        task = Task { [weak self] in await self?.run(tiles: tiles) }
+        task = Task { [weak self] in await self?.run(tiles: tiles, automatic: automatic) }
     }
 
-    private func run(tiles: [(lat: Int, lon: Int)]) async {
+    private func run(tiles: [(lat: Int, lon: Int)], automatic: Bool) async {
         let missing = tiles.filter { (try? store.hasTile(lat: $0.lat, lon: $0.lon)) != true }
         guard !missing.isEmpty else {
             state = .finished(tiles: 0)
@@ -95,7 +124,8 @@ final class ElevationDownloader: ObservableObject {
         for (index, tile) in missing.enumerated() {
             if Task.isCancelled { state = .idle; return }
             do {
-                let grid = try await fetch(lat: tile.lat, lon: tile.lon)
+                let grid = try await fetch(lat: tile.lat, lon: tile.lon,
+                                           automatic: automatic)
                 try store.store(lat: tile.lat, lon: tile.lon,
                                 samples: ElevationStore.tileSamples, grid: grid)
                 stored += 1
@@ -127,7 +157,7 @@ final class ElevationDownloader: ObservableObject {
     }
 
     /// One tile from the 3DEP image service, as a float32 GeoTIFF.
-    private func fetch(lat: Int, lon: Int) async throws -> [Float] {
+    private func fetch(lat: Int, lon: Int, automatic: Bool = false) async throws -> [Float] {
         let bounds = ElevationStore.bounds(lat: lat, lon: lon)
         let samples = ElevationStore.tileSamples
 
@@ -150,6 +180,10 @@ final class ElevationDownloader: ObservableObject {
         var request = URLRequest(url: components.url!)
         request.timeoutInterval = Self.requestTimeout
         request.setValue("AXTerm/1.0 (packet radio terminal)", forHTTPHeaderField: "User-Agent")
+        // Cellular, a personal hotspot, or a link the OS has flagged as low
+        // data mode. An unasked-for download has no business on any of them.
+        request.allowsExpensiveNetworkAccess = !automatic
+        request.allowsConstrainedNetworkAccess = !automatic
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {

@@ -192,6 +192,15 @@ struct AXTermiOSRootView: View {
             if phase == .active { applyKeepAwake() } else { keepAwake.release() }
         }
         .task { applyKeepAwake() }
+        // Same as the Mac: the ground around this station, once, without
+        // being asked. See ElevationStorage.fetchHomeTerrainIfNeeded for why
+        // this one needs no permission and a per-path fetch does.
+        .task(id: context.settings.gridSquare) {
+            guard let here = Maidenhead.center(of: context.settings.gridSquare)
+                .map(GreatCircle.Point.init) else { return }
+            elevation.fetchHomeTerrainIfNeeded(
+                around: here, gridSquare: context.settings.gridSquare)
+        }
         .task {
             // Without this, every "Open Settings" button in the shared views
             // is dead on iOS: the action is supplied by the macOS Settings

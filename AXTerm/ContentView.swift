@@ -347,6 +347,15 @@ struct ContentView: View {
             syncServiceAddresses()
             bbsLibrary.rescan()
         }
+        // Terrain for the ground around this station, once, without being
+        // asked. Keyed on the grid square so it follows the operator if they
+        // move, and skipped entirely if they have none set.
+        .task(id: winlinkContext.settings.gridSquare) {
+            guard let here = Maidenhead.center(of: winlinkContext.settings.gridSquare)
+                .map(GreatCircle.Point.init) else { return }
+            elevation.fetchHomeTerrainIfNeeded(
+                around: here, gridSquare: winlinkContext.settings.gridSquare)
+        }
         // Which addresses this station accepts calls on. Watched as one value
         // rather than five separate modifiers, which the type checker cannot
         // afford on a body this size.
