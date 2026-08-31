@@ -760,10 +760,12 @@ struct ContentView: View {
             let asked = profile.resolvedFromAlias ?? profile.alias ?? profile.callsign
             issueStationConnectRequest(
                 stationCall: asked, mode: .netrom,
-                nextHopOverride: via, executeImmediately: true)
+                nextHopOverride: via, executeImmediately: true,
+                origin: .explicitAction)
         } else {
             issueStationConnectRequest(
-                stationCall: profile.callsign, mode: .ax25, executeImmediately: true)
+                stationCall: profile.callsign, mode: .ax25, executeImmediately: true,
+                origin: .explicitAction)
         }
         selectedNav = .terminal
     }
@@ -1099,21 +1101,24 @@ struct ContentView: View {
                                     stationCall: station.call,
                                     mode: preferredMode,
                                     viaDigis: preferredPath,
-                                    executeImmediately: true
+                                    executeImmediately: true,
+                                    origin: .explicitAction
                                 )
                             }
                             Button("Connect via AX.25") {
                                 issueStationConnectRequest(
                                     stationCall: station.call,
                                     mode: .ax25,
-                                    executeImmediately: true
+                                    executeImmediately: true,
+                                    origin: .explicitAction
                                 )
                             }
                             Button("Connect via NET/ROM") {
                                 issueStationConnectRequest(
                                     stationCall: station.call,
                                     mode: .netrom,
-                                    executeImmediately: true
+                                    executeImmediately: true,
+                                    origin: .explicitAction
                                 )
                             }
                             .disabled(!stationHasNetRomRoute)
@@ -1166,7 +1171,8 @@ struct ContentView: View {
                                     stationCall: station.call,
                                     mode: preferredMode,
                                     viaDigis: preferredPath,
-                                    executeImmediately: true
+                                    executeImmediately: true,
+                                    origin: .explicitAction
                                 )
                             } else {
                                 let capturedCall = station.call
@@ -1250,7 +1256,8 @@ struct ContentView: View {
                                             mode: ConnectBarMode,
                                             viaDigis: [String] = [],
                                             nextHopOverride: String? = nil,
-                                            executeImmediately: Bool) {
+                                            executeImmediately: Bool,
+                                            origin: ConnectOrigin = .selection) {
         connectCoordinator.activeContext = .stations
         let normalized = CallsignValidator.normalize(stationCall)
         let intent: ConnectIntent
@@ -1291,7 +1298,8 @@ struct ContentView: View {
         }
 
         connectCoordinator.requestConnect(
-            ConnectRequest(intent: intent, mode: mode, executeImmediately: executeImmediately)
+            ConnectRequest(intent: intent, mode: mode,
+                           executeImmediately: executeImmediately, origin: origin)
         )
     }
 
@@ -1453,7 +1461,8 @@ struct ContentView: View {
                     onConnect: { alias, via in
                         issueStationConnectRequest(
                             stationCall: alias, mode: .netrom,
-                            nextHopOverride: via, executeImmediately: true)
+                            nextHopOverride: via, executeImmediately: true,
+                origin: .explicitAction)
                         selectedNav = .terminal
                     },
                     knownCallsigns: knownCallsigns,

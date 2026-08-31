@@ -1249,7 +1249,8 @@ extension AnalyticsDashboardView {
         }
         connectCoordinator.activeContext = .stations
         connectCoordinator.requestConnect(
-            ConnectRequest(intent: intent, mode: draft.connectMode, executeImmediately: true)
+            ConnectRequest(intent: intent, mode: draft.connectMode,
+                           executeImmediately: true, origin: .explicitAction)
         )
         viewModel.cancelPathDraft()
     }

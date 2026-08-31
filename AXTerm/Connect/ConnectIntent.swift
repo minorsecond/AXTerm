@@ -90,17 +90,48 @@ nonisolated struct ConnectIntent: Equatable, Hashable {
     }
 }
 
+/// What gesture produced a connect request.
+///
+/// The distinction exists because only one of them may key a transmitter.
+/// Choosing a name from a dropdown or a list is how an operator *looks* at
+/// a station; connecting is a decision to transmit on a shared channel,
+/// possibly into a station that is mid-net. Collapsing the two is the kind
+/// of surprise that costs somebody else their QSO.
+nonisolated enum ConnectOrigin: String, Codable, Equatable, Hashable {
+    /// A picker, a list selection, a row click — the operator is choosing
+    /// what to look at. Fills the connect bar in; never transmits.
+    case selection
+    /// A Connect button, or a menu item that says Connect. The operator
+    /// asked for the radio.
+    case explicitAction
+}
+
 nonisolated struct ConnectRequest: Equatable {
     let id: UUID
     let intent: ConnectIntent
     let mode: ConnectBarMode
     let executeImmediately: Bool
+    let origin: ConnectOrigin
 
-    init(intent: ConnectIntent, mode: ConnectBarMode, executeImmediately: Bool) {
+    /// `executeImmediately` is *clamped*, not trusted.
+    ///
+    /// A dozen views build these already and a thirteenth is always about
+    /// to be written, so the rule lives here where every one of them passes
+    /// through. A selection that asks to execute is a bug at the call site;
+    /// honouring it would put a radio on the air, so it is downgraded to a
+    /// prefill rather than obeyed.
+    ///
+    /// `origin` defaults to `.selection` on purpose: a call site that has
+    /// not thought about this does not get to transmit.
+    init(intent: ConnectIntent,
+         mode: ConnectBarMode,
+         executeImmediately: Bool,
+         origin: ConnectOrigin = .selection) {
         self.id = UUID()
         self.intent = intent
         self.mode = mode
-        self.executeImmediately = executeImmediately
+        self.origin = origin
+        self.executeImmediately = executeImmediately && origin == .explicitAction
     }
 }
 

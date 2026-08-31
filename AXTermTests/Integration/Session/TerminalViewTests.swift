@@ -195,7 +195,9 @@ final class TerminalViewTests: XCTestCase {
             routeHint: nil,
             note: nil
         )
-        coordinator.requestConnect(ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true))
+        coordinator.requestConnect(ConnectRequest(intent: intent, mode: .ax25,
+                                                  executeImmediately: true,
+                                                  origin: .explicitAction))
         XCTAssertTrue(didNavigate)
     }
 

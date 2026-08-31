@@ -44,10 +44,14 @@ final class ConnectBarViewModelTests: XCTestCase {
             routeHint: nil,
             note: nil
         )
-        let request = ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true)
+        // Navigation follows *execution*, and only an explicit action may
+        // execute — see ConnectOriginTests.
+        let request = ConnectRequest(intent: intent, mode: .ax25,
+                                     executeImmediately: true, origin: .explicitAction)
         XCTAssertTrue(ConnectPrefillLogic.shouldNavigateOnConnect(request))
 
-        let noNav = ConnectRequest(intent: intent, mode: .ax25, executeImmediately: false)
+        let noNav = ConnectRequest(intent: intent, mode: .ax25,
+                                   executeImmediately: false, origin: .explicitAction)
         XCTAssertFalse(ConnectPrefillLogic.shouldNavigateOnConnect(noNav))
     }
 

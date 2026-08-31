@@ -108,12 +108,15 @@ private struct TouchComboBox: View {
                     ForEach(suggestionGroups, id: \.title) { group in
                         if group.title.isEmpty {
                             ForEach(group.items, id: \.self) { item in
-                                Button(item) { text = item; onCommit?() }
+                                // Fills the field and stops. Committing here
+                                // made choosing a name from the list start a
+                                // connection — see ConnectOriginTests.
+                                Button(item) { text = item }
                             }
                         } else {
                             Section(group.title) {
                                 ForEach(group.items, id: \.self) { item in
-                                    Button(item) { text = item; onCommit?() }
+                                    Button(item) { text = item }
                                 }
                             }
                         }
@@ -272,6 +275,11 @@ private struct AppKitComboBox: NSViewRepresentable {
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                // Return with the list open is how the highlighted item gets
+                // chosen; it fills the field and nothing more. Only Return
+                // against a closed list is a submit — otherwise picking a
+                // station from the dropdown keys the transmitter.
+                guard !isPopUpVisible else { return true }
                 parent.onCommit?()
                 return true
             }

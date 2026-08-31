@@ -624,7 +624,8 @@ struct NetRomRoutesView: View {
             note: nil
         )
         connectCoordinator.requestConnect(
-            ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true)
+            ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true,
+                               origin: .explicitAction)
         )
     }
 
@@ -671,7 +672,8 @@ struct NetRomRoutesView: View {
                 note: nil
             )
             connectCoordinator.requestConnect(
-                ConnectRequest(intent: intent, mode: .netrom, executeImmediately: true)
+                ConnectRequest(intent: intent, mode: .netrom, executeImmediately: true,
+                               origin: .explicitAction)
             )
         case .ax25Direct:
             let target = ConnectPrefillLogic.ax25DirectTarget(
@@ -688,7 +690,8 @@ struct NetRomRoutesView: View {
                 note: target.note
             )
             connectCoordinator.requestConnect(
-                ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true)
+                ConnectRequest(intent: intent, mode: .ax25, executeImmediately: true,
+                               origin: .explicitAction)
             )
         case .ax25ViaDigi:
             let digis = route.heardPath.compactMap { Callsign($0) }
@@ -702,7 +705,8 @@ struct NetRomRoutesView: View {
                 note: nil
             )
             connectCoordinator.requestConnect(
-                ConnectRequest(intent: intent, mode: .ax25ViaDigi, executeImmediately: true)
+                ConnectRequest(intent: intent, mode: .ax25ViaDigi, executeImmediately: true,
+                               origin: .explicitAction)
             )
         }
     }
