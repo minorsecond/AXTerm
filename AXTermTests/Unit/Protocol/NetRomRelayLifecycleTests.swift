@@ -313,4 +313,81 @@ final class NetRomRelayLifecycleTests: XCTestCase {
         _ = sm.handle(event: .receivedRR(nr: 0, pf: true, isCommand: true))
         XCTAssertEqual(sm.inboundIFrameCount, 2)
     }
+
+    // MARK: - Arming on a link that is already up
+
+    /// Field capture 2026-08-31. A NET/ROM circuit attempt to BBSCBH opened
+    /// an AX.25 link to DRLNOD; DRLNOD greeted at 07:36:57 with its banner
+    /// and `ENTER COMMAND:`. The circuit failed, the fallback prompt relay
+    /// armed at 07:38:29 — and waited for a greeting that had already been
+    /// and gone, on a link that produced no new `.connected` transition to
+    /// start the banner watchdog. Nothing was ever sent; the session idled
+    /// out at 07:39:21 having exchanged only RR polls.
+    func testArmingOnALiveLinkMustNotSimplyWait() {
+        XCTAssertEqual(
+            NetRomRelayLifecycle.armingAction(linkAlreadyUp: true, bannerAlreadySeen: true),
+            .promptNow,
+            "the node greets once per connection; waiting is waiting forever")
+    }
+
+    /// The ordinary path: the link is about to be dialled, so the banner is
+    /// still to come and `.connected` will start the watchdog.
+    func testArmingBeforeTheLinkExistsWaitsForTheBanner() {
+        XCTAssertEqual(
+            NetRomRelayLifecycle.armingAction(linkAlreadyUp: false, bannerAlreadySeen: false),
+            .awaitBanner)
+    }
+
+    /// Live link, but nothing has greeted on it yet — a CR would arrive
+    /// while the node is still composing its banner. Watch, do not prod.
+    func testALiveLinkThatHasNotGreetedYetIsOnlyWatched() {
+        XCTAssertEqual(
+            NetRomRelayLifecycle.armingAction(linkAlreadyUp: true, bannerAlreadySeen: false),
+            .watchOnly)
+    }
+
+    /// A banner seen on some earlier link says nothing about one not yet
+    /// dialled; the new connection will greet on its own.
+    func testASpentBannerOnNoLinkStillWaits() {
+        XCTAssertEqual(
+            NetRomRelayLifecycle.armingAction(linkAlreadyUp: false, bannerAlreadySeen: true),
+            .awaitBanner)
+    }
+
+    // MARK: - Remembering that a prompt went past
+
+    /// The signal behind `bannerAlreadySeen`.
+    func testTheDetectorRemembersANodePrompt() {
+        var detector = ManualRelayDetector()
+        XCTAssertFalse(detector.hasSeenNodePrompt)
+
+        detector.processIncoming("ENTER COMMAND: B,C,J,N, or Help ?")
+        XCTAssertTrue(detector.hasSeenNodePrompt)
+    }
+
+    /// A disconnect notice ends a relay but is not a prompt. Recording it
+    /// as one would claim the greeting is spent on a link where the node
+    /// has said nothing.
+    func testADisconnectNoticeIsNotAPrompt() {
+        var detector = ManualRelayDetector()
+        detector.processIncoming("###DISCONNECTED FROM KB5YZB-7")
+        XCTAssertFalse(detector.hasSeenNodePrompt)
+    }
+
+    /// The next connection greets afresh, so the memory cannot outlive the
+    /// link — otherwise the first relay on a new link would prod a node
+    /// that was about to greet anyway.
+    func testTheMemoryIsClearedWithTheLink() {
+        var detector = ManualRelayDetector()
+        detector.processIncoming("ENTER COMMAND: B,C,J,N, or Help ?")
+        detector.clear()
+        XCTAssertFalse(detector.hasSeenNodePrompt)
+    }
+
+    /// BPQ words it differently.
+    func testBPQsPromptCountsToo() {
+        var detector = ManualRelayDetector()
+        detector.processIncoming("Enter cmd: B,C,J,N,Q?")
+        XCTAssertTrue(detector.hasSeenNodePrompt)
+    }
 }

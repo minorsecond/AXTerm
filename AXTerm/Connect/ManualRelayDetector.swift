@@ -22,6 +22,16 @@ nonisolated struct ManualRelayDetector {
 
     private(set) var state: State = .idle
 
+    /// Whether a node prompt has already gone past on this link.
+    ///
+    /// A node greets once per connection, so a relay armed after the
+    /// greeting is waiting for something that will never arrive. This is
+    /// what lets the arming decision tell "the banner is still to come"
+    /// from "the banner is spent" — see `NetRomRelayLifecycle.armingAction`.
+    /// Cleared with the rest of the state when the link drops, because the
+    /// next connection greets afresh.
+    private(set) var hasSeenNodePrompt = false
+
     /// Returns the confirmed relay destination, or nil when not yet established.
     var activeRelayDestination: String? {
         if case .established(let dest) = state { return dest }
@@ -44,6 +54,7 @@ nonisolated struct ManualRelayDetector {
     @discardableResult
     mutating func processIncoming(_ rawText: String) -> State {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if Self.isNodePrompt(text) { hasSeenNodePrompt = true }
         switch state {
         case .pending(let destination):
             if Self.isLinkMade(text) {
@@ -64,6 +75,7 @@ nonisolated struct ManualRelayDetector {
     /// Reset to idle (call on L2 session disconnect or explicit user cancellation).
     mutating func clear() {
         state = .idle
+        hasSeenNodePrompt = false
     }
 
     // MARK: - Pattern matchers
@@ -89,6 +101,17 @@ nonisolated struct ManualRelayDetector {
 
     static func isLinkFailed(_ text: String) -> Bool {
         text.uppercased().contains("###LINK FAILED")
+    }
+
+    /// True when the node is showing its command prompt.
+    ///
+    /// Narrower than `isRelayCleared` on purpose: that also treats a
+    /// disconnect notice as ending a relay, and a disconnect is not a
+    /// prompt. Recording one as a prompt would tell the arming decision the
+    /// greeting is spent when the node has yet to say anything.
+    static func isNodePrompt(_ text: String) -> Bool {
+        let upper = text.uppercased()
+        return upper.contains("ENTER COMMAND") || upper.contains("ENTER CMD")
     }
 
     /// True when the node signals relay teardown: back at the command prompt, or remote disconnected.

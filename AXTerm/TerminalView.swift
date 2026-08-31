@@ -92,6 +92,35 @@ nonisolated enum NetRomRelayLifecycle {
         return oldState != .disconnected
     }
 
+    /// What to do when a prompt relay is armed.
+    ///
+    /// The ordinary case arms *before* dialling: the banner is still to
+    /// come, and the `.connected` transition that follows starts the banner
+    /// watchdog. Arming on a link that is already up gets neither. A node
+    /// greets once per connection, so a greeting already delivered will not
+    /// repeat, and with no state transition nothing starts the watchdog
+    /// that would have recovered — the relay then waits in perfect silence
+    /// until the session idles out.
+    ///
+    /// Field capture 2026-08-31: a failed NET/ROM circuit to BBSCBH left
+    /// the DRLNOD link up, the fallback armed behind DRLNOD's spent prompt,
+    /// and nothing was transmitted for fifty-two seconds.
+    enum RelayArmingAction: Equatable {
+        /// Dialling next; the banner is still to come.
+        case awaitBanner
+        /// Link is live but nothing has greeted on it yet — start the
+        /// watchdog, but do not prod into a banner still being composed.
+        case watchOnly
+        /// Link is live and its greeting is spent. A bare CR is the
+        /// standard way to make a node reprint its prompt.
+        case promptNow
+    }
+
+    static func armingAction(linkAlreadyUp: Bool, bannerAlreadySeen: Bool) -> RelayArmingAction {
+        guard linkAlreadyUp else { return .awaitBanner }
+        return bannerAlreadySeen ? .promptNow : .watchOnly
+    }
+
     /// What to call the far end on screen, given what the operator typed.
     ///
     /// The mirror of `wireDestination`, and deliberately not its equal. The
@@ -466,6 +495,9 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// a *node command* to DRLNOD rather than to KB5YZB-7, and sending it to
     /// the destination opens the second link. Neither is what the operator
     /// meant, so nothing goes out until the circuit is up.
+    /// Whether a node prompt has already gone past on the current link.
+    fileprivate var relayHasSeenNodePrompt: Bool { manualRelayDetector.hasSeenNodePrompt }
+
     fileprivate var relayIsHandshaking: Bool {
         switch netRomRelayPhase {
         case .awaitingBanner, .awaitingConnected: return true
@@ -3676,6 +3708,7 @@ struct TerminalView: View {
             destination: intent.normalizedTo,
             nextHop: linkTarget,
             remaining: plan.intermediateHops)
+        armRelayRecovery(linkTarget: linkTarget)
 
         // Reaching the node is its own problem, and this station may already
         // know the answer. `digis: []` below used to dial every next hop
@@ -3967,6 +4000,38 @@ struct TerminalView: View {
     /// normally is never interrupted. Only a hop that genuinely stops
     /// speaking for its whole grace period is nudged, and only one that
     /// stays silent through the nudge is abandoned.
+    /// Starts whatever recovery arming a relay needs on *this* link.
+    ///
+    /// Arming before dialling needs nothing here: the `.connected`
+    /// transition that follows starts the watchdog, and the banner is still
+    /// to come. Arming on a link that is already up gets no such
+    /// transition, so this is the only chance to start it — and if the node
+    /// has already shown its prompt, that greeting is spent and waiting for
+    /// another is waiting forever.
+    private func armRelayRecovery(linkTarget: String) {
+        let live = sessionCoordinator.connectedSessions.contains {
+            $0.remoteAddress.display.uppercased() == linkTarget.uppercased()
+        }
+        switch NetRomRelayLifecycle.armingAction(
+            linkAlreadyUp: live,
+            bannerAlreadySeen: txViewModel.relayHasSeenNodePrompt) {
+        case .awaitBanner:
+            break  // `.connected` will start the watchdog
+        case .watchOnly:
+            startRelayBannerWatchdog()
+        case .promptNow:
+            // The node is sitting at a prompt it has already printed. A
+            // bare CR makes it print another, which is what the relay is
+            // waiting for.
+            client.appendSystemNotification(
+                "\(linkTarget.uppercased()) is already connected and has shown its prompt. "
+                + "Asking it to repeat the prompt rather than waiting for a greeting "
+                + "that has already been.")
+            txViewModel.nudgeStalledRelay()
+            startRelayBannerWatchdog()
+        }
+    }
+
     private func startRelayBannerWatchdog() {
         let armed = txViewModel.netRomRelayNextHop
         Task { @MainActor in
@@ -4120,6 +4185,7 @@ struct TerminalView: View {
             destination: intent.normalizedTo,
             nextHop: plan.linkTarget,
             remaining: plan.intermediateHops)
+        armRelayRecovery(linkTarget: plan.linkTarget)
 
         // Redirect connect bar to the link target for the L2 connect
         connectBarViewModel.setMode(.ax25, for: intent.sourceContext)
