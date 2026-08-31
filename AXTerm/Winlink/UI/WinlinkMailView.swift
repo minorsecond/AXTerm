@@ -34,6 +34,8 @@ struct WinlinkMailView: View {
     @State private var showingCatalog = false
     @State private var showingForms = false
     @State private var showingCommsLog = false
+    /// Past exchanges: what each cost and what it carried.
+    @State private var showingSessionHistory = false
     @State private var showingFieldStatus = false
     @State private var showingPositionReport = false
     @State private var fieldStatusLocation: StationLocation?
@@ -186,6 +188,9 @@ struct WinlinkMailView: View {
                 messages: loggableMessages(),
                 defaultOperatorName: context.profile.realName,
                 defaultStationId: appSettings.myCallsign)
+        }
+        .sheet(isPresented: $showingSessionHistory) {
+            WinlinkSessionHistoryView(store: context.store)
         }
         .sheet(isPresented: $showingCatalog) {
             WinlinkCatalogSheet(
@@ -545,6 +550,7 @@ struct WinlinkMailView: View {
 
             Divider()
             Button("Communications Log (ICS-309)\u{2026}") { showingCommsLog = true }
+            Button("Session History\u{2026}") { showingSessionHistory = true }
         } label: {
             Label("Station Tools", systemImage: "ellipsis.circle")
         }
