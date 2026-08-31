@@ -2118,7 +2118,15 @@ struct TerminalView: View {
             // 18:26), the harvester recorded "DRLNOD lists COSCO", and the
             // next connect plan asked a KA-Node for a station it cannot
             // hear. The relay already tracks who is expected to speak.
-            let speaker = txViewModel?.relayWaitingOn ?? from.display.uppercased()
+            // A line that names its own speaker beats both the relay's
+            // expectation and the link peer. Once the chain is up there is
+            // no expectation left, and crediting the destination with
+            // mid-chain chatter is what put a BBS in the sidebar as a node
+            // that reaches other nodes (2026-08-31).
+            let speaker = RelaySpeaker.attribute(
+                line: text,
+                relayWaitingOn: txViewModel?.relayWaitingOn,
+                linkPeer: from.display)
             observe?(text, speaker)
             // A KA-Node states its command set and nothing else, and the one
             // command that would explain it costs airtime on a shared
