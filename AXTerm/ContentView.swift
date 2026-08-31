@@ -339,13 +339,36 @@ struct ContentView: View {
             contestedIdentityHolder: contested))
     }
 
+    /// The window, assembled in layers.
+    ///
+    /// One chain of thirty modifiers is a single expression, and the Swift
+    /// type checker solves it as one problem — this body twice hit "unable to
+    /// type-check this expression in reasonable time" and left a stale
+    /// indexer pinned on the file for minutes at a stretch. Split into stages,
+    /// each is a small problem solved on its own.
+    ///
+    /// The stages are contiguous slices in their original order, because
+    /// modifier order is behaviour: a `.searchable` above an `.overlay` is not
+    /// the same view as one below it.
     var body: some View {
+        presentationLayer
+    }
+
+
+    /// The window itself. Everything below is a layer over this one.
+    private var windowShell: some View {
         NavigationSplitView {
             sidebar
         } detail: {
             detailView
         }
         .accessibilityIdentifier("mainWindowRoot")
+    }
+
+    /// Attaching and detaching the station: which addresses it answers on, and
+    /// saying goodbye before the machine sleeps or quits.
+    private var serviceLifecycleLayer: some View {
+        windowShell
         .task {
             bbsService.attach()
             syncServiceAddresses()
@@ -366,6 +389,11 @@ struct ContentView: View {
             for: NSWorkspace.willSleepNotification)) { _ in
             bbsService.shutdown(reason: "this station is going to sleep")
         }
+    }
+
+    /// The toolbar search field and the panel it opens.
+    private var searchLayer: some View {
+        serviceLifecycleLayer
         .searchable(text: $searchModel.query, prompt: searchPlaceholder)
         // The toolbar search field is THE search field — on pages that
         // filter in-pane it must drive that filter, not silently sift a
@@ -396,6 +424,11 @@ struct ContentView: View {
             }
         }
         .searchFocused($isSearchFocused)
+    }
+
+    /// Toolbar, alerts, and the invisible label the UI tests read.
+    private var chromeLayer: some View {
+        searchLayer
         .toolbar {
             toolbarContent
         }
@@ -417,6 +450,12 @@ struct ContentView: View {
                     .frame(width: 1, height: 1)
             }
         }
+    }
+
+    /// Work that begins once at launch: console history, analytics warm-up, and
+    /// the adaptive link-quality sampler.
+    private var startupWorkLayer: some View {
+        chromeLayer
         .task {
             guard !didLoadConsoleHistory else { return }
             didLoadConsoleHistory = true
@@ -467,6 +506,12 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
             }
         }
+    }
+
+    /// Work keyed to what the operator is looking at, plus the callsign lookups
+    /// that follow heard stations rather than page visits.
+    private var navigationWorkLayer: some View {
+        startupWorkLayer
         .task(id: selectedNav) {
             switch selectedNav {
             case .terminal:
@@ -572,6 +617,11 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
             }
         }
+    }
+
+    /// Menu commands, the throttled packet sweep, and the window-size probe.
+    private var commandLayer: some View {
+        navigationWorkLayer
         .focusedValue(\.searchFocus, SearchFocusAction { isSearchFocused = true })
         .focusedValue(\.toggleConnection, ToggleConnectionAction { toggleConnection() })
         .focusedValue(\.inspectPacket, InspectPacketAction { inspectSelectedPacket() })
@@ -600,6 +650,11 @@ struct ContentView: View {
         // opened once and then refused to reappear after being dismissed —
         // the packet inspector's sheet was fighting it for the same slot.
         // Both are routed through one modifier and one enum instead.
+    }
+
+    /// Sheets and the state changes that open them.
+    private var presentationLayer: some View {
+        commandLayer
         .sheet(item: rootSheet) { sheet in
             switch sheet {
             case .inspector(let packetID):
