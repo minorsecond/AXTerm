@@ -698,10 +698,15 @@ struct WinlinkMailboxScreen: View {
         // requires a secure login, and a session that gets as far as the
         // password prompt has already spent airtime for nothing.
         let password = context.settings.password
-        guard !password.isEmpty else {
-            exchangeAlert = "No Winlink password found — the CMS requires secure login, so the exchange was not started. Enter your password in Settings → Winlink."
-            return
-        }
+            guard !password.isEmpty else {
+                // "Nothing saved" and "saved but this build cannot open it"
+                // need opposite things from the operator, and the second is
+                // what actually happens after a rebuild.
+                exchangeAlert = context.settings.passwordReadOutcome.operatorAdvice
+                    ?? "No Winlink password found — the CMS requires secure login, so "
+                    + "the exchange was not started. Enter your password in Settings → Winlink."
+                return
+            }
 
         let product = context.settings.clientProduct.trimmingCharacters(in: .whitespaces)
         let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"

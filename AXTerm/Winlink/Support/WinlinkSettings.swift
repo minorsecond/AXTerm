@@ -320,6 +320,16 @@ final class WinlinkSettings: ObservableObject {
     /// Any write drops the CMS verification: the new string has not been
     /// checked, and carrying the old verdict forward is how a green tick
     /// ends up next to a password the CMS refuses.
+    /// Why the password could not be produced, when it could not.
+    ///
+    /// An empty `password` has two very different causes — none saved, or
+    /// one saved that this build is not allowed to open — and telling the
+    /// operator the wrong one sends them hunting for something they never
+    /// lost (2026-08-31).
+    var passwordReadOutcome: KeychainStore.ReadOutcome {
+        keychain.read(account: Self.passwordAccount)
+    }
+
     var password: String {
         get { keychain.string(account: Self.passwordAccount) ?? "" }
         set {
