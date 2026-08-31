@@ -270,8 +270,8 @@ struct ConsoleView: View {
     /// Which rows print their time. Computed with the grouping rather than
     /// per row: asking each row about the one above it would be a lookup per
     /// row per render on a list that grows all day.
-    private var timestampPrintingRows: Set<ConsoleLineGroup.ID> {
-        ConsoleTimestampRuler.printingRows(groupedLines, timestamp: \.primary.timestampString)
+    private var timestampRunPositions: [ConsoleLineGroup.ID: ConsoleTimestampRuler.RunPosition] {
+        ConsoleTimestampRuler.runPositions(groupedLines, timestamp: \.primary.timestampString)
     }
 
     /// Lines filtered by clear timestamp and message type preferences
@@ -424,11 +424,11 @@ struct ConsoleView: View {
                                     // Computed per section: a day separator
                                     // starts a new block, so the row after
                                     // one always prints its time.
-                                    let printing = ConsoleTimestampRuler.printingRows(
+                                    let runs = ConsoleTimestampRuler.runPositions(
                                         section.items, timestamp: \.primary.timestampString)
                                     ForEach(section.items) { group in
                                         ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
-                                                             printsTimestamp: printing.contains(group.id),
+                                                             timestampRun: runs[group.id] ?? .alone,
                                                              onIdentity: onIdentity,
                                                              onIdentityMenu: onIdentityMenu)
                                             .id(group.id)
@@ -437,7 +437,7 @@ struct ConsoleView: View {
                             } else {
                                 ForEach(groupedLines) { group in
                                     ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
-                                                             printsTimestamp: timestampPrintingRows.contains(group.id),
+                                                             timestampRun: timestampRunPositions[group.id] ?? .alone,
                                                              onIdentity: onIdentity,
                                                              onIdentityMenu: onIdentityMenu)
                                         .id(group.id)
@@ -790,8 +790,8 @@ struct ConsoleLineGroupView: View {
     var fontSize: Double = 11
     let group: ConsoleLineGroup
     var localCallsign: String = ""
-    /// False for a row whose time is the same as the row above it.
-    var printsTimestamp: Bool = true
+    /// Where this row sits among the rows sharing one displayed time.
+    var timestampRun: ConsoleTimestampRuler.RunPosition = .alone
     var onIdentity: ((String) -> Void)?
     var onIdentityMenu: ((String) -> Void)?
     @State private var isExpanded = false
@@ -801,7 +801,7 @@ struct ConsoleLineGroupView: View {
             ConsoleLineView(
                 fontSize: fontSize,
                 line: group.primary,
-                printsTimestamp: printsTimestamp,
+                timestampRun: timestampRun,
                 duplicateCount: group.duplicateCount,
                 allViaPaths: group.allViaPaths,
                 localCallsign: localCallsign,
@@ -894,9 +894,9 @@ private struct ExpandDuplicatesTap: ViewModifier {
 struct ConsoleLineView: View {
     var fontSize: Double = 11
     let line: ConsoleLine
-    /// False when the row above already printed this time. The column keeps
-    /// its width either way, so the text beside it stays aligned.
-    var printsTimestamp: Bool = true
+    /// Where this row sits among the rows sharing one displayed time. Decides
+    /// whether the time is printed and how the row is tied to the one above.
+    var timestampRun: ConsoleTimestampRuler.RunPosition = .alone
     var duplicateCount: Int = 0
     var allViaPaths: [[String]] = []
     var localCallsign: String = ""
@@ -934,15 +934,18 @@ struct ConsoleLineView: View {
             // Enhanced indicator bar with premium styling for system/error messages
             indicatorBar
 
-            // Timestamp, printed once per second rather than once per row.
-            // Hidden rather than removed: the column holds its width so the
-            // text beside it stays in line, and the value is the same string
-            // the row above printed, so nothing is lost.
+            // Printed once per run rather than once per row. The rows
+            // underneath keep the column's width and hang from a hairline, so
+            // the blank reads as "same time as above" rather than as a time
+            // that failed to appear.
             Text(line.timestampString)
                 .foregroundStyle(.tertiary)
                 .font(.system(size: fontSize, design: .monospaced))
-                .opacity(printsTimestamp ? 1 : 0)
-                .accessibilityHidden(!printsTimestamp)
+                .opacity(timestampRun.printsTimestamp ? 1 : 0)
+                .accessibilityHidden(!timestampRun.printsTimestamp)
+                .overlay(alignment: .trailing) {
+                    TimestampRunConnector(position: timestampRun)
+                }
                 .help(line.timestampString)
 
             // Which transmitter we actually heard. Shown for *any* repeated
@@ -1256,6 +1259,52 @@ private struct SoloTapGesture: ViewModifier {
         #else
         content.onTapGesture(perform: onToggle)
         #endif
+    }
+}
+
+/// The hairline tying a row to the timestamp above it.
+///
+/// Suppressing a repeated timestamp leaves a blank, and a blank in the
+/// leftmost column reads as missing data rather than as inherited. This is
+/// the difference: the time hangs a thread, and the rows sharing it hang from
+/// it. The run closes at the last row's centre rather than running off the
+/// bottom, so where one second ends and the next begins stays legible without
+/// reading the numbers.
+///
+/// Drawn on the trailing edge of the timestamp — the side nearest the content
+/// it labels — and quietly enough to be a guide rather than a rule. The left
+/// of the row already carries the message-kind indicator; a second bar of
+/// equal weight would compete with it.
+private struct TimestampRunConnector: View {
+
+    let position: ConsoleTimestampRuler.RunPosition
+
+    var body: some View {
+        GeometryReader { geometry in
+            let height = geometry.size.height
+            let middle = height / 2
+            Path { path in
+                switch position {
+                case .alone:
+                    break
+                case .start:
+                    // Leaves the digits alone and descends from below them.
+                    path.move(to: CGPoint(x: 0, y: middle + 3))
+                    path.addLine(to: CGPoint(x: 0, y: height))
+                case .middle:
+                    path.move(to: CGPoint(x: 0, y: 0))
+                    path.addLine(to: CGPoint(x: 0, y: height))
+                case .end:
+                    path.move(to: CGPoint(x: 0, y: 0))
+                    path.addLine(to: CGPoint(x: 0, y: middle))
+                }
+            }
+            .stroke(.secondary.opacity(0.3),
+                    style: StrokeStyle(lineWidth: 1, lineCap: .round))
+        }
+        .frame(width: 1)
+        .padding(.trailing, -3)
+        .accessibilityHidden(true)
     }
 }
 
