@@ -152,7 +152,17 @@ struct MapLegend: View {
     /// True when the node directory layer is drawn, so the diamond shape
     /// is explained where the colours are.
     var showsNodes = false
-    @State private var isExpanded = false
+    /// Collapses the whole key, not one line of it.
+    ///
+    /// The disclosure used to hide only the footnote — every swatch stayed
+    /// put — so the chevron promised more than it delivered and read as
+    /// broken. The legend is a permanent box over the map, and an operator
+    /// who knows the colours has a real reason to want it gone; that is what
+    /// a disclosure is for.
+    ///
+    /// Stored, so it stays how it was left. Open by default: a coloured dot
+    /// with no key is decoration.
+    @AppStorage("map.legendExpanded") private var isExpanded = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -167,7 +177,11 @@ struct MapLegend: View {
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(isExpanded
+                                ? "\(kind.title) legend, expanded"
+                                : "\(kind.title) legend, collapsed")
 
+            if isExpanded {
             ForEach(kind.entries, id: \.label) { entry in
                 HStack(spacing: 5) {
                     Circle()
@@ -228,12 +242,11 @@ struct MapLegend: View {
                 .help("The dashed outer ring: the most distant station that has demonstrably decoded you in the last two weeks. Your best proven reach \u{2014} not a promise, and not a propagation model. Terrain will bend both rings.")
             }
 
-            if isExpanded {
-                Text(kind.footnote)
-                    .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: 180, alignment: .leading)
+            Text(kind.footnote)
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 180, alignment: .leading)
             }
         }
         .padding(7)
