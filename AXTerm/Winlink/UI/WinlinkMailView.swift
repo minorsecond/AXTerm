@@ -36,6 +36,8 @@ struct WinlinkMailView: View {
     @State private var showingCommsLog = false
     /// Past exchanges: what each cost and what it carried.
     @State private var showingSessionHistory = false
+    /// Pre-selection for the history sheet, when opened from a message.
+    @State private var focusedSessionID: Int64?
     @State private var showingFieldStatus = false
     @State private var showingPositionReport = false
     @State private var fieldStatusLocation: StationLocation?
@@ -190,7 +192,8 @@ struct WinlinkMailView: View {
                 defaultStationId: appSettings.myCallsign)
         }
         .sheet(isPresented: $showingSessionHistory) {
-            WinlinkSessionHistoryView(store: context.store)
+            WinlinkSessionHistoryView(store: context.store,
+                                      focusSessionID: focusedSessionID)
         }
         .sheet(isPresented: $showingCatalog) {
             WinlinkCatalogSheet(
@@ -516,7 +519,19 @@ struct WinlinkMailView: View {
             knownContact: { address in contactsVM.contact(forAddress: address) != nil },
             onAddContact: { address in addContact(address: address) },
             onAddToMap: onAddSpatialAttachment,
-            onOpenInWindow: { openSelectedMessageInWindow() })
+            onOpenInWindow: { openSelectedMessageInWindow() },
+            carriedBySessionID: carryingSessionID(
+                for: mailboxVM.selectedMessage?.message.mid),
+            onShowCarryingSession: { id in
+                focusedSessionID = id
+                showingSessionHistory = true
+            })
+    }
+
+    /// Which exchange brought this message in, if that was recorded.
+    private func carryingSessionID(for mid: String?) -> Int64? {
+        guard let mid else { return nil }
+        return (try? context.store?.sessionLogID(forMessage: mid)) ?? nil
     }
 
     /// Lifts the selected message into its own window, sized for its

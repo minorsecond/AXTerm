@@ -27,6 +27,14 @@ struct WinlinkMessageDetail: View {
     /// the standalone window itself has no use for it.
     var onOpenInWindow: (() -> Void)?
 
+    /// The exchange that carried this message in, when one was recorded.
+    /// Nil for mail that arrived another way, and for everything downloaded
+    /// before the link existed — the control hides rather than pointing at a
+    /// session picked by proximity in time.
+    var carriedBySessionID: Int64?
+    /// Opens the session history focused on the exchange that carried this.
+    var onShowCarryingSession: ((Int64) -> Void)?
+
     @State private var saveError: String?
     @State private var pendingExport: ExportableFile?
     /// Derived off the main actor when the message changes — never in
@@ -87,6 +95,20 @@ struct WinlinkMessageDetail: View {
                             WinlinkDeliveryBadge(
                                 state: stored.state.state ?? .received,
                                 error: stored.state.lastError)
+                            // What this cost to fetch, and what the link
+                            // looked like at the time — the question asked
+                            // of a message that arrived late or truncated.
+                            if let carriedBySessionID, let onShowCarryingSession {
+                                Button {
+                                    onShowCarryingSession(carriedBySessionID)
+                                } label: {
+                                    Label("Session", systemImage: "clock.arrow.circlepath")
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Show the exchange that carried this message — how long it took, "
+                                    + "on what frequency, and what else it brought.")
+                            }
                         }
                     }
                     Spacer()
