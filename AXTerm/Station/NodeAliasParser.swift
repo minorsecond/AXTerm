@@ -504,6 +504,48 @@ nonisolated struct NodeAliasDirectory: Equatable, Sendable {
         entries[key] = entry
     }
 
+    /// What forgetting a station removed.
+    struct ForgetTally: Equatable, Sendable {
+        /// Entries that *are* this station.
+        var ownEntries: Int = 0
+        /// Claims this station made about other stations.
+        var claims: Int = 0
+
+        var removedAnything: Bool { ownEntries > 0 || claims > 0 }
+    }
+
+    /// Forget one station: its own entry, and everything it told us.
+    ///
+    /// Needed because a misattribution cannot be undone by rule. Once a
+    /// station has been credited with another's words, nothing afterwards
+    /// distinguishes the bad claim from a correct one, so the decision is
+    /// the operator's — this is the control, not a repair pass.
+    ///
+    /// Other stations' claims about the same nodes survive: one wrong claim
+    /// about COSCO is not a reason to forget that COSCO exists, or that
+    /// KB5YZB-7 genuinely lists it.
+    @discardableResult
+    mutating func forgetStation(_ callsign: String) -> ForgetTally {
+        let key = callsign.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !key.isEmpty else { return ForgetTally() }
+        var tally = ForgetTally()
+
+        for (alias, var entry) in entries {
+            if entry.tellers.removeValue(forKey: key) != nil {
+                tally.claims += 1
+                entries[alias] = entry
+            }
+        }
+        // Matched on either name: the operator typed a callsign, and an
+        // entry is keyed by alias.
+        for (alias, entry) in entries
+        where alias == key || entry.callsign.uppercased() == key {
+            entries.removeValue(forKey: alias)
+            tally.ownEntries += 1
+        }
+        return tally
+    }
+
     /// Deletes one entry entirely.
     mutating func removeEntry(alias: String) {
         entries.removeValue(forKey: alias.trimmingCharacters(in: .whitespaces).uppercased())
@@ -681,6 +723,17 @@ final class NodeAliasStore: ObservableObject {
     private func save() {
         guard let data = try? JSONEncoder().encode(directory.entries) else { return }
         defaults.set(data, forKey: key)
+    }
+
+    /// Forget one station and everything it told us, and persist that.
+    @discardableResult
+    func forgetStation(_ callsign: String) -> NodeAliasDirectory.ForgetTally {
+        var updated = directory
+        let tally = updated.forgetStation(callsign)
+        guard tally.removedAnything else { return tally }
+        directory = updated
+        save()
+        return tally
     }
 
     /// Forgets entries that offer no route and name nothing this station knows.

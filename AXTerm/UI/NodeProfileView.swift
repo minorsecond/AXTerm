@@ -62,6 +62,17 @@ struct NodeProfileView: View {
     /// are questions, and a tap should answer them. Nil renders plain text.
     var onOpenCallsign: ((String) -> Void)?
 
+    /// Forgets this station: its directory entry and every claim it made
+    /// about other stations. Nil hides the action rather than showing a
+    /// destructive button that does nothing.
+    ///
+    /// Needed because a misattribution cannot be undone by rule — once a
+    /// station has been credited with another's words, nothing afterwards
+    /// tells the bad claim from a good one, so the call is the operator's.
+    var onForgetStation: (() -> Void)?
+
+    @State private var confirmingForget = false
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -103,6 +114,7 @@ struct NodeProfileView: View {
                                         heightUnitIsFeet: $heightUnitIsFeet)
                 }
                 actions
+                forgetSection
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -660,6 +672,35 @@ struct NodeProfileView: View {
         return count == 0
             ? "Nothing heard \(window)."
             : "\(count) frame\(count == 1 ? "" : "s") heard \(window)."
+    }
+
+    /// Destructive, so it sits at the bottom, states exactly what goes, and
+    /// asks first.
+    @ViewBuilder
+    private var forgetSection: some View {
+        if let onForgetStation {
+            VStack(alignment: .leading, spacing: 6) {
+                Button(role: .destructive) {
+                    confirmingForget = true
+                } label: {
+                    Label("Forget This Station\u{2026}", systemImage: "trash")
+                }
+                Text("Removes \(profile.callsign)'s directory entry and every claim it made "
+                     + "about reaching other stations. Those other stations stay — only what "
+                     + "this one said about them goes.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .confirmationDialog("Forget \(profile.callsign)?",
+                                isPresented: $confirmingForget, titleVisibility: .visible) {
+                Button("Forget", role: .destructive) { onForgetStation() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This clears what AXTerm learned about and from this station. "
+                     + "It will be learned again if the station is heard.")
+            }
+        }
     }
 
     private func placementSection(_ placement: NodeProfile.Placement) -> some View {

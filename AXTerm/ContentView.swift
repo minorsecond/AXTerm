@@ -698,7 +698,20 @@ struct ContentView: View {
                         profiles.dismiss()
                         connectFromProfile(profile)
                     },
-                    onOpenCallsign: { profiles.peek($0) })
+                    onOpenCallsign: { profiles.peek($0) },
+                    onForgetStation: {
+                        // Clears the directory entry and every claim this
+                        // station made about reaching others. The operator's
+                        // call: a misattributed claim is indistinguishable
+                        // from a correct one after the fact.
+                        let tally = nodeAliases.forgetStation(profile.callsign)
+                        client.appendSystemNotification(
+                            tally.removedAnything
+                            ? "Forgot \(profile.callsign): \(tally.ownEntries) entry, "
+                              + "\(tally.claims) claim\(tally.claims == 1 ? "" : "s") about other stations."
+                            : "Nothing was stored about \(profile.callsign).")
+                        profiles.dismiss()
+                    })
                     .onPreferenceChange(NodeProfileContentHeightKey.self) { height in
                         guard height > 0 else { return }
                         profileContentHeights[measureKey] = height
