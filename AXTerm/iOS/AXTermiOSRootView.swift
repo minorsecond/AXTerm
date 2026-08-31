@@ -28,6 +28,8 @@ struct AXTermiOSRootView: View {
     /// Learns node aliases (DRLNOD, HORSE) from ID beacons already arriving,
     /// so via-path hops can be placed on the map.
     @StateObject private var nodeAliases = NodeAliasStore()
+    /// Owns the terminal's view model across tab switches.
+    @State private var terminalModels = TerminalModelBox()
     @StateObject private var nodeCapabilities = NodeCapabilityStore()
     /// Locators stations announce in their own beacons; the placement
     /// source for callsigns no directory covers.
@@ -351,6 +353,17 @@ struct AXTermiOSRootView: View {
                 connectCoordinator: connectCoordinator,
                 nodeAliases: nodeAliases,
                 nodeCapabilities: nodeCapabilities,
+                // Same reason as the Mac shell: a tab the operator switches
+                // away from must not take the live session's state with it.
+                txViewModel: terminalModels.model(
+                    sourceCall: settings.myCallsign,
+                    make: {
+                        ObservableTerminalTxViewModel(
+                            client: client,
+                            settings: settings,
+                            sourceCall: settings.myCallsign,
+                            sessionManager: sessionCoordinator.sessionManager)
+                    }),
                 onSessionText: { text, peer in
                     // Same harvest as the Mac shell: aliases, software
                     // fingerprints, and ROUTES rows all arrive because the

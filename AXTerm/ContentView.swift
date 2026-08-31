@@ -25,6 +25,9 @@ struct ContentView: View {
     /// Learns node aliases (DRLNOD, HORSE) from ID beacons already
     /// arriving, so via-path hops can be placed.
     @StateObject private var nodeAliases = NodeAliasStore()
+    /// Owns the terminal's view model, so leaving the Terminal page no
+    /// longer destroys everything it knows about a session that is still up.
+    @State private var terminalModels = TerminalModelBox()
     // Same key the map's layers menu writes — the trickle lookup below
     // follows the operator's layer choice from anywhere in the app.
     @AppStorage("stations.showsDirectoryNodes") private var showsDirectoryNodes = false
@@ -1409,6 +1412,17 @@ struct ContentView: View {
                     connectCoordinator: connectCoordinator,
                     nodeAliases: nodeAliases,
                     nodeCapabilities: nodeCapabilities,
+                    // Held above the view so navigating away cannot reset
+                    // what the UI knows about a live session.
+                    txViewModel: terminalModels.model(
+                        sourceCall: settings.myCallsign,
+                        make: {
+                            ObservableTerminalTxViewModel(
+                                client: client,
+                                settings: settings,
+                                sourceCall: settings.myCallsign,
+                                sessionManager: sessionCoordinator.sessionManager)
+                        }),
                     onSessionText: { text, peer in
                         // A node's `N` names its whole view of the network in
                         // one reply; a BBS listing names a dozen operators'

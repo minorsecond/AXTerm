@@ -1790,7 +1790,11 @@ struct TerminalView: View {
     /// Capability verdicts for the strategy ladder — read for planning,
     /// never observed: a verdict changing mid-plan is next plan's business.
     let nodeCapabilities: NodeCapabilityStore?
-    @StateObject private var txViewModel: ObservableTerminalTxViewModel
+    /// Observed rather than owned. A `@StateObject` here died every time the
+    /// operator navigated away, taking the relay's phase and chain with it
+    /// while the AX.25 session carried on in the coordinator — see
+    /// `TerminalModelBox`.
+    @ObservedObject private var txViewModel: ObservableTerminalTxViewModel
     @StateObject private var connectBarViewModel: ConnectBarViewModel
     @ObservedObject var searchModel: AppToolbarSearchModel
     /// Optional app-wide position source for "insert my position".
@@ -1825,6 +1829,7 @@ struct TerminalView: View {
         connectCoordinator: ConnectCoordinator,
         nodeAliases: NodeAliasStore,
         nodeCapabilities: NodeCapabilityStore? = nil,
+        txViewModel: ObservableTerminalTxViewModel,
         onSessionText: ((String, String) -> Void)? = nil,
         searchModel: AppToolbarSearchModel,
         locationService: StationLocationService? = nil,
@@ -1843,12 +1848,7 @@ struct TerminalView: View {
         self.searchModel = searchModel
         self.locationService = locationService
 
-        _txViewModel = StateObject(wrappedValue: ObservableTerminalTxViewModel(
-            client: client,
-            settings: settings,
-            sourceCall: settings.myCallsign,
-            sessionManager: sessionCoordinator.sessionManager
-        ))
+        _txViewModel = ObservedObject(wrappedValue: txViewModel)
         _connectBarViewModel = StateObject(wrappedValue: ConnectBarViewModel())
     }
 
@@ -4683,12 +4683,18 @@ struct TerminalViewModifiers: ViewModifier {
     let coordinator = SessionCoordinator()
     let connectCoordinator = ConnectCoordinator()
     let searchModel = AppToolbarSearchModel()
+    let client = PacketEngine(settings: settings)
     TerminalView(
-        client: PacketEngine(settings: settings),
+        client: client,
         settings: settings,
         sessionCoordinator: coordinator,
         connectCoordinator: connectCoordinator,
         nodeAliases: NodeAliasStore(),
+        txViewModel: ObservableTerminalTxViewModel(
+            client: client,
+            settings: settings,
+            sourceCall: settings.myCallsign,
+            sessionManager: coordinator.sessionManager),
         searchModel: searchModel
     )
     .frame(width: 800, height: 600)
