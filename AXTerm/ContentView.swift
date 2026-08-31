@@ -70,10 +70,10 @@ struct ContentView: View {
     @State private var profileTerrainHeightAssumed = false
     /// The tiles this path still needs, and what they weigh.
     @State private var profileTerrainEstimate: ElevationStorage.Estimate?
-    /// Non-nil while the operator is being asked about terrain for their
-    /// own area. Set once per grid square, and only when there is
-    /// something to ask about.
-    @State private var homeTerrainOffer: ElevationStorage.Estimate?
+    @State private var profileTerrainAreaEstimate: ElevationStorage.Estimate?
+    /// False when no elevation source covers this path at all, so the card
+    /// says so instead of offering a download that returns a tile of NaN.
+    @State private var profileTerrainHasSource = true
     /// The Mac gets the same identity view the handheld does — a callsign in
     /// the console is the same question there as here.
     @StateObject private var profiles = NodeProfileCoordinator()
@@ -350,23 +350,6 @@ struct ContentView: View {
             bbsService.attach()
             syncServiceAddresses()
             bbsLibrary.rescan()
-        }
-        // Offered once per grid square, never taken silently.
-        .task(id: winlinkContext.settings.gridSquare) { offerHomeTerrain() }
-        .sheet(item: $homeTerrainOffer) { offer in
-            HomeTerrainConsentSheet(
-                estimate: offer,
-                gridSquare: homeGrid,
-                onAccept: {
-                    if let here = homePosition {
-                        elevation.acceptHomeTerrain(around: here)
-                    }
-                    homeTerrainOffer = nil
-                },
-                onDecline: {
-                    elevation.declineHomeTerrain()
-                    homeTerrainOffer = nil
-                })
         }
         // Which addresses this station accepts calls on. Watched as one value
         // rather than five separate modifiers, which the type checker cannot
@@ -747,10 +730,16 @@ struct ContentView: View {
                     terrainHeightIsAssumed: profileTerrainHeightAssumed,
                     terrainEstimate: profileTerrainEstimate,
                     directFrames: directFrameCount(for: profile.callsign),
+                    terrainAreaEstimate: profileTerrainAreaEstimate,
+                    terrainSourceHasCoverage: profileTerrainHasSource,
                     isDownloadingTerrain: elevation.downloadState.isBusy,
                     onDownloadTerrain: {
                         guard let path = terrainPath(to: profile) else { return }
                         elevation.download(alongPathFrom: path.origin, to: path.destination)
+                    },
+                    onDownloadTerrainArea: {
+                        guard let path = terrainPath(to: profile) else { return }
+                        elevation.download(around: path.origin)
                     },
                     presentation: presentation.isPage ? .page : .sheet,
                     onOpenFullPage: presentation.isPage
@@ -1705,24 +1694,6 @@ struct ContentView: View {
     ///
     /// Off the main actor: 256 elevation samples per profile, and the
     /// station sheet opens on a click.
-    private var homeGrid: String { winlinkContext.settings.gridSquare }
-
-    private var homePosition: GreatCircle.Point? {
-        Maidenhead.center(of: homeGrid).map(GreatCircle.Point.init)
-    }
-
-    /// Asks about terrain for this station's own area — once in the life of
-    /// the install. After that the answer stands, and a new grid square is
-    /// acted on rather than asked about again.
-    private func offerHomeTerrain() {
-        guard let here = homePosition else { return }
-        if let offer = elevation.homeTerrainOffer(around: here, gridSquare: homeGrid) {
-            homeTerrainOffer = offer
-        } else {
-            elevation.fetchHomeTerrainIfEnabled(around: here)
-        }
-    }
-
     /// Frames from this station that arrived with nothing repeating them.
     ///
     /// Counted the way `CoverageEstimate` counts: an empty via path means no
@@ -1752,9 +1723,17 @@ struct ContentView: View {
     @MainActor
     private func refreshProfileTerrain(for profile: NodeProfile) async {
         profileTerrain = nil
-        profileTerrainEstimate = terrainPath(to: profile).map {
+        let path = terrainPath(to: profile)
+        profileTerrainEstimate = path.map {
             elevation.estimate(alongPathFrom: $0.origin, to: $0.destination)
         }
+        profileTerrainAreaEstimate = path.map { elevation.estimate(around: $0.origin) }
+        // Both ends, because a path from inside coverage to outside it has
+        // nothing to fetch for half of itself.
+        profileTerrainHasSource = path.map {
+            ElevationDownloader.sourceHasCoverage(at: $0.origin)
+                && ElevationDownloader.sourceHasCoverage(at: $0.destination)
+        } ?? true
         let computed = await terrainProfile(to: profile)
         profileTerrainHeightAssumed = computed?.assumedFarHeight ?? false
         profileTerrain = computed?.profile

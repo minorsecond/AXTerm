@@ -22,8 +22,17 @@ struct TerrainProfileView: View {
     /// Frames from this station that reached here with nothing repeating
     /// them. The one measurement that can contradict this forecast.
     var directFrames: Int = 0
+    /// What the whole area around this station would cost. Offered as the
+    /// quieter second option: someone thinking about terrain is often about
+    /// to go somewhere without a network, and this is where that occurs to
+    /// them.
+    var areaEstimate: ElevationStorage.Estimate?
+    /// False when no elevation source covers this path, so the card says so
+    /// rather than offering a download that would return nothing.
+    var sourceHasCoverage: Bool = true
     var isDownloading: Bool = false
     var onDownload: (() -> Void)?
+    var onDownloadArea: (() -> Void)?
 
     @AppStorage(WinlinkSettings.heightUnitIsFeetKey) private var heightUnitIsFeet = true
 
@@ -140,24 +149,46 @@ struct TerrainProfileView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)
-            if let onDownload, let estimate, estimate.tileCount > 0 {
-                Button {
-                    onDownload()
-                } label: {
-                    if isDownloading {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text("Downloading\u{2026}")
-                        }
-                    } else {
+            if !sourceHasCoverage {
+                // Offering a download here would fetch a tile of NaN and
+                // charge the operator for it.
+                Text("The elevation source covers the United States and its "
+                     + "territories. It has nothing for this path.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+            } else if isDownloading {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Downloading\u{2026}").font(.callout)
+                }
+            } else if let onDownload, let estimate, estimate.tileCount > 0 {
+                VStack(spacing: 4) {
+                    Button {
+                        onDownload()
+                    } label: {
                         Text("Download terrain for this path "
                              + "(\(estimate.tileCount) tile"
                              + "\(estimate.tileCount == 1 ? "" : "s"), \(estimate.sizeDescription))")
                     }
+                    .buttonStyle(.borderedProminent)
+                    .help("Fetches elevation for the ground between these two stations from "
+                          + "the USGS. Kept on this device, and it works offline afterwards.")
+
+                    if let onDownloadArea, let areaEstimate, areaEstimate.tileCount > 0 {
+                        Button("\u{2026}or the whole area around you "
+                               + "(\(areaEstimate.sizeDescription))") {
+                            onDownloadArea()
+                        }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
+                        .help("Every path from here in one go, instead of a couple of tiles "
+                              + "each time you open a station. Worth doing before going "
+                              + "somewhere with no network.")
+                    }
                 }
-                .disabled(isDownloading)
-                .help("Fetches elevation for the ground between these two stations from "
-                      + "the USGS. It is kept on this device and works offline afterwards.")
             }
         }
         .frame(maxWidth: .infinity)

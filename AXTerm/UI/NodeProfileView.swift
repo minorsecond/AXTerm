@@ -58,8 +58,13 @@ struct NodeProfileView: View {
     var terrainEstimate: ElevationStorage.Estimate?
     /// Frames from this station heard with nothing repeating them.
     var directFrames: Int = 0
+    /// What the whole area around this station would cost.
+    var terrainAreaEstimate: ElevationStorage.Estimate?
+    /// False when no elevation source covers this path at all.
+    var terrainSourceHasCoverage: Bool = true
     var isDownloadingTerrain: Bool = false
     var onDownloadTerrain: (() -> Void)?
+    var onDownloadTerrainArea: (() -> Void)?
     /// Mirrors the settings choice so a height typed on a station page reads
     /// back in the same unit everywhere else.
     @AppStorage(WinlinkSettings.heightUnitIsFeetKey) private var heightUnitIsFeet = true
@@ -751,8 +756,11 @@ struct NodeProfileView: View {
                                destinationHeightIsAssumed: terrainHeightIsAssumed,
                                estimate: terrainEstimate,
                                directFrames: directFrames,
+                               areaEstimate: terrainAreaEstimate,
+                               sourceHasCoverage: terrainSourceHasCoverage,
                                isDownloading: isDownloadingTerrain,
-                               onDownload: onDownloadTerrain)
+                               onDownload: onDownloadTerrain,
+                               onDownloadArea: onDownloadTerrainArea)
         }
     }
 
