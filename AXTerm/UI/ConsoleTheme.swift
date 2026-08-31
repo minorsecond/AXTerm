@@ -45,6 +45,11 @@ struct ConsoleTheme {
     
     /// Standard padding for emphasized rows
     static let rowPadding: CGFloat = 4
+    /// Gap between rows in the console list. Named because the timestamp
+    /// run connector has to bridge it: the line is drawn per row, so a row
+    /// that does not reach into the gap leaves a break in what should read as
+    /// one continuous thread.
+    static let rowSpacing: CGFloat = 2
     
     // MARK: - Color Helpers
     

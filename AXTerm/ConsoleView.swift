@@ -415,7 +415,7 @@ struct ConsoleView: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 2) {
+                        LazyVStack(alignment: .leading, spacing: ConsoleTheme.rowSpacing) {
                             if showDaySeparators {
                                 ForEach(dayGroupedLines) { section in
                                     DaySeparatorView(date: section.date)
@@ -943,10 +943,21 @@ struct ConsoleLineView: View {
                 .font(.system(size: fontSize, design: .monospaced))
                 .opacity(timestampRun.printsTimestamp ? 1 : 0)
                 .accessibilityHidden(!timestampRun.printsTimestamp)
-                .overlay(alignment: .trailing) {
-                    TimestampRunConnector(position: timestampRun)
-                }
                 .help(line.timestampString)
+
+            // A sibling of the timestamp rather than an overlay on it, and
+            // stretched past the row on both sides. As an overlay it was only
+            // as tall as the digits, so it drew a stub per row with the row's
+            // padding and the list's spacing showing through — a dotted line
+            // where a continuous one was the whole point. The negative
+            // padding covers this row's own vertical padding and half the
+            // gap to its neighbours, so consecutive rows meet.
+            TimestampRunConnector(position: timestampRun)
+                .frame(maxHeight: .infinity)
+                .padding(.vertical, -(ConsoleTheme.rowPadding + ConsoleTheme.rowSpacing))
+                // Claws back most of the stack's spacing so the thread sits
+                // just off the digits instead of a full gap away from them.
+                .padding(.leading, -4)
 
             // Which transmitter we actually heard. Shown for *any* repeated
             // copy, not just echoes of our own frames: a station's beacon
@@ -1288,22 +1299,28 @@ private struct TimestampRunConnector: View {
                 case .alone:
                     break
                 case .start:
-                    // Leaves the digits alone and descends from below them.
+                    // Clears the digits and runs to the row's edge, where the
+                    // next row's line begins.
                     path.move(to: CGPoint(x: 0, y: middle + 3))
                     path.addLine(to: CGPoint(x: 0, y: height))
                 case .middle:
                     path.move(to: CGPoint(x: 0, y: 0))
                     path.addLine(to: CGPoint(x: 0, y: height))
                 case .end:
+                    // Stops at the centre: the run has to close somewhere, or
+                    // there is no telling one second from the next without
+                    // reading the digits.
                     path.move(to: CGPoint(x: 0, y: 0))
                     path.addLine(to: CGPoint(x: 0, y: middle))
                 }
             }
+            // Butt caps, not round: a round cap adds half a line width at
+            // each end, which on a join between rows is a visible bulge and
+            // at the run's close overshoots the centre it is meant to stop at.
             .stroke(.secondary.opacity(0.3),
-                    style: StrokeStyle(lineWidth: 1, lineCap: .round))
+                    style: StrokeStyle(lineWidth: 1, lineCap: .butt))
         }
         .frame(width: 1)
-        .padding(.trailing, -3)
         .accessibilityHidden(true)
     }
 }
