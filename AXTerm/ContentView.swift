@@ -66,6 +66,8 @@ struct ContentView: View {
     /// The ground between here and the station whose page is open. Computed
     /// off the render pass: a profile is 256 elevation samples.
     @State private var profileTerrain: TerrainProfile?
+    /// Whether that profile used the assumed far-antenna height.
+    @State private var profileTerrainHeightAssumed = false
     /// The Mac gets the same identity view the handheld does — a callsign in
     /// the console is the same question there as here.
     @StateObject private var profiles = NodeProfileCoordinator()
@@ -719,6 +721,7 @@ struct ContentView: View {
                     isLookingUp: lookingUpCallsign == presentation.callsign,
                     noteStore: client.stationNotes,
                     terrain: profileTerrain,
+                    terrainHeightIsAssumed: profileTerrainHeightAssumed,
                     presentation: presentation.isPage ? .page : .sheet,
                     onOpenFullPage: presentation.isPage
                         ? nil : { profiles.promoteSheetToPage() },
@@ -746,7 +749,9 @@ struct ContentView: View {
                     }
                     .task(id: presentation.callsign) {
                         profileTerrain = nil
-                        profileTerrain = await terrainProfile(to: profile)
+                        let computed = await terrainProfile(to: profile)
+                        profileTerrainHeightAssumed = computed?.assumedFarHeight ?? false
+                        profileTerrain = computed?.profile
                     }
                     .task(id: presentation.callsign) {
                         guard winlinkContext.settings.callsignLookupEnabled else { return }
@@ -1666,7 +1671,9 @@ struct ContentView: View {
     ///
     /// Off the main actor: 256 elevation samples per profile, and the
     /// station sheet opens on a click.
-    private func terrainProfile(to profile: NodeProfile) async -> TerrainProfile? {
+    private func terrainProfile(
+        to profile: NodeProfile
+    ) async -> (profile: TerrainProfile, assumedFarHeight: Bool)? {
         guard elevation.hasTerrain, let store = elevation.store,
               let placement = profile.placement,
               let observer = Maidenhead.center(of: winlinkContext.settings.gridSquare)
@@ -1682,13 +1689,14 @@ struct ContentView: View {
         let theirs = noted ?? winlinkContext.settings.assumedRemoteHeightMetres
         let destination = placement.position
 
-        return await Task.detached(priority: .userInitiated) {
+        let computed = await Task.detached(priority: .userInitiated) {
             TerrainProfile.between(
                 origin: observer, destination: destination,
                 originHeight: mine, destinationHeight: theirs,
                 frequencyHz: StationsMapView.vhfCalculationFrequency,
                 sampler: StoredElevationSampler(store: store))
         }.value
+        return (computed, noted == nil)
     }
 
     /// Imports a spatial attachment onto the map and switches to it.

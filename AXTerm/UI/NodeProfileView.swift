@@ -51,6 +51,9 @@ struct NodeProfileView: View {
     /// which this view has — and nil hides the section rather than showing an
     /// empty chart.
     var terrain: TerrainProfile?
+    /// True when the far antenna height is the global assumption rather than
+    /// one recorded for this station.
+    var terrainHeightIsAssumed: Bool = false
     /// Mirrors the settings choice so a height typed on a station page reads
     /// back in the same unit everywhere else.
     @AppStorage(WinlinkSettings.heightUnitIsFeetKey) private var heightUnitIsFeet = true
@@ -468,7 +471,12 @@ struct NodeProfileView: View {
             items.append((110 + chart, AnyView(activitySection(activity))))
         }
         if let placement = profile.placement {
-            items.append((160, AnyView(placementSection(placement))))
+            // A 150pt map, grid and coordinate rows, and two or three lines
+            // saying what the coordinate is worth. The old estimate of 160
+            // counted the map alone, so this card was dealt as the shortest
+            // on the page while rendering as one of the tallest — and every
+            // column it was not in ended a card early.
+            items.append((330, AnyView(placementSection(placement))))
         }
         if let terrain {
             // Header, chart and legend. The chart carries a minHeight of its
@@ -550,8 +558,15 @@ struct NodeProfileView: View {
     private var statTiles: some View {
         let tiles = tileData
         if tiles.count >= 2 {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 8)],
-                      spacing: 8) {
+            // Equal shares of the width, not `.adaptive(minimum:)`. Adaptive
+            // fills the row with as many 100pt slots as fit and then leaves
+            // the unused ones empty, so three tiles on a wide window sat in
+            // the leftmost third under a band of nothing. There are at most
+            // three of these.
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible(), spacing: 8),
+                               count: tiles.count),
+                spacing: 8) {
                 ForEach(tiles) { statTile($0) }
             }
         }
@@ -726,7 +741,8 @@ struct NodeProfileView: View {
         section("Terrain", systemImage: "mountain.2") {
             TerrainProfileView(profile: terrain,
                                originLabel: localCallsign.isEmpty ? "Here" : localCallsign,
-                               destinationLabel: profile.callsign)
+                               destinationLabel: profile.callsign,
+                               destinationHeightIsAssumed: terrainHeightIsAssumed)
         }
     }
 

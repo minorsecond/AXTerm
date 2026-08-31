@@ -10,6 +10,13 @@ struct TerrainProfileView: View {
     let profile: TerrainProfile
     let originLabel: String
     let destinationLabel: String
+    /// True when the far antenna height is the global assumption rather than
+    /// something recorded for this station. Said out loud, because it is the
+    /// number the verdict is most sensitive to and the one most likely to be
+    /// wrong — a node on a tower reads as blocked at a default of 6 m.
+    var destinationHeightIsAssumed: Bool = false
+
+    @AppStorage(WinlinkSettings.heightUnitIsFeetKey) private var heightUnitIsFeet = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -24,6 +31,7 @@ struct TerrainProfileView: View {
             } else {
                 chart
                     .frame(minHeight: 180)
+                endpoints
                 legend
             }
         }
@@ -129,6 +137,27 @@ struct TerrainProfileView: View {
             }
             context.stroke(line, with: .color(tint), lineWidth: 1.5)
 
+            // The two antennas, drawn as masts standing on their own ground.
+            // Without them the line of sight begins and ends in mid-air, and
+            // the picture says nothing about which end is which or how much
+            // of the clearance is mast rather than hill.
+            if let first = profile.samples.first, let last = profile.samples.last {
+                for (sample, atOrigin) in [(first, true), (last, false)] {
+                    // Half a point in from the edge, or a 1.5pt stroke centred
+                    // on the boundary loses half its width to the clip.
+                    let px = atOrigin ? 1.0 : size.width - 1.0
+                    var mast = Path()
+                    mast.move(to: CGPoint(x: px, y: y(sample.effectiveElevation)))
+                    mast.addLine(to: CGPoint(x: px, y: y(sample.lineHeight)))
+                    context.stroke(mast, with: .color(.primary.opacity(0.5)),
+                                   style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                    let top = CGPoint(x: px, y: y(sample.lineHeight))
+                    context.fill(
+                        Path(ellipseIn: CGRect(x: top.x - 3, y: top.y - 3, width: 6, height: 6)),
+                        with: .color(.primary.opacity(0.65)))
+                }
+            }
+
             // The worst point, marked — where to look, and where a relay
             // would have to go.
             if let worst = worstSample() {
@@ -140,6 +169,46 @@ struct TerrainProfileView: View {
         }
         .background(Color(platform: .platformCardBackground),
                     in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    /// Which end is which, and how high each antenna is standing.
+    ///
+    /// Under the chart rather than inside it: two callsigns drawn into a
+    /// 180pt canvas either overlap the terrain or push the useful area down,
+    /// and the ends of the x axis are unambiguous without a leader line.
+    private var endpoints: some View {
+        HStack(alignment: .top, spacing: 8) {
+            endpoint(originLabel, height: profile.originHeight,
+                     assumed: false, alignment: .leading)
+            Spacer(minLength: 8)
+            endpoint(destinationLabel, height: profile.destinationHeight,
+                     assumed: destinationHeightIsAssumed, alignment: .trailing)
+        }
+    }
+
+    private func endpoint(_ callsign: String, height: Double,
+                          assumed: Bool,
+                          alignment: HorizontalAlignment) -> some View {
+        VStack(alignment: alignment, spacing: 1) {
+            Text(callsign)
+                .font(.caption.weight(.medium))
+            Text(assumed ? "\(describe(height)) assumed" : describe(height))
+                .font(.caption2)
+                .foregroundStyle(assumed ? .orange : .secondary)
+        }
+        .help(assumed
+              ? "No antenna height recorded for \(callsign), so the forecast uses the "
+                + "assumed height from Settings. This is the number the verdict is most "
+                + "sensitive to \u{2014} a node on a tower reads as blocked at a default "
+                + "height. Record one on this page to sharpen it."
+              : "Antenna height above ground for \(callsign).")
+    }
+
+    /// A height in whichever unit the operator entered theirs in.
+    private func describe(_ metres: Double) -> String {
+        heightUnitIsFeet
+            ? String(format: "%.0f ft", metres / 0.3048)
+            : String(format: "%.0f m", metres)
     }
 
     /// Vertical range, padded so the line and its envelope are not clipped.
