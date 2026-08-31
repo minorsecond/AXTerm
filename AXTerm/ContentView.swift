@@ -183,6 +183,7 @@ struct ContentView: View {
     @StateObject private var bbsService: BBSService
     @StateObject private var bbsLibrary: BBSFileLibrary
     @State private var filters = PacketFilters()
+    @State private var showingPacketFilters = false
 
     @State private var selection = Set<Packet.ID>()
     /// Surfaced when turning a map layer into a Winlink draft fails.
@@ -1580,7 +1581,8 @@ struct ContentView: View {
     private var packetsView: some View {
         let rows = filteredPackets
 
-        return PacketTableView(
+        return VStack(spacing: 0) {
+        PacketTableView(
             packets: rows,
             selection: $selection,
             onInspectSelection: {
@@ -1604,6 +1606,41 @@ struct ContentView: View {
         .onChange(of: filters) { _, _ in scheduleSelectionSync(with: rows) }
         .onChange(of: client.selectedStationCall) { _, _ in scheduleSelectionSync(with: rows) }
         .onChange(of: client.packets) { _, _ in scheduleSelectionSync(with: rows) }
+
+            packetStatusBar(shown: rows.count)
+        }
+    }
+
+    /// What the table is and is not showing.
+    ///
+    /// Always present, not only while filtering. This is the one page in the
+    /// app that is not an inference — every other view derives its claims
+    /// from these frames — so "I looked at the packets and it wasn't there"
+    /// has to be trustworthy, and that means the page states its own scope
+    /// rather than letting the operator assume it.
+    @ViewBuilder
+    private func packetStatusBar(shown: Int) -> some View {
+        let total = client.visiblePacketCount
+        let station = client.selectedStationCall
+        HStack(spacing: 8) {
+            Text(filters.statusLine(shown: shown, total: total, station: station))
+                .font(.caption)
+                .foregroundStyle(shown == 0 && total > 0 ? .orange : .secondary)
+            Spacer()
+            if !filters.isDefault || station != nil {
+                Button("Show Everything") {
+                    filters = PacketFilters()
+                    client.selectedStationCall = nil
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+                .help("Clear the frame filters and the station filter.")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
     }
 
     /// Imports a spatial attachment onto the map and switches to it.
@@ -1696,6 +1733,22 @@ struct ContentView: View {
                 )
             }
             if selectedNav == .packets {
+                Button {
+                    showingPacketFilters = true
+                } label: {
+                    Image(systemName: filters.isDefault
+                          ? "line.3.horizontal.decrease.circle"
+                          : "line.3.horizontal.decrease.circle.fill")
+                }
+                .help(filters.restrictionSummary.map { "Filtering: \($0)" }
+                      ?? "Filter which frames the table shows.")
+                .popover(isPresented: $showingPacketFilters, arrowEdge: .bottom) {
+                    FilterPopoverView(
+                        filters: $filters,
+                        hasPackets: !client.packets.isEmpty,
+                        hasPinnedPackets: !client.pinnedPacketIDs.isEmpty,
+                        onReset: { filters = PacketFilters() })
+                }
                 if client.packetsClearedAt != nil {
                     Button {
                         client.restorePackets()

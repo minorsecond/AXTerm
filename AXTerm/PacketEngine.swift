@@ -1370,6 +1370,13 @@ final class PacketEngine: ObservableObject {
 
     // MARK: - Filtering
 
+    /// How many frames the table could show at most — everything received
+    /// since the last Clear. The denominator in "1,204 of 24,353".
+    var visiblePacketCount: Int {
+        guard let clearedAt = packetsClearedAt else { return packets.count }
+        return packets.reduce(into: 0) { $0 += $1.timestamp < clearedAt ? 0 : 1 }
+    }
+
     func filteredPackets(search: String, filters: PacketFilters, stationCall: String?) -> [Packet] {
         let visiblePackets = packets.filter { packet in
             if let clearedAt = packetsClearedAt, packet.timestamp < clearedAt {
