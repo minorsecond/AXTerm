@@ -10,6 +10,7 @@ final class WinlinkReadinessTests: XCTestCase {
         WinlinkReadiness.Inputs(
             callsign: "K0EPI-7",
             hasPassword: true,
+            passwordVerifiedAt: now.addingTimeInterval(-86_400),
             gatewayCount: 2,
             gridSquare: "DM79po",
             hasPositionFix: false,
@@ -34,6 +35,18 @@ final class WinlinkReadinessTests: XCTestCase {
         XCTAssertEqual(readiness.overall, .ready)
         XCTAssertTrue(readiness.blockers.isEmpty)
         XCTAssertTrue(readiness.warnings.isEmpty, "\(readiness.warnings.map(\.title))")
+    }
+
+    /// Stored is not the same as right: an unchecked password looks
+    /// identical to a correct one until a session is refused mid-net.
+    func testAStoredButUnverifiedPasswordIsAWarning() throws {
+        var input = goodInputs()
+        input.passwordVerifiedAt = nil
+        let readiness = WinlinkReadiness.evaluate(input)
+        let password = try check(readiness, "password")
+        XCTAssertEqual(password.status, .warning)
+        XCTAssertEqual(password.detail, "Saved, but never checked against Winlink")
+        XCTAssertNotNil(password.remedy)
     }
 
     /// A station is only as ready as its weakest check.

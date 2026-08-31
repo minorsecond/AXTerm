@@ -8,17 +8,34 @@ final class WinlinkCMSClientTests: XCTestCase {
         nonisolated(unsafe) static var lastRequestURL: URL?
         nonisolated(unsafe) static var responseData = Data()
         nonisolated(unsafe) static var responseStatus = 200
+        /// Path -> body, for the calls that make more than one request.
+        nonisolated(unsafe) static var responsesByPath: [String: Data] = [:]
+        nonisolated(unsafe) static var requests: [(method: String, path: String, body: Data)] = []
 
         override class func canInit(with request: URLRequest) -> Bool { true }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
         override func startLoading() {
             Self.lastRequestURL = request.url
+            // URLProtocol hands a POST body over as a stream.
+            var body = request.httpBody ?? Data()
+            if body.isEmpty, let stream = request.httpBodyStream {
+                stream.open()
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let read = stream.read(&buffer, maxLength: buffer.count)
+                    if read <= 0 { break }
+                    body.append(contentsOf: buffer[0..<read])
+                }
+                stream.close()
+            }
+            Self.requests.append((request.httpMethod ?? "GET", request.url?.path ?? "", body))
             let response = HTTPURLResponse(
                 url: request.url!, statusCode: Self.responseStatus,
                 httpVersion: "HTTP/1.1", headerFields: nil)!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: Self.responseData)
+            let path = request.url?.path ?? ""
+            client?.urlProtocol(self, didLoad: Self.responsesByPath[path] ?? Self.responseData)
             client?.urlProtocolDidFinishLoading(self)
         }
 
@@ -39,6 +56,105 @@ final class WinlinkCMSClientTests: XCTestCase {
         StubURLProtocol.lastRequestURL = nil
         StubURLProtocol.responseData = Data()
         StubURLProtocol.responseStatus = 200
+        StubURLProtocol.responsesByPath = [:]
+        StubURLProtocol.requests = []
+    }
+
+    // MARK: - Password validation
+
+    func testValidPasswordIsAccepted() async throws {
+        StubURLProtocol.responseData = Data(#"{"IsValid":true,"ResponseStatus":{}}"#.utf8)
+        let verdict = try await makeClient().validatePassword(callsign: "K0EPI-7", password: "SECRET99")
+        XCTAssertEqual(verdict, .accepted)
+    }
+
+    /// The password must ride in the body. A query string is logged by
+    /// every proxy and server on the way.
+    func testPasswordIsPostedInTheBodyNotTheURL() async throws {
+        StubURLProtocol.responseData = Data(#"{"IsValid":true}"#.utf8)
+        _ = try await makeClient().validatePassword(callsign: "K0EPI-7", password: "SECRET99")
+
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.method, "POST")
+        XCTAssertEqual(request.path, "/account/password/validate")
+        let url = try XCTUnwrap(StubURLProtocol.lastRequestURL?.absoluteString)
+        XCTAssertFalse(url.contains("SECRET99"), url)
+        XCTAssertTrue(url.contains("Key=TESTKEY123"), url)
+        XCTAssertTrue(String(decoding: request.body, as: UTF8.self).contains("SECRET99"))
+    }
+
+    /// Winlink accounts belong to the base call; the SSID we connect with
+    /// is not part of the account.
+    func testSSIDIsStrippedBeforeAsking() async throws {
+        StubURLProtocol.responseData = Data(#"{"IsValid":true}"#.utf8)
+        _ = try await makeClient().validatePassword(callsign: "k0epi-7", password: "x")
+
+        let body = String(decoding: try XCTUnwrap(StubURLProtocol.requests.first).body, as: UTF8.self)
+        XCTAssertTrue(body.contains("\"Callsign\":\"K0EPI\""), body)
+    }
+
+    /// The CMS answers a wrong password and a missing account identically;
+    /// the client asks the follow-up so the operator knows which to fix.
+    func testWrongPasswordOnAnExistingAccountIsRejected() async throws {
+        StubURLProtocol.responsesByPath = [
+            "/account/password/validate": Data(#"{"IsValid":false,"ResponseStatus":{}}"#.utf8),
+            "/account/exists": Data(#"{"CallsignExists":true,"Blocked":false}"#.utf8),
+        ]
+        let verdict = try await makeClient().validatePassword(callsign: "K0EPI", password: "WRONG")
+        XCTAssertEqual(verdict, .rejected)
+        XCTAssertEqual(StubURLProtocol.requests.count, 2)
+    }
+
+    func testUnknownAccountIsDistinguishedFromAWrongPassword() async throws {
+        StubURLProtocol.responsesByPath = [
+            "/account/password/validate": Data(#"{"IsValid":false}"#.utf8),
+            "/account/exists": Data(#"{"CallsignExists":false,"Blocked":false}"#.utf8),
+        ]
+        let verdict = try await makeClient().validatePassword(callsign: "N0CALL", password: "x")
+        XCTAssertEqual(verdict, .noSuchAccount)
+    }
+
+    func testBlockedAccountIsReportedAsBlocked() async throws {
+        StubURLProtocol.responsesByPath = [
+            "/account/password/validate": Data(#"{"IsValid":false}"#.utf8),
+            "/account/exists": Data(#"{"CallsignExists":true,"Blocked":true}"#.utf8),
+        ]
+        let verdict = try await makeClient().validatePassword(callsign: "K0EPI", password: "x")
+        XCTAssertEqual(verdict, .accountBlocked)
+    }
+
+    /// A 400 must not be read as "the password is wrong" — that would put
+    /// a red cross next to a perfectly good password.
+    func testServiceErrorThrowsRatherThanRejecting() async {
+        StubURLProtocol.responseStatus = 400
+        StubURLProtocol.responseData = Data(#"""
+        {"IsValid":false,"ResponseStatus":{"ErrorCode":"InvalidAccessKey","Message":"Invalid access key for this operation"}}
+        """#.utf8)
+        do {
+            _ = try await makeClient().validatePassword(callsign: "K0EPI", password: "x")
+            XCTFail("expected a service error")
+        } catch let WinlinkCMSError.serviceError(message) {
+            XCTAssertTrue(message.contains("Invalid access key"), message)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    /// Error text goes to logs; neither credential may ride along.
+    func testCredentialsAreScrubbedFromServiceErrors() async {
+        StubURLProtocol.responseStatus = 400
+        StubURLProtocol.responseData = Data(#"""
+        {"ResponseStatus":{"ErrorCode":"Bad","Message":"key TESTKEY123 and password SECRET99 refused"}}
+        """#.utf8)
+        do {
+            _ = try await makeClient().validatePassword(callsign: "K0EPI", password: "SECRET99")
+            XCTFail("expected a service error")
+        } catch let WinlinkCMSError.serviceError(message) {
+            XCTAssertFalse(message.contains("TESTKEY123"), message)
+            XCTAssertFalse(message.contains("SECRET99"), message)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
     }
 
     // MARK: - Gateway proximity

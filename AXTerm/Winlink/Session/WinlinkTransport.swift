@@ -66,4 +66,18 @@ nonisolated enum WinlinkExchangeFailureClass {
         ]
         return gatewayMarkers.contains(where: { lowered.contains($0) })
     }
+
+    /// True when the CMS rejected the `;PR:` response itself — "Secure
+    /// login failed - account password does not match".
+    ///
+    /// That is the account answering, not the link: the stored password is
+    /// not the one on the account, and no gateway will take it. Settings
+    /// must stop showing it as verified.
+    static func isSecureLoginRefusal(_ reason: String) -> Bool {
+        let lowered = reason.lowercased()
+        guard lowered.contains("password") else { return false }
+        return lowered.contains("secure login failed")
+            || lowered.contains("does not match")
+            || lowered.contains("invalid password")
+    }
 }

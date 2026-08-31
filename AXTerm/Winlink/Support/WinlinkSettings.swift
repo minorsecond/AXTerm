@@ -27,6 +27,7 @@ final class WinlinkSettings: ObservableObject {
     static let clientProductKey = "winlinkClientProduct"
     static let gatewayLadderKey = "winlinkGatewayLadder"
     static let mailboxSyncEnabledKey = "winlinkMailboxSyncEnabled"
+    static let passwordVerifiedAtKey = "winlinkPasswordVerifiedAt"
 
     static let defaultMaxDistanceMiles = 100
     static let defaultHistoryHours = 24
@@ -259,26 +260,72 @@ final class WinlinkSettings: ObservableObject {
 
     private let keychain: KeychainStore
 
-    /// Saves the password and verifies it by reading it back — the only
-    /// way to catch a Keychain that accepts the write but denies reads
-    /// (seen after rebuilds when the code signature changes).
+    /// Stores the password and confirms the Keychain will give it back —
+    /// the only way to catch a Keychain that accepts the write but denies
+    /// reads (seen after rebuilds when the code signature changes).
+    ///
+    /// Surrounding whitespace is stripped first. A pasted password that
+    /// carried a trailing space still logs into winlink.org, which trims,
+    /// but the `;PR:` hash is over the exact bytes and the CMS would refuse
+    /// the session with nothing to see in the settings box.
+    ///
+    /// This says nothing about whether Winlink accepts the password — that
+    /// is `WinlinkCMSClient.validatePassword`, recorded by
+    /// ``markPasswordVerified()``.
     @discardableResult
-    func savePasswordVerified(_ value: String) -> Bool {
-        password = value
-        return password == value
+    func storePassword(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        password = trimmed
+        return password == trimmed
     }
 
     /// Winlink account password (used for `;PR:` secure login).
+    ///
+    /// Any write drops the CMS verification: the new string has not been
+    /// checked, and carrying the old verdict forward is how a green tick
+    /// ends up next to a password the CMS refuses.
     var password: String {
         get { keychain.string(account: Self.passwordAccount) ?? "" }
         set {
             objectWillChange.send()
+            if newValue == keychain.string(account: Self.passwordAccount) { return }
+            passwordVerifiedAt = nil
             if newValue.isEmpty {
                 keychain.remove(account: Self.passwordAccount)
             } else {
                 keychain.setString(newValue, account: Self.passwordAccount)
             }
         }
+    }
+
+    /// When the CMS last confirmed the stored password belongs to the
+    /// account. Nil means unverified — never checked, changed since, or
+    /// refused on the air.
+    ///
+    /// The date is kept, not the password or a hash of it: an offline
+    /// guess against a hash of an eight-character password is no work at
+    /// all, and a timestamp in preferences gives an attacker nothing.
+    private(set) var passwordVerifiedAt: Date? {
+        get { defaults.object(forKey: Self.passwordVerifiedAtKey) as? Date }
+        set {
+            objectWillChange.send()
+            if let newValue {
+                defaults.set(newValue, forKey: Self.passwordVerifiedAtKey)
+            } else {
+                defaults.removeObject(forKey: Self.passwordVerifiedAtKey)
+            }
+        }
+    }
+
+    /// The CMS accepted the stored password.
+    func markPasswordVerified(at date: Date = Date()) {
+        passwordVerifiedAt = date
+    }
+
+    /// The CMS refused the stored password — including on the air, where a
+    /// `;PR:` mismatch is the same news arriving by a different route.
+    func markPasswordUnverified() {
+        passwordVerifiedAt = nil
     }
 
     /// CMS web-services access key. Empty means "use the built-in default".

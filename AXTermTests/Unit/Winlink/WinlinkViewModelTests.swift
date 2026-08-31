@@ -179,6 +179,11 @@ final class WinlinkViewModelTests: XCTestCase {
             if let error { throw error }
             return catalog
         }
+
+        func validatePassword(callsign: String, password: String) async throws -> WinlinkPasswordVerdict {
+            if let error { throw error }
+            return .accepted
+        }
     }
 
     private func makeStation(callsign: String, distance: Double) -> WinlinkRMSStationRecord {
@@ -544,6 +549,18 @@ final class WinlinkGatewayLadderTests: XCTestCase {
         XCTAssertFalse(WinlinkExchangeFailureClass.isWorthTryingNextGateway("invalid password"))
         XCTAssertFalse(WinlinkExchangeFailureClass.isWorthTryingNextGateway("an exchange is already running"))
     }
+
+    /// The live CMS wording, verbatim from a refused session.
+    func testSecureLoginRefusalIsRecognised() {
+        XCTAssertTrue(WinlinkExchangeFailureClass.isSecureLoginRefusal(
+            "the CMS refused the connection: [1] Secure login failed - account password does not match. - Disconnecting (74.81.169.201)"))
+        XCTAssertTrue(WinlinkExchangeFailureClass.isSecureLoginRefusal("invalid password"))
+
+        // A link that died is not the account saying no.
+        XCTAssertFalse(WinlinkExchangeFailureClass.isSecureLoginRefusal("link disconnected mid-session"))
+        XCTAssertFalse(WinlinkExchangeFailureClass.isSecureLoginRefusal(
+            "the CMS refused the connection: Unknown client types are not allowed"))
+    }
 }
 
 @MainActor
@@ -554,15 +571,56 @@ final class WinlinkCredentialPersistenceTests: XCTestCase {
         let keychain = KeychainStore(service: "test-\(UUID().uuidString)")
         let settings = WinlinkSettings(defaults: defaults, keychain: keychain)
 
-        XCTAssertTrue(settings.savePasswordVerified("FIRSTPASS"))
+        XCTAssertTrue(settings.storePassword("FIRSTPASS"))
         XCTAssertEqual(settings.password, "FIRSTPASS")
 
         // Overwrite must survive the update-or-recreate path.
-        XCTAssertTrue(settings.savePasswordVerified("SECONDPASS"))
+        XCTAssertTrue(settings.storePassword("SECONDPASS"))
         XCTAssertEqual(settings.password, "SECONDPASS")
 
         settings.password = ""
         XCTAssertEqual(settings.password, "")
+
+        keychain.remove(account: WinlinkSettings.passwordAccount)
+    }
+
+    /// A pasted password often carries a trailing space or newline.
+    /// winlink.org trims and logs you in; the `;PR:` hash is over the exact
+    /// bytes, so the CMS refuses the session and the settings box looks fine.
+    func testStoredPasswordIsTrimmed() async {
+        let defaults = UserDefaults(suiteName: "cred-\(UUID().uuidString)")!
+        let keychain = KeychainStore(service: "test-\(UUID().uuidString)")
+        let settings = WinlinkSettings(defaults: defaults, keychain: keychain)
+
+        XCTAssertTrue(settings.storePassword("  SECRET99\n"))
+        XCTAssertEqual(settings.password, "SECRET99")
+
+        keychain.remove(account: WinlinkSettings.passwordAccount)
+    }
+
+    /// The old green tick meant "the Keychain gave it back", which is true
+    /// of any typo. Verification is now a CMS answer, and it must not
+    /// outlive the password it was about.
+    func testVerificationIsClearedWhenThePasswordChanges() async {
+        let defaults = UserDefaults(suiteName: "cred-\(UUID().uuidString)")!
+        let keychain = KeychainStore(service: "test-\(UUID().uuidString)")
+        let settings = WinlinkSettings(defaults: defaults, keychain: keychain)
+
+        settings.storePassword("FIRSTPASS")
+        settings.markPasswordVerified(at: Date(timeIntervalSince1970: 1_000_000))
+        XCTAssertNotNil(settings.passwordVerifiedAt)
+
+        // Storing the same string again is not a change.
+        settings.storePassword("FIRSTPASS")
+        XCTAssertNotNil(settings.passwordVerifiedAt)
+
+        settings.storePassword("SECONDPASS")
+        XCTAssertNil(settings.passwordVerifiedAt, "a new password inherits no verdict")
+
+        // A `;PR:` refusal on the air is the same news by another route.
+        settings.markPasswordVerified()
+        settings.markPasswordUnverified()
+        XCTAssertNil(settings.passwordVerifiedAt)
 
         keychain.remove(account: WinlinkSettings.passwordAccount)
     }

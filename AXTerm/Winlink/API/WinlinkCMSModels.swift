@@ -3,7 +3,8 @@ import Foundation
 /// DTOs for the Winlink CMS web services (api.winlink.org, JSON).
 ///
 /// Note: the community access key (Pat's) is only authorized for
-/// `/gateway/status.json` — the proximity and catalog operations return
+/// `/gateway/status.json`, `/account/password/validate` and
+/// `/account/exists` — the proximity and catalog operations return
 /// `InvalidAccessKey` (HTTP 400). Distance/bearing are therefore computed
 /// locally from each gateway's latitude/longitude.
 
@@ -53,6 +54,26 @@ nonisolated struct CMSInquiry: Codable, Sendable {
     var SizeEstimate: Int?
     var Enabled: Bool?
     var DownloadCount: Int?
+}
+
+nonisolated struct CMSPasswordValidateRequest: Codable, Sendable {
+    var Callsign: String
+    var Password: String
+}
+
+nonisolated struct CMSPasswordValidateResponse: Codable, Sendable {
+    var IsValid: Bool?
+    var ResponseStatus: CMSResponseStatus?
+}
+
+nonisolated struct CMSAccountExistsRequest: Codable, Sendable {
+    var Callsign: String
+}
+
+nonisolated struct CMSAccountExistsResponse: Codable, Sendable {
+    var CallsignExists: Bool?
+    var Blocked: Bool?
+    var ResponseStatus: CMSResponseStatus?
 }
 
 nonisolated struct CMSResponseStatus: Codable, Sendable {

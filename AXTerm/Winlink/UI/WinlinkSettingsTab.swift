@@ -6,7 +6,8 @@ struct WinlinkSettingsTab: View {
 
     @ObservedObject var settings: WinlinkSettings
     @ObservedObject var profile: StationProfile
-    /// Used only to show what an empty listen callsign resolves to.
+    /// Shows what an empty listen callsign resolves to, and names the
+    /// account the password is verified against.
     var stationCallsign: String = ""
 
     @State private var passwordDraft = ""
@@ -15,7 +16,25 @@ struct WinlinkSettingsTab: View {
     @State private var isVerifyingKey = false
     @State private var keyVerification: (ok: Bool, message: String)?
     @State private var newLadderCallsign = ""
-    @State private var passwordSaveOK: Bool?
+    @State private var passwordStatus: PasswordStatus = .idle
+    @State private var isVerifyingPassword = false
+    @FocusState private var passwordFieldFocused: Bool
+
+    /// What is known about the password in the box — kept apart from
+    /// what is known about the password on the account.
+    ///
+    /// The old UI collapsed the two: it wrote the Keychain on every
+    /// keystroke and showed a green tick for a successful read-back, so a
+    /// half-typed password looked verified. Only the CMS can produce
+    /// `.verified`.
+    private enum PasswordStatus: Equatable {
+        case idle
+        case stored
+        case storeFailed
+        case verified(Date)
+        case refused(String)
+        case unknown(String)
+    }
 
     /// Optional so the tab still previews and builds without a location
     /// service wired in.
@@ -195,26 +214,42 @@ struct WinlinkSettingsTab: View {
 
             Section {
                 HStack {
+                    // Committed on Return or when the field loses focus,
+                    // never per keystroke: the Keychain must hold the
+                    // account password, not whatever half of it has been
+                    // typed so far.
                     SecureField("Winlink password", text: $passwordDraft)
-                        .onChange(of: passwordDraft) { newValue in
-                            guard didLoadSecrets else { return }
-                            passwordSaveOK = newValue.isEmpty
-                                ? nil
-                                : settings.savePasswordVerified(newValue)
+                        .focused($passwordFieldFocused)
+                        .onSubmit { commitPassword() }
+                        .onChange(of: passwordFieldFocused) { focused in
+                            if !focused { commitPassword() }
                         }
                         .help(WinlinkCopy.passwordTooltip)
-                    if let ok = passwordSaveOK {
-                        Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                            .foregroundStyle(ok ? .green : .red)
-                            .help(ok
-                                  ? "Saved to the Keychain and verified readable."
-                                  : "The Keychain refused to store or return the password — see below.")
+
+                    if let icon = passwordStatusIcon {
+                        Image(systemName: icon.symbol)
+                            .foregroundStyle(icon.tint)
+                            .help(icon.help)
                     }
+
+                    Button {
+                        verifyPassword()
+                    } label: {
+                        if isVerifyingPassword {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text("Verify")
+                        }
+                    }
+                    .disabled(isVerifyingPassword
+                              || passwordDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .help("Asks the CMS whether this is the password on the account — the same question the ;PR: handshake asks on the air, answered here in a sentence instead of a disconnect.")
                 }
-                if passwordSaveOK == false {
-                    Text("The password could not be saved to the Keychain (or was saved but can't be read back). This usually happens with development builds after re-signing. Try: quit and relaunch AXTerm, then re-enter it. If it persists, delete the old entry in Keychain Access (search “com.axterm.winlink”) and enter the password again.")
+
+                if let note = passwordStatusNote {
+                    Text(note.text)
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(note.tint)
                 }
 
                 HStack {
@@ -343,6 +378,7 @@ struct WinlinkSettingsTab: View {
             passwordDraft = settings.password
             apiKeyDraft = settings.apiKeyOverride
             didLoadSecrets = true
+            passwordStatus = initialPasswordStatus()
         }
     }
 
@@ -356,6 +392,144 @@ struct WinlinkSettingsTab: View {
     /// Distance to a ladder rung, when the gateway cache knows it.
     private func ladderDistanceMiles(_ entry: WinlinkSettings.GatewayLadderEntry) -> Double? {
         stationDistanceMiles(entry.callsign, entry.frequencyHz)
+    }
+
+    // MARK: - Password
+
+    /// The state to show when the pane opens: whatever the CMS last said
+    /// about the password that is actually stored.
+    private func initialPasswordStatus() -> PasswordStatus {
+        guard !settings.password.isEmpty else { return .idle }
+        if let verifiedAt = settings.passwordVerifiedAt { return .verified(verifiedAt) }
+        return .stored
+    }
+
+    /// Writes the field to the Keychain. Called on Return and on focus
+    /// loss, so a password is stored once, whole — an abandoned edit
+    /// leaves the working password alone.
+    private func commitPassword() {
+        guard didLoadSecrets else { return }
+        let trimmed = passwordDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Clearing the field is a real instruction; a half-typed one never
+        // gets here, because nothing commits mid-edit.
+        //
+        // Only what gets stored is trimmed — the box is left as typed.
+        // Rewriting it under the cursor is startling, and the dirty check
+        // trims both sides anyway, so stray spaces do not read as an edit.
+        guard !trimmed.isEmpty else {
+            if !settings.password.isEmpty { settings.password = "" }
+            passwordStatus = .idle
+            return
+        }
+
+        // Same password as before: an abandoned edit, or a retype of the
+        // one already stored. Either way the standing verdict still applies.
+        guard trimmed != settings.password else { return }
+
+        passwordStatus = settings.storePassword(trimmed) ? .stored : .storeFailed
+    }
+
+    /// Asks the CMS the question the air link will ask later.
+    private func verifyPassword() {
+        commitPassword()
+        let password = settings.password
+        guard !password.isEmpty else { return }
+
+        let callsign = accountCallsign
+        guard !callsign.isEmpty else {
+            passwordStatus = .unknown("Set the station callsign first — the CMS checks a password against an account.")
+            return
+        }
+
+        isVerifyingPassword = true
+        Task { @MainActor in
+            defer { isVerifyingPassword = false }
+            do {
+                // Built here rather than injected so an access key typed
+                // in the field below counts immediately, exactly like the
+                // key's own Verify button.
+                let client = WinlinkCMSClient(accessKey: settings.effectiveAPIKey)
+                let verdict = try await client.validatePassword(
+                    callsign: callsign, password: password)
+                switch verdict {
+                case .accepted:
+                    let now = Date()
+                    settings.markPasswordVerified(at: now)
+                    passwordStatus = .verified(now)
+                case .rejected:
+                    settings.markPasswordUnverified()
+                    passwordStatus = .refused("The CMS says this is not the password on \(callsign). This is exactly what a session would hit: “Secure login failed - account password does not match”. Note it is case-sensitive. Reset it at winlink.org if you are unsure.")
+                case .noSuchAccount:
+                    settings.markPasswordUnverified()
+                    passwordStatus = .refused("Winlink has no account for \(callsign). Check the station callsign — an SSID is ignored here, accounts belong to the base call.")
+                case .accountBlocked:
+                    settings.markPasswordUnverified()
+                    passwordStatus = .refused("The Winlink account \(callsign) is locked out. Sort that out at winlink.org; no client can log in until it is.")
+                }
+            } catch let WinlinkCMSError.serviceError(message) {
+                passwordStatus = .unknown("The CMS would not answer: \(message). The password is stored — this says nothing about whether it is right.")
+            } catch {
+                passwordStatus = .unknown("Could not reach the CMS: \(RMSStationsViewModel.describe(error)). The password is stored — this says nothing about whether it is right.")
+            }
+        }
+    }
+
+    /// Winlink accounts belong to the base callsign; the SSID we connect
+    /// with is not part of the account.
+    private var accountCallsign: String {
+        Callsign(stationCallsign)?.base ?? ""
+    }
+
+    /// The box says something other than what is stored. Derived rather
+    /// than tracked: a flag set from an `onChange` races the assignment
+    /// that loads the field, and would open the pane claiming an edit.
+    private var passwordIsDirty: Bool {
+        guard didLoadSecrets else { return false }
+        return passwordDraft.trimmingCharacters(in: .whitespacesAndNewlines) != settings.password
+    }
+
+    private var passwordStatusIcon: (symbol: String, tint: Color, help: String)? {
+        if passwordIsDirty {
+            return ("pencil.circle", .secondary,
+                    "Not saved yet — press Return, or click outside the field.")
+        }
+        switch passwordStatus {
+        case .idle:
+            return nil
+        case .stored:
+            return ("questionmark.circle", .secondary,
+                    "Stored in the Keychain. Nobody has asked Winlink whether it is right — press Verify.")
+        case .storeFailed:
+            return ("exclamationmark.triangle.fill", .red,
+                    "The Keychain refused to store or return the password — see below.")
+        case .verified:
+            return ("checkmark.circle.fill", .green,
+                    "The CMS confirmed this is the password on the account.")
+        case .refused:
+            return ("xmark.circle.fill", .red, "The CMS refused this password — see below.")
+        case .unknown:
+            return ("questionmark.circle", .orange,
+                    "Stored, but the CMS could not be asked — see below.")
+        }
+    }
+
+    private var passwordStatusNote: (text: String, tint: Color)? {
+        if passwordIsDirty { return nil }
+        switch passwordStatus {
+        case .idle:
+            return nil
+        case .stored:
+            return ("Stored in the Keychain, but never checked against Winlink. Press Verify — a wrong password only shows up as a refused session otherwise.", .secondary)
+        case .storeFailed:
+            return ("The password could not be saved to the Keychain (or was saved but can't be read back). This usually happens with development builds after re-signing. Try: quit and relaunch AXTerm, then re-enter it. If it persists, delete the old entry in Keychain Access (search “com.axterm.winlink”) and enter the password again.", .red)
+        case .verified(let date):
+            return ("Winlink accepted this password on \(date.formatted(date: .abbreviated, time: .shortened)).", .green)
+        case .refused(let message):
+            return (message, .red)
+        case .unknown(let message):
+            return (message, .orange)
+        }
     }
 
     /// Tests the entered key against the catalog operation (the one that

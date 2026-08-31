@@ -577,6 +577,7 @@ struct AXTermiOSRootView: View {
         case .winlink:
             WinlinkSettingsTab(settings: context.settings,
                                profile: context.profile,
+                               stationCallsign: settings.myCallsign,
                                locationService: context.locationService,
                                stationDistanceMiles: { callsign, hz in
                                    // Read straight from the cache: Settings has

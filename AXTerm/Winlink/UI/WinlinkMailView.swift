@@ -552,9 +552,16 @@ struct WinlinkMailView: View {
         let catalogItems = catalogVM.groups.flatMap(\.items)
         let kit = WinlinkOutageKit.build(items: catalogItems, state: context.profile.state)
         let logs = (try? context.store?.sessionLogs(limit: 2000)) ?? []
-        return WinlinkReadiness.evaluate(.init(
+        let lastSuccess = logs
+            .filter { $0.result == "success" && $0.errorText == nil }
+            .map(\.startedAt).max()
+        let queued = (try? context.store?.queuedOutboundMessages().count) ?? 0
+        // Spelled out rather than `.init(...)`: with this many arguments
+        // the inferred form blows the type-checker's budget.
+        let inputs = WinlinkReadiness.Inputs(
             callsign: appSettings.myCallsign,
             hasPassword: !winlinkSettings.password.isEmpty,
+            passwordVerifiedAt: winlinkSettings.passwordVerifiedAt,
             gatewayCount: winlinkSettings.gatewayLadder.count,
             gridSquare: winlinkSettings.gridSquare,
             hasPositionFix: fieldStatusLocation?.source == .gps,
@@ -563,11 +570,10 @@ struct WinlinkMailView: View {
             outageKitCount: kit.count,
             outageKitBytes: WinlinkOutageKit.totalBytes(kit),
             p2pArmed: winlinkSettings.p2pListenEnabled,
-            lastSuccessfulSessionAt: logs
-                .filter { $0.result == "success" && $0.errorText == nil }
-                .map(\.startedAt).max(),
-            queuedOutboundCount: (try? context.store?.queuedOutboundMessages().count) ?? 0,
-            now: Date()))
+            lastSuccessfulSessionAt: lastSuccess,
+            queuedOutboundCount: queued,
+            now: Date())
+        return WinlinkReadiness.evaluate(inputs)
     }
 
     private func currentGatewayHours() -> WinlinkGatewayHours {
@@ -829,6 +835,9 @@ struct WinlinkMailView: View {
                 mailboxVM.refresh()
                 context.exchangeFinished()
                 if let failure = summary.failureReason {
+                    if WinlinkExchangeFailureClass.isSecureLoginRefusal(failure) {
+                        winlinkSettings.markPasswordUnverified()
+                    }
                     exchangeAlert = failure
                 }
             }
@@ -918,6 +927,11 @@ struct WinlinkMailView: View {
             }
             lastFailure = failure
             lastFailedCallsign = rung.callsign
+            // The account, not the link: drop the settings tick so the
+            // password stops looking checked when the CMS has just said no.
+            if WinlinkExchangeFailureClass.isSecureLoginRefusal(failure) {
+                winlinkSettings.markPasswordUnverified()
+            }
 
             let hasNextRung = index + 1 < rungs.count
             if hasNextRung, WinlinkExchangeFailureClass.isWorthTryingNextGateway(failure) {

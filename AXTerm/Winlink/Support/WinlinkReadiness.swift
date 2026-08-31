@@ -48,6 +48,8 @@ nonisolated struct WinlinkReadiness: Equatable, Sendable {
     struct Inputs: Equatable, Sendable {
         var callsign: String = ""
         var hasPassword: Bool = false
+        /// When the CMS last confirmed the password. Nil means unchecked.
+        var passwordVerifiedAt: Date?
         var gatewayCount: Int = 0
         var gridSquare: String = ""
         var hasPositionFix: Bool = false
@@ -131,8 +133,15 @@ nonisolated struct WinlinkReadiness: Equatable, Sendable {
                          detail: "Not saved in the Keychain",
                          remedy: "Settings \u{2192} Winlink. CMS sessions will be refused without it; P2P does not need one.")
         }
+        // Stored is not the same as right. An unchecked password looks
+        // identical to a correct one until a session is refused mid-net.
+        guard input.passwordVerifiedAt != nil else {
+            return Check(id: "password", title: "Winlink password", status: .warning,
+                         detail: "Saved, but never checked against Winlink",
+                         remedy: "Settings \u{2192} Winlink \u{2192} Verify. Better to find out here than at a refused session.")
+        }
         return Check(id: "password", title: "Winlink password", status: .ready,
-                     detail: "Saved in the Keychain")
+                     detail: "Verified against the CMS")
     }
 
     private static func positionCheck(_ input: Inputs) -> Check {
