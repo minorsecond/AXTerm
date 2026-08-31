@@ -34,6 +34,12 @@ struct TerrainProfileView: View {
                 chart
                     .frame(minHeight: 180)
                 endpoints
+                if let caveat = profile.lossCaveat {
+                    Label(caveat, systemImage: "exclamationmark.triangle")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 legend
             }
         }

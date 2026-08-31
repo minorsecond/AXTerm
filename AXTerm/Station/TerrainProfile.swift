@@ -239,6 +239,36 @@ nonisolated struct TerrainProfile: Equatable, Sendable {
         return 6.9 + 20 * log10((shifted * shifted + 1).squareRoot() + shifted)
     }
 
+    /// How many separate stretches of the path intrude into the clearance it
+    /// needs.
+    ///
+    /// The loss figure comes from the single worst point, which is the
+    /// classic knife edge. Two ridges cost more than the worse of them —
+    /// the second diffracts what the first left — so with more than one
+    /// obstruction the number is a floor rather than an estimate, and saying
+    /// so is the difference between a model and a guess wearing a unit.
+    var obstructionCount: Int {
+        var count = 0
+        var inside = false
+        for sample in samples.dropFirst().dropLast() {
+            let intruding = sample.fresnelRatio < Self.fresnelClearanceThreshold
+            if intruding, !inside { count += 1 }
+            inside = intruding
+        }
+        return count
+    }
+
+    /// True when the reported loss understates what the path actually costs.
+    var lossIsAFloor: Bool { obstructionCount > 1 }
+
+    /// What the loss figure is worth, said where the figure is.
+    var lossCaveat: String? {
+        guard diffractionLossDb != nil else { return nil }
+        guard lossIsAFloor else { return nil }
+        return "\(obstructionCount) separate obstructions — a single-edge model, "
+            + "so this is the least it costs, not the most."
+    }
+
     /// What the loss means for a packet link, which is the question actually
     /// being asked.
     ///
