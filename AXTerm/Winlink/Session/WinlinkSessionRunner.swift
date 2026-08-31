@@ -572,7 +572,13 @@ final class WinlinkSessionRunner: ObservableObject {
             obsLongitude: observedLocation?.longitude,
             obsGrid: observedLocation?.gridSquare,
             obsSource: observedLocation?.source.rawValue)
-        try? await worker.appendSessionLog(log)
+        // Tie the mail to the exchange that carried it. Done here rather
+        // than as each message lands because the log row cannot exist until
+        // the session's result and byte counts are known — and holding mail
+        // back until then would risk losing it to a crash mid-exchange.
+        if let logID = try? await worker.appendSessionLogReturningID(log) {
+            try? await worker.linkMessages(mids: summary.receivedMIDs, toSessionLog: logID)
+        }
         observationTask?.cancel()
         observationTask = nil
 

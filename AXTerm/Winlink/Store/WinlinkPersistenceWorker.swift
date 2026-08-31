@@ -42,6 +42,16 @@ actor WinlinkPersistenceWorker {
         try store.queuedOutboundMessages()
     }
 
+    /// Append the log and hand back its id, so the mail this exchange
+    /// brought in can be tied to it.
+    func appendSessionLogReturningID(_ log: WinlinkSessionLogRecord) throws -> Int64 {
+        try store.appendSessionLogReturningID(log)
+    }
+
+    func linkMessages(mids: [String], toSessionLog id: Int64) throws {
+        try store.linkMessages(mids: mids, toSessionLog: id)
+    }
+
     func appendSessionLog(_ log: WinlinkSessionLogRecord) throws {
         try store.appendSessionLog(log)
     }

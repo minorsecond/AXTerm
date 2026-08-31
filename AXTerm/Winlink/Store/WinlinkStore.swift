@@ -129,5 +129,13 @@ nonisolated protocol WinlinkStore: Sendable {
 
     // Session log
     func appendSessionLog(_ log: WinlinkSessionLogRecord) throws
+    /// Append and hand back the id, so the messages an exchange brought in
+    /// can be tied to it while both facts are still in hand.
+    func appendSessionLogReturningID(_ log: WinlinkSessionLogRecord) throws -> Int64
     func sessionLogs(limit: Int) throws -> [WinlinkSessionLogRecord]
+    func sessionLog(id: Int64) throws -> WinlinkSessionLogRecord?
+    func sessionLogID(forMessage mid: String) throws -> Int64?
+    func messageIDs(forSessionLog id: Int64) throws -> [String]
+    func linkMessages(mids: [String], toSessionLog id: Int64) throws
+    func saveInbound(_ message: WinlinkB2Message, sessionLogID: Int64?) throws -> Bool
 }

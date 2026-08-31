@@ -556,6 +556,25 @@ nonisolated enum DatabaseManager {
     /// `WinlinkMessageStateRecord`. Both nil for existing rows, which is
     /// correct: nothing already in the Trash has a recorded origin, and the
     /// UI treats a missing date as unknown rather than as the epoch.
+    /// Which exchange carried each message.
+    ///
+    /// Nullable, and deliberately *not* a foreign key with a cascade: a
+    /// session happened and cost airtime whether or not the mail it brought
+    /// still exists, so deleting a message must never delete the record of
+    /// the exchange. Rows written before this migration keep nil, which
+    /// reads as "arrived some other way" rather than pointing at an
+    /// unrelated session.
+    static func addWinlinkMessageSessionLink(_ db: Database) throws {
+        try db.alter(table: WinlinkMessageRecord.databaseTableName) { t in
+            t.add(column: "sessionLogId", .integer)
+        }
+        try db.create(
+            index: "idx_winlinkMessage_sessionLogId",
+            on: WinlinkMessageRecord.databaseTableName,
+            columns: ["sessionLogId"],
+            ifNotExists: true)
+    }
+
     static func addWinlinkTrashMetadata(_ db: Database) throws {
         try db.alter(table: WinlinkMessageStateRecord.databaseTableName) { t in
             t.add(column: "trashedAt", .datetime)
@@ -675,6 +694,10 @@ nonisolated enum DatabaseManager {
         registerReportedMigration(&migrator, version: 24,
                                   name: "addWinlinkTrashMetadata") { db in
             try addWinlinkTrashMetadata(db)
+        }
+        registerReportedMigration(&migrator, version: 25,
+                                  name: "addWinlinkMessageSessionLink") { db in
+            try addWinlinkMessageSessionLink(db)
         }
         return migrator
     }()

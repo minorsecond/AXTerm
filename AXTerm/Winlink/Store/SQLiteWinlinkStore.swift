@@ -212,6 +212,16 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
 
     @discardableResult
     func saveInbound(_ message: WinlinkB2Message) throws -> Bool {
+        try saveInbound(message, sessionLogID: nil)
+    }
+
+    /// Save an inbound message, recording which exchange carried it.
+    ///
+    /// The link is written here because this is the only moment both facts
+    /// are in hand — afterwards, matching a message to a session means
+    /// guessing from timestamps, and two exchanges minutes apart are exactly
+    /// the case where that guess would be wrong and confident.
+    func saveInbound(_ message: WinlinkB2Message, sessionLogID: Int64?) throws -> Bool {
         try dbQueue.write { [now] db in
             if try WinlinkMessageRecord.exists(db, key: message.mid) {
                 return false
@@ -225,7 +235,8 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
             let inboxID = try Self.folderID(for: .inbox, db: db)
             try Self.insertMessageRows(
                 message, direction: .inbound, folderId: inboxID,
-                deliveryState: .received, isRead: false, timestamp: now(), db: db)
+                deliveryState: .received, isRead: false, timestamp: now(),
+                sessionLogID: sessionLogID, db: db)
             return true
         }
     }
@@ -551,6 +562,54 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
         }
     }
 
+    /// Append a session log and hand back its id, so messages downloaded in
+    /// that exchange can be tied to it.
+    func appendSessionLogReturningID(_ log: WinlinkSessionLogRecord) throws -> Int64 {
+        try dbQueue.write { db in
+            var record = log
+            try record.insert(db)
+            return record.id ?? db.lastInsertedRowID
+        }
+    }
+
+    /// Tie messages already saved during an exchange to that exchange.
+    ///
+    /// The log row can only be written once the session has *ended* — its
+    /// result and byte counts are not known before then — while the messages
+    /// are saved as they arrive. So the link is made in this direction
+    /// rather than by holding mail back until the session closes, which
+    /// would risk losing it to a crash mid-exchange.
+    func linkMessages(mids: [String], toSessionLog id: Int64) throws {
+        guard !mids.isEmpty else { return }
+        try dbQueue.write { db in
+            let placeholders = databaseQuestionMarks(count: mids.count)
+            try db.execute(
+                sql: "UPDATE \(WinlinkMessageRecord.databaseTableName) "
+                   + "SET sessionLogId = ? WHERE id IN (\(placeholders))",
+                arguments: StatementArguments([id] + mids.map { $0 as DatabaseValueConvertible }))
+        }
+    }
+
+    func sessionLog(id: Int64) throws -> WinlinkSessionLogRecord? {
+        try dbQueue.read { db in try WinlinkSessionLogRecord.fetchOne(db, key: id) }
+    }
+
+    func sessionLogID(forMessage mid: String) throws -> Int64? {
+        try dbQueue.read { db in
+            try WinlinkMessageRecord.fetchOne(db, key: mid)?.sessionLogId
+        }
+    }
+
+    func messageIDs(forSessionLog id: Int64) throws -> [String] {
+        try dbQueue.read { db in
+            try String.fetchAll(
+                db,
+                sql: "SELECT id FROM \(WinlinkMessageRecord.databaseTableName) "
+                   + "WHERE sessionLogId = ?",
+                arguments: [id])
+        }
+    }
+
     func sessionLogs(limit: Int) throws -> [WinlinkSessionLogRecord] {
         try dbQueue.read { db in
             try WinlinkSessionLogRecord
@@ -589,6 +648,7 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
         deliveryState: WinlinkMessageStateRecord.DeliveryState,
         isRead: Bool,
         timestamp: Date,
+        sessionLogID: Int64? = nil,
         db: Database
     ) throws {
         let record = WinlinkMessageRecord(
@@ -602,7 +662,8 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
             subject: message.subject,
             mbo: message.mbo,
             body: message.body,
-            createdAt: timestamp)
+            createdAt: timestamp,
+            sessionLogId: sessionLogID)
         try record.insert(db)
 
         for (index, attachment) in message.attachments.enumerated() {

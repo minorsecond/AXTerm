@@ -1106,5 +1106,11 @@ private nonisolated final class FallbackWinlinkStore: WinlinkStore, @unchecked S
     func replaceCatalogCache(_ items: [WinlinkCatalogItemRecord]) throws {}
     func catalogItems() throws -> [WinlinkCatalogItemRecord] { [] }
     func appendSessionLog(_ log: WinlinkSessionLogRecord) throws {}
+    func appendSessionLogReturningID(_ log: WinlinkSessionLogRecord) throws -> Int64 { 0 }
     func sessionLogs(limit: Int) throws -> [WinlinkSessionLogRecord] { [] }
+    func sessionLog(id: Int64) throws -> WinlinkSessionLogRecord? { nil }
+    func sessionLogID(forMessage mid: String) throws -> Int64? { nil }
+    func messageIDs(forSessionLog id: Int64) throws -> [String] { [] }
+    func linkMessages(mids: [String], toSessionLog id: Int64) throws {}
+    func saveInbound(_ message: WinlinkB2Message, sessionLogID: Int64?) throws -> Bool { false }
 }

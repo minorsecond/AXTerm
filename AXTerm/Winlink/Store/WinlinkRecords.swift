@@ -50,6 +50,14 @@ nonisolated struct WinlinkMessageRecord: Codable, FetchableRecord, PersistableRe
     var body: Data
     var createdAt: Date
 
+    /// The exchange that carried this message in, when it came over the air.
+    ///
+    /// Nil for anything that arrived another way, and for every row written
+    /// before the link existed — which is why the question "which session
+    /// brought this?" has to be allowed to answer "nothing recorded" rather
+    /// than guessing at the nearest one in time.
+    var sessionLogId: Int64?
+
     var toAddressList: [String] { Self.decodeAddresses(toAddrs) }
     var ccAddressList: [String] { Self.decodeAddresses(ccAddrs) }
 
@@ -210,6 +218,11 @@ nonisolated struct WinlinkCatalogItemRecord: Codable, FetchableRecord, Persistab
 
 nonisolated struct WinlinkSessionLogRecord: Codable, FetchableRecord, MutablePersistableRecord, Hashable, Sendable {
     static let databaseTableName = "winlinkSessionLog"
+
+    /// How long the exchange took. Always derivable from the two
+    /// timestamps — it simply had no name, which is why "how long did that
+    /// take" had no answer in the UI.
+    var duration: TimeInterval { endedAt.timeIntervalSince(startedAt) }
 
     var id: Int64?
     var startedAt: Date
