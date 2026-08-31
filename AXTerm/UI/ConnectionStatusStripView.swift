@@ -23,6 +23,11 @@ struct ConnectionStatusStripView: View {
     /// while disconnected so the operator sees the path — and, per hop, the
     /// evidence behind it — before committing airtime. Empty hides it.
     var plannedHops: [PlannedRelayHop] = []
+    /// How far the last sent message has demonstrably got. Nil when nothing
+    /// has been sent. Deliberately says only what the link layer and a reply
+    /// can prove — see `RelayDelivery`.
+    var deliverySummary: String?
+    var deliveryDetail: String?
     
     private var isConnected: Bool {
         sessionState == .connected
@@ -70,6 +75,14 @@ struct ConnectionStatusStripView: View {
         .background(Color(platform: .platformCardBackground).opacity(0.5))
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// Paper-plane while it is still in the network, tick once the far end
+    /// has proven it arrived. Nothing in between, because there is nothing
+    /// in between to know.
+    private var deliveryIcon: String {
+        guard let deliverySummary else { return "paperplane" }
+        return deliverySummary.hasPrefix("Answered") ? "checkmark.circle.fill" : "paperplane"
     }
 
     // MARK: - Relay hop progress
@@ -162,13 +175,31 @@ struct ConnectionStatusStripView: View {
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
                 
-                if !viaDigipeaters.isEmpty {
+                // The chain outlives the handshake. It used to appear only
+                // while connecting, so it vanished at the moment it became
+                // most useful: once BBSCBH answers, "via DRLNOD" is the L2
+                // peer and says nothing about the three nodes the bytes
+                // actually cross.
+                if !relayHops.isEmpty {
+                    Text("·")
+                        .foregroundStyle(.tertiary)
+                    relayProgressRow
+                } else if !viaDigipeaters.isEmpty {
                     Text("·")
                         .foregroundStyle(.tertiary)
                     
                     Text("via \(viaDigipeaters.joined(separator: " → "))")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                }
+
+                if let deliverySummary {
+                    Text("·")
+                        .foregroundStyle(.tertiary)
+                    Label(deliverySummary, systemImage: deliveryIcon)
+                        .font(.subheadline)
+                        .foregroundStyle(deliverySummary.hasPrefix("Answered") ? .green : .secondary)
+                        .help(deliveryDetail ?? deliverySummary)
                 }
                 
                 if let srtt = session.timers.srtt {

@@ -665,6 +665,12 @@ struct NodeProfileView: View {
     private func placementSection(_ placement: NodeProfile.Placement) -> some View {
         section("Position", systemImage: "mappin.and.ellipse") {
             VStack(alignment: .leading, spacing: 6) {
+                // A coordinate is a fact about a place, and a place is far
+                // easier to judge on a map than as two decimals.
+                NodeProfileMiniMap(
+                    callsign: profile.callsign,
+                    position: placement.position,
+                    confidence: placement.confidence)
                 // Distance and bearing are a tile at the top of the page;
                 // this section carries what the tile cannot — where exactly.
                 if let grid = placement.gridSquare { row("Grid", grid) }

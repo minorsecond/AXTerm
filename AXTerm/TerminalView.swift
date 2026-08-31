@@ -344,6 +344,35 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         relayWaitingOn = waitingOn?.uppercased()
     }
 
+    /// How far the last sent message has demonstrably got.
+    ///
+    /// Deliberately thin — see `RelayDelivery`. AX.25 acknowledges the first
+    /// hop and nothing else, so the middle of a relay chain is never claimed
+    /// either way.
+    @Published fileprivate private(set) var relayDelivery: RelayDelivery?
+
+    /// Records that a message went out on this link.
+    fileprivate func noteMessageSent(_ text: String, to destination: String, at when: Date = Date()) {
+        let hop = (netRomRelayNextHop ?? destination).uppercased()
+        let target = relayHandshakeDestination?.uppercased() ?? destination.uppercased()
+        if relayDelivery?.firstHop != hop || relayDelivery?.destination != target {
+            relayDelivery = RelayDelivery(firstHop: hop, destination: target)
+        }
+        relayDelivery?.sent(text, at: when)
+    }
+
+    /// The next hop acknowledged our frame. The only delivery fact the link
+    /// layer can give us.
+    fileprivate func noteFirstHopAck(at when: Date = Date()) {
+        relayDelivery?.acknowledgedByFirstHop(at: when)
+    }
+
+    /// The far end said something, which it could only do having received
+    /// what we sent.
+    fileprivate func noteFarEndReplied(at when: Date = Date()) {
+        relayDelivery?.answered(at: when)
+    }
+
     /// The full chain the relay set out to walk, link target first.
     ///
     /// The phase's `remaining` list shrinks as hops are made, so by itself
@@ -783,6 +812,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
             previousAckCallback?(session, va)
             Task { @MainActor in
                 self?.updateOutboundBytesAcked(session: session, va: va)
+                self?.noteFirstHopAck()
             }
         }
     }
@@ -867,6 +897,9 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     ///   - startingVs: The V(S) sequence number when transmission starts (for modulo-8 ack tracking)
     ///   - paclen: Packet length for fragmentation
     func startOutboundProgress(text: String, totalBytes: Int, destination: String, hasAcks: Bool, startingVs: Int, paclen: Int) {
+        // Every connected send passes through here, which makes it the one
+        // place that knows a message just went out.
+        if hasAcks { noteMessageSent(text, to: destination) }
         let chunks = (totalBytes + paclen - 1) / paclen
         currentOutboundProgress = OutboundMessageProgress(
             id: UUID(),
@@ -1264,6 +1297,12 @@ final class ObservableTerminalTxViewModel: ObservableObject {
                         "bufferLenBeforeFlush": bufferLen
                     ])
                     onPlainTextChatReceived?(conversationPeer(for: session), line, session.lastReceivedVia)
+                    // The far end said something. It could only do that having
+                    // received what we sent, which is the one piece of
+                    // end-to-end evidence a prompt relay ever produces — the
+                    // chain itself carries no receipt. Ignored unless a
+                    // message is actually outstanding.
+                    noteFarEndReplied()
                     // Manual relay detection: inspect each received line for ###LINK MADE/FAILED / ENTER COMMAND
                     let prevRelayState = manualRelayDetector.state
                     manualRelayDetector.processIncoming(line)
@@ -2468,7 +2507,9 @@ struct TerminalView: View {
                         connectionMode: displayedConnectionMode,
                         isTNCConnected: client.status == .connected,
                         relayHops: txViewModel.relayProgressHops,
-                        plannedHops: plannedRelayPathPreview
+                        plannedHops: plannedRelayPathPreview,
+                        deliverySummary: txViewModel.relayDelivery?.summary,
+                        deliveryDetail: txViewModel.relayDelivery?.detail
                     )
                 }
 
