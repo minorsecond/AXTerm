@@ -162,6 +162,30 @@ final class ElevationStorage: ObservableObject {
         downloader?.download(tiles: Self.tilesWorthFetching(around: observer))
     }
 
+    /// What one path's profile needs, and what it would cost.
+    ///
+    /// A path is one or two tiles. Making the operator find the map, draw a
+    /// region and download a state before a station page can say anything
+    /// about terrain is a lot of ceremony for eight megabytes — and it makes
+    /// the feature depend on a map page they may never open.
+    func estimate(alongPathFrom origin: GreatCircle.Point,
+                  to destination: GreatCircle.Point) -> Estimate {
+        let tiles = ElevationDownloader.tiles(alongPathFrom: origin, to: destination)
+        let missing = tiles.filter { tile in
+            (try? store?.hasTile(lat: tile.lat, lon: tile.lon)) != true
+        }
+        return Estimate(tileCount: missing.count,
+                        byteCount: Int64(missing.count) * Self.bytesPerTile,
+                        requestedTileCount: tiles.count)
+    }
+
+    /// Fetches exactly the tiles one path crosses.
+    func download(alongPathFrom origin: GreatCircle.Point,
+                  to destination: GreatCircle.Point) {
+        downloader?.download(
+            tiles: ElevationDownloader.tiles(alongPathFrom: origin, to: destination))
+    }
+
     func cancelDownload() {
         downloader?.cancel()
     }

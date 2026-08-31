@@ -197,6 +197,117 @@ nonisolated struct TerrainProfile: Equatable, Sendable {
             : .clear(worstFresnelRatio: worst.fresnelRatio)
     }
 
+    // MARK: - What the obstruction costs
+
+    /// How much signal the terrain actually takes, in decibels.
+    ///
+    /// Metres above the line answer "is there something in the way". They do
+    /// not answer "does it matter", and the two come apart badly: 4 m above
+    /// the line 1 km out costs about 7 dB, which a packet link shrugs off,
+    /// while 4 m above the line at the midpoint of a 100 km path is a
+    /// different number entirely. Reporting the first as "blocked" and
+    /// leaving the operator to guess was the fault here.
+    ///
+    /// Knife-edge diffraction, ITU-R P.526. A single ridge is the case this
+    /// models honestly; a long shallow rise loses more than this says, so
+    /// treat it as the optimistic end.
+    ///
+    /// Nil when there is no verdict to have — a gap in the data is not a
+    /// clear path.
+    var diffractionLossDb: Double? {
+        let interior = samples.dropFirst().dropLast()
+        guard case .unknown = verdict else {
+            guard let worst = interior.min(by: { $0.fresnelRatio < $1.fresnelRatio })
+            else { return 0 }
+            return Self.knifeEdgeLossDb(fresnelRatio: worst.fresnelRatio)
+        }
+        return nil
+    }
+
+    /// Loss for a clearance expressed as a fraction of the first Fresnel
+    /// radius. Positive ratio is clearance, negative is intrusion.
+    static func knifeEdgeLossDb(fresnelRatio: Double) -> Double {
+        guard fresnelRatio.isFinite else { return 0 }
+        // The Fresnel-Kirchhoff parameter. Falls straight out of the ratio the
+        // samples already carry: v = -sqrt(2) x (clearance / F1).
+        let v = -(2.0).squareRoot() * fresnelRatio
+        // Below -0.78 the formula goes negative and the honest answer is zero.
+        // That threshold is 0.55 of the first zone — which is why 0.6 has been
+        // the engineering rule for as long as it has.
+        guard v > -0.78 else { return 0 }
+        let shifted = v - 0.1
+        return 6.9 + 20 * log10((shifted * shifted + 1).squareRoot() + shifted)
+    }
+
+    /// What the loss means for a packet link, which is the question actually
+    /// being asked.
+    ///
+    /// Bands rather than a bare number: an operator deciding whether to try a
+    /// station needs "will this work", and decibels only answer that against
+    /// a link budget they would have to keep in their head.
+    enum Severity: Equatable, Sendable {
+        /// Under 3 dB. Half an S-unit, inside the day-to-day variation of any
+        /// real path.
+        case negligible
+        /// 3-10 dB. Real, and the difference between a solid link and one that
+        /// retries, but not the difference between working and not.
+        case noticeable
+        /// 10-20 dB. Usually decisive at the powers and antennas packet runs.
+        case severe
+        /// Over 20 dB. Gone, and no amount of power on this path fixes it.
+        case blocking
+        /// No terrain data.
+        case unknown
+    }
+
+    var severity: Severity {
+        guard let loss = diffractionLossDb else { return .unknown }
+        switch loss {
+        case ..<3: return .negligible
+        case ..<10: return .noticeable
+        case ..<20: return .severe
+        default: return .blocking
+        }
+    }
+
+    /// The headline, in the terms that decide whether to call the station.
+    ///
+    /// Leads with the consequence rather than the geometry. "Blocked by 4 m"
+    /// was true and useless — it named a measurement, in a unit that does not
+    /// answer the question, at a precision the assumed antenna heights do not
+    /// support.
+    var headline: String {
+        guard let loss = diffractionLossDb else { return "No terrain data" }
+        let decibels = "\(Int(loss.rounded())) dB"
+        switch severity {
+        case .negligible:
+            return loss < 0.5 ? "Clear path" : "Clear \u{2014} terrain costs about \(decibels)"
+        case .noticeable:
+            return "Workable \u{2014} terrain costs about \(decibels)"
+        case .severe:
+            return "Marginal \u{2014} terrain costs about \(decibels)"
+        case .blocking:
+            return "Blocked \u{2014} terrain costs about \(decibels)"
+        case .unknown:
+            return "No terrain data"
+        }
+    }
+
+    /// Where the obstruction is and how far it reaches above the line, for
+    /// the line under the headline. The geometry is still worth stating: it
+    /// is what an antenna change acts on.
+    var geometryNote: String? {
+        switch verdict {
+        case .obstructed(let by, let at):
+            return "Terrain \(Int(by.rounded())) m above the line, "
+                + "\(Verdict.distanceText(at)) out"
+        case .marginal(_, let at):
+            return "Closest approach \(Verdict.distanceText(at)) out"
+        case .clear, .unknown:
+            return nil
+        }
+    }
+
     // MARK: - Physics
 
     /// How far the earth bulges above the chord between two points, at a
@@ -288,7 +399,7 @@ extension TerrainProfile.Verdict {
         }
     }
 
-    private static func distanceText(_ metres: Double) -> String {
+    static func distanceText(_ metres: Double) -> String {
         metres >= 1000
             ? String(format: "%.1f km", metres / 1000)
             : String(format: "%.0f m", metres)

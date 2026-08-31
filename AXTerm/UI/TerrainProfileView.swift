@@ -16,18 +16,20 @@ struct TerrainProfileView: View {
     /// wrong — a node on a tower reads as blocked at a default of 6 m.
     var destinationHeightIsAssumed: Bool = false
 
+    /// What the missing tiles would cost. Nil hides the offer rather than
+    /// promising a download the caller cannot perform.
+    var estimate: ElevationStorage.Estimate?
+    var isDownloading: Bool = false
+    var onDownload: (() -> Void)?
+
     @AppStorage(WinlinkSettings.heightUnitIsFeetKey) private var heightUnitIsFeet = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
 
-            if profile.samples.isEmpty {
-                ContentUnavailableView(
-                    "No terrain data",
-                    systemImage: "mountain.2",
-                    description: Text(profile.verdict.explanation(profile: profile)))
-                    .frame(minHeight: 180)
+            if profile.samples.isEmpty || profile.severity == .unknown {
+                missingData
             } else {
                 chart
                     .frame(minHeight: 180)
@@ -45,9 +47,14 @@ struct TerrainProfileView: View {
             Image(systemName: icon)
                 .foregroundStyle(tint)
             VStack(alignment: .leading, spacing: 1) {
-                Text(profile.verdict.summary)
+                Text(profile.headline)
                     .font(.headline)
-                Text("\(originLabel) → \(destinationLabel) · \(distanceText)")
+                // The geometry under the consequence, not instead of it: how
+                // far above the line and how far out is what an antenna
+                // change acts on, once you know whether it is worth acting.
+                Text([profile.geometryNote,
+                      "\(originLabel) \u{2192} \(destinationLabel) \u{b7} \(distanceText)"]
+                        .compactMap { $0 }.joined(separator: " \u{b7} "))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -57,19 +64,24 @@ struct TerrainProfileView: View {
     }
 
     private var icon: String {
-        switch profile.verdict {
-        case .clear: "checkmark.circle.fill"
-        case .marginal: "exclamationmark.triangle.fill"
-        case .obstructed: "xmark.octagon.fill"
+        switch profile.severity {
+        case .negligible: "checkmark.circle.fill"
+        case .noticeable: "exclamationmark.circle.fill"
+        case .severe: "exclamationmark.triangle.fill"
+        case .blocking: "xmark.octagon.fill"
         case .unknown: "questionmark.circle"
         }
     }
 
+    /// Coloured by what the terrain costs, not by whether anything is
+    /// geometrically in the way. A ridge 4 m above the line was drawn in the
+    /// same red as one that ends the path, and they are not the same news.
     private var tint: Color {
-        switch profile.verdict {
-        case .clear: .green
-        case .marginal: .orange
-        case .obstructed: .red
+        switch profile.severity {
+        case .negligible: .green
+        case .noticeable: .yellow
+        case .severe: .orange
+        case .blocking: .red
         case .unknown: .secondary
         }
     }
@@ -80,6 +92,51 @@ struct TerrainProfileView: View {
 
     /// Radius of the antenna markers, and the inset that keeps them whole.
     private static let markerRadius: Double = 4
+
+    // MARK: - Nothing to draw yet
+
+    /// What to do about it, in the place the absence is noticed.
+    ///
+    /// The old empty state explained that data was missing and stopped there,
+    /// leaving the operator to work out that the fix lived behind a menu on a
+    /// different page. A path is one or two tiles; asking for them belongs
+    /// here.
+    @ViewBuilder
+    private var missingData: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "mountain.2")
+                .font(.system(size: 26))
+                .foregroundStyle(.tertiary)
+            Text("No terrain for this path")
+                .font(.headline)
+            Text(profile.verdict.explanation(profile: profile))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
+            if let onDownload, let estimate, estimate.tileCount > 0 {
+                Button {
+                    onDownload()
+                } label: {
+                    if isDownloading {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Downloading\u{2026}")
+                        }
+                    } else {
+                        Text("Download terrain for this path "
+                             + "(\(estimate.tileCount) tile"
+                             + "\(estimate.tileCount == 1 ? "" : "s"), \(estimate.sizeDescription))")
+                    }
+                }
+                .disabled(isDownloading)
+                .help("Fetches elevation for the ground between these two stations from "
+                      + "the USGS. It is kept on this device and works offline afterwards.")
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 180)
+    }
 
     // MARK: - Chart
 

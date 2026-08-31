@@ -54,6 +54,10 @@ struct NodeProfileView: View {
     /// True when the far antenna height is the global assumption rather than
     /// one recorded for this station.
     var terrainHeightIsAssumed: Bool = false
+    /// What the tiles this path needs would cost, when some are missing.
+    var terrainEstimate: ElevationStorage.Estimate?
+    var isDownloadingTerrain: Bool = false
+    var onDownloadTerrain: (() -> Void)?
     /// Mirrors the settings choice so a height typed on a station page reads
     /// back in the same unit everywhere else.
     @AppStorage(WinlinkSettings.heightUnitIsFeetKey) private var heightUnitIsFeet = true
@@ -742,7 +746,10 @@ struct NodeProfileView: View {
             TerrainProfileView(profile: terrain,
                                originLabel: localCallsign.isEmpty ? "Here" : localCallsign,
                                destinationLabel: profile.callsign,
-                               destinationHeightIsAssumed: terrainHeightIsAssumed)
+                               destinationHeightIsAssumed: terrainHeightIsAssumed,
+                               estimate: terrainEstimate,
+                               isDownloading: isDownloadingTerrain,
+                               onDownload: onDownloadTerrain)
         }
     }
 

@@ -68,6 +68,8 @@ struct ContentView: View {
     @State private var profileTerrain: TerrainProfile?
     /// Whether that profile used the assumed far-antenna height.
     @State private var profileTerrainHeightAssumed = false
+    /// The tiles this path still needs, and what they weigh.
+    @State private var profileTerrainEstimate: ElevationStorage.Estimate?
     /// The Mac gets the same identity view the handheld does — a callsign in
     /// the console is the same question there as here.
     @StateObject private var profiles = NodeProfileCoordinator()
@@ -722,6 +724,12 @@ struct ContentView: View {
                     noteStore: client.stationNotes,
                     terrain: profileTerrain,
                     terrainHeightIsAssumed: profileTerrainHeightAssumed,
+                    terrainEstimate: profileTerrainEstimate,
+                    isDownloadingTerrain: elevation.downloadState.isBusy,
+                    onDownloadTerrain: {
+                        guard let path = terrainPath(to: profile) else { return }
+                        elevation.download(alongPathFrom: path.origin, to: path.destination)
+                    },
                     presentation: presentation.isPage ? .page : .sheet,
                     onOpenFullPage: presentation.isPage
                         ? nil : { profiles.promoteSheetToPage() },
@@ -748,10 +756,14 @@ struct ContentView: View {
                         profileContentHeights[measureKey] = height
                     }
                     .task(id: presentation.callsign) {
-                        profileTerrain = nil
-                        let computed = await terrainProfile(to: profile)
-                        profileTerrainHeightAssumed = computed?.assumedFarHeight ?? false
-                        profileTerrain = computed?.profile
+                        await refreshProfileTerrain(for: profile)
+                    }
+                    // A finished download is new evidence about the same
+                    // path, so the card recomputes rather than leaving the
+                    // operator to close and reopen the page they just
+                    // fetched tiles from.
+                    .task(id: elevation.tileCount) {
+                        await refreshProfileTerrain(for: profile)
                     }
                     .task(id: presentation.callsign) {
                         guard winlinkContext.settings.callsignLookupEnabled else { return }
@@ -1671,10 +1683,37 @@ struct ContentView: View {
     ///
     /// Off the main actor: 256 elevation samples per profile, and the
     /// station sheet opens on a click.
+    /// The two ends of the path a station page is about.
+    private func terrainPath(
+        to profile: NodeProfile
+    ) -> (origin: GreatCircle.Point, destination: GreatCircle.Point)? {
+        guard let placement = profile.placement,
+              let observer = Maidenhead.center(of: winlinkContext.settings.gridSquare)
+                  .map(GreatCircle.Point.init)
+        else { return nil }
+        return (observer, placement.position)
+    }
+
+    @MainActor
+    private func refreshProfileTerrain(for profile: NodeProfile) async {
+        profileTerrain = nil
+        profileTerrainEstimate = terrainPath(to: profile).map {
+            elevation.estimate(alongPathFrom: $0.origin, to: $0.destination)
+        }
+        let computed = await terrainProfile(to: profile)
+        profileTerrainHeightAssumed = computed?.assumedFarHeight ?? false
+        profileTerrain = computed?.profile
+    }
+
     private func terrainProfile(
         to profile: NodeProfile
     ) async -> (profile: TerrainProfile, assumedFarHeight: Bool)? {
-        guard elevation.hasTerrain, let store = elevation.store,
+        // Deliberately not gated on `hasTerrain`: with no tiles the profile
+        // comes back as an honest "unknown", and that is the state that
+        // offers to fetch the one or two tiles this path needs. Gating here
+        // meant the card simply did not appear, which is how the feature came
+        // to depend on having already downloaded a region from the map page.
+        guard let store = elevation.store,
               let placement = profile.placement,
               let observer = Maidenhead.center(of: winlinkContext.settings.gridSquare)
                   .map(GreatCircle.Point.init)
