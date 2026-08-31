@@ -373,6 +373,26 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         relayDelivery?.answered(at: when)
     }
 
+    /// Explains a KA-Node's command prompt, once per station.
+    ///
+    /// Lives here rather than in the view because it is per-session
+    /// knowledge, and because a View struct is the wrong place to keep
+    /// something that must not repeat.
+    private var kaNodeCoach = KaNodePromptCoach()
+
+    /// The notice for a prompt, or nil when there is nothing honest to say.
+    fileprivate func kaNodeNotice(
+        for line: String, peer: String, family: NodeSoftwareFamily?
+    ) -> String? {
+        kaNodeCoach.notice(for: line, peer: peer, family: family)
+    }
+
+    /// A new connection is a fresh chance to be useful, and the node may
+    /// offer a different set this time.
+    fileprivate func forgetKaNodeCoaching() {
+        kaNodeCoach = KaNodePromptCoach()
+    }
+
     /// The full chain the relay set out to walk, link target first.
     ///
     /// The phase's `remaining` list shrinks as hops are made, so by itself
@@ -1956,6 +1976,7 @@ struct TerminalView: View {
                         txViewModel.netRomRelayPhase = nil
                         txViewModel.clearManualRelay()
                     }
+                    txViewModel.forgetKaNodeCoaching()
                     connectBarViewModel.markDisconnected()
                     updateActiveSessionRecordState("Disconnected")
                     if sessionCoordinator.connectedSessions.isEmpty {
@@ -2085,7 +2106,7 @@ struct TerminalView: View {
 
         // Wire plain-text chat (non-AXDP) to console when sender uses plain text.
         let observe = onSessionText
-        txViewModel.onPlainTextChatReceived = { [weak client, weak txViewModel] from, text, via in
+        txViewModel.onPlainTextChatReceived = { [weak client, weak txViewModel, weak capabilities = nodeCapabilities] from, text, via in
             // A BBS session the operator opened themselves. Reading structure
             // out of what already arrived costs nobody anything; asking the
             // far end for it would spend their channel on our convenience.
@@ -2099,6 +2120,17 @@ struct TerminalView: View {
             // hear. The relay already tracks who is expected to speak.
             let speaker = txViewModel?.relayWaitingOn ?? from.display.uppercased()
             observe?(text, speaker)
+            // A KA-Node states its command set and nothing else, and the one
+            // command that would explain it costs airtime on a shared
+            // channel. Answer locally instead — but only when the software is
+            // *proven*, never guessed: a command set this node does not have
+            // is something the operator discovers by keying up.
+            if let notice = txViewModel?.kaNodeNotice(
+                for: text,
+                peer: speaker,
+                family: capabilities?.directory.family(for: speaker)) {
+                client?.appendSystemNotification(notice)
+            }
             if let client = client {
                 TxLog.debug(.session, "onPlainTextChatReceived callback executing", [
                     "from": from.display,
