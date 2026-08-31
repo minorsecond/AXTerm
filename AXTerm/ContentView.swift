@@ -725,6 +725,7 @@ struct ContentView: View {
                     terrain: profileTerrain,
                     terrainHeightIsAssumed: profileTerrainHeightAssumed,
                     terrainEstimate: profileTerrainEstimate,
+                    directFrames: directFrameCount(for: profile.callsign),
                     isDownloadingTerrain: elevation.downloadState.isBusy,
                     onDownloadTerrain: {
                         guard let path = terrainPath(to: profile) else { return }
@@ -1683,6 +1684,21 @@ struct ContentView: View {
     ///
     /// Off the main actor: 256 elevation samples per profile, and the
     /// station sheet opens on a click.
+    /// Frames from this station that arrived with nothing repeating them.
+    ///
+    /// Counted the way `CoverageEstimate` counts: an empty via path means no
+    /// digipeater had a hand in it, so the frame crossed the ground between
+    /// the two antennas. That is what makes it evidence about terrain.
+    private func directFrameCount(for callsign: String) -> Int {
+        let base = Callsign(callsign)?.base ?? callsign.uppercased()
+        return client.packets.reduce(into: 0) { total, packet in
+            guard packet.via.allSatisfy({ !$0.repeated }) else { return }
+            guard let from = packet.from?.display,
+                  (Callsign(from)?.base ?? from.uppercased()) == base else { return }
+            total += 1
+        }
+    }
+
     /// The two ends of the path a station page is about.
     private func terrainPath(
         to profile: NodeProfile

@@ -19,6 +19,9 @@ struct TerrainProfileView: View {
     /// What the missing tiles would cost. Nil hides the offer rather than
     /// promising a download the caller cannot perform.
     var estimate: ElevationStorage.Estimate?
+    /// Frames from this station that reached here with nothing repeating
+    /// them. The one measurement that can contradict this forecast.
+    var directFrames: Int = 0
     var isDownloading: Bool = false
     var onDownload: (() -> Void)?
 
@@ -34,6 +37,23 @@ struct TerrainProfileView: View {
                 chart
                     .frame(minHeight: 180)
                 endpoints
+                // The record, where it disagrees with the forecast. Above
+                // the caveats, because "this is wrong, and here is what you
+                // already know that proves it" outranks any refinement of a
+                // number that is wrong.
+                if TerrainCalibration.outcome(severity: profile.severity,
+                                              heardDirectly: directFrames > 0) == .contradicted {
+                    Label(TerrainCalibration.note(callsign: destinationLabel,
+                                                  directFrames: directFrames),
+                          systemImage: "antenna.radiowaves.left.and.right")
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.accentColor.opacity(0.12),
+                                    in: RoundedRectangle(cornerRadius: 6))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let caveat = profile.lossCaveat {
                     Label(caveat, systemImage: "exclamationmark.triangle")
                         .font(.caption2)

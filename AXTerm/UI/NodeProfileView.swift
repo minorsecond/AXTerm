@@ -56,6 +56,8 @@ struct NodeProfileView: View {
     var terrainHeightIsAssumed: Bool = false
     /// What the tiles this path needs would cost, when some are missing.
     var terrainEstimate: ElevationStorage.Estimate?
+    /// Frames from this station heard with nothing repeating them.
+    var directFrames: Int = 0
     var isDownloadingTerrain: Bool = false
     var onDownloadTerrain: (() -> Void)?
     /// Mirrors the settings choice so a height typed on a station page reads
@@ -748,6 +750,7 @@ struct NodeProfileView: View {
                                destinationLabel: profile.callsign,
                                destinationHeightIsAssumed: terrainHeightIsAssumed,
                                estimate: terrainEstimate,
+                               directFrames: directFrames,
                                isDownloading: isDownloadingTerrain,
                                onDownload: onDownloadTerrain)
         }
