@@ -70,6 +70,10 @@ struct ContentView: View {
     @State private var profileTerrainHeightAssumed = false
     /// The tiles this path still needs, and what they weigh.
     @State private var profileTerrainEstimate: ElevationStorage.Estimate?
+    /// Non-nil while the operator is being asked about terrain for their
+    /// own area. Set once per grid square, and only when there is
+    /// something to ask about.
+    @State private var homeTerrainOffer: ElevationStorage.Estimate?
     /// The Mac gets the same identity view the handheld does — a callsign in
     /// the console is the same question there as here.
     @StateObject private var profiles = NodeProfileCoordinator()
@@ -347,14 +351,22 @@ struct ContentView: View {
             syncServiceAddresses()
             bbsLibrary.rescan()
         }
-        // Terrain for the ground around this station, once, without being
-        // asked. Keyed on the grid square so it follows the operator if they
-        // move, and skipped entirely if they have none set.
-        .task(id: winlinkContext.settings.gridSquare) {
-            guard let here = Maidenhead.center(of: winlinkContext.settings.gridSquare)
-                .map(GreatCircle.Point.init) else { return }
-            elevation.fetchHomeTerrainIfNeeded(
-                around: here, gridSquare: winlinkContext.settings.gridSquare)
+        // Offered once per grid square, never taken silently.
+        .task(id: winlinkContext.settings.gridSquare) { offerHomeTerrain() }
+        .sheet(item: $homeTerrainOffer) { offer in
+            HomeTerrainConsentSheet(
+                estimate: offer,
+                gridSquare: homeGrid,
+                onAccept: {
+                    if let here = homePosition {
+                        elevation.acceptHomeTerrain(around: here, gridSquare: homeGrid)
+                    }
+                    homeTerrainOffer = nil
+                },
+                onDecline: {
+                    elevation.declineHomeTerrain(gridSquare: homeGrid)
+                    homeTerrainOffer = nil
+                })
         }
         // Which addresses this station accepts calls on. Watched as one value
         // rather than five separate modifiers, which the type checker cannot
@@ -1693,6 +1705,18 @@ struct ContentView: View {
     ///
     /// Off the main actor: 256 elevation samples per profile, and the
     /// station sheet opens on a click.
+    private var homeGrid: String { winlinkContext.settings.gridSquare }
+
+    private var homePosition: GreatCircle.Point? {
+        Maidenhead.center(of: homeGrid).map(GreatCircle.Point.init)
+    }
+
+    /// Asks about terrain for this station's own area, once.
+    private func offerHomeTerrain() {
+        guard let here = homePosition else { return }
+        homeTerrainOffer = elevation.homeTerrainOffer(around: here, gridSquare: homeGrid)
+    }
+
     /// Frames from this station that arrived with nothing repeating them.
     ///
     /// Counted the way `CoverageEstimate` counts: an empty via path means no

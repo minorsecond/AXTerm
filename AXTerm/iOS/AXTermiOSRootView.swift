@@ -50,6 +50,7 @@ struct AXTermiOSRootView: View {
     /// Downloaded terrain, owned by the shell for the same reason as on the
     /// Mac: one handle, one warm tile cache.
     @StateObject private var elevation = ElevationStorage()
+    @State private var homeTerrainOffer: ElevationStorage.Estimate?
     /// The callsign a directory lookup is running for, so the profile can say
     /// it is working rather than say it found nothing.
     @State private var lookingUpCallsign: String?
@@ -192,14 +193,31 @@ struct AXTermiOSRootView: View {
             if phase == .active { applyKeepAwake() } else { keepAwake.release() }
         }
         .task { applyKeepAwake() }
-        // Same as the Mac: the ground around this station, once, without
-        // being asked. See ElevationStorage.fetchHomeTerrainIfNeeded for why
-        // this one needs no permission and a per-path fetch does.
+        // Same as the Mac: offered once per grid square, never taken
+        // silently. Tens of megabytes from a US government service is not a
+        // decision to make on someone's behalf at launch.
         .task(id: context.settings.gridSquare) {
             guard let here = Maidenhead.center(of: context.settings.gridSquare)
                 .map(GreatCircle.Point.init) else { return }
-            elevation.fetchHomeTerrainIfNeeded(
+            homeTerrainOffer = elevation.homeTerrainOffer(
                 around: here, gridSquare: context.settings.gridSquare)
+        }
+        .sheet(item: $homeTerrainOffer) { offer in
+            HomeTerrainConsentSheet(
+                estimate: offer,
+                gridSquare: context.settings.gridSquare,
+                onAccept: {
+                    if let here = Maidenhead.center(of: context.settings.gridSquare)
+                        .map(GreatCircle.Point.init) {
+                        elevation.acceptHomeTerrain(
+                            around: here, gridSquare: context.settings.gridSquare)
+                    }
+                    homeTerrainOffer = nil
+                },
+                onDecline: {
+                    elevation.declineHomeTerrain(gridSquare: context.settings.gridSquare)
+                    homeTerrainOffer = nil
+                })
         }
         .task {
             // Without this, every "Open Settings" button in the shared views
