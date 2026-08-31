@@ -1008,6 +1008,11 @@ struct ContentView: View {
         }
     }
 
+    /// Whether the radio context belongs beside the frontmost page.
+    private var showsRadioSections: Bool {
+        SidebarContext.showsRadioSections(for: selectedNav)
+    }
+
     private var sidebar: some View {
         List(selection: $selectedNav) {
             Section("Views") {
@@ -1023,10 +1028,16 @@ struct ContentView: View {
             // before the section would appear, so the answer to "what can I
             // reach" sat under the list of what was already reachable.
             // Collapsed, it costs one line per node.
-            reachableSection
+            // Mail and BBS bring their own navigation column, and nothing
+            // here shapes them — showing it anyway left two sidebars
+            // competing before the content started.
+            if showsRadioSections {
+                reachableSection
 
-            circuitSection
+                circuitSection
+            }
 
+            if showsRadioSections {
             Section("Stations (\(client.stations.count))") {
                 // "All" option. The accent treatment appears only while a
                 // page this filter actually drives is frontmost — on the
@@ -1208,6 +1219,7 @@ struct ContentView: View {
                         }
                     }
                 }
+            }
             }
         }
         .listStyle(.sidebar)

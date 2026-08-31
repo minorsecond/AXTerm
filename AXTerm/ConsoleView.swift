@@ -675,6 +675,20 @@ struct ConsoleLineView: View {
         line.isDigipeatEcho(localCallsign: localCallsign)
     }
 
+    private func repeatHelp(_ attribution: ConsoleLine.RepeatAttribution) -> String {
+        let digis = attribution.digis.joined(separator: ", ")
+        switch attribution {
+        case .ourFrameEchoed:
+            return "Our own frame, repeated back by \(digis)."
+        case .heardVia:
+            // The distinction that matters: this copy came off the digi's
+            // transmitter, so it says nothing about whether the originating
+            // station is audible here.
+            return "Heard as \(digis)'s retransmission, not from "
+                 + "\(line.from ?? "the sender") directly."
+        }
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
             // Enhanced indicator bar with premium styling for system/error messages
@@ -685,18 +699,22 @@ struct ConsoleLineView: View {
                 .foregroundStyle(.tertiary)
                 .font(.system(size: fontSize, design: .monospaced))
 
-            // Digipeat-echo marker: this row is the digi re-transmitting our
-            // frame, so name the digi inline — that's the interesting fact.
-            if isDigipeatEcho {
+            // Which transmitter we actually heard. Shown for *any* repeated
+            // copy, not just echoes of our own frames: a station's beacon
+            // heard direct and heard off a digi arrive a second apart with
+            // identical text, and without this marker the two rows are the
+            // same words — so "I hear KB5YZB-7" and "DRLNOD hears KB5YZB-7"
+            // looked like a duplicate (2026-08-31).
+            if let attribution = line.repeatAttribution(localCallsign: localCallsign) {
                 HStack(spacing: 3) {
                     Image(systemName: "arrow.triangle.2.circlepath")
                         .font(.system(size: 10, weight: .semibold))
-                    Text(line.repeatedDigis.joined(separator: ","))
+                    Text(attribution.digis.joined(separator: ","))
                         .font(.system(size: fontSize, weight: .medium, design: .monospaced))
                 }
                 .foregroundStyle(.indigo)
-                .help("Digipeated copy — repeated by \(line.repeatedDigis.joined(separator: ", "))")
-                .accessibilityLabel("Digipeated copy via \(line.repeatedDigis.joined(separator: ", "))")
+                .help(repeatHelp(attribution))
+                .accessibilityLabel(repeatHelp(attribution))
             }
 
             // Callsigns

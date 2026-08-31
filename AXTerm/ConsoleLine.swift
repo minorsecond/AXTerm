@@ -94,6 +94,36 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         via.filter { $0.hasSuffix("*") }.map { String($0.dropLast()) }
     }
 
+    /// Why this copy reached us — when it did not reach us directly.
+    ///
+    /// Hearing a station's own transmitter and hearing a digipeater repeat it
+    /// are different facts, and for a beacon they arrive as two rows a second
+    /// apart with identical text. Without this the operator cannot tell "I
+    /// hear KB5YZB-7" from "DRLNOD hears KB5YZB-7", which is most of what a
+    /// beacon is for (2026-08-31).
+    enum RepeatAttribution: Equatable, Sendable {
+        /// Someone else's frame, reaching us off a digipeater's transmitter.
+        case heardVia([String])
+        /// Our own frame coming back. Carries no new content — the transmit
+        /// line already showed it — but proves the digi relayed us.
+        case ourFrameEchoed([String])
+
+        var digis: [String] {
+            switch self {
+            case let .heardVia(digis), let .ourFrameEchoed(digis): return digis
+            }
+        }
+    }
+
+    /// Nil when the frame reached us directly, which needs no explanation.
+    func repeatAttribution(localCallsign: String) -> RepeatAttribution? {
+        let digis = repeatedDigis
+        guard !digis.isEmpty else { return nil }
+        return isDigipeatEcho(localCallsign: localCallsign)
+            ? .ourFrameEchoed(digis)
+            : .heardVia(digis)
+    }
+
     /// True when this line is a digipeated copy of the local station's own
     /// transmission — the digi repeating our frame back at us. These carry no
     /// new content (the TX-time line already shows the frame), but seeing them
