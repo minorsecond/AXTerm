@@ -63,6 +63,29 @@ final class NetworkPathObserverTests: XCTestCase {
         XCTAssertEqual(path(paths, between: "KB5YZB-7", and: "K0NTS-1")?.via, [])
     }
 
+    /// The link the coverage rings depend on.
+    ///
+    /// `CoverageEstimate` reads only paths with an empty `via`, because a
+    /// digipeated answer proves the *digipeater* decoded us and says nothing
+    /// about the far station. That guard holds only if a digipeated
+    /// observation can never end up merged into the direct record for the
+    /// same pair — `NetworkPath.id` carries the hops for exactly this
+    /// reason, and dropping them from it would silently inflate the rings.
+    func testDirectAndDigipeatedCopiesOfTheSamePairStaySeparate() {
+        let paths = NetworkPathObserver.paths(in: [
+            packet("KB5YZB-7", "K0EPI-7"),
+            packet("KB5YZB-7", "K0EPI-7", via: [address("DRLNOD", repeated: true)], at: 1),
+        ])
+        let between = paths.filter { Set([$0.from, $0.to]) == Set(["KB5YZB-7", "K0EPI-7"]) }
+        XCTAssertEqual(between.count, 2, "the two observations are different facts")
+        XCTAssertEqual(Set(between.map(\.evidence)), [.heardDirect, .heardDigipeated])
+
+        let direct = between.filter(\.via.isEmpty)
+        XCTAssertEqual(direct.count, 1)
+        XCTAssertEqual(direct.first?.evidence, .heardDirect,
+                       "a digipeated hearing must never raise the direct record's evidence")
+    }
+
     func testDestinationsThatAreNotStationsAreIgnored() {
         let paths = NetworkPathObserver.paths(in: [packet("KD0SSP", "BEACON")])
         XCTAssertTrue(paths.isEmpty, "a path to BEACON is a category error")

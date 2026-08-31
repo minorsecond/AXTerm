@@ -172,14 +172,28 @@ struct MapLegend: View {
                 HStack(spacing: 4) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 8, weight: .bold))
-                    Text(kind.title)
+                    // Says what the box *is* before what it keys. On its own,
+                    // "Last heard" beside a chevron reads as a filter or a
+                    // sort order — something that picks stations by when they
+                    // were last heard — rather than as the key to the dot
+                    // colours. Naming the dimension still earns its place:
+                    // the Winlink scope keys the same dots by measured link
+                    // quality instead, and which is in force cannot be
+                    // guessed from the colours.
+                    Text("Legend")
                         .font(.caption2.weight(.semibold))
+                    Text("\u{b7} \(kind.title)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
             .buttonStyle(.plain)
+            .help(isExpanded
+                  ? "Hide the key and give the map back the space. Dot colour means \(kind.title.lowercased())."
+                  : "Show what the dot colours mean.")
             .accessibilityLabel(isExpanded
-                                ? "\(kind.title) legend, expanded"
-                                : "\(kind.title) legend, collapsed")
+                                ? "Legend, \(kind.title), expanded"
+                                : "Legend, \(kind.title), collapsed")
 
             if isExpanded {
             ForEach(kind.entries, id: \.label) { entry in
