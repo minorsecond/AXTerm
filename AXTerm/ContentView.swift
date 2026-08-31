@@ -188,6 +188,10 @@ struct ContentView: View {
     @State private var didLoadRawHistory = false
     @State private var selectionMutationScheduler = SelectionMutationScheduler()
     @StateObject private var analyticsViewModel: AnalyticsDashboardViewModel
+    /// Owned here rather than inside the mail pane, because the sidebar
+    /// and the message list are siblings: the folders can only appear in
+    /// the sidebar if both columns read the same mailbox.
+    @StateObject private var mailboxVM: WinlinkMailboxViewModel
     @State private var lastTapTimes: [String: Date] = [:]
 
 
@@ -196,6 +200,12 @@ struct ContentView: View {
         _settings = ObservedObject(wrappedValue: settings)
         _inspectionRouter = ObservedObject(wrappedValue: inspectionRouter)
         _winlinkContext = ObservedObject(wrappedValue: winlinkContext)
+        // `store` is a `let` fixed when the context is built at launch,
+        // so this cannot latch onto the fallback and then miss a real
+        // database arriving later.
+        _mailboxVM = StateObject(wrappedValue: WinlinkMailboxViewModel(
+            store: winlinkContext.store ?? FallbackWinlinkStore(),
+            myCallsign: { [weak settings] in settings?.myCallsign ?? "" }))
         // Initialize analytics view model with settings store for persistence
         _analyticsViewModel = StateObject(wrappedValue: AnalyticsDashboardViewModel(
             settingsStore: settings,
@@ -1008,10 +1018,12 @@ struct ContentView: View {
         }
     }
 
-    /// Whether the radio context belongs beside the frontmost page.
-    private var showsRadioSections: Bool {
-        SidebarContext.showsRadioSections(for: selectedNav)
+    /// What belongs in the sidebar beside the frontmost page.
+    private var sidebarSection: SidebarContext.Section {
+        SidebarContext.section(for: selectedNav)
     }
+
+    private var showsRadioSections: Bool { sidebarSection == .radio }
 
     private var sidebar: some View {
         List(selection: $selectedNav) {
@@ -1035,6 +1047,14 @@ struct ContentView: View {
                 reachableSection
 
                 circuitSection
+            }
+
+            // The mailbox's folders live here rather than in a column of
+            // their own. Two navigation columns before any content began was
+            // the complaint; a sidebar that changes with the page is the
+            // answer to it.
+            if sidebarSection == .mailFolders {
+                WinlinkFolderRows(viewModel: mailboxVM)
             }
 
             if showsRadioSections {
@@ -1521,6 +1541,7 @@ struct ContentView: View {
                     appSettings: settings,
                     sessionCoordinator: sessionCoordinator,
                     client: client,
+                    mailboxVM: mailboxVM,
                     onAddToMap: addSpatialAttachmentToMap
                 )
             case .bbs:

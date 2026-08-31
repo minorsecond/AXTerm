@@ -1,34 +1,50 @@
 import XCTest
 @testable import AXTerm
 
-/// What belongs in the primary sidebar for the page in front.
+/// What fills the sidebar below the view list.
 ///
-/// Mail and BBS bring their own navigation column — folders, boards — so the
-/// operator was looking at two sidebars before the content started: Views,
-/// then Reachable via nodes, then Stations (30), then Folders, then the
-/// message list. Nothing in the radio sections shapes those pages.
+/// The rule is "whatever the frontmost page navigates by". The first attempt
+/// at this only *removed* the radio context on Mail, which fixed nothing the
+/// operator could see: the folders were still a column of their own, so the
+/// window still opened four columns wide and one of them was now blank.
 final class SidebarContextTests: XCTestCase {
 
-    /// The pages the radio context serves: what can be reached, what is
-    /// live, who has been heard.
-    func testRadioPagesKeepTheirContext() {
+    /// Mail navigates by folder, so the sidebar carries the folders — and
+    /// carrying them is what lets the separate column go away.
+    func testMailShowsItsFolders() {
+        XCTAssertEqual(SidebarContext.section(for: .mail), .mailFolders)
+    }
+
+    /// BBS has no navigation column of its own; it is a single pane. Hiding
+    /// the radio context there bought no space and cost the operator the
+    /// stations list.
+    func testBBSKeepsTheRadioContext() {
+        XCTAssertEqual(SidebarContext.section(for: .bbs), .radio)
+    }
+
+    func testPagesBuiltOnReceivedTrafficKeepTheRadioContext() {
         for item in [NavigationItem.terminal, .packets, .routes, .nodes, .analytics, .map] {
-            XCTAssertTrue(SidebarContext.showsRadioSections(for: item),
-                          "\(item.rawValue) is a radio page")
+            XCTAssertEqual(SidebarContext.section(for: item), .radio, "\(item)")
         }
     }
 
-    /// The pages that bring their own second column.
-    func testPagesWithTheirOwnNavigationDropIt() {
-        XCTAssertFalse(SidebarContext.showsRadioSections(for: .mail))
-        XCTAssertFalse(SidebarContext.showsRadioSections(for: .bbs))
+    /// Exactly one page hosts the folders. Two would mean the mailbox
+    /// appeared somewhere it cannot be acted on.
+    func testOnlyMailHostsTheFolders() {
+        let hosts = NavigationItem.allCases.filter {
+            SidebarContext.section(for: $0) == .mailFolders
+        }
+        XCTAssertEqual(hosts, [.mail])
     }
 
-    /// Every page must be decided deliberately: a new one silently keeping
-    /// or losing the sidebar is how this drifts.
-    func testEveryPageHasAnAnswer() {
+    /// Every page gets an answer. The switch is exhaustive by construction,
+    /// so this fails to compile rather than at runtime if one is forgotten —
+    /// but a new page silently inheriting `.radio` is the drift to catch.
+    func testEveryPageIsAccountedFor() {
+        XCTAssertFalse(NavigationItem.allCases.isEmpty)
         for item in NavigationItem.allCases {
-            _ = SidebarContext.showsRadioSections(for: item)
+            let section = SidebarContext.section(for: item)
+            XCTAssertTrue(section == .radio || section == .mailFolders, "\(item)")
         }
     }
 }

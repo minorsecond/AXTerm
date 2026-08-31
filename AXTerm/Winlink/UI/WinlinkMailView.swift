@@ -25,7 +25,9 @@ struct WinlinkMailView: View {
         onAddToMap
     }
 
-    @StateObject private var mailboxVM: WinlinkMailboxViewModel
+    /// Owned by the shell, not here: the folder list lives in the main
+    /// sidebar, which is this view's sibling rather than its child.
+    @ObservedObject private var mailboxVM: WinlinkMailboxViewModel
     @StateObject private var stationsVM: RMSStationsViewModel
     @StateObject private var catalogVM: WinlinkCatalogViewModel
     @StateObject private var contactsVM: WinlinkContactsViewModel
@@ -76,6 +78,7 @@ struct WinlinkMailView: View {
          appSettings: AppSettingsStore,
          sessionCoordinator: SessionCoordinator,
          client: PacketEngine,
+         mailboxVM: WinlinkMailboxViewModel,
          onAddToMap: ((WinlinkB2Message.Attachment, String) -> Void)? = nil) {
         self.context = context
         self.appSettings = appSettings
@@ -84,11 +87,10 @@ struct WinlinkMailView: View {
         self.client = client
         self.onAddToMap = onAddToMap
 
+        _mailboxVM = ObservedObject(wrappedValue: mailboxVM)
+
         let store = context.store ?? FallbackWinlinkStore()
         let settingsStore = context.settings
-        let callsignProvider = { [weak appSettings] in appSettings?.myCallsign ?? "" }
-        _mailboxVM = StateObject(wrappedValue: WinlinkMailboxViewModel(
-            store: store, myCallsign: callsignProvider))
         // The last known position judges whether a stored measurement
         // still describes the link from here; the grid-square fallback
         // keeps the column meaningful when GPS is unavailable.
@@ -428,9 +430,6 @@ struct WinlinkMailView: View {
 
     private var mailPanes: some View {
         HSplitView {
-            WinlinkFolderSidebar(viewModel: mailboxVM)
-                .frame(minWidth: 150, idealWidth: 180, maxWidth: 260)
-
             switch readingPaneLayout {
             case .right:
                 messageList
@@ -1075,65 +1074,4 @@ struct WinlinkMailView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-}
-
-/// Inert store used only when the database failed to open, so view
-/// models still construct (the UI shows a disabled notice instead).
-private nonisolated final class FallbackWinlinkStore: WinlinkStore, @unchecked Sendable {
-    func folders() throws -> [WinlinkFolderRecord] { [] }
-    func folderID(for role: WinlinkFolderRecord.SystemRole) throws -> Int64 {
-        throw WinlinkStoreError.missingSystemFolder(role.rawValue)
-    }
-    func createFolder(name: String) throws -> WinlinkFolderRecord {
-        throw WinlinkStoreError.missingSystemFolder("unavailable")
-    }
-    func renameFolder(id: Int64, name: String) throws { throw WinlinkStoreError.folderNotFound(id) }
-    func deleteFolder(id: Int64) throws { throw WinlinkStoreError.folderNotFound(id) }
-    func trashOrigin(mid: String) throws -> Int64? { nil }
-    func deleteMessages(mids: [String]) throws -> [String] { [] }
-    func emptyTrash() throws -> Int { 0 }
-    func messageTombstones() throws -> [WinlinkMessageTombstoneRecord] { [] }
-    func saveDraft(_ message: WinlinkB2Message) throws { throw WinlinkStoreError.missingSystemFolder("unavailable") }
-    func updateDraft(_ message: WinlinkB2Message) throws { throw WinlinkStoreError.messageNotFound(message.mid) }
-    func queueDraft(mid: String) throws { throw WinlinkStoreError.messageNotFound(mid) }
-    func queuedOutboundMessages() throws -> [WinlinkB2Message] { [] }
-    func markSending(mid: String) throws {}
-    func markSent(mid: String) throws {}
-    func markFailed(mid: String, error: String) throws {}
-    func markDeferred(mid: String) throws {}
-    func savePartialBody(mid: String, compressedSize: Int, data: Data) throws {}
-    func partialBodies() throws -> [WinlinkPartialBodyRecord] { [] }
-    func deletePartialBody(mid: String) throws {}
-    func revertSendingToQueued() throws {}
-    func recordSentOffset(mid: String, offset: Int) throws {}
-    func saveInbound(_ message: WinlinkB2Message) throws -> Bool { false }
-    func messages(inFolder folderId: Int64) throws -> [WinlinkMessageSummary] { [] }
-    func message(mid: String) throws -> WinlinkStoredMessage? { nil }
-    func inboundMessages(fromAddr: String, limit: Int) throws -> [WinlinkStoredMessage] { [] }
-    func catalogFavorites() throws -> Set<String> { [] }
-    func setCatalogFavorite(inquiryId: String, isFavorite: Bool) throws {}
-    func callsignRecord(callsign: String) throws -> CallsignDirectoryRecord? { nil }
-    func saveCallsignRecord(_ record: CallsignDirectoryRecord) throws {}
-    func setRead(mid: String, _ read: Bool) throws {}
-    func move(mid: String, toFolder folderId: Int64) throws {}
-    func moveToTrash(mid: String) throws {}
-    func unreadInboxCount() throws -> Int { 0 }
-    func replaceStationCache(_ stations: [WinlinkRMSStationRecord],
-                             scope: WinlinkRMSStationRecord.Scope) throws {}
-    func stations() throws -> [WinlinkRMSStationRecord] { [] }
-    func stations(scope: WinlinkRMSStationRecord.Scope) throws -> [WinlinkRMSStationRecord] { [] }
-    func downloadedGridFields() throws -> [(field: String, count: Int)] { [] }
-    func clearDownloadedStations() throws {}
-    func replaceCatalogCache(_ items: [WinlinkCatalogItemRecord]) throws {}
-    func catalogItems() throws -> [WinlinkCatalogItemRecord] { [] }
-    func appendSessionLog(_ log: WinlinkSessionLogRecord) throws {}
-    func appendSessionLogReturningID(_ log: WinlinkSessionLogRecord) throws -> Int64 { 0 }
-    func sessionLogs(limit: Int) throws -> [WinlinkSessionLogRecord] { [] }
-    func sessionLog(id: Int64) throws -> WinlinkSessionLogRecord? { nil }
-    func sessionLogID(forMessage mid: String) throws -> Int64? { nil }
-    func messageIDs(forSessionLog id: Int64) throws -> [String] { [] }
-    func linkMessages(mids: [String], toSessionLog id: Int64) throws {}
-    func saveSolarConditions(_ conditions: SolarConditions) throws {}
-    func solarConditions(forDay day: Date) throws -> SolarConditions? { nil }
-    func saveInbound(_ message: WinlinkB2Message, sessionLogID: Int64?) throws -> Bool { false }
 }
