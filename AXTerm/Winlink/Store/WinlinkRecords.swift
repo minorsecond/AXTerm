@@ -320,3 +320,31 @@ nonisolated struct WinlinkPartialBodyRecord: Codable, FetchableRecord, Persistab
     var data: Data
     var updatedAt: Date
 }
+
+
+/// Space weather for one day, stored so it can be recalled when there is no
+/// internet to ask — which is the day it is most likely to be wanted.
+nonisolated struct SolarConditionsRecord: Codable, FetchableRecord, PersistableRecord, Hashable, Sendable {
+    static let databaseTableName = "solarConditions"
+
+    /// Midnight UTC of the day described. Primary key: one row per day.
+    var day: Date
+    var solarFlux: Double?
+    var kIndex: Double?
+    /// Kept so an odd reading can be traced rather than argued with.
+    var source: String
+    var fetchedAt: Date
+
+    var conditions: SolarConditions {
+        SolarConditions(day: day, solarFlux: solarFlux, kIndex: kIndex,
+                        source: source, fetchedAt: fetchedAt)
+    }
+
+    init(conditions: SolarConditions) {
+        self.day = conditions.day
+        self.solarFlux = conditions.solarFlux
+        self.kIndex = conditions.kIndex
+        self.source = conditions.source
+        self.fetchedAt = conditions.fetchedAt
+    }
+}

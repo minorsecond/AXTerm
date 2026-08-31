@@ -137,5 +137,7 @@ nonisolated protocol WinlinkStore: Sendable {
     func sessionLogID(forMessage mid: String) throws -> Int64?
     func messageIDs(forSessionLog id: Int64) throws -> [String]
     func linkMessages(mids: [String], toSessionLog id: Int64) throws
+    func saveSolarConditions(_ conditions: SolarConditions) throws
+    func solarConditions(forDay day: Date) throws -> SolarConditions?
     func saveInbound(_ message: WinlinkB2Message, sessionLogID: Int64?) throws -> Bool
 }

@@ -1133,5 +1133,7 @@ private nonisolated final class FallbackWinlinkStore: WinlinkStore, @unchecked S
     func sessionLogID(forMessage mid: String) throws -> Int64? { nil }
     func messageIDs(forSessionLog id: Int64) throws -> [String] { [] }
     func linkMessages(mids: [String], toSessionLog id: Int64) throws {}
+    func saveSolarConditions(_ conditions: SolarConditions) throws {}
+    func solarConditions(forDay day: Date) throws -> SolarConditions? { nil }
     func saveInbound(_ message: WinlinkB2Message, sessionLogID: Int64?) throws -> Bool { false }
 }

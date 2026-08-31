@@ -19,6 +19,7 @@ struct WinlinkSessionHistoryView: View {
     @State private var summaries: [WinlinkSessionSummary] = []
     @State private var selection: Int64?
     @State private var carried: [String] = []
+    @State private var solar: SolarConditions?
 
     var body: some View {
         NavigationSplitView {
@@ -40,7 +41,10 @@ struct WinlinkSessionHistoryView: View {
         .frame(minWidth: 720, minHeight: 440)
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         .onAppear(perform: load)
-        .onChange(of: selection) { _, _ in loadCarried() }
+        .onChange(of: selection) { _, _ in
+            loadCarried()
+            loadSolar()
+        }
     }
 
     private func row(_ summary: WinlinkSessionSummary) -> some View {
@@ -104,6 +108,39 @@ struct WinlinkSessionHistoryView: View {
                 }
             }
 
+            Section("Space weather that day") {
+                if let solar {
+                    if let flux = solar.solarFlux {
+                        LabeledContent("Solar flux", value: String(format: "%.0f", flux))
+                    }
+                    if let k = solar.kIndex {
+                        LabeledContent("Kp (day max)") {
+                            Text(SolarConditions.geomagneticDescription(kIndex: k)
+                                    .map { "\(String(format: "%.1f", k)) — \($0)" }
+                                 ?? String(format: "%.1f", k))
+                        }
+                    }
+                    LabeledContent("Source", value: solar.source)
+                    // What these numbers are allowed to explain depends on
+                    // the path this session actually used — and when the
+                    // frequency was not recorded, on saying so.
+                    if let note = SolarBandRelevance.note(
+                        frequencyHz: summary.log.frequencyHz,
+                        transport: summary.log.transport,
+                        kIndex: solar.kIndex) {
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else {
+                    Text("Not recorded for this day. Conditions are fetched when a session "
+                         + "runs and there is a network to ask.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Carried") {
                 if carried.isEmpty {
                     Text(summary.log.messagesReceived > 0
@@ -129,6 +166,17 @@ struct WinlinkSessionHistoryView: View {
             selection = summaries.first?.id
         }
         loadCarried()
+        loadSolar()
+    }
+
+    private func loadSolar() {
+        guard let selection,
+              let summary = summaries.first(where: { $0.id == selection }) else {
+            solar = nil
+            return
+        }
+        let day = SolarConditionsService.day(containing: summary.log.startedAt)
+        solar = (try? store?.solarConditions(forDay: day)) ?? nil
     }
 
     private func loadCarried() {

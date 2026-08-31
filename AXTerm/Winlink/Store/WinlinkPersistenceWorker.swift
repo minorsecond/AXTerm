@@ -52,6 +52,14 @@ actor WinlinkPersistenceWorker {
         try store.linkMessages(mids: mids, toSessionLog: id)
     }
 
+    /// Record the day's space weather if it is not already known.
+    ///
+    /// Best-effort and silent: no network is the normal case in the field,
+    /// and a missing reading must never affect the exchange that just ran.
+    func captureSpaceWeather(for date: Date) async {
+        await SolarConditionsService(store: store).captureIfNeeded(for: date)
+    }
+
     func appendSessionLog(_ log: WinlinkSessionLogRecord) throws {
         try store.appendSessionLog(log)
     }

@@ -556,6 +556,23 @@ nonisolated enum DatabaseManager {
     /// `WinlinkMessageStateRecord`. Both nil for existing rows, which is
     /// correct: nothing already in the Trash has a recorded origin, and the
     /// UI treats a missing date as unknown rather than as the epoch.
+    /// Space weather per day, kept locally.
+    ///
+    /// One row per day rather than per session: the indices are daily
+    /// figures, and storing them per session would imply a precision the
+    /// measurement does not have. Cached on disk because the day an operator
+    /// most wants to know what the ionosphere was doing is the day there is
+    /// no internet to ask.
+    static func createSolarConditions(_ db: Database) throws {
+        try db.create(table: SolarConditionsRecord.databaseTableName, ifNotExists: true) { t in
+            t.column("day", .datetime).primaryKey()
+            t.column("solarFlux", .double)
+            t.column("kIndex", .double)
+            t.column("source", .text).notNull()
+            t.column("fetchedAt", .datetime).notNull()
+        }
+    }
+
     /// Which exchange carried each message.
     ///
     /// Nullable, and deliberately *not* a foreign key with a cascade: a
@@ -698,6 +715,10 @@ nonisolated enum DatabaseManager {
         registerReportedMigration(&migrator, version: 25,
                                   name: "addWinlinkMessageSessionLink") { db in
             try addWinlinkMessageSessionLink(db)
+        }
+        registerReportedMigration(&migrator, version: 26,
+                                  name: "createSolarConditions") { db in
+            try createSolarConditions(db)
         }
         return migrator
     }()

@@ -590,6 +590,18 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
         }
     }
 
+    func saveSolarConditions(_ conditions: SolarConditions) throws {
+        try dbQueue.write { db in
+            try SolarConditionsRecord(conditions: conditions).insert(db, onConflict: .replace)
+        }
+    }
+
+    func solarConditions(forDay day: Date) throws -> SolarConditions? {
+        try dbQueue.read { db in
+            try SolarConditionsRecord.fetchOne(db, key: day)?.conditions
+        }
+    }
+
     func sessionLog(id: Int64) throws -> WinlinkSessionLogRecord? {
         try dbQueue.read { db in try WinlinkSessionLogRecord.fetchOne(db, key: id) }
     }

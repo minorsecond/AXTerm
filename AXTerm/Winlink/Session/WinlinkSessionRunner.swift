@@ -579,6 +579,12 @@ final class WinlinkSessionRunner: ObservableObject {
         if let logID = try? await worker.appendSessionLogReturningID(log) {
             try? await worker.linkMessages(mids: summary.receivedMIDs, toSessionLog: logID)
         }
+        // Capture the day's space weather now rather than when someone opens
+        // the history: the point is to still have it later, and the day it is
+        // most wanted is the day there is no internet to ask. Best-effort and
+        // silent — no network is normal in the field, and a missing reading
+        // must never affect the exchange that just ran.
+        await worker.captureSpaceWeather(for: startedAt)
         observationTask?.cancel()
         observationTask = nil
 
