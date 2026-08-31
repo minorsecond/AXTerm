@@ -53,6 +53,9 @@ struct ContentView: View {
     /// The node whose table the Nodes page is restricted to, set by the
     /// sidebar's "Reachable via" rows.
     @State private var nodeRouteFilter: String?
+    /// Which face of the mailbox the BBS page shows. Held here because
+    /// the sidebar is what chooses it.
+    @State private var bbsPane: BBSPane = .messages
     /// The Mac gets the same identity view the handheld does — a callsign in
     /// the console is the same question there as here.
     @StateObject private var profiles = NodeProfileCoordinator()
@@ -1049,12 +1052,21 @@ struct ContentView: View {
                 circuitSection
             }
 
-            // The mailbox's folders live here rather than in a column of
-            // their own. Two navigation columns before any content began was
-            // the complaint; a sidebar that changes with the page is the
-            // answer to it.
-            if sidebarSection == .mailFolders {
+            // What the page navigates by, in the place the sidebar keeps it.
+            // Two navigation columns before any content began was the
+            // complaint; a sidebar that changes with the page answers it
+            // without taking anything away.
+            switch sidebarSection {
+            case .radio:
+                EmptyView()   // Drawn above, where its three sections belong.
+            case .mapLayers:
+                MapLayerRows()
+            case .mailFolders:
                 WinlinkFolderRows(viewModel: mailboxVM)
+            case .bbsPanes:
+                BBSPaneRows(pane: $bbsPane,
+                            liveCallers: bbsService.live == nil ? 0 : 1,
+                            messageCount: bbsService.messages.count)
             }
 
             if showsRadioSections {
@@ -1549,7 +1561,8 @@ struct ContentView: View {
                     service: bbsService,
                     settings: bbsSettings,
                     library: bbsLibrary,
-                    stationCallsign: settings.myCallsign
+                    stationCallsign: settings.myCallsign,
+                    pane: $bbsPane
                 )
             //case .raw:
             //    RawView(

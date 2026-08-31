@@ -17,15 +17,10 @@ struct BBSView: View {
     @ObservedObject var library: BBSFileLibrary
     let stationCallsign: String
 
-    enum Pane: String, CaseIterable, Identifiable {
-        case messages = "Messages"
-        case callers = "Callers"
-        case directory = "Directory"
-        case files = "Files"
-        var id: String { rawValue }
-    }
-
-    @State private var pane: Pane = .messages
+    /// Chosen in the sidebar, which is where this page's navigation lives
+    /// now. The segmented picker that used to sit across the top was a
+    /// second row of navigation inside a page that already had one beside it.
+    @Binding var pane: BBSPane
 
     private var sysop: String {
         settings.effectiveCallsign(stationCallsign: stationCallsign)
@@ -46,16 +41,6 @@ struct BBSView: View {
                 }
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
-
-            Picker("", selection: $pane) {
-                ForEach(Pane.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 420)
-            .padding(.vertical, 8)
-
-            Divider()
 
             switch pane {
             case .messages:
