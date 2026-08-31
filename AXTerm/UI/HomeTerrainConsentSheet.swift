@@ -45,7 +45,8 @@ struct HomeTerrainConsentSheet: View {
                 row("externaldrive", "\(estimate.tileCount) tiles, "
                     + "\(estimate.sizeDescription), kept on this device")
                 row("globe.americas", "From the USGS 3DEP elevation service")
-                row("mappin.and.ellipse", "Covers the area around \(gridSquare.uppercased())")
+                row("mappin.and.ellipse", "The area around \(gridSquare.uppercased()), "
+                    + "and wherever you move to")
                 row("wifi.slash", "Works offline afterwards \u{2014} nothing is fetched again")
             }
             .font(.caption)
@@ -54,7 +55,10 @@ struct HomeTerrainConsentSheet: View {
             .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
 
             HStack(spacing: 10) {
-                Button("Not Now", action: onDecline)
+                // Not "Not Now": this answer stands. Saying so is the
+                // difference between a choice and a deferral the operator
+                // expects to be asked about again.
+                Button("No Thanks", action: onDecline)
                     .keyboardShortcut(.cancelAction)
                 Button("Download", action: onAccept)
                     .keyboardShortcut(.defaultAction)
@@ -62,7 +66,9 @@ struct HomeTerrainConsentSheet: View {
             }
             .padding(.top, 2)
 
-            Text("You can change this any time under Terrain in offline maps.")
+            Text("Asked once. Either way you can change it under Terrain in "
+                 + "offline maps, and any station page can fetch the tiles for its "
+                 + "own path.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }

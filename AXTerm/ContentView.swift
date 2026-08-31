@@ -359,12 +359,12 @@ struct ContentView: View {
                 gridSquare: homeGrid,
                 onAccept: {
                     if let here = homePosition {
-                        elevation.acceptHomeTerrain(around: here, gridSquare: homeGrid)
+                        elevation.acceptHomeTerrain(around: here)
                     }
                     homeTerrainOffer = nil
                 },
                 onDecline: {
-                    elevation.declineHomeTerrain(gridSquare: homeGrid)
+                    elevation.declineHomeTerrain()
                     homeTerrainOffer = nil
                 })
         }
@@ -1711,10 +1711,16 @@ struct ContentView: View {
         Maidenhead.center(of: homeGrid).map(GreatCircle.Point.init)
     }
 
-    /// Asks about terrain for this station's own area, once.
+    /// Asks about terrain for this station's own area — once in the life of
+    /// the install. After that the answer stands, and a new grid square is
+    /// acted on rather than asked about again.
     private func offerHomeTerrain() {
         guard let here = homePosition else { return }
-        homeTerrainOffer = elevation.homeTerrainOffer(around: here, gridSquare: homeGrid)
+        if let offer = elevation.homeTerrainOffer(around: here, gridSquare: homeGrid) {
+            homeTerrainOffer = offer
+        } else {
+            elevation.fetchHomeTerrainIfEnabled(around: here)
+        }
     }
 
     /// Frames from this station that arrived with nothing repeating them.

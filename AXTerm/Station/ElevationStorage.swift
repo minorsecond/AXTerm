@@ -190,33 +190,39 @@ final class ElevationStorage: ObservableObject {
             tiles: ElevationDownloader.tiles(alongPathFrom: origin, to: destination))
     }
 
-    /// Whether the offer is made at all. On by default; the Settings toggle
-    /// writes here. Off means never ask and never fetch.
+    /// The standing preference: keep terrain for wherever this station is.
+    /// On means fetch without asking again; off means never.
     static let autoFetchEnabledKey = "elevation.autoFetchHome"
 
-    /// What was decided for a given grid square, so the question is asked
-    /// once and an answer is respected.
-    static func decisionKey(_ grid: String) -> String {
-        "elevation.homeFetchDecision.\(grid)"
+    /// Whether the question has ever been put. Asked once in the life of the
+    /// install, not once per grid square — the operator is answering "should
+    /// this app keep terrain for my area", and that answer does not expire
+    /// because they corrected a typo in their locator or drove to a
+    /// neighbouring square.
+    static let askedKey = "elevation.homeFetchAsked"
+
+    /// Whether to put the question now.
+    ///
+    /// Separated from the store so the policy is testable without an
+    /// elevation database. Everything here is a reason *not* to ask.
+    static func shouldAskAboutHomeTerrain(gridSquare: String,
+                                          observer: GreatCircle.Point,
+                                          defaults: UserDefaults = .standard) -> Bool {
+        guard !normalizedGrid(gridSquare).isEmpty else { return false }
+        guard !defaults.bool(forKey: askedKey) else { return false }
+        // 3DEP is a USGS product covering the United States and its
+        // territories; elsewhere it answers with a tile of NaN. Asking
+        // someone in Copenhagen to spend 36 MB on that is worse than not
+        // asking at all — and it must not burn the one question either, in
+        // case they later move somewhere it would help.
+        return ElevationDownloader.sourceHasCoverage(at: observer)
     }
 
-    /// Whether to ask the operator for the ground around their station.
-    ///
-    /// Terrain used to work only if you knew a map page had an offline menu
-    /// with a terrain section in it — not a feature anyone discovers. VHF
-    /// packet is local, so nine tiles around the station cover every path it
-    /// will realistically be asked about, and having them should be the
-    /// default state of the app.
-    ///
-    /// Downloading them silently is a different matter. It is tens of
-    /// megabytes from a US government service, and the operator is the one
-    /// who knows whether their connection can afford it and whether they want
-    /// to make that request at all. So: offered, once, with the cost on the
-    /// face of it.
-    ///
-    /// Nil when there is nothing to ask about — no grid, no store, nothing
-    /// missing, already answered, or outside the only region the source
-    /// covers.
+    static func normalizedGrid(_ gridSquare: String) -> String {
+        gridSquare.trimmingCharacters(in: .whitespaces).uppercased()
+    }
+
+    /// The question, when it is live and there is something to fetch.
     func homeTerrainOffer(around observer: GreatCircle.Point,
                           gridSquare: String,
                           defaults: UserDefaults = .standard) -> Estimate? {
@@ -229,50 +235,39 @@ final class ElevationStorage: ObservableObject {
         return estimate.tileCount > 0 ? estimate : nil
     }
 
-    /// Whether the question is live, separated from the store so the policy
-    /// can be tested without one. Everything here is a reason *not* to ask.
-    static func shouldAskAboutHomeTerrain(gridSquare: String,
-                                          observer: GreatCircle.Point,
-                                          defaults: UserDefaults = .standard) -> Bool {
-        let grid = normalizedGrid(gridSquare)
-        guard !grid.isEmpty else { return false }
-        // Off means never ask. Checked before the answered-already lookup, so
-        // switching it back on asks again.
-        guard defaults.object(forKey: autoFetchEnabledKey) as? Bool ?? true else { return false }
-        // Asked and answered. A move to another grid is a new question.
-        guard defaults.string(forKey: decisionKey(grid)) == nil else { return false }
-        // 3DEP is a USGS product covering the United States and its
-        // territories; elsewhere it answers with a tile of NaN. Asking
-        // someone in Copenhagen to spend 36 MB on that is worse than not
-        // asking at all.
-        return ElevationDownloader.sourceHasCoverage(at: observer)
-    }
-
-    /// One square, one answer — "dm79po" and "DM79PO" are the same ground,
-    /// and keying the decision on the raw string would re-ask on a re-typed
-    /// grid.
-    static func normalizedGrid(_ gridSquare: String) -> String {
-        gridSquare.trimmingCharacters(in: .whitespaces).uppercased()
-    }
-
-    /// The operator said yes. Downloads as an asked-for fetch, because it
-    /// was one — they saw the size and pressed the button.
+    /// Yes. Downloads now as an asked-for fetch — they saw the size and
+    /// pressed the button — and stands as the preference from here on.
     func acceptHomeTerrain(around observer: GreatCircle.Point,
-                           gridSquare: String,
                            defaults: UserDefaults = .standard) {
-        let grid = Self.normalizedGrid(gridSquare)
-        guard !grid.isEmpty else { return }
-        defaults.set("accepted", forKey: Self.decisionKey(grid))
+        defaults.set(true, forKey: Self.askedKey)
+        defaults.set(true, forKey: Self.autoFetchEnabledKey)
         download(around: observer)
     }
 
-    /// The operator said no. Remembered per grid, so the question is not
-    /// asked again here — the Settings section and every station page still
-    /// offer terrain to anyone who changes their mind.
-    func declineHomeTerrain(gridSquare: String, defaults: UserDefaults = .standard) {
-        let grid = Self.normalizedGrid(gridSquare)
-        guard !grid.isEmpty else { return }
-        defaults.set("declined", forKey: Self.decisionKey(grid))
+    /// No. Not asked again; the Settings toggle and every station page are
+    /// still there for anyone who changes their mind.
+    func declineHomeTerrain(defaults: UserDefaults = .standard) {
+        defaults.set(true, forKey: Self.askedKey)
+        defaults.set(false, forKey: Self.autoFetchEnabledKey)
+    }
+
+    /// Terrain for a grid the operator has moved to, under a preference they
+    /// already gave.
+    ///
+    /// Automatic, so it refuses expensive and constrained networks. Agreeing
+    /// once to "keep terrain for my area" is not agreeing to 36 MB over a
+    /// hotspot in a car park, and a portable operator is exactly who ends up
+    /// in one.
+    func fetchHomeTerrainIfEnabled(around observer: GreatCircle.Point,
+                                   defaults: UserDefaults = .standard) {
+        guard store != nil, defaults.bool(forKey: Self.askedKey) else { return }
+        guard defaults.bool(forKey: Self.autoFetchEnabledKey) else { return }
+        guard ElevationDownloader.sourceHasCoverage(at: observer) else { return }
+        let wanted = Self.tilesWorthFetching(around: observer).filter { tile in
+            (try? store?.hasTile(lat: tile.lat, lon: tile.lon)) != true
+        }
+        guard !wanted.isEmpty else { return }
+        downloader?.download(tiles: wanted, automatic: true)
     }
 
     func cancelDownload() {

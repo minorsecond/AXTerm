@@ -199,8 +199,12 @@ struct AXTermiOSRootView: View {
         .task(id: context.settings.gridSquare) {
             guard let here = Maidenhead.center(of: context.settings.gridSquare)
                 .map(GreatCircle.Point.init) else { return }
-            homeTerrainOffer = elevation.homeTerrainOffer(
-                around: here, gridSquare: context.settings.gridSquare)
+            if let offer = elevation.homeTerrainOffer(
+                around: here, gridSquare: context.settings.gridSquare) {
+                homeTerrainOffer = offer
+            } else {
+                elevation.fetchHomeTerrainIfEnabled(around: here)
+            }
         }
         .sheet(item: $homeTerrainOffer) { offer in
             HomeTerrainConsentSheet(
@@ -209,13 +213,12 @@ struct AXTermiOSRootView: View {
                 onAccept: {
                     if let here = Maidenhead.center(of: context.settings.gridSquare)
                         .map(GreatCircle.Point.init) {
-                        elevation.acceptHomeTerrain(
-                            around: here, gridSquare: context.settings.gridSquare)
+                        elevation.acceptHomeTerrain(around: here)
                     }
                     homeTerrainOffer = nil
                 },
                 onDecline: {
-                    elevation.declineHomeTerrain(gridSquare: context.settings.gridSquare)
+                    elevation.declineHomeTerrain()
                     homeTerrainOffer = nil
                 })
         }
