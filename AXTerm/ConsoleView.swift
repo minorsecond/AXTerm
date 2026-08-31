@@ -18,6 +18,111 @@ nonisolated struct ConsoleTypeFilterFlags: Equatable, Sendable {
     /// Show digipeated copies of the local station's own frames (off by default —
     /// they carry no new content, but confirm the digi is actually relaying us).
     var showDigipeats: Bool = false
+    /// Show *nothing but* those echoes. Not a message class — an echo is
+    /// still an ID or a DATA line — so this is a separate axis rather than
+    /// another flag in the set above.
+    var digipeatsOnly: Bool = false
+
+    /// One switch on the filter row.
+    enum Kind: String, CaseIterable, Hashable, Sendable {
+        case id, beacon, mail, data, prompt, other, system, digipeats
+
+        /// The chip's label, and the word used in "Show Only …".
+        var label: String {
+            switch self {
+            case .id: return "ID"
+            case .beacon: return "BCN"
+            case .mail: return "MAIL"
+            case .data: return "DATA"
+            case .prompt: return "CMD"
+            case .other: return "OTHER"
+            case .system: return "SYS"
+            case .digipeats: return "DIGI"
+            }
+        }
+
+        /// The seven that partition the console. DIGI is excluded: it is an
+        /// overlay on these, not a ninth kind of line.
+        static var messageClasses: [Kind] {
+            allCases.filter { $0 != .digipeats }
+        }
+    }
+
+    subscript(kind: Kind) -> Bool {
+        get {
+            switch kind {
+            case .id: return showID
+            case .beacon: return showBeacon
+            case .mail: return showMail
+            case .data: return showData
+            case .prompt: return showPrompt
+            case .other: return showOther
+            case .system: return showSystem
+            case .digipeats: return showDigipeats
+            }
+        }
+        set {
+            switch kind {
+            case .id: showID = newValue
+            case .beacon: showBeacon = newValue
+            case .mail: showMail = newValue
+            case .data: showData = newValue
+            case .prompt: showPrompt = newValue
+            case .other: showOther = newValue
+            case .system: showSystem = newValue
+            case .digipeats: showDigipeats = newValue
+            }
+        }
+    }
+
+    /// Show this one and nothing else — the mixing-desk solo, so isolating a
+    /// class costs one gesture instead of switching off the other seven.
+    ///
+    /// Soloing a message class leaves `showDigipeats` alone: an echoed DATA
+    /// frame is still DATA, and whether the operator wants to see their own
+    /// echoes is a separate preference from which classes they are reading.
+    mutating func solo(_ kind: Kind) {
+        if kind == .digipeats {
+            // "Only DIGI" cannot mean "no message classes" — that shows an
+            // empty console, because every echo is also an ID or a DATA line.
+            for klass in Kind.messageClasses { self[klass] = true }
+            showDigipeats = true
+            digipeatsOnly = true
+        } else {
+            for klass in Kind.messageClasses { self[klass] = (klass == kind) }
+            digipeatsOnly = false
+        }
+    }
+
+    func isSoloed(_ kind: Kind) -> Bool {
+        if kind == .digipeats { return digipeatsOnly && showDigipeats }
+        guard !digipeatsOnly else { return false }
+        return Kind.messageClasses.allSatisfy { self[$0] == ($0 == kind) }
+    }
+
+    /// Back to every class. Deliberately does not touch `showDigipeats`:
+    /// echoes are off by default because they are noise, and restoring the
+    /// classes should not quietly turn the operator's own echoes back on.
+    mutating func showAllTypes() {
+        for klass in Kind.messageClasses { self[klass] = true }
+        digipeatsOnly = false
+    }
+
+    var isShowingEveryClass: Bool {
+        !digipeatsOnly && Kind.messageClasses.allSatisfy { self[$0] }
+    }
+
+    /// What is being held back, for the line beside the message count. Nil
+    /// when every class is showing.
+    var restrictionSummary: String? {
+        if digipeatsOnly { return "digipeat echoes only" }
+        if isShowingEveryClass { return nil }
+        let shown = Kind.messageClasses.filter { self[$0] }
+        if shown.isEmpty { return "every type hidden" }
+        if shown.count == 1 { return "\(shown[0].label) only" }
+        let hidden = Kind.messageClasses.filter { !self[$0] }
+        return "no \(hidden.map(\.label).joined(separator: "/"))"
+    }
 }
 
 nonisolated enum ConsoleVisibilityFilter {
@@ -38,7 +143,12 @@ nonisolated enum ConsoleVisibilityFilter {
             // Digipeated echoes of our own frames are copies, not content — hidden
             // unless the operator opts in. Frames FROM other stations heard via a
             // digi are the session content itself and are never hidden here.
-            if !flags.showDigipeats, line.isDigipeatEcho(localCallsign: localCallsign) {
+            let isEcho = line.isDigipeatEcho(localCallsign: localCallsign)
+            if !flags.showDigipeats, isEcho {
+                return false
+            }
+            // "Only DIGI": every line that is not one of our own echoes goes.
+            if flags.digipeatsOnly, !isEcho {
                 return false
             }
             switch line.kind {
@@ -101,22 +211,14 @@ struct ConsoleView: View {
     @AppStorage("consoleFilter_showOther") private var showOther = true
     @AppStorage("consoleFilter_showSystem") private var showSystem = true
     @AppStorage("consoleFilter_showDigipeats") private var showDigipeats = false
+    @AppStorage("consoleFilter_digipeatsOnly") private var digipeatsOnly = false
 
     /// Lines filtered by clear timestamp and message type preferences
     private var typeFilteredLines: [ConsoleLine] {
         ConsoleVisibilityFilter.apply(
             lines: lines,
             clearedAt: clearedAt,
-            flags: ConsoleTypeFilterFlags(
-                showID: showID,
-                showBeacon: showBeacon,
-                showMail: showMail,
-                showData: showData,
-                showPrompt: showPrompt,
-                showOther: showOther,
-                showSystem: showSystem,
-                showDigipeats: showDigipeats
-            ),
+            flags: currentFilterFlags,
             localCallsign: localCallsign
         )
     }
@@ -217,9 +319,23 @@ struct ConsoleView: View {
                     Divider()
                         .frame(height: 16)
 
-                    Text("\(groupedLines.count) messages")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
+                    // Naming the restriction, not just implying it with dim
+                    // chips: an operator who soloed DATA an hour ago and came
+                    // back to a quiet console should not have to audit eight
+                    // switches to find out why.
+                    HStack(spacing: 4) {
+                        Text("\(groupedLines.count) messages")
+                        if let restriction = currentFilterFlags.restrictionSummary {
+                            Text("\u{b7} \(restriction)")
+                                .foregroundStyle(.orange)
+                            Button("Show All") { applyFlags { $0.showAllTypes() } }
+                                .buttonStyle(.borderless)
+                                .controlSize(.small)
+                                .help("Turn every message type back on.")
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
 
                     Button(action: {
                         clearConsole()
@@ -382,56 +498,91 @@ struct ConsoleView: View {
     @ViewBuilder
     private var filterToggleGroup: some View {
         HStack(spacing: 4) {
-            FilterToggle(
-                label: "ID",
-                isOn: $showID,
-                color: .blue,
-                tooltip: "Station identification broadcasts. Stations periodically announce their callsign and capabilities."
-            )
-            FilterToggle(
-                label: "BCN",
-                isOn: $showBeacon,
-                color: .green,
-                tooltip: "Beacon messages. Periodic broadcasts containing station info, location, or status updates."
-            )
-            FilterToggle(
-                label: "MAIL",
-                isOn: $showMail,
-                color: .orange,
-                tooltip: "Mail notifications. Alerts about new messages waiting at a BBS or mailbox."
-            )
-            FilterToggle(
-                label: "DATA",
-                isOn: $showData,
-                color: .purple,
-                tooltip: "Content messages. The actual data being exchanged — personal messages, bulletins, and transferred information."
-            )
-            FilterToggle(
-                label: "CMD",
-                isOn: $showPrompt,
-                color: .cyan,
-                tooltip: "AX.25 Link Control frames. Protocol-level session messages like SABM, DISC, RR, and UA."
-            )
-            FilterToggle(
-                label: "OTHER",
-                isOn: $showOther,
-                color: .brown,
-                tooltip: "Unclassified messages. Packets that don't fit other categories."
-            )
-            FilterToggle(
-                label: "SYS",
-                isOn: $showSystem,
-                color: .gray,
-                tooltip: "System messages. Connection status, errors, and internal application notifications."
-            )
-            if !localCallsign.isEmpty {
-                FilterToggle(
-                    label: "DIGI",
-                    isOn: $showDigipeats,
-                    color: .indigo,
-                    tooltip: "Digipeater transmissions. Off-air copies of your own frames as repeated by a digipeater (marked ↻). They carry no new content, but seeing them confirms the digi is actually relaying you."
-                )
+            ForEach(ConsoleTypeFilterFlags.Kind.allCases, id: \.self) { kind in
+                // DIGI only appears once the local callsign is known: without
+                // it there is no way to tell our own echo from anyone else's.
+                if kind != .digipeats || !localCallsign.isEmpty {
+                    FilterToggle(
+                        label: kind.label,
+                        isOn: binding(for: kind),
+                        color: color(for: kind),
+                        tooltip: tooltip(for: kind),
+                        isSoloed: currentFilterFlags.isSoloed(kind),
+                        onSolo: { applyFlags { $0.solo(kind) } },
+                        onShowAll: { applyFlags { $0.showAllTypes() } })
+                }
             }
+        }
+    }
+
+    /// The eight switches as one value, so solo can reason about the set
+    /// rather than about eight independent booleans.
+    private var currentFilterFlags: ConsoleTypeFilterFlags {
+        ConsoleTypeFilterFlags(
+            showID: showID, showBeacon: showBeacon, showMail: showMail,
+            showData: showData, showPrompt: showPrompt, showOther: showOther,
+            showSystem: showSystem, showDigipeats: showDigipeats,
+            digipeatsOnly: digipeatsOnly)
+    }
+
+    private func applyFlags(_ change: (inout ConsoleTypeFilterFlags) -> Void) {
+        var flags = currentFilterFlags
+        change(&flags)
+        showID = flags.showID
+        showBeacon = flags.showBeacon
+        showMail = flags.showMail
+        showData = flags.showData
+        showPrompt = flags.showPrompt
+        showOther = flags.showOther
+        showSystem = flags.showSystem
+        showDigipeats = flags.showDigipeats
+        digipeatsOnly = flags.digipeatsOnly
+    }
+
+    private func binding(for kind: ConsoleTypeFilterFlags.Kind) -> Binding<Bool> {
+        switch kind {
+        case .id: return $showID
+        case .beacon: return $showBeacon
+        case .mail: return $showMail
+        case .data: return $showData
+        case .prompt: return $showPrompt
+        case .other: return $showOther
+        case .system: return $showSystem
+        case .digipeats: return $showDigipeats
+        }
+    }
+
+    private func color(for kind: ConsoleTypeFilterFlags.Kind) -> Color {
+        switch kind {
+        case .id: return .blue
+        case .beacon: return .green
+        case .mail: return .orange
+        case .data: return .purple
+        case .prompt: return .cyan
+        case .other: return .brown
+        case .system: return .gray
+        case .digipeats: return .indigo
+        }
+    }
+
+    private func tooltip(for kind: ConsoleTypeFilterFlags.Kind) -> String {
+        switch kind {
+        case .id:
+            return "Station identification broadcasts. Stations periodically announce their callsign and capabilities."
+        case .beacon:
+            return "Beacon messages. Periodic broadcasts containing station info, location, or status updates."
+        case .mail:
+            return "Mail notifications. Alerts about new messages waiting at a BBS or mailbox."
+        case .data:
+            return "Content messages. The actual data being exchanged \u{2014} personal messages, bulletins, and transferred information."
+        case .prompt:
+            return "AX.25 Link Control frames. Protocol-level session messages like SABM, DISC, RR, and UA."
+        case .other:
+            return "Unclassified messages. Packets that don't fit other categories."
+        case .system:
+            return "System messages. Connection status, errors, and internal application notifications."
+        case .digipeats:
+            return "Digipeater transmissions. Off-air copies of your own frames as repeated by a digipeater (marked \u{21bb}). They carry no new content, but seeing them confirms the digi is actually relaying you."
         }
     }
 
@@ -935,25 +1086,81 @@ struct DuplicateCountBadge: View {
 }
 
 /// Toggle button for filtering message types
+/// One switch on the console's filter row.
+///
+/// Plain click toggles. Option-click *solos* — shows this class and nothing
+/// else — because isolating one type by switching off the other seven was
+/// eight gestures to answer one question. Option-clicking a soloed chip puts
+/// everything back.
+///
+/// The same two actions are in the right-click menu, because a modifier
+/// nobody knows about is a feature nobody has.
 struct FilterToggle: View {
     let label: String
     @Binding var isOn: Bool
     let color: Color
     var tooltip: String = ""
+    /// Whether this chip is the only one showing.
+    var isSoloed: Bool = false
+    /// Show only this class. Nil leaves the chip a plain toggle.
+    var onSolo: (() -> Void)?
+    var onShowAll: (() -> Void)?
 
     var body: some View {
         Text(label)
             .font(.system(size: 9, weight: .medium, design: .monospaced))
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
-            .background(isOn ? color.opacity(0.2) : Color.gray.opacity(0.1))
+            .background(isOn ? color.opacity(isSoloed ? 0.35 : 0.2) : Color.gray.opacity(0.1))
             .foregroundStyle(isOn ? color : .secondary)
             .clipShape(RoundedRectangle(cornerRadius: 4))
+            // A soloed chip is doing something the other seven are not, and
+            // "lit" alone does not distinguish "on" from "the only one on".
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(color, lineWidth: isSoloed ? 1 : 0))
             .contentShape(Rectangle())
-            .onTapGesture {
-                isOn.toggle()
+            .modifier(SoloTapGesture(isSoloed: isSoloed,
+                                     onToggle: { isOn.toggle() },
+                                     onSolo: onSolo,
+                                     onShowAll: onShowAll))
+            .contextMenu {
+                if let onSolo, let onShowAll {
+                    if isSoloed {
+                        Button("Show All Types") { onShowAll() }
+                    } else {
+                        Button("Show Only \(label)") { onSolo() }
+                    }
+                    Divider()
+                }
+                Toggle("Show \(label)", isOn: $isOn)
             }
-            .help(tooltip)
+            .help(onSolo == nil ? tooltip
+                  : tooltip + "\n\nOption-click to show only this type.")
+    }
+}
+
+/// Option-click means "solo"; a plain click still toggles.
+///
+/// `TapGesture().modifiers(_:)` is macOS-only, so on iOS the chip stays a
+/// plain toggle and the menu carries the solo action instead.
+private struct SoloTapGesture: ViewModifier {
+    let isSoloed: Bool
+    let onToggle: () -> Void
+    let onSolo: (() -> Void)?
+    let onShowAll: (() -> Void)?
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content
+            .highPriorityGesture(TapGesture().modifiers(.option).onEnded {
+                guard let onSolo, let onShowAll else { return onToggle() }
+                isSoloed ? onShowAll() : onSolo()
+            })
+            .onTapGesture(perform: onToggle)
+        #else
+        content.onTapGesture(perform: onToggle)
+        #endif
     }
 }
 
