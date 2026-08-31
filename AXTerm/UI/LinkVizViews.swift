@@ -107,8 +107,18 @@ struct RTTChartView: View {
         }
         .chartYAxisLabel("seconds")
         .chartLegend(.hidden)
-        .help("Smoothed round-trip time (blue, with the ±RTTVAR band shaded) and the retransmission timeout derived from it (orange dashes). T1 fires when an ACK takes longer than the orange line.")
+        .sessionTimeAxis(start: samples.first?.date, end: samples.last?.date)
     }
+}
+
+extension RTTChartView {
+    /// Drawn beside the chart by the panel, so the plot keeps its height.
+    static let legend: [ChartLegend.Item] = [
+        .init(swatch: .line(.blue), label: "SRTT",
+              help: "Smoothed round-trip time, with the ±RTTVAR band shaded behind it."),
+        .init(swatch: .dashedLine(.orange), label: "RTO",
+              help: "Retransmission timeout derived from SRTT. T1 fires when an ACK takes longer than this."),
+    ]
 }
 
 // MARK: - AIMD window sawtooth
@@ -135,8 +145,21 @@ struct WindowSawtoothView: View {
         }
         .chartYScale(domain: 0...8)
         .chartLegend(.hidden)
-        .help("Frames in flight (blue) against the configured window K (gray dashes). Orange dots mark REJs we sent (a gap in the peer's stream); red dots mark our own T1 retransmission timeouts.")
+        .sessionTimeAxis(start: samples.first?.date, end: samples.last?.date)
     }
+}
+
+extension WindowSawtoothView {
+    static let legend: [ChartLegend.Item] = [
+        .init(swatch: .line(.blue), label: "In flight",
+              help: "Frames we have sent and not yet had acknowledged."),
+        .init(swatch: .dashedLine(.secondary), label: "Window K",
+              help: "The configured window size — the ceiling on frames in flight."),
+        .init(swatch: .dot(.orange), label: "REJ",
+              help: "A reject we sent: a gap appeared in the peer's stream."),
+        .init(swatch: .dot(.red), label: "T1",
+              help: "Our own retransmission timeout — no ack arrived in time."),
+    ]
 }
 
 // MARK: - Throughput (goodput vs raw)
@@ -195,8 +218,17 @@ struct ThroughputChartView: View {
         }
         .chartYAxisLabel("B/s")
         .chartLegend(.hidden)
-        .help("Average received rate over the visible window. Green is goodput (delivered in order); the orange area above it is channel bytes burned on retransmitted copies — the gap between them is the retransmit overhead.")
+        .sessionTimeAxis(start: ratePoints.first?.date, end: ratePoints.last?.date)
     }
+}
+
+extension ThroughputChartView {
+    static let legend: [ChartLegend.Item] = [
+        .init(swatch: .fill(.green.opacity(0.45)), label: "Goodput",
+              help: "Bytes delivered in order — the part of the channel that did useful work."),
+        .init(swatch: .fill(.orange.opacity(0.25)), label: "Retransmits",
+              help: "Channel bytes burned on repeated copies. The gap above the green line is the overhead."),
+    ]
 }
 
 // MARK: - Block cadence strip
@@ -345,5 +377,105 @@ struct ChannelAirtimeLanesView: View {
                 .help("One lane per station, busiest first. Each tick is a frame; tick width is its airtime at the channel baud rate. Blue ticks are your own transmissions, green are received. A thick striped pair of lanes is a connected-mode conversation.")
             }
         }
+    }
+}
+
+// MARK: - Shared chart furniture
+
+/// A legend the session charts draw themselves.
+///
+/// Charts' built-in legend keys off a foreground-style *scale*, and these
+/// plots deliberately don't use one: goodput is a filled area under a solid
+/// line, retransmit overhead is a translucent area above it, and RTO is a
+/// dashed line. Flattening all that into scale colours would lose the
+/// distinctions the panels exist to show, so the swatches are drawn to
+/// match the marks exactly.
+struct ChartLegend: View {
+
+    enum Swatch: Equatable {
+        case fill(Color)
+        case line(Color)
+        case dashedLine(Color)
+        case dot(Color)
+    }
+
+    struct Item: Identifiable, Equatable {
+        let swatch: Swatch
+        let label: String
+        /// The sentence a tooltip would have carried. Kept per item so the
+        /// explanation sits next to the thing it explains.
+        var help: String?
+        var id: String { label }
+    }
+
+    let items: [Item]
+
+    var body: some View {
+        // Wraps rather than truncates: four items at a narrow panel width
+        // would otherwise clip the last one, which is the same class of bug
+        // as the axis label running off the edge.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) { entries }
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 12) { entriesSlice(0..<(items.count + 1) / 2) }
+                HStack(spacing: 12) { entriesSlice((items.count + 1) / 2..<items.count) }
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+    }
+
+    private var entries: some View { entriesSlice(0..<items.count) }
+
+    private func entriesSlice(_ range: Range<Int>) -> some View {
+        ForEach(Array(items[range.clamped(to: 0..<items.count)])) { item in
+            HStack(spacing: 4) {
+                swatchView(item.swatch)
+                Text(item.label)
+            }
+            .help(item.help ?? item.label)
+        }
+    }
+
+    @ViewBuilder
+    private func swatchView(_ swatch: Swatch) -> some View {
+        switch swatch {
+        case .fill(let color):
+            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 12, height: 8)
+        case .line(let color):
+            Capsule().fill(color).frame(width: 12, height: 2)
+        case .dashedLine(let color):
+            HStack(spacing: 2) {
+                Capsule().fill(color).frame(width: 4, height: 2)
+                Capsule().fill(color).frame(width: 4, height: 2)
+            }
+            .frame(width: 12)
+        case .dot(let color):
+            Circle().fill(color).frame(width: 6, height: 6)
+        }
+    }
+}
+
+extension View {
+    /// The shared time axis: four ticks, labels sized to the session's own
+    /// span, and room at the trailing edge so the last one is not clipped.
+    func sessionTimeAxis(start: Date?, end: Date?) -> some View {
+        let axis = ChartTimeAxis(
+            span: (end?.timeIntervalSince(start ?? Date())) ?? 0)
+        let origin = start ?? Date()
+        return self
+            .chartXAxis {
+                AxisMarks(preset: .aligned, values: .automatic(desiredCount: axis.desiredTickCount)) { value in
+                    AxisGridLine()
+                    AxisTick()
+                    if let date = value.as(Date.self) {
+                        AxisValueLabel(axis.label(for: date, start: origin), centered: false)
+                    }
+                }
+            }
+            // The label at the right-hand tick is drawn from the plot edge
+            // outwards, so without this the last one runs under the panel
+            // border and loses its tail — "4:..." in the report.
+            .padding(.trailing, 14)
     }
 }

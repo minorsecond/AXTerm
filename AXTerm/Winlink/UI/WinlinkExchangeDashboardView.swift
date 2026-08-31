@@ -50,17 +50,19 @@ struct WinlinkExchangeDashboardView: View {
                         }
                     }
                     panel("Throughput", systemImage: "chart.line.uptrend.xyaxis",
-                          help: throughputHelp) {
+                          help: throughputHelp, legend: ThroughputChartView.legend) {
                         ThroughputChartView(buckets: viz?.throughput.suffix(600) ?? [])
                             .frame(height: 150)
                     }
                     adaptivePair {
-                        panel("Frames in flight", systemImage: "square.stack.3d.up") {
+                        panel("Frames in flight", systemImage: "square.stack.3d.up",
+                              legend: WindowSawtoothView.legend) {
                             WindowSawtoothView(samples: viz?.windowHistory ?? [])
                                 .frame(height: 120)
                         }
                     } second: {
-                        panel("Round-trip time", systemImage: "arrow.triangle.2.circlepath") {
+                        panel("Round-trip time", systemImage: "arrow.triangle.2.circlepath",
+                              legend: RTTChartView.legend) {
                             RTTChartView(samples: viz?.rttHistory ?? [])
                                 .frame(height: 120)
                         }
@@ -247,13 +249,22 @@ struct WinlinkExchangeDashboardView: View {
         _ title: String,
         systemImage: String,
         help: String? = nil,
+        legend: [ChartLegend.Item] = [],
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .modifier(OptionalHelp(help: help))
+            HStack(alignment: .firstTextBaseline) {
+                Label(title, systemImage: systemImage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .modifier(OptionalHelp(help: help))
+                Spacer(minLength: 12)
+                // Beside the title rather than under the plot: it costs no
+                // chart height, and it is the first thing read.
+                if !legend.isEmpty {
+                    ChartLegend(items: legend)
+                }
+            }
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
