@@ -56,6 +56,9 @@ struct ContentView: View {
     /// Which face of the mailbox the BBS page shows. Held here because
     /// the sidebar is what chooses it.
     @State private var bbsPane: BBSPane = .messages
+    /// Published by the map so the sidebar's layer rows can be gated and
+    /// captioned without recomputing the map's caches on every render.
+    @StateObject private var mapLayerStatus = MapLayerStatus()
     /// The Mac gets the same identity view the handheld does — a callsign in
     /// the console is the same question there as here.
     @StateObject private var profiles = NodeProfileCoordinator()
@@ -1060,7 +1063,7 @@ struct ContentView: View {
             case .radio:
                 EmptyView()   // Drawn above, where its three sections belong.
             case .mapLayers:
-                MapLayerRows()
+                MapLayerRows(status: mapLayerStatus)
             case .mailFolders:
                 WinlinkFolderRows(viewModel: mailboxVM)
             case .bbsPanes:
@@ -1440,6 +1443,7 @@ struct ContentView: View {
             onConnect: { call in
                 connectFromProfile(macResolver.profile(for: call))
             },
+            layerStatus: mapLayerStatus,
             focusCallsign: .constant(nil),
             overlayStore: overlayStore,
             onSendLayer: layerSendAction)

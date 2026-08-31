@@ -47,6 +47,9 @@ struct StationsMapView: View {
     var onConnect: ((String) -> Void)?
 
 
+    /// Published to the sidebar, which owns the layer toggles now.
+    @ObservedObject var layerStatus: MapLayerStatus
+
     @State private var selection: String?
     /// Set by another screen to bring a station into view — "Show on Map"
     /// from an identity page. Cleared once honoured so the same request
@@ -338,6 +341,25 @@ struct StationsMapView: View {
         return entriesCache.all
     }
 
+    /// Cheap fingerprint of everything the sidebar's captions depend on.
+    private var layerStatusKey: String {
+        [String(elevation.tileCount),
+         String(showsDirectoryNodes), String(showsPredictedPaths),
+         String(stations.count), String(aliases.directory.allEntries.count),
+         String(insights.isWorking), String(insights.snapshot.predictions.count),
+         String(insights.snapshot.terrainUnavailable)].joined(separator: "|")
+    }
+
+    private func publishLayerStatus() {
+        layerStatus.hasTerrain = elevation.hasTerrain
+        layerStatus.forecastSummary = showsPredictedPaths ? forecastSummary : nil
+        layerStatus.distantCount = distantStations.count
+        layerStatus.directoryCaption = showsDirectoryNodes
+            ? "\(placedDirectoryCount) drawn \u{b7} \(mergedNodeBoxCount) folded into heard "
+              + "stations \u{b7} \(aliases.directory.allEntries.count) known"
+            : nil
+    }
+
     /// How many heard stations carry folded-in node identities.
     private var mergedNodeBoxCount: Int {
         HeardStationMap.nodeAliasesByHeardBase(
@@ -543,6 +565,12 @@ struct StationsMapView: View {
                 defaultHeightMetres: settings.assumedRemoteHeightMetres,
                 wantsTerrain: showsPredictedPaths && elevation.hasTerrain)
         }
+        // The sidebar owns the layer toggles, but the captions and the
+        // terrain gate come from caches only this view has. Pushed on a
+        // change to cheap inputs — counts and flags — so the expensive
+        // captions are built when something moves rather than on every
+        // sidebar render.
+        .task(id: layerStatusKey) { publishLayerStatus() }
         .onChange(of: focusCallsign) { _, wanted in
             guard let wanted, !wanted.isEmpty else { return }
             selection = entries.first {
@@ -656,6 +684,10 @@ struct StationsMapView: View {
             .labelsHidden()
             .fixedSize()
             .help("Map draws real geography and needs tiles, which need the network. Scope plots bearing and range from positions already cached, and keeps working with everything else down.")
+            // iPhone and iPad have no sidebar to host these. On macOS the
+            // same toggles live in the sidebar's Layers section and there is
+            // deliberately no second copy here.
+            #if !os(macOS)
             Menu {
                 Toggle("Observed Paths", isOn: $showsPaths)
                     .help("Draw the paths that have been observed between stations. Colour is evidence: green completed a connect end to end, blue arrived through a digipeater, teal was heard direct, and grey dashed is inferred from two stations sharing a digipeater without anything having travelled it. Red means connect attempts went unanswered.")
@@ -708,6 +740,7 @@ struct StationsMapView: View {
                 }
                 .help(distantFilterTooltip)
             }
+            #endif
             Menu {
                 Picker("Terrain", selection: $terrainStyleRaw) {
                     Text("No Terrain").tag("")

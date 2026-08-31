@@ -42,6 +42,11 @@ struct AXTermiOSRootView: View {
     @State private var profileMenuTarget: String?
     /// "Show on Map" hands the map a station to select.
     @State private var mapFocusCallsign: String?
+    /// Written by the map. iOS keeps its layer toggles in the map's own
+    /// toolbar — there is no sidebar here to move them to — so nothing
+    /// reads this yet; it exists so the map has one owner on both
+    /// platforms rather than a shared instance nobody watches.
+    @StateObject private var mapLayerStatus = MapLayerStatus()
     /// The callsign a directory lookup is running for, so the profile can say
     /// it is working rather than say it found nothing.
     @State private var lookingUpCallsign: String?
@@ -481,6 +486,7 @@ struct AXTermiOSRootView: View {
                 pathStore: client.networkPaths,
                 serviceStore: client.stationServices,
                 onOpenProfile: { profiles.openPage($0) },
+                layerStatus: mapLayerStatus,
                 focusCallsign: $mapFocusCallsign,
                 overlayStore: overlayStore)
             .navigationTitle("Map")
