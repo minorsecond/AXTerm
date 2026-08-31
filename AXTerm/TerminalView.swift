@@ -2698,12 +2698,36 @@ struct TerminalView: View {
 
     // Inlined into the tab-picker row — carries no padding or background of
     // its own, so it must be placed inside a padded container.
+    /// Picker text for every session record, disambiguated only where two
+    /// rows would otherwise be the same word.
+    private var sessionRecordLabels: [String: String] {
+        SessionRecordLabel.labels(for: sessionRecords.map { record in
+            SessionRecordLabel.Item(
+                id: record.id,
+                destination: record.destination,
+                transport: {
+                    switch record.mode {
+                    case .ax25ViaDigi: return .ax25ViaDigi
+                    case .netrom: return .netrom
+                    default: return .ax25
+                    }
+                }(),
+                via: record.via,
+                relayDestination: record.relayDestination,
+                statusText: record.statusText)
+        })
+    }
+
     private var sessionSelectorView: some View {
         HStack(spacing: 8) {
             Picker("Sessions", selection: $activeSessionRecordID) {
                 Text("All Traffic").tag(Optional<String>.none)
                 ForEach(sessionRecords) { record in
-                    Text(record.label).tag(Optional(record.id))
+                    // Labels are computed over the whole list: a record only
+                    // says how it is carried when another record would
+                    // otherwise render identically. See SessionRecordLabel.
+                    Text(sessionRecordLabels[record.id] ?? record.label)
+                        .tag(Optional(record.id))
                 }
             }
             .pickerStyle(.menu)
