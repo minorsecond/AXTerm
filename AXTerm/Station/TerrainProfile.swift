@@ -242,8 +242,12 @@ extension TerrainProfile.Verdict {
             "Clear path"
         case .marginal:
             "Marginal — Fresnel zone obstructed"
-        case .obstructed(let by, _):
-            "Blocked by \(Int(by.rounded())) m of terrain"
+        case .obstructed(let by, let at):
+            // Where, not only how much. "Blocked by 4 m" on a 43 km path
+            // reads as a wall; the same 4 m a kilometre from the operator's
+            // own mast is an afternoon with a ladder, and the distance is
+            // what tells those apart.
+            "Blocked by \(Int(by.rounded())) m \(Self.distanceText(at)) out"
         case .unknown:
             "No terrain data"
         }

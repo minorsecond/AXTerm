@@ -78,6 +78,9 @@ struct TerrainProfileView: View {
         String(format: "%.1f km", profile.totalMetres / 1000)
     }
 
+    /// Radius of the antenna markers, and the inset that keeps them whole.
+    private static let markerRadius: Double = 4
+
     // MARK: - Chart
 
     /// Drawn with Canvas rather than Swift Charts: this is four series over a
@@ -89,22 +92,33 @@ struct TerrainProfileView: View {
             guard profile.samples.count > 1 else { return }
 
             let bounds = verticalBounds()
+            // The endpoints carry a marker with width, and drawing them on the
+            // canvas boundary clipped half of each away — the two things the
+            // chart most needs to identify were the two things cut in half.
+            let inset = Self.markerRadius + 2
+            let plot = CGSize(width: max(size.width - inset * 2, 1),
+                              height: max(size.height - inset, 1))
             func x(_ metres: Double) -> Double {
-                size.width * (metres / max(profile.totalMetres, 1))
+                inset + plot.width * (metres / max(profile.totalMetres, 1))
             }
             func y(_ elevation: Double) -> Double {
                 let span = max(bounds.top - bounds.bottom, 1)
-                return size.height * (1 - (elevation - bounds.bottom) / span)
+                return inset + plot.height * (1 - (elevation - bounds.bottom) / span)
             }
 
             // Terrain, as a filled silhouette — the shape an operator reads
             // first.
             var ground = Path()
             ground.move(to: CGPoint(x: 0, y: size.height))
+            ground.addLine(to: CGPoint(x: 0, y: y(profile.samples[0].effectiveElevation)))
             for sample in profile.samples {
                 ground.addLine(to: CGPoint(x: x(sample.distanceMetres),
                                            y: y(sample.effectiveElevation)))
             }
+            // Carried flat to the frame so the ground reads as ground rather
+            // than as a slab that stops short of the edge.
+            ground.addLine(to: CGPoint(x: size.width,
+                                       y: y(profile.samples[profile.samples.count - 1].effectiveElevation)))
             ground.addLine(to: CGPoint(x: size.width, y: size.height))
             ground.closeSubpath()
             context.fill(ground, with: .color(.secondary.opacity(0.35)))
@@ -143,27 +157,54 @@ struct TerrainProfileView: View {
             // of the clearance is mast rather than hill.
             if let first = profile.samples.first, let last = profile.samples.last {
                 for (sample, atOrigin) in [(first, true), (last, false)] {
-                    // Half a point in from the edge, or a 1.5pt stroke centred
-                    // on the boundary loses half its width to the clip.
-                    let px = atOrigin ? 1.0 : size.width - 1.0
+                    let px = x(sample.distanceMetres)
                     var mast = Path()
                     mast.move(to: CGPoint(x: px, y: y(sample.effectiveElevation)))
                     mast.addLine(to: CGPoint(x: px, y: y(sample.lineHeight)))
-                    context.stroke(mast, with: .color(.primary.opacity(0.5)),
+                    context.stroke(mast, with: .color(.primary.opacity(0.55)),
                                    style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+
+                    // Our end is a ring, theirs is solid — the same two glyphs
+                    // appear beside the callsigns underneath, so which end of
+                    // the chart is this station takes no working out.
                     let top = CGPoint(x: px, y: y(sample.lineHeight))
-                    context.fill(
-                        Path(ellipseIn: CGRect(x: top.x - 3, y: top.y - 3, width: 6, height: 6)),
-                        with: .color(.primary.opacity(0.65)))
+                    let r = Self.markerRadius
+                    let disc = Path(ellipseIn: CGRect(x: top.x - r, y: top.y - r,
+                                                      width: r * 2, height: r * 2))
+                    if atOrigin {
+                        context.fill(disc, with: .color(Color(platform: .platformCardBackground)))
+                        context.stroke(disc, with: .color(.primary.opacity(0.75)), lineWidth: 2)
+                    } else {
+                        context.fill(disc, with: .color(.primary.opacity(0.75)))
+                    }
                 }
             }
 
-            // The worst point, marked — where to look, and where a relay
-            // would have to go.
+            // Where the path is decided, drawn as the gap it actually is.
+            //
+            // A ring on the terrain said "look here" and nothing more, which
+            // is why a 4 m intrusion on a 43 km path read as "no blockage
+            // visible": at this scale the terrain and the line touch, and the
+            // whole story is in a few pixels. The segment between them is the
+            // measurement, so it is drawn as a measurement.
             if let worst = worstSample() {
-                let point = CGPoint(x: x(worst.distanceMetres), y: y(worst.effectiveElevation))
+                let px = x(worst.distanceMetres)
+                let onTerrain = CGPoint(x: px, y: y(worst.effectiveElevation))
+                let onLine = CGPoint(x: px, y: y(worst.lineHeight))
+                var gap = Path()
+                gap.move(to: onLine)
+                gap.addLine(to: onTerrain)
+                context.stroke(gap, with: .color(tint),
+                               style: StrokeStyle(lineWidth: 1.5, dash: [2, 2]))
+                for end in [onTerrain, onLine] {
+                    var tick = Path()
+                    tick.move(to: CGPoint(x: end.x - 4, y: end.y))
+                    tick.addLine(to: CGPoint(x: end.x + 4, y: end.y))
+                    context.stroke(tick, with: .color(tint), lineWidth: 1.5)
+                }
                 context.stroke(
-                    Path(ellipseIn: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8)),
+                    Path(ellipseIn: CGRect(x: onTerrain.x - 4, y: onTerrain.y - 4,
+                                           width: 8, height: 8)),
                     with: .color(tint), lineWidth: 2)
             }
         }
@@ -189,9 +230,20 @@ struct TerrainProfileView: View {
     private func endpoint(_ callsign: String, height: Double,
                           assumed: Bool,
                           alignment: HorizontalAlignment) -> some View {
-        VStack(alignment: alignment, spacing: 1) {
-            Text(callsign)
-                .font(.caption.weight(.medium))
+        // The glyph is the whole point of this row: it is what ties a name to
+        // one of the two antennas on the chart. Hollow for this station,
+        // solid for the far one, drawn exactly as the chart draws them.
+        let marker = Circle()
+            .strokeBorder(.primary.opacity(0.75), lineWidth: 2)
+            .background(Circle().fill(alignment == .leading
+                                      ? Color.clear : .primary.opacity(0.75)))
+            .frame(width: 8, height: 8)
+        return VStack(alignment: alignment, spacing: 1) {
+            HStack(spacing: 4) {
+                if alignment == .trailing { Text(callsign).font(.caption.weight(.medium)) }
+                marker
+                if alignment == .leading { Text(callsign).font(.caption.weight(.medium)) }
+            }
             Text(assumed ? "\(describe(height)) assumed" : describe(height))
                 .font(.caption2)
                 .foregroundStyle(assumed ? .orange : .secondary)
