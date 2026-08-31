@@ -109,6 +109,23 @@ nonisolated struct WinlinkAirtimeEstimate: Equatable, Sendable {
         return max(1, Int((seconds / cap).rounded(.up)))
     }
 
+    /// Airtime for bytes whose compressed size is already known.
+    ///
+    /// An FBB proposal states the compressed size exactly — `FC EM <MID>
+    /// <uncompressed> <compressed> 0` — so the 3:1 assumption has no place
+    /// here. Half the guesswork in `estimatedSeconds(bytes:)` disappears
+    /// and only the throughput is estimated, which is the half that can at
+    /// least be measured.
+    func estimatedSecondsOnTheAir(compressedBytes: Int) -> Double {
+        guard compressedBytes > 0 else { return 0 }
+        return Double(compressedBytes) / compressedBytesPerSecond
+    }
+
+    /// Compact airtime label for a known compressed size.
+    func airtimeTextOnTheAir(compressedBytes: Int) -> String {
+        Self.durationText(estimatedSecondsOnTheAir(compressedBytes: compressedBytes))
+    }
+
     /// Compact airtime label: "8s", "3 min", "1 hr 5 min".
     func airtimeText(bytes: Int) -> String {
         Self.durationText(estimatedSeconds(bytes: bytes))

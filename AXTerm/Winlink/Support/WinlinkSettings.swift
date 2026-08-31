@@ -28,9 +28,26 @@ final class WinlinkSettings: ObservableObject {
     static let gatewayLadderKey = "winlinkGatewayLadder"
     static let mailboxSyncEnabledKey = "winlinkMailboxSyncEnabled"
     static let passwordVerifiedAtKey = "winlinkPasswordVerifiedAt"
+    static let askBeforeDownloadingKey = "winlinkAskBeforeDownloading"
+    static let downloadAnywayUnderKBKey = "winlinkDownloadAnywayUnderKB"
 
     static let defaultMaxDistanceMiles = 100
     static let defaultHistoryHours = 24
+
+    /// How long the operator gets to answer the download picker.
+    ///
+    /// The link is up and the remote is waiting on our FS line for the
+    /// whole of it, so this is airtime spent on a shared channel doing
+    /// nothing. Long enough to read a handful of subjects, short enough
+    /// that a gateway with an idle timer does not drop us first.
+    static let inboundSelectionTimeout = 90
+
+    /// Default for `downloadAnywayUnderKB`: about 90 seconds at a healthy
+    /// 1200-baud rate. Emergency traffic — ICS forms, welfare checks,
+    /// position reports — is a few kilobytes; bulletins and imagery are
+    /// what run long, and those are exactly what an unattended station
+    /// should leave on the server.
+    static let defaultDownloadAnywayUnderKB = 10
 
     static let passwordAccount = "winlink-password"
     static let apiKeyAccount = "winlink-cms-api-key"
@@ -256,6 +273,25 @@ final class WinlinkSettings: ObservableObject {
         didSet { defaults.set(mailboxSyncEnabled, forKey: Self.mailboxSyncEnabledKey) }
     }
 
+    /// Show the picker when a remote offers mail, instead of taking
+    /// everything it has. Off means the old behaviour: download the lot.
+    @Published var askBeforeDownloading: Bool {
+        didSet { defaults.set(askBeforeDownloading, forKey: Self.askBeforeDownloadingKey) }
+    }
+
+    /// Messages costing at most this much airtime are taken anyway when
+    /// the picker times out unanswered. See `inboundSelectionTimeout`.
+    @Published var downloadAnywayUnderKB: Int {
+        didSet { defaults.set(downloadAnywayUnderKB, forKey: Self.downloadAnywayUnderKBKey) }
+    }
+
+    /// The policy to hand `runExchange`.
+    var inboundSelectionPolicy: B2FSessionEngine.InboundSelectionPolicy {
+        guard askBeforeDownloading else { return .acceptAll }
+        return .ask(timeoutSeconds: Self.inboundSelectionTimeout,
+                    autoAcceptUnderBytes: max(0, downloadAnywayUnderKB) * 1024)
+    }
+
     // MARK: - Keychain-backed credentials
 
     private let keychain: KeychainStore
@@ -386,6 +422,16 @@ final class WinlinkSettings: ObservableObject {
         mailboxSyncEnabled = defaults.object(forKey: Self.mailboxSyncEnabledKey) == nil
             ? true
             : defaults.bool(forKey: Self.mailboxSyncEnabledKey)
+        // Asking is the default: a station that downloads whatever it is
+        // offered can spend twenty minutes of a shared channel on a
+        // bulletin nobody wanted.
+        askBeforeDownloading = defaults.object(forKey: Self.askBeforeDownloadingKey) == nil
+            ? true
+            : defaults.bool(forKey: Self.askBeforeDownloadingKey)
+        let storedThreshold = defaults.integer(forKey: Self.downloadAnywayUnderKBKey)
+        downloadAnywayUnderKB = storedThreshold > 0
+            ? storedThreshold
+            : Self.defaultDownloadAnywayUnderKB
         stationPreferences = defaults.data(forKey: Self.stationPreferencesKey)
             .flatMap { try? JSONDecoder().decode(WinlinkStationPreferences.self, from: $0) }
             ?? WinlinkStationPreferences()

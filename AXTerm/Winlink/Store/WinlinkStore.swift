@@ -15,6 +15,9 @@ nonisolated struct WinlinkMessageSummary: Hashable, Sendable, Identifiable {
     var deliveryState: WinlinkMessageStateRecord.DeliveryState
     var folderId: Int64
     var lastError: String?
+    /// Set only while the message is in the Trash. Drives the Deleted
+    /// column, which exists only in that folder.
+    var trashedAt: Date?
 }
 
 /// A fully loaded message with its mutable state and attachments.
@@ -81,7 +84,28 @@ nonisolated protocol WinlinkStore: Sendable {
     func setRead(mid: String, _ read: Bool) throws
     func move(mid: String, toFolder folderId: Int64) throws
     func moveToTrash(mid: String) throws
+    /// The folder a trashed message came from, for Put Back and undo. Nil
+    /// when it is not in the Trash, or was trashed before origins were
+    /// recorded.
+    func trashOrigin(mid: String) throws -> Int64?
     func unreadInboxCount() throws -> Int
+
+    // Permanent deletion
+    //
+    /// Destroys these messages — body, attachments and state — and records
+    /// a tombstone for each so a sync from another device cannot put them
+    /// back. Returns the MIDs actually removed; MIDs that were not here are
+    /// skipped rather than treated as an error.
+    ///
+    /// There is no undo. Everything else in this store moves mail between
+    /// folders; this is the only operation that loses it.
+    @discardableResult
+    func deleteMessages(mids: [String]) throws -> [String]
+    /// Destroys everything in the Trash. Returns how many went.
+    @discardableResult
+    func emptyTrash() throws -> Int
+    /// MIDs deleted here, for the sync source to publish.
+    func messageTombstones() throws -> [WinlinkMessageTombstoneRecord]
 
     // RMS station + catalog caches
     func replaceStationCache(_ stations: [WinlinkRMSStationRecord],

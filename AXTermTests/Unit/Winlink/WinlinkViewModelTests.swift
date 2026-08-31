@@ -47,6 +47,156 @@ final class WinlinkViewModelTests: XCTestCase {
         XCTAssertEqual(vm.unreadCount, 0)
     }
 
+    /// The list is a multi-selection table. Storing one optional and
+    /// collapsing the table's `Set` into it — which is what this did — made
+    /// Select All, shift-click and command-click all land on one row.
+    func testMailboxHoldsAMultipleSelection() async throws {
+        let store = try makeStore()
+        for mid in ["VMSEL0000001", "VMSEL0000002", "VMSEL0000003"] {
+            try store.saveInbound(makeMessage(mid: mid))
+        }
+        let vm = WinlinkMailboxViewModel(store: store, myCallsign: { "K0EPI" })
+
+        vm.selectedMIDs = ["VMSEL0000001", "VMSEL0000003"]
+        XCTAssertEqual(vm.selectionCount, 2)
+        // No single message to read, so the pane must not be handed one.
+        XCTAssertNil(vm.selectedMID)
+        XCTAssertNil(vm.selectedMessage)
+
+        // Narrowing to one restores the reading pane.
+        vm.selectedMIDs = ["VMSEL0000003"]
+        XCTAssertEqual(vm.selectedMID, "VMSEL0000003")
+        XCTAssertEqual(vm.selectedMessage?.message.mid, "VMSEL0000003")
+    }
+
+    func testTrashingASelectionMovesAllOfThem() async throws {
+        let store = try makeStore()
+        for mid in ["VMTRASH00001", "VMTRASH00002", "VMTRASH00003"] {
+            try store.saveInbound(makeMessage(mid: mid))
+        }
+        let vm = WinlinkMailboxViewModel(store: store, myCallsign: { "K0EPI" })
+
+        vm.selectedMIDs = ["VMTRASH00001", "VMTRASH00002"]
+        XCTAssertTrue(vm.canTrashSelection)
+        vm.trash(mids: vm.selectedMIDs)
+
+        XCTAssertEqual(vm.filteredMessages.map(\.mid), ["VMTRASH00003"])
+        // The selection cannot keep pointing at rows that left the folder.
+        XCTAssertTrue(vm.selectedMIDs.isEmpty)
+    }
+
+    /// The store moves mail between folders and never destroys it, so
+    /// Delete has nowhere to send something already in the trash. The menu
+    /// item and the key must both know that rather than appearing to work.
+    func testTrashIsNotOfferedFromInsideTheTrash() async throws {
+        let store = try makeStore()
+        try store.saveInbound(makeMessage(mid: "VMINTRASH001"))
+        let vm = WinlinkMailboxViewModel(store: store, myCallsign: { "K0EPI" })
+        vm.selectedMIDs = ["VMINTRASH001"]
+        vm.trash(mids: ["VMINTRASH001"])
+
+        vm.selectedFolderID = try store.folderID(for: .trash)
+        vm.selectedMIDs = ["VMINTRASH001"]
+        XCTAssertFalse(vm.canTrashSelection)
+    }
+
+    /// A selection that survives a folder reload keeps the rows that are
+    /// still there instead of being thrown away wholesale.
+    func testReloadKeepsTheSurvivingPartOfASelection() async throws {
+        let store = try makeStore()
+        for mid in ["VMKEEP000001", "VMKEEP000002"] {
+            try store.saveInbound(makeMessage(mid: mid))
+        }
+        let vm = WinlinkMailboxViewModel(store: store, myCallsign: { "K0EPI" })
+        vm.selectedMIDs = ["VMKEEP000001", "VMKEEP000002"]
+
+        vm.trash(mids: ["VMKEEP000001"])
+        XCTAssertEqual(vm.selectedMIDs, ["VMKEEP000002"])
+    }
+
+    /// Inside the Trash, Delete has to mean delete. Before this the key was
+    /// simply disabled there, which looked exactly like a broken key.
+    /// Backspace moving mail to the Trash is Mail.app behaviour and needs
+    /// no dialog — but only because it can be taken back. Undo restores
+    /// each message to the folder it actually came from.
+    func testUndoingATrashPutsMessagesBackWhereTheyCameFrom() async throws {
+        let store = try makeStore()
+        try store.saveInbound(makeMessage(mid: "VMUNDO000001"))
+        try store.saveInbound(makeMessage(mid: "VMUNDO000002"))
+        let archive = try store.folderID(for: .archive)
+        try store.move(mid: "VMUNDO000002", toFolder: archive)
+
+        let vm = WinlinkMailboxViewModel(store: store, myCallsign: { "K0EPI" })
+        vm.trash(mids: ["VMUNDO000001", "VMUNDO000002"])
+        XCTAssertEqual(try store.message(mid: "VMUNDO000001")?.state.folderId,
+                       try store.folderID(for: .trash))
+
+        vm.undoLastTrash()
+
+        // Each goes home, not both to the Inbox.
+        XCTAssertEqual(try store.message(mid: "VMUNDO000001")?.state.folderId,
+                       try store.folderID(for: .inbox))
+        XCTAssertEqual(try store.message(mid: "VMUNDO000002")?.state.folderId, archive)
+        XCTAssertNil(try store.message(mid: "VMUNDO000001")?.state.trashedAt)
+    }
+
+    /// Nothing to undo must be a no-op rather than a guess.
+    func testUndoWithNothingTrashedDoesNothing() async throws {
+        let store = try makeStore()
+        try store.saveInbound(makeMessage(mid: "VMNOUNDO0001"))
+        let vm = WinlinkMailboxViewModel(store: store, myCallsign: { "K0EPI" })
+
+        XCTAssertFalse(vm.canUndoTrash)
+        vm.undoLastTrash()
+        XCTAssertEqual(try store.message(mid: "VMNOUNDO0001")?.state.folderId,
+                       try store.folderID(for: .inbox))
+    }
+
+    /// A permanent delete cannot be undone, and offering it would be a lie.
+    func testPermanentDeleteClearsTheUndo() async throws {
+        let store = try makeStore()
+        try store.saveInbound(makeMessage(mid: "VMUNDOGONE01"))
+        let vm = WinlinkMailboxViewModel(store: store, myCallsign: { "K0EPI" })
+
+        vm.trash(mids: ["VMUNDOGONE01"])
+        XCTAssertTrue(vm.canUndoTrash)
+
+        vm.deleteForever(mids: ["VMUNDOGONE01"])
+        XCTAssertFalse(vm.canUndoTrash)
+    }
+
+    func testDeleteForeverFromTheTrash() async throws {
+        let store = try makeStore()
+        try store.saveInbound(makeMessage(mid: "VMGONE000001"))
+        let vm = WinlinkMailboxViewModel(store: store, myCallsign: { "K0EPI" })
+
+        vm.trash(mid: "VMGONE000001")
+        vm.selectedFolderID = try store.folderID(for: .trash)
+        XCTAssertTrue(vm.isViewingTrash)
+        XCTAssertEqual(vm.filteredMessages.count, 1)
+
+        vm.deleteForever(mids: ["VMGONE000001"])
+        XCTAssertTrue(vm.filteredMessages.isEmpty)
+        XCTAssertNil(try store.message(mid: "VMGONE000001"))
+    }
+
+    func testEmptyTrashCountsAndClears() async throws {
+        let store = try makeStore()
+        for mid in ["VMEMPTY00001", "VMEMPTY00002"] {
+            try store.saveInbound(makeMessage(mid: mid))
+        }
+        let vm = WinlinkMailboxViewModel(store: store, myCallsign: { "K0EPI" })
+        vm.trash(mid: "VMEMPTY00001")
+        vm.trash(mid: "VMEMPTY00002")
+
+        // Counted from anywhere — the confirmation names a number without
+        // making the operator open the Trash first.
+        XCTAssertEqual(vm.trashedMessageCount(), 2)
+        vm.emptyTrash()
+        XCTAssertEqual(vm.trashedMessageCount(), 0)
+        XCTAssertNil(try store.message(mid: "VMEMPTY00001"))
+    }
+
     func testMailboxSearchFilters() async throws {
         let store = try makeStore()
         try store.saveInbound(makeMessage(mid: "VMSEARCH0001", subject: "Weather report"))

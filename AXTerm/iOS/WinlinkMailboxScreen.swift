@@ -37,6 +37,15 @@ struct WinlinkMailboxScreen: View {
     @State private var showingConsole = false
     @State private var activeExchangeGateway = ""
     @State private var exchangeAlert: String?
+    /// The download picker's request, mirrored from the runner.
+    @State private var inboundSelection: WinlinkSessionRunner.InboundSelectionRequest?
+
+    /// No runner means the store failed to open, so there are no exchanges
+    /// to be asked about either.
+    private var selectionPublisher: AnyPublisher<WinlinkSessionRunner.InboundSelectionRequest?, Never> {
+        context.runner?.$pendingSelection.eraseToAnyPublisher()
+            ?? Just(nil).eraseToAnyPublisher()
+    }
     @State private var showingFieldStatus = false
     @State private var showingCommsLog = false
     @State private var showingPositionReport = false
@@ -336,6 +345,17 @@ struct WinlinkMailboxScreen: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(exchangeAlert ?? "")
+            }
+            .onReceive(selectionPublisher) { request in
+                // The publisher republishes on resubscribe and `body`
+                // rebuilds it; assign only on a real change.
+                if inboundSelection != request { inboundSelection = request }
+            }
+            .sheet(item: $inboundSelection) { request in
+                WinlinkInboundSelectionSheet(request: request) { mids in
+                    inboundSelection = nil
+                    context.runner?.resolveInboundSelection(accepting: mids)
+                }
             }
             .alert("Compose", isPresented: Binding(
                 get: { composeError != nil },
@@ -700,7 +720,9 @@ struct WinlinkMailboxScreen: View {
                     password: password,
                     gatewayName: "Winlink CMS",
                     transportName: "telnet",
-                    sid: sid)
+                    sid: sid,
+                    inboundSelection: context.settings.inboundSelectionPolicy,
+                    airtime: catalogAirtime)
                 refresh()
                 context.exchangeFinished()
                 if let failure = summary.failureReason { exchangeAlert = failure }
@@ -763,7 +785,10 @@ struct WinlinkMailboxScreen: View {
                 transportName: "ax25",
                 frequencyHz: rung.frequencyHz,
                 sid: sid,
-                preserveTranscript: index > 0)
+                preserveTranscript: index > 0,
+                inboundSelection: context.settings.inboundSelectionPolicy,
+                airtime: WinlinkAirtimeEstimate.forGateway(
+                    callsign: rung.callsign, frequencyHz: rung.frequencyHz, quality: [:]))
 
             refresh()
             context.exchangeFinished()

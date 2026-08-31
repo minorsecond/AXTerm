@@ -42,6 +42,13 @@ nonisolated enum WinlinkSyncPolicy {
             .synced("Immutable once delivered, and MIDs are globally unique, so merging is a union with no conflicts.")
         case .messageState:
             .synced("Read flags and folders are what a unified mailbox is for. Merged by rule — see WinlinkStateMerge.")
+        case .messageDeletion:
+            // Deletion is the one mailbox operation that cannot ride on
+            // `messageState`: the message is gone, so there is no state row
+            // left to carry a flag. Without this, a unified mailbox
+            // resurrects everything deleted — the other device still holds
+            // the mail, sees a MID this one lacks, and sends it back.
+            .synced("A deleted message must stay deleted everywhere. Absence cannot express that: another device reads a missing MID as new mail and sends it back, so the deletion travels as its own fact.")
         case .contact:
             .synced("An address book is about people, not equipment.")
         case .catalogFavorite:
@@ -92,6 +99,7 @@ nonisolated enum WinlinkSyncPolicy {
     enum Kind: String, CaseIterable, Sendable {
         case message
         case messageState
+        case messageDeletion
         case contact
         case catalogFavorite
         case callsignDirectory

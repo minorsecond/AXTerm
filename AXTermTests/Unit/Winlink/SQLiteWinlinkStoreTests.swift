@@ -5,9 +5,15 @@ import GRDB
 final class SQLiteWinlinkStoreTests: XCTestCase {
 
     private func makeStore() throws -> SQLiteWinlinkStore {
+        try makeStoreWithQueue().store
+    }
+
+    /// For the few assertions that have to look at the rows themselves —
+    /// cascade deletes leave nothing visible through the store's own API.
+    private func makeStoreWithQueue() throws -> (store: SQLiteWinlinkStore, queue: DatabaseQueue) {
         let queue = try DatabaseQueue(path: ":memory:")
         try DatabaseManager.migrator.migrate(queue)
-        return SQLiteWinlinkStore(dbQueue: queue)
+        return (SQLiteWinlinkStore(dbQueue: queue), queue)
     }
 
     private func makeMessage(mid: String = "TESTMID00001",
@@ -23,6 +29,171 @@ final class SQLiteWinlinkStoreTests: XCTestCase {
             mbo: "K0EPI",
             body: Data("Body text.\r\n".utf8),
             attachments: attachments)
+    }
+
+    // MARK: - Trash metadata
+
+    /// The Trash needs to say when something went in — `updatedAt` cannot,
+    /// because opening a message in the Trash bumps it and the column would
+    /// then report when you last looked at it.
+    func testTrashingRecordsWhenAndFromWhere() throws {
+        let store = try makeStore()
+        try store.saveInbound(makeMessage(mid: "TRASHTIME001"))
+        let inbox = try store.folderID(for: .inbox)
+
+        try store.moveToTrash(mid: "TRASHTIME001")
+        let state = try XCTUnwrap(try store.message(mid: "TRASHTIME001")?.state)
+
+        XCTAssertNotNil(state.trashedAt)
+        XCTAssertEqual(state.trashedFromFolderId, inbox)
+    }
+
+    /// Reading a message in the Trash must not look like re-deleting it.
+    func testMarkingATrashedMessageReadLeavesTheDeletedDateAlone() throws {
+        let store = try makeStore()
+        try store.saveInbound(makeMessage(mid: "TRASHREAD001"))
+        try store.moveToTrash(mid: "TRASHREAD001")
+        let deletedAt = try XCTUnwrap(try store.message(mid: "TRASHREAD001")?.state.trashedAt)
+
+        try store.setRead(mid: "TRASHREAD001", true)
+        XCTAssertEqual(try store.message(mid: "TRASHREAD001")?.state.trashedAt, deletedAt)
+    }
+
+    /// Coming back out of the Trash clears both: a message sitting in the
+    /// Inbox has not been deleted, and a stale origin would send a later
+    /// Put Back to the wrong place.
+    func testRestoringFromTrashClearsTheDeletedDate() throws {
+        let store = try makeStore()
+        try store.saveInbound(makeMessage(mid: "TRASHBACK001"))
+        let inbox = try store.folderID(for: .inbox)
+        try store.moveToTrash(mid: "TRASHBACK001")
+
+        try store.move(mid: "TRASHBACK001", toFolder: inbox)
+        let state = try XCTUnwrap(try store.message(mid: "TRASHBACK001")?.state)
+        XCTAssertNil(state.trashedAt)
+        XCTAssertNil(state.trashedFromFolderId)
+    }
+
+    /// A message trashed from a user folder goes back there, not to the
+    /// Inbox — Put Back means back, not somewhere plausible.
+    func testTheOriginIsTheFolderItActuallyCameFrom() throws {
+        let store = try makeStore()
+        try store.saveInbound(makeMessage(mid: "TRASHFOLD001"))
+        let archive = try store.folderID(for: .archive)
+        try store.move(mid: "TRASHFOLD001", toFolder: archive)
+
+        try store.moveToTrash(mid: "TRASHFOLD001")
+        XCTAssertEqual(try store.message(mid: "TRASHFOLD001")?.state.trashedFromFolderId, archive)
+    }
+
+    /// The list column reads from the summary, so it has to carry it.
+    func testTheSummaryCarriesTheDeletedDate() throws {
+        let store = try makeStore()
+        try store.saveInbound(makeMessage(mid: "TRASHSUMM001"))
+        try store.moveToTrash(mid: "TRASHSUMM001")
+
+        let trash = try store.folderID(for: .trash)
+        let summary = try XCTUnwrap(try store.messages(inFolder: trash).first)
+        XCTAssertNotNil(summary.trashedAt)
+    }
+
+    // MARK: - Permanent deletion
+
+    /// Everything goes: the message, its attachments, its state row. The
+    /// tombstone is what stays.
+    func testDeleteRemovesEveryTraceAndLeavesATombstone() throws {
+        let (store, queue) = try makeStoreWithQueue()
+        let attachment = WinlinkB2Message.Attachment(name: "ICS213.txt",
+                                                    data: Data("form".utf8))
+        try store.saveInbound(makeMessage(mid: "DELETEME0001", attachments: [attachment]))
+        XCTAssertNotNil(try store.message(mid: "DELETEME0001"))
+
+        let removed = try store.deleteMessages(mids: ["DELETEME0001"])
+        XCTAssertEqual(removed, ["DELETEME0001"])
+        XCTAssertNil(try store.message(mid: "DELETEME0001"))
+
+        let inbox = try store.folderID(for: .inbox)
+        XCTAssertTrue(try store.messages(inFolder: inbox).isEmpty)
+        XCTAssertEqual(try store.messageTombstones().map(\.messageId), ["DELETEME0001"])
+
+        // The attachment rows cascade with the message rather than being
+        // orphaned in the table.
+        let orphans = try queue.read { db in
+            try WinlinkAttachmentRecord
+                .filter(Column("messageId") == "DELETEME0001").fetchCount(db)
+        }
+        XCTAssertEqual(orphans, 0)
+    }
+
+    /// A MID that is not here still has to be remembered: a device asked to
+    /// delete something it never received must not accept it later.
+    func testDeletingAnAbsentMessageStillTombstonesIt() throws {
+        let store = try makeStore()
+        let removed = try store.deleteMessages(mids: ["NEVERHERE001"])
+        XCTAssertTrue(removed.isEmpty)
+        XCTAssertEqual(try store.messageTombstones().map(\.messageId), ["NEVERHERE001"])
+    }
+
+    func testEmptyTrashDestroysOnlyWhatIsInTheTrash() throws {
+        let store = try makeStore()
+        try store.saveInbound(makeMessage(mid: "TRASHED00001"))
+        try store.saveInbound(makeMessage(mid: "KEEPME000001"))
+        try store.moveToTrash(mid: "TRASHED00001")
+
+        XCTAssertEqual(try store.emptyTrash(), 1)
+        XCTAssertNil(try store.message(mid: "TRASHED00001"))
+        XCTAssertNotNil(try store.message(mid: "KEEPME000001"))
+        XCTAssertEqual(try store.messageTombstones().map(\.messageId), ["TRASHED00001"])
+    }
+
+    func testEmptyTrashOnAnEmptyTrashIsHarmless() throws {
+        let store = try makeStore()
+        XCTAssertEqual(try store.emptyTrash(), 0)
+        XCTAssertTrue(try store.messageTombstones().isEmpty)
+    }
+
+    /// A half-received body is a partial copy of a message the operator has
+    /// just destroyed; resuming it would spend airtime rebuilding exactly
+    /// what they threw away.
+    func testDeletingAMessageDropsItsPartialBody() throws {
+        let store = try makeStore()
+        try store.saveInbound(makeMessage(mid: "PARTIAL00001"))
+        try store.savePartialBody(mid: "PARTIAL00001", compressedSize: 900,
+                                  data: Data(repeating: 0x41, count: 100))
+        XCTAssertEqual(try store.partialBodies().count, 1)
+
+        try store.deleteMessages(mids: ["PARTIAL00001"])
+        XCTAssertTrue(try store.partialBodies().isEmpty)
+    }
+
+    /// Downloading a message again is a deliberate act and outranks having
+    /// deleted it. Leaving the tombstone would let the next sync round
+    /// delete the message the operator just spent airtime on.
+    func testDownloadingADeletedMessageAgainClearsItsTombstone() throws {
+        let store = try makeStore()
+        try store.saveInbound(makeMessage(mid: "REDOWNLOAD01"))
+        try store.deleteMessages(mids: ["REDOWNLOAD01"])
+        XCTAssertEqual(try store.messageTombstones().count, 1)
+
+        XCTAssertTrue(try store.saveInbound(makeMessage(mid: "REDOWNLOAD01")))
+        XCTAssertNotNil(try store.message(mid: "REDOWNLOAD01"))
+        XCTAssertTrue(try store.messageTombstones().isEmpty,
+                      "the tombstone would delete it again on the next sync")
+    }
+
+    /// Deletion is monotonic and settles on the earliest stamp, so two
+    /// devices that deleted independently stop trading timestamps.
+    func testApplyingARemoteDeletionKeepsTheEarliestStamp() throws {
+        let store = try makeStore()
+        let early = Date(timeIntervalSince1970: 1_700_000_000)
+        let late = early.addingTimeInterval(500)
+
+        XCTAssertTrue(try store.syncApplyDeletion(mid: "STAMPED00001", at: late))
+        XCTAssertTrue(try store.syncApplyDeletion(mid: "STAMPED00001", at: early))
+        XCTAssertEqual(try store.messageTombstones().first?.deletedAt, early)
+
+        // Nothing left to change: a repeat is not a change.
+        XCTAssertFalse(try store.syncApplyDeletion(mid: "STAMPED00001", at: late))
     }
 
     // MARK: - Folders

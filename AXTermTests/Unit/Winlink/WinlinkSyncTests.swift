@@ -70,9 +70,9 @@ final class WinlinkSyncPolicyTests: XCTestCase {
 
     func testSyncedKindsAreExactlyTheSyncedDispositions() {
         XCTAssertEqual(Set(WinlinkSyncPolicy.syncedKinds.map(\.rawValue)),
-                       ["message", "messageState", "contact", "catalogFavorite",
-                        "callsignDirectory", "nodeAlias", "stationLease",
-                        "callsignBase", "operatorProfile"])
+                       ["message", "messageState", "messageDeletion", "contact",
+                        "catalogFavorite", "callsignDirectory", "nodeAlias",
+                        "stationLease", "callsignBase", "operatorProfile"])
     }
 }
 

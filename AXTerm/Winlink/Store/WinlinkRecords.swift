@@ -87,8 +87,40 @@ nonisolated struct WinlinkMessageStateRecord: Codable, FetchableRecord, Persista
     var sentOffset: Int
     var lastError: String?
     var updatedAt: Date
+    /// When this message was moved to the Trash, and where from.
+    ///
+    /// `updatedAt` cannot answer either question: it is bumped by marking a
+    /// message read, so a "Deleted" column driven by it would report when
+    /// the operator last *looked* at something in the Trash. Both are nil
+    /// for anything not in the Trash, and cleared when a message comes back
+    /// out — a stale origin would send a later Put Back somewhere wrong.
+    var trashedAt: Date?
+    var trashedFromFolderId: Int64?
 
     var state: DeliveryState? { DeliveryState(rawValue: deliveryState) }
+}
+
+/// A message that was permanently deleted here.
+///
+/// The row the message occupied is gone — body, attachments and state with
+/// it — and this is what remains: the MID, and when it went.
+///
+/// It exists for one reason. Deletion is the only mailbox operation that
+/// cannot be expressed as state on a message, because the message is no
+/// longer there to carry it, and a mailbox that syncs would otherwise
+/// resurrect anything deleted: the other device still holds the mail, sees
+/// a MID this one lacks, and helpfully sends it back. A tombstone is the
+/// difference between "I have never seen this" and "I got rid of this".
+///
+/// Tombstones are kept indefinitely. They are a MID and a date — tens of
+/// bytes against the kilobytes the message cost — and expiring them would
+/// reintroduce resurrection for exactly the device that was switched off
+/// longest, which is the one least able to notice.
+nonisolated struct WinlinkMessageTombstoneRecord: Codable, FetchableRecord, PersistableRecord, Hashable, Sendable {
+    static let databaseTableName = "winlinkMessageTombstone"
+
+    var messageId: String
+    var deletedAt: Date
 }
 
 nonisolated struct WinlinkAttachmentRecord: Codable, FetchableRecord, MutablePersistableRecord, Hashable, Sendable {

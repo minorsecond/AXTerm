@@ -14,9 +14,30 @@ final class WinlinkMailboxViewModel: ObservableObject {
         didSet { applyFilter() }
     }
     @Published private(set) var filteredMessages: [WinlinkMessageSummary] = []
-    @Published var selectedMID: String? {
-        didSet { loadSelectedMessage() }
+    /// Every selected message.
+    ///
+    /// The list is a real multi-selection table, so this is the truth and
+    /// `selectedMID` is derived from it. Storing one optional here and
+    /// collapsing the table's `Set` into it — which is what this was —
+    /// makes Select All, shift-click and command-click all appear to
+    /// select exactly one row.
+    @Published var selectedMIDs: Set<String> = [] {
+        didSet {
+            guard selectedMIDs != oldValue else { return }
+            loadSelectedMessage()
+        }
     }
+
+    /// The one selected message, when exactly one is selected. Nil for an
+    /// empty selection *and* for a multiple one: the reading pane can only
+    /// show a message, and showing an arbitrary member of a selection would
+    /// be a lie about which.
+    var selectedMID: String? {
+        get { selectedMIDs.count == 1 ? selectedMIDs.first : nil }
+        set { selectedMIDs = newValue.map { [$0] } ?? [] }
+    }
+
+    var selectionCount: Int { selectedMIDs.count }
     @Published private(set) var selectedMessage: WinlinkStoredMessage?
     @Published private(set) var unreadCount: Int = 0
     @Published private(set) var lastError: String?
@@ -71,8 +92,11 @@ final class WinlinkMailboxViewModel: ObservableObject {
         do {
             messages = try store.messages(inFolder: folderID)
             applyFilter()
-            if let selectedMID, !messages.contains(where: { $0.mid == selectedMID }) {
-                self.selectedMID = nil
+            // Drop anything that just left the folder, keeping the rest of
+            // the selection intact.
+            let present = Set(messages.map(\.mid))
+            if !selectedMIDs.isSubset(of: present) {
+                selectedMIDs = selectedMIDs.intersection(present)
             }
         } catch {
             lastError = String(describing: error)
@@ -113,15 +137,130 @@ final class WinlinkMailboxViewModel: ObservableObject {
     // MARK: - Message actions
 
     func move(mid: String, toFolder folderID: Int64) {
-        perform { try self.store.move(mid: mid, toFolder: folderID) }
+        move(mids: [mid], toFolder: folderID)
     }
 
     func trash(mid: String) {
-        perform { try self.store.moveToTrash(mid: mid) }
+        trash(mids: [mid])
     }
 
     func markUnread(mid: String) {
-        perform { try self.store.setRead(mid: mid, false) }
+        markUnread(mids: [mid])
+    }
+
+    // Bulk forms. One `perform` for the whole batch, so the list reloads
+    // once rather than once per message — moving twenty messages should not
+    // rebuild the table twenty times.
+
+    func move(mids: Set<String>, toFolder folderID: Int64) {
+        guard !mids.isEmpty else { return }
+        perform {
+            for mid in mids { try self.store.move(mid: mid, toFolder: folderID) }
+        }
+    }
+
+    /// Moving mail to the Trash is Mail.app's ⌫ behaviour, and it asks no
+    /// question because it can be taken back. Recording where each message
+    /// came from is what makes that true — see `undoLastTrash`.
+    func trash(mids: Set<String>) {
+        guard !mids.isEmpty else { return }
+        perform {
+            for mid in mids { try self.store.moveToTrash(mid: mid) }
+        }
+        // Read the origins back from the store rather than from `messages`,
+        // which holds only the folder on screen — a selection can include
+        // mail the visible list has never seen.
+        var origins = [String: Int64]()
+        for mid in mids {
+            if let folder = try? store.trashOrigin(mid: mid) {
+                origins[mid] = folder
+            }
+        }
+        lastTrashed = origins.isEmpty ? nil : origins
+    }
+
+    /// The last batch moved to the Trash, and the folder each came from.
+    ///
+    /// One step, not a stack: this backs ⌘Z immediately after a delete,
+    /// which is the moment the mistake is noticed. A deeper history would
+    /// imply the app can walk back an arbitrary sequence of mailbox edits,
+    /// which it cannot.
+    private var lastTrashed: [String: Int64]?
+
+    var canUndoTrash: Bool { lastTrashed?.isEmpty == false }
+
+    /// Puts specific messages back where they were trashed from.
+    ///
+    /// Independent of the undo stack: this works on anything sitting in the
+    /// Trash with a recorded origin, however long ago it went in. Messages
+    /// trashed before origins were recorded have nowhere known to go, so
+    /// they are left alone rather than dropped in the Inbox.
+    func putBack(mids: Set<String>) {
+        guard !mids.isEmpty else { return }
+        perform {
+            for mid in mids {
+                guard let origin = try self.store.trashOrigin(mid: mid) else { continue }
+                try self.store.move(mid: mid, toFolder: origin)
+            }
+        }
+    }
+
+    /// Puts the last trashed batch back where it came from.
+    ///
+    /// Each message goes to *its own* origin. Sending them all to the Inbox
+    /// would be tidy and wrong: a message filed in Archive and deleted from
+    /// there has never been in the Inbox.
+    func undoLastTrash() {
+        guard let origins = lastTrashed, !origins.isEmpty else { return }
+        lastTrashed = nil
+        perform {
+            for (mid, folder) in origins {
+                try self.store.move(mid: mid, toFolder: folder)
+            }
+        }
+    }
+
+    func markUnread(mids: Set<String>) {
+        guard !mids.isEmpty else { return }
+        perform {
+            for mid in mids { try self.store.setRead(mid: mid, false) }
+        }
+    }
+
+    /// True while looking at the Trash, where Delete destroys rather than
+    /// files.
+    var isViewingTrash: Bool {
+        folders.first { $0.id == selectedFolderID }?.role == .trash
+    }
+
+    /// Whether `trash(mids:)` would do anything from here. Inside the Trash
+    /// there is nowhere further to file mail — `deleteForever` is what
+    /// applies there instead.
+    var canTrashSelection: Bool {
+        !selectedMIDs.isEmpty && !isViewingTrash
+    }
+
+    /// Destroys the selection outright. There is no undo, so every caller
+    /// confirms first.
+    func deleteForever(mids: Set<String>) {
+        guard !mids.isEmpty else { return }
+        // Nothing here can be undone, and leaving the undo armed would
+        // offer to restore messages that no longer exist.
+        lastTrashed = nil
+        perform { _ = try self.store.deleteMessages(mids: Array(mids)) }
+    }
+
+    /// Destroys everything in the Trash, wherever the operator is looking.
+    func emptyTrash() {
+        lastTrashed = nil
+        perform { _ = try self.store.emptyTrash() }
+    }
+
+    /// How many messages `emptyTrash()` would destroy — so the confirmation
+    /// can say, rather than ask about an unknown quantity.
+    func trashedMessageCount() -> Int {
+        guard let id = folders.first(where: { $0.role == .trash })?.id else { return 0 }
+        return (try? store.messages(inFolder: id).count) ?? 0
     }
 
     // MARK: - Folder actions

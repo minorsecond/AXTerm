@@ -29,6 +29,10 @@ struct WinlinkMessageDetail: View {
 
     @State private var saveError: String?
     @State private var pendingExport: ExportableFile?
+    /// Derived off the main actor when the message changes — never in
+    /// `body`. See `WinlinkRenderedBody`.
+    @State private var rendered: WinlinkRenderedBody?
+    @State private var wantsFullText = false
 
     var body: some View {
         if let stored {
@@ -127,24 +131,34 @@ struct WinlinkMessageDetail: View {
                     WinlinkReceivedFormView(form: form)
                         .padding([.horizontal, .top], 12)
                 }
-                let raw = bodyText(of: message)
                 // Fixed-width NWS products get a real table; the view
                 // keeps the raw text one disclosure away. Anything that
                 // does not parse cleanly falls through unchanged rather
                 // than being half-rendered.
-                if let forecast = NWSTabularForecast.parse(raw) {
-                    NWSTabularForecastView(forecast: forecast, rawText: raw,
-                                           preferredLocality: preferredLocality)
-                        .padding(12)
+                if let rendered {
+                    switch rendered.content {
+                    case .forecast(let forecast):
+                        NWSTabularForecastView(forecast: forecast, rawText: rendered.raw,
+                                               preferredLocality: preferredLocality)
+                            .padding(12)
+                    case .text(let attributed):
+                        // Links are an overlay on the exact bytes received,
+                        // never an edit — and clickable, never auto-opened.
+                        Text(attributed)
+                            .font(.body.monospaced())
+                            .textSelection(.enabled)
+                            .tint(.accentColor)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                        if rendered.isTruncated {
+                            truncationFooter(rendered, message: message)
+                        }
+                    }
                 } else {
-                    // Links are an overlay on the exact bytes received,
-                    // never an edit — and clickable, never auto-opened.
-                    Text(WinlinkBodyText.attributed(raw))
-                        .font(.body.monospaced())
-                        .textSelection(.enabled)
-                        .tint(.accentColor)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(24)
                 }
 
                 // A product that arrived as an image cost airtime to
@@ -154,6 +168,24 @@ struct WinlinkMessageDetail: View {
                     imagePreview(attachment)
                 }
             }
+        }
+        // Keyed on the MID *and* the full-text flag, so switching messages
+        // re-derives and "Show Everything" re-renders — and neither costs
+        // anything on an unrelated update.
+        .task(id: "\(message.mid)|\(wantsFullText)") {
+            let body = message.body
+            let wantsFull = wantsFullText
+            let derived = await Task.detached(priority: .userInitiated) {
+                WinlinkRenderedBody.make(body: body, fullText: wantsFull)
+            }.value
+            guard !Task.isCancelled else { return }
+            rendered = derived
+        }
+        .onChange(of: message.mid) { _ in
+            // A new message starts capped again, and must not show the
+            // previous one's text while its own is being derived.
+            wantsFullText = false
+            rendered = nil
         }
         .alert("Save failed", isPresented: Binding(
             get: { saveError != nil },
@@ -166,6 +198,45 @@ struct WinlinkMessageDetail: View {
     }
 
     /// Attachments this platform can actually decode as an image.
+    /// Says exactly how much is being withheld and why, and offers both
+    /// ways out: render the rest here, or save it and read it elsewhere.
+    @ViewBuilder
+    private func truncationFooter(_ rendered: WinlinkRenderedBody,
+                                  message: WinlinkB2Message) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+            Text("Showing the first \(byteText(rendered.shownCharacters)) of \(byteText(rendered.totalCharacters)). "
+                 + "A message this long takes a noticeable moment to lay out, so the rest is one click away.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("Show Everything") { wantsFullText = true }
+                Button("Save as Text\u{2026}") {
+                    pendingExport = ExportableFile(
+                        name: exportName(for: message),
+                        data: Data(rendered.raw.utf8))
+                }
+                Spacer()
+            }
+        }
+        .padding(12)
+    }
+
+    private func byteText(_ characters: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(characters), countStyle: .file)
+    }
+
+    /// A filename that says which message this came from.
+    private func exportName(for message: WinlinkB2Message) -> String {
+        let subject = message.subject
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespaces)
+        let stem = subject.isEmpty ? message.mid : String(subject.prefix(60))
+        return "\(stem).txt"
+    }
+
     private func imageAttachments(in message: WinlinkB2Message) -> [WinlinkB2Message.Attachment] {
         message.attachments.filter { attachment in
             let ext = (attachment.name as NSString).pathExtension.lowercased()
@@ -255,10 +326,6 @@ struct WinlinkMessageDetail: View {
             }
         }
         return nil
-    }
-
-    private func bodyText(of message: WinlinkB2Message) -> String {
-        String(data: message.body, encoding: .isoLatin1) ?? "(body could not be decoded)"
     }
 
     /// Hands the attachment to the operator to file wherever they like.

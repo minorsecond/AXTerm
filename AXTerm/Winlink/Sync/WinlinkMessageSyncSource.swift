@@ -70,6 +70,22 @@ nonisolated struct WinlinkMessageStatePayload: Codable, Equatable, Sendable {
     var claim: WinlinkTransmitClaim?
     var sentOffset: Int
     var offsetDevice: String?
+    /// When this message was trashed, and from where, so the Trash reads
+    /// the same on every device. The folder travels as an identity for the
+    /// same reason `folder` does — a rowid means nothing elsewhere.
+    var trashedAt: Date?
+    var trashedFrom: WinlinkSyncFolderRef?
+}
+
+/// A deletion, on the wire.
+///
+/// Deliberately not a field on `WinlinkMessageStatePayload`. State describes
+/// a message that exists; once one is deleted there is no state row left to
+/// carry the flag, and a receiving device may need to honour the deletion
+/// for a message it has never held — so this must apply with no content to
+/// attach it to.
+nonisolated struct WinlinkMessageDeletionPayload: Codable, Equatable, Sendable {
+    var deletedAt: Date
 }
 
 // MARK: - Store surface
@@ -94,6 +110,16 @@ nonisolated protocol WinlinkSyncStore: Sendable {
                            state: WinlinkMessageStateRecord) throws
     /// Writes merged state onto an existing message.
     func syncUpdateState(_ state: WinlinkMessageStateRecord) throws
+
+    /// Messages deleted on this device, to be published so others honour it.
+    func syncTombstones() throws -> [WinlinkMessageTombstoneRecord]
+    /// Whether this MID was deleted here. Guards content coming back in.
+    func syncIsDeleted(mid: String) throws -> Bool
+    /// Honours another device's deletion: removes the message if it is
+    /// here, and records the tombstone either way. Returns whether anything
+    /// changed locally.
+    @discardableResult
+    func syncApplyDeletion(mid: String, at deletedAt: Date) throws -> Bool
 }
 
 // MARK: - Message source
@@ -115,7 +141,7 @@ nonisolated struct WinlinkMessageSyncSource: WinlinkSyncSource {
          store: WinlinkSyncStore,
          deviceID: String,
          now: @escaping @Sendable () -> Date = Date.init) {
-        precondition(kind == .message || kind == .messageState,
+        precondition(kind == .message || kind == .messageState || kind == .messageDeletion,
                      "this source owns mail only")
         self.kind = kind
         self.store = store
@@ -128,13 +154,30 @@ nonisolated struct WinlinkMessageSyncSource: WinlinkSyncSource {
                         deviceID: String,
                         now: @escaping @Sendable () -> Date = Date.init)
         -> [WinlinkSyncSource] {
-        [WinlinkMessageSyncSource(kind: .message, store: store, deviceID: deviceID, now: now),
+        // Deletions are listed first so that within one round a deletion is
+        // applied before content that would otherwise be re-inserted and
+        // deleted again. Correct either way — `applyContent` checks the
+        // tombstone — but this keeps a message from flickering back into
+        // the mailbox for the length of a sync.
+        [WinlinkMessageSyncSource(kind: .messageDeletion, store: store, deviceID: deviceID, now: now),
+         WinlinkMessageSyncSource(kind: .message, store: store, deviceID: deviceID, now: now),
          WinlinkMessageSyncSource(kind: .messageState, store: store, deviceID: deviceID, now: now)]
     }
 
     // MARK: Outgoing
 
     func localRecords() throws -> [WinlinkSyncRecord] {
+        if kind == .messageDeletion {
+            return try store.syncTombstones().map { tombstone in
+                WinlinkSyncRecord(
+                    kind: .messageDeletion,
+                    id: tombstone.messageId,
+                    modifiedAt: tombstone.deletedAt,
+                    payload: try Self.encoder.encode(
+                        WinlinkMessageDeletionPayload(deletedAt: tombstone.deletedAt)))
+            }
+        }
+
         let folders = try store.folders()
         let states = try store.syncMessageStates()
 
@@ -172,7 +215,11 @@ nonisolated struct WinlinkMessageSyncSource: WinlinkSyncSource {
                     // send; this source reports, it does not claim.
                     claim: nil,
                     sentOffset: state.sentOffset,
-                    offsetDevice: state.sentOffset > 0 ? deviceID : nil)
+                    offsetDevice: state.sentOffset > 0 ? deviceID : nil,
+                    trashedAt: state.trashedAt,
+                    trashedFrom: state.trashedFromFolderId.flatMap {
+                        WinlinkSyncFolderRef.of(folderId: $0, in: folders)
+                    })
                 return WinlinkSyncRecord(
                     kind: .messageState,
                     id: state.messageId,
@@ -194,6 +241,7 @@ nonisolated struct WinlinkMessageSyncSource: WinlinkSyncSource {
             switch kind {
             case .message: changed += try applyContent(record) ? 1 : 0
             case .messageState: changed += try applyState(record) ? 1 : 0
+            case .messageDeletion: changed += try applyDeletion(record) ? 1 : 0
             default: break
             }
         }
@@ -204,6 +252,11 @@ nonisolated struct WinlinkMessageSyncSource: WinlinkSyncSource {
     /// overwritten — content is immutable, so a second copy is the same copy.
     private func applyContent(_ record: WinlinkSyncRecord) throws -> Bool {
         if try store.syncStoredMessage(mid: record.id) != nil { return false }
+        // The whole reason tombstones exist. Another device still holding a
+        // message this one deleted will keep offering it; absence is not a
+        // decision, so without this check every sync round puts deleted mail
+        // straight back in the mailbox.
+        if try store.syncIsDeleted(mid: record.id) { return false }
 
         guard let payload = try? Self.decoder.decode(
                 WinlinkMessageContentPayload.self, from: record.payload),
@@ -238,6 +291,20 @@ nonisolated struct WinlinkMessageSyncSource: WinlinkSyncSource {
         return true
     }
 
+    /// Honours a deletion from another device.
+    ///
+    /// Applied whether or not the message is here. A device that never
+    /// received the message still has to record the tombstone, or the
+    /// content record — which may arrive from a third device, or later in
+    /// this same round — would file it as new mail.
+    private func applyDeletion(_ record: WinlinkSyncRecord) throws -> Bool {
+        guard let payload = try? Self.decoder.decode(
+                WinlinkMessageDeletionPayload.self, from: record.payload) else {
+            throw WinlinkSyncError.payloadUnreadable(kind: kind, id: record.id)
+        }
+        return try store.syncApplyDeletion(mid: record.id, at: payload.deletedAt)
+    }
+
     /// Merges a remote state onto the local one.
     ///
     /// A state for a message this device has never seen is dropped, not
@@ -265,7 +332,15 @@ nonisolated struct WinlinkMessageSyncSource: WinlinkSyncSource {
 
         let local = WinlinkStateMerge.State(record: stored.state)
         let merged = WinlinkStateMerge.merge(local, remote, at: now())
-        let updated = merged.applied(to: stored.state)
+        var updated = merged.applied(to: stored.state)
+        // Trash metadata follows the folder decision, because it describes
+        // that decision: whichever side's filing won, its account of when
+        // and from where won with it. Splitting them would show a deletion
+        // date beside a message sitting in the Inbox.
+        if merged.folderId == folderId {
+            updated.trashedAt = payload.trashedAt
+            updated.trashedFromFolderId = try payload.trashedFrom.map(resolve)
+        }
         guard updated != stored.state else { return false }
         try store.syncUpdateState(updated)
         return true

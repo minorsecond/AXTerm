@@ -10,6 +10,10 @@ struct WinlinkFolderSidebar: View {
     @State private var showingNewFolder = false
     @State private var renamingFolder: WinlinkFolderRecord?
     @State private var renameText = ""
+    @State private var confirmingEmptyTrash = false
+    /// Counted when the menu item is chosen, so the confirmation can name a
+    /// number instead of asking about an unknown quantity.
+    @State private var trashCount = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,6 +34,17 @@ struct WinlinkFolderSidebar: View {
                                         if let id = folder.id { viewModel.deleteFolder(id: id) }
                                     }
                                 }
+                                if folder.role == .trash {
+                                    // The only way the mailbox ever gets
+                                    // smaller. Until this existed the Trash
+                                    // was a folder mail went into and never
+                                    // left.
+                                    Button("Empty Trash\u{2026}", role: .destructive) {
+                                        trashCount = viewModel.trashedMessageCount()
+                                        confirmingEmptyTrash = trashCount > 0
+                                    }
+                                    .disabled(viewModel.trashedMessageCount() == 0)
+                                }
                             }
                     }
                 }
@@ -49,6 +64,18 @@ struct WinlinkFolderSidebar: View {
                 Spacer()
             }
             .padding(6)
+        }
+        .confirmationDialog(
+            trashCount == 1
+                ? "Delete the message in the Trash permanently?"
+                : "Delete \(trashCount) messages in the Trash permanently?",
+            isPresented: $confirmingEmptyTrash,
+            titleVisibility: .visible
+        ) {
+            Button("Empty Trash", role: .destructive) { viewModel.emptyTrash() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This cannot be undone, here or on your other devices.")
         }
         .alert("New Folder", isPresented: $showingNewFolder) {
             TextField("Name", text: $newFolderName)

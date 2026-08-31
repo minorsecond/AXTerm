@@ -4,6 +4,15 @@ import SwiftUI
 struct WinlinkMessageList: View {
 
     @ObservedObject var viewModel: WinlinkMailboxViewModel
+    /// Set while a permanent deletion is waiting to be confirmed. Nothing
+    /// in this view destroys mail without passing through here.
+    @State private var pendingDeletion: Set<String>?
+    /// Set while a *bulk* move to the Trash waits to be confirmed. A single
+    /// message never gets here — see `onDeleteCommand`.
+    @State private var pendingTrash: Set<String>?
+    /// The window's undo stack, so ⌘Z and Edit ▸ Undo both work and the
+    /// menu item names the action.
+    @Environment(\.undoManager) private var undoManager
     /// Double-click and the context menu both open a message in its own
     /// window — the habitual mail-client gesture.
     var onOpenInWindow: ((String) -> Void)?
@@ -65,9 +74,10 @@ struct WinlinkMessageList: View {
                 #if os(iOS)
                 touchList
                 #else
-                Table(viewModel.filteredMessages, selection: Binding(
-                    get: { viewModel.selectedMID.map { Set([$0]) } ?? [] },
-                    set: { viewModel.selectedMID = $0.first })) {
+                // Bound straight to the set. Routing it through a single
+                // optional is what made Select All and shift-click land on
+                // one row.
+                Table(viewModel.filteredMessages, selection: $viewModel.selectedMIDs) {
 
                     TableColumn("") { summary in
                         HStack(spacing: 2) {
@@ -104,6 +114,27 @@ struct WinlinkMessageList: View {
                     }
                     .width(min: 100, ideal: 130)
 
+                    // Only in the Trash, where "when did this go?" is the
+                    // question. Everywhere else it would be an empty column
+                    // with a header promising something.
+                    if viewModel.isViewingTrash {
+                    TableColumn("Deleted") { summary in
+                        if let trashedAt = summary.trashedAt {
+                            Text(trashedAt.formatted(date: .abbreviated, time: .shortened))
+                                .foregroundStyle(.secondary)
+                                .help("Moved to the Trash on "
+                                      + trashedAt.formatted(date: .long, time: .standard))
+                        } else if viewModel.isViewingTrash {
+                            // Trashed before the date was recorded. Saying
+                            // so beats an invented one.
+                            Text("—")
+                                .foregroundStyle(.tertiary)
+                                .help("Deleted before AXTerm recorded deletion dates.")
+                        }
+                    }
+                    .width(min: 100, ideal: 130)
+                    }
+
                     TableColumn("State") { summary in
                         WinlinkDeliveryBadge(state: summary.deliveryState, error: summary.lastError)
                     }
@@ -117,31 +148,139 @@ struct WinlinkMessageList: View {
                     .width(min: 50, ideal: 70)
                 }
                 .platformInsetTable()
+                // Every item acts on the whole selection. Right-clicking
+                // one of six selected messages and having "Move to Trash"
+                // take one of them is worse than not offering it.
                 .contextMenu(forSelectionType: String.self) { mids in
-                    if let mid = mids.first {
-                        if let onOpenInWindow {
+                    if !mids.isEmpty {
+                        if let onOpenInWindow, mids.count == 1, let mid = mids.first {
                             Button("Open in Window") { onOpenInWindow(mid) }
                             Divider()
                         }
-                        Button("Mark as Unread") { viewModel.markUnread(mid: mid) }
-                        Menu("Move to") {
+                        if viewModel.isViewingTrash {
+                            // Finder's word for it, and now that the origin
+                            // is recorded it means the same thing: back to
+                            // the folder it actually came from.
+                            Button(label("Put Back", mids)) { viewModel.putBack(mids: mids) }
+                            Divider()
+                        }
+                        Button(label("Mark as Unread", mids)) { viewModel.markUnread(mids: mids) }
+                        Menu(label("Move", mids) + " to") {
                             ForEach(viewModel.folders, id: \.id) { folder in
                                 Button(folder.name) {
-                                    if let id = folder.id { viewModel.move(mid: mid, toFolder: id) }
+                                    if let id = folder.id {
+                                        viewModel.move(mids: mids, toFolder: id)
+                                    }
                                 }
                             }
                         }
                         Divider()
-                        Button("Move to Trash", role: .destructive) { viewModel.trash(mid: mid) }
+                        // Inside the Trash there is nowhere further to file
+                        // mail, so Delete means what it says there and only
+                        // there.
+                        if viewModel.isViewingTrash {
+                            Button(label("Delete", mids) + " Permanently", role: .destructive) {
+                                pendingDeletion = mids
+                            }
+                        } else {
+                            Button(label("Move", mids) + " to Trash", role: .destructive) {
+                                viewModel.trash(mids: mids)
+                            }
+                        }
                     }
                 } primaryAction: { mids in
                     // Table's primaryAction is the double-click.
-                    if let mid = mids.first { onOpenInWindow?(mid) }
+                    if mids.count == 1, let mid = mids.first { onOpenInWindow?(mid) }
+                }
+                // Delete moves the selection to the trash, which is what
+                // the key does in every other mail client.
+                // ⌫ moves the selection to the Trash, as it does in
+                // Mail. No dialog for a single message: it is reversible,
+                // and a prompt on every keystroke is how operators learn to
+                // dismiss prompts — which is exactly the habit the
+                // permanent-delete dialog cannot afford.
+                //
+                // A whole selection is different. Twenty messages vanishing
+                // at once is disorienting even when it can be taken back,
+                // so that one asks.
+                .onDeleteCommand {
+                    let selection = viewModel.selectedMIDs
+                    guard !selection.isEmpty else { return }
+                    if viewModel.isViewingTrash {
+                        pendingDeletion = selection
+                    } else if selection.count > 1 {
+                        pendingTrash = selection
+                    } else {
+                        trash(selection)
+                    }
                 }
                 #endif
             }
         }
+        // The only path to a permanent delete in this view, and it always
+        // says how many and that it cannot be undone. Mail that cost
+        // airtime to receive deserves the extra keystroke.
+        .confirmationDialog(
+            deletionPrompt,
+            isPresented: Binding(
+                get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Permanently", role: .destructive) {
+                if let mids = pendingDeletion { viewModel.deleteForever(mids: mids) }
+                pendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDeletion = nil }
+        } message: {
+            Text("This cannot be undone, here or on your other devices.")
+        }
+        .confirmationDialog(
+            "Move \(pendingTrash?.count ?? 0) messages to the Trash?",
+            isPresented: Binding(
+                get: { pendingTrash != nil },
+                set: { if !$0 { pendingTrash = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Move to Trash") {
+                if let mids = pendingTrash { trash(mids) }
+                pendingTrash = nil
+            }
+            Button("Cancel", role: .cancel) { pendingTrash = nil }
+        } message: {
+            Text("You can put them back with Undo.")
+        }
     }
+
+    /// Moves to the Trash and arms the window's undo, so ⌘Z reads
+    /// "Undo Move to Trash" and puts each message back where it came from.
+    private func trash(_ mids: Set<String>) {
+        viewModel.trash(mids: mids)
+        guard let undoManager, viewModel.canUndoTrash else { return }
+        undoManager.registerUndo(withTarget: viewModel) { model in
+            // The undo manager calls back on the main thread; the model is
+            // main-actor isolated and this is where that is asserted.
+            MainActor.assumeIsolated { model.undoLastTrash() }
+        }
+        undoManager.setActionName(mids.count == 1
+                                  ? "Move to Trash"
+                                  : "Move \(mids.count) Messages to Trash")
+    }
+
+    private var deletionPrompt: String {
+        let count = pendingDeletion?.count ?? 0
+        return count == 1
+            ? "Delete this message permanently?"
+            : "Delete \(count) messages permanently?"
+    }
+
+#if os(macOS)
+    /// "Move to Trash" for one, "Move 6 to Trash" for a selection — so a
+    /// destructive item always says how much it is about to affect.
+    private func label(_ verb: String, _ mids: Set<String>) -> String {
+        mids.count > 1 ? "\(verb) \(mids.count)" : verb
+    }
+#endif
 
 #if os(iOS)
     /// The same messages as a touch list.
@@ -157,8 +296,17 @@ struct WinlinkMessageList: View {
             set: { viewModel.selectedMID = $0 })) { summary in
             row(for: summary)
                 .swipeActions(edge: .trailing) {
-                    Button("Trash", systemImage: "trash", role: .destructive) {
-                        viewModel.trash(mid: summary.id)
+                    // Swiping in the Trash used to file a message into the
+                    // folder it was already in, which looked like the swipe
+                    // had failed.
+                    if viewModel.isViewingTrash {
+                        Button("Delete", systemImage: "trash.slash", role: .destructive) {
+                            pendingDeletion = [summary.id]
+                        }
+                    } else {
+                        Button("Trash", systemImage: "trash", role: .destructive) {
+                            viewModel.trash(mid: summary.id)
+                        }
                     }
                 }
                 .swipeActions(edge: .leading) {

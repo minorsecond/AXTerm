@@ -216,6 +216,12 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
             if try WinlinkMessageRecord.exists(db, key: message.mid) {
                 return false
             }
+            // Downloading a message again is a deliberate act — the operator
+            // chose it in the download picker — so it outranks having
+            // deleted it earlier. Dropping the tombstone is what makes that
+            // stick: leaving it would let the next sync round delete the
+            // message the operator just spent airtime on.
+            try WinlinkMessageTombstoneRecord.deleteOne(db, key: message.mid)
             let inboxID = try Self.folderID(for: .inbox, db: db)
             try Self.insertMessageRows(
                 message, direction: .inbound, folderId: inboxID,
@@ -256,7 +262,8 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
                     isRead: state.isRead,
                     deliveryState: state.state ?? .received,
                     folderId: state.folderId,
-                    lastError: state.lastError)
+                    lastError: state.lastError,
+                    trashedAt: state.trashedAt)
             }
             // Newest first by the message's own timestamp — the value the
             // Date column shows. MID breaks ties so two reads of the same
@@ -317,6 +324,22 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
             guard var state = try WinlinkMessageStateRecord.fetchOne(db, key: mid) else {
                 throw WinlinkStoreError.messageNotFound(mid)
             }
+            let trashId = try Self.folderID(for: .trash, db: db)
+            if folderId == trashId {
+                // Only on the way *in*. Moving between folders inside the
+                // Trash is not possible, but re-trashing something already
+                // there must not overwrite when it went or where it came
+                // from with "the Trash".
+                if state.folderId != trashId {
+                    state.trashedAt = now()
+                    state.trashedFromFolderId = state.folderId
+                }
+            } else {
+                // Out of the Trash: it has not been deleted, and a stale
+                // origin would send a later Put Back somewhere wrong.
+                state.trashedAt = nil
+                state.trashedFromFolderId = nil
+            }
             state.folderId = folderId
             state.updatedAt = now()
             try state.update(db)
@@ -326,6 +349,71 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
     func moveToTrash(mid: String) throws {
         let trashID = try folderID(for: .trash)
         try move(mid: mid, toFolder: trashID)
+    }
+
+    /// Where a trashed message came from, for Put Back and for undo.
+    /// Nil when it is not in the Trash, or predates the origin being
+    /// recorded.
+    func trashOrigin(mid: String) throws -> Int64? {
+        try dbQueue.read { db in
+            try WinlinkMessageStateRecord.fetchOne(db, key: mid)?.trashedFromFolderId
+        }
+    }
+
+    // MARK: - Permanent deletion
+
+    @discardableResult
+    func deleteMessages(mids: [String]) throws -> [String] {
+        guard !mids.isEmpty else { return [] }
+        return try dbQueue.write { [now] db in
+            try Self.delete(mids: mids, at: now(), db: db)
+        }
+    }
+
+    @discardableResult
+    func emptyTrash() throws -> Int {
+        try dbQueue.write { [now] db in
+            let trashID = try Self.folderID(for: .trash, db: db)
+            let mids = try WinlinkMessageStateRecord
+                .filter(Column("folderId") == trashID)
+                .fetchAll(db)
+                .map(\.messageId)
+            return try Self.delete(mids: mids, at: now(), db: db).count
+        }
+    }
+
+    func messageTombstones() throws -> [WinlinkMessageTombstoneRecord] {
+        try dbQueue.read { db in
+            try WinlinkMessageTombstoneRecord.fetchAll(db)
+        }
+    }
+
+    /// Removes the message rows and leaves a tombstone behind.
+    ///
+    /// The state row and the attachments go with the message: both cascade
+    /// from `winlinkMessage`, which is also why the tombstone cannot simply
+    /// be a flag on the state row — deleting the message would take the flag
+    /// with it.
+    ///
+    /// A partial body is dropped too. It is a half-received copy of a
+    /// message the operator has just destroyed; resuming it later would
+    /// spend airtime rebuilding exactly what they threw away.
+    private static func delete(mids: [String], at timestamp: Date, db: Database) throws -> [String] {
+        var removed = [String]()
+        for mid in mids {
+            guard try WinlinkMessageRecord.exists(db, key: mid) else { continue }
+            try WinlinkMessageRecord.deleteOne(db, key: mid)
+            try WinlinkPartialBodyRecord.deleteOne(db, key: mid)
+            removed.append(mid)
+        }
+        // Tombstone every requested MID, not just the rows that were here.
+        // A device asked to delete something it never had still has to
+        // remember the decision, or the next sync brings it in.
+        for mid in mids {
+            try WinlinkMessageTombstoneRecord(messageId: mid, deletedAt: timestamp)
+                .insert(db, onConflict: .replace)
+        }
+        return removed
     }
 
     func unreadInboxCount() throws -> Int {
@@ -626,6 +714,42 @@ extension SQLiteWinlinkStore: WinlinkSyncStore {
         try dbQueue.write { db in
             guard try WinlinkMessageStateRecord.exists(db, key: state.messageId) else { return }
             try state.update(db)
+        }
+    }
+
+    func syncTombstones() throws -> [WinlinkMessageTombstoneRecord] {
+        try messageTombstones()
+    }
+
+    func syncIsDeleted(mid: String) throws -> Bool {
+        try dbQueue.read { db in
+            try WinlinkMessageTombstoneRecord.exists(db, key: mid)
+        }
+    }
+
+    /// Honours another device's deletion.
+    ///
+    /// The tombstone is recorded whether or not the message is here — a
+    /// device that never received it still has to remember the decision, or
+    /// the content record files it as new mail.
+    ///
+    /// Deletion is monotonic and keeps the *earliest* timestamp it has seen.
+    /// Two devices deleting the same message independently then converge on
+    /// one answer rather than trading later stamps forever.
+    @discardableResult
+    func syncApplyDeletion(mid: String, at deletedAt: Date) throws -> Bool {
+        try dbQueue.write { db in
+            let existing = try WinlinkMessageTombstoneRecord.fetchOne(db, key: mid)
+            let removed = try WinlinkMessageRecord.exists(db, key: mid)
+            if removed {
+                try WinlinkMessageRecord.deleteOne(db, key: mid)
+                try WinlinkPartialBodyRecord.deleteOne(db, key: mid)
+            }
+            let stamp = min(deletedAt, existing?.deletedAt ?? deletedAt)
+            guard removed || existing == nil || existing?.deletedAt != stamp else { return false }
+            try WinlinkMessageTombstoneRecord(messageId: mid, deletedAt: stamp)
+                .insert(db, onConflict: .replace)
+            return true
         }
     }
 }

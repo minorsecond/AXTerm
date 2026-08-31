@@ -543,6 +543,26 @@ nonisolated enum DatabaseManager {
                       on: "remoteStationActivity", columns: ["lastHeard"])
     }
 
+    /// Records that a message was deleted for good, so a sync cannot put it
+    /// back. See `WinlinkMessageTombstoneRecord`.
+    static func createWinlinkMessageTombstones(_ db: Database) throws {
+        try db.create(table: WinlinkMessageTombstoneRecord.databaseTableName) { t in
+            t.primaryKey("messageId", .text)
+            t.column("deletedAt", .datetime).notNull()
+        }
+    }
+
+    /// When a message was trashed and where from — see
+    /// `WinlinkMessageStateRecord`. Both nil for existing rows, which is
+    /// correct: nothing already in the Trash has a recorded origin, and the
+    /// UI treats a missing date as unknown rather than as the epoch.
+    static func addWinlinkTrashMetadata(_ db: Database) throws {
+        try db.alter(table: WinlinkMessageStateRecord.databaseTableName) { t in
+            t.add(column: "trashedAt", .datetime)
+            t.add(column: "trashedFromFolderId", .integer)
+        }
+    }
+
     /// Register a migration with full Sentry lifecycle reporting: a start
     /// breadcrumb, then either a success breadcrumb or — previously impossible —
     /// a failure breadcrumb plus a captured event naming the migration and
@@ -647,6 +667,14 @@ nonisolated enum DatabaseManager {
         registerReportedMigration(&migrator, version: 22,
                                   name: "dropBBSPersonalContactFields") { db in
             try dropBBSPersonalContactFields(db)
+        }
+        registerReportedMigration(&migrator, version: 23,
+                                  name: "createWinlinkMessageTombstones") { db in
+            try createWinlinkMessageTombstones(db)
+        }
+        registerReportedMigration(&migrator, version: 24,
+                                  name: "addWinlinkTrashMetadata") { db in
+            try addWinlinkTrashMetadata(db)
         }
         return migrator
     }()

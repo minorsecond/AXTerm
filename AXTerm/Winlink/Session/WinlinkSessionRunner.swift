@@ -30,6 +30,43 @@ final class WinlinkSessionRunner: ObservableObject {
     @Published private(set) var transcript: [WinlinkTranscriptEntry] = []
     private static let transcriptLimit = 600
 
+    /// Set while the remote is holding for an answer about which of its
+    /// messages to download. Nil at every other moment — including as soon
+    /// as the session ends, so a sheet can never outlive its link.
+    @Published private(set) var pendingSelection: InboundSelectionRequest?
+
+    /// One batch of offers put to the operator, with the deadline the link
+    /// imposes on answering.
+    struct InboundSelectionRequest: Identifiable, Equatable {
+        let id: UUID
+        var offers: [B2FSessionEngine.InboundOffer]
+        var gatewayName: String
+        /// When the engine stops waiting and applies the fallback below.
+        var deadline: Date
+        /// Offers costing at most this many bytes on the air are taken
+        /// automatically if the deadline passes.
+        var autoAcceptUnderBytes: Int
+        /// How the airtime column was arrived at.
+        var airtime: WinlinkAirtimeEstimate
+    }
+
+    /// The operator has chosen. MIDs absent from the set are deferred, and
+    /// the remote keeps them for next time.
+    func resolveInboundSelection(accepting mids: Set<String>) {
+        guard pendingSelection != nil else { return }
+        pendingSelection = nil
+        log(.event, mids.isEmpty
+            ? "Downloading nothing this session — everything stays on the server"
+            : "Downloading \(mids.count) of the offered messages")
+        // The question is answered, so the status must stop asking it. The
+        // first `receiveProgress` is far too late to do this: on a 20 B/s
+        // link the first body byte can be a minute after the FS line.
+        statusText = mids.isEmpty
+            ? "Declined — nothing downloaded"
+            : "Requesting \(mids.count) message\(mids.count == 1 ? "" : "s")…"
+        dispatch(.inboundSelectionResolved(acceptedMIDs: mids))
+    }
+
     // Per-message metadata and delivery baselines for send progress.
     private var messageSubjects: [String: String] = [:]
     private var messageCompressedSizes: [String: Int] = [:]
@@ -44,6 +81,10 @@ final class WinlinkSessionRunner: ObservableObject {
     private var completion: CheckedContinuation<WinlinkExchangeSummary, Never>?
     private var startedAt = Date()
     private var sessionFrequencyHz: Int?
+    /// Supplied by the caller, which knows the gateway and frequency the
+    /// ladder picked; the runner deliberately owns no link-quality store.
+    private var sessionAirtime: WinlinkAirtimeEstimate = .assumed
+    private var sessionGatewayName = ""
     /// Bytes handed to the transport since the last timer was armed; used
     /// to stretch protocol timeouts over slow RF links (1200 bd moves
     /// ~100 B/s of payload — a 30 kB attachment takes minutes).
@@ -86,7 +127,9 @@ final class WinlinkSessionRunner: ObservableObject {
         frequencyHz: Int? = nil,
         sid: WinlinkSID? = nil,
         role: B2FSessionEngine.Role = .initiator,
-        preserveTranscript: Bool = false
+        preserveTranscript: Bool = false,
+        inboundSelection: B2FSessionEngine.InboundSelectionPolicy = .acceptAll,
+        airtime: WinlinkAirtimeEstimate = .assumed
     ) async -> WinlinkExchangeSummary {
         guard !isRunning else {
             var summary = WinlinkExchangeSummary()
@@ -98,6 +141,9 @@ final class WinlinkSessionRunner: ObservableObject {
         statusText = "Preparing outbound mail…"
         startedAt = Date()
         sessionFrequencyHz = frequencyHz
+        sessionAirtime = airtime
+        sessionGatewayName = gatewayName
+        pendingSelection = nil
         bytesQueuedSinceTimer = 0
         // Fire and forget: a GPS fix takes seconds, the exchange takes
         // minutes, and the answer is only needed when the log is written.
@@ -152,7 +198,8 @@ final class WinlinkSessionRunner: ObservableObject {
             sid: sid ?? .axterm(version: Self.appVersion),
             role: role,
             outbound: prepared,
-            partialInbound: partialInbound))
+            partialInbound: partialInbound,
+            inboundSelection: inboundSelection))
         self.engine = engine
         self.transport = transport
 
@@ -247,6 +294,14 @@ final class WinlinkSessionRunner: ObservableObject {
         case .startTimer(let kind, let seconds):
             // Stretch protocol timeouts by the time our own queued bytes
             // still need on the air; the peer cannot answer sooner.
+            //
+            // The selection deadline is exempt: it measures a person, not
+            // a peer, and stretching it would leave the sheet's countdown
+            // reading 0:00 while the engine was still waiting.
+            guard kind != .selection else {
+                startTimer(kind, seconds: seconds)
+                return
+            }
             let stretched = seconds + bytesQueuedSinceTimer / assumedBytesPerSecond
             bytesQueuedSinceTimer = 0
             startTimer(kind, seconds: min(stretched, 1800))
@@ -254,6 +309,35 @@ final class WinlinkSessionRunner: ObservableObject {
         case .cancelTimer(let kind):
             timerTasks[kind]?.cancel()
             timerTasks[kind] = nil
+            // The selection timer exists only while a question is
+            // outstanding, so cancelling it means the question is answered.
+            // `resolveInboundSelection` clears the request before it
+            // dispatches, so anything still set here was answered by the
+            // deadline on the operator's behalf — and the sheet has to go
+            // with it, or it sits there collecting ticks the engine will
+            // ignore.
+            if kind == .selection, let stale = pendingSelection {
+                let threshold = ByteCountFormatter.string(
+                    fromByteCount: Int64(stale.autoAcceptUnderBytes), countStyle: .file)
+                log(.event, "No answer in time — taking what is under \(threshold), "
+                    + "the rest stays on the server")
+                statusText = "No answer in time — taking what is under \(threshold)"
+                pendingSelection = nil
+            }
+
+        case .requestInboundSelection(let offers, let timeoutSeconds, let autoAcceptUnderBytes):
+            let total = offers.reduce(0) { $0 + $1.bytesOnTheAir }
+            log(.event, "\(offers.count) message\(offers.count == 1 ? "" : "s") offered, "
+                + "\(ByteCountFormatter.string(fromByteCount: Int64(total), countStyle: .file)) "
+                + "(about \(sessionAirtime.airtimeTextOnTheAir(compressedBytes: total)) on the air) — waiting for a choice")
+            statusText = "Choose which messages to download…"
+            pendingSelection = InboundSelectionRequest(
+                id: UUID(),
+                offers: offers,
+                gatewayName: sessionGatewayName,
+                deadline: Date().addingTimeInterval(TimeInterval(timeoutSeconds)),
+                autoAcceptUnderBytes: autoAcceptUnderBytes,
+                airtime: sessionAirtime)
 
         case .outboundAccepted(let mid, let offset):
             log(.event, offset > 0
@@ -418,6 +502,10 @@ final class WinlinkSessionRunner: ObservableObject {
 
     private func resolve(with summary: WinlinkExchangeSummary) {
         cancelAllTimers()
+        // A sheet must never outlive the link it was asking about: the
+        // messages are gone from this session either way, and answering a
+        // dead exchange would silently do nothing.
+        pendingSelection = nil
         completion?.resume(returning: summary)
         completion = nil
     }

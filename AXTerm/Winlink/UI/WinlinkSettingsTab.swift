@@ -362,6 +362,24 @@ struct WinlinkSettingsTab: View {
                 .frame(maxWidth: 280)
                 .help("The client name sent in the B2F handshake. The production Winlink CMS only accepts registered client types — until AXTerm is registered with the Winlink development team, gateways will reply 'Unknown client types are not allowed' and disconnect. Selecting Pat (an open-source client with the same B2F feature set) is the community's usual workaround while a registration request is pending.")
 
+                Toggle("Ask which messages to download", isOn: $settings.askBeforeDownloading)
+                    .help("A gateway proposes its mail before sending it. With this on, you see the subjects, senders and airtime and choose; with it off, everything it offers comes down.")
+
+                if settings.askBeforeDownloading {
+                    HStack {
+                        Text("Download anyway if under")
+                        TextField("", value: $settings.downloadAnywayUnderKB, format: .number)
+                            .frame(maxWidth: 60)
+                            .multilineTextAlignment(.trailing)
+                        Text("KB")
+                    }
+                    .help("Applied only when the picker times out unanswered.")
+
+                    Text("You get \(WinlinkSettings.inboundSelectionTimeout) seconds to choose, with the link open. Unanswered, messages under the size above download and the rest stay on the server — emergency traffic is small, and an unattended station should not commit a shared channel to a bulletin. Nothing you skip is ever lost; the gateway offers it again.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Picker("Preferred transport", selection: $settings.preferredTransport) {
                     Text("Packet (AX.25)").tag(WinlinkSettings.TransportPreference.ax25)
                     Text("Telnet (Internet)").tag(WinlinkSettings.TransportPreference.telnet)

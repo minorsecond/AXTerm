@@ -47,12 +47,16 @@ nonisolated final class B2FSessionEngine {
         /// by MID. When the gateway re-proposes one of these, the FS answer
         /// requests a resume from the saved offset instead of a restart.
         var partialInbound: [String: PartialInboundBody]
+        /// Who decides which offered messages come down this session.
+        var inboundSelection: InboundSelectionPolicy
 
         init(myCallsign: String, password: String? = nil,
              sid: WinlinkSID = .axterm(version: "1.0"),
              role: Role = .initiator,
              outbound: [PreparedOutbound] = [],
-             partialInbound: [String: PartialInboundBody] = [:]) {
+             partialInbound: [String: PartialInboundBody] = [:],
+             inboundSelection: InboundSelectionPolicy = .acceptAll) {
+            self.inboundSelection = inboundSelection
             self.myCallsign = myCallsign
             self.password = password
             self.sid = sid
@@ -80,10 +84,48 @@ nonisolated final class B2FSessionEngine {
         var uncompressedSize: Int
     }
 
+    /// Who answers a remote's proposal block.
+    ///
+    /// Asking holds the link open while a human reads, which on a shared
+    /// channel is a real cost — hence the deadline, and a default that
+    /// spends as little airtime as possible when nobody is at the radio.
+    enum InboundSelectionPolicy: Equatable, Sendable {
+        /// Take everything offered. No operator in the loop.
+        case acceptAll
+        /// Put the batch to the operator. If `timeoutSeconds` passes with
+        /// no answer, everything costing at most `autoAcceptUnderBytes` on
+        /// the air is taken and the rest deferred: emergency traffic is
+        /// small, and an unattended station must never commit the channel
+        /// to a large download nobody asked for.
+        case ask(timeoutSeconds: Int, autoAcceptUnderBytes: Int)
+    }
+
+    /// One message a remote is offering, as far as anything can be known
+    /// before it is downloaded.
+    ///
+    /// There is no preview: the body does not cross the air until the
+    /// proposal is accepted. The `;PM:` advisory is the whole of what can
+    /// be shown, and a remote need not have sent one.
+    struct InboundOffer: Equatable, Sendable, Identifiable {
+        var mid: String
+        var compressedSize: Int
+        var uncompressedSize: Int
+        /// Bytes already held from an interrupted session; only the
+        /// remainder costs airtime this time.
+        var resumeFrom: Int
+        var advisory: B2FPendingAdvisory?
+
+        var id: String { mid }
+
+        /// What accepting this actually costs on the air.
+        var bytesOnTheAir: Int { max(0, compressedSize - resumeFrom) }
+    }
+
     enum TimerKind: String, Sendable {
         case banner    // waiting for SID + prompt after connect
         case response  // waiting for FS / FC / FF / FQ lines
         case binary    // waiting for the next byte of a binary body
+        case selection // waiting for the operator to choose what to download
     }
 
     enum Event {
@@ -92,6 +134,10 @@ nonisolated final class B2FSessionEngine {
         case timerFired(TimerKind)
         case linkDisconnected
         case abortRequested
+        /// The operator answered `requestInboundSelection`. MIDs absent
+        /// from the set are deferred, never rejected: nothing an operator
+        /// declines here may be lost, only left on the server.
+        case inboundSelectionResolved(acceptedMIDs: Set<String>)
     }
 
     enum Action: Equatable {
@@ -120,6 +166,10 @@ nonisolated final class B2FSessionEngine {
         /// A stored partial for this MID is no longer usable (message
         /// completed, stitch failed, or the re-proposal changed size).
         case discardPartialBody(mid: String)
+        /// Ask the operator which of these to download. The link stays up
+        /// meanwhile, so the driver must answer with
+        /// `inboundSelectionResolved` or let the timer expire.
+        case requestInboundSelection(offers: [InboundOffer], timeoutSeconds: Int, autoAcceptUnderBytes: Int)
         case requestDisconnect
         case complete(WinlinkExchangeSummary)
         case fail(reason: String)
@@ -133,6 +183,9 @@ nonisolated final class B2FSessionEngine {
         case awaitingCallerHandshake
         case awaitingProposalAnswer
         case awaitingRemoteProposals
+        /// The FS answer is written but held back while the operator
+        /// chooses. The remote is waiting on us, not the other way round.
+        case awaitingInboundSelection
         case receivingBodies
         case closing
         case closed
@@ -162,9 +215,30 @@ nonisolated final class B2FSessionEngine {
     /// The batch currently proposed and awaiting an FS answer.
     private var proposedBatch: [PreparedOutbound] = []
 
+    /// `;PM:` descriptions seen this session, keyed by MID. Advisory: a
+    /// proposal with no entry here is still perfectly downloadable.
+    private var pendingAdvisories: [String: B2FPendingAdvisory] = [:]
+
     /// Remote proposals collected while parsing their FC block.
     private var remoteFCLines: [String] = []
     private var remoteProposals: [B2FProposal.Proposal] = []
+    /// What was decided about each entry of `remoteProposals`, in the same
+    /// order — an FS line answers one code per proposal, so the answers are
+    /// indexed rather than keyed by MID, which a block may repeat.
+    private enum ProposalDisposition: Equatable {
+        /// Never offered to anyone: wrong kind, or a size we will not buffer.
+        case refuse
+        /// Offerable. `prefix` is the saved body from an interrupted
+        /// session, empty for a fresh transfer.
+        case offer(prefix: Data)
+    }
+    private var proposalPlan: [ProposalDisposition] = []
+    /// The offers currently in front of the operator, kept so a deadline
+    /// can be resolved without the driver handing them back.
+    private var heldOffers: [InboundOffer] = []
+    /// Actions computed while planning and owed regardless of what the
+    /// operator picks; emitted with the FS line.
+    private var plannedPreamble: [Action] = []
     /// One accepted remote proposal plus the saved prefix (empty for a
     /// fresh transfer) its continuation stitches onto.
     private struct IncomingTransfer {
@@ -219,6 +293,12 @@ nonisolated final class B2FSessionEngine {
 
         case .timerFired(let kind):
             return handleTimeout(kind)
+
+        case .inboundSelectionResolved(let accepted):
+            // Late answers are ordinary: the deadline can expire, or the
+            // link drop, while the sheet is still open.
+            guard state == .awaitingInboundSelection else { return [] }
+            return answerProposals(accepting: accepted)
 
         case .linkDisconnected:
             switch state {
@@ -442,6 +522,12 @@ nonisolated final class B2FSessionEngine {
         // turnover rules below.
         if line.uppercased().hasPrefix(";PM:") {
             remoteHasPendingMail = true
+            // Keep the description too. The FC proposal that follows is a
+            // MID and two byte counts; this is the only place a subject and
+            // a sender ever appear before the body is on the wire.
+            if let advisory = B2FPendingAdvisory.parse(line) {
+                pendingAdvisories[advisory.mid] = advisory
+            }
             return []
         }
 
@@ -662,9 +748,20 @@ nonisolated final class B2FSessionEngine {
             return failSession("remote sent an empty proposal block")
         }
 
-        var answers = [B2FProposal.Answer]()
-        var preambleActions = [Action]()
-        incomingQueue = []
+        return planProposals()
+    }
+
+    /// Decides what each proposal in the block *could* be, then either
+    /// answers straight away or puts the offerable ones to the operator.
+    ///
+    /// Refusals are settled here and never offered: a proposal we would not
+    /// buffer under any circumstances is not a choice anyone should be
+    /// shown.
+    private func planProposals() -> [Action] {
+        proposalPlan = []
+        plannedPreamble = []
+        var offers = [InboundOffer]()
+
         for proposal in remoteProposals {
             // Sanity-check sizes; a hostile or corrupt proposal must not
             // make us buffer unbounded data.
@@ -672,33 +769,88 @@ nonisolated final class B2FSessionEngine {
                 && proposal.compressedSize >= 6
                 && proposal.compressedSize <= 4 * 1024 * 1024
             guard acceptable else {
-                answers.append(.reject)
+                proposalPlan.append(.refuse)
                 continue
             }
 
             // Resume: a saved prefix from an interrupted session lets us
             // ask for the remainder only (FS !offset). The prefix is valid
             // only for the same MID at the same compressed size.
+            var prefix = Data()
             if let partial = config.partialInbound[proposal.mid] {
                 if partial.compressedSize == proposal.compressedSize,
                    !partial.data.isEmpty,
                    partial.data.count < proposal.compressedSize {
-                    answers.append(.acceptFromOffset(partial.data.count))
-                    incomingQueue.append(IncomingTransfer(proposal: proposal, prefix: partial.data))
+                    prefix = partial.data
+                } else {
+                    // Stale or oversized partial — start over and drop it.
+                    plannedPreamble.append(.discardPartialBody(mid: proposal.mid))
+                }
+            }
+
+            proposalPlan.append(.offer(prefix: prefix))
+            offers.append(InboundOffer(
+                mid: proposal.mid,
+                compressedSize: proposal.compressedSize,
+                uncompressedSize: proposal.uncompressedSize,
+                resumeFrom: prefix.count,
+                advisory: pendingAdvisories[proposal.mid]))
+        }
+
+        guard case .ask(let timeout, let threshold) = config.inboundSelection, !offers.isEmpty else {
+            return answerProposals(accepting: Set(offers.map(\.mid)))
+        }
+
+        // The remote is now waiting on us rather than the other way round,
+        // so its response timer comes down and the operator's goes up.
+        state = .awaitingInboundSelection
+        heldOffers = offers
+        return [
+            .cancelTimer(.response),
+            .requestInboundSelection(
+                offers: offers, timeoutSeconds: timeout, autoAcceptUnderBytes: threshold),
+            .startTimer(.selection, seconds: timeout),
+        ]
+    }
+
+    /// Renders the FS line for the plan, taking the MIDs in `accepted` and
+    /// deferring every other offer.
+    ///
+    /// Deferral (`=`), never rejection: a message the operator passed over
+    /// stays on the server and is re-proposed next session. Nothing chosen
+    /// in a hurry on a bad link can lose mail.
+    private func answerProposals(accepting accepted: Set<String>) -> [Action] {
+        var answers = [B2FProposal.Answer]()
+        incomingQueue = []
+
+        for (index, proposal) in remoteProposals.enumerated() {
+            guard index < proposalPlan.count else { break }
+            switch proposalPlan[index] {
+            case .refuse:
+                answers.append(.reject)
+            case .offer(let prefix):
+                guard accepted.contains(proposal.mid) else {
+                    answers.append(.defer_)
                     continue
                 }
-                // Stale or oversized partial — start over and drop it.
-                preambleActions.append(.discardPartialBody(mid: proposal.mid))
+                if prefix.isEmpty {
+                    answers.append(.accept)
+                } else {
+                    answers.append(.acceptFromOffset(prefix.count))
+                }
+                incomingQueue.append(IncomingTransfer(proposal: proposal, prefix: prefix))
             }
-            answers.append(.accept)
-            incomingQueue.append(IncomingTransfer(proposal: proposal, prefix: Data()))
         }
 
         let fsLine = "FS " + answers.map(\.rendered).joined() + "\r"
-        var actions: [Action] = preambleActions + [.cancelTimer(.response), sendText(fsLine)]
+        var actions: [Action] = plannedPreamble
+            + [.cancelTimer(.selection), .cancelTimer(.response), sendText(fsLine)]
+        plannedPreamble = []
+        heldOffers = []
 
         if incomingQueue.isEmpty {
-            // Rejected everything; remote will follow with FF or more proposals.
+            // Took nothing; remote will follow with FF or more proposals.
+            state = .awaitingRemoteProposals
             actions.append(.startTimer(.response, seconds: 120))
         } else {
             state = .receivingBodies
@@ -939,6 +1091,17 @@ nonisolated final class B2FSessionEngine {
                 : "timed out waiting for the gateway's response")
         case (.receivingBodies, .binary):
             return failSession("timed out waiting for message data")
+        case (.awaitingInboundSelection, .selection):
+            // Nobody is at the radio. Take what is cheap enough that an
+            // unattended station can afford it — emergency traffic is
+            // small — and leave the rest on the server for a session with
+            // an operator in front of it. Never fail here: the link is
+            // healthy and the remote is waiting for an FS line.
+            guard case .ask(_, let threshold) = config.inboundSelection else {
+                return answerProposals(accepting: Set(heldOffers.map(\.mid)))
+            }
+            let affordable = heldOffers.filter { $0.bytesOnTheAir <= threshold }
+            return answerProposals(accepting: Set(affordable.map(\.mid)))
         default:
             return []  // stale timer from a state we already left
         }

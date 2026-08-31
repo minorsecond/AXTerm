@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// Root of the Winlink feature area: Mail / Stations segmented control,
@@ -42,6 +43,16 @@ struct WinlinkMailView: View {
     @State private var positionQueued: String?
     @State private var showConsole = false
     @State private var exchangeAlert: String?
+    /// The download picker's request, mirrored from the runner.
+    @State private var inboundSelection: WinlinkSessionRunner.InboundSelectionRequest?
+    @State private var confirmingPermanentDelete = false
+
+    /// Nothing to mirror when the store failed to open and there is no
+    /// runner: there are then no exchanges to be asked about either.
+    private var selectionPublisher: AnyPublisher<WinlinkSessionRunner.InboundSelectionRequest?, Never> {
+        context.runner?.$pendingSelection.eraseToAnyPublisher()
+            ?? Just(nil).eraseToAnyPublisher()
+    }
     /// The gateway the running (or last) exchange actually talks to — the
     /// active ladder rung, which can differ from the configured gateway.
     @State private var activeExchangeGateway: String = ""
@@ -194,6 +205,21 @@ struct WinlinkMailView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(exchangeAlert ?? "")
+        }
+        // Mirrored into local state so the sheet gets a real binding. The
+        // runner clears its own copy the moment the session ends, which
+        // drops the sheet with it.
+        .onReceive(selectionPublisher) { request in
+            // The publisher republishes its current value on every
+            // resubscribe, and `body` rebuilds it — assign only on a real
+            // change or the view updates itself in a loop.
+            if inboundSelection != request { inboundSelection = request }
+        }
+        .sheet(item: $inboundSelection) { request in
+            WinlinkInboundSelectionSheet(request: request) { mids in
+                inboundSelection = nil
+                context.runner?.resolveInboundSelection(accepting: mids)
+            }
         }
         .onAppear {
             // Defer one tick: onAppear runs inside SwiftUI's update
@@ -424,7 +450,59 @@ struct WinlinkMailView: View {
             onOpenInWindow: { mid in openWindow(id: "winlinkMessage", value: mid) })
     }
 
+    @ViewBuilder
     private var messageDetail: some View {
+        // With several selected there is no one message to read, and the
+        // "Select a message" placeholder would be wrong — something *is*
+        // selected. Say what, and offer what applies to all of them.
+        if mailboxVM.selectionCount > 1 {
+            multiSelectionSummary
+        } else {
+            singleMessageDetail
+        }
+    }
+
+    private var multiSelectionSummary: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "envelope.badge.fill")
+                .font(.system(size: 28))
+                .foregroundStyle(.secondary)
+            Text("\(mailboxVM.selectionCount) messages selected")
+                .font(.headline)
+            HStack {
+                Button("Mark as Unread") {
+                    mailboxVM.markUnread(mids: mailboxVM.selectedMIDs)
+                }
+                // In the Trash there is nowhere further to file mail, so the
+                // destructive action is the real one rather than a button
+                // that does nothing.
+                if mailboxVM.isViewingTrash {
+                    Button("Delete Permanently", role: .destructive) {
+                        confirmingPermanentDelete = true
+                    }
+                } else {
+                    Button("Move to Trash", role: .destructive) {
+                        mailboxVM.trash(mids: mailboxVM.selectedMIDs)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .confirmationDialog(
+            "Delete \(mailboxVM.selectionCount) messages permanently?",
+            isPresented: $confirmingPermanentDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Permanently", role: .destructive) {
+                mailboxVM.deleteForever(mids: mailboxVM.selectedMIDs)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This cannot be undone, here or on your other devices.")
+        }
+    }
+
+    private var singleMessageDetail: some View {
         WinlinkMessageDetail(
             stored: mailboxVM.selectedMessage,
             onReply: { replyAll in composeReply(replyAll: replyAll) },
@@ -831,7 +909,9 @@ struct WinlinkMailView: View {
                     password: password.isEmpty ? nil : password,
                     gatewayName: "Winlink CMS",
                     transportName: "telnet",
-                    sid: sid)
+                    sid: sid,
+                    inboundSelection: winlinkSettings.inboundSelectionPolicy,
+                    airtime: catalogAirtime)
                 mailboxVM.refresh()
                 context.exchangeFinished()
                 if let failure = summary.failureReason {
@@ -913,7 +993,12 @@ struct WinlinkMailView: View {
                 transportName: "ax25",
                 frequencyHz: rung.frequencyHz,
                 sid: sid,
-                preserveTranscript: index > 0)
+                preserveTranscript: index > 0,
+                inboundSelection: winlinkSettings.inboundSelectionPolicy,
+                airtime: WinlinkAirtimeEstimate.forGateway(
+                    callsign: rung.callsign,
+                    frequencyHz: rung.frequencyHz,
+                    quality: stationsVM.linkQuality))
 
             mailboxVM.refresh()
             context.exchangeFinished()
@@ -978,6 +1063,10 @@ private nonisolated final class FallbackWinlinkStore: WinlinkStore, @unchecked S
     }
     func renameFolder(id: Int64, name: String) throws { throw WinlinkStoreError.folderNotFound(id) }
     func deleteFolder(id: Int64) throws { throw WinlinkStoreError.folderNotFound(id) }
+    func trashOrigin(mid: String) throws -> Int64? { nil }
+    func deleteMessages(mids: [String]) throws -> [String] { [] }
+    func emptyTrash() throws -> Int { 0 }
+    func messageTombstones() throws -> [WinlinkMessageTombstoneRecord] { [] }
     func saveDraft(_ message: WinlinkB2Message) throws { throw WinlinkStoreError.missingSystemFolder("unavailable") }
     func updateDraft(_ message: WinlinkB2Message) throws { throw WinlinkStoreError.messageNotFound(message.mid) }
     func queueDraft(mid: String) throws { throw WinlinkStoreError.messageNotFound(mid) }
