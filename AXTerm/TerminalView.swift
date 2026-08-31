@@ -354,7 +354,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Records that a message went out on this link.
     fileprivate func noteMessageSent(_ text: String, to destination: String, at when: Date = Date()) {
         let hop = (netRomRelayNextHop ?? destination).uppercased()
-        let target = relayHandshakeDestination?.uppercased() ?? destination.uppercased()
+        let target = relayDestination?.uppercased() ?? destination.uppercased()
         if relayDelivery?.firstHop != hop || relayDelivery?.destination != target {
             relayDelivery = RelayDelivery(firstHop: hop, destination: target)
         }
@@ -508,6 +508,25 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Separate from `relayConversation`, which is deliberately established-only
     /// so nothing claims a live circuit early. This one is for saying what is
     /// being *attempted*, which is a different and honest thing to show.
+    /// Where the relay is ultimately headed, established or not.
+    ///
+    /// Distinct from `relayHandshakeDestination`, which is deliberately nil
+    /// once established because it answers "what is the handshake still
+    /// working towards". Anything naming the far end *after* the chain is up
+    /// needs this one — the connect bar's own destination is redirected to
+    /// the link target for the L2 connect, so falling back to it named the
+    /// first hop and reported "Answered by DRLNOD" for a reply from BBSCBH.
+    fileprivate var relayDestination: String? {
+        switch netRomRelayPhase {
+        case let .awaitingBanner(destination, _, _),
+             let .awaitingConnected(destination, _, _),
+             let .established(destination, _):
+            return destination
+        case nil:
+            return nil
+        }
+    }
+
     fileprivate var relayHandshakeDestination: String? {
         switch netRomRelayPhase {
         case let .awaitingBanner(destination, _, _),
