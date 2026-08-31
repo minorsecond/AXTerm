@@ -45,6 +45,12 @@ struct NodeProfileView: View {
     /// Where the operator's own notes live. Nil hides the section rather than
     /// showing an editor that cannot save.
     var noteStore: StationNoteStore?
+    /// The ground between this station and ours, when terrain covering both
+    /// ends has been downloaded. Computed by the caller — it needs the
+    /// elevation store, our own position and both antenna heights, none of
+    /// which this view has — and nil hides the section rather than showing an
+    /// empty chart.
+    var terrain: TerrainProfile?
     /// Mirrors the settings choice so a height typed on a station page reads
     /// back in the same unit everywhere else.
     @AppStorage(WinlinkSettings.heightUnitIsFeetKey) private var heightUnitIsFeet = true
@@ -464,6 +470,11 @@ struct NodeProfileView: View {
         if let placement = profile.placement {
             items.append((160, AnyView(placementSection(placement))))
         }
+        if let terrain {
+            // Header, chart and legend. The chart carries a minHeight of its
+            // own, so this is that plus the prose around it.
+            items.append((260, AnyView(terrainSection(terrain))))
+        }
         if !profile.links.isEmpty {
             // Each measured direction is a headline, bar, metric row,
             // sparkline with its caption, and a freshness line — the
@@ -700,6 +711,22 @@ struct NodeProfileView: View {
                 Text("This clears what AXTerm learned about and from this station. "
                      + "It will be learned again if the station is heard.")
             }
+        }
+    }
+
+    /// Why a path does or does not work, drawn.
+    ///
+    /// The verdict alone ("blocked by 180 m") is the answer; the picture is
+    /// *where* and *what shape*, which is what decides whether a digipeater
+    /// on a particular hill would help. A prediction, not a measurement —
+    /// which is why it sits below the position rather than beside the
+    /// heard-history that is evidence.
+    @ViewBuilder
+    private func terrainSection(_ terrain: TerrainProfile) -> some View {
+        section("Terrain", systemImage: "mountain.2") {
+            TerrainProfileView(profile: terrain,
+                               originLabel: localCallsign.isEmpty ? "Here" : localCallsign,
+                               destinationLabel: profile.callsign)
         }
     }
 

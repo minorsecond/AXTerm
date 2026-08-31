@@ -47,6 +47,9 @@ struct AXTermiOSRootView: View {
     /// reads this yet; it exists so the map has one owner on both
     /// platforms rather than a shared instance nobody watches.
     @StateObject private var mapLayerStatus = MapLayerStatus()
+    /// Downloaded terrain, owned by the shell for the same reason as on the
+    /// Mac: one handle, one warm tile cache.
+    @StateObject private var elevation = ElevationStorage()
     /// The callsign a directory lookup is running for, so the profile can say
     /// it is working rather than say it found nothing.
     @State private var lookingUpCallsign: String?
@@ -488,6 +491,7 @@ struct AXTermiOSRootView: View {
                 onOpenProfile: { profiles.openPage($0) },
                 layerStatus: mapLayerStatus,
                 focusCallsign: $mapFocusCallsign,
+                elevation: elevation,
                 overlayStore: overlayStore)
             .navigationTitle("Map")
             .navigationBarTitleDisplayMode(.inline)

@@ -97,7 +97,10 @@ struct StationsMapView: View {
     /// Stored elevation grids. Terrain forecasts read this and nothing else,
     /// so the feature works with the network down, and is honestly
     /// unavailable rather than quietly wrong when nothing is downloaded.
-    @StateObject private var elevation = ElevationStorage()
+    /// Owned by the shell so the station pages can read the same store —
+    /// two handles to one elevation database would be two caches warming
+    /// separately for the same tiles.
+    @ObservedObject var elevation: ElevationStorage
     @StateObject private var offlineMaps = OfflineMapStore()
     /// Stored map tiles, for the basemap that keeps working with the network
     /// down. See Docs/OfflineMaps.md.

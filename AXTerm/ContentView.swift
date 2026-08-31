@@ -59,6 +59,13 @@ struct ContentView: View {
     /// Published by the map so the sidebar's layer rows can be gated and
     /// captioned without recomputing the map's caches on every render.
     @StateObject private var mapLayerStatus = MapLayerStatus()
+    /// Downloaded terrain. Owned here because both the map's predicted-path
+    /// layer and the station pages read it, and two handles to one elevation
+    /// database would warm two caches for the same tiles.
+    @StateObject private var elevation = ElevationStorage()
+    /// The ground between here and the station whose page is open. Computed
+    /// off the render pass: a profile is 256 elevation samples.
+    @State private var profileTerrain: TerrainProfile?
     /// The Mac gets the same identity view the handheld does — a callsign in
     /// the console is the same question there as here.
     @StateObject private var profiles = NodeProfileCoordinator()
@@ -711,6 +718,7 @@ struct ContentView: View {
                     lookupEnabled: winlinkContext.settings.callsignLookupEnabled,
                     isLookingUp: lookingUpCallsign == presentation.callsign,
                     noteStore: client.stationNotes,
+                    terrain: profileTerrain,
                     presentation: presentation.isPage ? .page : .sheet,
                     onOpenFullPage: presentation.isPage
                         ? nil : { profiles.promoteSheetToPage() },
@@ -735,6 +743,10 @@ struct ContentView: View {
                     .onPreferenceChange(NodeProfileContentHeightKey.self) { height in
                         guard height > 0 else { return }
                         profileContentHeights[measureKey] = height
+                    }
+                    .task(id: presentation.callsign) {
+                        profileTerrain = nil
+                        profileTerrain = await terrainProfile(to: profile)
                     }
                     .task(id: presentation.callsign) {
                         guard winlinkContext.settings.callsignLookupEnabled else { return }
@@ -1446,6 +1458,7 @@ struct ContentView: View {
             },
             layerStatus: mapLayerStatus,
             focusCallsign: .constant(nil),
+            elevation: elevation,
             overlayStore: overlayStore,
             onSendLayer: layerSendAction)
     }
@@ -1641,6 +1654,41 @@ struct ContentView: View {
         .padding(.vertical, 5)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+    }
+
+    /// The ground between this station and the one whose page is open.
+    ///
+    /// Nil whenever the answer would be a guess dressed as a picture: no
+    /// terrain downloaded, no position for either end. `TerrainProfile`
+    /// itself refuses to read a gap in coverage as sea level, so a partial
+    /// download returns an "unknown" verdict rather than a clear path — the
+    /// most dangerous possible way to be wrong here.
+    ///
+    /// Off the main actor: 256 elevation samples per profile, and the
+    /// station sheet opens on a click.
+    private func terrainProfile(to profile: NodeProfile) async -> TerrainProfile? {
+        guard elevation.hasTerrain, let store = elevation.store,
+              let placement = profile.placement,
+              let observer = Maidenhead.center(of: winlinkContext.settings.gridSquare)
+                  .map(GreatCircle.Point.init)
+        else { return nil }
+
+        // A height the operator recorded for this station beats the assumed
+        // one: a node on a tower is the case the forecast most often gets
+        // wrong, and it is the case they are most likely to have noted.
+        let noted = (try? client.stationNotes?.antennaHeights())?[
+            profile.callsign.uppercased()]
+        let mine = winlinkContext.settings.antennaHeightMetres
+        let theirs = noted ?? winlinkContext.settings.assumedRemoteHeightMetres
+        let destination = placement.position
+
+        return await Task.detached(priority: .userInitiated) {
+            TerrainProfile.between(
+                origin: observer, destination: destination,
+                originHeight: mine, destinationHeight: theirs,
+                frequencyHz: StationsMapView.vhfCalculationFrequency,
+                sampler: StoredElevationSampler(store: store))
+        }.value
     }
 
     /// Imports a spatial attachment onto the map and switches to it.

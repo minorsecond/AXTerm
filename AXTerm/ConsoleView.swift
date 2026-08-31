@@ -267,6 +267,13 @@ struct ConsoleView: View {
     @AppStorage("consoleFilter_digipeatsOnly") private var digipeatsOnly = false
     @AppStorage("consoleFilter_minesOnly") private var minesOnly = false
 
+    /// Which rows print their time. Computed with the grouping rather than
+    /// per row: asking each row about the one above it would be a lookup per
+    /// row per render on a list that grows all day.
+    private var timestampPrintingRows: Set<ConsoleLineGroup.ID> {
+        ConsoleTimestampRuler.printingRows(groupedLines, timestamp: \.primary.timestampString)
+    }
+
     /// Lines filtered by clear timestamp and message type preferences
     private var typeFilteredLines: [ConsoleLine] {
         ConsoleVisibilityFilter.apply(
@@ -414,8 +421,14 @@ struct ConsoleView: View {
                                     DaySeparatorView(date: section.date)
                                         .padding(.vertical, 4)
 
+                                    // Computed per section: a day separator
+                                    // starts a new block, so the row after
+                                    // one always prints its time.
+                                    let printing = ConsoleTimestampRuler.printingRows(
+                                        section.items, timestamp: \.primary.timestampString)
                                     ForEach(section.items) { group in
                                         ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
+                                                             printsTimestamp: printing.contains(group.id),
                                                              onIdentity: onIdentity,
                                                              onIdentityMenu: onIdentityMenu)
                                             .id(group.id)
@@ -424,6 +437,7 @@ struct ConsoleView: View {
                             } else {
                                 ForEach(groupedLines) { group in
                                     ConsoleLineGroupView(fontSize: fontSize, group: group, localCallsign: localCallsign,
+                                                             printsTimestamp: timestampPrintingRows.contains(group.id),
                                                              onIdentity: onIdentity,
                                                              onIdentityMenu: onIdentityMenu)
                                         .id(group.id)
@@ -776,6 +790,8 @@ struct ConsoleLineGroupView: View {
     var fontSize: Double = 11
     let group: ConsoleLineGroup
     var localCallsign: String = ""
+    /// False for a row whose time is the same as the row above it.
+    var printsTimestamp: Bool = true
     var onIdentity: ((String) -> Void)?
     var onIdentityMenu: ((String) -> Void)?
     @State private var isExpanded = false
@@ -785,6 +801,7 @@ struct ConsoleLineGroupView: View {
             ConsoleLineView(
                 fontSize: fontSize,
                 line: group.primary,
+                printsTimestamp: printsTimestamp,
                 duplicateCount: group.duplicateCount,
                 allViaPaths: group.allViaPaths,
                 localCallsign: localCallsign,
@@ -877,6 +894,9 @@ private struct ExpandDuplicatesTap: ViewModifier {
 struct ConsoleLineView: View {
     var fontSize: Double = 11
     let line: ConsoleLine
+    /// False when the row above already printed this time. The column keeps
+    /// its width either way, so the text beside it stays aligned.
+    var printsTimestamp: Bool = true
     var duplicateCount: Int = 0
     var allViaPaths: [[String]] = []
     var localCallsign: String = ""
@@ -914,10 +934,16 @@ struct ConsoleLineView: View {
             // Enhanced indicator bar with premium styling for system/error messages
             indicatorBar
 
-            // Timestamp
+            // Timestamp, printed once per second rather than once per row.
+            // Hidden rather than removed: the column holds its width so the
+            // text beside it stays in line, and the value is the same string
+            // the row above printed, so nothing is lost.
             Text(line.timestampString)
                 .foregroundStyle(.tertiary)
                 .font(.system(size: fontSize, design: .monospaced))
+                .opacity(printsTimestamp ? 1 : 0)
+                .accessibilityHidden(!printsTimestamp)
+                .help(line.timestampString)
 
             // Which transmitter we actually heard. Shown for *any* repeated
             // copy, not just echoes of our own frames: a station's beacon
