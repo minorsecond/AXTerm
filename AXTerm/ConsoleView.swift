@@ -22,10 +22,19 @@ nonisolated struct ConsoleTypeFilterFlags: Equatable, Sendable {
     /// still an ID or a DATA line — so this is a separate axis rather than
     /// another flag in the set above.
     var digipeatsOnly: Bool = false
+    /// Show only lines this station is a party to — sent by us, addressed to
+    /// us, or digipeated by us.
+    ///
+    /// The single biggest lever on a busy channel: on this operator's own
+    /// capture, 71% of frames involve neither end of their station, and a
+    /// stranger's Winlink session can fill the console for minutes at a time.
+    /// Another axis rather than a class, for the same reason as
+    /// `digipeatsOnly` — our own traffic is still IDs and DATA.
+    var minesOnly: Bool = false
 
     /// One switch on the filter row.
     enum Kind: String, CaseIterable, Hashable, Sendable {
-        case id, beacon, mail, data, prompt, other, system, digipeats
+        case id, beacon, mail, data, prompt, other, system, mine, digipeats
 
         /// The chip's label, and the word used in "Show Only …".
         var label: String {
@@ -37,15 +46,22 @@ nonisolated struct ConsoleTypeFilterFlags: Equatable, Sendable {
             case .prompt: return "CMD"
             case .other: return "OTHER"
             case .system: return "SYS"
+            case .mine: return "MINE"
             case .digipeats: return "DIGI"
             }
         }
 
-        /// The seven that partition the console. DIGI is excluded: it is an
-        /// overlay on these, not a ninth kind of line.
+        /// The seven that partition the console. MINE and DIGI are excluded:
+        /// they narrow the same lines rather than naming a kind of line, so
+        /// treating them as classes would let "show only mine" mean "show
+        /// nothing".
         static var messageClasses: [Kind] {
-            allCases.filter { $0 != .digipeats }
+            allCases.filter { !$0.isAxis }
         }
+
+        /// True for the switches that filter across every class instead of
+        /// selecting one.
+        var isAxis: Bool { self == .mine || self == .digipeats }
     }
 
     subscript(kind: Kind) -> Bool {
@@ -58,6 +74,7 @@ nonisolated struct ConsoleTypeFilterFlags: Equatable, Sendable {
             case .prompt: return showPrompt
             case .other: return showOther
             case .system: return showSystem
+            case .mine: return minesOnly
             case .digipeats: return showDigipeats
             }
         }
@@ -70,6 +87,7 @@ nonisolated struct ConsoleTypeFilterFlags: Equatable, Sendable {
             case .prompt: showPrompt = newValue
             case .other: showOther = newValue
             case .system: showSystem = newValue
+            case .mine: minesOnly = newValue
             case .digipeats: showDigipeats = newValue
             }
         }
@@ -82,22 +100,34 @@ nonisolated struct ConsoleTypeFilterFlags: Equatable, Sendable {
     /// frame is still DATA, and whether the operator wants to see their own
     /// echoes is a separate preference from which classes they are reading.
     mutating func solo(_ kind: Kind) {
-        if kind == .digipeats {
+        switch kind {
+        case .digipeats:
             // "Only DIGI" cannot mean "no message classes" — that shows an
             // empty console, because every echo is also an ID or a DATA line.
             for klass in Kind.messageClasses { self[klass] = true }
             showDigipeats = true
             digipeatsOnly = true
-        } else {
+            minesOnly = false
+        case .mine:
+            // Same shape: our own traffic is still IDs and DATA.
+            for klass in Kind.messageClasses { self[klass] = true }
+            minesOnly = true
+            digipeatsOnly = false
+        default:
             for klass in Kind.messageClasses { self[klass] = (klass == kind) }
             digipeatsOnly = false
+            minesOnly = false
         }
     }
 
     func isSoloed(_ kind: Kind) -> Bool {
-        if kind == .digipeats { return digipeatsOnly && showDigipeats }
-        guard !digipeatsOnly else { return false }
-        return Kind.messageClasses.allSatisfy { self[$0] == ($0 == kind) }
+        switch kind {
+        case .digipeats: return digipeatsOnly && showDigipeats && !minesOnly
+        case .mine: return minesOnly && !digipeatsOnly && isShowingEveryClass
+        default:
+            guard !digipeatsOnly, !minesOnly else { return false }
+            return Kind.messageClasses.allSatisfy { self[$0] == ($0 == kind) }
+        }
     }
 
     /// Back to every class. Deliberately does not touch `showDigipeats`:
@@ -106,18 +136,34 @@ nonisolated struct ConsoleTypeFilterFlags: Equatable, Sendable {
     mutating func showAllTypes() {
         for klass in Kind.messageClasses { self[klass] = true }
         digipeatsOnly = false
+        minesOnly = false
     }
 
+    /// Every message class switched on. Says nothing about the axes — a
+    /// console showing only our own traffic is still showing every class of
+    /// it.
     var isShowingEveryClass: Bool {
-        !digipeatsOnly && Kind.messageClasses.allSatisfy { self[$0] }
+        Kind.messageClasses.allSatisfy { self[$0] }
+    }
+
+    /// Nothing filtered at all, on either axis.
+    var isUnrestricted: Bool {
+        isShowingEveryClass && !digipeatsOnly && !minesOnly
     }
 
     /// What is being held back, for the line beside the message count. Nil
     /// when every class is showing.
     var restrictionSummary: String? {
-        if digipeatsOnly { return "digipeat echoes only" }
-        if isShowingEveryClass { return nil }
+        var parts: [String] = []
+        if minesOnly { parts.append("my traffic only") }
+        if digipeatsOnly { parts.append("digipeat echoes only") }
+        if let classes = classRestriction { parts.append(classes) }
+        return parts.isEmpty ? nil : parts.joined(separator: " \u{b7} ")
+    }
+
+    private var classRestriction: String? {
         let shown = Kind.messageClasses.filter { self[$0] }
+        if shown.count == Kind.messageClasses.count { return nil }
         if shown.isEmpty { return "every type hidden" }
         if shown.count == 1 { return "\(shown[0].label) only" }
         let hidden = Kind.messageClasses.filter { !self[$0] }
@@ -149,6 +195,13 @@ nonisolated enum ConsoleVisibilityFilter {
             }
             // "Only DIGI": every line that is not one of our own echoes goes.
             if flags.digipeatsOnly, !isEcho {
+                return false
+            }
+            // "Only MINE": lines this station is not a party to go. Needs a
+            // callsign to mean anything — with none set, every line would
+            // vanish, which is a worse answer than not filtering.
+            if flags.minesOnly, !localCallsign.isEmpty,
+               !line.involvesStation(localCallsign) {
                 return false
             }
             switch line.kind {
@@ -212,6 +265,7 @@ struct ConsoleView: View {
     @AppStorage("consoleFilter_showSystem") private var showSystem = true
     @AppStorage("consoleFilter_showDigipeats") private var showDigipeats = false
     @AppStorage("consoleFilter_digipeatsOnly") private var digipeatsOnly = false
+    @AppStorage("consoleFilter_minesOnly") private var minesOnly = false
 
     /// Lines filtered by clear timestamp and message type preferences
     private var typeFilteredLines: [ConsoleLine] {
@@ -498,21 +552,31 @@ struct ConsoleView: View {
     @ViewBuilder
     private var filterToggleGroup: some View {
         HStack(spacing: 4) {
-            ForEach(ConsoleTypeFilterFlags.Kind.allCases, id: \.self) { kind in
-                // DIGI only appears once the local callsign is known: without
-                // it there is no way to tell our own echo from anyone else's.
-                if kind != .digipeats || !localCallsign.isEmpty {
-                    FilterToggle(
-                        label: kind.label,
-                        isOn: binding(for: kind),
-                        color: color(for: kind),
-                        tooltip: tooltip(for: kind),
-                        isSoloed: currentFilterFlags.isSoloed(kind),
-                        onSolo: { applyFlags { $0.solo(kind) } },
-                        onShowAll: { applyFlags { $0.showAllTypes() } })
-                }
+            ForEach(ConsoleTypeFilterFlags.Kind.messageClasses, id: \.self) { kind in
+                chip(kind)
+            }
+            // MINE and DIGI narrow every class rather than selecting one, and
+            // sitting them flush against the class chips read as "nine kinds
+            // of line". Both need a callsign to mean anything: without one
+            // there is no way to tell our traffic, or our echo, from anyone
+            // else's.
+            if !localCallsign.isEmpty {
+                Divider().frame(height: 12).padding(.horizontal, 2)
+                chip(.mine)
+                chip(.digipeats)
             }
         }
+    }
+
+    private func chip(_ kind: ConsoleTypeFilterFlags.Kind) -> some View {
+        FilterToggle(
+            label: kind.label,
+            isOn: binding(for: kind),
+            color: color(for: kind),
+            tooltip: tooltip(for: kind),
+            isSoloed: currentFilterFlags.isSoloed(kind),
+            onSolo: { applyFlags { $0.solo(kind) } },
+            onShowAll: { applyFlags { $0.showAllTypes() } })
     }
 
     /// The eight switches as one value, so solo can reason about the set
@@ -522,7 +586,7 @@ struct ConsoleView: View {
             showID: showID, showBeacon: showBeacon, showMail: showMail,
             showData: showData, showPrompt: showPrompt, showOther: showOther,
             showSystem: showSystem, showDigipeats: showDigipeats,
-            digipeatsOnly: digipeatsOnly)
+            digipeatsOnly: digipeatsOnly, minesOnly: minesOnly)
     }
 
     private func applyFlags(_ change: (inout ConsoleTypeFilterFlags) -> Void) {
@@ -537,10 +601,12 @@ struct ConsoleView: View {
         showSystem = flags.showSystem
         showDigipeats = flags.showDigipeats
         digipeatsOnly = flags.digipeatsOnly
+        minesOnly = flags.minesOnly
     }
 
     private func binding(for kind: ConsoleTypeFilterFlags.Kind) -> Binding<Bool> {
         switch kind {
+        case .mine: return $minesOnly
         case .id: return $showID
         case .beacon: return $showBeacon
         case .mail: return $showMail
@@ -554,6 +620,7 @@ struct ConsoleView: View {
 
     private func color(for kind: ConsoleTypeFilterFlags.Kind) -> Color {
         switch kind {
+        case .mine: return .pink
         case .id: return .blue
         case .beacon: return .green
         case .mail: return .orange
@@ -567,6 +634,8 @@ struct ConsoleView: View {
 
     private func tooltip(for kind: ConsoleTypeFilterFlags.Kind) -> String {
         switch kind {
+        case .mine:
+            return "Only traffic this station is a party to \u{2014} sent by you, addressed to you, or digipeated by you. Matches any SSID of your callsign. On this channel most frames are conversations between other stations."
         case .id:
             return "Station identification broadcasts. Stations periodically announce their callsign and capabilities."
         case .beacon:

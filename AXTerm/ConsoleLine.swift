@@ -81,6 +81,34 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
 
     // MARK: - Formatting Helpers
 
+    /// Whether this station is one of the three parties to the line: sender,
+    /// addressee, or a digipeater that carried it.
+    ///
+    /// Matched on the base callsign, so every SSID this operator runs counts
+    /// — K0EPI-7 on the terminal and K0EPI-10 on Winlink are the same person
+    /// at the same desk, and a filter that showed one and hid the other would
+    /// be a worse answer to "what am I doing" than no filter.
+    ///
+    /// Deliberately looser than `CoverageEstimate`, which matches the full
+    /// address because it is making a measurement claim about one
+    /// transmitter. This only decides what to draw.
+    func involvesStation(_ callsign: String) -> Bool {
+        let base = Self.base(of: callsign)
+        guard !base.isEmpty else { return false }
+        if let from, Self.base(of: from) == base { return true }
+        if let to, Self.base(of: to) == base { return true }
+        // A frame we digipeated went out of our transmitter, whoever it was
+        // addressed to.
+        return via.contains { Self.base(of: $0) == base }
+    }
+
+    /// Callsign without SSID or the `*` has-been-repeated marker.
+    private static func base(of address: String) -> String {
+        var text = address.trimmingCharacters(in: .whitespaces).uppercased()
+        while text.hasSuffix("*") { text.removeLast() }
+        return String(text.split(separator: "-").first ?? "")
+    }
+
     /// True when the line was heard as a digipeated copy (any via marked `*` —
     /// the H bit was set, so what we heard was the digipeater's transmitter).
     var heardViaDigipeater: Bool {
