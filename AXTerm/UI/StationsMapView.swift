@@ -622,7 +622,26 @@ struct StationsMapView: View {
         #endif
     }
 
+    /// The map's control row.
+    ///
+    /// Scrolls sideways where it does not fit. On an iPhone this row holds
+    /// more than 402 points of controls, and an HStack that overflows is
+    /// centred and clipped at both ends — the terrain menu was cut in half
+    /// by the right edge of the screen with no way to reach it. Scrolling
+    /// keeps every control reachable; on a Mac window or an iPad it never
+    /// engages, because everything already fits.
     private var header: some View {
+        #if os(iOS)
+        ScrollView(.horizontal, showsIndicators: false) {
+            headerContent
+        }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        #else
+        headerContent
+        #endif
+    }
+
+    private var headerContent: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Stations Heard").font(.headline)
