@@ -626,12 +626,34 @@ struct OfflineBasemapMapView {
     /// boundary — an operator glancing at a half-drawn zone must be able to
     /// tell it is not one.
     private func applyDrawingPreview(to mapView: MKMapView, coordinator: Coordinator) {
-        mapView.removeOverlays(coordinator.previewOverlays)
-        mapView.removeAnnotations(coordinator.previewAnnotations)
-        coordinator.previewOverlays = []
-        coordinator.previewAnnotations = []
-
         let vertices = drawing.previewVertices()
+
+        // Nothing drawn and nothing to draw: leave the map alone entirely.
+        //
+        // This used to clear the preview unconditionally, and
+        // `removeAnnotations([])` is not free — handing MKMapView an empty
+        // array still invalidates its annotation layout, and it responds by
+        // repositioning every annotation view it holds. With no drawing in
+        // progress, which is essentially always, that ran on every update
+        // pass: the field log measured 560 marker moves in 5.4 seconds
+        // against 1.0 update passes per second and ~110 markers, so
+        // every marker was being nudged about a point once per pass. That
+        // is the bouncing.
+        if vertices.isEmpty,
+           coordinator.previewOverlays.isEmpty,
+           coordinator.previewAnnotations.isEmpty {
+            return
+        }
+
+        if !coordinator.previewOverlays.isEmpty {
+            mapView.removeOverlays(coordinator.previewOverlays)
+            coordinator.previewOverlays = []
+        }
+        if !coordinator.previewAnnotations.isEmpty {
+            mapView.removeAnnotations(coordinator.previewAnnotations)
+            coordinator.previewAnnotations = []
+        }
+
         guard vertices.count >= 2 else {
             // A single vertex has no line to draw, but the operator still
             // needs to see it landed.
