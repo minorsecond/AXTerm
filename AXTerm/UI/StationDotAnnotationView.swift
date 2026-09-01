@@ -86,6 +86,10 @@ final class StationDotAnnotationView: MKAnnotationView {
     private static var rectChanges = 0
     private static var rectMaxDrift = 0.0
     private static var rectMaxZoom = 0.0
+    private static var lastWindowOrigin: CGPoint?
+    private static var windowMoves = 0
+    private static var windowMaxDrift = 0.0
+    private static var windowFraction = 0.0
 
     /// The map this view is inside, found by walking up rather than being
     /// handed down, so the diagnostic needs no wiring.
@@ -98,7 +102,22 @@ final class StationDotAnnotationView: MKAnnotationView {
         return nil
     }
 
-    private static func noteMove(_ distance: Double, mapRect: MKMapRect?) {
+    /// Where the map sits in the window, which is what pixel alignment is
+    /// actually relative to. The map's own frame can read a constant 0,0
+    /// inside its parent while an ancestor slides it a fraction of a point
+    /// across the screen — and that is enough to flip every marker between
+    /// two adjacent pixels.
+    private var mapOriginInWindow: CGPoint? {
+        guard let map = enclosingMap else { return nil }
+        #if os(macOS)
+        return map.convert(NSPoint.zero, to: nil)
+        #else
+        return map.convert(CGPoint.zero, to: nil)
+        #endif
+    }
+
+    private static func noteMove(_ distance: Double, mapRect: MKMapRect?,
+                                 windowOrigin: CGPoint?) {
         guard distance > 0.01 else { return }
         moveCount += 1
         moveMax = max(moveMax, distance)
@@ -117,6 +136,18 @@ final class StationDotAnnotationView: MKAnnotationView {
                 rectMaxZoom = max(rectMaxZoom, dw)
             }
             lastRect = rect
+        }
+
+        if let origin = windowOrigin {
+            if let last = lastWindowOrigin {
+                let dx = abs(origin.x - last.x), dy = abs(origin.y - last.y)
+                if dx > 0 || dy > 0 { windowMoves += 1 }
+                windowMaxDrift = max(windowMaxDrift, max(dx, dy))
+            }
+            lastWindowOrigin = origin
+            windowFraction = max(windowFraction,
+                                 max(origin.x - origin.x.rounded(.down),
+                                     origin.y - origin.y.rounded(.down)))
         }
 
         // Who is actually calling. Every theory about *what* moves these
@@ -139,13 +170,18 @@ final class StationDotAnnotationView: MKAnnotationView {
         if moveWindow != .distantPast {
             print(String(format: "[MAPDIAG] MapKit moved markers %d times in %.1fs (max %.1f pt); visible rect changed %d times (max drift %.3f, zoom %.3f)",
                          moveCount, elapsed, moveMax,
-                         rectChanges, rectMaxDrift, rectMaxZoom))
+                         rectChanges, rectMaxDrift, rectMaxZoom)
+                  + String(format: "; map in window moved %d times (max %.4f pt, fraction %.4f)",
+                           windowMoves, windowMaxDrift, windowFraction))
         }
         moveCount = 0
         moveMax = 0
         rectChanges = 0
         rectMaxDrift = 0
         rectMaxZoom = 0
+        windowMoves = 0
+        windowMaxDrift = 0
+        windowFraction = 0
         moveWindow = Date()
         // One stack per window, and skip the first: that window is the
         // initial layout, which is legitimate and not what is being chased.
@@ -313,7 +349,8 @@ final class StationDotAnnotationView: MKAnnotationView {
     override func setFrameOrigin(_ newOrigin: NSPoint) {
         #if DEBUG
         Self.noteMove(hypot(newOrigin.x - frame.origin.x, newOrigin.y - frame.origin.y),
-                      mapRect: enclosingMap?.visibleMapRect)
+                      mapRect: enclosingMap?.visibleMapRect,
+                      windowOrigin: mapOriginInWindow)
         #endif
         super.setFrameOrigin(newOrigin)
     }
@@ -322,7 +359,8 @@ final class StationDotAnnotationView: MKAnnotationView {
         didSet {
             #if DEBUG
             Self.noteMove(hypot(center.x - oldValue.x, center.y - oldValue.y),
-                          mapRect: enclosingMap?.visibleMapRect)
+                          mapRect: enclosingMap?.visibleMapRect,
+                      windowOrigin: mapOriginInWindow)
             #endif
         }
     }
