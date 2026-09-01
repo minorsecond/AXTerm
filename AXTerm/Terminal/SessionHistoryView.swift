@@ -22,7 +22,6 @@ struct SessionHistoryView: View {
     var body: some View {
         splitView
             .task { reload() }
-            .searchable(text: $query, prompt: "Callsign, path, tag, or anything said")
             .modifier(SessionDeletionDialogs(
                 pendingDeletion: $pendingDeletion,
                 pendingStationPurge: $pendingStationPurge,
@@ -49,6 +48,34 @@ struct SessionHistoryView: View {
 
     private var list: some View {
         VStack(spacing: 0) {
+            // An inline field, not `.searchable`.
+            //
+            // This view lives inside the main window, which already owns a
+            // `.searchable` for the universal search. A second one is a
+            // second `com.apple.SwiftUI.search` toolbar item, and AppKit
+            // refuses outright: "NSToolbar already contains an item with the
+            // identifier". It is a launch-time assertion failure, not a
+            // warning, and it took the app down the first time History was
+            // opened.
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("Callsign, path, tag, or anything said", text: $query)
+                    .textFieldStyle(.plain)
+                if !query.isEmpty {
+                    Button {
+                        query = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            Divider()
             if !tagCounts.isEmpty { tagFilter }
             List(selection: $selection) {
                 ForEach(visible) { session in
