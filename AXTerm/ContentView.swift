@@ -484,6 +484,18 @@ struct ContentView: View {
             // Load console history for the default Terminal view
             client.loadPersistedConsole()
         }
+        .task(id: useDeviceLocation) {
+            // Ask for a fix at launch, not only when Settings is open.
+            //
+            // Requesting one was wired on the Settings page and nowhere
+            // else, so an operator who had switched device location on got a
+            // grid centre until they happened to open that page — and the
+            // toolbar, correctly, reported "No GPS fix" the whole time. The
+            // switch is a station-level setting; honouring it is the shell's
+            // job, not a side effect of visiting a preferences pane.
+            guard useDeviceLocation else { return }
+            _ = await winlinkContext.locationService.currentLocation()
+        }
         .task {
             // Warm analytics caches in the background so first tab-open is fast.
             analyticsViewModel.prewarmIfNeeded(with: client.packets)
@@ -1842,11 +1854,22 @@ struct ContentView: View {
         candidates.surveyed = manualStationPoint
         candidates.gridSquare = Maidenhead.center(of: winlinkContext.settings.gridSquare)
             .map(GreatCircle.Point.init)
-        if useDeviceLocation, let fix = winlinkContext.locationService.lastLocation {
+        // `.gps` checked, because `lastLocation` is not always a fix:
+        // `currentLocation()` falls back to the grid square when GPS fails
+        // and stores that. Without the check a 7 km square was published to
+        // the whole app as "Device GPS ±20 m".
+        if useDeviceLocation, let fix = deviceGPSFix {
             candidates.deviceGPS = GreatCircle.Point(latitude: fix.latitude,
                                                      longitude: fix.longitude)
         }
         return StationPositionResolver.resolve(candidates)
+    }
+
+    /// The last device fix, and only when it really is one.
+    private var deviceGPSFix: StationLocation? {
+        let last = winlinkContext.locationService.lastLocation
+        guard last?.source == .gps else { return nil }
+        return last
     }
 
     /// The two ends of the path a station page is about.
@@ -2061,6 +2084,14 @@ struct ContentView: View {
             if let sync = winlinkContext.sync {
                 SyncStatusIndicator(sync: sync)
             }
+            // Same group, same test: a station with no usable position has a
+            // quietly broken map and terrain. Silent unless it has something
+            // to say — see PositionStatusChip.
+            PositionStatusChip(
+                position: myPosition,
+                usesDeviceLocation: useDeviceLocation,
+                deviceFix: deviceGPSFix,
+                gpsError: winlinkContext.locationService.lastGPSError)
             tncToolbarMenu
         }
     }
