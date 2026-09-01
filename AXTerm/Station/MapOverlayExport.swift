@@ -60,7 +60,7 @@ nonisolated enum MapOverlayExport {
         var advice: String
 
         var sizeDescription: String {
-            ByteCountFormatter.string(fromByteCount: Int64(byteCount), countStyle: .file)
+            ByteCount.string(Int64(byteCount))
         }
     }
 
@@ -78,7 +78,7 @@ nonisolated enum MapOverlayExport {
         var advice: String
         if impractical {
             advice = """
-            This is \(ByteCountFormatter.string(fromByteCount: Int64(byteCount), countStyle: .file)) — about \(airtime.airtimeText(bytes: byteCount)) of airtime\(sessions > 1 ? ", across roughly \(sessions) sessions" : "").
+            This is \(ByteCount.string(Int64(byteCount))) — about \(airtime.airtimeText(bytes: byteCount)) of airtime\(sessions > 1 ? ", across roughly \(sessions) sessions" : "").
 
             That is not a reasonable thing to put on a shared channel. The channel is occupied for the whole of it, and any interruption starts a session again.
 

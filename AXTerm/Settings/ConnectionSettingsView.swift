@@ -133,13 +133,15 @@ struct NetworkSettingsContent: View {
                 TextField("Host", text: $viewModel.host)
                     .labelsHidden()
                     .frame(maxWidth: .infinity)
-                    // Without a border these read as static labels on iOS —
-                    // the operator cannot tell the host is editable. The
-                    // keyboard hints matter too: autocapitalising the first
-                    // letter of a hostname, or offering letters for an IP,
-                    // turns a working address into a failed connection.
-                    #if os(iOS)
+                    // Without a border these read as static labels and the
+                    // operator cannot tell the host is editable. That is true
+                    // on both platforms — inside this Grid the Mac does not
+                    // supply one either. The keyboard hints are iOS-only, but
+                    // they matter as much: autocapitalising the first letter
+                    // of a hostname, or offering letters for an IP, turns a
+                    // working address into a failed connection.
                     .textFieldStyle(.roundedBorder)
+                    #if os(iOS)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
@@ -152,8 +154,8 @@ struct NetworkSettingsContent: View {
                 TextField("Port", value: $viewModel.port, format: .number.grouping(.never))
                     .labelsHidden()
                     .frame(width: 80)
-                    #if os(iOS)
                     .textFieldStyle(.roundedBorder)
+                    #if os(iOS)
                     .keyboardType(.numberPad)
                     #endif
             }

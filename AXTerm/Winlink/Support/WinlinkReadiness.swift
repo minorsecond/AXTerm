@@ -189,8 +189,7 @@ nonisolated struct WinlinkReadiness: Equatable, Sendable {
                          detail: "Nothing identified to stage",
                          remedy: "Cache the catalog and set your state in Settings \u{2192} Winlink.")
         }
-        let size = ByteCountFormatter.string(
-            fromByteCount: Int64(input.outageKitBytes), countStyle: .file)
+        let size = ByteCount.string(Int64(input.outageKitBytes))
         return Check(id: "outageKit", title: "Outage kit", status: .ready,
                      detail: "\(input.outageKitCount) products ready to request (\(size))")
     }

@@ -161,8 +161,7 @@ struct OfflineMapsView: View {
                 Text(elevation.tileCount == 0
                      ? "None"
                      : "\(elevation.tileCount) tile\(elevation.tileCount == 1 ? "" : "s") \u{00B7} "
-                        + ByteCountFormatter.string(fromByteCount: elevation.byteSize,
-                                                    countStyle: .file))
+                        + ByteCount.string(elevation.byteSize))
                     .foregroundStyle(.secondary)
             }
             .help("Elevation grids covering one degree of latitude and longitude each, about 100 m between samples. A path profile normally touches one or two tiles.")

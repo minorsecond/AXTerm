@@ -146,7 +146,7 @@ nonisolated struct WinlinkAirtimeEstimate: Equatable, Sendable {
     /// Explains a size in the terms that decide whether to request it,
     /// and says plainly which half of the estimate is evidence.
     func tooltip(bytes: Int) -> String {
-        let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        let size = ByteCount.string(Int64(bytes))
         let ratio = Int(Self.assumedCompressionRatio)
         var text = """
         \(size) of text, roughly \(airtimeText(bytes: bytes)) of airtime.

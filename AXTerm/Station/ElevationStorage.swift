@@ -146,7 +146,7 @@ final class ElevationStorage: ObservableObject {
         var wasCapped: Bool = false
 
         var sizeDescription: String {
-            ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file)
+            ByteCount.string(byteCount)
         }
     }
 

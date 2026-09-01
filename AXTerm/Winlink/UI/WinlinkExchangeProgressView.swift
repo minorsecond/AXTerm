@@ -84,7 +84,7 @@ struct WinlinkExchangeProgressView: View {
     }
 
     private func byteText(_ bytes: Int) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        ByteCount.string(Int64(bytes))
     }
 
     private func timeText(_ seconds: Int) -> String {

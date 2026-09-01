@@ -569,12 +569,12 @@ private struct SidebarInspectorContent: View {
                     )
                     InspectorMetricStringRow(
                         title: Copy.Inspector.bytesWithinSelectionLabel,
-                        value: ByteCountFormatter.string(fromByteCount: Int64(details.internalByteCount), countStyle: .file),
+                        value: ByteCount.string(Int64(details.internalByteCount)),
                         tooltip: Copy.Inspector.bytesWithinSelectionTooltip
                     )
                     InspectorMetricStringRow(
                         title: Copy.Inspector.bytesTouchingSelectionLabel,
-                        value: ByteCountFormatter.string(fromByteCount: Int64(details.touchingByteCount), countStyle: .file),
+                        value: ByteCount.string(Int64(details.touchingByteCount)),
                         tooltip: Copy.Inspector.bytesTouchingSelectionTooltip
                     )
                     InspectorMetricStringRow(
@@ -730,12 +730,12 @@ private struct SidebarInspectorContent: View {
                     )
                     InspectorMetricStringRow(
                         title: Copy.Inspector.bytesInLabel,
-                        value: ByteCountFormatter.string(fromByteCount: Int64(details.node.inBytes), countStyle: .file),
+                        value: ByteCount.string(Int64(details.node.inBytes)),
                         tooltip: Copy.Inspector.bytesInTooltip
                     )
                     InspectorMetricStringRow(
                         title: Copy.Inspector.bytesOutLabel,
-                        value: ByteCountFormatter.string(fromByteCount: Int64(details.node.outBytes), countStyle: .file),
+                        value: ByteCount.string(Int64(details.node.outBytes)),
                         tooltip: Copy.Inspector.bytesOutTooltip
                     )
                     InspectorMetricRow(

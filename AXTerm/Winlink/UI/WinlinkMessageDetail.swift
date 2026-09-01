@@ -246,7 +246,7 @@ struct WinlinkMessageDetail: View {
     }
 
     private func byteText(_ characters: Int) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(characters), countStyle: .file)
+        ByteCount.string(Int64(characters))
     }
 
     /// A filename that says which message this came from.
@@ -278,7 +278,7 @@ struct WinlinkMessageDetail: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity)
-                    .help("\(attachment.name) — \(ByteCountFormatter.string(fromByteCount: Int64(attachment.data.count), countStyle: .file)) as received. Right-click the chip above to save it.")
+                    .help("\(attachment.name) — \(ByteCount.string(Int64(attachment.data.count))) as received. Right-click the chip above to save it.")
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 12)
@@ -305,8 +305,7 @@ struct WinlinkMessageDetail: View {
                 Image(systemName: "paperclip")
                 VStack(alignment: .leading, spacing: 0) {
                     Text(attachment.name).font(.caption)
-                    Text(ByteCountFormatter.string(
-                        fromByteCount: Int64(attachment.data.count), countStyle: .file))
+                    Text(ByteCount.string(Int64(attachment.data.count)))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

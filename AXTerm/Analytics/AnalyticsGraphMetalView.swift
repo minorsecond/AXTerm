@@ -680,7 +680,7 @@ private struct GraphTooltipView: View {
             // labeling it "Packets" showed a route count as traffic.
             Text(isNetRomSource ? "Routes: \(node.weight)" : "Packets: \(node.weight)")
                 .font(.caption2)
-            Text("Bytes: \(ByteCountFormatter.string(fromByteCount: Int64(node.inBytes + node.outBytes), countStyle: .file))")
+            Text("Bytes: \(ByteCount.string(Int64(node.inBytes + node.outBytes)))")
                 .font(.caption2)
         }
         .padding(6)

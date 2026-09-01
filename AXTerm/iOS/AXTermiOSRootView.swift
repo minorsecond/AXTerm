@@ -71,6 +71,34 @@ struct AXTermiOSRootView: View {
     /// screen that holds the setting rather than on a menu.
     @State private var settingsPath: [SettingsDestination] = []
 
+    /// Puts the TNC link strip above the tab bar, on every tab.
+    ///
+    /// Every screen shows it because the link is a property of the station,
+    /// not of whichever screen is open: a dropped TNC looks exactly like a
+    /// quiet channel from the map or the mailbox.
+    ///
+    /// It wraps each tab's content rather than the `TabView`. Applied to the
+    /// `TabView` the inset landed on the tab container, and on iPhone the
+    /// strip was drawn across the tab bar — the icons lost their bottom half
+    /// and their labels entirely.
+    ///
+    /// A `VStack`, not a `safeAreaInset`. An inset only moves views that
+    /// consult the safe area, and a tab whose root is a plain `VStack`
+    /// filling its frame does not: it kept laying out to the full height and
+    /// the strip was painted over the bottom of it. On the terminal that was
+    /// the message field and the Send button, cut in half — on iPad too,
+    /// with most of the screen empty above them, which is what ruled out the
+    /// obvious reading that the screen was simply too short. Stacking gives
+    /// the strip its own space and hands the rest to the tab.
+    private func withTNCStrip<Content: View>(_ content: Content) -> some View {
+        VStack(spacing: 0) {
+            content
+            TNCStatusStrip(status: client.status,
+                           host: settings.host,
+                           port: settings.port)
+        }
+    }
+
     /// Says what the station is currently set up as, so the section is not
     /// four nouns the operator has to open one at a time to check.
     private var stationFooter: String {
@@ -220,34 +248,27 @@ struct AXTermiOSRootView: View {
 
     private var tabs: some View {
         TabView(selection: $selection) {
-            terminal
+            withTNCStrip(terminal)
                 .tabItem { Label("Terminal", systemImage: "terminal") }
                 .tag(NavigationItem.terminal)
 
-            packets
+            withTNCStrip(packets)
                 .tabItem { Label("Packets", systemImage: "list.bullet.rectangle") }
                 .tag(NavigationItem.packets)
 
-            mail
+            withTNCStrip(mail)
                 .tabItem { Label("Mail", systemImage: "envelope") }
                 .badge(context.unreadCount)
                 .tag(NavigationItem.mail)
 
-            map
+            withTNCStrip(map)
                 .tabItem { Label("Map", systemImage: "map") }
                 .tag(NavigationItem.map)
 
-            more
+            withTNCStrip(more)
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(NavigationItem.analytics)
         }
-        // On the TabView rather than in each tab: the link is a property of
-        // the station, not of whichever screen is open, and a dropped TNC
-        // looks exactly like a quiet channel from the map or the mailbox.
-        //
-        // Bottom edge, not top: iPadOS floats the tab bar over the top of the
-        // content, so a top inset sits underneath it and hides the tabs. The
-        // bottom is free on iPad and lands just above the tab bar on iPhone.
         .task {
             // Analytics owns the derivation; the context owns the decision
             // to publish. Wired here because this is the one place holding
@@ -313,11 +334,6 @@ struct AXTermiOSRootView: View {
         // Any view can ask for an identity page without threading a callback
         // through four levels of navigation.
         .environmentObject(profiles)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            TNCStatusStrip(status: client.status,
-                           host: settings.host,
-                           port: settings.port)
-        }
         // Keep the alias store learning wherever the operator happens to be:
         // aliases are heard in ID beacons, not in the tab that shows them.
         .onReceive(client.$packets.throttle(for: .seconds(5), scheduler: RunLoop.main, latest: true)) { packets in

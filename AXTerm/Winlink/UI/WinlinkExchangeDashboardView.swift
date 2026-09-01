@@ -230,7 +230,7 @@ struct WinlinkExchangeDashboardView: View {
     }
 
     private func bytes(_ count: Int) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .file)
+        ByteCount.string(Int64(count))
     }
 
     private func kindLabel(_ kind: WinlinkExchangeProgress.Kind) -> String {

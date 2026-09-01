@@ -48,7 +48,7 @@ nonisolated enum MapOverlayAttachment {
         var explanation: String {
             switch self {
             case .tooLarge(let bytes):
-                "That attachment is \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)), which is too large to open as a map layer."
+                "That attachment is \(ByteCount.string(Int64(bytes))), which is too large to open as a map layer."
             case .notSpatialData(let name):
                 "\(name) is not map data AXTerm can read. It handles GeoJSON (.geojson, .json) and shapefiles (.shp, or a .zip containing one)."
             case .zip(let error):

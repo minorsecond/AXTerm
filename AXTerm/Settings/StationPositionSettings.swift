@@ -59,19 +59,36 @@ struct StationPositionSettings: View {
             }
 
             if let winlinkSettings {
-                TextField("Grid square", text: Binding(
-                    get: { winlinkSettings.gridSquare },
-                    set: { winlinkSettings.gridSquare = $0.uppercased() }))
-                    .help("A six-character locator places you within about 7 km by 5 km. "
-                          + "Fine for a map pin, too coarse for a short path.")
+                LabeledContent("Grid square") {
+                    TextField("DM79po", text: Binding(
+                        get: { winlinkSettings.gridSquare },
+                        set: { winlinkSettings.gridSquare = $0.uppercased() }))
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 110)
+                        .accessibilityLabel("Grid square")
+                }
+                .help("A six-character locator places you within about 7 km by 5 km. "
+                      + "Fine for a map pin, too coarse for a short path.")
             }
 
             LabeledContent("Exact coordinate") {
+                // labelsHidden, or each field renders its own title beside
+                // itself inside a 110-point box: the editable area collapses
+                // to nothing and "Longitude" hyphenates across two lines. A
+                // border because without one these read as static text and
+                // there is no sign the coordinate can be typed at all.
                 HStack(spacing: 6) {
                     TextField("Latitude", text: $manualLatitude)
-                        .frame(maxWidth: 110)
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 110)
+                        .accessibilityLabel("Latitude")
                     TextField("Longitude", text: $manualLongitude)
-                        .frame(maxWidth: 110)
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 110)
+                        .accessibilityLabel("Longitude")
                     if hasManualCoordinate {
                         Button("Clear") {
                             manualLatitude = ""
@@ -86,12 +103,19 @@ struct StationPositionSettings: View {
                   + "the aerial rather than the operator, and it is what makes a short "
                   + "path worth analysing.")
 
-            HStack(spacing: 6) {
-                TextField("Or look up an address", text: $address)
-                Button(isGeocoding ? "Looking up\u{2026}" : "Find") {
-                    Task { await geocode() }
+            LabeledContent("Or look up an address") {
+                HStack(spacing: 6) {
+                    TextField("Street, city", text: $address)
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .frame(minWidth: 180)
+                        .accessibilityLabel("Address to look up")
+                        .onSubmit { Task { await geocode() } }
+                    Button(isGeocoding ? "Looking up\u{2026}" : "Find") {
+                        Task { await geocode() }
+                    }
+                    .disabled(address.trimmingCharacters(in: .whitespaces).isEmpty || isGeocoding)
                 }
-                .disabled(address.trimmingCharacters(in: .whitespaces).isEmpty || isGeocoding)
             }
             .help("Fills the coordinate above from a street address. The address is sent "
                   + "to Apple's geocoder; the coordinate is then kept on this device.")

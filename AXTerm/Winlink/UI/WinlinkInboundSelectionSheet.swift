@@ -92,8 +92,7 @@ struct WinlinkInboundSelectionSheet: View {
     }
 
     private var deadlineExplanation: String {
-        let threshold = ByteCountFormatter.string(
-            fromByteCount: Int64(request.autoAcceptUnderBytes), countStyle: .file)
+        let threshold = ByteCount.string(Int64(request.autoAcceptUnderBytes))
         return "Unanswered, anything under \(threshold) downloads and the rest stays on the server. "
             + "Nothing you leave unticked is lost — the gateway offers it again next exchange."
     }
@@ -195,7 +194,7 @@ struct WinlinkInboundSelectionSheet: View {
     }
 
     private func byteText(_ bytes: Int) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        ByteCount.string(Int64(bytes))
     }
 }
 
@@ -302,6 +301,6 @@ private struct OfferRow: View {
     }
 
     private func byteText(_ bytes: Int) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+        ByteCount.string(Int64(bytes))
     }
 }

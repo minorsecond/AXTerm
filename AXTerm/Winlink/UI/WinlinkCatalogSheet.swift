@@ -311,7 +311,7 @@ struct WinlinkCatalogSheet: View {
             : ", and forecasts for \(operatorState.uppercased())."
         if !outageKit.isEmpty {
             text += "\n\n\(outageKit.count) products, "
-            text += "\(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)), "
+            text += "\(ByteCount.string(Int64(bytes))), "
             text += "\u{2248}\(airtime.airtimeText(bytes: bytes)) of airtime."
         }
         text += "\n\nBulk weather — radar, fax — is deliberately excluded: too large, and stale within the hour."
@@ -387,7 +387,7 @@ struct WinlinkCatalogSheet: View {
                     Text("\(scopedItems.count) product\(scopedItems.count == 1 ? "" : "s")")
                     if scopedBytes > 0 {
                         Text("·")
-                        Text(ByteCountFormatter.string(fromByteCount: Int64(scopedBytes), countStyle: .file))
+                        Text(ByteCount.string(Int64(scopedBytes)))
                         Text("·")
                         Text("≈\(airtime.airtimeText(bytes: scopedBytes)) airtime")
                     }
@@ -511,7 +511,7 @@ struct WinlinkCatalogSheet: View {
                     HStack(spacing: 6) {
                         Text("\(viewModel.selection.count) selected")
                         Text("·")
-                        Text("≈\(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))")
+                        Text("≈\(ByteCount.string(Int64(bytes)))")
                         Text("·")
                         Label("≈\(airtime.airtimeText(bytes: bytes))",
                               systemImage: "clock")
@@ -657,7 +657,7 @@ struct WinlinkCatalogSheet: View {
                     }
                     Spacer(minLength: 12)
                     VStack(alignment: .trailing, spacing: 1) {
-                        Text(ByteCountFormatter.string(fromByteCount: Int64(item.sizeEstimate), countStyle: .file))
+                        Text(ByteCount.string(Int64(item.sizeEstimate)))
                         Text("\u{2248}\(airtime.airtimeText(bytes: item.sizeEstimate))")
                             .foregroundStyle(.tertiary)
                     }

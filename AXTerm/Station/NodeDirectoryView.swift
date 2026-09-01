@@ -226,13 +226,13 @@ struct NodeDirectoryView: View {
     }
 
     private var toolbar: some View {
+        // No search field here. The window's own search field already drives
+        // this page's `query` — the shell mirrors it into the same binding
+        // this row used — so the page carried two fields that edited one
+        // string, side by side, with two different placeholders describing
+        // the same thing. The one in the toolbar is the one that also works
+        // on every other page.
         HStack(spacing: 12) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField("Alias, callsign, or the node to reach it", text: $query)
-                .textFieldStyle(.plain)
-                .frame(maxWidth: 320)
-
             // Says what the page is currently restricted to, and is the way
             // out of it. Arriving at a filtered page with no visible reason
             // for the missing rows is how the sidebar's jump used to read.
