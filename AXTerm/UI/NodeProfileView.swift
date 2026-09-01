@@ -722,9 +722,22 @@ struct NodeProfileView: View {
     private func activityChart(_ counts: [Int]) -> some View {
         let peak = max(counts.max() ?? 0, 1)
         return VStack(alignment: .leading, spacing: 3) {
-            Text("Frames heard, last 24 hours")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            // The peak, because the bars are drawn against it.
+            //
+            // Normalising to the tallest bar means a station sending one
+            // frame an hour and one sending fifty draw exactly the same
+            // chart: a row of full-height bars. Reported as "are those
+            // correct? they're all the same value" for KF0HEG, which turned
+            // out to be an hourly beacon, one frame on the hour, every hour.
+            // The shape was right and there was no way to know it.
+            HStack(alignment: .firstTextBaseline) {
+                Text("Frames heard, last 24 hours")
+                Spacer(minLength: 8)
+                Text(peak == 1 ? "1 an hour at most" : "up to \(peak) an hour")
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
             HStack(alignment: .bottom, spacing: 2) {
                 ForEach(counts.indices, id: \.self) { index in
                     RoundedRectangle(cornerRadius: 1.5, style: .continuous)
