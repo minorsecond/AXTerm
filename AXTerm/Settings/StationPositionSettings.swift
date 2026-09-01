@@ -78,13 +78,20 @@ struct StationPositionSettings: View {
                 // to nothing and "Longitude" hyphenates across two lines. A
                 // border because without one these read as static text and
                 // there is no sign the coordinate can be typed at all.
+                //
+                // And an explicit prompt, because hiding the label hides the
+                // title outright rather than demoting it to placeholder text
+                // — which left two blank boxes with no way to tell which one
+                // wanted the latitude.
                 HStack(spacing: 6) {
-                    TextField("Latitude", text: $manualLatitude)
+                    TextField("Latitude", text: $manualLatitude,
+                              prompt: Text("Latitude"))
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 110)
                         .accessibilityLabel("Latitude")
-                    TextField("Longitude", text: $manualLongitude)
+                    TextField("Longitude", text: $manualLongitude,
+                              prompt: Text("Longitude"))
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 110)
@@ -105,7 +112,8 @@ struct StationPositionSettings: View {
 
             LabeledContent("Or look up an address") {
                 HStack(spacing: 6) {
-                    TextField("Street, city", text: $address)
+                    TextField("Street, city", text: $address,
+                              prompt: Text("Street, city"))
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .frame(minWidth: 180)
