@@ -288,6 +288,7 @@ struct OfflineBasemapMapView {
         /// distinguishable from one MapKit is animating on its own.
         var passCount = 0
         var passWindowStart = Date.distantPast
+        var lastLoggedRegion: MKCoordinateRegion?
         #endif
         var installedTerrainIDs: [String] = []
 
@@ -486,6 +487,24 @@ struct OfflineBasemapMapView {
         var labelsVisible = true
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            #if DEBUG
+            // A region that oscillates moves every marker at once, which is
+            // what "the points jump very slightly" would look like. Logged
+            // with the delta so a genuine pan reads differently from a
+            // micro-wobble nobody asked for.
+            let region = mapView.region
+            if let last = lastLoggedRegion {
+                let dLat = abs(region.center.latitude - last.center.latitude)
+                let dLon = abs(region.center.longitude - last.center.longitude)
+                let dSpan = abs(region.span.latitudeDelta - last.span.latitudeDelta)
+                let metres = dLat * 111_320
+                if metres > 0 || dSpan > 0 {
+                    print(String(format: "[MAPDIAG] region %@ centre %.1f m  span %.8f",
+                                 animated ? "anim" : "still", metres, dSpan))
+                }
+            }
+            lastLoggedRegion = region
+            #endif
             let shows = MapLabelPolicy.showsLabels(
                 latitudeDelta: mapView.region.span.latitudeDelta)
             guard shows != labelsVisible else { return }
@@ -494,6 +513,9 @@ struct OfflineBasemapMapView {
         }
 
         func applyLabelVisibility(on mapView: MKMapView) {
+            #if DEBUG
+            print("[MAPDIAG] label visibility sweep -> \(labelsVisible)")
+            #endif
             for annotation in mapView.annotations {
                 guard let site = annotation as? SiteAnnotation,
                       let view = mapView.view(for: annotation) as? StationDotAnnotationView
