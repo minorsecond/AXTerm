@@ -82,11 +82,42 @@ final class StationDotAnnotationView: MKAnnotationView {
     private static var moveMax = 0.0
     private static var stackWindows = 0
     private static var wantsStack = false
+    private static var lastRect: MKMapRect?
+    private static var rectChanges = 0
+    private static var rectMaxDrift = 0.0
+    private static var rectMaxZoom = 0.0
 
-    private static func noteMove(_ distance: Double) {
+    /// The map this view is inside, found by walking up rather than being
+    /// handed down, so the diagnostic needs no wiring.
+    private var enclosingMap: MKMapView? {
+        var candidate = superview
+        while let view = candidate {
+            if let map = view as? MKMapView { return map }
+            candidate = view.superview
+        }
+        return nil
+    }
+
+    private static func noteMove(_ distance: Double, mapRect: MKMapRect?) {
         guard distance > 0.01 else { return }
         moveCount += 1
         moveMax = max(moveMax, distance)
+
+        // The discriminator. If the visible rect is identical between two
+        // moves, the camera is still and MapKit is re-snapping to pixels for
+        // its own reasons. If it drifts, something is re-projecting the map,
+        // and the size hypothesis was only one way that could happen.
+        if let rect = mapRect {
+            if let last = lastRect {
+                let dx = abs(rect.origin.x - last.origin.x)
+                let dy = abs(rect.origin.y - last.origin.y)
+                let dw = abs(rect.size.width - last.size.width)
+                if dx > 0 || dy > 0 || dw > 0 { rectChanges += 1 }
+                rectMaxDrift = max(rectMaxDrift, max(dx, dy))
+                rectMaxZoom = max(rectMaxZoom, dw)
+            }
+            lastRect = rect
+        }
 
         // Who is actually calling. Every theory about *what* moves these
         // markers has been wrong, and the stack does not need a theory —
@@ -106,11 +137,15 @@ final class StationDotAnnotationView: MKAnnotationView {
         let elapsed = Date().timeIntervalSince(moveWindow)
         guard elapsed >= 5 else { return }
         if moveWindow != .distantPast {
-            print(String(format: "[MAPDIAG] MapKit moved markers %d times in %.1fs (max %.1f pt)",
-                         moveCount, elapsed, moveMax))
+            print(String(format: "[MAPDIAG] MapKit moved markers %d times in %.1fs (max %.1f pt); visible rect changed %d times (max drift %.3f, zoom %.3f)",
+                         moveCount, elapsed, moveMax,
+                         rectChanges, rectMaxDrift, rectMaxZoom))
         }
         moveCount = 0
         moveMax = 0
+        rectChanges = 0
+        rectMaxDrift = 0
+        rectMaxZoom = 0
         moveWindow = Date()
         // One stack per window, and skip the first: that window is the
         // initial layout, which is legitimate and not what is being chased.
@@ -277,7 +312,8 @@ final class StationDotAnnotationView: MKAnnotationView {
     #if os(macOS)
     override func setFrameOrigin(_ newOrigin: NSPoint) {
         #if DEBUG
-        Self.noteMove(hypot(newOrigin.x - frame.origin.x, newOrigin.y - frame.origin.y))
+        Self.noteMove(hypot(newOrigin.x - frame.origin.x, newOrigin.y - frame.origin.y),
+                      mapRect: enclosingMap?.visibleMapRect)
         #endif
         super.setFrameOrigin(newOrigin)
     }
@@ -285,7 +321,8 @@ final class StationDotAnnotationView: MKAnnotationView {
     override var center: CGPoint {
         didSet {
             #if DEBUG
-            Self.noteMove(hypot(center.x - oldValue.x, center.y - oldValue.y))
+            Self.noteMove(hypot(center.x - oldValue.x, center.y - oldValue.y),
+                          mapRect: enclosingMap?.visibleMapRect)
             #endif
         }
     }

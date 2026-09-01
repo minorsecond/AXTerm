@@ -612,19 +612,56 @@ struct OfflineBasemapMapView {
     /// 0.5pt at 2 Hz moved fifty markers 1910 times in ten seconds; with
     /// this, zero — and a genuine resize still lays out normally.
     final class StableFrameMapView: MKMapView {
+        #if DEBUG
+        /// Did the frame hypothesis even apply here? Counted separately for
+        /// proposals swallowed and proposals applied, because "no frame
+        /// changes at all" and "frame changes we absorbed" call for
+        /// completely different next steps.
+        nonisolated(unsafe) static var swallowed = 0
+        nonisolated(unsafe) static var applied = 0
+        nonisolated(unsafe) static var window = Date.distantPast
+
+        static func note(applied didApply: Bool, detail: String) {
+            if didApply { applied += 1 } else { swallowed += 1 }
+            let elapsed = Date().timeIntervalSince(window)
+            guard elapsed >= 5 else { return }
+            if window != .distantPast {
+                print(String(format: "[MAPDIAG] map frame in %.1fs: %d applied, %d swallowed  last=%@",
+                             elapsed, applied, swallowed, detail))
+            }
+            applied = 0
+            swallowed = 0
+            window = Date()
+        }
+        #endif
+
         #if os(macOS)
         override func setFrameSize(_ newSize: NSSize) {
-            guard MapFrameStability.isRealResize(
+            let real = MapFrameStability.isRealResize(
                 width: newSize.width, height: newSize.height,
-                currentWidth: frame.width, currentHeight: frame.height) else { return }
+                currentWidth: frame.width, currentHeight: frame.height)
+            #if DEBUG
+            Self.note(applied: real,
+                      detail: String(format: "size %.3fx%.3f -> %.3fx%.3f",
+                                     frame.width, frame.height,
+                                     newSize.width, newSize.height))
+            #endif
+            guard real else { return }
             super.setFrameSize(NSSize(width: MapFrameStability.settled(newSize.width),
                                       height: MapFrameStability.settled(newSize.height)))
         }
 
         override func setFrameOrigin(_ newOrigin: NSPoint) {
-            guard MapFrameStability.isRealMove(
+            let real = MapFrameStability.isRealMove(
                 x: newOrigin.x, y: newOrigin.y,
-                currentX: frame.origin.x, currentY: frame.origin.y) else { return }
+                currentX: frame.origin.x, currentY: frame.origin.y)
+            #if DEBUG
+            Self.note(applied: real,
+                      detail: String(format: "origin %.3f,%.3f -> %.3f,%.3f",
+                                     frame.origin.x, frame.origin.y,
+                                     newOrigin.x, newOrigin.y))
+            #endif
+            guard real else { return }
             super.setFrameOrigin(NSPoint(x: MapFrameStability.settled(newOrigin.x),
                                          y: MapFrameStability.settled(newOrigin.y)))
         }
