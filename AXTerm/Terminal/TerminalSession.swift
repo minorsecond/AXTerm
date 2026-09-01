@@ -30,6 +30,24 @@ nonisolated struct TerminalSession: Identifiable, Equatable, Sendable {
         /// Whether the far end demonstrably heard us. A refusal counts: it
         /// took a decoded frame to produce one.
         var provesTheFarEndHeardUs: Bool { self == .closed || self == .refused }
+
+        /// From the terminal's own status line.
+        ///
+        /// Reusing those strings rather than inventing a second vocabulary:
+        /// the history should describe a session in the words the operator
+        /// watched it happen in, and two vocabularies eventually disagree.
+        ///
+        /// Nil while a session is still in progress, which is most of the
+        /// states the strip shows.
+        init?(statusText: String) {
+            switch statusText.lowercased() {
+            case "disconnected": self = .closed
+            case "refused", "busy": self = .refused
+            case "timed out", "no answer": self = .timedOut
+            case "failed", "lost": self = .lost
+            default: return nil
+            }
+        }
     }
 
     let id: UUID

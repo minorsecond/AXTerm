@@ -28,6 +28,10 @@ struct ContentView: View {
     /// Owns the terminal's view model, so leaving the Terminal page no
     /// longer destroys everything it knows about a session that is still up.
     @State private var terminalModels = TerminalModelBox()
+    /// Keeps connected-mode sessions past a relaunch. Held by the shell
+    /// because the terminal view is torn down on navigation and a session
+    /// outlives that.
+    @State private var sessionRecorder: TerminalSessionRecorder?
     // Same key the map's layers menu writes — the trickle lookup below
     // follows the operator's layer choice from anywhere in the app.
     @AppStorage("stations.showsDirectoryNodes") private var showsDirectoryNodes = false
@@ -384,6 +388,9 @@ struct ContentView: View {
     private var serviceLifecycleLayer: some View {
         windowShell
         .task {
+            if sessionRecorder == nil {
+                sessionRecorder = TerminalSessionRecorder(store: client.terminalSessions)
+            }
             bbsService.attach()
             syncServiceAddresses()
             bbsLibrary.rescan()
@@ -1634,6 +1641,7 @@ struct ContentView: View {
                     },
                     searchModel: searchModel,
                     locationService: winlinkContext.locationService,
+                    sessionRecorder: sessionRecorder,
                     onIdentity: { profiles.peek($0) },
                     onIdentityMenu: { profiles.openPage($0) }
                 )

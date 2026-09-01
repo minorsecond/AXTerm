@@ -1730,6 +1730,9 @@ final class ObservableTerminalTxViewModel: ObservableObject {
 enum TerminalTab: String, CaseIterable {
     case session = "Session"
     case transfers = "Transfers"
+    /// Everything this station has connected to, kept past a relaunch. The
+    /// Session tab is a strip of live tabs; this is the record.
+    case history = "History"
 }
 
 private struct TerminalAutoPathCandidate: Identifiable, Hashable {
@@ -1799,6 +1802,8 @@ struct TerminalView: View {
     @ObservedObject var searchModel: AppToolbarSearchModel
     /// Optional app-wide position source for "insert my position".
     var locationService: StationLocationService?
+    /// Keeps what happened. Nil disables recording rather than the session.
+    var sessionRecorder: TerminalSessionRecorder?
 
     @State private var selectedTab: TerminalTab = .session
     @State private var showingTransferSheet = false
@@ -1833,6 +1838,7 @@ struct TerminalView: View {
         onSessionText: ((String, String) -> Void)? = nil,
         searchModel: AppToolbarSearchModel,
         locationService: StationLocationService? = nil,
+        sessionRecorder: TerminalSessionRecorder? = nil,
         onIdentity: ((String) -> Void)? = nil,
         onIdentityMenu: ((String) -> Void)? = nil
     ) {
@@ -1847,6 +1853,7 @@ struct TerminalView: View {
         self.onSessionText = onSessionText
         self.searchModel = searchModel
         self.locationService = locationService
+        self.sessionRecorder = sessionRecorder
 
         _txViewModel = ObservedObject(wrappedValue: txViewModel)
         _connectBarViewModel = StateObject(wrappedValue: ConnectBarViewModel())
@@ -2080,6 +2087,9 @@ struct TerminalView: View {
                 sessionView
             case .transfers:
                 transfersView
+            case .history:
+                SessionHistoryView(store: client.terminalSessions,
+                                   onOpenCallsign: onIdentity)
             }
         }
     }
@@ -4427,6 +4437,10 @@ struct TerminalView: View {
         if let idx = sessionRecords.firstIndex(where: { $0.id == key }) {
             sessionRecords[idx].statusText = statusText
         } else {
+            // The same event, kept. `sessionRecords` is a strip of live tabs
+            // capped at twenty and gone on relaunch; this is the history.
+            sessionRecorder?.began(id: key, remote: intent.normalizedTo,
+                                   via: via, transport: mode.rawValue)
             sessionRecords.insert(
                 SessionRecord(
                     id: key,
@@ -4447,12 +4461,21 @@ struct TerminalView: View {
         guard let activeSessionRecordID,
               let idx = sessionRecords.firstIndex(where: { $0.id == activeSessionRecordID }) else { return }
         sessionRecords[idx].statusText = state
+        // The status strings are what the terminal already says out loud, so
+        // the history is described in the same words rather than a second
+        // vocabulary that could disagree with the screen.
+        if let outcome = TerminalSession.Outcome(statusText: state) {
+            sessionRecorder?.ended(id: activeSessionRecordID, outcome: outcome)
+        }
     }
 
     private func updateActiveSessionRelayDestination(_ destination: String?) {
         guard let activeSessionRecordID,
               let idx = sessionRecords.firstIndex(where: { $0.id == activeSessionRecordID }) else { return }
         sessionRecords[idx].relayDestination = destination
+        if let destination {
+            sessionRecorder?.learnedRelayDestination(destination, for: activeSessionRecordID)
+        }
     }
 
     private func focusSessionRecord(id: String) {

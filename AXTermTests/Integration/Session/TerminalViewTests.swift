@@ -135,9 +135,12 @@ final class TerminalViewTests: XCTestCase {
     func testTerminalTabAllCases() {
         let allCases = TerminalTab.allCases
 
-        XCTAssertEqual(allCases.count, 2)
+        XCTAssertEqual(allCases.count, 3)
         XCTAssertTrue(allCases.contains(.session))
         XCTAssertTrue(allCases.contains(.transfers))
+        // History is where connected-mode sessions live once they end. The
+        // Session tab is a strip of live tabs, capped and lost on relaunch.
+        XCTAssertTrue(allCases.contains(.history))
     }
 
     func testTerminalTabRawValues() {

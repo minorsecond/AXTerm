@@ -161,6 +161,8 @@ final class PacketEngine: ObservableObject {
     /// Per-station totals from the whole log rather than the in-memory
     /// window. See StationStats for why the two disagree.
     private(set) var stationStats: SQLiteStationStatsStore?
+    /// Connected-mode sessions that survive a relaunch.
+    private(set) var terminalSessions: SQLiteTerminalSessionStore?
     /// The personal mailbox: messages left by callers, and who called.
     private(set) var bbsMessages: SQLiteBBSMessageStore?
 
@@ -361,6 +363,7 @@ final class PacketEngine: ObservableObject {
                 self.stationServices = SQLiteStationServiceStore(dbQueue: queue)
                 self.networkPaths = SQLiteNetworkPathStore(dbQueue: queue)
                 self.stationStats = SQLiteStationStatsStore(dbQueue: queue)
+                self.terminalSessions = SQLiteTerminalSessionStore(dbQueue: queue)
                 // Lifetime counts for stations already on the list. One pass
                 // over v_station_counts, held rather than re-asked: the
                 // sidebar draws on every packet and this must never be in
