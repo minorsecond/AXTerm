@@ -95,6 +95,14 @@ struct OfflineBasemapMapView {
         func absorb(_ next: SiteAnnotation) -> Bool {
             if coordinate.latitude != next.coordinate.latitude
                 || coordinate.longitude != next.coordinate.longitude {
+                #if DEBUG
+                let metres = GreatCircle.kilometres(
+                    from: GreatCircle.Point(latitude: coordinate.latitude,
+                                            longitude: coordinate.longitude),
+                    to: GreatCircle.Point(latitude: next.coordinate.latitude,
+                                          longitude: next.coordinate.longitude)) * 1000
+                print(String(format: "[MAPDIAG] move %@ %.2f m", id, metres))
+                #endif
                 coordinate = next.coordinate
             }
             if subtitle != next.subtitle { subtitle = next.subtitle }
@@ -616,6 +624,9 @@ struct OfflineBasemapMapView {
         // rebuild, and it happens only when the operator toggles terrain.
         let wantedVectors = overlays.map(\.id)
         if terrainChanged || coordinator.installedOverlayIDs != wantedVectors {
+            #if DEBUG
+            print("[MAPDIAG] vector rebuild terrainChanged=\(terrainChanged)")
+            #endif
             coordinator.installedOverlayIDs = wantedVectors
 
             let coverageIDs = Set(coordinator.coverageCircles.map(ObjectIdentifier.init))
@@ -673,6 +684,9 @@ struct OfflineBasemapMapView {
                 }
                 continue
             }
+            #if DEBUG
+            print("[MAPDIAG] link rebuild \(id)")
+            #endif
             if let stale = coordinator.linkLines[id] {
                 mapView.removeOverlay(stale)
                 coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(stale))
@@ -707,6 +721,9 @@ struct OfflineBasemapMapView {
     private func applyTerrain(to mapView: MKMapView, coordinator: Coordinator) -> Bool {
         let wanted = terrainOverlays.map(\.id)
         guard coordinator.installedTerrainIDs != wanted else { return false }
+        #if DEBUG
+        print("[MAPDIAG] terrain rebuild \(coordinator.installedTerrainIDs.count) -> \(wanted.count)")
+        #endif
         coordinator.installedTerrainIDs = wanted
 
         mapView.removeOverlays(mapView.overlays.compactMap { $0 as? ElevationOverlay })
@@ -729,6 +746,9 @@ struct OfflineBasemapMapView {
             coordinator.installedCoverage = nil
         }
         guard coordinator.installedCoverage != coverage else { return }
+        #if DEBUG
+        print("[MAPDIAG] coverage rebuild")
+        #endif
         coordinator.installedCoverage = coverage
         mapView.removeOverlays(coordinator.coverageCircles)
         coordinator.coverageCircles = []
@@ -814,6 +834,11 @@ struct OfflineBasemapMapView {
         let departed = surplus + existing.filter {
             existingByID[$0.id] === $0 && !wantedIDs.contains($0.id)
         }
+        #if DEBUG
+        if !departed.isEmpty {
+            print("[MAPDIAG] departed \(departed.map(\.id).joined(separator: ","))")
+        }
+        #endif
         if !departed.isEmpty {
             // Removing a selected annotation fires `didDeselect`; suppressed,
             // or the delegate writes `selection = nil` straight back into the
@@ -828,6 +853,9 @@ struct OfflineBasemapMapView {
             if let current = existingByID[annotation.id] {
                 if current.absorb(annotation),
                    let view = mapView.view(for: current) as? StationDotAnnotationView {
+                    #if DEBUG
+                    print("[MAPDIAG] reconfigure \(current.id)")
+                    #endif
                     view.configure(tint: Coordinator.tint(for: current),
                                    isObserver: current.isObserver,
                                    approximate: current.isApproximate,
@@ -839,6 +867,9 @@ struct OfflineBasemapMapView {
             }
         }
         if !arrived.isEmpty {
+            #if DEBUG
+            print("[MAPDIAG] arrived \(arrived.map(\.id).joined(separator: ","))")
+            #endif
             mapView.addAnnotations(arrived)
         }
 
@@ -847,6 +878,9 @@ struct OfflineBasemapMapView {
         let existingLabels = mapView.annotations.compactMap { $0 as? FeatureLabelAnnotation }
         let wantedLabels = featureLabels()
         if Set(existingLabels.map { $0.title ?? "" }) != Set(wantedLabels.map { $0.title ?? "" }) {
+            #if DEBUG
+            print("[MAPDIAG] feature labels rebuild")
+            #endif
             mapView.removeAnnotations(existingLabels)
             mapView.addAnnotations(wantedLabels)
         }

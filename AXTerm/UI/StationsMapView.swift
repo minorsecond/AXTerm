@@ -252,9 +252,42 @@ struct StationsMapView: View {
     /// was — two parts of the app disagreeing about the operator's own
     /// location, with nothing on screen to say which was right.
     private var observer: GreatCircle.Point? {
-        observerPosition?.point
+        guard let live = observerPosition?.point
             ?? Maidenhead.center(of: observerGrid).map(GreatCircle.Point.init)
+        else {
+            observerAnchor.point = nil
+            return nil
+        }
+        // Anchored against GPS noise. Successive fixes land a few metres
+        // apart (the toolbar chip reports ±20 m), and every one of them used
+        // to become a new observer coordinate — which slid our pin, moved
+        // the endpoint of every path line radiating from this station, and
+        // re-centred the coverage rings, roughly once a second. On screen
+        // that was the whole network around our dot twitching in place. The
+        // drawn position only follows the fix once it has moved further
+        // than the noise floor; a base station holds still, and a rover
+        // driving at any real speed crosses the threshold every couple of
+        // seconds anyway.
+        if let held = observerAnchor.point,
+           GreatCircle.kilometres(from: held, to: live) * 1000
+               < Self.observerJitterFloorMetres {
+            return held
+        }
+        observerAnchor.point = live
+        return live
     }
+
+    /// How far a fresh fix must move before the map redraws around it.
+    /// Above any plausible GPS wobble for a stationary antenna, far below
+    /// anything that matters at map zoom.
+    static let observerJitterFloorMetres = 25.0
+
+    /// Reference box, same pattern as `PathAssemblyCache`: mutating it
+    /// during a body evaluation must never invalidate the view.
+    nonisolated final class ObserverAnchor {
+        var point: GreatCircle.Point?
+    }
+    @State private var observerAnchor = ObserverAnchor()
 
     /// Stations the radio has actually met: heard stations plus the
     /// via-path aliases. These are the entries the *analysis* layers
