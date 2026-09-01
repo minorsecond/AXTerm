@@ -157,6 +157,30 @@ nonisolated final class ElevationOverlay: NSObject, MKOverlay, @unchecked Sendab
 // thread could not be used at all.
 nonisolated final class ElevationOverlayRenderer: MKOverlayRenderer, @unchecked Sendable {
 
+    #if DEBUG
+    /// Counts terrain repaints. A tile that never reports itself ready, or
+    /// a renderer that invalidates itself, keeps MapKit redrawing — and a
+    /// map redrawing continuously re-resolves its own label layer, which is
+    /// the remaining candidate for movement nothing else accounts for.
+    nonisolated(unsafe) private static var drawCount = 0
+    nonisolated(unsafe) private static var pendingCount = 0
+    nonisolated(unsafe) private static var drawWindow = Date.distantPast
+
+    private static func noteDraw(ready: Bool) {
+        drawCount += 1
+        if !ready { pendingCount += 1 }
+        let elapsed = Date().timeIntervalSince(drawWindow)
+        guard elapsed >= 5 else { return }
+        if drawWindow != .distantPast {
+            print(String(format: "[MAPDIAG] terrain draws %d in %.1fs (%d still shading)",
+                         drawCount, elapsed, pendingCount))
+        }
+        drawCount = 0
+        pendingCount = 0
+        drawWindow = Date()
+    }
+    #endif
+
     override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale,
                        in context: CGContext) {
         guard let overlay = overlay as? ElevationOverlay else { return }
@@ -164,12 +188,16 @@ nonisolated final class ElevationOverlayRenderer: MKOverlayRenderer, @unchecked 
         // this tile when it finishes is what keeps the map responsive: the
         // terrain fades in a tile at a time instead of the whole map
         // stalling until every tile is ready.
-        guard let image = overlay.image(onReady: { [weak self] in
+        let pending = overlay.image(onReady: { [weak self] in
             guard let self else { return }
             DispatchQueue.main.async {
                 self.setNeedsDisplay(overlay.boundingMapRect)
             }
-        }) else { return }
+        })
+        #if DEBUG
+        Self.noteDraw(ready: pending != nil)
+        #endif
+        guard let image = pending else { return }
 
         let rect = rect(for: overlay.boundingMapRect)
         context.saveGState()
