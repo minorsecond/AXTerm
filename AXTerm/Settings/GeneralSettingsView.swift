@@ -19,6 +19,9 @@ struct GeneralSettingsView: View {
     /// app-wide behaviour, so their controls live here. Nil hides them —
     /// the caller that cannot supply the store keeps the old page.
     var winlinkSettings: WinlinkSettings?
+    /// Offered so the position section can use a GPS fix when the
+    /// operator has asked it to.
+    var locationService: StationLocationService?
     @EnvironmentObject var router: SettingsRouter
 
     @State private var launchAtLoginFeedback: String?
@@ -35,6 +38,14 @@ struct GeneralSettingsView: View {
                     .foregroundStyle(.secondary)
             }
             
+            // Beside the callsign, because it is the other half of "who and
+            // where this station is". It lived on the Winlink tab as a grid
+            // square, which is a strange home for the fact the map, the
+            // coverage rings and every terrain profile depend on.
+            StationPositionSettings(settings: settings,
+                                    winlinkSettings: winlinkSettings,
+                                    locationService: locationService)
+
             PreferencesSection("Display") {
                 Picker("Time format", selection: $timeFormatRaw) {
                     ForEach(TimeDisplayFormat.allCases) { format in

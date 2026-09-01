@@ -77,7 +77,8 @@ struct SettingsView: View {
         switch router.selectedTab {
         case .general:
             GeneralSettingsView(settings: settings, client: client,
-                                winlinkSettings: winlinkSettings)
+                                winlinkSettings: winlinkSettings,
+                                locationService: locationService)
         case .notifications:
             NotificationSettingsView(settings: settings, notificationManager: notificationManager)
         case .network:

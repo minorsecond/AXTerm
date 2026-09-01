@@ -83,6 +83,8 @@ struct ContentView: View {
     /// Whether to take this device's GPS as the station's position.
     /// Off by default: the radio is not necessarily with the device.
     @AppStorage("station.useDeviceLocation") private var useDeviceLocation = false
+    @AppStorage("station.manualLatitude") private var manualLatitude = ""
+    @AppStorage("station.manualLongitude") private var manualLongitude = ""
     /// When a connection to the station on screen last completed over a
     /// path with no digipeater in it.
     @State private var profileLastDirectConnection: Date?
@@ -1811,6 +1813,15 @@ struct ContentView: View {
         }.value
     }
 
+    /// The coordinate the operator typed in Settings, if it is a coordinate.
+    private var manualStationPoint: GreatCircle.Point? {
+        guard let latitude = Double(manualLatitude.trimmingCharacters(in: .whitespaces)),
+              let longitude = Double(manualLongitude.trimmingCharacters(in: .whitespaces)),
+              (-90...90).contains(latitude), (-180...180).contains(longitude)
+        else { return nil }
+        return GreatCircle.Point(latitude: latitude, longitude: longitude)
+    }
+
     /// Where this station is, and how well that is known.
     ///
     /// GPS is offered but never taken silently. The radio is not necessarily
@@ -1819,6 +1830,7 @@ struct ContentView: View {
     /// operator chooses, and the choice is remembered.
     private var myPosition: StationPosition? {
         var candidates = StationPositionResolver.Candidates()
+        candidates.surveyed = manualStationPoint
         candidates.gridSquare = Maidenhead.center(of: winlinkContext.settings.gridSquare)
             .map(GreatCircle.Point.init)
         if useDeviceLocation, let fix = winlinkContext.locationService.lastLocation {

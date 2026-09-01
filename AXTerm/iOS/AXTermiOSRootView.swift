@@ -594,7 +594,8 @@ struct AXTermiOSRootView: View {
         switch destination {
         case .identity:
             GeneralSettingsView(settings: settings, client: client,
-                                winlinkSettings: context.settings)
+                                winlinkSettings: context.settings,
+                                locationService: context.locationService)
                 .navigationTitle("Identity")
                 .navigationBarTitleDisplayMode(.inline)
         case .winlink:
