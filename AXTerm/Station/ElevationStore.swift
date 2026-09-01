@@ -113,7 +113,12 @@ nonisolated final class ElevationStore: @unchecked Sendable {
 
     func store(lat: Int, lon: Int, samples: Int, grid: [Float]) throws {
         precondition(grid.count == samples * samples, "grid is not square")
-        let blob = grid.withUnsafeBufferPointer { Data(buffer: $0) }
+        // Encoded from here on. Tiles written before this stay readable, and
+        // are re-encoded the next time they are fetched rather than in a
+        // migration: a rewrite of every stored tile is a lot of I/O at launch
+        // to save space the operator is not short of yet.
+        let blob = (try? ElevationTileCodec.encode(grid, samples: samples))
+            ?? grid.withUnsafeBufferPointer { Data(buffer: $0) }
         try dbQueue.write { db in
             try db.execute(sql: """
                 INSERT OR REPLACE INTO elevation (tile_lat, tile_lon, samples, grid)
@@ -129,6 +134,12 @@ nonisolated final class ElevationStore: @unchecked Sendable {
                 """, arguments: [lat, lon]) else { return nil }
             let samples: Int = row["samples"]
             let blob: Data = row["grid"]
+            // Either format. The encoded one says so in its first four bytes;
+            // anything else is a raw Float32 tile from before the codec.
+            if ElevationTileCodec.isEncoded(blob),
+               let decoded = try? ElevationTileCodec.decode(blob) {
+                return decoded
+            }
             let grid = blob.withUnsafeBytes { raw in
                 Array(raw.bindMemory(to: Float.self))
             }

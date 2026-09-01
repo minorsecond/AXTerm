@@ -67,8 +67,12 @@ final class ElevationStoreTests: XCTestCase {
 
         let stats = try store.statistics()
         XCTAssertEqual(stats.tileCount, 2)
-        // Two 4×4 grids of 4-byte floats.
-        XCTAssertEqual(stats.byteSize, 2 * 16 * 4)
+        // Tiles are encoded now, so this is no longer four bytes a sample.
+        // The figure is what the operator is shown as "terrain stored", so
+        // what it has to be is the space actually taken.
+        XCTAssertGreaterThan(stats.byteSize, 0)
+        XCTAssertLessThanOrEqual(stats.byteSize, 2 * 16 * 4,
+                                 "encoded tiles should never be larger than raw")
     }
 
     func testDeletingEverythingEmptiesTheStore() throws {
