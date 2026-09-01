@@ -16,9 +16,11 @@ import SwiftUI
 ///
 /// * There is no position at all, so distances and terrain are unavailable
 ///   and nothing else on screen says why.
-/// * The operator switched device location on and is not getting it. That
-///   state used to be visible only on the Settings page they would already
-///   have had to be looking at.
+/// * The operator switched device location on and an attempt to use it has
+///   failed. That state used to be visible only on the Settings page they
+///   would already have had to be looking at. Waiting for the attempt to
+///   fail, rather than for a fix to be absent, is what keeps this quiet
+///   during the ordinary second at launch before the first fix arrives.
 ///
 /// A stale-fix state is deliberately absent. It matters for a portable rig
 /// and is pure noise for a base station, and there is no field evidence yet
@@ -92,9 +94,18 @@ struct PositionStatusChip: View {
     }
 
     /// Nil when there is nothing worth interrupting for.
+    ///
+    /// A failed attempt is required, not merely a missing fix. Between the
+    /// window appearing and the first fix landing there is a second where
+    /// device location is on and no coordinate exists yet, and reporting
+    /// that painted the toolbar orange on every single launch — a blink
+    /// that draws the eye and then withdraws the claim, which is worse than
+    /// saying nothing. `currentLocation()` records an error on every failure
+    /// path, so "we asked and it did not work" is a fact this can wait for.
     var problem: Problem? {
         guard position != nil else { return .noPosition }
         guard usesDeviceLocation, deviceFix == nil else { return nil }
+        guard let gpsError else { return nil }
         return gpsError == .denied ? .denied : .noFix
     }
 }

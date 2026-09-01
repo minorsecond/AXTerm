@@ -77,13 +77,26 @@ final class PositionStatusChipTests: XCTestCase {
     }
 
     /// A grid-square fallback is stored in `lastLocation` when GPS fails, so
-    /// a caller that passes it as the fix would silence the chip with the
-    /// very thing that proves it should be speaking.
+    /// a caller that passed it as the fix would silence the chip with the
+    /// very thing that proves it should be speaking. `deviceFix` is nil here
+    /// because the caller filtered it correctly.
     func testAGridFallbackIsNotAFix() {
         XCTAssertEqual(chip(position: somewhere,
                             usesDeviceLocation: true,
                             deviceFix: nil,
-                            gpsError: nil).problem, .noFix)
+                            gpsError: .timeout).problem, .noFix)
+    }
+
+    /// The launch case, and the reason this needs a failed attempt rather
+    /// than a missing fix: for the second between the window appearing and
+    /// the first fix landing, device location is on and there is no
+    /// coordinate yet. Reporting that blinked the toolbar orange on every
+    /// launch and then took it back.
+    func testAnAttemptStillInFlightSaysNothing() {
+        XCTAssertNil(chip(position: somewhere,
+                          usesDeviceLocation: true,
+                          deviceFix: nil,
+                          gpsError: nil).problem)
     }
 
     /// Every state names where to fix it; a chip that only complains is
