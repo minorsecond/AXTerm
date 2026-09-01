@@ -77,6 +77,9 @@ struct ContentView: View {
     /// How far away the station is, when that is too far for a terrain
     /// profile to answer anything.
     @State private var profileTerrainOutOfRange: Double?
+    /// Lifetime totals for the station on screen, read from the log rather
+    /// than the capped in-memory window.
+    @State private var profileStats: StationStats?
     /// When a connection to the station on screen last completed over a
     /// path with no digipeater in it.
     @State private var profileLastDirectConnection: Date?
@@ -794,6 +797,7 @@ struct ContentView: View {
                     terrainAreaEstimate: profileTerrainAreaEstimate,
                     terrainSourceHasCoverage: profileTerrainHasSource,
                     terrainBeyondRadioRange: profileTerrainOutOfRange,
+                    stats: profileStats,
                     isDownloadingTerrain: elevation.downloadState.isBusy,
                     onDownloadTerrain: {
                         guard let path = terrainPath(to: profile) else { return }
@@ -1787,6 +1791,17 @@ struct ContentView: View {
             .max()
     }
 
+    /// Lifetime totals for one station, off the main thread.
+    private func stationStats(for callsign: String) async -> StationStats? {
+        guard let store = client.stationStats else { return nil }
+        let address = Callsign(callsign)
+        let call = address?.base ?? callsign.uppercased()
+        let ssid = address?.ssid ?? 0
+        return await Task.detached(priority: .userInitiated) {
+            try? store.stats(forStation: call, ssid: ssid, now: Date())
+        }.value
+    }
+
     /// The two ends of the path a station page is about.
     private func terrainPath(
         to profile: NodeProfile
@@ -1800,6 +1815,7 @@ struct ContentView: View {
 
     @MainActor
     private func refreshProfileTerrain(for profile: NodeProfile) async {
+        profileStats = await stationStats(for: profile.callsign)
         profileTerrain = nil
         let path = terrainPath(to: profile)
 

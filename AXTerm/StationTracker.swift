@@ -19,6 +19,20 @@ nonisolated struct StationTracker {
         packet.via.filter { $0.repeated }.map { $0.display }
     }
 
+    /// Folds in lifetime totals read from the log.
+    ///
+    /// Applied to stations already listed rather than adding rows for every
+    /// callsign ever heard: the sidebar lists what is on the air now, and
+    /// turning it into a historical roster is a different feature. This only
+    /// corrects the number beside a station that is already there.
+    mutating func applyLifetimeCounts(_ counts: [String: Int]) {
+        for index in stations.indices {
+            if let lifetime = counts[stations[index].call.uppercased()] {
+                stations[index].lifetimeCount = lifetime
+            }
+        }
+    }
+
     mutating func update(with packet: Packet) {
         guard let from = packet.from else { return }
         let call = from.display

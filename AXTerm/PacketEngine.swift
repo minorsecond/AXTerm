@@ -158,6 +158,9 @@ final class PacketEngine: ObservableObject {
     /// Observed paths, kept across launches so the network graph does not
     /// start every session convinced the network is empty.
     private(set) var networkPaths: SQLiteNetworkPathStore?
+    /// Per-station totals from the whole log rather than the in-memory
+    /// window. See StationStats for why the two disagree.
+    private(set) var stationStats: SQLiteStationStatsStore?
     /// The personal mailbox: messages left by callers, and who called.
     private(set) var bbsMessages: SQLiteBBSMessageStore?
 
@@ -357,6 +360,12 @@ final class PacketEngine: ObservableObject {
                 self.stationNotes = SQLiteStationNoteStore(dbQueue: queue)
                 self.stationServices = SQLiteStationServiceStore(dbQueue: queue)
                 self.networkPaths = SQLiteNetworkPathStore(dbQueue: queue)
+                self.stationStats = SQLiteStationStatsStore(dbQueue: queue)
+                // Lifetime counts for stations already on the list. One pass
+                // over v_station_counts, held rather than re-asked: the
+                // sidebar draws on every packet and this must never be in
+                // that path.
+                self.loadLifetimeStationCounts()
                 self.bbsMessages = SQLiteBBSMessageStore(dbQueue: queue)
                 // A path nobody has seen for a fortnight is not evidence any
                 // more; leaving it in would draw a neighbour that moved away.
@@ -1395,6 +1404,23 @@ final class PacketEngine: ObservableObject {
 
     func packet(with id: Packet.ID) -> Packet? {
         packets.first { $0.id == id }
+    }
+
+    /// Corrects the in-memory station counts against the whole log.
+    ///
+    /// Only the number changes. Adding a row for every callsign ever heard
+    /// would turn a list of who is on the air into a historical roster, which
+    /// is a different feature.
+    func loadLifetimeStationCounts() {
+        guard let store = stationStats else { return }
+        Task.detached(priority: .utility) { [weak self] in
+            guard let counts = try? store.allStationCounts(), !counts.isEmpty else { return }
+            await MainActor.run {
+                guard let self else { return }
+                self.stationTracker.applyLifetimeCounts(counts)
+                self.stations = self.stationTracker.stations
+            }
+        }
     }
 
     func isPinned(_ id: Packet.ID) -> Bool {

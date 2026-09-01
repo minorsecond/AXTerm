@@ -66,6 +66,9 @@ struct NodeProfileView: View {
     /// Set when the station is too far away for a terrain profile to mean
     /// anything, in kilometres.
     var terrainBeyondRadioRange: Double?
+    /// Totals from the whole log. Nil falls back to what the profile was
+    /// built from, which is the in-memory window.
+    var stats: StationStats?
     var isDownloadingTerrain: Bool = false
     var onDownloadTerrain: (() -> Void)?
     var onDownloadTerrainArea: (() -> Void)?
@@ -630,12 +633,26 @@ struct NodeProfileView: View {
         }
     }
 
+    /// How far back the count reaches, which is the thing that makes a
+    /// frame count mean anything. "136 frames" says nothing without "since
+    /// 22 Aug" beside it.
+    private var heardSpanDetail: String? {
+        guard let first = stats?.firstHeard else { return nil }
+        return "frames since " + first.formatted(.dateTime.day().month(.abbreviated))
+    }
+
     private var tileData: [StatTile] {
         var tiles: [StatTile] = []
-        if let activity = profile.activity, activity.heardCount > 0 {
-            tiles.append(StatTile(id: "heard", label: "Heard",
-                                  value: "\(activity.heardCount)", detail: "frames",
-                                  symbol: "waveform", tint: .orange))
+        // The log if it has more to say than the window, which it usually
+        // does: the in-memory list is capped at 5,000 frames, a few hours on
+        // a busy channel, and the tile read as a lifetime count.
+        let heardCount = stats?.frameCount ?? profile.activity?.heardCount ?? 0
+        if heardCount > 0 {
+            tiles.append(StatTile(
+                id: "heard", label: "Heard",
+                value: heardCount.formatted(),
+                detail: heardSpanDetail ?? "frames",
+                symbol: "waveform", tint: .orange))
         }
         // No "last heard" tile: the freshness line in the header already
         // says it, two lines up, and saying it twice was the clutter.
@@ -708,8 +725,12 @@ struct NodeProfileView: View {
                 if !activity.lastVia.isEmpty {
                     row("Last path", activity.lastVia.joined(separator: " \u{2192} "))
                 }
-                if activity.heardByHour.contains(where: { $0 > 0 }) {
-                    activityChart(activity.heardByHour)
+                // From the log too, so a station quiet in the last few
+                // thousand frames on the channel still shows the day it had.
+                let hours = stats?.hourlyCounts.isEmpty == false
+                    ? stats!.hourlyCounts : activity.heardByHour
+                if hours.contains(where: { $0 > 0 }) {
+                    activityChart(hours)
                 }
             }
         }
