@@ -64,6 +64,24 @@ struct AXTermiOSRootView: View {
     /// not land somewhere else every time.
     @AppStorage("ios.selectedTab") private var selection: NavigationItem = .terminal
 
+    // The same three position sources the Mac shell offers, read from the
+    // same defaults. The ladder itself is shared; only the storage keys are
+    // repeated, because `@AppStorage` has to be declared per view.
+    @AppStorage("station.useDeviceLocation") private var useDeviceLocation = false
+    @AppStorage("station.manualLatitude") private var manualLatitude = ""
+    @AppStorage("station.manualLongitude") private var manualLongitude = ""
+
+    /// Where this station is. Drives the map's own pin, its coverage rings
+    /// and every distance it measures.
+    private var myPosition: StationPosition? {
+        StationPositionResolver.ownStation(
+            gridSquare: context.settings.gridSquare,
+            manualLatitude: manualLatitude,
+            manualLongitude: manualLongitude,
+            usesDeviceLocation: useDeviceLocation,
+            deviceLocation: context.locationService.lastLocation)
+    }
+
     @State private var packetSelection = Set<Packet.ID>()
     @State private var inspectedPacket: Packet?
 
@@ -498,6 +516,7 @@ struct AXTermiOSRootView: View {
                 recentPackets: Array(client.packets.suffix(600)),
                 gatewayGrids: gatewayGrids,
                 observerGrid: context.settings.gridSquare,
+                observerPosition: myPosition,
                 myCallsign: settings.myCallsign,
                 lookup: callsignLookup,
                 aliases: nodeAliases,

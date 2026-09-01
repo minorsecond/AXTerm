@@ -264,14 +264,20 @@ nonisolated enum HeardStationMap {
     static func fannedPositions(_ entries: [Entry]) -> [String: GreatCircle.Point] {
         var result = [String: GreatCircle.Point]()
         for cluster in clusters(entries) {
-            guard let centre = cluster.first?.position else { continue }
-            if cluster.count == 1 {
-                result[cluster[0].callsign] = centre
+            // Sorted before the centre is taken, not after. `clusters`
+            // groups on coordinates rounded to five decimals, so members
+            // agree to about a metre but are not identical, and
+            // `cluster.first` is whichever one the caller happened to list
+            // first. Two passes over the same stations in a different order
+            // therefore fanned them around slightly different centres.
+            let ordered = cluster.sorted { $0.callsign < $1.callsign }
+            guard let centre = ordered.first?.position else { continue }
+            if ordered.count == 1 {
+                result[ordered[0].callsign] = centre
                 continue
             }
             // Even spacing around the centre, starting due north, in a
             // fixed order so the arrangement never jitters on redraw.
-            let ordered = cluster.sorted { $0.callsign < $1.callsign }
             for (index, entry) in ordered.enumerated() {
                 let radius = entry.isExactPosition
                     ? exactFanRadiusMetres : gridFanRadiusMetres

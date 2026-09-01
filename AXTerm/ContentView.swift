@@ -1568,6 +1568,7 @@ struct ContentView: View {
             gatewayGrids: gatewayGrids,
             announcedGrids: announcedGrids.grids,
             observerGrid: winlinkContext.settings.gridSquare,
+            observerPosition: myPosition,
             myCallsign: settings.myCallsign,
             lookup: callsignLookup,
             aliases: nodeAliases,
@@ -1835,41 +1836,22 @@ struct ContentView: View {
     }
 
     /// The coordinate the operator typed in Settings, if it is a coordinate.
-    private var manualStationPoint: GreatCircle.Point? {
-        guard let latitude = Double(manualLatitude.trimmingCharacters(in: .whitespaces)),
-              let longitude = Double(manualLongitude.trimmingCharacters(in: .whitespaces)),
-              (-90...90).contains(latitude), (-180...180).contains(longitude)
-        else { return nil }
-        return GreatCircle.Point(latitude: latitude, longitude: longitude)
-    }
-
     /// Where this station is, and how well that is known.
     ///
-    /// GPS is offered but never taken silently. The radio is not necessarily
-    /// with the device: this operator reaches their TNC over a network, so
-    /// the laptop's position and the transmitter's are different facts. The
-    /// operator chooses, and the choice is remembered.
+    /// The ladder itself lives on `StationPositionResolver` so the two
+    /// shells, the settings page and the toolbar chip cannot drift apart
+    /// again.
     private var myPosition: StationPosition? {
-        var candidates = StationPositionResolver.Candidates()
-        candidates.surveyed = manualStationPoint
-        candidates.gridSquare = Maidenhead.center(of: winlinkContext.settings.gridSquare)
-            .map(GreatCircle.Point.init)
-        // `.gps` checked, because `lastLocation` is not always a fix:
-        // `currentLocation()` falls back to the grid square when GPS fails
-        // and stores that. Without the check a 7 km square was published to
-        // the whole app as "Device GPS ±20 m".
-        if useDeviceLocation, let fix = deviceGPSFix {
-            candidates.deviceGPS = GreatCircle.Point(latitude: fix.latitude,
-                                                     longitude: fix.longitude)
-        }
-        return StationPositionResolver.resolve(candidates)
+        StationPositionResolver.ownStation(
+            gridSquare: winlinkContext.settings.gridSquare,
+            manualLatitude: manualLatitude,
+            manualLongitude: manualLongitude,
+            usesDeviceLocation: useDeviceLocation,
+            deviceLocation: winlinkContext.locationService.lastLocation)
     }
 
-    /// The last device fix, and only when it really is one.
     private var deviceGPSFix: StationLocation? {
-        let last = winlinkContext.locationService.lastLocation
-        guard last?.source == .gps else { return nil }
-        return last
+        StationPositionResolver.deviceFix(winlinkContext.locationService.lastLocation)
     }
 
     /// The two ends of the path a station page is about.

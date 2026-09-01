@@ -102,3 +102,54 @@ nonisolated enum StationPositionResolver {
         return StationPosition(point: best.1, source: best.0, doubts: doubts)
     }
 }
+
+// MARK: - This station
+
+extension StationPositionResolver {
+
+    /// Where *this* station is, from the three sources the operator controls.
+    ///
+    /// One definition, because there are now four callers — the Mac shell,
+    /// the iOS shell, the settings page and the toolbar chip — and every
+    /// time this ladder was written out again it was written slightly
+    /// wrong. Twice in one afternoon the `.gps` check below was the thing
+    /// omitted, publishing a 7 km grid square to the whole app as a
+    /// twenty-metre fix.
+    ///
+    /// - Parameter deviceLocation: the service's `lastLocation`, passed
+    ///   whole. It is *not* always a fix: `currentLocation()` falls back to
+    ///   the grid square when GPS fails and stores that under the same
+    ///   property, so the filtering belongs here rather than at each call
+    ///   site that keeps forgetting it.
+    static func ownStation(gridSquare: String,
+                           manualLatitude: String,
+                           manualLongitude: String,
+                           usesDeviceLocation: Bool,
+                           deviceLocation: StationLocation?) -> StationPosition? {
+        var candidates = Candidates()
+        candidates.surveyed = manualPoint(latitude: manualLatitude,
+                                          longitude: manualLongitude)
+        candidates.gridSquare = Maidenhead.center(of: gridSquare)
+            .map(GreatCircle.Point.init)
+        if usesDeviceLocation, let fix = deviceFix(deviceLocation) {
+            candidates.deviceGPS = GreatCircle.Point(latitude: fix.latitude,
+                                                     longitude: fix.longitude)
+        }
+        return resolve(candidates)
+    }
+
+    /// The device's last location, and only when it is genuinely a fix.
+    static func deviceFix(_ location: StationLocation?) -> StationLocation? {
+        guard location?.source == .gps else { return nil }
+        return location
+    }
+
+    /// A typed coordinate, when both halves parse and are in range.
+    static func manualPoint(latitude: String, longitude: String) -> GreatCircle.Point? {
+        guard let lat = Double(latitude.trimmingCharacters(in: .whitespaces)),
+              let lon = Double(longitude.trimmingCharacters(in: .whitespaces)),
+              (-90...90).contains(lat), (-180...180).contains(lon)
+        else { return nil }
+        return GreatCircle.Point(latitude: lat, longitude: lon)
+    }
+}

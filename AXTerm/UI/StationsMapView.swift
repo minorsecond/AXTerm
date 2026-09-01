@@ -20,6 +20,10 @@ struct StationsMapView: View {
     /// Locators stations beaconed about themselves, per full callsign.
     var announcedGrids: [String: String] = [:]
     let observerGrid: String
+    /// Where this station actually is, when something better than the grid
+    /// square is known. The grid string stays for the label and the cache
+    /// key; this is what gets plotted and measured from.
+    var observerPosition: StationPosition?
     /// Excluded from the heard list and used to label the centre marker.
     let myCallsign: String
     @ObservedObject var lookup: CallsignLookupService
@@ -239,8 +243,17 @@ struct StationsMapView: View {
         return ElevationOverlay.overlays(from: store, style: terrainStyle)
     }
 
+    /// Our own coordinate: the resolved position when there is one, the
+    /// grid centre otherwise.
+    ///
+    /// This drives our pin, the coverage rings, the plausibility partition
+    /// and the framing, so taking the grid square when a GPS fix existed put
+    /// the whole map up to 4.3 km from where the toolbar said the station
+    /// was — two parts of the app disagreeing about the operator's own
+    /// location, with nothing on screen to say which was right.
     private var observer: GreatCircle.Point? {
-        Maidenhead.center(of: observerGrid).map(GreatCircle.Point.init)
+        observerPosition?.point
+            ?? Maidenhead.center(of: observerGrid).map(GreatCircle.Point.init)
     }
 
     /// Stations the radio has actually met: heard stations plus the
@@ -328,6 +341,8 @@ struct StationsMapView: View {
         let key = "\(stations.count)|\(lookup.records.count)|"
             + "\(aliases.directory.allEntries.count)|\(showsDirectoryNodes)|"
             + "\(hidesDistantStations)|\(myCallsign)|\(observerGrid)|\(bucket)"
+            // The resolved origin, or a fix arriving would not redraw.
+            + "|\(observer?.latitude ?? 0),\(observer?.longitude ?? 0)"
         if entriesCache.key != key {
             let core = coreEntries
             let all = core + directoryEntries(core: core)
