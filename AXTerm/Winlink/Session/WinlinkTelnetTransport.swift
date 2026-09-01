@@ -15,8 +15,12 @@ import Network
 @MainActor
 final class WinlinkTelnetTransport: WinlinkTransport {
 
-    static let defaultHost = "cms.winlink.org"
-    static let defaultPort: UInt16 = 8772
+    // Two constants, used as default arguments to this type's initialiser.
+    // A default argument is evaluated in the caller's context, so leaving
+    // these on the main actor — which the project's default isolation does
+    // — made every nonisolated caller a warning.
+    nonisolated static let defaultHost = "cms.winlink.org"
+    nonisolated static let defaultPort: UInt16 = 8772
     static let telnetAccessPassword = "CMSTELNET"
 
     private enum LoginPhase {
@@ -58,7 +62,14 @@ final class WinlinkTelnetTransport: WinlinkTransport {
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             var resumed = false
+            // The weak reference is read once, here, into a local. Reading
+            // it inside the Task means the concurrently-executing closure
+            // touches the captured variable itself, which Swift 6 rejects.
+            // A strong capture would be worse: the connection owns this
+            // handler and this object owns the connection, so it would be a
+            // retain cycle rather than a fix.
             connection.stateUpdateHandler = { [weak self] state in
+                let transport = self
                 Task { @MainActor in
                     switch state {
                     case .ready:
@@ -72,10 +83,10 @@ final class WinlinkTelnetTransport: WinlinkTransport {
                             continuation.resume(throwing: WinlinkTransportError.loginFailed(
                                 "TCP connect failed: \(error.localizedDescription)"))
                         } else {
-                            self?.handleClosed("connection failed: \(error.localizedDescription)")
+                            transport?.handleClosed("connection failed: \(error.localizedDescription)")
                         }
                     case .cancelled:
-                        self?.handleClosed(nil)
+                        transport?.handleClosed(nil)
                     default:
                         break
                     }
@@ -91,10 +102,12 @@ final class WinlinkTelnetTransport: WinlinkTransport {
         submittedBytes += data.count
         let count = data.count
         connection?.send(content: data, completion: .contentProcessed { [weak self] _ in
+            // See `open()`: one read of the weak reference, out here.
+            let transport = self
             Task { @MainActor in
-                guard let self else { return }
-                self.deliveredBytes += count
-                self.onDeliveryProgress?(self.deliveredBytes, self.submittedBytes)
+                guard let transport else { return }
+                transport.deliveredBytes += count
+                transport.onDeliveryProgress?(transport.deliveredBytes, transport.submittedBytes)
             }
         })
     }
@@ -108,16 +121,18 @@ final class WinlinkTelnetTransport: WinlinkTransport {
 
     private func receiveLoop() {
         connection?.receive(minimumIncompleteLength: 1, maximumLength: 16384) { [weak self] data, _, isComplete, error in
+            // See `open()`: one read of the weak reference, out here.
+            let transport = self
             Task { @MainActor in
-                guard let self else { return }
+                guard let transport else { return }
                 if let data, !data.isEmpty {
-                    self.handleIncoming(data)
+                    transport.handleIncoming(data)
                 }
                 if isComplete || error != nil {
-                    self.handleClosed(error.map { "connection error: \($0.localizedDescription)" })
+                    transport.handleClosed(error.map { "connection error: \($0.localizedDescription)" })
                     return
                 }
-                self.receiveLoop()
+                transport.receiveLoop()
             }
         }
     }

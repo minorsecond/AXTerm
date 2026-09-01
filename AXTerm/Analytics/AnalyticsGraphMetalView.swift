@@ -701,7 +701,12 @@ private struct GraphTooltipView: View {
 /// `GraphMetalInteractionDelegate`, so all of the graph's actual behaviour —
 /// hit testing, selection, camera — stays in one place and neither platform
 /// gets a second implementation of it to keep in step.
-nonisolated private class GraphMetalViewBase: MTKView {
+// Main-actor, like the MTKView it inherits from. Marking a view
+// subclass nonisolated does not move it off the main actor — it only
+// stops the compiler agreeing, so every `bounds`, `isPaused` and
+// `setNeedsDisplay` in it became a warning about a hop that never
+// actually happens. Views are main-actor; say so.
+private class GraphMetalViewBase: MTKView {
     weak var interactionDelegate: GraphMetalInteractionDelegate?
 
     init() {
@@ -729,7 +734,7 @@ nonisolated private class GraphMetalViewBase: MTKView {
 
 #if os(macOS)
 
-nonisolated private final class GraphMetalView: GraphMetalViewBase {
+private final class GraphMetalView: GraphMetalViewBase {
 
     private var trackingArea: NSTrackingArea?
     private var magnifyRecognizer: NSMagnificationGestureRecognizer?
@@ -835,7 +840,7 @@ nonisolated private final class GraphMetalView: GraphMetalViewBase {
 /// and a long press opens the node's actions — the touch equivalent of a
 /// right-click. There is no hover, so the hover callback is never fired and
 /// the tooltip surfaces on selection instead.
-nonisolated private final class GraphMetalView: GraphMetalViewBase {
+private final class GraphMetalView: GraphMetalViewBase {
 
     /// Reported to the delegate, which shares its drag path with the Mac's
     /// mouse drag. A touch is a mouse-down/dragged/up sequence as far as the
@@ -2221,7 +2226,9 @@ private extension ClosedRange where Bound: Comparable {
 }
 
 private extension CGFloat {
-    func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
+    // See the Int version: pure arithmetic, explicitly nonisolated so the
+    // renderer's value types can use it without crossing an actor.
+    nonisolated func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
         let (lo, hi) = range.lowerBound <= range.upperBound
             ? (range.lowerBound, range.upperBound)
             : (range.upperBound, range.lowerBound)

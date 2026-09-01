@@ -420,6 +420,7 @@ struct AXTermiOSRootView: View {
         NavigationStack {
             PacketTableView(
                 packets: client.packets,
+                isLoadingHistory: client.isLoadingPersistedPackets,
                 selection: $packetSelection,
                 onInspectSelection: {
                     inspectedPacket = client.packets.first { packetSelection.contains($0.id) }
@@ -798,7 +799,7 @@ struct AXTermiOSRootView: View {
 
     /// Read on demand: another device may sync between screens.
     private var remoteObservations: [StationActivityPayload] {
-        (try? context.activityStore?.remoteStationActivity()) as? [StationActivityPayload] ?? []
+        (try? context.activityStore?.remoteStationActivity()) ?? []
     }
 
     private var gatewayGrids: [String: String] {

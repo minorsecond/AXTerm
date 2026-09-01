@@ -109,7 +109,16 @@ nonisolated struct NetRomCircuitSummary: Identifiable, Equatable, Sendable {
 nonisolated final class NetRomLinkDriver: ObservableObject {
 
     /// Live circuits, for the Terminal.
-    @Published private(set) var circuits: [NetRomCircuitSummary] = []
+    ///
+    /// Announced by hand rather than with `@Published`. A property wrapper
+    /// cannot be `nonisolated`, and this class has to be — see above — so
+    /// the modifier was silently doing nothing here. `objectWillChange`
+    /// fires at exactly the moment `@Published` fires it, so SwiftUI sees
+    /// no difference; the difference is that the code now says what it
+    /// actually does. Nothing observes the projected value.
+    private(set) var circuits: [NetRomCircuitSummary] = [] {
+        willSet { objectWillChange.send() }
+    }
 
     let endpoint: NetRomEndpoint
     /// Held strongly. The adapter on the other side keeps its own

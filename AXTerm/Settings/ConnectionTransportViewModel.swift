@@ -219,16 +219,22 @@ final class ConnectionTransportViewModel: ObservableObject {
             // main actor explicitly rather than relying on the timer's run loop happening
             // to be the main one. Reading and mutating them from the nonisolated Sendable
             // closure is a data race (and an error under the Swift 6 language mode).
+            // The weak reference is read once, here, into a local: reading it
+            // inside the Task means the concurrently-executing closure touches
+            // the captured variable, which Swift 6 rejects. Capturing strongly
+            // would be worse — the timer owns this closure and this object owns
+            // the timer, so it would be a retain cycle rather than a fix.
+            let model = self
             Task { @MainActor in
-                guard let self, let missingSince = self.missingSerialDeviceDate else { return }
+                guard let model, let missingSince = model.missingSerialDeviceDate else { return }
                 guard Date().timeIntervalSince(missingSince) > 10 else { return }
 
                 // Grace period expired
-                self.selectedSerialDevicePath = ""
-                self.stopSerialGraceTimer()
-                self.missingSerialDeviceDate = nil
+                model.selectedSerialDevicePath = ""
+                model.stopSerialGraceTimer()
+                model.missingSerialDeviceDate = nil
                 // Refresh list to remove the unavailable item
-                self.handleSerialDevicesUpdate(self.serialDiscovery.devices)
+                model.handleSerialDevicesUpdate(model.serialDiscovery.devices)
             }
         }
     }
@@ -266,7 +272,7 @@ final class ConnectionTransportViewModel: ObservableObject {
     
     func onAppear() {
         if selectedTransport == .serial {
-            Task { await serialDiscovery.startScanning() }
+            Task { serialDiscovery.startScanning() }
         } else if selectedTransport == .ble {
              // Don't auto-start BLE scan every time view appears,
              // only if we don't have a device selected or user requests it.
@@ -275,7 +281,7 @@ final class ConnectionTransportViewModel: ObservableObject {
     }
     
     func onDisappear() {
-        Task { await serialDiscovery.stopScanning() }
+        Task { serialDiscovery.stopScanning() }
         bleScanner.stopScan()
         stopSerialGraceTimer()
     }
@@ -291,7 +297,7 @@ final class ConnectionTransportViewModel: ObservableObject {
     }
     
     func refreshSerialPorts() {
-        Task { await serialDiscovery.startScanning() }
+        Task { serialDiscovery.startScanning() }
     }
 
     func triggerAutoGain() {
@@ -388,16 +394,16 @@ final class ConnectionTransportViewModel: ObservableObject {
         
         switch selectedTransport {
         case .network:
-            Task { await serialDiscovery.stopScanning() }
+            Task { serialDiscovery.stopScanning() }
             bleScanner.stopScan()
             stopSerialGraceTimer()
             
         case .serial:
-            Task { await serialDiscovery.startScanning() }
+            Task { serialDiscovery.startScanning() }
             bleScanner.stopScan()
             
         case .ble:
-            Task { await serialDiscovery.stopScanning() }
+            Task { serialDiscovery.stopScanning() }
             stopSerialGraceTimer()
             // BLE scan is manual or on-demand
         }

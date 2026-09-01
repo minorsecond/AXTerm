@@ -45,7 +45,11 @@ nonisolated protocol NodeCircuitOps: AnyObject {
     func openNodeCircuit(to destination: AX25Address) -> NetRomCircuitID?
 }
 
-extension NetRomLinkDriver: NodeCircuitOps {
+// The driver is nonisolated and so is `NodeCircuitOps`; only this
+// extension was not, because an un-annotated declaration defaults to the
+// main actor. That made the conformance main-actor-isolated and unusable
+// from the nonisolated host that exists to call it.
+nonisolated extension NetRomLinkDriver: NodeCircuitOps {
     func openNodeCircuit(to destination: AX25Address) -> NetRomCircuitID? {
         switch openCircuit(to: destination) {
         case .success(let id): return id
@@ -92,7 +96,10 @@ nonisolated final class NetRomNodeHost {
     var bbsSessionFactory: (@MainActor (String) -> NodeMailboxSession?)?
     var onOperatorNote: ((String) -> Void)?
     /// Test seam for the dial timeout.
-    var scheduleTimeout: (_ seconds: Double, _ work: @escaping () -> Void) -> Void = { seconds, work in
+    // `@Sendable`, because the default implementation hands the closure to
+    // `DispatchQueue.asyncAfter`, which runs it on another thread and asks
+    // for that guarantee.
+    var scheduleTimeout: (_ seconds: Double, _ work: @escaping @Sendable () -> Void) -> Void = { seconds, work in
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
     }
 

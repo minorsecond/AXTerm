@@ -221,7 +221,7 @@ struct WinlinkSettingsTab: View {
                     SecureField("Winlink password", text: $passwordDraft)
                         .focused($passwordFieldFocused)
                         .onSubmit { commitPassword() }
-                        .onChange(of: passwordFieldFocused) { focused in
+                        .onChange(of: passwordFieldFocused) { _, focused in
                             if !focused { commitPassword() }
                         }
                         .help(WinlinkCopy.passwordTooltip)
@@ -254,7 +254,7 @@ struct WinlinkSettingsTab: View {
 
                 HStack {
                     SecureField("CMS access key (optional)", text: $apiKeyDraft)
-                        .onChange(of: apiKeyDraft) { newValue in
+                        .onChange(of: apiKeyDraft) { _, newValue in
                             guard didLoadSecrets else { return }
                             settings.apiKeyOverride = newValue
                             keyVerification = nil

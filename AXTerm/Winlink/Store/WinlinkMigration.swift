@@ -2,7 +2,14 @@ import Foundation
 import GRDB
 
 /// Schema for the Winlink radiomail subsystem (migration v5).
-extension DatabaseManager {
+///
+/// `nonisolated`, like the migrations themselves. These run inside GRDB's
+/// migrator on the database's own queue, not the main actor; only the
+/// project's default isolation put them there, and it made every
+/// registration in `DatabaseManager` a warning about a hop that must not
+/// happen — a schema migration blocking on the main thread is the thing to
+/// avoid, not the thing to arrange.
+nonisolated extension DatabaseManager {
 
     static func createWinlinkTables(_ db: Database) throws {
         try db.create(table: WinlinkFolderRecord.databaseTableName) { t in

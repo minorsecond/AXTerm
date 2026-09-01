@@ -274,7 +274,13 @@ nonisolated protocol FileTransferProtocol: AnyObject {
 
 // MARK: - Default Implementations
 
-extension FileTransferProtocol {
+// Arithmetic on two Ints, and the only member of this protocol that was
+// not explicitly nonisolated. The project defaults un-annotated
+// declarations to the main actor, so this one default implementation put
+// every conformer's conformance across an actor boundary — which is what
+// the "crosses into main actor-isolated code" warning on all four transfer
+// protocols was about.
+nonisolated extension FileTransferProtocol {
     /// Default progress calculation
     var progress: Double {
         guard totalBytes > 0 else { return 0.0 }

@@ -1710,6 +1710,7 @@ struct ContentView: View {
         return VStack(spacing: 0) {
         PacketTableView(
             packets: rows,
+            isLoadingHistory: client.isLoadingPersistedPackets,
             selection: $selection,
             onInspectSelection: {
                 inspectSelectedPacket()

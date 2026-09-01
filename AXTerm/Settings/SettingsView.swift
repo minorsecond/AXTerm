@@ -62,6 +62,16 @@ struct SettingsView: View {
                 }
             }
             .listStyle(.sidebar)
+            // No sidebar toggle in a Settings window.
+            //
+            // System Settings has none, and for a good reason: the sidebar
+            // is the only way to reach the other pages, so collapsing it
+            // strands the operator on whichever page happens to be open.
+            // The modifier goes on the sidebar's own content, which is
+            // where the item comes from — on the split view it does nothing.
+            #if os(macOS)
+            .toolbar(removing: .sidebarToggle)
+            #endif
             .navigationSplitViewColumnWidth(min: 185, ideal: 200, max: 240)
         } detail: {
             detail

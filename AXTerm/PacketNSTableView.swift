@@ -184,9 +184,26 @@ struct PacketNSTableView: NSViewRepresentable {
         let otherColumnsWidth = tableView.tableColumns
             .filter { $0 != infoColumn }
             .reduce(CGFloat.zero) { $0 + $1.width }
-        let availableWidth = max(infoColumn.minWidth, tableView.bounds.width - otherColumnsWidth - totalSpacing)
-        // Only expand; never shrink user-resized widths.
-        if availableWidth > infoColumn.width {
+        // The clip view's width, not the table's. The table is the scroll
+        // view's document view and can be wider than what is on screen, so
+        // measuring against its own bounds sized the Info column to include
+        // the part hidden under the vertical scroller — payload text was
+        // then clipped mid-character at the window edge instead of
+        // truncating with an ellipsis inside it.
+        let visibleWidth = tableView.enclosingScrollView?.contentSize.width ?? tableView.bounds.width
+        let availableWidth = max(infoColumn.minWidth, visibleWidth - otherColumnsWidth - totalSpacing)
+        // Fill the remaining width exactly — shrink as well as expand.
+        //
+        // This used to expand only, to avoid overriding a width the operator
+        // had dragged. The cost was that a width set while the window was
+        // wide, or restored from the autosaved column state, outlived the
+        // window it was measured for: the Info column stayed wider than the
+        // table, so payload text ran off the right edge with its ellipsis
+        // somewhere out of sight, and the only clue was an autohiding
+        // scroller. Filling exactly is also what
+        // `lastColumnOnlyAutoresizingStyle` already promises, so the two are
+        // no longer pulling against each other.
+        if availableWidth != infoColumn.width {
             infoColumn.width = availableWidth
         }
     }
@@ -470,6 +487,15 @@ extension PacketNSTableView {
             let field = NSTextField(labelWithString: "")
             field.usesSingleLineMode = true
             field.lineBreakMode = .byTruncatingTail
+            // Truncating a label takes more than a line-break mode. Without
+            // the line cap and `truncatesLastVisibleLine` the cell clips
+            // instead, and without the low compression resistance the field
+            // keeps its intrinsic width and pushes past the cell — which is
+            // how a long beacon ended mid-character at the window edge with
+            // no ellipsis to say there was more.
+            field.maximumNumberOfLines = 1
+            field.cell?.truncatesLastVisibleLine = true
+            field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             field.backgroundColor = .clear
             field.drawsBackground = false
 

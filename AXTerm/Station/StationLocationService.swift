@@ -90,7 +90,10 @@ final class StationLocationService: ObservableObject {
 // MARK: - CoreLocation provider
 
 /// Real GPS via CoreLocation (Wi-Fi positioning on most Macs).
-final class CoreLocationGPSProvider: NSObject, GPSProviding, CLLocationManagerDelegate, @unchecked Sendable {
+// Nonisolated: it is already `@unchecked Sendable` and guards its own
+// state, and it is used as a default argument, which is evaluated in the
+// caller's context rather than this type's.
+nonisolated final class CoreLocationGPSProvider: NSObject, GPSProviding, CLLocationManagerDelegate, @unchecked Sendable {
 
     private var manager: CLLocationManager?
     private var continuation: CheckedContinuation<(latitude: Double, longitude: Double), Error>?

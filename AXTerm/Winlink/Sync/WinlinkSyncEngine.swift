@@ -154,7 +154,10 @@ nonisolated protocol WinlinkSyncTokenStore: Sendable {
     func savePushLedger(_ ledger: [String: Date])
 }
 
-nonisolated struct WinlinkDefaultsTokenStore: WinlinkSyncTokenStore {
+// `@unchecked` for `defaults`, and only for that. `UserDefaults` is
+// documented as thread-safe, so sharing one across actors is sound; the
+// compiler cannot see that because the class predates Sendable.
+nonisolated struct WinlinkDefaultsTokenStore: WinlinkSyncTokenStore, @unchecked Sendable {
     let defaults: UserDefaults
     let key: String
 

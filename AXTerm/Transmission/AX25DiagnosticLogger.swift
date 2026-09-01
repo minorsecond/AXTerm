@@ -12,7 +12,9 @@ import OSLog
 // MARK: - Diagnostic Log Level
 
 /// Diagnostic log levels for fine-grained control
-enum AX25DiagnosticLevel: Int, Comparable, CaseIterable {
+// Nonisolated: the logger is an actor and compares these levels on its
+// own executor, so a main-actor `Comparable` conformance is unusable there.
+nonisolated enum AX25DiagnosticLevel: Int, Comparable, CaseIterable {
     case verbose = 0  // Every byte, every event
     case debug = 1    // Detailed debugging info
     case info = 2     // Key events and state changes
@@ -80,7 +82,9 @@ struct AX25DiagnosticConfig: Sendable {
         enablePerformanceTiming: false
     )
     
-    static let standard = AX25DiagnosticConfig(
+    // Read from inside an actor, so it cannot be main-actor state. It is a
+    // constant configuration; nothing about it wants an actor.
+    nonisolated static let standard = AX25DiagnosticConfig(
         minimumLevel: .info,
         enableHexDumps: true,
         maxHexDumpBytes: 128,

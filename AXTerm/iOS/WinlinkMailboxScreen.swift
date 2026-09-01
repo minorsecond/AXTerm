@@ -186,7 +186,7 @@ struct WinlinkMailboxScreen: View {
     /// user action, so a snapshot taken when the screen was built would show
     /// yesterday's answer to a question about today.
     private var remoteObservations: [StationActivityPayload] {
-        (try? context.activityStore?.remoteStationActivity()) as? [StationActivityPayload] ?? []
+        (try? context.activityStore?.remoteStationActivity()) ?? []
     }
 
     /// Opens a draft addressed to someone chosen from Contacts.

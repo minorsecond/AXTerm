@@ -66,7 +66,12 @@ nonisolated final class PingProber: ObservableObject {
         var escalated: Bool
     }
 
-    @Published private(set) var records: [String: Record] = [:]
+    /// Announced by hand: a property wrapper cannot be `nonisolated`, and
+    /// this class has to be (see above). `objectWillChange` fires where
+    /// `@Published` did, and nothing observes the projected value.
+    private(set) var records: [String: Record] = [:] {
+        willSet { objectWillChange.send() }
+    }
 
     /// How long to wait for an answer before escalating from XID to DISC,
     /// and again before calling it silence. Generous: a node answers when
