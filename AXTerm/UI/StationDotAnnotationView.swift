@@ -80,11 +80,29 @@ final class StationDotAnnotationView: MKAnnotationView {
     private static var moveCount = 0
     private static var moveWindow = Date.distantPast
     private static var moveMax = 0.0
+    private static var stackWindows = 0
+    private static var wantsStack = false
 
     private static func noteMove(_ distance: Double) {
         guard distance > 0.01 else { return }
         moveCount += 1
         moveMax = max(moveMax, distance)
+
+        // Who is actually calling. Every theory about *what* moves these
+        // markers has been wrong, and the stack does not need a theory —
+        // captured once per window, since symbolicating on every move would
+        // itself be the load.
+        if wantsStack {
+            wantsStack = false
+            let frames = Thread.callStackSymbols.dropFirst(2).prefix(14)
+                .map { line -> String in
+                    // Keep the symbol, drop the address columns.
+                    let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+                    return parts.count > 3 ? parts[1...].joined(separator: " ") : line
+                }
+            print("[MAPDIAG] marker move stack:\n  " + frames.joined(separator: "\n  "))
+        }
+
         let elapsed = Date().timeIntervalSince(moveWindow)
         guard elapsed >= 5 else { return }
         if moveWindow != .distantPast {
@@ -94,6 +112,10 @@ final class StationDotAnnotationView: MKAnnotationView {
         moveCount = 0
         moveMax = 0
         moveWindow = Date()
+        // One stack per window, and skip the first: that window is the
+        // initial layout, which is legitimate and not what is being chased.
+        stackWindows += 1
+        wantsStack = stackWindows >= 2 && stackWindows <= 4
     }
     #endif
 
