@@ -296,7 +296,11 @@ nonisolated enum PacketTableColumnIdentifier: String {
     case info
 }
 
-nonisolated final class PacketTableNativeTableView: NSTableView {
+// Stays on the main actor, unlike most of this file. A blanket `nonisolated`
+// here would make the mutable callback a data race under Swift 6, and an
+// NSTableView subclass has no business being reachable off the main thread
+// anyway — the only construction site is in `makeNSView`.
+@MainActor final class PacketTableNativeTableView: NSTableView {
     var onRightClickRow: ((Int) -> Void)?
 
     override func rightMouseDown(with event: NSEvent) {

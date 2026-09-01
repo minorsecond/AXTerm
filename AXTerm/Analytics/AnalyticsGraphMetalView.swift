@@ -825,9 +825,11 @@ private final class GraphMetalView: GraphMetalViewBase {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let location = convert(event.locationInWindow, from: nil)
-        return MainActor.assumeIsolated {
-            interactionDelegate?.contextMenu(at: location)?.makeNSMenu()
+        nonisolated(unsafe) var menu: NSMenu?
+        MainActor.assumeIsolated {
+            menu = interactionDelegate?.contextMenu(at: location)?.makeNSMenu()
         }
+        return menu
     }
 }
 

@@ -156,9 +156,11 @@ struct PacketNSTableView: NSViewRepresentable {
 
     #if DEBUG
     private func resetAutosavedColumnsIfNeeded(for tableView: NSTableView) {
-        // Autosaved column widths can mask changes to autoresizingColumn. Use this
-        // debug-only toggle to clear saved widths if the Info column stays narrow.
-        let shouldResetAutosave = false
+        // Autosaved column widths can mask changes to autoresizingColumn. If the
+        // Info column stays narrow, clear the saved widths with:
+        //   defaults write com.rosswardrup.AXTerm AXTermResetPacketColumnAutosave -bool YES
+        let shouldResetAutosave = UserDefaults.standard.bool(
+            forKey: "AXTermResetPacketColumnAutosave")
         guard shouldResetAutosave, let autosaveName = tableView.autosaveName else { return }
         let defaultsKey = "NSTableView Columns \(autosaveName)"
         UserDefaults.standard.removeObject(forKey: defaultsKey)

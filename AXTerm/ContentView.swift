@@ -1383,6 +1383,7 @@ struct ContentView: View {
                                         issueStationConnectRequest(
                                             stationCall: capturedCall,
                                             mode: capturedMode,
+                                            viaDigis: capturedPath,
                                             executeImmediately: false
                                         )
                                     }
@@ -1927,12 +1928,13 @@ struct ContentView: View {
         let mine = winlinkContext.settings.antennaHeightMetres
         let theirs = noted ?? winlinkContext.settings.assumedRemoteHeightMetres
         let destination = placement.position
+        let frequencyHz = StationsMapView.vhfCalculationFrequency
 
         let computed = await Task.detached(priority: .userInitiated) {
             TerrainProfile.between(
                 origin: observer, destination: destination,
                 originHeight: mine, destinationHeight: theirs,
-                frequencyHz: StationsMapView.vhfCalculationFrequency,
+                frequencyHz: frequencyHz,
                 sampler: StoredElevationSampler(store: store))
         }.value
         return (computed, noted == nil)
