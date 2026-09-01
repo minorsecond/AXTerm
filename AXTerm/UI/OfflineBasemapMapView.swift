@@ -283,6 +283,12 @@ struct OfflineBasemapMapView {
         /// section stamping the clock and starving the other.
         var structuralMutationsAllowed = true
         var structuralMutationDidOccur = false
+        #if DEBUG
+        /// Update-pass rate, so a map that redraws at packet rate is
+        /// distinguishable from one MapKit is animating on its own.
+        var passCount = 0
+        var passWindowStart = Date.distantPast
+        #endif
         var installedTerrainIDs: [String] = []
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -825,6 +831,22 @@ struct OfflineBasemapMapView {
         context.coordinator.structuralMutationsAllowed = Date().timeIntervalSince(
             context.coordinator.lastStructuralMutation) >= Self.structuralMutationInterval
         context.coordinator.structuralMutationDidOccur = false
+        #if DEBUG
+        // Counted, not printed per pass: printing at the rate we are trying
+        // to measure would itself be the load.
+        let coordinator = context.coordinator
+        coordinator.passCount += 1
+        let elapsed = Date().timeIntervalSince(coordinator.passWindowStart)
+        if elapsed >= 5 {
+            if coordinator.passWindowStart != .distantPast {
+                print(String(format: "[MAPDIAG] %d update passes in %.1fs (%.1f/s)",
+                             coordinator.passCount, elapsed,
+                             Double(coordinator.passCount) / elapsed))
+            }
+            coordinator.passCount = 0
+            coordinator.passWindowStart = Date()
+        }
+        #endif
 
         // `applyBasemap` owns the tile overlay's lifecycle and swaps it only
         // when the basemap actually changes — rebuilding it on every update
