@@ -302,11 +302,19 @@ struct StationsMapView: View {
         // Aliases used in via paths, placed through their operator.
         // Appended rather than merged: a node is its own thing, and its
         // position is a lead rather than a fix.
+        // Placed through the same step the directory layer uses. An alias
+        // crosses between the two layers as via paths change, and if only
+        // one of them could place it, it appeared and vanished with the
+        // traffic rather than staying put.
         let nodes = HeardStationMap.aliasEntries(
             aliases: aliases.directory,
             usedAliases: HeardStationMap.aliasesInUse(stations),
             directory: lookup.records,
             stations: stations)
+            .map {
+                HeardStationMap.placingFromAnnouncedGrid(
+                    $0, aliases: aliases.directory, announcedGrids: announcedGrids)
+            }
         guard showsDirectoryNodes else {
             return HeardStationMap.addingAliases(nodes, toHeard: heard)
         }

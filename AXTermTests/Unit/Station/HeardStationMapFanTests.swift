@@ -166,6 +166,50 @@ final class HeardStationMapFanTests: XCTestCase {
         XCTAssertEqual(survivor?.isNodeAlias, false)
     }
 
+    /// The map's pulse, finally: an alias placed by a locator it beaconed
+    /// itself is on the map while it sits in the directory layer, then a
+    /// packet routes through it, it moves into the core (via-path) layer,
+    /// and only the directory layer knew how to place it — so it vanished,
+    /// and reappeared when traffic moved on. Placement must not depend on
+    /// which layer currently holds the alias.
+    func testAnAliasIsPlacedTheSameInEitherLayer() throws {
+        let aliases = NodeAliasDirectory(entries: [
+            "HNTBBS": NodeAliasDirectory.Entry(
+                alias: "HNTBBS", callsign: "W0HNT-1", service: "B",
+                heardAt: Date(timeIntervalSince1970: 1_787_500_000), announcements: 1)
+        ])
+        let announced = ["W0HNT-1": "DM79po"]
+
+        var unplaced = HeardStationMap.Entry(
+            callsign: "HNTBBS", heardCount: 0, lastHeard: nil, lastVia: [])
+        unplaced.isNodeAlias = true
+        XCTAssertFalse(unplaced.isPlaced, "no operator record, so nothing places it yet")
+
+        let placed = HeardStationMap.placingFromAnnouncedGrid(
+            unplaced, aliases: aliases, announcedGrids: announced)
+        XCTAssertTrue(placed.isPlaced, "its own beacon carries a locator")
+        XCTAssertEqual(placed.gridSquare, "DM79PO")
+        XCTAssertEqual(placed.confidence, HeardStationMap.PositionConfidence.gridSquare)
+    }
+
+    /// An alias that already has a position keeps it — the announced grid
+    /// is a second chance, not an override.
+    func testAlreadyPlacedAliasesAreLeftAlone() {
+        let aliases = NodeAliasDirectory(entries: [
+            "HNTBBS": NodeAliasDirectory.Entry(
+                alias: "HNTBBS", callsign: "W0HNT-1", service: "B",
+                heardAt: Date(timeIntervalSince1970: 1_787_500_000), announcements: 1)
+        ])
+        var already = HeardStationMap.Entry(
+            callsign: "HNTBBS", heardCount: 0, lastHeard: nil, lastVia: [])
+        already.position = GreatCircle.Point(latitude: 39.6, longitude: -104.7)
+
+        let result = HeardStationMap.placingFromAnnouncedGrid(
+            already, aliases: aliases, announcedGrids: ["W0HNT-1": "DM79po"])
+        XCTAssertEqual(result.position?.latitude, 39.6)
+        XCTAssertEqual(result.position?.longitude, -104.7)
+    }
+
     private func entry(_ callsign: String,
                        latitude: Double,
                        longitude: Double) -> HeardStationMap.Entry {

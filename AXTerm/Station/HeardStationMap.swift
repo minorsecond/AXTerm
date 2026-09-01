@@ -601,19 +601,42 @@ nonisolated enum HeardStationMap {
                     let base = entry.name ?? "Node"
                     entry.name = "\(base) — also \(others.joined(separator: ", "))"
                 }
-                if entry.isPlaced { return entry }
-                // Second chance before dropping: the entry's own callsign
-                // may have beaconed a locator, which places the station
-                // itself — better than the operator's address.
-                let call = aliases.callsign(for: entry.callsign)?.uppercased()
-                guard let grid = call.flatMap({ announcedGrids[$0] }),
-                      let center = Maidenhead.center(of: grid) else { return nil }
-                entry.position = GreatCircle.Point(center)
-                entry.positionSource = "locator announced in its own beacon"
-                entry.confidence = .gridSquare
-                entry.gridSquare = grid.uppercased()
-                return entry
+                let placed = placingFromAnnouncedGrid(
+                    entry, aliases: aliases, announcedGrids: announcedGrids)
+                return placed.isPlaced ? placed : nil
             }
+    }
+
+    /// Places an alias from a locator it beaconed itself, if it is not
+    /// placed already.
+    ///
+    /// Shared by both node layers, and it has to be. The via-path aliases in
+    /// `coreEntries` and the rest of the directory are the same kind of
+    /// thing, drawn from the same table, differing only in whether traffic
+    /// has lately used them — and traffic moves an alias between the two as
+    /// via paths change. When only the directory layer knew this step, an
+    /// alias placed by its own beacon appeared while it sat in that layer
+    /// and vanished the moment a packet routed through it, because the core
+    /// layer could not place it and the directory layer no longer claimed
+    /// it. Then it came back. That flapping is what the map's remaining
+    /// pulse turned out to be (field log 2026-09-01: the same fifteen BBS
+    /// aliases arriving and departing together).
+    ///
+    /// A locator the station announced beats its operator's licence
+    /// address, so this is a genuine refinement rather than a fallback.
+    static func placingFromAnnouncedGrid(_ entry: Entry,
+                                         aliases: NodeAliasDirectory,
+                                         announcedGrids: [String: String]) -> Entry {
+        guard !entry.isPlaced else { return entry }
+        let call = aliases.callsign(for: entry.callsign)?.uppercased()
+        guard let grid = call.flatMap({ announcedGrids[$0] }),
+              let center = Maidenhead.center(of: grid) else { return entry }
+        var entry = entry
+        entry.position = GreatCircle.Point(center)
+        entry.positionSource = "locator announced in its own beacon"
+        entry.confidence = .gridSquare
+        entry.gridSquare = grid.uppercased()
+        return entry
     }
 
     /// Operator callsigns worth asking a directory about to place more of
