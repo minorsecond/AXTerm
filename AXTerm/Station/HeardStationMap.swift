@@ -264,26 +264,17 @@ nonisolated enum HeardStationMap {
     static func fannedPositions(_ entries: [Entry]) -> [String: GreatCircle.Point] {
         var result = [String: GreatCircle.Point]()
         for cluster in clusters(entries) {
-            // Sorted before the centre is taken, not after. `clusters`
-            // groups on coordinates rounded to five decimals, so members
-            // agree to about a metre but are not identical, and
-            // `cluster.first` is whichever one the caller happened to list
-            // first. Two passes over the same stations in a different order
-            // therefore fanned them around slightly different centres.
-            let ordered = cluster.sorted { $0.callsign < $1.callsign }
-            guard let centre = ordered.first?.position else { continue }
-            if ordered.count == 1 {
-                result[ordered[0].callsign] = centre
+            guard let anchor = cluster.first?.position else { continue }
+            if cluster.count == 1 {
+                result[cluster[0].callsign] = anchor
                 continue
             }
-            // Even spacing around the centre, starting due north, in a
-            // fixed order so the arrangement never jitters on redraw.
-            for (index, entry) in ordered.enumerated() {
+            let centre = clusterCentre(anchor)
+            for entry in cluster {
                 let radius = entry.isExactPosition
                     ? exactFanRadiusMetres : gridFanRadiusMetres
-                let bearing = 2 * Double.pi * Double(index) / Double(ordered.count)
-                let metresNorth = radius * cos(bearing)
-                let metresEast = radius * sin(bearing)
+                let (metresNorth, metresEast) = fanOffset(
+                    callsign: entry.callsign, radius: radius)
                 let cosLat = max(0.01, cos(centre.latitude * .pi / 180))
                 result[entry.callsign] = GreatCircle.Point(
                     latitude: centre.latitude + metresNorth / 111_320,
@@ -291,6 +282,59 @@ nonisolated enum HeardStationMap {
             }
         }
         return result
+    }
+
+    /// The one point a cluster fans around, whoever is in it.
+    ///
+    /// `clusters` groups on coordinates rounded to five decimals, so members
+    /// agree to about a metre without being identical. Taking any member's
+    /// raw position as the centre therefore moved the whole cluster whenever
+    /// its membership changed. Re-deriving the grouping key instead — via the
+    /// same formatting, so the two can never disagree — gives a centre that
+    /// depends on the square, not on who is standing in it.
+    static func clusterCentre(_ point: GreatCircle.Point) -> GreatCircle.Point {
+        GreatCircle.Point(
+            latitude: Double(String(format: "%.5f", point.latitude)) ?? point.latitude,
+            longitude: Double(String(format: "%.5f", point.longitude)) ?? point.longitude)
+    }
+
+    /// Where one station sits in its cluster's fan, in metres north and east.
+    ///
+    /// Derived from the callsign alone, which is the whole point. The fan
+    /// used to space stations evenly — `2pi * index / count` — and the
+    /// comment beside it claimed the arrangement therefore never jittered.
+    /// It only held for fixed membership: both the index and the count move
+    /// when a station joins or leaves the square, so every *other* marker in
+    /// that cluster jumped, by up to the fan radius, every time a new station
+    /// was heard from the same grid. On a busy channel that is most of the
+    /// time, and it is what made the map look unsettled.
+    ///
+    /// The cost is that spacing is no longer perfectly even, and two
+    /// callsigns can hash to nearby bearings. The radius varies with the
+    /// hash as well so they still separate, and a pair sitting a little
+    /// closer than ideal beats every marker in a cluster moving whenever the
+    /// radio hears someone new.
+    static func fanOffset(callsign: String, radius: Double) -> (north: Double, east: Double) {
+        let hash = stableHash(callsign)
+        let bearing = 2 * Double.pi * Double(hash % 3_600) / 3_600
+        // Never the full radius for everyone: two stations that land on
+        // similar bearings are pushed apart by sitting on different rings.
+        let ring = radius * (0.6 + 0.4 * Double((hash >> 24) % 1_000) / 1_000)
+        return (ring * cos(bearing), ring * sin(bearing))
+    }
+
+    /// FNV-1a over the callsign's bytes.
+    ///
+    /// Swift's own `hashValue` is seeded per process, so a marker placed
+    /// with it would sit somewhere different every launch — trading a jitter
+    /// on redraw for a jitter on relaunch. This is fixed for all time.
+    static func stableHash(_ text: String) -> UInt64 {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in text.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x0000_0100_0000_01b3
+        }
+        return hash
     }
 
     /// How many *other* stations share each station's exact position.

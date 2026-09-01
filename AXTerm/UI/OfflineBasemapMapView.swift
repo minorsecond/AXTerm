@@ -400,6 +400,10 @@ struct OfflineBasemapMapView {
         /// deselection MapKit reports as a side effect is not mistaken for the
         /// operator dismissing a selection.
         var isRebuildingAnnotations = false
+        /// Set while the map is being driven to match `selection` rather than
+        /// by the operator, so the callbacks that causes are not mistaken for
+        /// a fresh choice and written back into SwiftUI.
+        var isApplyingSelection = false
 
         /// Whether callsign labels are shown at the current zoom — see
         /// MapLabelPolicy. The observer's and the selection's labels stay
@@ -426,7 +430,7 @@ struct OfflineBasemapMapView {
         }
 
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
-            guard !isRebuildingAnnotations,
+            guard !isRebuildingAnnotations, !isApplyingSelection,
                   let site = view.annotation as? SiteAnnotation else { return }
             // A selected station's name is always worth ink, even zoomed out.
             (view as? StationDotAnnotationView)?.setLabelVisible(true)
@@ -439,7 +443,7 @@ struct OfflineBasemapMapView {
         }
 
         func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
-            guard !isRebuildingAnnotations else { return }
+            guard !isRebuildingAnnotations, !isApplyingSelection else { return }
             if let site = view.annotation as? SiteAnnotation {
                 (view as? StationDotAnnotationView)?.setLabelVisible(
                     labelsVisible || site.isObserver)
@@ -710,7 +714,23 @@ struct OfflineBasemapMapView {
            let match = mapView.annotations.compactMap({ $0 as? SiteAnnotation })
                .first(where: { $0.id == selection }),
            mapView.selectedAnnotations.first !== match {
-            mapView.selectAnnotation(match, animated: true)
+            // Not inline. `selectAnnotation` deselects whatever was selected
+            // first, and MapKit delivers `didDeselect` synchronously — which
+            // writes `parent.selection`, and this runs inside the SwiftUI
+            // view update. Writing state mid-update is undefined behaviour
+            // and the runtime says as much in the log; it also fed the write
+            // straight back in as another update.
+            //
+            // So hop off the update before touching the map, and flag the
+            // round trip so the callbacks it causes are read as "the map
+            // catching up with the selection" rather than as the operator
+            // picking something new.
+            let coordinator = context.coordinator
+            coordinator.isApplyingSelection = true
+            DispatchQueue.main.async {
+                mapView.selectAnnotation(match, animated: true)
+                coordinator.isApplyingSelection = false
+            }
         }
     }
 }

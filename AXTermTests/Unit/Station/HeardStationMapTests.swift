@@ -254,8 +254,12 @@ final class HeardStationMapTests: XCTestCase {
             observerLabel: "DM79po",
             observer: .init(latitude: 39.6, longitude: -104.7),
             entries: entries, now: now)
-        XCTAssertEqual(scope.sites.first?.signal, .good)
-        XCTAssertFalse(scope.sites.first?.isStale ?? true)
+        // By id, not by `first`. Sites sort by distance from the observer,
+        // so which one leads depends on where the fan happens to put them —
+        // nothing to do with what this test is about.
+        let lively = scope.sites.first { $0.id == "K0NTS-7" }
+        XCTAssertEqual(lively?.signal, .good)
+        XCTAssertFalse(lively?.isStale ?? true)
     }
 
     // MARK: - The operator's own station
