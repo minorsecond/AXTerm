@@ -48,6 +48,19 @@ nonisolated enum PositionQuality {
             }
         }
 
+        /// One word, for a toolbar chip where `label` is too long to sit
+        /// beside a distance without crowding its neighbours.
+        var shortLabel: String {
+            switch self {
+            case .surveyed: return "Exact"
+            case .deviceGPS: return "GPS"
+            case .geocodedAddress: return "Address"
+            case .announcedLocator: return "Locator"
+            case .licenceAddress: return "Licence"
+            case .gridSquare: return "Grid"
+            }
+        }
+
         var label: String {
             switch self {
             case .surveyed: return "Surveyed"

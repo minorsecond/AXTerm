@@ -1,30 +1,32 @@
 import SwiftUI
 
-/// Says something about this station's position only when there is something
-/// worth saying.
+/// What the station is using for its position, in the toolbar.
 ///
 /// Position is load-bearing in the way the TNC link is: every distance,
 /// bearing, coverage ring and terrain profile starts from it, and a station
-/// with no usable position has a quietly broken map. That earns it a place
-/// beside the other "is this station working" indicators.
+/// working from a grid centre is quietly answering short-path questions it
+/// cannot answer. That earns a permanent place beside the other "is this
+/// station working" indicators.
 ///
-/// What it does not earn is a permanent readout. A base station's position
-/// never changes, so a chip that always says `DM79po` is a status line that
-/// shouts when everything is fine — the thing `TNCStatusStrip` argues
-/// against, and the thing that trains an operator to stop reading the
-/// toolbar. So it is silent unless one of two things is true:
+/// Graded rather than uniform, which is the same bargain `TNCStatusStrip`
+/// makes: the normal case is a quiet secondary-coloured line naming the
+/// source and its accuracy — "GPS ±20 m" — and only a real problem takes
+/// colour. Nothing here shouts while everything is fine, but the operator
+/// can always see which of three position sources the whole app is running
+/// on, which is the question a settings page three clicks away was the only
+/// thing answering.
 ///
-/// * There is no position at all, so distances and terrain are unavailable
-///   and nothing else on screen says why.
-/// * The operator switched device location on and an attempt to use it has
-///   failed. That state used to be visible only on the Settings page they
-///   would already have had to be looking at. Waiting for the attempt to
-///   fail, rather than for a fix to be absent, is what keeps this quiet
-///   during the ordinary second at launch before the first fix arrives.
+/// Two states are worth the orange:
+///
+/// * No position at all, so distances and terrain are unavailable outright.
+/// * Device location switched on and an attempt to use it has failed.
+///   Waiting for the attempt to fail, rather than for a fix to be absent,
+///   is what keeps this from blinking during the ordinary second at launch
+///   before the first fix lands.
 ///
 /// A stale-fix state is deliberately absent. It matters for a portable rig
-/// and is pure noise for a base station, and there is no field evidence yet
-/// for which way that trade falls.
+/// and is noise for a base station, and there is no evidence yet for which
+/// way that falls.
 struct PositionStatusChip: View {
 
     let position: StationPosition?
@@ -35,23 +37,51 @@ struct PositionStatusChip: View {
     let gpsError: GPSError?
 
     var body: some View {
-        if let problem {
-            Button {
-                SettingsRouter.shared.navigate(to: .general)
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: problem.symbol)
-                        .font(.caption2)
-                    Text(problem.label)
-                        .font(.caption.weight(.medium))
-                }
-                .foregroundStyle(.orange)
+        Button {
+            SettingsRouter.shared.navigate(to: .general)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: symbol)
+                    .font(.caption2)
+                Text(title)
+                    .font(.caption.weight(.medium))
+                    .monospacedDigit()
             }
-            .buttonStyle(.plain)
-            .help(problem.help)
-            .accessibilityLabel(problem.label)
-            .accessibilityHint("Opens position settings")
+            .foregroundStyle(problem == nil ? AnyShapeStyle(.secondary)
+                                            : AnyShapeStyle(Color.orange))
         }
+        .buttonStyle(.plain)
+        .help(helpText)
+        .accessibilityLabel("Station position: \(title)")
+        .accessibilityHint("Opens position settings")
+    }
+
+    // MARK: - What it reads
+
+    private var title: String {
+        if let problem { return problem.label }
+        guard let position else { return Problem.noPosition.label }
+        return "\(position.source.shortLabel) \(accuracyText)"
+    }
+
+    private var symbol: String {
+        problem?.symbol ?? "location.fill"
+    }
+
+    private var helpText: String {
+        if let problem { return problem.help }
+        guard let position else { return Problem.noPosition.help }
+        return "Every distance, bearing, coverage ring and terrain profile "
+            + "starts from this position: \(position.source.label.lowercased()), "
+            + "accurate to about \(accuracyText.dropFirst()). "
+            + "Click to change it."
+    }
+
+    private var accuracyText: String {
+        guard let metres = position?.accuracyMetres else { return "" }
+        return metres >= 1_000
+            ? String(format: "\u{00B1}%.1f km", metres / 1_000)
+            : String(format: "\u{00B1}%.0f m", metres)
     }
 
     enum Problem {
