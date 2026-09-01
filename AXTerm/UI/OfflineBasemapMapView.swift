@@ -76,9 +76,23 @@ struct OfflineBasemapMapView {
     /// down and rebuilt because one field of one station moved.
     final class SiteAnnotation: NSObject, MKAnnotation {
         let id: String
+        /// KVO-observed, and the only one that should be: this is how MapKit
+        /// is told a marker moved, and it is the whole reason the annotation
+        /// object persists across updates.
         @objc dynamic var coordinate: CLLocationCoordinate2D
-        @objc dynamic var title: String?
-        @objc dynamic var subtitle: String?
+        /// Deliberately *not* `@objc dynamic`.
+        ///
+        /// MapKit observes an annotation's title and subtitle to keep
+        /// callouts current, and answers a change by re-laying out the
+        /// annotations it holds. The subtitle carries this station's detail
+        /// text — last heard, counts, distance — which is rewritten every
+        /// staleness bucket, so making these observable had the whole marker
+        /// layer shuffle on a timer. These dots set `canShowCallout = false`
+        /// and draw their own label, so MapKit never needs to hear about it;
+        /// the view is reconfigured explicitly when `absorb` says the title
+        /// changed.
+        var title: String?
+        var subtitle: String?
         var signal: StationScope.Signal
         var isApproximate: Bool
         let isObserver: Bool
@@ -97,6 +111,28 @@ struct OfflineBasemapMapView {
             self.isNode = isNode
         }
 
+        #if DEBUG
+        /// Counts how often an annotation's fields are rewritten, by field.
+        /// A field nobody looks at being written constantly is cheap on its
+        /// own and expensive if MapKit is observing it.
+        nonisolated(unsafe) private static var fieldWrites: [String: Int] = [:]
+        nonisolated(unsafe) private static var fieldWindow = Date.distantPast
+
+        private static func noteFieldWrite(_ field: String) {
+            fieldWrites[field, default: 0] += 1
+            let elapsed = Date().timeIntervalSince(fieldWindow)
+            guard elapsed >= 5 else { return }
+            if fieldWindow != .distantPast, !fieldWrites.isEmpty {
+                let summary = fieldWrites.sorted { $0.key < $1.key }
+                    .map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+                print(String(format: "[MAPDIAG] annotation field writes in %.1fs: %@",
+                             elapsed, summary))
+            }
+            fieldWrites.removeAll()
+            fieldWindow = Date()
+        }
+        #endif
+
         /// Folds a rebuilt annotation's values into this one, returning
         /// whether anything the *view* draws — tint, glyph, label — changed
         /// and it therefore needs reconfiguring. The coordinate is written
@@ -114,12 +150,20 @@ struct OfflineBasemapMapView {
                 #endif
                 coordinate = next.coordinate
             }
-            if subtitle != next.subtitle { subtitle = next.subtitle }
+            if subtitle != next.subtitle {
+                subtitle = next.subtitle
+                #if DEBUG
+                Self.noteFieldWrite("subtitle")
+                #endif
+            }
             let redraws = title != next.title
                 || signal != next.signal
                 || isApproximate != next.isApproximate
                 || isNode != next.isNode
             if redraws {
+                #if DEBUG
+                Self.noteFieldWrite("title/tint")
+                #endif
                 title = next.title
                 signal = next.signal
                 isApproximate = next.isApproximate
