@@ -50,6 +50,13 @@ struct ConsoleTheme {
     /// that does not reach into the gap leaves a break in what should read as
     /// one continuous thread.
     static let rowSpacing: CGFloat = 2
+
+    /// How far to fade a timestamp that repeats the row above it.
+    ///
+    /// Low enough that a run reads as one block at a glance, high enough
+    /// that the digits are still legible when an operator wants to check a
+    /// single row rather than trace it back to the top of its run.
+    static let repeatedTimestampOpacity: Double = 0.3
     
     // MARK: - Color Helpers
     
