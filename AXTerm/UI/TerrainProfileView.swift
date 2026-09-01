@@ -288,7 +288,12 @@ struct TerrainProfileView: View {
                 envelope.addLine(to: CGPoint(x: x(sample.distanceMetres), y: y(upper)))
             }
             envelope.closeSubpath()
-            context.fill(envelope, with: .color(tint.opacity(0.15)))
+            // Outlined rather than washed. Filled at any weight that reads
+            // in both appearances, the band covered the ridge line it exists
+            // to be compared against.
+            context.fill(envelope, with: .color(tint.opacity(0.07)))
+            context.stroke(envelope, with: .color(tint.opacity(0.35)),
+                           style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
 
             // The straight line between the antennas.
             var line = Path()
@@ -327,32 +332,45 @@ struct TerrainProfileView: View {
                 }
             }
 
-            // Where the path is decided, drawn as the gap it actually is.
+            // Every obstruction, with the governing one drawn in full.
             //
-            // A ring on the terrain said "look here" and nothing more, which
-            // is why a 4 m intrusion on a 43 km path read as "no blockage
-            // visible": at this scale the terrain and the line touch, and the
-            // whole story is in a few pixels. The segment between them is the
-            // measurement, so it is drawn as a measurement.
-            if let worst = worstSample() {
-                let px = x(worst.distanceMetres)
-                let onTerrain = CGPoint(x: px, y: y(worst.effectiveElevation))
-                let onLine = CGPoint(x: px, y: y(worst.lineHeight))
-                var gap = Path()
-                gap.move(to: onLine)
-                gap.addLine(to: onTerrain)
-                context.stroke(gap, with: .color(tint),
-                               style: StrokeStyle(lineWidth: 1.5, dash: [2, 2]))
-                for end in [onTerrain, onLine] {
+            // The caption counts them, so marking only the worst left an
+            // operator told about "2 separate obstructions" hunting for the
+            // second with no idea where it was. The lesser ones are a tick on
+            // the ground: enough to find, quiet enough not to compete with the
+            // one the verdict came from.
+            let governing = worstSample()
+            for obstruction in profile.obstructions {
+                let px = x(obstruction.distanceMetres)
+                let onTerrain = CGPoint(x: px, y: y(obstruction.effectiveElevation))
+                let isGoverning = obstruction.distanceMetres == governing?.distanceMetres
+
+                if isGoverning {
+                    // The intrusion drawn as the measurement it is. At this
+                    // scale a few metres of terrain and the line simply touch,
+                    // and the whole story is in those pixels.
+                    let onLine = CGPoint(x: px, y: y(obstruction.lineHeight))
+                    var gap = Path()
+                    gap.move(to: onLine)
+                    gap.addLine(to: onTerrain)
+                    context.stroke(gap, with: .color(tint),
+                                   style: StrokeStyle(lineWidth: 1.5, dash: [2, 2]))
+                    for end in [onTerrain, onLine] {
+                        var tick = Path()
+                        tick.move(to: CGPoint(x: end.x - 4, y: end.y))
+                        tick.addLine(to: CGPoint(x: end.x + 4, y: end.y))
+                        context.stroke(tick, with: .color(tint), lineWidth: 1.5)
+                    }
+                    context.stroke(
+                        Path(ellipseIn: CGRect(x: onTerrain.x - 4, y: onTerrain.y - 4,
+                                               width: 8, height: 8)),
+                        with: .color(tint), lineWidth: 2)
+                } else {
                     var tick = Path()
-                    tick.move(to: CGPoint(x: end.x - 4, y: end.y))
-                    tick.addLine(to: CGPoint(x: end.x + 4, y: end.y))
-                    context.stroke(tick, with: .color(tint), lineWidth: 1.5)
+                    tick.move(to: CGPoint(x: px, y: onTerrain.y - 5))
+                    tick.addLine(to: CGPoint(x: px, y: onTerrain.y + 1))
+                    context.stroke(tick, with: .color(tint.opacity(0.55)), lineWidth: 1.5)
                 }
-                context.stroke(
-                    Path(ellipseIn: CGRect(x: onTerrain.x - 4, y: onTerrain.y - 4,
-                                           width: 8, height: 8)),
-                    with: .color(tint), lineWidth: 2)
             }
         }
         .background(Color(platform: .platformCardBackground),

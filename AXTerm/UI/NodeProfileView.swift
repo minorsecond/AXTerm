@@ -138,7 +138,10 @@ struct NodeProfileView: View {
                                         heightUnitIsFeet: $heightUnitIsFeet)
                 }
                 actions
-                forgetSection
+                // The page has room to explain what forgetting costs. The
+                // sheet carries the same action in its footer, where it takes
+                // one word instead of a paragraph.
+                if presentation == .page { forgetSection }
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -428,10 +431,15 @@ struct NodeProfileView: View {
                             // Every role says what earned it — and for
                             // NET/ROM that is the station's own declaration,
                             // quoted rather than paraphrased.
+                            // One line in the peek, the whole account on
+                            // the page. Four lines of prose per role turned a
+                            // sheet meant to be glanced at into a document.
                             Text(evidence(for: role))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                                .lineLimit(presentation == .sheet ? 2 : nil)
+                                .fixedSize(horizontal: false, vertical: presentation != .sheet)
+                                .help(evidence(for: role))
                         }
                     }
                 }
@@ -1153,24 +1161,54 @@ struct NodeProfileView: View {
                     .buttonStyle(.bordered)
                 }
             }
-            // Offered only when the page has something the sheet does not.
-            // A full-width bordered button with a trailing chevron also read as
-            // a pop-up menu rather than a way onward, so it is a link now.
-            if presentation == .sheet, profile.hasDepth, let onOpenFullPage {
-                Button {
-                    onOpenFullPage()
-                } label: {
-                    HStack(spacing: 3) {
-                        Text("Full profile")
-                        Image(systemName: "chevron.right")
-                            .font(.caption2.weight(.semibold))
+            // A footer, not a third stacked button. Centred under two
+            // full-width buttons the link read as a caption belonging to
+            // them; on its own row, leading, it reads as the way onward it
+            // is. Forgetting the station sits opposite because it is the
+            // other thing you can do with this sheet and it belongs at the
+            // quiet end.
+            if presentation == .sheet {
+                HStack {
+                    if profile.hasDepth, let onOpenFullPage {
+                        Button {
+                            onOpenFullPage()
+                        } label: {
+                            HStack(spacing: 3) {
+                                Text("Full profile")
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2.weight(.semibold))
+                            }
+                            .font(.callout)
+                            .foregroundStyle(.tint)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Measurements, history and neighbours, with room to read them.")
                     }
-                    .font(.callout)
-                    .foregroundStyle(.tint)
+                    Spacer(minLength: 8)
+                    if onForgetStation != nil {
+                        Button(role: .destructive) {
+                            confirmingForget = true
+                        } label: {
+                            Text("Forget\u{2026}")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Removes \(profile.callsign)'s directory entry and every claim it "
+                              + "made about reaching other stations. Those other stations stay: "
+                              + "only what this one said about them goes.")
+                    }
                 }
-                .buttonStyle(.plain)
-                .padding(.top, 2)
-                .help("Measurements, history and neighbours, with room to read them.")
+                .padding(.top, 6)
+                .confirmationDialog("Forget \(profile.callsign)?",
+                                    isPresented: $confirmingForget, titleVisibility: .visible) {
+                    Button("Forget", role: .destructive) { onForgetStation?() }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Removes this station's directory entry and every claim it made about "
+                         + "reaching other stations. Those other stations stay: only what this "
+                         + "one said about them goes. It is learned again if the station is heard.")
+                }
             }
         }
         .padding(.top, 4)

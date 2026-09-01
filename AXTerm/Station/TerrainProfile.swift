@@ -261,6 +261,33 @@ nonisolated struct TerrainProfile: Equatable, Sendable {
     /// True when the reported loss understates what the path actually costs.
     var lossIsAFloor: Bool { obstructionCount > 1 }
 
+    /// The worst sample in each separate stretch that intrudes on the
+    /// clearance the path needs, in order along the path.
+    ///
+    /// The verdict comes from one of these, and the caption counts them, so
+    /// the chart has to be able to draw all of them: saying "2 separate
+    /// obstructions" while marking one leaves the operator looking for a
+    /// second ridge with no idea where it is. Which one matters most is a
+    /// different question from how many there are, and both are worth
+    /// answering.
+    var obstructions: [Sample] {
+        var found: [Sample] = []
+        var current: Sample?
+        for sample in samples.dropFirst().dropLast() {
+            if sample.fresnelRatio < Self.fresnelClearanceThreshold {
+                if let running = current, running.fresnelRatio <= sample.fresnelRatio {
+                    continue
+                }
+                current = sample
+            } else if let running = current {
+                found.append(running)
+                current = nil
+            }
+        }
+        if let running = current { found.append(running) }
+        return found
+    }
+
     /// What the loss figure is worth, said where the figure is.
     var lossCaveat: String? {
         guard diffractionLossDb != nil else { return nil }

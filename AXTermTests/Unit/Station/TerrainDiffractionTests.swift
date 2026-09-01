@@ -252,3 +252,73 @@ final class MultipleObstructionTests: XCTestCase {
         func elevation(at point: GreatCircle.Point) -> Double? { 0 }
     }
 }
+
+/// Finding every obstruction, not just the one that decides the verdict.
+///
+/// The caption counts them, so the chart has to be able to draw them all:
+/// telling an operator there are "2 separate obstructions" while marking one
+/// leaves them hunting for a second ridge with no idea where it is.
+final class ObstructionLocationTests: XCTestCase {
+
+    private let here = GreatCircle.Point(latitude: 39.6, longitude: -104.9)
+    private let there = GreatCircle.Point(latitude: 39.6, longitude: -104.3)
+
+    private struct Ridges: ElevationSampling {
+        let origin: GreatCircle.Point
+        let destination: GreatCircle.Point
+        /// Fractions along the path, and how high each peak stands.
+        let peaks: [(at: Double, height: Double)]
+
+        func elevation(at point: GreatCircle.Point) -> Double? {
+            let total = GreatCircle.kilometres(from: origin, to: destination)
+            guard total > 0 else { return 0 }
+            let along = GreatCircle.kilometres(from: origin, to: point) / total
+            for peak in peaks where abs(along - peak.at) < 0.06 {
+                return peak.height * (1 - abs(along - peak.at) / 0.06)
+            }
+            return 0
+        }
+    }
+
+    private func profile(_ peaks: [(at: Double, height: Double)]) -> TerrainProfile {
+        TerrainProfile.between(
+            origin: here, destination: there,
+            originHeight: 250, destinationHeight: 250,
+            frequencyHz: 145_000_000,
+            sampler: Ridges(origin: here, destination: there, peaks: peaks))
+    }
+
+    /// One local worst point per obstruction, in path order, and the count
+    /// agrees with what the caption says.
+    func testEachObstructionIsFoundOnce() {
+        let two = profile([(0.3, 600), (0.7, 600)])
+        XCTAssertEqual(two.obstructions.count, 2)
+        XCTAssertEqual(two.obstructions.count, two.obstructionCount)
+
+        let fractions = two.obstructions.map { $0.distanceMetres / two.totalMetres }
+        XCTAssertEqual(fractions[0], 0.3, accuracy: 0.05)
+        XCTAssertEqual(fractions[1], 0.7, accuracy: 0.05)
+        XCTAssertLessThan(fractions[0], fractions[1], "path order, not severity order")
+    }
+
+    /// Each entry is the worst point of its own stretch, so a marker lands on
+    /// the peak rather than on the shoulder where the stretch began.
+    func testEachEntryIsTheWorstPointOfItsOwnRidge() {
+        let uneven = profile([(0.25, 500), (0.65, 900)])
+        XCTAssertEqual(uneven.obstructions.count, 2)
+
+        let taller = uneven.obstructions.max { $0.effectiveElevation < $1.effectiveElevation }
+        XCTAssertEqual((taller?.distanceMetres ?? 0) / uneven.totalMetres, 0.65, accuracy: 0.05)
+
+        // The verdict comes from one of these, so the chart's full treatment
+        // always has an entry to attach to.
+        let worst = uneven.obstructions.min { $0.fresnelRatio < $1.fresnelRatio }
+        XCTAssertNotNil(worst)
+    }
+
+    /// A single ridge is one entry, and a clear path is none.
+    func testTheSimpleCasesStaySimple() {
+        XCTAssertEqual(profile([(0.5, 600)]).obstructions.count, 1)
+        XCTAssertTrue(profile([]).obstructions.isEmpty)
+    }
+}
