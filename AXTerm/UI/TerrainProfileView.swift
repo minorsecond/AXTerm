@@ -31,6 +31,9 @@ struct TerrainProfileView: View {
     /// False when no elevation source covers this path, so the card says so
     /// rather than offering a download that would return nothing.
     var sourceHasCoverage: Bool = true
+    /// Set when the station is too far away for a terrain profile to mean
+    /// anything, in kilometres.
+    var beyondRadioRange: Double?
     var isDownloading: Bool = false
     var onDownload: (() -> Void)?
     var onDownloadArea: (() -> Void)?
@@ -41,7 +44,9 @@ struct TerrainProfileView: View {
         VStack(alignment: .leading, spacing: 10) {
             header
 
-            if profile.samples.isEmpty || profile.severity == .unknown {
+            if let kilometres = beyondRadioRange {
+                outOfRange(kilometres)
+            } else if profile.samples.isEmpty || profile.severity == .unknown {
                 missingData
             } else {
                 chart
@@ -124,6 +129,37 @@ struct TerrainProfileView: View {
 
     /// Radius of the antenna markers, and the inset that keeps them whole.
     private static let markerRadius: Double = 4
+
+    // MARK: - Too far for the question to mean anything
+
+    /// A profile over a thousand kilometres draws the planet, not the ground.
+    ///
+    /// The earth's own curvature puts tens of kilometres between two stations
+    /// that far apart, so the chart is a smooth parabola and the verdict is
+    /// "blocked by 78 km of terrain" — arithmetically true, and no use to
+    /// anybody. Worse, it buries the thing actually worth saying: a station
+    /// heard on VHF cannot be where this position claims, so the position is
+    /// what is wrong.
+    private func outOfRange(_ kilometres: Double) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: "location.slash")
+                .font(.system(size: 24))
+                .foregroundStyle(.tertiary)
+            Text("Too far for a terrain profile")
+                .font(.headline)
+            Text("This position puts \(destinationLabel) \(Int(kilometres.rounded())) km away. "
+                 + "At that range the earth's curvature alone stands tens of kilometres above "
+                 + "the line, so a profile would only tell you the planet is in the way. "
+                 + "If you are hearing this station on VHF, the position is likely a licence "
+                 + "address rather than where the radio is.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 340)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 160)
+    }
 
     // MARK: - Nothing to draw yet
 

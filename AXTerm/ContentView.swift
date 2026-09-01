@@ -74,6 +74,9 @@ struct ContentView: View {
     /// False when no elevation source covers this path at all, so the card
     /// says so instead of offering a download that returns a tile of NaN.
     @State private var profileTerrainHasSource = true
+    /// How far away the station is, when that is too far for a terrain
+    /// profile to answer anything.
+    @State private var profileTerrainOutOfRange: Double?
     /// When a connection to the station on screen last completed over a
     /// path with no digipeater in it.
     @State private var profileLastDirectConnection: Date?
@@ -790,6 +793,7 @@ struct ContentView: View {
                     lastDirectConnection: profileLastDirectConnection,
                     terrainAreaEstimate: profileTerrainAreaEstimate,
                     terrainSourceHasCoverage: profileTerrainHasSource,
+                    terrainBeyondRadioRange: profileTerrainOutOfRange,
                     isDownloadingTerrain: elevation.downloadState.isBusy,
                     onDownloadTerrain: {
                         guard let path = terrainPath(to: profile) else { return }
@@ -1798,6 +1802,28 @@ struct ContentView: View {
     private func refreshProfileTerrain(for profile: NodeProfile) async {
         profileTerrain = nil
         let path = terrainPath(to: profile)
+
+        // Judged before anything is computed or offered. A profile over a
+        // thousand kilometres draws the earth's curvature and calls it
+        // terrain, and downloading thirty tiles to produce that answer is
+        // worse than not answering. The map already hides these stations for
+        // the same reason; the card was simply never asked.
+        profileTerrainOutOfRange = path.flatMap { ends -> Double? in
+            guard let placement = profile.placement else { return nil }
+            let verdict = StationPlausibility.verdict(
+                observer: ends.origin,
+                station: ends.destination,
+                confidence: placement.confidence)
+            guard case .beyondRadioRange(let kilometres) = verdict else { return nil }
+            return kilometres
+        }
+        guard profileTerrainOutOfRange == nil else {
+            profileTerrainEstimate = nil
+            profileTerrainAreaEstimate = nil
+            profileTerrain = nil
+            return
+        }
+
         profileTerrainEstimate = path.map {
             elevation.estimate(alongPathFrom: $0.origin, to: $0.destination)
         }

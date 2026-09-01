@@ -63,6 +63,9 @@ struct NodeProfileView: View {
     var terrainAreaEstimate: ElevationStorage.Estimate?
     /// False when no elevation source covers this path at all.
     var terrainSourceHasCoverage: Bool = true
+    /// Set when the station is too far away for a terrain profile to mean
+    /// anything, in kilometres.
+    var terrainBeyondRadioRange: Double?
     var isDownloadingTerrain: Bool = false
     var onDownloadTerrain: (() -> Void)?
     var onDownloadTerrainArea: (() -> Void)?
@@ -759,6 +762,7 @@ struct NodeProfileView: View {
                                lastDirectConnection: lastDirectConnection,
                                areaEstimate: terrainAreaEstimate,
                                sourceHasCoverage: terrainSourceHasCoverage,
+                               beyondRadioRange: terrainBeyondRadioRange,
                                isDownloading: isDownloadingTerrain,
                                onDownload: onDownloadTerrain,
                                onDownloadArea: onDownloadTerrainArea)
