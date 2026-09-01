@@ -563,6 +563,58 @@ nonisolated enum DatabaseManager {
     /// measurement does not have. Cached on disk because the day an operator
     /// most wants to know what the ionosphere was doing is the day there is
     /// no internet to ask.
+    /// Connected-mode sessions, kept past a relaunch.
+    ///
+    /// `remoteBase` is stored rather than derived at query time so "every
+    /// session with KB5YZB" is an index lookup instead of a scan with string
+    /// surgery in the WHERE clause. KB5YZB-1 and KB5YZB-7 are one operator's
+    /// mailbox and node, and someone asking about the station means both.
+    ///
+    /// Tags are their own table. One row per tag makes "every tag in use" a
+    /// query rather than a scan-and-split, and deleting a session takes its
+    /// tags with it by cascade rather than by remembering to.
+    static func createTerminalSessions(_ db: Database) throws {
+        try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS terminal_sessions (
+                id TEXT PRIMARY KEY,
+                remote TEXT NOT NULL,
+                remoteBase TEXT NOT NULL,
+                via TEXT NOT NULL DEFAULT '',
+                relayDestination TEXT,
+                transport TEXT NOT NULL DEFAULT 'AX.25',
+                startedAt DATETIME NOT NULL,
+                endedAt DATETIME,
+                outcome TEXT NOT NULL,
+                framesSent INTEGER NOT NULL DEFAULT 0,
+                framesReceived INTEGER NOT NULL DEFAULT 0,
+                bytesSent INTEGER NOT NULL DEFAULT 0,
+                bytesReceived INTEGER NOT NULL DEFAULT 0,
+                transcript TEXT NOT NULL DEFAULT '',
+                note TEXT
+            )
+            """)
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_terminal_sessions_started
+                ON terminal_sessions(startedAt)
+            """)
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_terminal_sessions_remote
+                ON terminal_sessions(remoteBase, startedAt)
+            """)
+        try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS terminal_session_tags (
+                sessionId TEXT NOT NULL
+                    REFERENCES terminal_sessions(id) ON DELETE CASCADE,
+                tag TEXT NOT NULL,
+                PRIMARY KEY (sessionId, tag)
+            )
+            """)
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_terminal_session_tags_tag
+                ON terminal_session_tags(tag)
+            """)
+    }
+
     static func createSolarConditions(_ db: Database) throws {
         try db.create(table: SolarConditionsRecord.databaseTableName, ifNotExists: true) { t in
             t.column("day", .datetime).primaryKey()
@@ -719,6 +771,10 @@ nonisolated enum DatabaseManager {
         registerReportedMigration(&migrator, version: 26,
                                   name: "createSolarConditions") { db in
             try createSolarConditions(db)
+        }
+        registerReportedMigration(&migrator, version: 27,
+                                  name: "createTerminalSessions") { db in
+            try createTerminalSessions(db)
         }
         return migrator
     }()
