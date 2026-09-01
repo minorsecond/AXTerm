@@ -57,6 +57,46 @@ final class StationDotAnnotationView: MKAnnotationView {
     private let ring = CAShapeLayer()
     private let label = PlatformLabel()
 
+    /// Implicit animation is the default for a bare `CALayer`, and it is
+    /// never wanted here. These layers are not view-backed, so setting a
+    /// path or a colour on one starts a quarter-second animation of its
+    /// own accord — a marker whose recency tint changes should snap to the
+    /// new colour, and one MapKit repositions should arrive where it was
+    /// put rather than easing toward it.
+    private static let noImplicitAnimations: [String: CAAction] = [
+        "position": NSNull(), "bounds": NSNull(), "path": NSNull(),
+        "fillColor": NSNull(), "strokeColor": NSNull(), "lineWidth": NSNull(),
+        "lineDashPattern": NSNull(), "shadowOpacity": NSNull(),
+        "shadowRadius": NSNull(), "shadowOffset": NSNull(),
+        "transform": NSNull(), "opacity": NSNull(), "hidden": NSNull(),
+        "contents": NSNull()
+    ]
+
+    #if DEBUG
+    /// Counts how often MapKit repositions a marker on screen, which is the
+    /// phenomenon actually being reported. Every other mutation the map
+    /// makes is already logged and none of them fire while the points move,
+    /// so the movement is either MapKit's or nobody's.
+    private static var moveCount = 0
+    private static var moveWindow = Date.distantPast
+    private static var moveMax = 0.0
+
+    private static func noteMove(_ distance: Double) {
+        guard distance > 0.01 else { return }
+        moveCount += 1
+        moveMax = max(moveMax, distance)
+        let elapsed = Date().timeIntervalSince(moveWindow)
+        guard elapsed >= 5 else { return }
+        if moveWindow != .distantPast {
+            print(String(format: "[MAPDIAG] MapKit moved markers %d times in %.1fs (max %.1f pt)",
+                         moveCount, elapsed, moveMax))
+        }
+        moveCount = 0
+        moveMax = 0
+        moveWindow = Date()
+    }
+    #endif
+
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
         // No MapKit callout: selecting a station opens the selection
@@ -72,6 +112,8 @@ final class StationDotAnnotationView: MKAnnotationView {
         #if os(macOS)
         wantsLayer = true
         #endif
+        fill.actions = Self.noImplicitAnimations
+        ring.actions = Self.noImplicitAnimations
         host.addSublayer(fill)
         host.addSublayer(ring)
         configureLabel()
@@ -209,6 +251,23 @@ final class StationDotAnnotationView: MKAnnotationView {
         // problem the operator can solve by zooming; a hidden station is not.
         displayPriority = .required
     }
+
+    #if os(macOS)
+    override func setFrameOrigin(_ newOrigin: NSPoint) {
+        #if DEBUG
+        Self.noteMove(hypot(newOrigin.x - frame.origin.x, newOrigin.y - frame.origin.y))
+        #endif
+        super.setFrameOrigin(newOrigin)
+    }
+    #else
+    override var center: CGPoint {
+        didSet {
+            #if DEBUG
+            Self.noteMove(hypot(center.x - oldValue.x, center.y - oldValue.y))
+            #endif
+        }
+    }
+    #endif
 
     /// A rotated square, point-up — the node marker's silhouette.
     private static func diamondPath(in rect: CGRect) -> CGPath {
