@@ -30,23 +30,57 @@ final class CoverageEstimateTests: XCTestCase {
 
     func testRingsComeFromDirectAnswers() {
         let paths = [
-            path(from: "DRLNOD", to: "K0EPI-7"),                       // 10 km
-            path(from: "K0EPI-7", to: "AB0VZ"),                        // 30 km
-            path(from: "K0EPI-7", to: "W0ARP-10", evidence: .heardDirect) // 50 km
+            path(from: "DRLNOD", to: "K0EPI-7"),   // 10 km, answered
+            path(from: "K0EPI-7", to: "AB0VZ"),    // 30 km, answered
+            path(from: "K0EPI-7", to: "KB5YZB-7")  // 50 km, answered
         ]
         let positions = [
             "DRLNOD": point(kmNorth: 10),
             "AB0VZ": point(kmNorth: 30),
-            "W0ARP-10": point(kmNorth: 50)
+            "KB5YZB-7": point(kmNorth: 50)
         ]
         let ring = CoverageEstimate.ring(paths: paths, ownAddresses: ["K0EPI-7"],
                                          positions: positions, observer: observer)
         XCTAssertEqual(ring?.stationCount, 3)
-        XCTAssertEqual(ring?.farthestCallsign, "W0ARP-10")
+        XCTAssertEqual(ring?.farthestCallsign, "KB5YZB-7")
         XCTAssertEqual(ring!.reachKm, 50, accuracy: 1)
         XCTAssertEqual(ring!.typicalKm, 30, accuracy: 1,
                        "median of 10, 30, 50")
-        XCTAssertTrue(ring!.summary.contains("W0ARP-10"))
+        XCTAssertTrue(ring!.summary.contains("KB5YZB-7"))
+    }
+
+    /// The bug this guards: our own transmissions come back through the
+    /// receive path, so a station we called and never reached still has a
+    /// direct path to us. It is not inside our footprint, and because the
+    /// outer ring is the farthest answerer, counting it would have let one
+    /// unanswered call to a distant node set the entire reach figure.
+    func testAStationWeCalledButNeverReachedDoesNotCount() {
+        let paths = [
+            path(from: "DRLNOD", to: "K0EPI-7"),                          // 10 km, answered
+            path(from: "K0EPI-7", to: "W0ARP-10", evidence: .heardDirect) // 90 km, silent
+        ]
+        let positions = [
+            "DRLNOD": point(kmNorth: 10),
+            "W0ARP-10": point(kmNorth: 90)
+        ]
+        let ring = CoverageEstimate.ring(paths: paths, ownAddresses: ["K0EPI-7"],
+                                         positions: positions, observer: observer)
+        XCTAssertEqual(ring?.stationCount, 1)
+        XCTAssertEqual(ring?.farthestCallsign, "DRLNOD")
+        XCTAssertEqual(ring!.reachKm, 10, accuracy: 1,
+                       "the unanswered 90 km call must not set the reach")
+    }
+
+    /// Nothing has answered, so there is no measurement to draw.
+    func testNoAnswersMeansNoRingAtAll() {
+        let paths = [
+            path(from: "K0EPI-7", to: "W0ARP-10", evidence: .heardDirect),
+            path(from: "K0EPI-7", to: "AB0VZ", evidence: .heardDirect)
+        ]
+        XCTAssertNil(CoverageEstimate.ring(
+            paths: paths, ownAddresses: ["K0EPI-7"],
+            positions: ["W0ARP-10": point(kmNorth: 90), "AB0VZ": point(kmNorth: 30)],
+            observer: observer))
     }
 
     /// A digipeated answer proves the digipeater's coverage, not ours.

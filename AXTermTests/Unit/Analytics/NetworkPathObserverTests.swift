@@ -38,6 +38,35 @@ final class NetworkPathObserverTests: XCTestCase {
         }
     }
 
+    // MARK: - What counts as an answer
+
+    /// FRMR is a complaint, not a refusal, but a station only sends one after
+    /// decoding a frame addressed to it — so it proves the path as surely as
+    /// a UA does. It was missing from the answer set, which left coverage
+    /// leaning on the far weaker "we overheard a frame" evidence instead.
+    func testFRMRAnswersAConnectRequest() {
+        let paths = NetworkPathObserver.paths(in: [
+            packet("K0EPI-7", "AB0VZ", type: .u, control: 0x2F, at: 0),
+            packet("AB0VZ", "K0EPI-7", type: .u, control: 0x87, at: 2)
+        ])
+        XCTAssertEqual(path(paths, between: "K0EPI-7", and: "AB0VZ")?.evidence,
+                       .sessionEstablished)
+    }
+
+    /// A path id is undirected, so without checking who sent what, our own
+    /// second frame could close our own request and claim both directions
+    /// carried traffic when only ours did.
+    func testOurOwnFrameCannotAnswerOurOwnRequest() {
+        let paths = NetworkPathObserver.paths(in: [
+            packet("K0EPI-7", "W0ARP-10", type: .u, control: 0x2F, at: 0),
+            packet("K0EPI-7", "W0ARP-10", type: .u, control: 0x0F, at: 2)
+        ])
+        let found = path(paths, between: "K0EPI-7", and: "W0ARP-10")
+        XCTAssertEqual(found?.evidence, .heardDirect,
+                       "nothing came back, so the path is only overheard")
+        XCTAssertNotEqual(found?.evidence, .sessionEstablished)
+    }
+
     // MARK: - Direct and digipeated
 
     func testADirectFrameIsADirectPath() {

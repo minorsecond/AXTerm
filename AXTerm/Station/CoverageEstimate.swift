@@ -7,10 +7,17 @@
 //
 //  Coverage is not "who I can hear" — a well-sited node is heard fifty
 //  miles past the range of a home station's own transmitter. The honest
-//  evidence is the reverse direction: a station that *addressed us
-//  directly* (a UA to our SABM, a DM or FRMR to our ping, a completed
-//  session) necessarily decoded our transmission. Each such station with a
-//  known position is a measured point inside our footprint.
+//  evidence is the reverse direction: a station that *answered us* (a UA to
+//  our SABM, a DM or FRMR to our ping, a completed session) necessarily
+//  decoded our transmission. Each such station with a known position is a
+//  measured point inside our footprint.
+//
+//  Which is why nothing weaker than an answer counts. Our own transmissions
+//  come back through the receive path, so every station we have ever called
+//  has a direct path to us at `.heardDirect` whether or not it ever replied.
+//  Counting those plotted stations we shouted at and never reached as
+//  measured coverage — and since the outer ring is the farthest of them, one
+//  unanswered call to a distant node set the whole reach figure.
 //
 //  Two rings, because one number would lie in one direction or the other:
 //  the median answered distance is where the signal reliably works; the
@@ -44,7 +51,8 @@ nonisolated enum CoverageEstimate {
             return String(
                 format: "Estimated coverage, measured from the %d station%@ that "
                 + "answered this station directly (a UA, DM or FRMR to our frames "
-                + "proves they decoded us). Inner ring: half of them are within "
+                + "proves they decoded us; calls that went unanswered do not count). "
+                + "Inner ring: half of them are within "
                 + "%@. Outer ring: the farthest answer came from %@ at %@. "
                 + "Measurements, not a propagation model — terrain will bend both.",
                 stationCount, stationCount == 1 ? "" : "s",
@@ -58,7 +66,10 @@ nonisolated enum CoverageEstimate {
     /// callsign match — a base-callsign match would count a node's
     /// borrowed relay leg, whose transmitter is the node's, not ours),
     /// travelled direct (a digipeated answer proves the digipeater's
-    /// coverage), carries at least direct-heard evidence, and is fresh.
+    /// coverage, not ours), is fresh, and reached `.sessionEstablished` —
+    /// a connect request answered, so frames crossed in both directions.
+    /// That last is the only level that proves the far end decoded us
+    /// rather than merely that we transmitted at it.
     static func ring(paths: [NetworkPath],
                      ownAddresses: [String],
                      positions: [String: GreatCircle.Point],
@@ -72,7 +83,7 @@ nonisolated enum CoverageEstimate {
         var seen = Set<String>()
         for path in paths {
             guard path.via.isEmpty,
-                  path.evidence >= .heardDirect,
+                  path.evidence >= .sessionEstablished,
                   path.lastSeen >= cutoff else { continue }
             let from = path.from.uppercased()
             let to = path.to.uppercased()
