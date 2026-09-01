@@ -237,11 +237,38 @@ struct StationsMapView: View {
     /// Rebuilt only when the style or the stored tile count changes — the
     /// overlays cache their rendered images, and making new ones on every
     /// redraw would throw that away.
+    ///
+    /// The doc comment above was true of the overlays MapKit *installs* and
+    /// false of this property, which the map's update pass reads every time
+    /// it runs. `ElevationOverlay.overlays(from:style:)` queries the tile
+    /// store, so the map was doing a synchronous SQLite read and allocating
+    /// an overlay per stored tile on every pass — a couple of times a second
+    /// on a busy channel, on the main thread, where it costs frames. The
+    /// installed set never changed as a result, because the ids matched;
+    /// only the work was wasted, and dropped frames are the kind of thing
+    /// that reads as the map stuttering.
     private var terrainOverlays: [ElevationOverlay] {
         guard let terrainStyle, let store = elevation.store,
-              elevation.hasTerrain else { return [] }
-        return ElevationOverlay.overlays(from: store, style: terrainStyle)
+              elevation.hasTerrain else {
+            terrainCache.key = ""
+            terrainCache.overlays = []
+            return []
+        }
+        let key = "\(terrainStyle.rawValue)|\(elevation.tileCount)"
+        if terrainCache.key != key {
+            terrainCache.overlays = ElevationOverlay.overlays(from: store, style: terrainStyle)
+            terrainCache.key = key
+        }
+        return terrainCache.overlays
     }
+
+    /// Reference box, same pattern as `PathAssemblyCache`: mutating it
+    /// during a body evaluation must never invalidate the view.
+    nonisolated final class TerrainCache {
+        var key = ""
+        var overlays: [ElevationOverlay] = []
+    }
+    @State private var terrainCache = TerrainCache()
 
     /// Our own coordinate: the resolved position when there is one, the
     /// grid centre otherwise.

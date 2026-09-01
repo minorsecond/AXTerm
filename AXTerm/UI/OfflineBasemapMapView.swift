@@ -269,7 +269,12 @@ struct OfflineBasemapMapView {
         /// rebuilt alone, instead of every line on the map being torn down
         /// because one path was heard again.
         var linkLines: [String: MKPolyline] = [:]
-        var linkSignatures: [String: String] = [:]
+        /// Where each line runs, and how it is painted, tracked apart. A
+        /// path whose evidence improves is the same line in a new colour;
+        /// replacing the overlay for that made MapKit re-resolve its label
+        /// layer, and evidence improves constantly on a busy channel.
+        var linkGeometry: [String: String] = [:]
+        var linkStyleSignatures: [String: String] = [:]
         /// When the map was last structurally mutated — an annotation added
         /// or removed, a line rebuilt. Inserting anything makes MapKit
         /// re-resolve its own label layer: an animated ripple of the city
@@ -497,7 +502,8 @@ struct OfflineBasemapMapView {
                 let dLat = abs(region.center.latitude - last.center.latitude)
                 let dLon = abs(region.center.longitude - last.center.longitude)
                 let dSpan = abs(region.span.latitudeDelta - last.span.latitudeDelta)
-                let metres = dLat * 111_320
+                // Both axes, or an east-west drift reads as no movement.
+                let metres = (dLat + dLon * cos(region.center.latitude * .pi / 180)) * 111_320
                 if metres > 0 || dSpan > 0 {
                     print(String(format: "[MAPDIAG] region %@ centre %.1f m  span %.8f",
                                  animated ? "anim" : "still", metres, dSpan))
@@ -707,7 +713,8 @@ struct OfflineBasemapMapView {
                     coordinator.linkStyles.removeValue(forKey: ObjectIdentifier(line))
                 }
                 coordinator.linkLines.removeAll()
-                coordinator.linkSignatures.removeAll()
+                coordinator.linkGeometry.removeAll()
+                coordinator.linkStyleSignatures.removeAll()
             }
         }
 
@@ -727,22 +734,37 @@ struct OfflineBasemapMapView {
             coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(line))
             coordinator.linkStyles.removeValue(forKey: ObjectIdentifier(line))
             coordinator.linkLines.removeValue(forKey: id)
-            coordinator.linkSignatures.removeValue(forKey: id)
+            coordinator.linkGeometry.removeValue(forKey: id)
+            coordinator.linkStyleSignatures.removeValue(forKey: id)
             coordinator.structuralMutationDidOccur = true
         }
         for (id, link) in wantedLinks {
-            let signature = Self.linkSignature(link)
-            if coordinator.linkSignatures[id] == signature {
-                // Same pixels, but the label may have new numbers in it —
-                // it feeds the tap card, and the card should not read stale.
-                if let line = coordinator.linkLines[id] {
-                    coordinator.linkStyles[ObjectIdentifier(line)] = link
+            let geometry = Self.linkGeometrySignature(link)
+            let style = Self.linkStyleSignature(link)
+
+            if coordinator.linkGeometry[id] == geometry,
+               let line = coordinator.linkLines[id] {
+                // The line already runs where it should. Its label may carry
+                // new numbers — that feeds the tap card, which should not
+                // read stale — and its colour may have changed, which is a
+                // repaint of the overlay already on the map. Neither adds or
+                // removes anything, so neither disturbs MapKit's labels and
+                // neither waits on the batching clock.
+                coordinator.linkStyles[ObjectIdentifier(line)] = link
+                if coordinator.linkStyleSignatures[id] != style {
+                    #if DEBUG
+                    print("[MAPDIAG] link restyle \(id) \(coordinator.linkStyleSignatures[id] ?? "-") -> \(style)")
+                    #endif
+                    coordinator.overlayColors[ObjectIdentifier(line)] = Self.linkColor(for: link)
+                    coordinator.linkStyleSignatures[id] = style
+                    mapView.renderer(for: line)?.setNeedsDisplay()
                 }
                 continue
             }
+
             guard mayMutateLinks else { continue }
             #if DEBUG
-            print("[MAPDIAG] link rebuild \(id)")
+            print("[MAPDIAG] link rebuild \(id) geom \(coordinator.linkGeometry[id] ?? "none") -> \(geometry)")
             #endif
             if let stale = coordinator.linkLines[id] {
                 mapView.removeOverlay(stale)
@@ -753,21 +775,29 @@ struct OfflineBasemapMapView {
             coordinator.overlayColors[ObjectIdentifier(line)] = Self.linkColor(for: link)
             coordinator.linkStyles[ObjectIdentifier(line)] = link
             coordinator.linkLines[id] = line
-            coordinator.linkSignatures[id] = signature
+            coordinator.linkGeometry[id] = geometry
+            coordinator.linkStyleSignatures[id] = style
             mapView.addOverlay(line, level: .aboveRoads)
             coordinator.structuralMutationDidOccur = true
         }
     }
 
-    /// Everything that feeds a link's geometry or renderer, folded to a
-    /// string. Two links with the same signature draw identically, so the
-    /// installed line can be left alone. The label is deliberately absent —
-    /// it feeds the tap card, not the pixels, and `linkStyles` is refreshed
-    /// with the link either way.
-    private static func linkSignature(_ link: MapPathLink) -> String {
-        String(format: "%.6f,%.6f|%.6f,%.6f|", link.from.latitude, link.from.longitude,
+    /// Where a link runs. Only a change here needs a new polyline; the
+    /// endpoints are rounded to about a decimetre, far under what any zoom
+    /// resolves, so floating-point drift cannot pass for a move.
+    static func linkGeometrySignature(_ link: MapPathLink) -> String {
+        String(format: "%.6f,%.6f|%.6f,%.6f", link.from.latitude, link.from.longitude,
                link.to.latitude, link.to.longitude)
-            + "\(link.evidence.rawValue)|\(link.isSuspect)|\(link.isPrediction)"
+    }
+
+    /// How a link is painted. A change here repaints the line already on
+    /// the map rather than replacing it. Evidence improves whenever a path
+    /// is proven, which on a busy channel is constant, and tearing the
+    /// overlay out for a colour change made MapKit re-resolve its labels
+    /// every time. The label is deliberately absent — it feeds the tap
+    /// card, not the pixels, and `linkStyles` is refreshed either way.
+    static func linkStyleSignature(_ link: MapPathLink) -> String {
+        "\(link.evidence.rawValue)|\(link.isSuspect)|\(link.isPrediction)"
     }
 
     /// Adds or removes shaded elevation tiles.
