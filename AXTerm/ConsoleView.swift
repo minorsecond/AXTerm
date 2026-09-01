@@ -1302,6 +1302,10 @@ private struct TimestampRunConnector: View {
         GeometryReader { geometry in
             let height = geometry.size.height
             let middle = height / 2
+            // The row stretches this view past itself on both sides so
+            // neighbouring rows meet; this is how much of each end is that
+            // overhang rather than the row.
+            let overhang = ConsoleTheme.rowPadding + ConsoleTheme.rowSpacing
             Path { path in
                 switch position {
                 case .alone:
@@ -1315,11 +1319,20 @@ private struct TimestampRunConnector: View {
                     path.move(to: CGPoint(x: 0, y: 0))
                     path.addLine(to: CGPoint(x: 0, y: height))
                 case .end:
-                    // Stops at the centre: the run has to close somewhere, or
-                    // there is no telling one second from the next without
-                    // reading the digits.
+                    // Down to the foot of the last row's text, not to the
+                    // middle of the row.
+                    //
+                    // The run has to close somewhere or there is no telling
+                    // one second from the next, and the centre seemed like
+                    // the place. It is not: half a row of bare gutter under
+                    // the final entry reads as the thread giving up early,
+                    // and against a tinted info row — where the pill carries
+                    // on past where the line stopped — it reads as a mistake.
+                    // The break before the next run is still unmistakable,
+                    // because a new run does not start its line until below
+                    // its own digits, leaving the top of that row bare.
                     path.move(to: CGPoint(x: 0, y: 0))
-                    path.addLine(to: CGPoint(x: 0, y: middle))
+                    path.addLine(to: CGPoint(x: 0, y: height - overhang))
                 }
             }
             // Butt caps, not round: a round cap adds half a line width at
