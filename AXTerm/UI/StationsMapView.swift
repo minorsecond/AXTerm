@@ -274,7 +274,9 @@ struct StationsMapView: View {
             usedAliases: HeardStationMap.aliasesInUse(stations),
             directory: lookup.records,
             stations: stations)
-        guard showsDirectoryNodes else { return heard + nodes }
+        guard showsDirectoryNodes else {
+            return HeardStationMap.addingAliases(nodes, toHeard: heard)
+        }
         // A heard station that IS a node says so, instead of the fold
         // being silent: the ZI* diamonds vanish because K0ZIA-14's dot
         // owns the box — so the dot's detail must carry the node names.
@@ -289,7 +291,7 @@ struct StationsMapView: View {
             entry.name = entry.name.map { "\($0) · \(badge)" } ?? badge
             return entry
         }
-        return annotated + nodes
+        return HeardStationMap.addingAliases(nodes, toHeard: annotated)
     }
 
     /// The rest of the node directory — placeable entries only, drawn

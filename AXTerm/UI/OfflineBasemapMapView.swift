@@ -173,8 +173,10 @@ struct OfflineBasemapMapView {
             subtitle: "This station",
             signal: .good, isApproximate: false, isObserver: true)]
 
+        var seen: Set<String> = [result[0].id]
         for site in scope.sites {
-            guard let position = coordinates[site.id] else { continue }
+            guard let position = coordinates[site.id],
+                  seen.insert(site.id).inserted else { continue }
             result.append(SiteAnnotation(
                 id: site.id,
                 coordinate: position.clCoordinate,
@@ -791,11 +793,27 @@ struct OfflineBasemapMapView {
         // Keeping identity also means the selected annotation survives
         // updates instead of being torn down and re-selected.
         let existing = mapView.annotations.compactMap { $0 as? SiteAnnotation }
-        let existingByID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        // Tolerant of duplicate ids, not trusting that upstream never emits
+        // one: `Dictionary(uniqueKeysWithValues:)` traps on a repeat, and a
+        // trap in a map update is a crash the operator sees (field capture
+        // 2026-09-01 11:03 — DRLNOD arrived as both a heard station and a
+        // via alias). The first annotation keeps the id; the surplus copies
+        // are swept off the map with the departed.
+        var existingByID: [String: SiteAnnotation] = [:]
+        var surplus: [SiteAnnotation] = []
+        for annotation in existing {
+            if existingByID[annotation.id] == nil {
+                existingByID[annotation.id] = annotation
+            } else {
+                surplus.append(annotation)
+            }
+        }
         let wanted = annotations()
         let wantedIDs = Set(wanted.map(\.id))
 
-        let departed = existing.filter { !wantedIDs.contains($0.id) }
+        let departed = surplus + existing.filter {
+            existingByID[$0.id] === $0 && !wantedIDs.contains($0.id)
+        }
         if !departed.isEmpty {
             // Removing a selected annotation fires `didDeselect`; suppressed,
             // or the delegate writes `selection = nil` straight back into the

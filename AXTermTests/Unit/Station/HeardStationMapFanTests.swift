@@ -138,6 +138,34 @@ final class HeardStationMapFanTests: XCTestCase {
         }
     }
 
+    /// The DRLNOD crash, 2026-09-01: a node that transmits its own beacons
+    /// is a heard station, and one that also relays traffic appears as a
+    /// via alias — so it arrived in the entry list twice under one
+    /// callsign. Everything downstream keys on the callsign, and the map's
+    /// annotation reconciler trapped on the repeat. The heard entry must
+    /// win: it is the station itself, where the alias is only a lead to it.
+    func testAnAliasAlsoHeardDirectlyFoldsIntoTheHeardEntry() {
+        var heardNode = entry("DRLNOD", latitude: 39.61, longitude: -104.71)
+        heardNode.heardCount = 42
+        let heard = [heardNode, entry("W0ARP-10", latitude: 39.7, longitude: -104.8)]
+
+        var aliasNode = entry("DRLNOD", latitude: 39.62, longitude: -104.72)
+        aliasNode.isNodeAlias = true
+        let nodes = [aliasNode, {
+            var other = entry("HORSE", latitude: 39.5, longitude: -104.6)
+            other.isNodeAlias = true
+            return other
+        }()]
+
+        let merged = HeardStationMap.addingAliases(nodes, toHeard: heard)
+        XCTAssertEqual(merged.map(\.callsign).sorted(),
+                       ["DRLNOD", "HORSE", "W0ARP-10"])
+        let survivor = merged.first { $0.callsign == "DRLNOD" }
+        XCTAssertEqual(survivor?.heardCount, 42,
+                       "the heard entry must survive, not the alias lead")
+        XCTAssertEqual(survivor?.isNodeAlias, false)
+    }
+
     private func entry(_ callsign: String,
                        latitude: Double,
                        longitude: Double) -> HeardStationMap.Entry {

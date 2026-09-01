@@ -456,6 +456,20 @@ nonisolated enum HeardStationMap {
             }
     }
 
+    /// Appends alias entries to heard ones, dropping any alias the radio has
+    /// also heard directly.
+    ///
+    /// `DRLNOD` transmits its own beacons *and* appears as a hop in via
+    /// paths, so it arrived once as a heard station and again as an alias
+    /// placed through its operator — two entries with one callsign. Every
+    /// consumer downstream keys on the callsign, so the pair drew as two
+    /// stacked markers and trapped the map's annotation reconciler outright.
+    /// The heard entry wins: it is the station itself, not a lead to it.
+    static func addingAliases(_ nodes: [Entry], toHeard heard: [Entry]) -> [Entry] {
+        let heardCalls = Set(heard.map { $0.callsign.uppercased() })
+        return heard + nodes.filter { !heardCalls.contains($0.callsign.uppercased()) }
+    }
+
     // MARK: - Node aliases
 
     /// Entries for NET/ROM aliases seen in via paths.
