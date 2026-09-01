@@ -66,6 +66,10 @@ struct NodeProfileView: View {
     /// Set when the station is too far away for a terrain profile to mean
     /// anything, in kilometres.
     var terrainBeyondRadioRange: Double?
+    /// Where this station's own position came from.
+    var terrainOriginPosition: StationPosition?
+    var isUsingDeviceLocation: Bool = false
+    var onToggleDeviceLocation: (() -> Void)?
     /// Totals from the whole log. Nil falls back to what the profile was
     /// built from, which is the in-memory window.
     var stats: StationStats?
@@ -654,6 +658,24 @@ struct NodeProfileView: View {
                 detail: heardSpanDetail ?? "frames",
                 symbol: "waveform", tint: .orange))
         }
+        // How much of that arrived off this station's own transmitter.
+        //
+        // The count alone says how talkative a station is. This says whether
+        // the app has ever actually heard *it*, as opposed to a digipeater
+        // repeating it, which is the difference between a station you can
+        // work and one you only know about.
+        if let stats, stats.frameCount > 0 {
+            let share = Int((Double(stats.directCount) / Double(stats.frameCount) * 100)
+                .rounded())
+            tiles.append(StatTile(
+                id: "direct", label: "Heard direct",
+                value: "\(share)%",
+                detail: stats.directCount == 0
+                    ? "always through a digi"
+                    : "\(stats.directCount.formatted()) of \(stats.frameCount.formatted())",
+                symbol: "antenna.radiowaves.left.and.right",
+                tint: share == 0 ? .secondary : (share < 25 ? .orange : .green)))
+        }
         // No "last heard" tile: the freshness line in the header already
         // says it, two lines up, and saying it twice was the clutter.
         if let km = profile.placement?.distanceKilometres {
@@ -840,6 +862,9 @@ struct NodeProfileView: View {
                                areaEstimate: terrainAreaEstimate,
                                sourceHasCoverage: terrainSourceHasCoverage,
                                beyondRadioRange: terrainBeyondRadioRange,
+                               originPosition: terrainOriginPosition,
+                               onToggleDeviceLocation: onToggleDeviceLocation,
+                               isUsingDeviceLocation: isUsingDeviceLocation,
                                isDownloading: isDownloadingTerrain,
                                onDownload: onDownloadTerrain,
                                onDownloadArea: onDownloadTerrainArea)

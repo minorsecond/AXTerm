@@ -34,6 +34,14 @@ struct TerrainProfileView: View {
     /// Set when the station is too far away for a terrain profile to mean
     /// anything, in kilometres.
     var beyondRadioRange: Double?
+    /// Where this station's own position came from, and what it is worth.
+    /// Shown because a profile from a grid centre good to 4.3 km is a
+    /// different claim from one from a surveyed antenna, and the chart looks
+    /// identical either way.
+    var originPosition: StationPosition?
+    /// Offered where the operator is: switching to the device's GPS.
+    var onToggleDeviceLocation: (() -> Void)?
+    var isUsingDeviceLocation: Bool = false
     var isDownloading: Bool = false
     var onDownload: (() -> Void)?
     var onDownloadArea: (() -> Void)?
@@ -385,11 +393,52 @@ struct TerrainProfileView: View {
     /// and the ends of the x axis are unambiguous without a leader line.
     private var endpoints: some View {
         HStack(alignment: .top, spacing: 8) {
-            endpoint(originLabel, height: profile.originHeight,
-                     assumed: false, alignment: .leading)
+            VStack(alignment: .leading, spacing: 1) {
+                endpoint(originLabel, height: profile.originHeight,
+                         assumed: false, alignment: .leading)
+                if let originPosition { originSourceControl(originPosition) }
+            }
             Spacer(minLength: 8)
             endpoint(destinationLabel, height: profile.destinationHeight,
                      assumed: destinationHeightIsAssumed, alignment: .trailing)
+        }
+    }
+
+    /// The origin's source, and a way to change it.
+    ///
+    /// A terrain profile is only as good as where it starts from, and until
+    /// now every one of them began at a grid square's centre without saying
+    /// so. The device's GPS is offered rather than taken: the radio is not
+    /// necessarily with the device, and a network TNC means the transmitter
+    /// can be somewhere else entirely.
+    @ViewBuilder
+    private func originSourceControl(_ position: StationPosition) -> some View {
+        let coarse = position.accuracyMetres > 1_000
+        HStack(spacing: 4) {
+            Text(position.summary)
+                .font(.caption2)
+                .foregroundStyle(coarse ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+            if let onToggleDeviceLocation {
+                Button(isUsingDeviceLocation ? "Use grid" : "Use GPS") {
+                    onToggleDeviceLocation()
+                }
+                .font(.caption2)
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+            }
+        }
+        .help(coarse
+              ? "This profile starts from a grid square's centre, which can be kilometres "
+                + "from the antenna. On a short path that is a larger error than the "
+                + "terrain it is measuring."
+              : "Where this profile starts from.")
+        // The doubt, where the position is being relied on rather than in a
+        // settings page nobody visits.
+        if let doubt = position.doubts.first {
+            Text(doubt.warning)
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

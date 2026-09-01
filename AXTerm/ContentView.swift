@@ -80,6 +80,9 @@ struct ContentView: View {
     /// Lifetime totals for the station on screen, read from the log rather
     /// than the capped in-memory window.
     @State private var profileStats: StationStats?
+    /// Whether to take this device's GPS as the station's position.
+    /// Off by default: the radio is not necessarily with the device.
+    @AppStorage("station.useDeviceLocation") private var useDeviceLocation = false
     /// When a connection to the station on screen last completed over a
     /// path with no digipeater in it.
     @State private var profileLastDirectConnection: Date?
@@ -797,6 +800,12 @@ struct ContentView: View {
                     terrainAreaEstimate: profileTerrainAreaEstimate,
                     terrainSourceHasCoverage: profileTerrainHasSource,
                     terrainBeyondRadioRange: profileTerrainOutOfRange,
+                    terrainOriginPosition: myPosition,
+                    isUsingDeviceLocation: useDeviceLocation,
+                    onToggleDeviceLocation: {
+                        useDeviceLocation.toggle()
+                        Task { await refreshProfileTerrain(for: profile) }
+                    },
                     stats: profileStats,
                     isDownloadingTerrain: elevation.downloadState.isBusy,
                     onDownloadTerrain: {
@@ -1802,15 +1811,29 @@ struct ContentView: View {
         }.value
     }
 
+    /// Where this station is, and how well that is known.
+    ///
+    /// GPS is offered but never taken silently. The radio is not necessarily
+    /// with the device: this operator reaches their TNC over a network, so
+    /// the laptop's position and the transmitter's are different facts. The
+    /// operator chooses, and the choice is remembered.
+    private var myPosition: StationPosition? {
+        var candidates = StationPositionResolver.Candidates()
+        candidates.gridSquare = Maidenhead.center(of: winlinkContext.settings.gridSquare)
+            .map(GreatCircle.Point.init)
+        if useDeviceLocation, let fix = winlinkContext.locationService.lastLocation {
+            candidates.deviceGPS = GreatCircle.Point(latitude: fix.latitude,
+                                                     longitude: fix.longitude)
+        }
+        return StationPositionResolver.resolve(candidates)
+    }
+
     /// The two ends of the path a station page is about.
     private func terrainPath(
         to profile: NodeProfile
     ) -> (origin: GreatCircle.Point, destination: GreatCircle.Point)? {
-        guard let placement = profile.placement,
-              let observer = Maidenhead.center(of: winlinkContext.settings.gridSquare)
-                  .map(GreatCircle.Point.init)
-        else { return nil }
-        return (observer, placement.position)
+        guard let placement = profile.placement, let mine = myPosition else { return nil }
+        return (mine.point, placement.position)
     }
 
     @MainActor
