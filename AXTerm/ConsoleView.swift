@@ -1301,43 +1301,43 @@ private struct TimestampRunConnector: View {
     var body: some View {
         GeometryReader { geometry in
             let height = geometry.size.height
-            let middle = height / 2
-            // The row stretches this view past itself on both sides so
-            // neighbouring rows meet; this is how much of each end is that
-            // overhang rather than the row.
-            let overhang = ConsoleTheme.rowPadding + ConsoleTheme.rowSpacing
+            // The row stretches this view past itself on both sides so that
+            // neighbouring rows meet in the gap. The row's own painted extent
+            // — its background pill — therefore starts this far in from each
+            // end of the view.
+            let rowEdge = ConsoleTheme.rowSpacing
             Path { path in
                 switch position {
                 case .alone:
                     break
                 case .start:
-                    // Clears the digits and runs to the row's edge, where the
-                    // next row's line begins.
-                    path.move(to: CGPoint(x: 0, y: middle + 3))
+                    // Opens level with the top of its own row rather than at
+                    // the row's centre, below the digits. Starting halfway
+                    // down the first entry bracketed the group from the
+                    // middle of a row it was supposed to enclose.
+                    path.move(to: CGPoint(x: 0, y: rowEdge))
                     path.addLine(to: CGPoint(x: 0, y: height))
                 case .middle:
                     path.move(to: CGPoint(x: 0, y: 0))
                     path.addLine(to: CGPoint(x: 0, y: height))
                 case .end:
-                    // Down to the foot of the last row's text, not to the
-                    // middle of the row.
+                    // ...and closes level with the bottom of the last row,
+                    // so the run spans every entry sharing the second.
+                    // Stopping at the row's centre left half a row of bare
+                    // gutter under the final entry; against a tinted info
+                    // row, where the pill carries on past where the line
+                    // stopped, that read as a mistake rather than a close.
                     //
-                    // The run has to close somewhere or there is no telling
-                    // one second from the next, and the centre seemed like
-                    // the place. It is not: half a row of bare gutter under
-                    // the final entry reads as the thread giving up early,
-                    // and against a tinted info row — where the pill carries
-                    // on past where the line stopped — it reads as a mistake.
-                    // The break before the next run is still unmistakable,
-                    // because a new run does not start its line until below
-                    // its own digits, leaving the top of that row bare.
+                    // Adjacent runs are still distinguishable without reading
+                    // the digits, because neither end reaches into the gap
+                    // between rows.
                     path.move(to: CGPoint(x: 0, y: 0))
-                    path.addLine(to: CGPoint(x: 0, y: height - overhang))
+                    path.addLine(to: CGPoint(x: 0, y: height - rowEdge))
                 }
             }
             // Butt caps, not round: a round cap adds half a line width at
             // each end, which on a join between rows is a visible bulge and
-            // at the run's close overshoots the centre it is meant to stop at.
+            // at a run's ends spills past the row edge into the gap.
             .stroke(.secondary.opacity(0.3),
                     style: StrokeStyle(lineWidth: 1, lineCap: .butt))
         }
