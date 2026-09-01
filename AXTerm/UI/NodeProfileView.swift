@@ -56,8 +56,9 @@ struct NodeProfileView: View {
     var terrainHeightIsAssumed: Bool = false
     /// What the tiles this path needs would cost, when some are missing.
     var terrainEstimate: ElevationStorage.Estimate?
-    /// Frames from this station heard with nothing repeating them.
-    var directFrames: Int = 0
+    /// When a connection to this station last completed over a path with no
+    /// digipeater in it.
+    var lastDirectConnection: Date?
     /// What the whole area around this station would cost.
     var terrainAreaEstimate: ElevationStorage.Estimate?
     /// False when no elevation source covers this path at all.
@@ -755,7 +756,7 @@ struct NodeProfileView: View {
                                destinationLabel: profile.callsign,
                                destinationHeightIsAssumed: terrainHeightIsAssumed,
                                estimate: terrainEstimate,
-                               directFrames: directFrames,
+                               lastDirectConnection: lastDirectConnection,
                                areaEstimate: terrainAreaEstimate,
                                sourceHasCoverage: terrainSourceHasCoverage,
                                isDownloading: isDownloadingTerrain,

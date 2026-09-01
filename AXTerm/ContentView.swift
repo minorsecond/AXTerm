@@ -74,6 +74,9 @@ struct ContentView: View {
     /// False when no elevation source covers this path at all, so the card
     /// says so instead of offering a download that returns a tile of NaN.
     @State private var profileTerrainHasSource = true
+    /// When a connection to the station on screen last completed over a
+    /// path with no digipeater in it.
+    @State private var profileLastDirectConnection: Date?
     /// The Mac gets the same identity view the handheld does — a callsign in
     /// the console is the same question there as here.
     @StateObject private var profiles = NodeProfileCoordinator()
@@ -784,7 +787,7 @@ struct ContentView: View {
                     terrain: profileTerrain,
                     terrainHeightIsAssumed: profileTerrainHeightAssumed,
                     terrainEstimate: profileTerrainEstimate,
-                    directFrames: directFrameCount(for: profile.callsign),
+                    lastDirectConnection: profileLastDirectConnection,
                     terrainAreaEstimate: profileTerrainAreaEstimate,
                     terrainSourceHasCoverage: profileTerrainHasSource,
                     isDownloadingTerrain: elevation.downloadState.isBusy,
@@ -1749,19 +1752,35 @@ struct ContentView: View {
     ///
     /// Off the main actor: 256 elevation samples per profile, and the
     /// station sheet opens on a click.
-    /// Frames from this station that arrived with nothing repeating them.
+    /// When a connection to this station last completed with no digipeater
+    /// in the path.
     ///
-    /// Counted the way `CoverageEstimate` counts: an empty via path means no
-    /// digipeater had a hand in it, so the frame crossed the ground between
-    /// the two antennas. That is what makes it evidence about terrain.
-    private func directFrameCount(for callsign: String) -> Int {
-        let base = Callsign(callsign)?.base ?? callsign.uppercased()
-        return client.packets.reduce(into: 0) { total, packet in
-            guard packet.via.allSatisfy({ !$0.repeated }) else { return }
-            guard let from = packet.from?.display,
-                  (Callsign(from)?.base ?? from.uppercased()) == base else { return }
-            total += 1
-        }
+    /// The bar is deliberately high. Hearing a station proves their
+    /// transmitter reaches us and nothing about the reverse, and a frame that
+    /// arrived through a digipeater proves the digipeater is well sited. Only
+    /// a completed connection over a clean path means frames crossed that
+    /// ground both ways, which is the one thing that can outrank a terrain
+    /// verdict.
+    ///
+    /// Full-callsign matching against our own addresses, as CoverageEstimate
+    /// does: a node relaying under a borrowed SSID is that node's transmitter,
+    /// not ours.
+    private func lastDirectConnection(to callsign: String) async -> Date? {
+        guard let store = client.networkPaths else { return nil }
+        let target = Callsign(callsign)?.base ?? callsign.uppercased()
+        let ours = CallsignValidator.normalize(settings.myCallsign)
+        guard !ours.isEmpty else { return nil }
+        let cutoff = Date().addingTimeInterval(-CoverageEstimate.evidenceWindow)
+        let paths = (try? store.paths(since: cutoff)) ?? []
+        return paths
+            .filter { path in
+                guard path.via.isEmpty, path.evidence == .sessionEstablished else { return false }
+                let ends = [path.from, path.to].map { $0.uppercased() }
+                guard ends.contains(ours) else { return false }
+                return ends.contains { (Callsign($0)?.base ?? $0) == target }
+            }
+            .map(\.lastSeen)
+            .max()
     }
 
     /// The two ends of the path a station page is about.
@@ -1789,6 +1808,7 @@ struct ContentView: View {
             ElevationDownloader.sourceHasCoverage(at: $0.origin)
                 && ElevationDownloader.sourceHasCoverage(at: $0.destination)
         } ?? true
+        profileLastDirectConnection = await lastDirectConnection(to: profile.callsign)
         let computed = await terrainProfile(to: profile)
         profileTerrainHeightAssumed = computed?.assumedFarHeight ?? false
         profileTerrain = computed?.profile

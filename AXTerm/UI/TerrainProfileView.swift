@@ -19,9 +19,10 @@ struct TerrainProfileView: View {
     /// What the missing tiles would cost. Nil hides the offer rather than
     /// promising a download the caller cannot perform.
     var estimate: ElevationStorage.Estimate?
-    /// Frames from this station that reached here with nothing repeating
-    /// them. The one measurement that can contradict this forecast.
-    var directFrames: Int = 0
+    /// When a connection to this station last completed over this path with
+    /// no digipeater in it. The one thing in the log that can settle whether
+    /// the forecast is too pessimistic here.
+    var lastDirectConnection: Date?
     /// What the whole area around this station would cost. Offered as the
     /// quieter second option: someone thinking about terrain is often about
     /// to go somewhere without a network, and this is where that occurs to
@@ -46,21 +47,17 @@ struct TerrainProfileView: View {
                 chart
                     .frame(minHeight: 180)
                 endpoints
-                // The record, where it disagrees with the forecast. Above
-                // the caveats, because "this is wrong, and here is what you
-                // already know that proves it" outranks any refinement of a
-                // number that is wrong.
-                if TerrainCalibration.outcome(severity: profile.severity,
-                                              heardDirectly: directFrames > 0) == .contradicted {
-                    Label(TerrainCalibration.note(callsign: destinationLabel,
-                                                  directFrames: directFrames),
-                          systemImage: "antenna.radiowaves.left.and.right")
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                        .padding(8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.accentColor.opacity(0.12),
-                                    in: RoundedRectangle(cornerRadius: 6))
+                // Said plainly and quietly. A coloured banner on a chart
+                // that is already coloured reads as an error the operator
+                // caused, and shouting that our own forecast is wrong is a
+                // strange way to be trusted.
+                if TerrainCalibration.outcome(
+                    severity: profile.severity,
+                    hasCompletedDirectConnection: lastDirectConnection != nil) == .contradicted {
+                    Text(TerrainCalibration.note(callsign: destinationLabel,
+                                                 lastConnected: lastDirectConnection))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let caveat = profile.lossCaveat {

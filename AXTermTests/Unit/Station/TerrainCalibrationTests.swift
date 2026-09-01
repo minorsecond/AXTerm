@@ -3,74 +3,80 @@ import XCTest
 
 /// Checking the terrain forecast against what the radio has actually done.
 ///
-/// Measured on this operator's own data: of 26 paths with a position and full
-/// terrain coverage, the model called every one geometrically obstructed, and
-/// several of those stations send frames that arrive here with nothing
-/// repeating them — 10,000 of them, in one case. The physics is verified
-/// against the Fresnel integral, so the arithmetic is not what is wrong. The
-/// inputs are.
+/// The bar is a completed connection over a path with no digipeater in it.
+/// Anything weaker cannot outrank a terrain verdict, and claiming otherwise
+/// on the strength of a beacon we happened to hear would make the page less
+/// trustworthy, not more.
 final class TerrainCalibrationTests: XCTestCase {
 
-    /// The case this exists for: the page telling an operator not to bother
-    /// with a station they are demonstrably receiving.
-    func testABlockedPathThatIsHeardAnywayIsContradicted() {
-        XCTAssertEqual(
-            TerrainCalibration.outcome(severity: .blocking, heardDirectly: true),
-            .contradicted)
-        XCTAssertEqual(
-            TerrainCalibration.outcome(severity: .severe, heardDirectly: true),
-            .contradicted)
+    private let when = Date(timeIntervalSince1970: 1_756_000_000)
+
+    /// The case this exists for: the page rating a path badly that this
+    /// station has already worked.
+    func testAConnectionOverABadlyRatedPathContradictsIt() {
+        for severity in [TerrainProfile.Severity.severe, .blocking] {
+            XCTAssertEqual(
+                TerrainCalibration.outcome(severity: severity,
+                                           hasCompletedDirectConnection: true),
+                .contradicted, "\(severity)")
+        }
     }
 
-    /// Below 10 dB the model already says the path works, so a reception
-    /// agrees with it. Flagging that as a contradiction would cry wolf on
-    /// every working link.
-    func testAWorkablePathThatWorksIsNotAContradiction() {
+    /// Below 10 dB the model already says the path works, so a connection
+    /// agrees with it. Flagging that would cry wolf on every good link.
+    func testAConnectionOverAWorkablePathAgreesWithTheModel() {
         for severity in [TerrainProfile.Severity.negligible, .noticeable] {
             XCTAssertEqual(
-                TerrainCalibration.outcome(severity: severity, heardDirectly: true),
+                TerrainCalibration.outcome(severity: severity,
+                                           hasCompletedDirectConnection: true),
                 .consistent, "\(severity)")
         }
     }
 
-    /// Silence is not agreement. A station that never transmits produces
-    /// nothing either way, and recording that as confirmation would let the
-    /// model mark its own homework.
-    func testSilenceIsUntestedRatherThanConfirmed() {
+    /// No connection is not agreement. An untried path produces silence
+    /// either way, and counting that as confirmation would let the model mark
+    /// its own homework.
+    func testNoConnectionIsUntestedRatherThanConfirmed() {
         XCTAssertEqual(
-            TerrainCalibration.outcome(severity: .blocking, heardDirectly: false),
-            .untested)
-        XCTAssertEqual(
-            TerrainCalibration.outcome(severity: .severe, heardDirectly: false),
+            TerrainCalibration.outcome(severity: .blocking,
+                                       hasCompletedDirectConnection: false),
             .untested)
     }
 
-    /// No terrain, no claim to contradict.
-    func testAnUnknownPathIsUntestedEvenWhenHeard() {
+    func testNoTerrainMeansNoClaimToContradict() {
         XCTAssertEqual(
-            TerrainCalibration.outcome(severity: .unknown, heardDirectly: true),
+            TerrainCalibration.outcome(severity: .unknown,
+                                       hasCompletedDirectConnection: true),
             .untested)
     }
 
-    /// The note has to say the forecast is wrong — not that it is uncertain.
-    /// Terrain blocks both directions equally, so a frame that crossed the
-    /// ground is a measurement refuting a prediction, and hedging it would
-    /// leave the operator weighing a model against their own radio.
-    func testTheNoteNamesTheContradictionAndTheLikeliestCause() {
-        let note = TerrainCalibration.note(callsign: "K0NTS", directFrames: 10_252)
-        XCTAssertTrue(note.contains("K0NTS"))
-        XCTAssertTrue(note.contains("10,252 frames"))
-        XCTAssertTrue(note.contains("forecast is wrong"))
-        // Height before position: it is one number, the operator can find it
-        // out, and it is the input the verdict is most sensitive to.
-        let height = try? XCTUnwrap(note.range(of: "height"))
-        let position = try? XCTUnwrap(note.range(of: "position"))
-        XCTAssertLessThan(height!.lowerBound, position!.lowerBound)
+    /// The note is a fact about the connection, not a verdict on the chart.
+    /// The operator can see the chart. What they cannot see is that their own
+    /// station has already worked this path.
+    func testTheNoteStatesTheConnectionAndNamesTheInputToFix() {
+        let note = TerrainCalibration.note(callsign: "W0TX", lastConnected: when)
+        XCTAssertTrue(note.contains("W0TX"))
+        XCTAssertTrue(note.contains("connected directly"))
+        XCTAssertTrue(note.contains("antenna height"))
     }
 
-    func testTheNoteReadsNaturallyForASingleFrame() {
-        let note = TerrainCalibration.note(callsign: "W0TX", directFrames: 1)
-        XCTAssertTrue(note.contains("one frame"), note)
-        XCTAssertFalse(note.contains("1 frames"), note)
+    /// Quiet, not accusatory. Shouting that our own forecast is wrong is a
+    /// strange way to be trusted, and the operator asked for a line, not an
+    /// alarm.
+    func testTheNoteDoesNotShout() {
+        let note = TerrainCalibration.note(callsign: "W0TX", lastConnected: when)
+        for shout in ["wrong", "Warning", "!", "error", "failed"] {
+            XCTAssertFalse(note.contains(shout), "note should not say \"\(shout)\": \(note)")
+        }
+        XCTAssertLessThan(note.count, 220, "one line, not a paragraph")
+    }
+
+    /// A date is worth having when there is one, and the sentence still has
+    /// to read when there is not.
+    func testTheDateIsOptional() {
+        XCTAssertTrue(
+            TerrainCalibration.note(callsign: "W0TX", lastConnected: when).contains(" on "))
+        let undated = TerrainCalibration.note(callsign: "W0TX", lastConnected: nil)
+        XCTAssertTrue(undated.contains("over this path."), undated)
     }
 }
