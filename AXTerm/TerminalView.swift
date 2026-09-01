@@ -2138,6 +2138,13 @@ struct TerminalView: View {
                 relayWaitingOn: txViewModel?.relayWaitingOn,
                 linkPeer: from.display)
             observe?(text, speaker)
+            // The transcript. Same hook the console renders from, so what is
+            // kept is what the operator saw rather than a second pass at
+            // deciding what counts.
+            if let id = activeSessionRecordID {
+                sessionRecorder?.recorded(line: "\(speaker): \(text)", for: id,
+                                          sent: false, bytes: text.utf8.count)
+            }
             // A KA-Node states its command set and nothing else, and the one
             // command that would explain it costs airtime on a shared
             // channel. Answer locally instead — but only when the software is
@@ -2922,6 +2929,10 @@ struct TerminalView: View {
     /// AX.25 text.
     private func sendOnCircuit(_ circuitID: NetRomCircuitID) {
         let text = txViewModel.viewModel.composeText
+        if let id = activeSessionRecordID, !text.isEmpty {
+            sessionRecorder?.recorded(line: "> \(text)", for: id,
+                                      sent: true, bytes: text.utf8.count)
+        }
         guard !text.isEmpty else { return }
         var payload = Data(text.utf8)
         payload.append(0x0D)  // CR, as node command lines expect
@@ -3055,6 +3066,10 @@ struct TerminalView: View {
 
         // Build payload
         let text = txViewModel.viewModel.composeText
+        if let id = activeSessionRecordID, !text.isEmpty {
+            sessionRecorder?.recorded(line: "> \(text)", for: id,
+                                      sent: true, bytes: text.utf8.count)
+        }
         let useAXDP = txViewModel.viewModel.useAXDP
         
         // If AXDP is requested, verify capability is confirmed
