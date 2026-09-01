@@ -292,8 +292,8 @@ struct TerrainProfileView: View {
             // in both appearances, the band covered the ridge line it exists
             // to be compared against.
             context.fill(envelope, with: .color(tint.opacity(0.07)))
-            context.stroke(envelope, with: .color(tint.opacity(0.35)),
-                           style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            context.stroke(envelope, with: .color(tint.opacity(0.65)),
+                           style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
 
             // The straight line between the antennas.
             var line = Path()
@@ -450,23 +450,59 @@ struct TerrainProfileView: View {
     // MARK: - Legend
 
     private var legend: some View {
-        HStack(spacing: 14) {
-            label(colour: .secondary.opacity(0.6), text: "Terrain")
-                .explain("Ground elevation plus the earth's curvature — what the signal actually has to clear. The bulge is applied with the standard 4/3 effective-radius factor, which is why a long path over flat ground can still be blocked.")
-            label(colour: tint, text: "Line of sight")
-                .explain("The straight line between the two antennas, at their stated heights above ground.")
-            label(colour: tint.opacity(0.3), text: "Fresnel zone")
-                .explain("The band that must stay clear for the path to behave like a clear one — 60% of the first Fresnel zone. Terrain inside it costs signal even when there is line of sight, which is what a path that connects and struggles looks like.")
-            Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 14) {
+                // Each key draws the way the chart draws it. Three identical
+                // bars in three colours told you nothing about which mark on
+                // the chart was which, and after the Fresnel band became a
+                // dashed outline the solid bar was simply wrong.
+                key(.filled(.secondary.opacity(0.6)), "Terrain")
+                    .explain("Ground elevation plus the earth's curvature, which is what the signal actually has to clear. The bulge uses the standard 4/3 effective-radius factor, which is why a long path over flat ground can still be blocked.")
+                key(.line(tint), "Line of sight")
+                    .explain("The straight line between the two antennas, at their stated heights above ground.")
+                key(.dashed(tint.opacity(0.65)), "Fresnel zone")
+                    .explain("60% of the first Fresnel zone. Terrain inside it costs signal even when the line of sight is open, which is what a path that connects and struggles looks like.")
+                Spacer(minLength: 0)
+            }
+            // Answers the question the term raises, where it is raised. A
+            // tooltip only helps someone who already suspects there is
+            // something to hover over.
+            Text("Radio needs room around the line of sight, not just a clear view. "
+                 + "Terrain inside the Fresnel zone costs signal even when nothing "
+                 + "blocks the line itself.")
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .font(.caption2)
     }
 
-    private func label(colour: Color, text: String) -> some View {
+    /// How a thing is drawn on the chart, so its key can be drawn the same.
+    private enum KeyStyle {
+        case filled(Color)
+        case line(Color)
+        case dashed(Color)
+    }
+
+    private func key(_ style: KeyStyle, _ text: String) -> some View {
         HStack(spacing: 4) {
-            RoundedRectangle(cornerRadius: 1)
-                .fill(colour)
-                .frame(width: 12, height: 3)
+            Group {
+                switch style {
+                case .filled(let colour):
+                    RoundedRectangle(cornerRadius: 1).fill(colour)
+                        .frame(width: 12, height: 8)
+                case .line(let colour):
+                    RoundedRectangle(cornerRadius: 1).fill(colour)
+                        .frame(width: 12, height: 2)
+                case .dashed(let colour):
+                    Path { path in
+                        path.move(to: CGPoint(x: 0, y: 1))
+                        path.addLine(to: CGPoint(x: 12, y: 1))
+                    }
+                    .stroke(colour, style: StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
+                    .frame(width: 12, height: 2)
+                }
+            }
+            .frame(width: 12, height: 8)
             Text(text)
                 .foregroundStyle(.secondary)
         }
