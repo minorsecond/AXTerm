@@ -1011,8 +1011,16 @@ struct ConsoleLineView: View {
         .font(.system(size: 12, design: .monospaced))
         .padding(.vertical, ConsoleTheme.rowPadding)
         .padding(.horizontal, ConsoleTheme.rowPadding)
-        .background(premiumBackground)
-        .cornerRadius(ConsoleTheme.rowCornerRadius)
+        // Shaped background, not a clip. `.cornerRadius` clips the whole
+        // row, and the timestamp connector is deliberately taller than the
+        // row so it can bridge the gap to its neighbour — so the clip cut
+        // off the exact overhang that makes the thread continuous, and the
+        // line arrived back as the dashes it was supposed to stop being.
+        // Invisible on an untinted row, obvious the moment a run of grey
+        // info rows drew a visible edge for it to stop at.
+        .background(premiumBackground,
+                    in: RoundedRectangle(cornerRadius: ConsoleTheme.rowCornerRadius,
+                                         style: .continuous))
         .opacity(isDigipeatEcho ? 0.6 : 1.0)
     }
     
