@@ -58,7 +58,9 @@ nonisolated struct ConsoleEntryRecord: Codable, FetchableRecord, PersistableReco
     }
 }
 
-private extension ConsoleLine.Kind {
+// Nonisolated, like the type it extends: only the project's main-actor
+// default put these members on an actor.
+nonisolated private extension ConsoleLine.Kind {
     init(from level: ConsoleEntryRecord.Level) {
         switch level {
         case .system:

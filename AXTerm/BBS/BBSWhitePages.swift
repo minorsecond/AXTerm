@@ -136,7 +136,7 @@ nonisolated struct WhitePagesEntry: Equatable, Sendable, Identifiable {
     var lastUpdated: Date? { fields.values.map(\.updatedAt).max() }
 }
 
-extension WhitePagesEntry {
+nonisolated extension WhitePagesEntry {
 
     /// Whether a newly learned field replaces what is already known.
     ///
@@ -190,7 +190,7 @@ extension WhitePagesEntry {
     }
 }
 
-extension WhitePagesEntry {
+nonisolated extension WhitePagesEntry {
 
     /// What a licence record can contribute to a directory entry.
     ///

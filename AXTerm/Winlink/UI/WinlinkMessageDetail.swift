@@ -203,7 +203,7 @@ struct WinlinkMessageDetail: View {
             guard !Task.isCancelled else { return }
             rendered = derived
         }
-        .onChange(of: message.mid) { _ in
+        .onChange(of: message.mid) {
             // A new message starts capped again, and must not show the
             // previous one's text while its own is being derived.
             wantsFullText = false

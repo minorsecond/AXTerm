@@ -14,7 +14,7 @@ nonisolated enum RootSheetRoute: Identifiable, Equatable {
     case inspector(UUID)
     case profile(NodeProfileCoordinator.Presentation)
 
-    var id: String {
+    nonisolated var id: String {
         switch self {
         case .inspector(let packetID): return "inspector:\(packetID.uuidString)"
         case .profile(let presentation): return "profile:\(presentation.id)"

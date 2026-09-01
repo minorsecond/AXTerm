@@ -72,7 +72,7 @@ nonisolated enum GreatCircle {
     private static func degrees(_ radians: Double) -> Double { radians * 180 / .pi }
 }
 
-extension GreatCircle {
+nonisolated extension GreatCircle {
 
     /// Mean Earth radius in metres, as used for the great-circle maths above.
     static let earthRadiusMetres = 6_371_008.8

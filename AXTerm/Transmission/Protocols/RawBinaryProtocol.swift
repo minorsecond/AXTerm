@@ -36,7 +36,12 @@ nonisolated enum RawBinaryState: Equatable, Sendable {
 // MARK: - Raw Binary Protocol Implementation
 
 /// Simple raw binary file transfer protocol
-nonisolated final class RawBinaryProtocol: FileTransferProtocol {
+// `@unchecked Sendable`: the transfer schedules its own continuation with
+// `DispatchQueue.main.asyncAfter` and is driven entirely from the main
+// thread, so the weak capture in that `@Sendable` closure is confined in
+// practice. A convention, not a proof — but the same one the rest of the
+// transmission layer runs on.
+nonisolated final class RawBinaryProtocol: FileTransferProtocol, @unchecked Sendable {
     let protocolType: TransferProtocolType = .rawBinary
 
     weak var delegate: FileTransferProtocolDelegate?

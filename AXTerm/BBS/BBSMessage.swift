@@ -42,7 +42,7 @@ nonisolated struct BBSMessage: Equatable, Sendable, Identifiable {
     var isBulletin: Bool { BBSMessage.baseCall(to) == BBSMessage.allCall }
 }
 
-extension BBSMessage {
+nonisolated extension BBSMessage {
 
     /// Mail is addressed to an operator, not to a radio: someone calling in as
     /// `K0XYZ-7` collects mail addressed to `K0XYZ`.

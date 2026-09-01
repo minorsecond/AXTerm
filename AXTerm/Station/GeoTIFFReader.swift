@@ -225,7 +225,10 @@ nonisolated enum GeoTIFFReader {
 
 // MARK: - Byte reading
 
-private extension Data {
+// Byte arithmetic on a `Data`, which belongs to no actor. The project
+// defaults un-annotated declarations to the main actor, which put these
+// helpers there and made every parser that calls them a warning.
+nonisolated private extension Data {
     func u16(at offset: Int, _ littleEndian: Bool) -> UInt16 {
         guard offset >= 0, offset + 2 <= count else { return 0 }
         let start = startIndex + offset

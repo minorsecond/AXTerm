@@ -162,11 +162,12 @@ nonisolated final class CloudKitSyncTransport: WinlinkSyncTransport, @unchecked 
 
     // MARK: - Zone
 
+    // Scoped locking: `lock()`/`unlock()` are unavailable in an async
+    // function — a hard error under Swift 6 — because a suspension point
+    // between them would hold the lock across an await. Here that risk is
+    // real rather than theoretical: there is an `await` a few lines down.
     private func ensureZone() async throws {
-        lock.lock()
-        let ready = zoneReady
-        lock.unlock()
-        if ready { return }
+        if lock.withLock({ zoneReady }) { return }
 
         do {
             _ = try await database.modifyRecordZones(
@@ -175,9 +176,7 @@ nonisolated final class CloudKitSyncTransport: WinlinkSyncTransport, @unchecked 
             // Another device created it first, which is the expected race.
         }
 
-        lock.lock()
-        zoneReady = true
-        lock.unlock()
+        lock.withLock { zoneReady = true }
     }
 
     // MARK: - Record mapping

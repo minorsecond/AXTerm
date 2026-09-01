@@ -61,7 +61,7 @@ enum DestinationValidationState: Equatable {
     }
 }
 
-enum DestinationAliasEvidence: Hashable {
+nonisolated enum DestinationAliasEvidence: Hashable {
     case digipeatReference
     case nodeIdentifier
     case userConfirmed
@@ -105,7 +105,7 @@ final class DestinationPickerViewModel: ObservableObject {
         }
     }
 
-    private struct PersistedAliasLink: Codable {
+    nonisolated private struct PersistedAliasLink: Codable {
         let left: String
         let right: String
         let evidence: [DestinationAliasEvidenceCodable]
@@ -279,7 +279,8 @@ final class DestinationPickerViewModel: ObservableObject {
         return links.first
     }
 
-    static func sanitizeForTyping(_ raw: String) -> String {
+    // String tidying; called from the nonisolated `normalizeCandidate`.
+    nonisolated static func sanitizeForTyping(_ raw: String) -> String {
         let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789- ")
         let upper = raw.uppercased().unicodeScalars.map { allowed.contains($0) ? Character($0) : nil }
         let filtered = String(upper.compactMap { $0 })
@@ -288,7 +289,9 @@ final class DestinationPickerViewModel: ObservableObject {
         return collapsed.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    static func normalizeCandidate(_ raw: String) -> String {
+    // String tidying, called from the nonisolated suggestion machinery as
+    // well as from the view model.
+    nonisolated static func normalizeCandidate(_ raw: String) -> String {
         sanitizeForTyping(raw)
             .replacingOccurrences(of: " ", with: "")
     }
@@ -596,7 +599,7 @@ final class DestinationPickerViewModel: ObservableObject {
     }
 }
 
-private struct DestinationAliasEvidenceCodable: Codable {
+nonisolated private struct DestinationAliasEvidenceCodable: Codable {
     let rawValue: String
 
     init(_ value: DestinationAliasEvidence) {
@@ -608,7 +611,7 @@ private struct DestinationAliasEvidenceCodable: Codable {
     }
 }
 
-private extension DestinationAliasEvidence {
+nonisolated private extension DestinationAliasEvidence {
     var rawValue: String {
         switch self {
         case .digipeatReference: return "digipeatReference"

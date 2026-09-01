@@ -123,7 +123,9 @@ nonisolated struct WinlinkLinkQuality: Equatable, Sendable {
 
 // MARK: - Aggregation
 
-extension WinlinkLinkQuality {
+// Nonisolated, like the type it extends. Only the project's main-actor
+// default put these members on an actor.
+nonisolated extension WinlinkLinkQuality {
 
     /// Groups session logs into one quality summary per link.
     ///

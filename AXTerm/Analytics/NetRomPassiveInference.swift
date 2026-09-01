@@ -73,7 +73,7 @@ final class NetRomPassiveInference {
         // This includes both packets addressed to us AND third-party traffic
         guard !packet.via.isEmpty else { return }
 
-        let viaNormalized = packet.via.compactMap { normalize($0.display) }
+        _ = packet.via.compactMap { normalize($0.display) }
         // Prefer the actual repeated chain (H-bit set) when present; this reflects
         // the path that truly delivered the frame to us.
         let repeatedViaNormalized = packet.via

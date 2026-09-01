@@ -62,7 +62,7 @@ final class ElevationStorage: ObservableObject {
         guard let store else { return }
         tileCount = (try? store.tileCount()) ?? 0
         byteSize = (try? FileManager.default
-            .attributesOfItem(atPath: store.url.path)[.size] as? Int64) as? Int64 ?? 0
+            .attributesOfItem(atPath: store.url.path)[.size] as? Int64) ?? 0
     }
 
     /// How far from the station terrain is worth having.

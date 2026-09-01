@@ -104,7 +104,7 @@ nonisolated enum ZipWriter {
     }
 }
 
-private extension Data {
+nonisolated private extension Data {
     mutating func append(little value: UInt32) {
         var raw = value.littleEndian
         append(Data(bytes: &raw, count: 4))

@@ -34,7 +34,6 @@ final class SerialPortDiscovery: ObservableObject {
     @Published private(set) var devices: [SerialDevice] = []
     
     private var timer: Timer?
-    private let fileManager = FileManager.default
     
     // Known system ports to ignore to reduce noise
     private let ignoredPatterns = [
@@ -80,7 +79,11 @@ final class SerialPortDiscovery: ObservableObject {
         guard PlatformIdiom.supportsSerialPorts else { return [] }
 
         do {
-            let devContents = try fileManager.contentsOfDirectory(atPath: "/dev")
+            // `FileManager.default` here rather than a stored property. The
+            // property belonged to the main actor, and this scan deliberately
+            // does not — reaching back for it handed a non-Sendable
+            // FileManager across an actor boundary, which Swift 6 rejects.
+            let devContents = try FileManager.default.contentsOfDirectory(atPath: "/dev")
             
             let ports = devContents.filter { filename in
                 // We only want calling units (cu.*) for outbound connections

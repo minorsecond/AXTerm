@@ -218,7 +218,7 @@ struct LinkDebugView: View {
                                 }
                             }
                             .frame(minHeight: 150, maxHeight: 300)
-                            .onChange(of: filtered.count) { _ in
+                            .onChange(of: filtered.count) {
                                 if autoScroll, let last = filtered.last {
                                     proxy.scrollTo(last.id, anchor: .bottom)
                                 }

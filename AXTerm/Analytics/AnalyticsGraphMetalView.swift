@@ -2031,6 +2031,10 @@ nonisolated private struct GraphCamera {
         targetOffset.height = targetOffset.height.clamped(to: -maxPanY...maxPanY)
     }
 
+    // `@MainActor` because it reads the view's bounds, and a view's bounds
+    // are main-actor state. Zooming is a gesture response, so it is already
+    // on the main actor when it runs.
+    @MainActor
     mutating func zoom(at location: CGPoint, scaleDelta: CGFloat, view: MTKView?) {
         guard let view else { return }
         guard scaleDelta > 0 else { return }

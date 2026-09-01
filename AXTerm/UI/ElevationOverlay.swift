@@ -7,7 +7,10 @@ import CoreGraphics
 /// A tile per overlay rather than one overlay for everything: MapKit only
 /// asks for the renderers whose bounding rects are on screen, so panning away
 /// from a tile stops it costing anything.
-nonisolated final class ElevationOverlay: NSObject, MKOverlay {
+// `@unchecked Sendable`, earned by the lock: every mutable field is read
+// and written under `lock`, which is what lets the tile be built on a
+// background queue and handed back.
+nonisolated final class ElevationOverlay: NSObject, MKOverlay, @unchecked Sendable {
 
     let tileLatitude: Int
     let tileLongitude: Int
@@ -94,12 +97,14 @@ nonisolated final class ElevationOverlay: NSObject, MKOverlay {
             state = .rendering
             lock.unlock()
 
-            let key = id as NSString
+            // The Swift String crosses, not the NSString: `NSString` is not
+            // Sendable and this closure is.
+            let key = id
             let build = makeImage
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 let image = build()
                 if let image {
-                    Self.cache.setObject(image, forKey: key,
+                    Self.cache.setObject(image, forKey: key as NSString,
                                          cost: image.height * image.bytesPerRow)
                 }
                 self?.lock.lock()
@@ -147,7 +152,10 @@ nonisolated final class ElevationOverlay: NSObject, MKOverlay {
 }
 
 /// Draws a shaded elevation tile.
-nonisolated final class ElevationOverlayRenderer: MKOverlayRenderer {
+// `@unchecked Sendable` because MapKit says so: it calls renderers from
+// its own drawing queues, and an overlay renderer that refused to cross a
+// thread could not be used at all.
+nonisolated final class ElevationOverlayRenderer: MKOverlayRenderer, @unchecked Sendable {
 
     override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale,
                        in context: CGContext) {

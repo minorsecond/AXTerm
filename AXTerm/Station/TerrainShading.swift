@@ -107,7 +107,18 @@ nonisolated enum TerrainShading {
                 let bands = min(ProcessInfo.processInfo.activeProcessorCount, samples)
                 let rowsPerBand = (samples + bands - 1) / bands
 
+                // The pointers are passed through a box the compiler will not
+                // check. It cannot see what makes this safe, which is worth
+                // stating rather than hiding: each band writes a disjoint
+                // range of rows, nothing reads another band's output, and
+                // `concurrentPerform` joins before the pointers go out of
+                // scope. Widen the bands or let them overlap and this stops
+                // being true.
+                let inputBox = UncheckedSendableBox(input)
+                let outputBox = UncheckedSendableBox(output)
                 DispatchQueue.concurrentPerform(iterations: bands) { band in
+                    let input = inputBox.value
+                    let output = outputBox.value
                     let firstRow = band * rowsPerBand
                     let lastRow = min(firstRow + rowsPerBand, samples)
                     guard firstRow < lastRow else { return }
@@ -322,4 +333,16 @@ nonisolated enum TerrainShading {
         return (x: abs(metresPerDegreeLongitude) / perSample,
                 y: metresPerDegreeLatitude / perSample)
     }
+}
+
+
+/// Carries a value into a concurrent closure without a Sendable check.
+///
+/// Only for buffer pointers handed to `DispatchQueue.concurrentPerform`,
+/// where the safety argument is disjoint indices plus the join at the end of
+/// the call. It is deliberately not general: anything else that wants this
+/// should say why at its own call site.
+private nonisolated struct UncheckedSendableBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
 }

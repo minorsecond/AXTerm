@@ -381,7 +381,9 @@ final class WinlinkSessionRunner: ObservableObject {
                 log(.event, "Catalog index received \u{2014} \(catalogItems.count) products cached")
             }
             Task { [worker] in
-                try? await worker.saveInbound(message)
+                // Discarded deliberately: a failed save must not abort the
+                // rest of the exchange.
+                _ = try? await worker.saveInbound(message)
                 if let catalogItems {
                     try? await worker.replaceCatalogCache(catalogItems)
                 }

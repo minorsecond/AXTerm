@@ -55,7 +55,7 @@ struct WinlinkExchangeConsoleView: View {
                     // Scoped to the transcript pane only — a container-level
                     // help would shadow the per-chart tooltips in Activity.
                     .help("The raw B2F conversation with the gateway: sent lines (→), received lines (←), and session events. Binary message bodies are summarized by size.")
-                    .onChange(of: runner.transcript.count) { _ in
+                    .onChange(of: runner.transcript.count) {
                         if let last = runner.transcript.last {
                             proxy.scrollTo(last.id, anchor: .bottom)
                         }

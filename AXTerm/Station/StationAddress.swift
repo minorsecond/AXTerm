@@ -75,7 +75,7 @@ nonisolated struct StationAddress: Equatable, Sendable {
     }
 }
 
-private extension String {
+nonisolated private extension String {
     var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
 }
 

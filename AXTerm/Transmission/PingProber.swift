@@ -36,7 +36,11 @@ import Combine
 /// note is on `SessionCoordinator`'s transport adapter, for the same
 /// reason. Everything here runs on the main run loop regardless — the
 /// timer is scheduled there and the radio callbacks arrive there.
-nonisolated final class PingProber: ObservableObject {
+// `@unchecked Sendable` for the reason stated above: everything here runs
+// on the main run loop, so the weak capture in the timer's `@Sendable`
+// closure is confined in practice. The compiler cannot check a convention;
+// the convention is the one this class already documents.
+nonisolated final class PingProber: ObservableObject, @unchecked Sendable {
 
     /// What a probe learned. Persisted, because the useful thing is the
     /// pattern over days, not the last result.

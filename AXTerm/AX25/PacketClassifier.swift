@@ -295,7 +295,9 @@ nonisolated enum PacketClassifier {
 
 // MARK: - Packet Extension
 
-extension Packet {
+// Nonisolated, like the type it extends: only the project's main-actor
+// default put these members on an actor.
+nonisolated extension Packet {
     /// Get the classification for this packet
     var classification: PacketClassification {
         PacketClassifier.classify(packet: self)

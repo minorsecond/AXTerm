@@ -88,7 +88,7 @@ nonisolated struct CMSErrorEnvelope: Codable, Sendable {
 
 // MARK: - Mapping to cache records
 
-extension CMSGateway {
+nonisolated extension CMSGateway {
 
     static let lastStatusFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -145,7 +145,7 @@ extension CMSGateway {
     }
 }
 
-extension CMSInquiry {
+nonisolated extension CMSInquiry {
     func catalogRecord(fetchedAt: Date) -> WinlinkCatalogItemRecord? {
         guard let inquiryId = InquiryId?.trimmingCharacters(in: .whitespaces), !inquiryId.isEmpty
         else { return nil }

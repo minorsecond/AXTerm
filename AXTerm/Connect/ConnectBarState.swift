@@ -154,10 +154,10 @@ nonisolated enum ConnectBarEvent: Equatable {
 nonisolated enum ConnectBarStateReducer {
     static func reduce(state: ConnectBarState, event: ConnectBarEvent) -> ConnectBarState {
         switch (state, event) {
-        case let (_, .switchedToBroadcast):
+        case (_, .switchedToBroadcast):
             return .broadcastComposer(.default)
 
-        case let (.broadcastComposer, .switchedToConnect):
+        case (.broadcastComposer, .switchedToConnect):
             return .disconnectedDraft(.empty())
 
         case let (.disconnectedDraft(_), .draftUpdated(draft)),
