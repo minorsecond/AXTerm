@@ -58,6 +58,15 @@ struct OfflineBasemapMapView {
 
     // MARK: - Annotations
 
+    /// How often the map accepts structural mutations — annotation
+    /// arrivals and departures, line rebuilds. Anything inserted makes
+    /// MapKit re-resolve its label layer, which reads as the basemap's
+    /// own dots and shields rippling; on a busy channel someone new is
+    /// placed every few seconds, so unpaced mutations kept that ripple
+    /// running continuously (field video 2026-09-01 11:28). Deferred
+    /// changes are re-derived and applied by a later pass.
+    static let structuralMutationInterval: TimeInterval = 10
+
     /// One station, carried into MapKit.
     ///
     /// Mutable, deliberately: the object *is* the marker's identity. A
@@ -261,6 +270,19 @@ struct OfflineBasemapMapView {
         /// because one path was heard again.
         var linkLines: [String: MKPolyline] = [:]
         var linkSignatures: [String: String] = [:]
+        /// When the map was last structurally mutated — an annotation added
+        /// or removed, a line rebuilt. Inserting anything makes MapKit
+        /// re-resolve its own label layer: an animated ripple of the city
+        /// dots and road shields. One new station every few seconds meant
+        /// that ripple ran continuously, so mutations are batched on this
+        /// clock — the first after a quiet spell applies at once, the ones
+        /// behind it coalesce into the next pass.
+        var lastStructuralMutation = Date.distantPast
+        /// One decision per update pass, taken before any section runs, so
+        /// annotations and lines mutate in the same batch instead of one
+        /// section stamping the clock and starving the other.
+        var structuralMutationsAllowed = true
+        var structuralMutationDidOccur = false
         var installedTerrainIDs: [String] = []
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -667,12 +689,18 @@ struct OfflineBasemapMapView {
         // link it draws actually changed — new, gone, restyled, or moved.
         let wantedLinks = Dictionary(pathLinks.map { ($0.id, $0) },
                                      uniquingKeysWith: { first, _ in first })
+        // Same batching clock as the annotations, same reasoning: a line
+        // inserted or removed ripples the basemap's label layer. Deferred
+        // work is re-derived by a later pass, never lost.
+        let mayMutateLinks = coordinator.structuralMutationsAllowed
         for (id, line) in coordinator.linkLines where wantedLinks[id] == nil {
+            guard mayMutateLinks else { break }
             mapView.removeOverlay(line)
             coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(line))
             coordinator.linkStyles.removeValue(forKey: ObjectIdentifier(line))
             coordinator.linkLines.removeValue(forKey: id)
             coordinator.linkSignatures.removeValue(forKey: id)
+            coordinator.structuralMutationDidOccur = true
         }
         for (id, link) in wantedLinks {
             let signature = Self.linkSignature(link)
@@ -684,6 +712,7 @@ struct OfflineBasemapMapView {
                 }
                 continue
             }
+            guard mayMutateLinks else { continue }
             #if DEBUG
             print("[MAPDIAG] link rebuild \(id)")
             #endif
@@ -698,6 +727,7 @@ struct OfflineBasemapMapView {
             coordinator.linkLines[id] = line
             coordinator.linkSignatures[id] = signature
             mapView.addOverlay(line, level: .aboveRoads)
+            coordinator.structuralMutationDidOccur = true
         }
     }
 
@@ -792,6 +822,9 @@ struct OfflineBasemapMapView {
 
     fileprivate func updateMapView(_ mapView: MKMapView, context: Context) {
         context.coordinator.parent = self
+        context.coordinator.structuralMutationsAllowed = Date().timeIntervalSince(
+            context.coordinator.lastStructuralMutation) >= Self.structuralMutationInterval
+        context.coordinator.structuralMutationDidOccur = false
 
         // `applyBasemap` owns the tile overlay's lifecycle and swaps it only
         // when the basemap actually changes — rebuilding it on every update
@@ -834,18 +867,24 @@ struct OfflineBasemapMapView {
         let departed = surplus + existing.filter {
             existingByID[$0.id] === $0 && !wantedIDs.contains($0.id)
         }
+
+        // The batching clock. Structural changes are deferred, not dropped:
+        // the body re-evaluates with every packet, so a deferred arrival is
+        // re-derived and applied by a pass a few seconds later.
+        let mayMutate = context.coordinator.structuralMutationsAllowed
         #if DEBUG
         if !departed.isEmpty {
-            print("[MAPDIAG] departed \(departed.map(\.id).joined(separator: ","))")
+            print("[MAPDIAG] departed\(mayMutate ? "" : " (deferred)") \(departed.map(\.id).joined(separator: ","))")
         }
         #endif
-        if !departed.isEmpty {
+        if !departed.isEmpty, mayMutate {
             // Removing a selected annotation fires `didDeselect`; suppressed,
             // or the delegate writes `selection = nil` straight back into the
             // state that caused this update.
             context.coordinator.isRebuildingAnnotations = true
             mapView.removeAnnotations(departed)
             context.coordinator.isRebuildingAnnotations = false
+            context.coordinator.structuralMutationDidOccur = true
         }
 
         var arrived: [SiteAnnotation] = []
@@ -866,11 +905,12 @@ struct OfflineBasemapMapView {
                 arrived.append(annotation)
             }
         }
-        if !arrived.isEmpty {
+        if !arrived.isEmpty, mayMutate {
             #if DEBUG
             print("[MAPDIAG] arrived \(arrived.map(\.id).joined(separator: ","))")
             #endif
             mapView.addAnnotations(arrived)
+            context.coordinator.structuralMutationDidOccur = true
         }
 
         // Feature labels are rebuilt with the overlays they belong to, keyed
@@ -906,6 +946,10 @@ struct OfflineBasemapMapView {
                 mapView.selectAnnotation(match, animated: true)
                 coordinator.isApplyingSelection = false
             }
+        }
+
+        if context.coordinator.structuralMutationDidOccur {
+            context.coordinator.lastStructuralMutation = Date()
         }
     }
 }

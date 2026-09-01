@@ -495,6 +495,15 @@ struct ContentView: View {
             // job, not a side effect of visiting a preferences pane.
             guard useDeviceLocation else { return }
             _ = await winlinkContext.locationService.currentLocation()
+            // ...and keep it no staler than the fix lifetime. This loop is
+            // the app's only GPS cadence: everyone else reads through the
+            // service's cache, so however often the map or Winlink ask,
+            // CoreLocation hears about it once per lifetime.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(StationLocationService.gpsFixLifetime))
+                guard !Task.isCancelled, useDeviceLocation else { return }
+                _ = await winlinkContext.locationService.currentLocation()
+            }
         }
         .task {
             // Warm analytics caches in the background so first tab-open is fast.

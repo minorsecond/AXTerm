@@ -281,7 +281,10 @@ struct StationPositionSettings: View {
         await Task.yield()
         isLocating = true
         defer { isLocating = false }
-        _ = await locationService.currentLocation()
+        // The one deliberate re-read in the app: the operator is looking at
+        // the position pane and asked. Everyone else lives with the cached
+        // fix for its lifetime.
+        _ = await locationService.currentLocation(maxFixAge: 0)
     }
 
     private func message(for error: GPSError) -> String {
