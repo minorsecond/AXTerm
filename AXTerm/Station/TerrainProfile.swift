@@ -79,6 +79,16 @@ nonisolated struct TerrainProfile: Equatable, Sendable {
     var originHeight: Double
     var destinationHeight: Double
 
+    /// A profile that has not been computed yet.
+    ///
+    /// The card is dealt into the page's columns before the samples exist, so
+    /// that a profile arriving a second later does not change the set of cards
+    /// and redeal the page. Reads as "no terrain for this path", which is what
+    /// the card shows while it waits.
+    static let pending = TerrainProfile(
+        samples: [], verdict: .unknown("Working out the ground along this path\u{2026}"),
+        totalMetres: 0, frequencyHz: 0, originHeight: 0, destinationHeight: 0)
+
     // MARK: - Constants
 
     /// Effective-earth-radius factor. 4/3 is the standard temperate-climate
@@ -353,13 +363,39 @@ nonisolated struct TerrainProfile: Equatable, Sendable {
     /// Where the obstruction is and how far it reaches above the line, for
     /// the line under the headline. The geometry is still worth stating: it
     /// is what an antenna change acts on.
-    var geometryNote: String? {
+    var geometryNote: String? { geometryNote(origin: nil, destination: nil) }
+
+    /// Where the obstruction is, measured from whichever end it is nearer.
+    ///
+    /// "63.2 km out" on a 64 km path is technically the distance from here
+    /// and practically unreadable: the operator has to subtract to discover
+    /// the thing that matters, which is that the obstruction is 800 m from
+    /// the *far* station. That difference decides what to do about it. Near
+    /// their end, their antenna or their siting is the answer; near ours,
+    /// ours is.
+    ///
+    /// It is also the case the chart draws worst, because the mark lands
+    /// under an endpoint marker. Saying it in words is what makes that
+    /// survivable.
+    func geometryNote(origin: String?, destination: String?) -> String? {
+        func place(_ at: Double) -> String {
+            let fromFar = totalMetres - at
+            // A fifth of the path, so "near the far end" means near enough
+            // that the far station is the thing to think about.
+            guard totalMetres > 0 else { return Verdict.distanceText(at) }
+            if at <= totalMetres * 0.2, let origin {
+                return "\(Verdict.distanceText(at)) from \(origin)"
+            }
+            if fromFar <= totalMetres * 0.2, let destination {
+                return "\(Verdict.distanceText(fromFar)) from \(destination)"
+            }
+            return "\(Verdict.distanceText(at)) out"
+        }
         switch verdict {
         case .obstructed(let by, let at):
-            return "Terrain \(Int(by.rounded())) m above the line, "
-                + "\(Verdict.distanceText(at)) out"
+            return "Terrain \(Int(by.rounded())) m above the line, \(place(at))"
         case .marginal(_, let at):
-            return "Closest approach \(Verdict.distanceText(at)) out"
+            return "Closest approach \(place(at))"
         case .clear, .unknown:
             return nil
         }

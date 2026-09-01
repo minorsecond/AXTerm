@@ -89,7 +89,8 @@ struct TerrainProfileView: View {
                 // The geometry under the consequence, not instead of it: how
                 // far above the line and how far out is what an antenna
                 // change acts on, once you know whether it is worth acting.
-                Text([profile.geometryNote,
+                Text([profile.geometryNote(origin: originLabel,
+                                           destination: destinationLabel),
                       "\(originLabel) \u{2192} \(destinationLabel) \u{b7} \(distanceText)"]
                         .compactMap { $0 }.joined(separator: " \u{b7} "))
                     .font(.caption)

@@ -55,4 +55,48 @@ final class NodeProfilePageColumnsTests: XCTestCase {
         XCTAssertEqual(NodeProfileView.distributeSections(estimates: [10], into: 0),
                        [[0]])
     }
+
+    // MARK: - Staying put
+
+    /// Cards arrive late. Terrain is computed off the main thread, a licence
+    /// lookup lands seconds after the page opens, an activity chart grows a
+    /// row. Packing tallest-first re-sorted every card against whichever
+    /// estimate had just changed, so the page rearranged itself under the
+    /// operator and a page reopened a minute later dealt itself differently.
+    /// Reported as "the tiles move every time I open them".
+    func testEveryCardIsStillDealtExactlyOnce() {
+        let assignment = NodeProfileView.distributeSections(
+            estimates: [300, 120, 200, 160, 260], into: 3)
+        XCTAssertEqual(assignment.flatMap { $0 }.sorted(), Array(0..<5))
+    }
+
+    /// A card growing by a line is not a reason to redeal the page.
+    func testACardChangingHeightDoesNotRedealTheRest() {
+        // A line's worth of growth, well inside the bucket the card sits in.
+        let before = NodeProfileView.distributeSections(
+            estimates: [300, 120, 200, 160], into: 2)
+        let after = NodeProfileView.distributeSections(
+            estimates: [300, 138, 200, 160], into: 2)
+        XCTAssertEqual(after, before)
+    }
+
+    /// Ranking in buckets is what makes that true. Ordering on exact heights
+    /// let one card growing by a few points re-sort every card against it.
+    func testTheRankingIsCoarseEnoughToIgnoreSmallGrowth() {
+        let quiet = NodeProfileView.distributeSections(
+            estimates: [110, 160, 600, 242, 188, 160, 130, 320], into: 3)
+        let nudged = NodeProfileView.distributeSections(
+            estimates: [110, 172, 600, 249, 188, 160, 130, 320], into: 3)
+        XCTAssertEqual(nudged, quiet)
+    }
+
+    /// Cards keep the order they were declared in, within a column. Sorting
+    /// them back afterwards used to hide that the packer had reordered them.
+    func testCardsStayInDeclarationOrderWithinAColumn() {
+        let assignment = NodeProfileView.distributeSections(
+            estimates: [100, 100, 100, 100, 100, 100], into: 2)
+        for column in assignment {
+            XCTAssertEqual(column, column.sorted())
+        }
+    }
 }

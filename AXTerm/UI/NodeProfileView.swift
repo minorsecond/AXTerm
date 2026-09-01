@@ -95,6 +95,13 @@ struct NodeProfileView: View {
     /// tells the bad claim from a good one, so the call is the operator's.
     var onForgetStation: (() -> Void)?
 
+    /// Whether this page is about the station running the app.
+    ///
+    /// Several things that are informative about somebody else are empty or
+    /// circular about ourselves, and they need to be asked the same question
+    /// rather than each inventing its own callsign comparison.
+    private var isOurOwnStation: Bool { profile.roles.contains(.ourStation) }
+
     @State private var confirmingForget = false
 
     var body: some View {
@@ -113,7 +120,7 @@ struct NodeProfileView: View {
                     // scroll of things the tiles had already said.
                     statTiles
                     if !profile.roles.isEmpty { rolesSection }
-                    if let topology = profile.topology, topology.isCritical {
+                    if let topology = profile.topology, topology.isCritical, !isOurOwnStation {
                         criticalLine(topology)
                     }
                 } else {
@@ -501,10 +508,16 @@ struct NodeProfileView: View {
             // column it was not in ended a card early.
             items.append((330, AnyView(placementSection(placement))))
         }
-        if let terrain {
-            // Header, chart and legend. The chart carries a minHeight of its
-            // own, so this is that plus the prose around it.
-            items.append((260, AnyView(terrainSection(terrain))))
+        // Present from the first render, not added when the profile finishes
+        // computing. A card that appears a second later changes the set being
+        // dealt, and the whole page re-deals under the operator — which is
+        // most of why the tiles seemed to move every time the page opened.
+        //
+        // No path from a station to itself, though. Left in, the card measured
+        // the ground between our grid square's centre and our own licence
+        // address and reported "K0EPI-7 to K0EPI-7, 2.3 km, marginal".
+        if profile.placement != nil, !isOurOwnStation {
+            items.append((260, AnyView(terrainSection(terrain ?? .pending))))
         }
         if !profile.links.isEmpty {
             // Each measured direction is a headline, bar, metric row,
@@ -517,7 +530,8 @@ struct NodeProfileView: View {
         if let topology = profile.topology, !topology.isEmpty {
             let clusters = topology.communityMembers.isEmpty
                 ? 0 : 70 + topology.communityMembers.count * 6
-            items.append((CGFloat(100 + (topology.isCritical ? 60 : 0) + clusters),
+            let criticalLine = (topology.isCritical && !isOurOwnStation) ? 60 : 0
+            items.append((CGFloat(100 + criticalLine + clusters),
                           AnyView(topologySection(topology))))
         }
         if !profile.siblings.isEmpty {
@@ -552,14 +566,35 @@ struct NodeProfileView: View {
         let columnCount = max(1, columns)
         var assignment = Array(repeating: [Int](), count: columnCount)
         var heights = Array(repeating: CGFloat(0), count: columnCount)
-        let bySize = estimates.indices.sorted {
-            estimates[$0] != estimates[$1] ? estimates[$0] > estimates[$1] : $0 < $1
+        // Largest first, but ranked in coarse buckets rather than by exact
+        // height.
+        //
+        // Packing the tallest card first balances columns slightly better and
+        // makes the page rearrange itself under the operator. Cards arrive
+        // late: terrain is computed off the main thread, a licence lookup
+        // lands seconds after the page opens, and an activity chart grows a
+        // row. Each of those changes one estimate, largest-first re-sorts
+        // every card against it, and a page reopened a minute later deals
+        // itself differently. Reported as "the tiles move every time I open
+        // them", which is worse than a column ending an inch short.
+        //
+        // Bucketing to the nearest 100pt keeps the balance that largest-first
+        // buys while making the order insensitive to the small changes that
+        // were causing the churn. Ties fall back to declaration order, so the
+        // result is fully determined by which cards are present and roughly
+        // how big each is.
+        let bucket = CGFloat(100)
+        let order = estimates.indices.sorted { a, b in
+            let ba = (estimates[a] / bucket).rounded()
+            let bb = (estimates[b] / bucket).rounded()
+            return ba == bb ? a < b : ba > bb
         }
-        for index in bySize {
+        for index in order {
             let target = heights.indices.min { heights[$0] < heights[$1] } ?? 0
             assignment[target].append(index)
             heights[target] += estimates[index]
         }
+        // Reading order within each column, whatever order they were dealt in.
         return assignment.map { $0.sorted() }
     }
 
@@ -967,7 +1002,12 @@ struct NodeProfileView: View {
                 row("Direct links", "\(topology.neighbourCount)")
                     .help("Stations this one has been observed exchanging frames with, counting digipeated paths. Built from watched traffic, not from anything the station announced.")
 
-                if topology.isCritical {
+                // Never about ourselves. The graph is built from traffic this
+                // receiver heard, so of course removing this receiver
+                // disconnects it: "37 stations reach the network only
+                // through this one" is the definition of being the one
+                // listening, not a finding about the network.
+                if topology.isCritical, !isOurOwnStation {
                     Label {
                         Text(criticalSummary(topology))
                             .font(.callout)
