@@ -65,6 +65,10 @@ nonisolated struct HamDBDirectory: CallsignDirectory {
                 var lon: String?
                 var fname: String?
                 var name: String?
+                /// The street line. Decoded because it is the only way to
+                /// tell a house from a post office box, and a PO box means
+                /// the coordinate is a post office.
+                var addr1: String?
                 var addr2: String?
                 var state: String?
                 var country: String?
@@ -102,6 +106,7 @@ nonisolated struct HamDBDirectory: CallsignDirectory {
             gridSquare: clean(entry.grid),
             latitude: clean(entry.lat).flatMap(Double.init),
             longitude: clean(entry.lon).flatMap(Double.init),
+            street: clean(entry.addr1),
             locality: clean(entry.addr2)?.capitalized,
             state: clean(entry.state),
             country: clean(entry.country),

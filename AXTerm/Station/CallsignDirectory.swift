@@ -14,6 +14,12 @@ nonisolated struct CallsignRecord: Codable, Equatable, Sendable {
     var gridSquare: String?
     var latitude: Double?
     var longitude: Double?
+    /// The street line from the licence, when the source gives one.
+    ///
+    /// Kept for one reason: a PO box means the coordinate is a post office
+    /// rather than an antenna, and nothing else in the record can tell those
+    /// apart.
+    var street: String?
     var locality: String?
     var state: String?
     var country: String?
