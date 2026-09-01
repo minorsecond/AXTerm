@@ -59,15 +59,21 @@ struct OfflineBasemapMapView {
     // MARK: - Annotations
 
     /// One station, carried into MapKit.
+    ///
+    /// Mutable, deliberately: the object *is* the marker's identity. A
+    /// station that persists across updates keeps its annotation, and a
+    /// changed position is written into `coordinate` — KVO-compliant, so
+    /// MapKit slides that one view — instead of the whole layer being torn
+    /// down and rebuilt because one field of one station moved.
     final class SiteAnnotation: NSObject, MKAnnotation {
         let id: String
-        let coordinate: CLLocationCoordinate2D
-        let title: String?
-        let subtitle: String?
-        let signal: StationScope.Signal
-        let isApproximate: Bool
+        @objc dynamic var coordinate: CLLocationCoordinate2D
+        @objc dynamic var title: String?
+        @objc dynamic var subtitle: String?
+        var signal: StationScope.Signal
+        var isApproximate: Bool
         let isObserver: Bool
-        let isNode: Bool
+        var isNode: Bool
 
         init(id: String, coordinate: CLLocationCoordinate2D, title: String?,
              subtitle: String?, signal: StationScope.Signal,
@@ -80,6 +86,29 @@ struct OfflineBasemapMapView {
             self.isApproximate = isApproximate
             self.isObserver = isObserver
             self.isNode = isNode
+        }
+
+        /// Folds a rebuilt annotation's values into this one, returning
+        /// whether anything the *view* draws — tint, glyph, label — changed
+        /// and it therefore needs reconfiguring. The coordinate is written
+        /// only when it moved, so MapKit is not KVO-poked on every pass.
+        func absorb(_ next: SiteAnnotation) -> Bool {
+            if coordinate.latitude != next.coordinate.latitude
+                || coordinate.longitude != next.coordinate.longitude {
+                coordinate = next.coordinate
+            }
+            if subtitle != next.subtitle { subtitle = next.subtitle }
+            let redraws = title != next.title
+                || signal != next.signal
+                || isApproximate != next.isApproximate
+                || isNode != next.isNode
+            if redraws {
+                title = next.title
+                signal = next.signal
+                isApproximate = next.isApproximate
+                isNode = next.isNode
+            }
+            return redraws
         }
     }
 
@@ -215,6 +244,13 @@ struct OfflineBasemapMapView {
         /// Links keep their evidence so the renderer can dash the ones that
         /// have never actually been travelled.
         var linkStyles: [ObjectIdentifier: MapPathLink] = [:]
+        /// Installed path lines by link id, with the signature of what each
+        /// was built from. A line whose signature is unchanged is left
+        /// exactly where it is; one whose evidence or endpoints changed is
+        /// rebuilt alone, instead of every line on the map being torn down
+        /// because one path was heard again.
+        var linkLines: [String: MKPolyline] = [:]
+        var linkSignatures: [String: String] = [:]
         var installedTerrainIDs: [String] = []
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -383,7 +419,7 @@ struct OfflineBasemapMapView {
             return label
         }
 
-        private static func tint(for site: SiteAnnotation) -> PlatformColor {
+        static func tint(for site: SiteAnnotation) -> PlatformColor {
             if site.isObserver { return .systemBlue }
             // Infrastructure wears one colour so it reads apart from
             // traffic; recency still shows through the label and callout.
@@ -566,38 +602,98 @@ struct OfflineBasemapMapView {
         // path link appeared would make every new packet stutter the map.
         let terrainChanged = applyTerrain(to: mapView, coordinator: coordinator)
 
-        let wanted = overlays.map(\.id) + pathLinks.map(\.id)
+        // Boundaries rebuild only when the layer set itself changes — not,
+        // as before, whenever a path link appeared. The two were keyed
+        // together, so every newly heard path tore down every county
+        // boundary and every line on the map at once, and on a busy channel
+        // that was a visible flicker of the whole network every few seconds.
+        //
         // Order within a level is insertion order, so terrain added *after*
-        // the network would cover it. Re-adding the vectors whenever terrain
-        // changes keeps them on top no matter which was toggled first.
-        guard terrainChanged || coordinator.installedOverlayIDs != wanted else { return }
-        coordinator.installedOverlayIDs = wanted
+        // the network would cover it. A terrain change therefore forces both
+        // sections to re-add on top of it — the one remaining wholesale
+        // rebuild, and it happens only when the operator toggles terrain.
+        let wantedVectors = overlays.map(\.id)
+        if terrainChanged || coordinator.installedOverlayIDs != wantedVectors {
+            coordinator.installedOverlayIDs = wantedVectors
 
-        let coverageIDs = Set(coordinator.coverageCircles.map(ObjectIdentifier.init))
-        let existing = mapView.overlays.filter {
-            !($0 is MKTileOverlay) && !($0 is ElevationOverlay)
-                && !coverageIDs.contains(ObjectIdentifier($0))
-        }
-        mapView.removeOverlays(existing)
-        coordinator.overlayColors.removeAll()
-        coordinator.linkStyles.removeAll()
+            let coverageIDs = Set(coordinator.coverageCircles.map(ObjectIdentifier.init))
+            let linkIDs = Set(coordinator.linkLines.values.map(ObjectIdentifier.init))
+            let existing = mapView.overlays.filter {
+                !($0 is MKTileOverlay) && !($0 is ElevationOverlay)
+                    && !coverageIDs.contains(ObjectIdentifier($0))
+                    && !linkIDs.contains(ObjectIdentifier($0))
+            }
+            mapView.removeOverlays(existing)
+            for id in coordinator.overlayColors.keys where !linkIDs.contains(id) {
+                coordinator.overlayColors.removeValue(forKey: id)
+            }
 
-        for layer in overlays {
-            let color = Self.platformColor(named: layer.colorName)
-            for overlay in layer.mapKitOverlays() {
-                coordinator.overlayColors[ObjectIdentifier(overlay)] = color
-                mapView.addOverlay(overlay, level: .aboveLabels)
+            for layer in overlays {
+                let color = Self.platformColor(named: layer.colorName)
+                for overlay in layer.mapKitOverlays() {
+                    coordinator.overlayColors[ObjectIdentifier(overlay)] = color
+                    mapView.addOverlay(overlay, level: .aboveLabels)
+                }
+            }
+
+            if terrainChanged {
+                // Sweep the lines so they re-add above the fresh terrain.
+                mapView.removeOverlays(Array(coordinator.linkLines.values))
+                for (_, line) in coordinator.linkLines {
+                    coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(line))
+                    coordinator.linkStyles.removeValue(forKey: ObjectIdentifier(line))
+                }
+                coordinator.linkLines.removeAll()
+                coordinator.linkSignatures.removeAll()
             }
         }
 
-        // Below the labels: the network is context for the stations, and a
-        // web of lines over the place names would bury what they connect.
-        for link in pathLinks {
+        // Links reconciled one by one, below the labels: the network is
+        // context for the stations, and a web of lines over the place names
+        // would bury what they connect. A line is touched only when the
+        // link it draws actually changed — new, gone, restyled, or moved.
+        let wantedLinks = Dictionary(pathLinks.map { ($0.id, $0) },
+                                     uniquingKeysWith: { first, _ in first })
+        for (id, line) in coordinator.linkLines where wantedLinks[id] == nil {
+            mapView.removeOverlay(line)
+            coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(line))
+            coordinator.linkStyles.removeValue(forKey: ObjectIdentifier(line))
+            coordinator.linkLines.removeValue(forKey: id)
+            coordinator.linkSignatures.removeValue(forKey: id)
+        }
+        for (id, link) in wantedLinks {
+            let signature = Self.linkSignature(link)
+            if coordinator.linkSignatures[id] == signature {
+                // Same pixels, but the label may have new numbers in it —
+                // it feeds the tap card, and the card should not read stale.
+                if let line = coordinator.linkLines[id] {
+                    coordinator.linkStyles[ObjectIdentifier(line)] = link
+                }
+                continue
+            }
+            if let stale = coordinator.linkLines[id] {
+                mapView.removeOverlay(stale)
+                coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(stale))
+                coordinator.linkStyles.removeValue(forKey: ObjectIdentifier(stale))
+            }
             let line = link.polyline
             coordinator.overlayColors[ObjectIdentifier(line)] = Self.linkColor(for: link)
             coordinator.linkStyles[ObjectIdentifier(line)] = link
+            coordinator.linkLines[id] = line
+            coordinator.linkSignatures[id] = signature
             mapView.addOverlay(line, level: .aboveRoads)
         }
+    }
+
+    /// Everything that feeds a link's geometry or renderer, folded to a
+    /// string. Two links with the same signature draw identically, so the
+    /// installed line can be left alone. The label is deliberately absent —
+    /// it feeds the tap card, not the pixels, and `linkStyles` is refreshed
+    /// with the link either way.
+    private static func linkSignature(_ link: MapPathLink) -> String {
+        String(format: "%.6f,%.6f|%.6f,%.6f|", link.from.latitude, link.from.longitude,
+               link.to.latitude, link.to.longitude)
+            + "\(link.evidence.rawValue)|\(link.isSuspect)|\(link.isPrediction)"
     }
 
     /// Adds or removes shaded elevation tiles.
@@ -684,21 +780,48 @@ struct OfflineBasemapMapView {
         applyCoverage(to: mapView, coordinator: context.coordinator)
         applyDrawingPreview(to: mapView, coordinator: context.coordinator)
 
-        // Compared as *sets*: `mapView.annotations` is unordered, so an
-        // ordered comparison reported a difference on almost every pass and
-        // tore down every annotation for nothing — including the selected
-        // one, which is what turned a tap into an infinite loop.
+        // Reconciled station by station, never wholesale. This used to
+        // compare id-sets and, on any difference, remove every annotation
+        // and add them all back — so each newly placed station (every few
+        // seconds on a busy channel) made the entire marker layer blink and
+        // resettle. The operator saw the map pulse. Now a station that
+        // persists keeps its annotation object: a moved position slides that
+        // one dot via KVO, a changed signal reconfigures that one view, and
+        // only genuinely new or departed stations are added or removed.
+        // Keeping identity also means the selected annotation survives
+        // updates instead of being torn down and re-selected.
         let existing = mapView.annotations.compactMap { $0 as? SiteAnnotation }
+        let existingByID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
         let wanted = annotations()
-        if Set(existing.map(\.id)) != Set(wanted.map(\.id)) {
-            // Rebuilding annotations deselects whatever was selected, and
-            // MapKit reports that as a user deselection. Suppressed, or the
-            // delegate writes `selection = nil` straight back into the state
-            // that caused the rebuild.
+        let wantedIDs = Set(wanted.map(\.id))
+
+        let departed = existing.filter { !wantedIDs.contains($0.id) }
+        if !departed.isEmpty {
+            // Removing a selected annotation fires `didDeselect`; suppressed,
+            // or the delegate writes `selection = nil` straight back into the
+            // state that caused this update.
             context.coordinator.isRebuildingAnnotations = true
-            mapView.removeAnnotations(existing)
-            mapView.addAnnotations(wanted)
+            mapView.removeAnnotations(departed)
             context.coordinator.isRebuildingAnnotations = false
+        }
+
+        var arrived: [SiteAnnotation] = []
+        for annotation in wanted {
+            if let current = existingByID[annotation.id] {
+                if current.absorb(annotation),
+                   let view = mapView.view(for: current) as? StationDotAnnotationView {
+                    view.configure(tint: Coordinator.tint(for: current),
+                                   isObserver: current.isObserver,
+                                   approximate: current.isApproximate,
+                                   isNode: current.isNode,
+                                   callsign: current.title)
+                }
+            } else {
+                arrived.append(annotation)
+            }
+        }
+        if !arrived.isEmpty {
+            mapView.addAnnotations(arrived)
         }
 
         // Feature labels are rebuilt with the overlays they belong to, keyed
