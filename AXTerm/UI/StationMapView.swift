@@ -92,7 +92,7 @@ struct StationMapView: View {
             region: MapRegionFit.region(covering: framingPoints)?.mkRegion,
             coverage: coverage)
         .overlay(alignment: .bottomLeading) {
-            MapLegend(kind: legend, overDarkBasemap: false,
+            MapLegend(kind: legend, overDarkBasemap: store == nil && basemap.isDark,
                       showsCoverage: coverage != nil, showsNodes: hasNodeSites)
                 .padding(10)
         }

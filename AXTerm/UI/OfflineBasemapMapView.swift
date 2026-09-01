@@ -342,6 +342,7 @@ struct OfflineBasemapMapView {
                            approximate: site.isApproximate,
                            isNode: site.isNode,
                            callsign: site.title)
+            view.setOverDarkBasemap(parent.store == nil && parent.basemap.isDark)
             view.setLabelVisible(
                 labelsVisible || site.isObserver || site.id == parent.selection)
             // The callout has to earn the tap: a bubble carrying only the

@@ -81,33 +81,49 @@ final class StationDotAnnotationView: MKAnnotationView {
     /// The callsign under the dot.
     ///
     /// `MKMarkerAnnotationView` drew this for free; a plain annotation view
-    /// draws nothing, which is how the dots ended up anonymous. Rendered with
-    /// a dark halo rather than a plate, so it stays readable over both the
-    /// light and the dark basemap without boxing in the terrain.
+    /// draws nothing, which is how the dots ended up anonymous. A halo
+    /// rather than a plate, so a dense cluster of callsigns does not box in
+    /// the terrain they sit on.
     private func configureLabel() {
         #if os(iOS)
         label.font = .systemFont(ofSize: 10, weight: .medium)
-        label.textColor = .white
         label.textAlignment = .center
         label.numberOfLines = 1
         label.lineBreakMode = .byTruncatingTail
-        label.layer.shadowColor = PlatformColor.black.cgColor
-        label.layer.shadowOpacity = 0.85
+        label.layer.shadowOpacity = 1
         label.layer.shadowRadius = 1.5
         label.layer.shadowOffset = .zero
         #else
         label.font = .systemFont(ofSize: 10, weight: .medium)
-        label.textColor = .white
         label.alignment = .center
         label.isBezeled = false
         label.isEditable = false
         label.drawsBackground = false
         label.lineBreakMode = .byTruncatingTail
         label.wantsLayer = true
-        label.layer?.shadowColor = PlatformColor.black.cgColor
-        label.layer?.shadowOpacity = 0.85
+        label.layer?.shadowOpacity = 1
         label.layer?.shadowRadius = 1.5
         label.layer?.shadowOffset = .zero
+        #endif
+        setOverDarkBasemap(false)
+    }
+
+    /// Matches the label to the basemap under it.
+    ///
+    /// This used to be white with a black glow on every basemap, on the
+    /// theory that one halo would carry both. It does not: a blurred shadow
+    /// is not an outline, so white-on-light-grey left the callsigns — the
+    /// operator's own among them — barely legible on the standard map. Ink
+    /// takes the basemap's contrast and the halo takes the opposite, which
+    /// is how a paper map has always done it.
+    func setOverDarkBasemap(_ isDark: Bool) {
+        let halo: PlatformColor = isDark ? .black : .white
+        #if os(iOS)
+        label.textColor = isDark ? .white : .label
+        label.layer.shadowColor = halo.cgColor
+        #else
+        label.textColor = isDark ? .white : .labelColor
+        label.layer?.shadowColor = halo.cgColor
         #endif
     }
 
