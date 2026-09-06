@@ -36,7 +36,7 @@ final class DirectionalETXTests: XCTestCase {
         let parsed = CallsignNormalizer.parse(peer)
         let remote = AX25Address(call: parsed.call, ssid: parsed.ssid)
         _ = manager.handleInboundSABM(
-            from: remote, to: manager.localCallsign, path: DigiPath(), channel: 0)
+            from: remote, to: manager.localCallsign, path: DigiPath(), radio: .primary)
         return manager.existingSession(for: remote)!
     }
 

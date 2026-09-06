@@ -17,9 +17,9 @@ final class AX25RetryTests: XCTestCase {
         destination: AX25Address,
         path: DigiPath
     ) -> AX25Session {
-        _ = manager.connect(to: destination, path: path, channel: 0)
-        let session = manager.session(for: destination, path: path, channel: 0)
-        manager.handleInboundUA(from: destination, path: path, channel: 0)
+        _ = manager.connect(to: destination, path: path, radio: .primary)
+        let session = manager.session(for: destination, path: path, radio: .primary)
+        manager.handleInboundUA(from: destination, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connected)
         return session
     }
@@ -35,8 +35,8 @@ final class AX25RetryTests: XCTestCase {
         let session = connectSession(manager: manager, destination: destination, path: path)
         
         // 2. Send 2 frames (vs=0, vs=1)
-        _ = manager.sendData(Data("FRAME1".utf8), to: destination, path: path, channel: 0) // vs becomes 1
-        _ = manager.sendData(Data("FRAME2".utf8), to: destination, path: path, channel: 0) // vs becomes 2
+        _ = manager.sendData(Data("FRAME1".utf8), to: destination, path: path, radio: .primary) // vs becomes 1
+        _ = manager.sendData(Data("FRAME2".utf8), to: destination, path: path, radio: .primary) // vs becomes 2
         XCTAssertEqual(session.outstandingCount, 2)
         
         // 3. Trigger T1 timeout to increment retryCount
@@ -44,7 +44,7 @@ final class AX25RetryTests: XCTestCase {
         XCTAssertEqual(session.stateMachine.retryCount, 1, "retryCount should be 1 after timeout")
         
         // 4. Receive RR(nr=1) - Acks FRAME1 (progress made!)
-        _ = manager.handleInboundRR(from: destination, path: path, channel: 0, nr: 1, isPoll: false)
+        _ = manager.handleInboundRR(from: destination, path: path, radio: .primary, nr: 1, isPoll: false)
         XCTAssertEqual(session.stateMachine.retryCount, 0, "retryCount should reset because V(A) advanced")
         XCTAssertEqual(session.outstandingCount, 1)
         
@@ -54,11 +54,11 @@ final class AX25RetryTests: XCTestCase {
         
         // 6. Receive RR(nr=1) AGAIN (No progress, duplicate ack)
         // Peer might resend RR(1) if it hasn't received FRAME2 yet
-        _ = manager.handleInboundRR(from: destination, path: path, channel: 0, nr: 1, isPoll: false)
+        _ = manager.handleInboundRR(from: destination, path: path, radio: .primary, nr: 1, isPoll: false)
         XCTAssertEqual(session.stateMachine.retryCount, 1, "retryCount must NOT reset on duplicate RR (no progress)")
         
         // 7. Receive RR(nr=2) - Acks FRAME2 (progress made!)
-        _ = manager.handleInboundRR(from: destination, path: path, channel: 0, nr: 2, isPoll: false)
+        _ = manager.handleInboundRR(from: destination, path: path, radio: .primary, nr: 2, isPoll: false)
         XCTAssertEqual(session.stateMachine.retryCount, 0, "retryCount should reset when V(A) advances")
     }
 
@@ -70,7 +70,7 @@ final class AX25RetryTests: XCTestCase {
         let path = DigiPath.from(["W0ARP-7"])
         
         let session = connectSession(manager: manager, destination: destination, path: path)
-        _ = manager.sendData(Data("FRAME1".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("FRAME1".utf8), to: destination, path: path, radio: .primary)
         
         XCTAssertEqual(session.stateMachine.retryCount, 0)
         
@@ -95,7 +95,7 @@ final class AX25RetryTests: XCTestCase {
         let path = DigiPath.from(["W0ARP-7"])
         
         let session = connectSession(manager: manager, destination: destination, path: path)
-        _ = manager.sendData(Data("FRAME1".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("FRAME1".utf8), to: destination, path: path, radio: .primary)
         
         // Retry 1
         _ = manager.handleT1Timeout(session: session)
@@ -129,14 +129,14 @@ final class AX25RetryTests: XCTestCase {
         let session = connectSession(manager: manager, destination: destination, path: path)
         
         // Send frame vs=0
-        _ = manager.sendData(Data("FRAME1".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("FRAME1".utf8), to: destination, path: path, radio: .primary)
         
         // Peer acks it (nr=1)
-        _ = manager.handleInboundRR(from: destination, path: path, channel: 0, nr: 1, isPoll: false)
+        _ = manager.handleInboundRR(from: destination, path: path, radio: .primary, nr: 1, isPoll: false)
         // retryCount is 0, session idle
         
         // Send next frame vs=1
-        _ = manager.sendData(Data("FRAME2".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("FRAME2".utf8), to: destination, path: path, radio: .primary)
         
         // Timeout occurs (peer didn't ack FRAME2)
         _ = manager.handleT1Timeout(session: session)
@@ -144,7 +144,7 @@ final class AX25RetryTests: XCTestCase {
         
         // Receive RR(nr=1) - Peer still asking for 1 (maybe didn't hear FRAME2)
         // This is a duplicate ACK for the previous state. Progress NOT made.
-        _ = manager.handleInboundRR(from: destination, path: path, channel: 0, nr: 1, isPoll: false)
+        _ = manager.handleInboundRR(from: destination, path: path, radio: .primary, nr: 1, isPoll: false)
         
         XCTAssertEqual(session.stateMachine.retryCount, 1, "Duplicate RR(nr=1) should NOT reset retry count")
     }
@@ -159,7 +159,7 @@ final class AX25RetryTests: XCTestCase {
         let session = connectSession(manager: manager, destination: destination, path: path)
         
         // Peer sends RNR (Receive Not Ready)
-        _ = manager.handleInboundRR(from: destination, path: path, channel: 0, nr: 0, isPoll: false)
+        _ = manager.handleInboundRR(from: destination, path: path, radio: .primary, nr: 0, isPoll: false)
         let actions = session.stateMachine.handle(event: .receivedRNR(nr: 0))
         
         // Sending is gated by the peer-busy condition, not by stopping T1. T1 must keep
@@ -185,12 +185,12 @@ final class AX25RetryTests: XCTestCase {
 
         let session = connectSession(manager: manager, destination: destination, path: path)
 
-        _ = manager.sendData(Data("FRAME1".utf8), to: destination, path: path, channel: 0)
-        _ = manager.sendData(Data("FRAME2".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("FRAME1".utf8), to: destination, path: path, radio: .primary)
+        _ = manager.sendData(Data("FRAME2".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 2)
 
         // Peer acknowledges the first frame while reporting a full receive buffer.
-        _ = manager.handleInboundRNR(from: destination, path: path, channel: 0, nr: 1)
+        _ = manager.handleInboundRNR(from: destination, path: path, radio: .primary, nr: 1)
 
         XCTAssertEqual(session.va, 1, "RNR(N(R)=1) must advance V(A) to 1")
         XCTAssertEqual(session.outstandingCount, 1, "the acknowledged frame must leave the send buffer")
@@ -211,20 +211,20 @@ final class AX25RetryTests: XCTestCase {
         // Fill the window so further sends have to queue.
         let windowSize = session.stateMachine.config.windowSize
         for i in 0..<(windowSize + 2) {
-            _ = manager.sendData(Data("F\(i)".utf8), to: destination, path: path, channel: 0)
+            _ = manager.sendData(Data("F\(i)".utf8), to: destination, path: path, radio: .primary)
         }
         XCTAssertGreaterThan(session.pendingDataQueue.count, 0, "precondition: data is queued")
         let queuedBefore = session.pendingDataQueue.count
 
         // Peer acks one frame but reports busy — the freed slot must NOT be used.
-        _ = manager.handleInboundRNR(from: destination, path: path, channel: 0, nr: 1)
+        _ = manager.handleInboundRNR(from: destination, path: path, radio: .primary, nr: 1)
 
         XCTAssertTrue(session.stateMachine.peerBusy)
         XCTAssertEqual(session.pendingDataQueue.count, queuedBefore,
                        "no queued data may be sent while the peer is busy")
 
         // Once the peer clears the condition with RR, the queue drains again.
-        _ = manager.handleInboundRRFrames(from: destination, path: path, channel: 0, nr: 2)
+        _ = manager.handleInboundRRFrames(from: destination, path: path, radio: .primary, nr: 2)
         XCTAssertFalse(session.stateMachine.peerBusy, "RR clears the busy condition")
         XCTAssertLessThan(session.pendingDataQueue.count, queuedBefore,
                           "queued data must resume draining after RR")
@@ -247,12 +247,12 @@ final class AX25RetryTests: XCTestCase {
         // Peer opens with the wrong N(S) (it sends 1 while we expect 0), creating a receive
         // gap. Outbound data is held while that gap is unresolved.
         _ = manager.handleInboundIFrame(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             ns: 1, nr: 0, pf: true, payload: Data("HELLO".utf8)
         )
         XCTAssertTrue(session.hasReceiveSequenceGap, "precondition: a receive gap exists")
 
-        _ = manager.sendData(Data("bbs\r".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("bbs\r".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.pendingDataQueue.count, 1, "precondition: data is queued behind the gap")
 
         // Frames reach the air by two routes: the drain emits through onSendFrame, while the
@@ -262,7 +262,7 @@ final class AX25RetryTests: XCTestCase {
 
         // Peer polls. This drains the queued frame — and must put it on the air exactly once.
         let returned = manager.handleInboundRRFrames(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             nr: 0, pf: true, isCommand: true
         )
 
@@ -288,14 +288,14 @@ final class AX25RetryTests: XCTestCase {
         let session = connectSession(manager: manager, destination: destination, path: path)
         let maxRetries = session.stateMachine.config.maxRetries
 
-        _ = manager.sendData(Data("b\r".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("b\r".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 1)
 
         // The peer keeps polling with nr that acks nothing.
         var sawLinkFailure = false
         for poll in 1...(maxRetries + 2) {
             let frames = manager.handleInboundRRFrames(
-                from: destination, path: path, channel: 0,
+                from: destination, path: path, radio: .primary,
                 nr: 0, pf: true, isCommand: true
             )
             if session.state == .error {
@@ -327,20 +327,20 @@ final class AX25RetryTests: XCTestCase {
         manager.onLinkQualitySample = { _, _ in samples += 1 }
 
         // Still connecting (SABM unanswered) — the peer's zombie session polls us.
-        _ = manager.connect(to: destination, path: path, channel: 0)
-        _ = manager.handleInboundRRFrames(from: destination, path: path, channel: 0,
+        _ = manager.connect(to: destination, path: path, radio: .primary)
+        _ = manager.handleInboundRRFrames(from: destination, path: path, radio: .primary,
                                           nr: 0, pf: true, isCommand: true)
         XCTAssertEqual(samples, 0, "no link-quality sample while connecting")
 
         // Connected but no I-frame ever sent: still no evidence to learn from.
-        manager.handleInboundUA(from: destination, path: path, channel: 0)
-        _ = manager.handleInboundRRFrames(from: destination, path: path, channel: 0,
+        manager.handleInboundUA(from: destination, path: path, radio: .primary)
+        _ = manager.handleInboundRRFrames(from: destination, path: path, radio: .primary,
                                           nr: 0, pf: true, isCommand: true)
         XCTAssertEqual(samples, 0, "SABMs and polls alone are not loss evidence")
 
         // Real I-frame traffic: now samples flow.
-        _ = manager.sendData(Data("info\r".utf8), to: destination, path: path, channel: 0)
-        _ = manager.handleInboundRRFrames(from: destination, path: path, channel: 0,
+        _ = manager.sendData(Data("info\r".utf8), to: destination, path: path, radio: .primary)
+        _ = manager.handleInboundRRFrames(from: destination, path: path, radio: .primary,
                                           nr: 1, pf: false, isCommand: false)
         XCTAssertEqual(samples, 1, "an acked I-frame is genuine link-quality evidence")
     }
@@ -361,13 +361,13 @@ final class AX25RetryTests: XCTestCase {
         var samples: [LinkQualitySample] = []
         manager.onLinkQualitySample = { _, sample in samples.append(sample) }
 
-        _ = manager.sendData(Data("mh 3\r".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("mh 3\r".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 1)
 
         // The peer's data frame carries nr=1 — our frame is acked by piggyback,
         // no standalone RR ever arrives (the BBS pattern from the field log).
         _ = manager.handleInboundIFrame(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             ns: 0, nr: 1, pf: false, payload: Data("Welcome\r".utf8)
         )
 
@@ -380,7 +380,7 @@ final class AX25RetryTests: XCTestCase {
         // Further inbound I-frames with no new outbound evidence must NOT spam
         // the controller — the delta gate still applies on this path.
         _ = manager.handleInboundIFrame(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             ns: 1, nr: 1, pf: false, payload: Data("Commands:\r".utf8)
         )
         XCTAssertEqual(samples.count, 1, "no new sent frames, no retransmits → no sample")
@@ -397,12 +397,12 @@ final class AX25RetryTests: XCTestCase {
         var samples: [LinkQualitySample] = []
         manager.onLinkQualitySample = { _, sample in samples.append(sample) }
 
-        _ = manager.sendData(Data("A".utf8), to: destination, path: path, channel: 0)
-        _ = manager.sendData(Data("B".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("A".utf8), to: destination, path: path, radio: .primary)
+        _ = manager.sendData(Data("B".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 2)
 
         // Peer rejects from 0: both frames retransmit — that is real loss evidence.
-        let frames = manager.handleInboundREJ(from: destination, path: path, channel: 0,
+        let frames = manager.handleInboundREJ(from: destination, path: path, radio: .primary,
                                               nr: 0, pf: false, isCommand: false)
         XCTAssertFalse(frames.filter { $0.frameType == "i" }.isEmpty,
                        "precondition: REJ triggered retransmission")
@@ -420,15 +420,15 @@ final class AX25RetryTests: XCTestCase {
         let path = DigiPath()
         let session = connectSession(manager: manager, destination: destination, path: path)
 
-        _ = manager.sendData(Data("A".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("A".utf8), to: destination, path: path, radio: .primary)
         for _ in 1...3 {
-            _ = manager.handleInboundRRFrames(from: destination, path: path, channel: 0,
+            _ = manager.handleInboundRRFrames(from: destination, path: path, radio: .primary,
                                               nr: 0, pf: true, isCommand: true)
         }
         XCTAssertEqual(session.stateMachine.retryCount, 3)
 
         // The frame finally lands: ack advances V(A) and resets the ladder.
-        _ = manager.handleInboundRRFrames(from: destination, path: path, channel: 0,
+        _ = manager.handleInboundRRFrames(from: destination, path: path, radio: .primary,
                                           nr: 1, pf: false, isCommand: false)
         XCTAssertEqual(session.stateMachine.retryCount, 0,
                        "genuine ack progress must clear the no-progress ladder")
@@ -506,14 +506,14 @@ final class AX25RetryTests: XCTestCase {
         // Fill the window so one chunk queues behind it.
         let windowSize = session.stateMachine.config.windowSize
         for i in 0...windowSize {
-            _ = manager.sendData(Data("F\(i)".utf8), to: destination, path: path, channel: 0)
+            _ = manager.sendData(Data("F\(i)".utf8), to: destination, path: path, radio: .primary)
         }
         XCTAssertEqual(session.pendingDataQueue.count, 1, "precondition: one chunk queued")
 
         // Peer acks the whole window. The state machine sees outstanding == 0 and
         // emits stopT1/startT3 — but the drain then transmits the queued chunk.
         _ = manager.handleInboundRRFrames(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             nr: windowSize, pf: true, isCommand: false
         )
 
@@ -530,12 +530,12 @@ final class AX25RetryTests: XCTestCase {
         let destination = AX25Address(call: "N0HI", ssid: 7)
         let path = DigiPath()
 
-        _ = manager.connect(to: destination, path: path, channel: 0)
-        let session = manager.session(for: destination, path: path, channel: 0)
-        _ = manager.sendData(Data("EARLY".utf8), to: destination, path: path, channel: 0)
+        _ = manager.connect(to: destination, path: path, radio: .primary)
+        let session = manager.session(for: destination, path: path, radio: .primary)
+        _ = manager.sendData(Data("EARLY".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.pendingDataQueue.count, 1, "precondition: data queued while connecting")
 
-        manager.handleInboundUA(from: destination, path: path, channel: 0)
+        manager.handleInboundUA(from: destination, path: path, radio: .primary)
 
         XCTAssertEqual(session.state, .connected)
         XCTAssertEqual(session.outstandingCount, 1, "queued data must be transmitted on connect")
@@ -553,14 +553,14 @@ final class AX25RetryTests: XCTestCase {
         let session = connectSession(manager: manager, destination: destination, path: path)
         
         // Send 3 frames
-        _ = manager.sendData(Data("FRAME1".utf8), to: destination, path: path, channel: 0)
-        _ = manager.sendData(Data("FRAME2".utf8), to: destination, path: path, channel: 0)
-        _ = manager.sendData(Data("FRAME3".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("FRAME1".utf8), to: destination, path: path, radio: .primary)
+        _ = manager.sendData(Data("FRAME2".utf8), to: destination, path: path, radio: .primary)
+        _ = manager.sendData(Data("FRAME3".utf8), to: destination, path: path, radio: .primary)
         
         // Receive REJ(nr=1) - Peer acked FRAME1 but missed FRAME2 (and FRAME3 sent out of order)
         // Peer is asking for retransmission starting from FRAME2 (nr=1)
         // Note: handleInboundREJ returns the retransmitted frames directly
-        let retransmitFrames = manager.handleInboundREJ(from: destination, path: path, channel: 0, nr: 1)
+        let retransmitFrames = manager.handleInboundREJ(from: destination, path: path, radio: .primary, nr: 1)
 
         // Should retransmit FRAME2 and FRAME3
         XCTAssertEqual(retransmitFrames.count, 2)

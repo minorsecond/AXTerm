@@ -97,6 +97,51 @@ stop trusting switches.
 On iOS the same two faces sit behind the More screen's row, which is likewise
 "Connection" or "Radios" (`SettingsDestination.radios` / `.radio(id)`).
 
+## The link layer
+
+`RadioManager` (`AXTerm/Radio/RadioManager.swift`) owns one `LinkSession`
+per byte stream and a table saying which radio each KISS port of each
+stream belongs to.
+
+- `LinkSession` (`AXTerm/Radio/LinkSession.swift`) is a `KISSLink` plus the
+  parser that reassembles its frames. The parser lives with the stream and
+  not with a radio because a KISS frame can be split across TCP reads, and
+  the pieces belong to the stream before the finished frame's port says
+  which radio it is for. The session also keeps the TNC's own facts — what
+  it called itself, a Mobilinkd's battery and input level.
+- `reconcile(radios, open:)` brings the links into line with the enabled
+  profiles. A link still wanted is kept (a serial or Bluetooth one has its
+  config applied in place, and its transport decides whether that needs a
+  reconnect — Mobilinkd gains never do); a link no longer wanted is closed;
+  a new one is opened. Two radios on one Direwolf share a link and differ by
+  port. Opening reports "connecting" before the transport has said so, so a
+  caller that connects and then reads the state is not shown the stale
+  "disconnected".
+- Inbound: a frame comes off a session with its port; the table names the
+  radio; `RadioManager.ingest` publishes it as a `RadioIngest`. A frame on a
+  port no radio claims is dropped, counted, and reported once per link and
+  port (CLAUDE.md §4: logged, not dropped silently).
+- Outbound: a frame carries its `radio` (`OutboundFrame.radio`, which
+  replaced the always-zero `channel`); `RadioManager.send` looks up that
+  radio's link and port. `AX25SessionManager.processActions` stamps every
+  frame a session produces with the session's radio, so a UA answering a
+  SABM heard on the second radio leaves by the second radio. Pinned end to
+  end in `TwoRadioSessionTraceTests`.
+
+`PacketEngine` no longer owns a link. It consumes `ingest`, stamps every
+`Packet` with `radioID`, `kissPort` and the link's description, and keeps a
+one-line summary for the surfaces that still show one status: the aggregate
+status and the primary radio's host, port and TNC identity. `connect(host:
+port:)`, `connectSerial` and `connectBLE` remain as shims that reconcile a
+single overriding profile — the test harness and the old link-reuse tests
+speak them — and do not write settings.
+
+The session layer's dimension is the radio: `SessionKey.radio` (was
+`channel: UInt8`, always 0) and `AX25Session.radio`. Every handler threads it
+through, with `.primary` as the default so callers that predate radios still
+compile. One peer heard on two radios is two sessions. Per-radio callsigns
+are not yet in effect: every radio answers as the station callsign.
+
 ## What an operator with one radio must never notice
 
 Every "only when there is more than one" decision hangs off one predicate,
@@ -123,7 +168,12 @@ These are pinned literally in `RadioPresentationTests`,
    Radios pane. The engine still holds one link and connects to the primary
    radio; the list says so while that is true.
 
-Next: a link layer that holds one `LinkSession` per byte stream and demuxes
-ports to radios; then the radio dimension in packets, sessions, storage and
-metrics; then the services and the multi-radio UI. See
-`Docs/RoutingMetrics.md` for how link quality will be kept per radio.
+3. The link layer: one `LinkSession` per byte stream, ports demuxed to
+   radios, every packet and session bound to its radio, replies leaving by
+   the radio that heard the call. All enabled radios connect.
+
+Next: the radio dimension in storage (a migration that lets serial and
+Bluetooth packets stop borrowing the TCP endpoint), per-radio callsigns,
+cross-radio duplicate handling and per-radio link metrics, then the
+services and the multi-radio UI. See `Docs/RoutingMetrics.md` for how link
+quality will be kept per radio.

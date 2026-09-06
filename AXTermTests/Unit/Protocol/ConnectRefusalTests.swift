@@ -24,12 +24,12 @@ final class ConnectRefusalTests: XCTestCase {
         let peer = AX25Address(call: "COSCO", ssid: 0)
         let path = DigiPath()
 
-        XCTAssertNotNil(manager.connect(to: peer, path: path, channel: 0))
-        let session = manager.session(for: peer, path: path, channel: 0)
+        XCTAssertNotNil(manager.connect(to: peer, path: path, radio: .primary))
+        let session = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connecting)
         XCTAssertFalse(session.peerRefusedConnect)
 
-        manager.handleInboundDM(from: peer, path: path, channel: 0)
+        manager.handleInboundDM(from: peer, path: path, radio: .primary)
 
         XCTAssertEqual(session.state, .disconnected, "§6.3.1: DM aborts the connect cleanly")
         XCTAssertTrue(session.peerRefusedConnect, "the refusal must survive the state transition")
@@ -42,13 +42,13 @@ final class ConnectRefusalTests: XCTestCase {
         let peer = AX25Address(call: "COSCO", ssid: 0)
         let path = DigiPath()
 
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        let refusedSession = manager.session(for: peer, path: path, channel: 0)
-        manager.handleInboundDM(from: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        let refusedSession = manager.session(for: peer, path: path, radio: .primary)
+        manager.handleInboundDM(from: peer, path: path, radio: .primary)
         XCTAssertTrue(refusedSession.peerRefusedConnect)
 
-        XCTAssertNotNil(manager.connect(to: peer, path: path, channel: 0))
-        let retried = manager.session(for: peer, path: path, channel: 0)
+        XCTAssertNotNil(manager.connect(to: peer, path: path, radio: .primary))
+        let retried = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertFalse(retried.peerRefusedConnect)
         XCTAssertEqual(retried.state, .connecting)
     }
@@ -60,12 +60,12 @@ final class ConnectRefusalTests: XCTestCase {
         let peer = AX25Address(call: "NODE", ssid: 0)
         let path = DigiPath()
 
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
-        let session = manager.session(for: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
+        let session = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connected)
 
-        manager.handleInboundDM(from: peer, path: path, channel: 0)
+        manager.handleInboundDM(from: peer, path: path, radio: .primary)
         XCTAssertFalse(session.peerRefusedConnect)
     }
 }

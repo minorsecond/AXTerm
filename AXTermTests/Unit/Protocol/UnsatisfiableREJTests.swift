@@ -19,7 +19,7 @@ final class UnsatisfiableREJTests: XCTestCase {
         manager.defaultConfig = AX25SessionConfig(maxRetries: maxRetries)
         _ = manager.connect(to: peer)
         let session = manager.session(for: peer)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
         XCTAssertEqual(session.state, .connected)
         return (manager, session)
     }
@@ -31,7 +31,7 @@ final class UnsatisfiableREJTests: XCTestCase {
         XCTAssertEqual(session.outstandingCount, 1)
 
         // The first REJ acknowledges the frame — real progress, no escalation.
-        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0,
+        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), radio: .primary,
                                      nr: 1, pf: true, isCommand: false)
         XCTAssertEqual(session.outstandingCount, 0)
         XCTAssertEqual(session.state, .connected)
@@ -39,7 +39,7 @@ final class UnsatisfiableREJTests: XCTestCase {
         // Every one after that acknowledges nothing and asks for a frame that
         // does not exist. The ladder has to climb.
         for _ in 0...3 {
-            _ = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0,
+            _ = manager.handleInboundREJ(from: peer, path: DigiPath(), radio: .primary,
                                          nr: 1, pf: true, isCommand: false)
         }
         XCTAssertEqual(session.state, .error,
@@ -51,7 +51,7 @@ final class UnsatisfiableREJTests: XCTestCase {
     func testTheSpecRetryRuleIsUntouched() {
         let (manager, session) = connected(maxRetries: 3)
         _ = manager.sendData(Data("n".utf8), to: peer)
-        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0,
+        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), radio: .primary,
                                      nr: 1, pf: true, isCommand: false)
         XCTAssertEqual(session.stateMachine.retryCount, 0)
         XCTAssertEqual(session.stateMachine.unsatisfiableREJCount, 0,
@@ -61,15 +61,15 @@ final class UnsatisfiableREJTests: XCTestCase {
     func testUnsatisfiableREJsAreCountedSeparately() {
         let (manager, session) = connected(maxRetries: 3)
         _ = manager.sendData(Data("n".utf8), to: peer)
-        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0,
+        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), radio: .primary,
                                      nr: 1, pf: true, isCommand: false)
 
         for _ in 0..<3 {
-            _ = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0,
+            _ = manager.handleInboundREJ(from: peer, path: DigiPath(), radio: .primary,
                                          nr: 1, pf: true, isCommand: false)
             XCTAssertNotEqual(session.state, .error, "should not fail before N2")
         }
-        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0,
+        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), radio: .primary,
                                      nr: 1, pf: true, isCommand: false)
         XCTAssertEqual(session.state, .error)
     }
@@ -79,7 +79,7 @@ final class UnsatisfiableREJTests: XCTestCase {
         let (manager, session) = connected(maxRetries: 3)
         for index in 0..<6 {
             _ = manager.sendData(Data("frame\(index)".utf8), to: peer)
-            _ = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0,
+            _ = manager.handleInboundREJ(from: peer, path: DigiPath(), radio: .primary,
                                          nr: (index + 1) % 8, pf: true, isCommand: false)
             XCTAssertEqual(session.state, .connected, "progress must reset the ladder")
         }
@@ -93,7 +93,7 @@ final class UnsatisfiableREJTests: XCTestCase {
         _ = manager.sendData(Data("two".utf8), to: peer)
         XCTAssertEqual(session.outstandingCount, 2)
 
-        let frames = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0,
+        let frames = manager.handleInboundREJ(from: peer, path: DigiPath(), radio: .primary,
                                               nr: 1, pf: true, isCommand: false)
         XCTAssertFalse(frames.isEmpty, "a satisfiable REJ must put something on the air")
         XCTAssertEqual(session.state, .connected)

@@ -156,12 +156,12 @@ final class AdaptiveTestHarness {
     @discardableResult
     func connect() -> Bool {
         // 1. Alice sends SABM — returned directly from connect()
-        guard let sabm = alice.connect(to: bobAddr, path: path, channel: 0) else {
+        guard let sabm = alice.connect(to: bobAddr, path: path, radio: .primary) else {
             return false
         }
 
         // 2. Deliver SABM to Bob immediately (no impairment on handshake for simplicity)
-        if let ua = bob.handleInboundSABM(from: aliceAddr, to: bobAddr, path: path, channel: 0) {
+        if let ua = bob.handleInboundSABM(from: aliceAddr, to: bobAddr, path: path, radio: .primary) {
             // Bob sends UA back to Alice
             deliverToAlice(frame: ua, delay: config.baseLatency)
         }
@@ -169,7 +169,7 @@ final class AdaptiveTestHarness {
         // 3. Advance past the handshake latency so UA reaches Alice
         clock.advance(by: config.baseLatency + 0.01)
 
-        let aliceSession = alice.session(for: bobAddr, path: path, channel: 0)
+        let aliceSession = alice.session(for: bobAddr, path: path, radio: .primary)
         captureSnapshot(session: aliceSession, context: "connected", trigger: .uaReceived)
 
         _ = sabm  // suppress unused-result warning
@@ -178,7 +178,7 @@ final class AdaptiveTestHarness {
 
     /// Alice disconnects gracefully.
     func disconnect() {
-        let session = alice.existingSession(for: bobAddr, path: path, channel: 0)
+        let session = alice.existingSession(for: bobAddr, path: path, radio: .primary)
         if let session = session {
             _ = alice.disconnect(session: session)
         }
@@ -193,9 +193,9 @@ final class AdaptiveTestHarness {
         payload: Data = Data("adaptive-test".utf8),
         advanceFactor: TimeInterval = 1.5
     ) {
-        let rto = alice.existingSession(for: bobAddr, path: path, channel: 0)?.timers.rto ?? 2.0
+        let rto = alice.existingSession(for: bobAddr, path: path, radio: .primary)?.timers.rto ?? 2.0
         for _ in 0..<count {
-            let frames = alice.sendData(payload, to: bobAddr, path: path, channel: 0)
+            let frames = alice.sendData(payload, to: bobAddr, path: path, radio: .primary)
             for f in frames {
                 stats.aliceFramesSent += 1
                 throughput.recordSend(bytes: payload.count, at: clock.currentTime)
@@ -210,7 +210,7 @@ final class AdaptiveTestHarness {
     /// Send data from Alice to Bob and return without advancing the clock.
     func queueFrames(count: Int, payload: Data = Data("test".utf8)) {
         for _ in 0..<count {
-            let frames = alice.sendData(payload, to: bobAddr, path: path, channel: 0)
+            let frames = alice.sendData(payload, to: bobAddr, path: path, radio: .primary)
             for f in frames { dispatchFromAlice(frame: f) }
         }
     }
@@ -226,7 +226,7 @@ final class AdaptiveTestHarness {
         }
 
         // Periodic snapshot
-        if let session = alice.existingSession(for: bobAddr, path: path, channel: 0) {
+        if let session = alice.existingSession(for: bobAddr, path: path, radio: .primary) {
             captureSnapshot(session: session, context: "periodic", trigger: .periodic)
         }
     }
@@ -247,12 +247,12 @@ final class AdaptiveTestHarness {
 
     /// Alice's current session (nil if not connected).
     var aliceSession: AX25Session? {
-        alice.existingSession(for: bobAddr, path: path, channel: 0)
+        alice.existingSession(for: bobAddr, path: path, radio: .primary)
     }
 
     /// Bob's current session (nil if not connected).
     var bobSession: AX25Session? {
-        bob.existingSession(for: aliceAddr, path: path, channel: 0)
+        bob.existingSession(for: aliceAddr, path: path, radio: .primary)
     }
 
     /// Current RTO for Alice's session.
@@ -351,7 +351,7 @@ final class AdaptiveTestHarness {
     /// Deliver a frame to Bob's protocol stack and return any response frames.
     private func dispatchToBob(frame: OutboundFrame) -> [OutboundFrame] {
         let from = frame.source
-        let channel: UInt8 = frame.channel
+        let radio: RadioID = frame.radio
         let path = frame.path.normalized
         var responses: [OutboundFrame] = []
 
@@ -359,15 +359,15 @@ final class AdaptiveTestHarness {
         case "u":
             let info = frame.displayInfo ?? ""
             if info.contains("SABM") {
-                if let r = bob.handleInboundSABM(from: from, to: frame.destination, path: path, channel: channel) {
+                if let r = bob.handleInboundSABM(from: from, to: frame.destination, path: path, radio: radio) {
                     responses.append(r)
                 }
             } else if info.contains("UA") {
-                bob.handleInboundUA(from: from, path: path, channel: channel)
+                bob.handleInboundUA(from: from, path: path, radio: radio)
             } else if info.contains("DM") {
-                bob.handleInboundDM(from: from, path: path, channel: channel)
+                bob.handleInboundDM(from: from, path: path, radio: radio)
             } else if info.contains("DISC") {
-                if let r = bob.handleInboundDISC(from: from, path: path, channel: channel) {
+                if let r = bob.handleInboundDISC(from: from, path: path, radio: radio) {
                     responses.append(r)
                 }
             }
@@ -378,7 +378,7 @@ final class AdaptiveTestHarness {
             // matters now that receivers batch acks on T2 and rely on the
             // burst-ending poll for the immediate cumulative F=1 response.
             if let r = bob.handleInboundIFrame(
-                from: from, path: path, channel: channel,
+                from: from, path: path, radio: radio,
                 ns: frame.ns ?? 0, nr: frame.nr ?? 0,
                 pf: ((frame.controlByte ?? 0) & 0x10) != 0,
                 payload: frame.payload
@@ -392,13 +392,13 @@ final class AdaptiveTestHarness {
             let info = frame.displayInfo ?? ""
             if info.hasPrefix("RR") || info.hasPrefix("rr") {
                 if let r = bob.handleInboundRR(
-                    from: from, path: path, channel: channel,
+                    from: from, path: path, radio: radio,
                     nr: frame.nr ?? 0, isPoll: false
                 ) {
                     responses.append(r)
                 }
             } else if info.hasPrefix("REJ") || info.hasPrefix("rej") {
-                let frames = bob.handleInboundREJ(from: from, path: path, channel: channel, nr: frame.nr ?? 0)
+                let frames = bob.handleInboundREJ(from: from, path: path, radio: radio, nr: frame.nr ?? 0)
                 responses.append(contentsOf: frames)
             }
 
@@ -412,7 +412,7 @@ final class AdaptiveTestHarness {
     /// Deliver a frame to Alice's protocol stack and return any response frames.
     private func dispatchToAlice(frame: OutboundFrame) -> [OutboundFrame] {
         let from = frame.source
-        let channel: UInt8 = frame.channel
+        let radio: RadioID = frame.radio
         let path = frame.path.normalized
         var responses: [OutboundFrame] = []
 
@@ -420,14 +420,14 @@ final class AdaptiveTestHarness {
         case "u":
             let info = frame.displayInfo ?? ""
             if info.contains("UA") {
-                alice.handleInboundUA(from: from, path: path, channel: channel)
+                alice.handleInboundUA(from: from, path: path, radio: radio)
                 if let session = aliceSession {
                     captureSnapshot(session: session, context: "ua-received", trigger: .uaReceived)
                 }
             } else if info.contains("DM") {
-                alice.handleInboundDM(from: from, path: path, channel: channel)
+                alice.handleInboundDM(from: from, path: path, radio: radio)
             } else if info.contains("DISC") {
-                if let r = alice.handleInboundDISC(from: from, path: path, channel: channel) {
+                if let r = alice.handleInboundDISC(from: from, path: path, radio: radio) {
                     responses.append(r)
                 }
             }
@@ -438,7 +438,7 @@ final class AdaptiveTestHarness {
             // matters now that receivers batch acks on T2 and rely on the
             // burst-ending poll for the immediate cumulative F=1 response.
             if let r = alice.handleInboundIFrame(
-                from: from, path: path, channel: channel,
+                from: from, path: path, radio: radio,
                 ns: frame.ns ?? 0, nr: frame.nr ?? 0,
                 pf: ((frame.controlByte ?? 0) & 0x10) != 0,
                 payload: frame.payload
@@ -451,7 +451,7 @@ final class AdaptiveTestHarness {
             let info = frame.displayInfo ?? ""
             if info.hasPrefix("RR") || info.hasPrefix("rr") {
                 if let r = alice.handleInboundRR(
-                    from: from, path: path, channel: channel,
+                    from: from, path: path, radio: radio,
                     nr: frame.nr ?? 0, isPoll: false
                 ) {
                     responses.append(r)
@@ -460,7 +460,7 @@ final class AdaptiveTestHarness {
                     captureSnapshot(session: session, context: "rr-received", trigger: .rrReceived)
                 }
             } else if info.hasPrefix("REJ") || info.hasPrefix("rej") {
-                let frames = alice.handleInboundREJ(from: from, path: path, channel: channel, nr: frame.nr ?? 0)
+                let frames = alice.handleInboundREJ(from: from, path: path, radio: radio, nr: frame.nr ?? 0)
                 responses.append(contentsOf: frames)
                 if config.captureOnEveryREJ, let session = aliceSession {
                     captureSnapshot(session: session, context: "rej-received", trigger: .rejReceived)
@@ -537,7 +537,7 @@ final class MultisessionAdaptiveHarness {
 
     struct SessionEntry {
         let peerAddr: AX25Address
-        let channel: UInt8
+        let radio: RadioID
         var forwardModel: any RFImpairmentModel
         var reverseModel: any RFImpairmentModel
         var deliveredPayloads: [Data] = []
@@ -564,7 +564,7 @@ final class MultisessionAdaptiveHarness {
     /// Add a new session to a peer with a given impairment model.
     func addSession(
         peer: String,
-        channel: UInt8,
+        radio: RadioID,
         forwardModel: any RFImpairmentModel,
         reverseModel: any RFImpairmentModel,
         seed: UInt64
@@ -572,7 +572,7 @@ final class MultisessionAdaptiveHarness {
         let addr = AX25Address(call: peer, ssid: 0)
         sessions.append(SessionEntry(
             peerAddr: addr,
-            channel: channel,
+            radio: radio,
             forwardModel: forwardModel,
             reverseModel: reverseModel,
             rng: RFRng(seed: seed)
@@ -582,7 +582,7 @@ final class MultisessionAdaptiveHarness {
     /// Connect all registered sessions.
     func connectAll() {
         for entry in sessions {
-            _ = alice.connect(to: entry.peerAddr, path: DigiPath(), channel: entry.channel)
+            _ = alice.connect(to: entry.peerAddr, path: DigiPath(), radio: entry.radio)
         }
     }
 
@@ -590,7 +590,7 @@ final class MultisessionAdaptiveHarness {
         clock.advance(by: seconds)
         // Run invariant checks for all Alice sessions
         for entry in sessions {
-            if let session = alice.existingSession(for: entry.peerAddr, path: DigiPath(), channel: entry.channel) {
+            if let session = alice.existingSession(for: entry.peerAddr, path: DigiPath(), radio: entry.radio) {
                 let violations = checker.check(session: session)
                 invariantViolations.append(contentsOf: violations)
             }

@@ -425,7 +425,7 @@ final class BBSService: ObservableObject {
             Data(text.utf8),
             to: session.remoteAddress,
             path: session.path,
-            channel: session.channel,
+            radio: session.radio,
             pid: 0xF0,
             displayInfo: "BBS (\(text.utf8.count) bytes)")
         sendFrames(frames)
@@ -723,7 +723,7 @@ final class BBSService: ObservableObject {
             data,
             to: session.remoteAddress,
             path: session.path,
-            channel: session.channel,
+            radio: session.radio,
             pid: 0xF0,
             displayInfo: "BBS file (\(data.count) bytes)")
         sendFrames(frames)

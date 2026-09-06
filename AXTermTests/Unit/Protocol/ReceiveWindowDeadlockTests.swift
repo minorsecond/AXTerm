@@ -36,7 +36,7 @@ final class ReceiveWindowDeadlockTests: XCTestCase {
             AX25SessionConfig(windowSize: k, maxRetries: 15)
         }
         _ = manager.handleInboundSABM(
-            from: peer, to: manager.localCallsign, path: DigiPath(), channel: 0)
+            from: peer, to: manager.localCallsign, path: DigiPath(), radio: .primary)
         let session = manager.existingSession(for: peer)!
         XCTAssertEqual(session.state, .connected)
         XCTAssertEqual(session.stateMachine.config.windowSize, k)
@@ -48,7 +48,7 @@ final class ReceiveWindowDeadlockTests: XCTestCase {
         var delivered = [Data]()
         manager.onDataReceived = { _, data in delivered.append(data) }
         _ = manager.handleInboundIFrame(
-            from: peer, path: DigiPath(), channel: 0,
+            from: peer, path: DigiPath(), radio: .primary,
             ns: ns, nr: 0, pf: pf, payload: Data("f\(ns)".utf8))
         return delivered
     }

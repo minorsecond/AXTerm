@@ -46,7 +46,7 @@ final class PacketEngineIFrameConsoleFilteringTests: XCTestCase {
             from: AX25Address(call: "PEER", ssid: 1),
             to: AX25Address(call: "TEST", ssid: 7),
             path: DigiPath(),
-            channel: 0
+            radio: .primary
         )
 
         let packet = Packet(

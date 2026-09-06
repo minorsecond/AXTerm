@@ -17,7 +17,7 @@ final class SessionDeliveryClaimTests: XCTestCase {
         let parsed = CallsignNormalizer.parse(peer)
         let remote = AX25Address(call: parsed.call, ssid: parsed.ssid)
         // Peer initiates: inbound SABM creates and connects the session.
-        _ = manager.handleInboundSABM(from: remote, to: manager.localCallsign, path: DigiPath(), channel: 0)
+        _ = manager.handleInboundSABM(from: remote, to: manager.localCallsign, path: DigiPath(), radio: .primary)
         let session = manager.existingSession(for: remote)!
         XCTAssertEqual(session.state, .connected)
         return session
@@ -27,7 +27,7 @@ final class SessionDeliveryClaimTests: XCTestCase {
         _ = manager.handleInboundIFrame(
             from: session.remoteAddress,
             path: DigiPath(),
-            channel: 0,
+            radio: .primary,
             ns: ns,
             nr: 0,
             pf: false,
@@ -123,7 +123,7 @@ final class SessionDeliveryClaimTests: XCTestCase {
 
         // Peer sends DISC — session should disconnect and notify the claim.
         _ = manager.handleInboundDISC(
-            from: session.remoteAddress, path: DigiPath(), channel: 0)
+            from: session.remoteAddress, path: DigiPath(), radio: .primary)
         XCTAssertTrue(transitions.contains(.disconnected), "transitions: \(transitions)")
     }
 
@@ -144,7 +144,7 @@ final class SessionDeliveryClaimTests: XCTestCase {
         XCTAssertTrue(manager.hasDeliveryClaim(for: session.key))
 
         _ = manager.handleInboundDISC(
-            from: session.remoteAddress, path: DigiPath(), channel: 0)
+            from: session.remoteAddress, path: DigiPath(), radio: .primary)
 
         XCTAssertFalse(manager.hasDeliveryClaim(for: session.key),
                        "a disconnected session must not keep its delivery claim")

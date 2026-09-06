@@ -26,9 +26,9 @@ final class AX25SessionViaPathTests: XCTestCase {
         destination: AX25Address,
         path: DigiPath = DigiPath()
     ) -> AX25Session {
-        _ = manager.connect(to: destination, path: path, channel: 0)
-        let session = manager.session(for: destination, path: path, channel: 0)
-        manager.handleInboundUA(from: destination, path: path, channel: 0)
+        _ = manager.connect(to: destination, path: path, radio: .primary)
+        let session = manager.session(for: destination, path: path, radio: .primary)
+        manager.handleInboundUA(from: destination, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connected)
         return session
     }
@@ -53,7 +53,7 @@ final class AX25SessionViaPathTests: XCTestCase {
         // Receive an I-frame via DRL
         let payload = Data("Hello\r".utf8)
         _ = manager.handleInboundIFrame(
-            from: dest, path: digiPath, channel: 0,
+            from: dest, path: digiPath, radio: .primary,
             ns: 0, nr: 0, pf: false, payload: payload
         )
 
@@ -68,7 +68,7 @@ final class AX25SessionViaPathTests: XCTestCase {
 
         let payload = Data("Hi\r".utf8)
         _ = manager.handleInboundIFrame(
-            from: dest, path: DigiPath(), channel: 0,
+            from: dest, path: DigiPath(), radio: .primary,
             ns: 0, nr: 0, pf: false, payload: payload
         )
 
@@ -84,14 +84,14 @@ final class AX25SessionViaPathTests: XCTestCase {
 
         // First I-frame via DRL
         _ = manager.handleInboundIFrame(
-            from: dest, path: digiPath, channel: 0,
+            from: dest, path: digiPath, radio: .primary,
             ns: 0, nr: 0, pf: false, payload: Data("Line1\r".utf8)
         )
         XCTAssertEqual(session.lastReceivedVia, ["DRL"])
 
         // Second I-frame direct (no digi) — simulates path change
         _ = manager.handleInboundIFrame(
-            from: dest, path: DigiPath(), channel: 0,
+            from: dest, path: DigiPath(), radio: .primary,
             ns: 1, nr: 0, pf: false, payload: Data("Line2\r".utf8)
         )
         XCTAssertTrue(session.lastReceivedVia.isEmpty,
@@ -105,7 +105,7 @@ final class AX25SessionViaPathTests: XCTestCase {
         let session = connectSession(manager: manager, destination: dest, path: multiPath)
 
         _ = manager.handleInboundIFrame(
-            from: dest, path: multiPath, channel: 0,
+            from: dest, path: multiPath, radio: .primary,
             ns: 0, nr: 0, pf: false, payload: Data("Test\r".utf8)
         )
 
@@ -127,7 +127,7 @@ final class AX25SessionViaPathTests: XCTestCase {
         }
 
         _ = manager.handleInboundIFrame(
-            from: dest, path: digiPath, channel: 0,
+            from: dest, path: digiPath, radio: .primary,
             ns: 0, nr: 0, pf: false, payload: Data("Hello\r".utf8)
         )
 
@@ -146,7 +146,7 @@ final class AX25SessionViaPathTests: XCTestCase {
         }
 
         _ = manager.handleInboundIFrame(
-            from: dest, path: DigiPath(), channel: 0,
+            from: dest, path: DigiPath(), radio: .primary,
             ns: 0, nr: 0, pf: false, payload: Data("Hi\r".utf8)
         )
 

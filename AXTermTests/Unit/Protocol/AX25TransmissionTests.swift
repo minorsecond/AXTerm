@@ -19,9 +19,9 @@ final class AX25TransmissionTests: XCTestCase {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
 
         let payload = Data([0x41, 0x58, 0x54, 0x31])
         for ns in 0..<8 {
@@ -48,9 +48,9 @@ final class AX25TransmissionTests: XCTestCase {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
 
         let payload = Data([0x41])
         for ns in [6, 7, 0, 1] {
@@ -76,9 +76,9 @@ final class AX25TransmissionTests: XCTestCase {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
 
         let payload = Data([0x41])
         for ns in [6, 7, 0, 1, 2, 3] {
@@ -105,9 +105,9 @@ final class AX25TransmissionTests: XCTestCase {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
 
         let payload = Data([0x41, 0x58, 0x54, 0x31])
         // Only frames 4-7 remain; 0-3 were already acked (va=4)
@@ -134,9 +134,9 @@ final class AX25TransmissionTests: XCTestCase {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
 
         let payload = Data([0x41])
         for ns in 0..<8 {
@@ -161,9 +161,9 @@ final class AX25TransmissionTests: XCTestCase {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
 
         let payload = Data([0x41])
         session.sendBuffer[2] = OutboundFrame(destination: dest, source: src, payload: payload, frameType: "i", ns: 2, nr: 0)
@@ -184,8 +184,8 @@ final class AX25TransmissionTests: XCTestCase {
         let dest = AX25Address(call: "PEER", ssid: 0)
         let path = DigiPath.from(["WIDE1-1"])
 
-        _ = manager.sendData(Data("hello".utf8), to: dest, path: path, channel: 0)
-        let session = manager.session(for: dest, path: path, channel: 0)
+        _ = manager.sendData(Data("hello".utf8), to: dest, path: path, radio: .primary)
+        let session = manager.session(for: dest, path: path, radio: .primary)
 
         XCTAssertEqual(session.state, .connecting)
         XCTAssertFalse(session.pendingDataQueue.isEmpty)
@@ -209,8 +209,8 @@ final class AX25TransmissionTests: XCTestCase {
             payload: Data("AXDP".utf8)
         ).encode()
 
-        _ = manager.sendData(axdpPayload, to: dest, path: path, channel: 0)
-        let session = manager.session(for: dest, path: path, channel: 0)
+        _ = manager.sendData(axdpPayload, to: dest, path: path, radio: .primary)
+        let session = manager.session(for: dest, path: path, radio: .primary)
 
         XCTAssertEqual(session.state, .connecting)
         XCTAssertFalse(session.pendingDataQueue.isEmpty)
@@ -227,9 +227,9 @@ final class AX25TransmissionTests: XCTestCase {
         let dest = AX25Address(call: "PEER", ssid: 0)
         let path = DigiPath()
 
-        _ = manager.connect(to: dest, path: path, channel: 0)
-        manager.handleInboundUA(from: dest, path: path, channel: 0)
-        let session = manager.session(for: dest, path: path, channel: 0)
+        _ = manager.connect(to: dest, path: path, radio: .primary)
+        manager.handleInboundUA(from: dest, path: path, radio: .primary)
+        let session = manager.session(for: dest, path: path, radio: .primary)
 
         session.pendingDataQueue = [(data: Data("queued".utf8), pid: 0xF0, displayInfo: "queued")]
         session.sendBuffer[0] = OutboundFrame(
@@ -256,9 +256,9 @@ final class AX25TransmissionTests: XCTestCase {
         let dest = AX25Address(call: "PEER", ssid: 0)
         let path = DigiPath()
 
-        _ = manager.connect(to: dest, path: path, channel: 0)
-        manager.handleInboundUA(from: dest, path: path, channel: 0)
-        let session = manager.session(for: dest, path: path, channel: 0)
+        _ = manager.connect(to: dest, path: path, radio: .primary)
+        manager.handleInboundUA(from: dest, path: path, radio: .primary)
+        let session = manager.session(for: dest, path: path, radio: .primary)
 
         session.pendingDataQueue = [(data: Data("queued".utf8), pid: 0xF0, displayInfo: "queued")]
         session.sendBuffer[0] = OutboundFrame(
@@ -285,8 +285,8 @@ final class AX25TransmissionTests: XCTestCase {
         let dest = AX25Address(call: "PEER", ssid: 0)
         let path = DigiPath()
 
-        _ = manager.connect(to: dest, path: path, channel: 0)
-        let session = manager.session(for: dest, path: path, channel: 0)
+        _ = manager.connect(to: dest, path: path, radio: .primary)
+        let session = manager.session(for: dest, path: path, radio: .primary)
         XCTAssertNotNil(session.sabmSentAt, "SABM sent timestamp should be recorded")
 
         _ = manager.disconnect(session: session)
@@ -300,8 +300,8 @@ final class AX25TransmissionTests: XCTestCase {
         let dest = AX25Address(call: "PEER", ssid: 0)
         let path = DigiPath()
 
-        _ = manager.connect(to: dest, path: path, channel: 0)
-        let session = manager.session(for: dest, path: path, channel: 0)
+        _ = manager.connect(to: dest, path: path, radio: .primary)
+        let session = manager.session(for: dest, path: path, radio: .primary)
         XCTAssertNotNil(session.sabmSentAt, "SABM sent timestamp should be recorded")
 
         manager.forceDisconnect(session: session)
@@ -447,9 +447,9 @@ final class AX25TransmissionTests: XCTestCase {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
 
         let payload = Data([0x41])
         for ns in 0..<8 {
@@ -476,9 +476,9 @@ final class AX25TransmissionTests: XCTestCase {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
 
         let payload = Data([0x41])
         for ns in 0..<8 {
@@ -509,9 +509,9 @@ final class AX25TransmissionTests: XCTestCase {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
 
         let payload = Data([0x41])
         for ns in [4, 5, 6, 7] {
@@ -536,9 +536,9 @@ final class AX25TransmissionTests: XCTestCase {
     func testOutstandingCountEqualsSendBufferCountEmpty() {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
 
         session.sendBuffer.removeAll()
         XCTAssertEqual(session.outstandingCount, 0)
@@ -550,9 +550,9 @@ final class AX25TransmissionTests: XCTestCase {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
 
         let payload = Data([0x41])
         for ns in 0..<8 {
@@ -578,9 +578,9 @@ final class AX25TransmissionTests: XCTestCase {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
 
         let payload = Data([0x41])
         for ns in 0..<8 {
@@ -607,9 +607,9 @@ final class AX25TransmissionTests: XCTestCase {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
 
         let payload = Data([0x41])
         for ns in 0..<4 {
@@ -634,9 +634,9 @@ final class AX25TransmissionTests: XCTestCase {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "NOCALL", ssid: 0))
         let dest = AX25Address(call: "TEST", ssid: 2)
         let src = AX25Address(call: "TEST", ssid: 1)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
 
         let payload = Data([0x41])
         for ns in [4, 5, 6, 7] {
@@ -665,11 +665,11 @@ final class AX25TransmissionTests: XCTestCase {
         manager: AX25SessionManager,
         dest: AX25Address = AX25Address(call: "TEST", ssid: 2),
         path: DigiPath = DigiPath(),
-        channel: UInt8 = 0
+        radio: RadioID = .primary
     ) -> AX25Session {
-        _ = manager.connect(to: dest, path: path, channel: channel)
-        manager.handleInboundUA(from: dest, path: path, channel: channel)
-        let session = manager.session(for: dest, path: path, channel: channel)
+        _ = manager.connect(to: dest, path: path, radio: radio)
+        manager.handleInboundUA(from: dest, path: path, radio: radio)
+        let session = manager.session(for: dest, path: path, radio: radio)
         XCTAssertEqual(session.state, .connected)
         return session
     }
@@ -692,14 +692,14 @@ final class AX25TransmissionTests: XCTestCase {
         XCTAssertEqual(connectedSession.state, .connected)
         
         // Verify session is lookup-able
-        XCTAssertNotNil(manager.existingSession(for: dest, path: DigiPath(), channel: 0), "Session should be found by existingSession")
+        XCTAssertNotNil(manager.existingSession(for: dest, path: DigiPath(), radio: .primary), "Session should be found by existingSession")
 
         // Send 5 in-sequence I-frames; only the burst-ending frame polls.
         for ns in 0..<5 {
             if let response = manager.handleInboundIFrame(
                 from: dest,
                 path: DigiPath(),
-                channel: 0,
+                radio: .primary,
                 ns: ns,
                 nr: 0,
                 pf: ns == 4,
@@ -734,7 +734,7 @@ final class AX25TransmissionTests: XCTestCase {
         if let response = manager.handleInboundIFrame(
             from: dest,
             path: DigiPath(),
-            channel: 0,
+            radio: .primary,
             ns: 0,
             nr: 0,
             pf: true,
@@ -788,7 +788,7 @@ final class AX25TransmissionTests: XCTestCase {
         let _ = manager.handleInboundIFrame(
             from: dest,
             path: DigiPath(),
-            channel: 0,
+            radio: .primary,
             ns: 0,
             nr: 0,
             pf: false,
@@ -828,7 +828,7 @@ final class AX25TransmissionTests: XCTestCase {
         _ = manager.handleInboundIFrame(
             from: dest,
             path: DigiPath(),
-            channel: 0,
+            radio: .primary,
             ns: 0,
             nr: 0,
             pf: false,
@@ -906,9 +906,9 @@ final class AX25TransmissionTests: XCTestCase {
         let src = AX25Address(call: "ME", ssid: 0)
 
         // Connect and establish session
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
         XCTAssertEqual(session.state, .connected)
 
         // Simulate sending "bye" command as I-frame (n(s)=0)
@@ -938,7 +938,7 @@ final class AX25TransmissionTests: XCTestCase {
         let response = manager.handleInboundDISC(
             from: dest,
             path: DigiPath(),
-            channel: 0
+            radio: .primary
         )
 
         // Verify DISC processed correctly

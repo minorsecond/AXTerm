@@ -52,7 +52,7 @@ final class NetRomTransportIntegrationTests: XCTestCase {
 
         func datagramCapacity(toNeighbor neighbor: AX25Address) -> Int? {
             MainActor.assumeIsolated {
-                manager.session(for: neighbor, path: DigiPath(), channel: 0)
+                manager.session(for: neighbor, path: DigiPath(), radio: .primary)
                     .stateMachine.config.paclen
             }
         }
@@ -61,7 +61,7 @@ final class NetRomTransportIntegrationTests: XCTestCase {
             sentDatagramBytes.append(data)
             let frames = MainActor.assumeIsolated {
                 manager.sendData(
-                    data, to: neighbor, path: DigiPath(), channel: 0, pid: NetRomWire.pid)
+                    data, to: neighbor, path: DigiPath(), radio: .primary, pid: NetRomWire.pid)
             }
             transmitted.append(contentsOf: frames)
             return true
@@ -86,11 +86,11 @@ final class NetRomTransportIntegrationTests: XCTestCase {
         /// Bring the L2 link to `neighbor` up, as a UA would.
         func completeL2Handshake(with neighbor: AX25Address) {
             MainActor.assumeIsolated {
-                let session = manager.session(for: neighbor, path: DigiPath(), channel: 0)
+                let session = manager.session(for: neighbor, path: DigiPath(), radio: .primary)
                 if session.state == .disconnected {
                     _ = session.stateMachine.handle(event: .connectRequest)
                 }
-                manager.handleInboundUA(from: neighbor, path: DigiPath(), channel: 0)
+                manager.handleInboundUA(from: neighbor, path: DigiPath(), radio: .primary)
             }
         }
 
@@ -98,7 +98,7 @@ final class NetRomTransportIntegrationTests: XCTestCase {
         func receiveDatagram(_ datagram: NetRomDatagram, fromNeighbor neighbor: AX25Address, ns: Int) {
             MainActor.assumeIsolated {
                 _ = manager.handleInboundIFrame(
-                    from: neighbor, path: DigiPath(), channel: 0,
+                    from: neighbor, path: DigiPath(), radio: .primary,
                     ns: ns, nr: 0, pf: false,
                     payload: NetRomTransportWire.encode(datagram),
                     pid: NetRomWire.pid)
@@ -109,7 +109,7 @@ final class NetRomTransportIntegrationTests: XCTestCase {
         func receiveText(_ text: String, fromNeighbor neighbor: AX25Address, ns: Int) {
             MainActor.assumeIsolated {
                 _ = manager.handleInboundIFrame(
-                    from: neighbor, path: DigiPath(), channel: 0,
+                    from: neighbor, path: DigiPath(), radio: .primary,
                     ns: ns, nr: 0, pf: false,
                     payload: Data(text.utf8), pid: 0xF0)
             }

@@ -14,4 +14,12 @@ nonisolated struct RadioID: Hashable, Codable, Sendable, RawRepresentable {
 
     /// A fresh identity for a radio being added.
     init() { rawValue = UUID().uuidString }
+
+    /// The radio a station had before it had several.
+    ///
+    /// A constant rather than a minted UUID so every layer — the settings
+    /// migration, the database migration that backfills old rows, and the
+    /// session APIs whose callers predate radios — agrees on it without
+    /// asking anyone first.
+    static let primary = RadioID(rawValue: "radio-primary")
 }

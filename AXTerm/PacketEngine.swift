@@ -212,7 +212,6 @@ final class PacketEngine: ObservableObject {
         identityCollision = nil
     }
     @Published private(set) var lastError: String?
-    private var previousLinkState: KISSLinkState = .disconnected
     @Published private(set) var bytesReceived: Int = 0
     @Published private(set) var lastRxTime: Date = .distantPast
     @Published private(set) var lastTxTime: Date = .distantPast
@@ -299,6 +298,9 @@ final class PacketEngine: ObservableObject {
         let blePeripheralUUID: String
         let host: String
         let port: Int
+        /// Every enabled radio's transport, so a change to a second radio is
+        /// a change too. Mobilinkd gains are not part of a signature.
+        let radios: [String]
 
         init(settings: AppSettingsStore) {
             self.transportType = settings.transportType
@@ -307,6 +309,7 @@ final class PacketEngine: ObservableObject {
             self.blePeripheralUUID = settings.blePeripheralUUID
             self.host = settings.host
             self.port = settings.port
+            self.radios = settings.radios.filter { $0.enabled && !$0.archived }.map(\.transportSignature)
         }
     }
 
@@ -315,8 +318,13 @@ final class PacketEngine: ObservableObject {
 
     // MARK: - Private State
 
-    private var link: KISSLink?
-    private var parser = KISSFrameParser()
+    /// The station's radios and the links that carry them. The engine reads
+    /// frames out of it already attributed to a radio, and hands frames to
+    /// it addressed to one.
+    let radioManager: RadioManager
+    /// For bytes handed straight to the engine — tools and tests — as if
+    /// from the primary radio's TNC.
+    private var injectionParser = KISSFrameParser()
     private var stationTracker = StationTracker()
 
     // MARK: - Console Line Duplicate Detection
@@ -341,7 +349,8 @@ final class PacketEngine: ObservableObject {
         watchMatcher: WatchMatching? = nil,
         watchRecorder: WatchEventRecording? = nil,
         notificationScheduler: NotificationScheduling? = nil,
-        databaseWriter: (any GRDB.DatabaseWriter)? = nil
+        databaseWriter: (any GRDB.DatabaseWriter)? = nil,
+        linkFactory: RadioManager.LinkFactory? = nil
     ) {
         self.maxPackets = maxPackets
         self.maxConsoleLines = maxConsoleLines
@@ -356,6 +365,7 @@ final class PacketEngine: ObservableObject {
         self.watchMatcher = watchMatcher ?? WatchRuleMatcher(settings: settings)
         self.watchRecorder = watchRecorder
         self.notificationScheduler = notificationScheduler
+        self.radioManager = linkFactory.map { RadioManager(linkFactory: $0) } ?? RadioManager()
 
         // Initialize NET/ROM persistence
         if let writer = databaseWriter {
@@ -417,6 +427,7 @@ final class PacketEngine: ObservableObject {
         }
 
         configureStationSubscription()
+        observeRadios()
         observeSettings()
         observeCapabilityStore()
         // Console history first: the terminal is the landing view, its query is
@@ -464,72 +475,30 @@ final class PacketEngine: ObservableObject {
 
     // MARK: - Connection Management
 
-    /// Connect using the transport configured in settings.
-    /// Falls back to network if transport type is unknown.
+    /// Brings the links into line with the radios in settings and opens them.
+    ///
+    /// A link that is already up for a radio that has not changed is kept as
+    /// it is; a serial or Bluetooth link has its config applied in place and
+    /// decides for itself whether that needs a reconnect. So calling this
+    /// with nothing changed changes nothing — which is what stops the
+    /// "connect, drop, connect" loop a resume after the settings pane used to
+    /// produce.
     func connectUsingSettings() {
-        // This call brings the link into line with whatever the settings say
+        // This call brings the links into line with whatever the settings say
         // right now, so any "settings changed while suspended" baseline is by
-        // definition already satisfied. Re-baselining here stops the resume
-        // from firing a second connect that tears down the link this one is
-        // about to open — which is exactly what an operator sees as the app
-        // connecting and immediately dropping, over and over.
+        // definition already satisfied.
         if isConnectionLogicSuspended {
             suspendedConfigSnapshot = ConnectionConfigSnapshot(settings: settings)
         }
-
-        // A serial TNC exists only where there is a serial port. iOS has no
-        // IOKit and no user-accessible USB serial, so a handheld reaches a
-        // TNC over the network or over Bluetooth instead; falling through to
-        // the network path is correct there, not a degraded mode.
-        if settings.isSerialTransport && PlatformIdiom.supportsSerialPorts {
-            #if os(macOS)
-            
-            // Construct Mobilinkd Config if enabled
-            var mobilinkdConfig: MobilinkdConfig?
-            if settings.mobilinkdEnabled {
-                mobilinkdConfig = MobilinkdConfig(
-                    modemType: MobilinkdTNC.ModemType(rawValue: UInt8(settings.mobilinkdModemType)) ?? .afsk1200,
-                    outputGain: UInt8(settings.mobilinkdOutputGain),
-                    inputGain: UInt8(settings.mobilinkdInputGain),
-                    isBatteryMonitoringEnabled: true // Always true for now if enabled
-                )
-            }
-            
-            let resolvedPath = resolveSerialDevicePath(settings.serialDevicePath)
-            let config = SerialConfig(
-                devicePath: resolvedPath,
-                baudRate: settings.serialBaudRate,
-                autoReconnect: settings.serialAutoReconnect,
-                mobilinkdConfig: mobilinkdConfig
-            )
-            connectSerial(config: config)
-            #endif
-        } else if settings.isBLETransport {
-            // Construct Mobilinkd config for BLE just like serial
-            var bleMobilinkdConfig: MobilinkdConfig?
-            if settings.mobilinkdEnabled {
-                bleMobilinkdConfig = MobilinkdConfig(
-                    modemType: MobilinkdTNC.ModemType(rawValue: UInt8(settings.mobilinkdModemType)) ?? .afsk1200,
-                    outputGain: UInt8(settings.mobilinkdOutputGain),
-                    inputGain: UInt8(settings.mobilinkdInputGain),
-                    isBatteryMonitoringEnabled: true
-                )
-            }
-            let config = BLEConfig(
-                peripheralUUID: settings.blePeripheralUUID,
-                peripheralName: settings.blePeripheralName,
-                autoReconnect: settings.bleAutoReconnect,
-                mobilinkdConfig: bleMobilinkdConfig
-            )
-            connectBLE(config: config)
-        } else {
-            connect(host: settings.host, port: settings.portValue)
-        }
+        loadPersistedPackets(reason: "connect")
+        radioManager.reconcile(settings.radios, open: true)
+        refreshLinkSummary()
     }
 
+    /// One explicit TCP TNC, as the test harness asks for it: the primary
+    /// radio's profile with this host and port, and nothing else open.
+    /// Settings are not written.
     func connect(host: String = "localhost", port: UInt16 = 8001) {
-        disconnect()
-
         guard port > 0 else {
             status = .failed
             lastError = "Invalid port \(port)"
@@ -538,91 +507,67 @@ final class PacketEngine: ObservableObject {
             SentryManager.shared.captureConnectionFailure("Connection failed: invalid port \(port)")
             return
         }
-
-        status = .connecting
-        lastError = nil
-        connectedHost = host
-        connectedPort = port
-        SentryManager.shared.breadcrumbConnectAttempt(host: host, port: port)
-        SentryManager.shared.setConnectionTags(host: host, port: port)
-        eventLogger?.log(level: .info, category: .connection, message: "Connecting to \(host):\(port)", metadata: nil)
-        loadPersistedPackets(reason: "connect")
-
-        let networkLink = KISSLinkNetwork(host: host, port: port)
-        connectViaLink(networkLink)
+        var radio = settings.primaryRadio ?? RadioProfile(id: .primary, name: "Direwolf")
+        radio.kind = .tcp
+        radio.host = host
+        radio.port = Int(port)
+        radio.enabled = true
+        radio.archived = false
+        connectOverriding(with: radio)
     }
 
     #if os(macOS)
-    /// Connect using a serial device
+    /// The primary radio on this serial device, and nothing else open. The
+    /// same device already open is kept and has the config applied in place.
     func connectSerial(config: SerialConfig) {
-        // Orchestration: Check if we are already connected/connecting to this exact device
-        if let currentLink = link as? KISSLinkSerial, currentLink.config.devicePath == config.devicePath {
-            // It's the same device path. 
-            // If settings (baud rate/auto-reconnect) changed, we might need to update.
-            // KISSLinkSerial.updateConfig handles this efficiently without full teardown if possible,
-            // or handles the teardown/reopen internally.
-            debugTrace("Update serial config", ["path": config.devicePath])
-            currentLink.updateConfig(config)
-            
-            // Ensure we are in a mode to connect if we weren't
-            if currentLink.state == .disconnected || currentLink.state == .failed {
-                currentLink.open()
-            }
-            return
+        var radio = settings.primaryRadio ?? RadioProfile(id: .primary, name: "Serial TNC")
+        radio.kind = .serial
+        radio.serialDevicePath = config.devicePath
+        radio.serialBaudRate = config.baudRate
+        radio.serialAutoReconnect = config.autoReconnect
+        radio.mobilinkdEnabled = config.mobilinkdConfig != nil
+        if let mobilinkd = config.mobilinkdConfig {
+            radio.mobilinkdModemType = Int(mobilinkd.modemType.rawValue)
+            radio.mobilinkdOutputGain = Int(mobilinkd.outputGain)
+            radio.mobilinkdInputGain = Int(mobilinkd.inputGain)
         }
-
-        disconnect(reason: "switching to new serial device")
-
-        status = .connecting
-        lastError = nil
-        connectedHost = nil
-        connectedPort = nil
-        eventLogger?.log(level: .info, category: .connection, message: "Connecting to serial: \(config.devicePath)", metadata: nil)
-        loadPersistedPackets(reason: "connect")
-
-        let serialLink = KISSLinkSerial(config: config)
-        connectViaLink(serialLink)
+        radio.enabled = true
+        radio.archived = false
+        connectOverriding(with: radio)
     }
     #endif
 
-    /// Connect using a BLE device
+    /// The primary radio on this Bluetooth peripheral, and nothing else open.
+    /// The same peripheral already open is kept and has the config applied
+    /// in place.
     func connectBLE(config: BLEConfig) {
-        // Reuse existing BLE link if it's the same peripheral (mirrors serial pattern)
-        if let currentLink = link as? KISSLinkBLE, currentLink.config.peripheralUUID == config.peripheralUUID {
-            debugTrace("Update BLE config", ["uuid": config.peripheralUUID])
-            currentLink.updateConfig(config)
-
-            if currentLink.state == .disconnected || currentLink.state == .failed {
-                currentLink.open()
-            }
-            return
+        var radio = settings.primaryRadio ?? RadioProfile(id: .primary, name: "Bluetooth TNC")
+        radio.kind = .ble
+        radio.blePeripheralUUID = config.peripheralUUID
+        radio.blePeripheralName = config.peripheralName
+        radio.bleAutoReconnect = config.autoReconnect
+        radio.mobilinkdEnabled = config.mobilinkdConfig != nil
+        if let mobilinkd = config.mobilinkdConfig {
+            radio.mobilinkdModemType = Int(mobilinkd.modemType.rawValue)
+            radio.mobilinkdOutputGain = Int(mobilinkd.outputGain)
+            radio.mobilinkdInputGain = Int(mobilinkd.inputGain)
         }
-
-        disconnect(reason: "switching to BLE transport")
-
-        status = .connecting
-        lastError = nil
-        connectedHost = nil
-        connectedPort = nil
-        eventLogger?.log(level: .info, category: .connection, message: "Connecting to BLE: \(config.peripheralName.isEmpty ? config.peripheralUUID : config.peripheralName)", metadata: nil)
-        loadPersistedPackets(reason: "connect")
-
-        let bleLink = KISSLinkBLE(config: config)
-        connectViaLink(bleLink)
+        radio.enabled = true
+        radio.archived = false
+        connectOverriding(with: radio)
     }
 
-    /// Connect using any KISSLink transport
-    private func connectViaLink(_ newLink: KISSLink) {
-        link = newLink
-        newLink.delegate = self
-        newLink.open()
+    private func connectOverriding(with radio: RadioProfile) {
+        lastError = nil
+        loadPersistedPackets(reason: "connect")
+        radioManager.reconcile([radio], open: true)
+        refreshLinkSummary()
     }
 
     func disconnect(reason: String = "unknown") {
         let previousStatus = status
-        link?.close()
-        link = nil
-        parser.reset()
+        radioManager.closeAll()
+        injectionParser.reset()
         status = .disconnected
         tncIdentity = nil
         connectedHost = nil
@@ -647,7 +592,7 @@ final class PacketEngine: ObservableObject {
     /// - Parameter completion: Callback with success or error
     func send(frame: OutboundFrame, completion: ((Result<Void, Error>) -> Void)? = nil) {
         lastTxTime = Date()
-        guard status == .connected, let activeLink = link else {
+        guard let activeLink = radioManager.session(for: frame.radio), activeLink.state == .connected else {
             let error = NSError(domain: "PacketEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not connected"])
             TxLog.error(.transport, "Send failed: not connected", error: error, ["frameId": String(frame.id.uuidString.prefix(8))])
             addErrorLine("Send failed: not connected", category: .transmission)
@@ -674,10 +619,12 @@ final class PacketEngine: ObservableObject {
         )
         TxLog.hexDump(.ax25, "AX.25 frame", data: ax25Data)
 
-        // Wrap in KISS frame (port 0, data frame)
-        let kissData = KISS.encodeFrame(payload: ax25Data, port: frame.channel)
+        // Wrap in KISS frame for the radio's port on its link.
+        let port = radioManager.kissPort(for: frame.radio)
+        let kissData = KISS.encodeFrame(payload: ax25Data, port: port)
         debugTrace("TX KISS", [
-            "port": frame.channel,
+            "port": port,
+            "radio": frame.radio.rawValue,
             "len": kissData.count,
             "hex": hexPrefix(kissData)
         ])
@@ -768,7 +715,7 @@ final class PacketEngine: ObservableObject {
     /// One-shot poll of audio input levels. Stops the demodulator during measurement,
     /// then sends RESET to restart it. Do NOT call this in a loop.
     func sendPollInputLevel() {
-        guard let activeLink = link else { return }
+        guard let activeLink = radioManager.primarySession else { return }
         let pollFrame = Data(MobilinkdTNC.pollInputLevel())
         let resetFrame = Data(MobilinkdTNC.reset())
         activeLink.send(pollFrame) { [weak activeLink] _ in
@@ -783,7 +730,7 @@ final class PacketEngine: ObservableObject {
     /// Sends the ADJUST_INPUT_LEVELS command to trigger the TNC4's auto-AGC.
     /// Stops the demodulator during calibration; sends RESET after 5s to restart.
     func sendAdjustInputLevels() {
-        guard let activeLink = link else { return }
+        guard let activeLink = radioManager.primarySession else { return }
         let frame = Data(MobilinkdTNC.adjustInputLevels())
         let resetFrame = Data(MobilinkdTNC.reset())
         activeLink.send(frame) { [weak activeLink] _ in
@@ -796,7 +743,7 @@ final class PacketEngine: ObservableObject {
 
     /// Sends a SET_INPUT_GAIN command to set manual input gain level (0-4, 6dB steps).
     func sendSetInputGain(_ level: UInt8) {
-        guard let activeLink = link else { return }
+        guard let activeLink = radioManager.primarySession else { return }
         let frame = Data(MobilinkdTNC.setInputGain(level))
         activeLink.send(frame) { _ in }
     }
@@ -805,103 +752,134 @@ final class PacketEngine: ObservableObject {
     /// Safe on the wire (SetHardware is advisory and never leaves the
     /// TNC); the answer, if any, lands in `tncIdentity`.
     func identifyTNC() {
-        guard let activeLink = link else { return }
+        guard let activeLink = radioManager.primarySession else { return }
         activeLink.send(TNCIdentifier.queryFrame()) { _ in }
         debugTrace("TNC identity query sent", [:])
     }
 
     /// Sends RESET to restart the TNC4 demodulator.
     func sendMobilinkdReset() {
-        guard let activeLink = link else { return }
+        guard let activeLink = radioManager.primarySession else { return }
         let frame = Data(MobilinkdTNC.reset())
         activeLink.send(frame) { _ in }
     }
 
+    /// KISS bytes handed straight to the engine, as if from the primary
+    /// radio's TNC. The live path is `RadioManager` → `ingest`; this exists
+    /// for tools and tests that have bytes and no link.
     func handleIncomingData(_ data: Data) {
-        bytesReceived += data.count
-        lastRxTime = Date()
-        LinkDebugLog.shared.recordRxBytes(data.count)
-
-        TxLog.kissReceive(size: data.count)
-        debugTrace("RX KISS chunk", [
-            "len": data.count,
-            "hex": hexPrefix(data)
-        ])
-
-        // Always log raw chunk
-        appendRawChunk(RawChunk(data: data))
-
-        // Parse KISS frames from the chunk
-        let kissFrames = parser.feedFrames(data)
-
-        if !kissFrames.isEmpty {
-            TxLog.debug(.kiss, "Parsed KISS frames", ["count": kissFrames.count])
-        }
-
-        for frame in kissFrames {
+        noteReceivedBytes(data, link: "injected")
+        for frame in injectionParser.feedFrames(data) {
             switch frame.output {
-            case .ax25(let ax25Data):
-                debugTrace("KISS AX.25 frame parsed", ["len": ax25Data.count, "port": frame.port])
-                frameStats.recordFrame(type: "AX.25", size: ax25Data.count)
+            case .ax25(let ax25):
+                frameStats.recordFrame(type: "AX.25", size: ax25.count)
                 LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
-                    timestamp: Date(), direction: .rx, rawBytes: ax25Data,
-                    frameType: "AX25", byteCount: ax25Data.count))
-                processAX25Frame(ax25Data)
-
-            case .mobilinkdTelemetry(let telemetryData):
-                frameStats.recordFrame(type: "Telemetry", size: telemetryData.count)
-                if let identity = TNCIdentifier.identity(fromTelemetryFrame: telemetryData) {
-                    // The TNC answered the hardware query with its name —
-                    // Direwolf does; this rides the same SetHardware
-                    // command Mobilinkd telemetry uses, so it is checked
-                    // first and everything else falls through unchanged.
-                    DispatchQueue.main.async {
-                        self.tncIdentity = identity
-                    }
-                    debugTrace("TNC identified itself", ["identity": identity])
-                } else if let inputLevel = MobilinkdTNC.parseInputLevel(telemetryData) {
-                    DispatchQueue.main.async {
-                        self.mobilinkdInputLevel = inputLevel
-                    }
-                    debugTrace("Mobilinkd InputLevel", [
-                        "vpp": inputLevel.vpp, "vavg": inputLevel.vavg,
-                        "vmin": inputLevel.vmin, "vmax": inputLevel.vmax
-                    ])
-                } else if let battery = MobilinkdTNC.parseBatteryLevel(telemetryData) {
-                    DispatchQueue.main.async {
-                         self.mobilinkdBatteryLevel = battery
-                    }
-                    debugTrace("Mobilinkd Battery", ["level": battery])
-                } else if let gain = MobilinkdTNC.parseInputGain(telemetryData) {
-                     DispatchQueue.main.async {
-                         if self.settings.mobilinkdInputGain != gain {
-                             self.settings.mobilinkdInputGain = gain
-                             self.debugTrace("Mobilinkd Auto-Gain Updated", ["newGain": gain])
-                         }
-                     }
-                } else {
-                    debugTrace("Mobilinkd Telemetry", ["hex": hexPrefix(telemetryData)])
-                }
-                LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
-                    timestamp: Date(), direction: .rx, rawBytes: telemetryData,
-                    frameType: "Telemetry", byteCount: telemetryData.count))
-
-            case .unknown(let cmd, let payload):
-                frameStats.recordFrame(type: "Unknown(0x\(String(format: "%02X", cmd)))", size: payload.count)
-                debugTrace("Unknown KISS Frame", ["cmd": String(format: "0x%02X", cmd), "len": payload.count])
-                LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
-                    timestamp: Date(), direction: .rx, rawBytes: payload,
-                    frameType: "Unknown(0x\(String(format: "%02X", cmd)))", byteCount: payload.count))
-                LinkDebugLog.shared.recordParseError(
-                    message: "Unknown KISS command: 0x\(String(format: "%02X", cmd))",
-                    rawBytes: payload)
+                    timestamp: Date(), direction: .rx, rawBytes: ax25,
+                    frameType: "AX25", byteCount: ax25.count))
+                processAX25Frame(ax25, radio: radioManager.primaryRadioID ?? .primary, kissPort: frame.port)
+            case .mobilinkdTelemetry(let telemetry):
+                absorbTelemetry(telemetry, isPrimary: true)
+            case .unknown(let command, let payload):
+                noteUnknownFrame(command: command, payload: payload)
             }
         }
     }
 
-    private func processAX25Frame(_ ax25Data: Data) {
-        debugTrace("processAX25Frame called", ["len": ax25Data.count, "hex": hexPrefix(ax25Data)])
-        digipeatIfAsked(ax25Data)
+    private func noteReceivedBytes(_ data: Data, link: String) {
+        bytesReceived += data.count
+        lastRxTime = Date()
+        LinkDebugLog.shared.recordRxBytes(data.count)
+        TxLog.kissReceive(size: data.count)
+        debugTrace("RX KISS chunk", [
+            "len": data.count,
+            "link": link,
+            "hex": hexPrefix(data)
+        ])
+        // Always log raw chunk
+        appendRawChunk(RawChunk(data: data))
+    }
+
+    /// Telemetry is a fact about one TNC. The engine's published copy is the
+    /// primary radio's, because that is the one the single-radio surfaces
+    /// describe; the link keeps its own regardless.
+    private func absorbTelemetry(_ telemetryData: Data, isPrimary: Bool) {
+        frameStats.recordFrame(type: "Telemetry", size: telemetryData.count)
+        if let identity = TNCIdentifier.identity(fromTelemetryFrame: telemetryData) {
+            // The TNC answered the hardware query with its name — Direwolf
+            // does; this rides the same SetHardware command Mobilinkd
+            // telemetry uses, so it is checked first and everything else
+            // falls through unchanged.
+            if isPrimary { tncIdentity = identity }
+            debugTrace("TNC identified itself", ["identity": identity])
+        } else if let inputLevel = MobilinkdTNC.parseInputLevel(telemetryData) {
+            if isPrimary { mobilinkdInputLevel = inputLevel }
+            debugTrace("Mobilinkd InputLevel", [
+                "vpp": inputLevel.vpp, "vavg": inputLevel.vavg,
+                "vmin": inputLevel.vmin, "vmax": inputLevel.vmax
+            ])
+        } else if let battery = MobilinkdTNC.parseBatteryLevel(telemetryData) {
+            if isPrimary { mobilinkdBatteryLevel = battery }
+            debugTrace("Mobilinkd Battery", ["level": battery])
+        } else if let gain = MobilinkdTNC.parseInputGain(telemetryData) {
+            // The TNC4 reports the gain its auto-adjust settled on. Written
+            // to the scalar, which the settings store mirrors into the
+            // primary radio's profile.
+            if isPrimary, settings.mobilinkdInputGain != gain {
+                settings.mobilinkdInputGain = gain
+                debugTrace("Mobilinkd Auto-Gain Updated", ["newGain": gain])
+            }
+        } else {
+            debugTrace("Mobilinkd Telemetry", ["hex": hexPrefix(telemetryData)])
+        }
+        LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+            timestamp: Date(), direction: .rx, rawBytes: telemetryData,
+            frameType: "Telemetry", byteCount: telemetryData.count))
+    }
+
+    private func noteUnknownFrame(command cmd: UInt8, payload: Data) {
+        frameStats.recordFrame(type: "Unknown(0x\(String(format: "%02X", cmd)))", size: payload.count)
+        debugTrace("Unknown KISS Frame", ["cmd": String(format: "0x%02X", cmd), "len": payload.count])
+        LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+            timestamp: Date(), direction: .rx, rawBytes: payload,
+            frameType: "Unknown(0x\(String(format: "%02X", cmd)))", byteCount: payload.count))
+        LinkDebugLog.shared.recordParseError(
+            message: "Unknown KISS command: 0x\(String(format: "%02X", cmd))",
+            rawBytes: payload)
+    }
+
+    /// The engine's one-line summary of its links, for the surfaces that
+    /// still show one status, one host, one TNC: the aggregate status and the
+    /// primary radio's link.
+    private func refreshLinkSummary() {
+        let aggregate = radioManager.aggregateStatus
+        if status != aggregate { status = aggregate }
+        let primary = radioManager.primarySession
+        connectedHost = primary?.tcpEndpoint?.host
+        connectedPort = primary?.tcpEndpoint?.port
+        if tncIdentity != primary?.tncIdentity { tncIdentity = primary?.tncIdentity }
+        if mobilinkdBatteryLevel != primary?.mobilinkdBatteryLevel { mobilinkdBatteryLevel = primary?.mobilinkdBatteryLevel }
+        if mobilinkdInputLevel != primary?.mobilinkdInputLevel { mobilinkdInputLevel = primary?.mobilinkdInputLevel }
+    }
+
+    private func observeRadios() {
+        radioManager.delegate = self
+        radioManager.ingest
+            .sink { [weak self] ingest in
+                guard let self else { return }
+                self.frameStats.recordFrame(type: "AX.25", size: ingest.ax25.count)
+                LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
+                    timestamp: ingest.at, direction: .rx, rawBytes: ingest.ax25,
+                    frameType: "AX25", byteCount: ingest.ax25.count))
+                self.processAX25Frame(ingest.ax25, radio: ingest.radio, kissPort: ingest.kissPort,
+                                      tcpEndpoint: ingest.tcpEndpoint, linkDescription: ingest.linkDescription)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func processAX25Frame(_ ax25Data: Data, radio: RadioID, kissPort: UInt8 = 0,
+                                  tcpEndpoint: KISSEndpoint? = nil, linkDescription: String? = nil) {
+        debugTrace("processAX25Frame called", ["len": ax25Data.count, "radio": radio.rawValue, "hex": hexPrefix(ax25Data)])
+        digipeatIfAsked(ax25Data, radio: radio)
         TxLog.hexDump(.ax25, "Received AX.25 frame", data: ax25Data)
         debugTrace("RX AX.25 raw", [
             "len": ax25Data.count,
@@ -979,9 +957,12 @@ final class PacketEngine: ObservableObject {
             }
         }
 
-        let host = connectedHost ?? settings.host
-        let port = connectedPort ?? settings.portValue
-        let endpoint = KISSEndpoint(host: host, port: port)
+        // Provenance. A serial or Bluetooth link has no host and port, and
+        // until the packets table lets those columns be null (the next
+        // migration) such a frame is stamped with the settings' TCP endpoint,
+        // as it always was — a known lie kept only so storage keeps working.
+        let endpoint = tcpEndpoint
+            ?? KISSEndpoint(host: settings.host, port: settings.portValue)
 
         let packet = Packet(
             timestamp: Date(),
@@ -994,7 +975,10 @@ final class PacketEngine: ObservableObject {
             pid: decoded.pid,
             info: decoded.info,
             rawAx25: ax25Data,
-            kissEndpoint: endpoint
+            kissEndpoint: endpoint,
+            radioID: radio,
+            kissPort: kissPort,
+            linkDescription: linkDescription
         )
 
         SentryManager.shared.breadcrumbDecodeSuccessSampled(packet: packet)
@@ -1063,8 +1047,8 @@ final class PacketEngine: ObservableObject {
 
     /// Repeats a frame addressed via this station, when the operator
     /// has switched digipeating on. One bit changes; see AX25Digipeater.
-    private func digipeatIfAsked(_ raw: Data) {
-        guard settings.digipeatEnabled, let activeLink = link else { return }
+    private func digipeatIfAsked(_ raw: Data, radio: RadioID) {
+        guard settings.digipeatEnabled else { return }
         var addresses = [settings.myCallsign]
         let alias = settings.digipeatAlias
             .trimmingCharacters(in: .whitespaces).uppercased()
@@ -1078,7 +1062,9 @@ final class PacketEngine: ObservableObject {
         guard recentDigipeats[key] == nil else { return }
         recentDigipeats[key] = now
 
-        activeLink.send(KISS.encodeFrame(payload: repeated)) { _ in }
+        // Back out the radio that heard it: a repeat belongs to the channel
+        // the original was on.
+        guard radioManager.send(ax25: repeated, radio: radio) else { return }
         let who = AX25.decodeFrame(ax25: raw).map {
             "\($0.from?.display ?? "?") \u{2192} \($0.to?.display ?? "?")"
         } ?? "frame"
@@ -1882,72 +1868,20 @@ final class PacketEngine: ObservableObject {
     }
 
     private func observeSettings() {
-        // Transport changes
-        settings.$transportType
+        // The radios. Every transport scalar mirrors into the primary radio's
+        // profile, so one sink over the list sees them all. A tweak to a link
+        // that is up is applied in place; only a link that did not exist
+        // loads history, as an explicit connect does.
+        settings.$radios
             .dropFirst()
             .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                if !self.isConnectionLogicSuspended {
-                    self.connectUsingSettings()
+            .sink { [weak self] radios in
+                guard let self, !self.isConnectionLogicSuspended else { return }
+                if self.radioManager.reconcile(radios, open: true) > 0 {
+                    self.loadPersistedPackets(reason: "connect")
                 }
+                self.refreshLinkSummary()
             }
-            .store(in: &cancellables)
-
-        settings.$serialDevicePath
-            .dropFirst()
-            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                if self.settings.isSerialTransport && !self.isConnectionLogicSuspended {
-                    self.connectUsingSettings()
-                }
-            }
-            .store(in: &cancellables)
-            
-        settings.$serialBaudRate
-            .dropFirst()
-            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                if self.settings.isSerialTransport && !self.isConnectionLogicSuspended {
-                    self.connectUsingSettings()
-                }
-            }
-            .store(in: &cancellables)
-
-        settings.$blePeripheralUUID
-            .dropFirst()
-            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                if self.settings.isBLETransport && !self.isConnectionLogicSuspended {
-                    self.connectUsingSettings()
-                }
-            }
-            .store(in: &cancellables)
-
-        settings.$host
-            .dropFirst()
-            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                if !self.settings.isSerialTransport && !self.settings.isBLETransport && !self.isConnectionLogicSuspended {
-                    self.connectUsingSettings()
-                }
-            }
-            .store(in: &cancellables)
-
-        settings.$port
-            .dropFirst()
-            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                if !self.settings.isSerialTransport && !self.settings.isBLETransport && !self.isConnectionLogicSuspended {
-                    self.connectUsingSettings()
-                }
-            }
-
             .store(in: &cancellables)
 
         // Retention settings
@@ -2599,27 +2533,47 @@ struct DebugRebuildResult {
 
 // MARK: - KISSLinkDelegate
 
-extension PacketEngine: KISSLinkDelegate {
-    func linkDidReceive(_ data: Data) {
-        handleIncomingData(data)
+extension PacketEngine: RadioManagerDelegate {
+    func radioManager(_ manager: RadioManager, link: LinkSession, didReceiveBytes data: Data) {
+        noteReceivedBytes(data, link: link.endpointDescription)
     }
 
-    func linkDidChangeState(_ state: KISSLinkState) {
-        let newStatus = ConnectionStatus(linkState: state)
-        let endpoint = link?.endpointDescription ?? "unknown"
-        LinkDebugLog.shared.recordStateChange(
-            from: previousLinkState.rawValue,
-            to: state.rawValue,
-            endpoint: endpoint)
-        previousLinkState = state
-        self.status = newStatus
+    func radioManager(_ manager: RadioManager, link: LinkSession, didReceiveTelemetry frame: Data, port: UInt8) {
+        absorbTelemetry(frame, isPrimary: link === manager.primarySession)
+        if link === manager.primarySession { refreshLinkSummary() }
+    }
+
+    func radioManager(_ manager: RadioManager, link: LinkSession, didReceiveUnknown command: UInt8, payload: Data) {
+        noteUnknownFrame(command: command, payload: payload)
+    }
+
+    func radioManager(_ manager: RadioManager, link: LinkSession, didChangeState state: KISSLinkState, from previous: KISSLinkState) {
+        let endpoint = link.endpointDescription
+        LinkDebugLog.shared.recordStateChange(from: previous.rawValue, to: state.rawValue, endpoint: endpoint)
 
         switch state {
+        case .connecting:
+            eventLogger?.log(level: .info, category: .connection, message: "Connecting to \(endpoint)", metadata: nil)
+            if link === manager.primarySession, let tcp = link.tcpEndpoint {
+                SentryManager.shared.breadcrumbConnectAttempt(host: tcp.host, port: tcp.port)
+                SentryManager.shared.setConnectionTags(host: tcp.host, port: tcp.port)
+            }
+
         case .connected:
-            let endpoint = link?.endpointDescription ?? "unknown"
             addSystemLine("Connected to \(endpoint)", category: .connection)
             eventLogger?.log(level: .info, category: .connection, message: "Connected to \(endpoint)", metadata: nil)
             SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Connected", level: .info, data: nil)
+            // Ask the TNC to name itself — an advisory SetHardware frame on
+            // the link, never transmitted on RF. Direwolf answers; anything
+            // that does not implement the extension ignores it. Network
+            // transport only: poking hardware-dependent commands at serial
+            // or BLE TNCs is Mobilinkd's lane.
+            if link.transport == .tcp {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak link] in
+                    guard let link, link.state == .connected else { return }
+                    link.identifyTNC()
+                }
+            }
 
         case .disconnected:
             addSystemLine("Disconnected", category: .connection)
@@ -2627,24 +2581,29 @@ extension PacketEngine: KISSLinkDelegate {
             SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Disconnected", level: .info, data: nil)
 
         case .failed:
-            let endpoint = link?.endpointDescription ?? "unknown"
             addErrorLine("Connection to \(endpoint) failed", category: .connection)
             eventLogger?.log(level: .error, category: .connection, message: "Connection failed: \(endpoint)", metadata: nil)
-            // All modern link transports (TCP, BLE, serial) fail through this
-            // path; it previously emitted no Sentry event at all, so only the
-            // legacy NWConnection path reported connection failures.
             SentryManager.shared.captureConnectionFailure("KISS link failed: \(endpoint)")
-
-        case .connecting:
-            break
         }
+
+        refreshLinkSummary()
     }
 
-    func linkDidError(_ message: String) {
+    func radioManager(_ manager: RadioManager, link: LinkSession, didError message: String) {
         lastError = message
         LinkDebugLog.shared.recordParseError(message: "Link error: \(message)")
         addErrorLine(message, category: .connection)
         eventLogger?.log(level: .error, category: .connection, message: message, metadata: nil)
+    }
+
+    func radioManager(_ manager: RadioManager, link: LinkSession, droppedFrameOnUnassignedPort port: UInt8) {
+        // Logged, not dropped silently (CLAUDE.md §4) — and said once per
+        // link and port, because it is a configuration fact, not an event.
+        let message = "\(link.endpointDescription) sent frames on KISS port \(port), which no radio uses. Add a radio for that port, or fix the TNC's channel numbering."
+        LinkDebugLog.shared.recordParseError(message: "KISS port \(port) on \(link.endpointDescription) has no radio")
+        addErrorLine(message, category: .connection)
+        eventLogger?.log(level: .warning, category: .connection, message: message,
+                         metadata: ["link": link.endpointDescription, "port": "\(port)"])
     }
 }
 

@@ -16,7 +16,8 @@ nonisolated enum RadioTransportKind: String, Codable, CaseIterable, Sendable {
 /// from TCP to serial and back and the host is still there — and a profile
 /// that forgot the host on the way through serial would be a regression the
 /// operator felt. The link layer reads the one transport that is current
-/// through `transport`.
+/// through `kind` and builds its link from those fields
+/// (`RadioManager.defaultLinkFactory`); `linkKey` names the byte stream.
 ///
 /// Fields the app does not act on yet (`kissPort`, `callsign`, `autoConnect`,
 /// `frequencyHz`) are here because the storage format is versioned and every
@@ -107,6 +108,18 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         case .tcp: return "tcp://\(host.lowercased()):\(port)"
         case .serial: return "serial://\(serialDevicePath)"
         case .ble: return "ble://\(blePeripheralUUID.lowercased())"
+        }
+    }
+
+    /// What has to change for the link to need reopening: the transport and
+    /// its addressing, including the serial baud rate. Mobilinkd gains are
+    /// deliberately absent — they are applied in place, and reopening the
+    /// port for them would disrupt the running demodulator.
+    var transportSignature: String {
+        switch kind {
+        case .tcp: return "tcp://\(host.lowercased()):\(port)#\(kissPort)"
+        case .serial: return "serial://\(serialDevicePath)@\(serialBaudRate)#\(kissPort)"
+        case .ble: return "ble://\(blePeripheralUUID.lowercased())#\(kissPort)"
         }
     }
 
@@ -201,20 +214,13 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
 }
 
 /// The fixed identity of the radio a station had before it had several.
-///
-/// Minted once and kept in defaults, like `WinlinkSyncDevice.identifier`, so
-/// the settings migration and the database migration can each ask for it
-/// without either having to run first.
 nonisolated enum RadioIdentity {
-    static let primaryKey = "radios.primaryID"
-
+    /// `RadioID.primary`. Kept as a function because the settings store and
+    /// the database migration both ask by name; the `defaults` parameter is
+    /// accepted and ignored so the call sites need not care that the answer
+    /// stopped being minted.
     static func primaryID(defaults: UserDefaults = AppEnvironment.defaults) -> RadioID {
-        if let existing = defaults.string(forKey: primaryKey), !existing.isEmpty {
-            return RadioID(rawValue: existing)
-        }
-        let fresh = RadioID()
-        defaults.set(fresh.rawValue, forKey: primaryKey)
-        return fresh
+        .primary
     }
 }
 

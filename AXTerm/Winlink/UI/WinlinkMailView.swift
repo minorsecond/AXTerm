@@ -622,7 +622,7 @@ struct WinlinkMailView: View {
                 for frame in frames { client?.send(frame: frame) }
             },
             destination: session.remoteAddress,
-            channel: session.channel)
+            radio: session.radio)
         _ = await runner.runExchange(
             transport: transport,
             myCallsign: appSettings.myCallsign,

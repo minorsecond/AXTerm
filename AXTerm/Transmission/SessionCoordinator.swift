@@ -928,7 +928,7 @@ final class SessionCoordinator: ObservableObject {
                 data,
                 to: session.remoteAddress,
                 path: session.path,
-                channel: session.channel,
+                radio: session.radio,
                 pid: 0xF0,
                 displayInfo: "Node (\(data.count) bytes)")
             for frame in frames { _ = self.sendFrame(frame) }
@@ -1159,7 +1159,7 @@ final class SessionCoordinator: ObservableObject {
             guard let coordinator else { return nil }
             return MainActor.assumeIsolated {
                 coordinator.sessionManager
-                    .session(for: neighbor, path: DigiPath(), channel: 0)
+                    .session(for: neighbor, path: DigiPath(), radio: .primary)
                     .stateMachine.config.paclen
             }
         }
@@ -1193,7 +1193,7 @@ final class SessionCoordinator: ObservableObject {
                     data,
                     to: neighbor,
                     path: DigiPath(),
-                    channel: 0,
+                    radio: .primary,
                     pid: NetRomWire.pid
                 )
                 for frame in frames { coordinator.sendFrame(frame) }
@@ -1969,21 +1969,24 @@ final class SessionCoordinator: ObservableObject {
             return
         }
 
-        let channel: UInt8 = 0
+        // The radio that heard the frame is the radio the session runs on and
+        // the radio the reply leaves by. Frames from before radios existed carry
+        // none and fall to the primary.
+        let radio = packet.radioID ?? .primary
 
         switch decoded.frameClass {
         case .U:
-            handleUFrame(packet: packet, from: from, to: to, uType: decoded.uType, channel: channel)
+            handleUFrame(packet: packet, from: from, to: to, uType: decoded.uType, radio: radio)
         case .I:
-            handleIFrame(packet: packet, from: from, ns: decoded.ns ?? 0, nr: decoded.nr ?? 0, pf: (decoded.pf ?? 0) == 1, channel: channel)
+            handleIFrame(packet: packet, from: from, ns: decoded.ns ?? 0, nr: decoded.nr ?? 0, pf: (decoded.pf ?? 0) == 1, radio: radio)
         case .S:
-            handleSFrame(packet: packet, from: from, sType: decoded.sType, nr: decoded.nr ?? 0, pf: decoded.pf ?? 0, channel: channel)
+            handleSFrame(packet: packet, from: from, sType: decoded.sType, nr: decoded.nr ?? 0, pf: decoded.pf ?? 0, radio: radio)
         case .unknown:
             break
         }
     }
 
-    private func handleUFrame(packet: Packet, from: AX25Address, to: AX25Address, uType: AX25UType?, channel: UInt8) {
+    private func handleUFrame(packet: Packet, from: AX25Address, to: AX25Address, uType: AX25UType?, radio: RadioID) {
         guard let uType = uType else { return }
 
         // An answer to a probe, for a peer we hold no session with. Taken
@@ -1999,24 +2002,24 @@ final class SessionCoordinator: ObservableObject {
 
         switch uType {
         case .UA:
-            sessionManager.handleInboundUA(from: from, path: path, channel: channel)
+            sessionManager.handleInboundUA(from: from, path: path, radio: radio)
         case .DM:
             // A DM answering our XID is a pre-2.2 peer saying "I hold no
             // link to you", not a refusal. It resolves the negotiation and
             // is consumed there — see handleInboundDMDuringNegotiation.
-            if sessionManager.handleInboundDMDuringNegotiation(from: from, channel: channel) { break }
-            sessionManager.handleInboundDM(from: from, path: path, channel: channel)
+            if sessionManager.handleInboundDMDuringNegotiation(from: from, radio: radio) { break }
+            sessionManager.handleInboundDM(from: from, path: path, radio: radio)
         case .FRMR:
             // §6.3.2: during XID negotiation, FRMR is a pre-2.2 peer's
             // documented "use defaults" — resolve the negotiation first so
             // the deferred SABM proceeds; then normal FRMR handling.
-            sessionManager.handleInboundFRMRDuringNegotiation(from: from, channel: channel)
-            sessionManager.handleInboundFRMR(from: from, path: path, channel: channel)
+            sessionManager.handleInboundFRMRDuringNegotiation(from: from, radio: radio)
+            sessionManager.handleInboundFRMR(from: from, path: path, radio: radio)
         case .XID:
             let responses = sessionManager.handleInboundXID(
                 from: from,
                 path: path,
-                channel: channel,
+                radio: radio,
                 info: packet.info,
                 isCommand: packet.isCommand,
                 pf: (packet.control & 0x10) != 0
@@ -2025,7 +2028,7 @@ final class SessionCoordinator: ObservableObject {
                 sendFrame(response)
             }
         case .DISC:
-            if let response = sessionManager.handleInboundDISC(from: from, path: path, channel: channel) {
+            if let response = sessionManager.handleInboundDISC(from: from, path: path, radio: radio) {
                 sendFrame(response)
             }
         case .SABM, .SABME:
@@ -2033,7 +2036,7 @@ final class SessionCoordinator: ObservableObject {
                 from: from,
                 to: to,
                 path: path,
-                channel: channel
+                radio: radio
             ) {
                 sendFrame(response)
             }
@@ -2048,12 +2051,12 @@ final class SessionCoordinator: ObservableObject {
         }
     }
 
-    private func handleIFrame(packet: Packet, from: AX25Address, ns: Int, nr: Int, pf: Bool, channel: UInt8) {
+    private func handleIFrame(packet: Packet, from: AX25Address, ns: Int, nr: Int, pf: Bool, radio: RadioID) {
         let path = DigiPath.from(packet.via.map { $0.display })
         if let response = sessionManager.handleInboundIFrame(
             from: from,
             path: path,
-            channel: channel,
+            radio: radio,
             ns: ns,
             nr: nr,
             pf: pf,
@@ -3306,8 +3309,8 @@ final class SessionCoordinator: ObservableObject {
     /// — so nothing in the protocol layer objects. What is wrong is only visible
     /// one level up: the session strip says "connected" and the far end has
     /// never sent anything. Reported once per session; real data resets it.
-    private func reportIdleLinkIfNeeded(peer: AX25Address, channel: UInt8) {
-        guard let session = sessionManager.connectedSession(withPeer: peer, channel: channel)
+    private func reportIdleLinkIfNeeded(peer: AX25Address, radio: RadioID) {
+        guard let session = sessionManager.connectedSession(withPeer: peer, radio: radio)
         else { return }
         let polls = session.stateMachine.idlePollCount
         guard polls >= Self.idlePollNotice else { return }
@@ -3338,7 +3341,7 @@ final class SessionCoordinator: ObservableObject {
         packetEngine?.appendSystemNotification(detail)
     }
 
-    private func handleSFrame(packet: Packet, from: AX25Address, sType: AX25SType?, nr: Int, pf: Int, channel: UInt8) {
+    private func handleSFrame(packet: Packet, from: AX25Address, sType: AX25SType?, nr: Int, pf: Int, radio: RadioID) {
         guard let sType = sType else { return }
         let path = DigiPath.from(packet.via.map { $0.display })
         let pfSet = pf == 1
@@ -3348,7 +3351,7 @@ final class SessionCoordinator: ObservableObject {
             let responses = sessionManager.handleInboundRRFrames(
                 from: from,
                 path: path,
-                channel: channel,
+                radio: radio,
                 nr: nr,
                 pf: pfSet,
                 isCommand: packet.isCommand
@@ -3356,10 +3359,10 @@ final class SessionCoordinator: ObservableObject {
             for response in responses {
                 sendFrame(response)
             }
-            reportIdleLinkIfNeeded(peer: from, channel: channel)
+            reportIdleLinkIfNeeded(peer: from, radio: radio)
         case .REJ:
             let retransmits = sessionManager.handleInboundREJ(
-                from: from, path: path, channel: channel, nr: nr,
+                from: from, path: path, radio: radio, nr: nr,
                 pf: pfSet, isCommand: packet.isCommand
             )
             for frame in retransmits {
@@ -3370,7 +3373,7 @@ final class SessionCoordinator: ObservableObject {
             let responses = sessionManager.handleInboundRNR(
                 from: from,
                 path: path,
-                channel: channel,
+                radio: radio,
                 nr: nr,
                 pf: pfSet,
                 isCommand: packet.isCommand
@@ -3385,7 +3388,7 @@ final class SessionCoordinator: ObservableObject {
             let retransmits = sessionManager.handleInboundSREJ(
                 from: packet.from.map { AX25Address(call: $0.display) } ?? from,
                 path: path,
-                channel: channel,
+                radio: radio,
                 nr: nr,
                 pf: pfSet
             )

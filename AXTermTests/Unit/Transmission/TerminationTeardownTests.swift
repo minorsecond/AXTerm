@@ -31,16 +31,16 @@ final class TerminationTeardownTests: XCTestCase {
         let idlePeer = AX25Address(call: "N0HI", ssid: 7)
 
         // One connected session, one still connecting, one already closed.
-        let connected = manager.session(for: peer, path: DigiPath(), channel: 0)
+        let connected = manager.session(for: peer, path: DigiPath(), radio: .primary)
         _ = connected.stateMachine.handle(event: .connectRequest)
         _ = connected.stateMachine.handle(event: .receivedUA)
         XCTAssertEqual(connected.state, .connected)
 
-        let connecting = manager.session(for: idlePeer, path: DigiPath(), channel: 0)
+        let connecting = manager.session(for: idlePeer, path: DigiPath(), radio: .primary)
         _ = connecting.stateMachine.handle(event: .connectRequest)
         XCTAssertEqual(connecting.state, .connecting)
 
-        let closed = manager.session(for: AX25Address(call: "W0ARP", ssid: 7), path: DigiPath(), channel: 0)
+        let closed = manager.session(for: AX25Address(call: "W0ARP", ssid: 7), path: DigiPath(), radio: .primary)
         XCTAssertEqual(closed.state, .disconnected)
 
         let sent = coordinator.prepareForTermination()

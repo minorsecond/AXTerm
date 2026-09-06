@@ -1415,7 +1415,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         let cr = Data("\r".utf8)
         let prompt = sessionManager.sendData(cr, to: session.remoteAddress,
                                              path: session.path,
-                                             channel: session.channel, pid: 0xF0)
+                                             radio: session.radio, pid: 0xF0)
         onSendFrames?(prompt)
         TxLog.outbound(.session, "Node-prompt relay: prompted a silent node with CR", [
             "nextHop": session.remoteAddress.display, "frames": prompt.count
@@ -1528,7 +1528,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         relayAskedNode = relayWaitingOn ?? session.remoteAddress.display
 
         let command = Data("C \(destination)\r".utf8)
-        let frames = sessionManager.sendData(command, to: session.remoteAddress, path: session.path, channel: session.channel, pid: 0xF0)
+        let frames = sessionManager.sendData(command, to: session.remoteAddress, path: session.path, radio: session.radio, pid: 0xF0)
         onSendFrames?(frames)
         TxLog.outbound(.session, "Node-prompt relay connect command queued", [
             "destination": destination,

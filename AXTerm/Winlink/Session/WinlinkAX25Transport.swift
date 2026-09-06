@@ -14,7 +14,7 @@ final class WinlinkAX25Transport: WinlinkTransport {
     private let sendFrames: ([OutboundFrame]) -> Void
     private let destination: AX25Address
     private let path: DigiPath
-    private let channel: UInt8
+    private let radio: RadioID
     private let connectTimeout: TimeInterval
 
     private var claim: SessionDeliveryClaim?
@@ -35,19 +35,19 @@ final class WinlinkAX25Transport: WinlinkTransport {
         sendFrames: @escaping ([OutboundFrame]) -> Void,
         destination: AX25Address,
         path: DigiPath = DigiPath(),
-        channel: UInt8 = 0,
+        radio: RadioID = .primary,
         connectTimeout: TimeInterval = 90
     ) {
         self.sessionManager = sessionManager
         self.sendFrames = sendFrames
         self.destination = destination
         self.path = path
-        self.channel = channel
+        self.radio = radio
         self.connectTimeout = connectTimeout
     }
 
     func open() async throws {
-        let key = SessionKey(destination: destination, path: path, channel: channel)
+        let key = SessionKey(destination: destination, path: path, radio: radio)
 
         // Claim before any frame goes out so no delivered byte can leak
         // to the terminal path, and so a terminal session to the same
@@ -72,12 +72,12 @@ final class WinlinkAX25Transport: WinlinkTransport {
         }
         self.claim = claim
 
-        if let existing = sessionManager.existingSession(for: destination, path: path, channel: channel),
+        if let existing = sessionManager.existingSession(for: destination, path: path, radio: radio),
            existing.state == .connected {
             return  // already connected (e.g. retry after a failed handshake)
         }
 
-        if let sabm = sessionManager.connect(to: destination, path: path, channel: channel) {
+        if let sabm = sessionManager.connect(to: destination, path: path, radio: radio) {
             sendFrames([sabm])
         }
 
@@ -88,7 +88,7 @@ final class WinlinkAX25Transport: WinlinkTransport {
             releaseClaim()
             throw WinlinkTransportError.connectRefused(destination.display)
         case .timeout:
-            if let session = sessionManager.existingSession(for: destination, path: path, channel: channel) {
+            if let session = sessionManager.existingSession(for: destination, path: path, radio: radio) {
                 sessionManager.forceDisconnect(session: session)
             }
             releaseClaim()
@@ -102,11 +102,11 @@ final class WinlinkAX25Transport: WinlinkTransport {
             data,
             to: destination,
             path: path,
-            channel: channel,
+            radio: radio,
             pid: 0xF0,
             displayInfo: "Winlink B2F (\(data.count) bytes)")
         sendFrames(frames)
-        if let session = sessionManager.existingSession(for: destination, path: path, channel: channel) {
+        if let session = sessionManager.existingSession(for: destination, path: path, radio: radio) {
             reportDeliveryProgress(session: session)
         }
     }
@@ -122,7 +122,7 @@ final class WinlinkAX25Transport: WinlinkTransport {
 
     func close() {
         guard !closed else { return }
-        if let session = sessionManager.existingSession(for: destination, path: path, channel: channel),
+        if let session = sessionManager.existingSession(for: destination, path: path, radio: radio),
            session.state == .connected || session.state == .connecting {
             if let disc = sessionManager.disconnect(session: session) {
                 sendFrames([disc])

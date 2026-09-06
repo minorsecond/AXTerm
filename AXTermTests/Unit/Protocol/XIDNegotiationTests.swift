@@ -58,7 +58,7 @@ final class XIDNegotiationTests: XCTestCase {
     // MARK: - Outbound negotiation
 
     func testFirstConnectSendsXIDCommandNotSABM() {
-        let frame = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        let frame = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         XCTAssertEqual(frame?.displayInfo, "XID")
         XCTAssertEqual(frame?.controlByte, 0xBF, "XID command with P=1")
         XCTAssertFalse(sent.contains { $0.displayInfo == "SABM" },
@@ -70,7 +70,7 @@ final class XIDNegotiationTests: XCTestCase {
     /// goes straight to SABM instead of re-spending a frame and an RTO.
     func testARememberedRejectionSkipsTheProbeEntirely() {
         manager.rememberXIDAnswer(peer: peer.display, unsupported: true)
-        let frame = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        let frame = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         XCTAssertEqual(frame?.displayInfo, "SABM",
                        "the answer is remembered; the question is not re-asked")
     }
@@ -78,31 +78,31 @@ final class XIDNegotiationTests: XCTestCase {
     /// The memory itself is written by the negotiation's answers: a DM
     /// during this launch means no probe next launch.
     func testADMAnswerWritesTheMemory() {
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundDMDuringNegotiation(from: peer, channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundDMDuringNegotiation(from: peer, radio: .primary)
         XCTAssertTrue(manager.xidMemory.isKnownUnsupported(peer.display))
     }
 
     func testXIDResponseEnablesSREJAndMinimumsThenSABM() {
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         let responses = manager.handleInboundXID(
-            from: peer, path: DigiPath(), channel: 0,
+            from: peer, path: DigiPath(), radio: .primary,
             info: xidResponse(srej: true, n1: 64, k: 2), isCommand: false, pf: true)
         XCTAssertTrue(responses.isEmpty, "an XID response draws no reply")
 
         XCTAssertTrue(sent.contains { $0.displayInfo == "SABM" }, "SABM follows the answer")
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
         XCTAssertTrue(session.stateMachine.config.srejEnabled)
         XCTAssertEqual(session.stateMachine.config.windowSize, 2, "k = min(ours 4, theirs 2)")
         XCTAssertEqual(session.stateMachine.config.paclen, 64, "paclen = min(ours 128, their N1 64)")
     }
 
     func testPeerWithoutSREJGetsPlainGoBackN() {
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         _ = manager.handleInboundXID(
-            from: peer, path: DigiPath(), channel: 0,
+            from: peer, path: DigiPath(), radio: .primary,
             info: xidResponse(srej: false), isCommand: false, pf: true)
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
         XCTAssertFalse(session.stateMachine.config.srejEnabled)
         XCTAssertTrue(sent.contains { $0.displayInfo == "SABM" })
     }
@@ -110,11 +110,11 @@ final class XIDNegotiationTests: XCTestCase {
     /// §6.3.2: pre-2.2 implementations answer XID with FRMR. That is the
     /// documented "no" — connect proceeds with defaults, never fails.
     func testFRMRFallsBackToPlainSABM() {
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundFRMRDuringNegotiation(from: peer, channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundFRMRDuringNegotiation(from: peer, radio: .primary)
 
         XCTAssertTrue(sent.contains { $0.displayInfo == "SABM" })
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
         XCTAssertFalse(session.stateMachine.config.srejEnabled)
     }
 
@@ -126,15 +126,15 @@ final class XIDNegotiationTests: XCTestCase {
     /// connect sat out its whole RTO anyway: on 2026-08-27 DRLNOD answered
     /// in 2.1 s and AXTerm did not send SABM until 8 s had passed.
     func testDMFallsBackToPlainSABMWithoutWaitingOutTheRTO() {
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         XCTAssertFalse(sent.contains { $0.displayInfo == "SABM" })
 
-        XCTAssertTrue(manager.handleInboundDMDuringNegotiation(from: peer, channel: 0),
+        XCTAssertTrue(manager.handleInboundDMDuringNegotiation(from: peer, radio: .primary),
                       "the DM belongs to the negotiation and is consumed by it")
 
         XCTAssertTrue(sent.contains { $0.displayInfo == "SABM" },
                       "the answer arrived; there is nothing left to wait for")
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
         XCTAssertFalse(session.stateMachine.config.srejEnabled)
         XCTAssertEqual(session.state, .connecting)
     }
@@ -143,15 +143,15 @@ final class XIDNegotiationTests: XCTestCase {
     /// and *also* run through normal handling would reach a `.connecting`
     /// session as "connection refused" and cancel the connect it started.
     func testDMOutsideNegotiationIsNotConsumed() {
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        _ = manager.handleInboundDMDuringNegotiation(from: peer, channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        _ = manager.handleInboundDMDuringNegotiation(from: peer, radio: .primary)
 
-        XCTAssertFalse(manager.handleInboundDMDuringNegotiation(from: peer, channel: 0),
+        XCTAssertFalse(manager.handleInboundDMDuringNegotiation(from: peer, radio: .primary),
                        "negotiation is over; a later DM is a real refusal")
     }
 
     func testSilentPeerTimesOutOnceAndIsCached() {
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         XCTAssertFalse(sent.contains { $0.displayInfo == "SABM" })
 
         clock.advance(by: 3.0)  // past the 2.0 s RTO
@@ -159,27 +159,27 @@ final class XIDNegotiationTests: XCTestCase {
                       "timeout falls back to the classic connect")
 
         // Tear down and reconnect: the peer is now known pre-2.2 — no XID.
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
         manager.forceDisconnect(session: session)
         manager.removeSession(session)
         sent = []
-        let frame = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        let frame = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         XCTAssertEqual(frame?.displayInfo, "SABM", "one RTO paid once, not per connect")
     }
 
     func testSecondConnectAfterSuccessfulXIDSkipsStraightToSABMWithSREJ() {
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         _ = manager.handleInboundXID(
-            from: peer, path: DigiPath(), channel: 0,
+            from: peer, path: DigiPath(), radio: .primary,
             info: xidResponse(srej: true), isCommand: false, pf: true)
-        let first = manager.session(for: peer, path: DigiPath(), channel: 0)
+        let first = manager.session(for: peer, path: DigiPath(), radio: .primary)
         manager.forceDisconnect(session: first)
         manager.removeSession(first)
         sent = []
 
-        let frame = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        let frame = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         XCTAssertEqual(frame?.displayInfo, "SABM", "capabilities are cached per callsign")
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
         XCTAssertTrue(session.stateMachine.config.srejEnabled)
     }
 
@@ -190,8 +190,8 @@ final class XIDNegotiationTests: XCTestCase {
     /// saw "connect refused" followed by the link connecting anyway.
     /// While negotiation is pending, the outcome must stay undecided.
     func testAwaitOutcomeDoesNotReadPendingNegotiationAsRefused() async {
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        let key = SessionKey(destination: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        let key = SessionKey(destination: peer, path: DigiPath(), radio: .primary)
 
         let outcomeTask = Task { [manager] in
             await manager!.awaitConnectionOutcome(key: key, timeout: 3.0)
@@ -203,9 +203,9 @@ final class XIDNegotiationTests: XCTestCase {
         // Peer answers XID (pre-2.2 peers would FRMR here instead — same
         // resolution path), SABM goes out, UA completes the link.
         _ = manager.handleInboundXID(
-            from: peer, path: DigiPath(), channel: 0,
+            from: peer, path: DigiPath(), radio: .primary,
             info: xidResponse(srej: true), isCommand: false, pf: true)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
 
         let outcome = await outcomeTask.value
         XCTAssertEqual(outcome, .connected,
@@ -214,7 +214,7 @@ final class XIDNegotiationTests: XCTestCase {
 
     func testNegotiationDisabledConnectsClassically() {
         manager.negotiateV22 = false
-        let frame = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        let frame = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         XCTAssertEqual(frame?.displayInfo, "SABM")
     }
 
@@ -224,7 +224,7 @@ final class XIDNegotiationTests: XCTestCase {
         var offer = AX25XIDParameters()
         offer.supportsSREJ = true
         let responses = manager.handleInboundXID(
-            from: peer, path: DigiPath(), channel: 0,
+            from: peer, path: DigiPath(), radio: .primary,
             info: offer.encoded(isCommand: true), isCommand: true, pf: true)
 
         XCTAssertEqual(responses.count, 1)
@@ -234,7 +234,7 @@ final class XIDNegotiationTests: XCTestCase {
         XCTAssertEqual(parsed?.supportsSREJ, true, "we accept the offered SREJ")
 
         // The SABM that follows creates a session that honors the agreement.
-        _ = manager.handleInboundSABM(from: peer, to: manager.localCallsign, path: DigiPath(), channel: 0)
+        _ = manager.handleInboundSABM(from: peer, to: manager.localCallsign, path: DigiPath(), radio: .primary)
         let session = manager.existingSession(for: peer)!
         XCTAssertTrue(session.stateMachine.config.srejEnabled)
     }
@@ -243,24 +243,24 @@ final class XIDNegotiationTests: XCTestCase {
         var offer = AX25XIDParameters()
         offer.supportsSREJ = false
         let responses = manager.handleInboundXID(
-            from: peer, path: DigiPath(), channel: 0,
+            from: peer, path: DigiPath(), radio: .primary,
             info: offer.encoded(isCommand: true), isCommand: true, pf: true)
         let parsed = AX25XIDParameters.parse(responses.first?.payload ?? Data())
         XCTAssertEqual(parsed?.supportsSREJ, false,
                        "never select an option the peer did not offer")
 
-        _ = manager.handleInboundSABM(from: peer, to: manager.localCallsign, path: DigiPath(), channel: 0)
+        _ = manager.handleInboundSABM(from: peer, to: manager.localCallsign, path: DigiPath(), radio: .primary)
         XCTAssertFalse(manager.existingSession(for: peer)!.stateMachine.config.srejEnabled)
     }
 
     func testMalformedXIDIsTreatedAsUnsupported() {
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         _ = manager.handleInboundXID(
-            from: peer, path: DigiPath(), channel: 0,
+            from: peer, path: DigiPath(), radio: .primary,
             info: Data([0xDE, 0xAD]), isCommand: false, pf: true)
         XCTAssertTrue(sent.contains { $0.displayInfo == "SABM" },
                       "garbage in the answer still must not strand the connect")
-        XCTAssertFalse(manager.session(for: peer, path: DigiPath(), channel: 0)
+        XCTAssertFalse(manager.session(for: peer, path: DigiPath(), radio: .primary)
             .stateMachine.config.srejEnabled)
     }
 }
