@@ -25,7 +25,7 @@ final class TwoRadioSessionTraceTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let settings = AppSettingsStore(defaults: defaults)
-        settings.myCallsign = "TEST-7"
+        settings.myCallsign = "K0EPI-7"
 
         // Two radios on one Direwolf: same host and port, KISS ports 0 and 1.
         settings.updateRadio(settings.radios[0].id) { $0.host = "192.168.3.218"; $0.port = 8001; $0.kissPort = 0 }
@@ -41,7 +41,7 @@ final class TwoRadioSessionTraceTests: XCTestCase {
             return fresh
         })
         let coordinator = SessionCoordinator()
-        coordinator.localCallsign = "TEST-7"
+        coordinator.localCallsign = "K0EPI-7"
         coordinator.appSettings = settings
         coordinator.subscribeToPackets(from: engine)
         return (engine, coordinator, settings)
@@ -94,7 +94,7 @@ final class TwoRadioSessionTraceTests: XCTestCase {
         XCTAssertEqual(engine.radioManager.sessions.count, 1, "two radios, one byte stream")
 
         let peer = AX25Address(call: "PEER", ssid: 1)
-        let local = AX25Address(call: "TEST", ssid: 7)
+        let local = AX25Address(call: "K0EPI", ssid: 7)
         let sabm = AX25FrameBuilder.buildSABM(from: peer, to: local, via: DigiPath(), extended: false).encodeAX25()
 
         // What the engine published, as it published it. (Its `packets` list
@@ -119,7 +119,7 @@ final class TwoRadioSessionTraceTests: XCTestCase {
         let decoded = reply.flatMap { AX25.decodeFrame(ax25: $0.ax25) }
         XCTAssertEqual(decoded?.frameType, .u)
         XCTAssertEqual(decoded?.to?.display, "PEER-1")
-        XCTAssertEqual(decoded?.from?.display, "TEST-7")
+        XCTAssertEqual(decoded?.from?.display, "K0EPI-7")
     }
 
     /// A second call on the primary radio is a different session, answered
@@ -131,7 +131,7 @@ final class TwoRadioSessionTraceTests: XCTestCase {
 
         let peer = AX25Address(call: "PEER", ssid: 1)
         let other = AX25Address(call: "PEER", ssid: 2)
-        let local = AX25Address(call: "TEST", ssid: 7)
+        let local = AX25Address(call: "K0EPI", ssid: 7)
         let sabm = AX25FrameBuilder.buildSABM(from: peer, to: local, via: DigiPath(), extended: false).encodeAX25()
         let sabm2 = AX25FrameBuilder.buildSABM(from: other, to: local, via: DigiPath(), extended: false).encodeAX25()
 
@@ -156,7 +156,7 @@ final class TwoRadioSessionTraceTests: XCTestCase {
         engine.connectUsingSettings()
 
         let peer = AX25Address(call: "PEER", ssid: 1)
-        let local = AX25Address(call: "TEST", ssid: 7)
+        let local = AX25Address(call: "K0EPI", ssid: 7)
         let sabm = AX25FrameBuilder.buildSABM(from: peer, to: local, via: DigiPath(), extended: false).encodeAX25()
         link!.injectReceived(kissFrame(port: 1, ax25: sabm))
         link!.injectReceived(kissFrame(port: 0, ax25: sabm))
@@ -177,22 +177,22 @@ final class TwoRadioSessionTraceTests: XCTestCase {
         let (engine, coordinator, settings) = makeStation()
         defer { withExtendedLifetime(coordinator) {} }
         let uhf = settings.radios.first { $0.kissPort == 1 }!.id
-        settings.updateRadio(uhf) { $0.callsign = "TEST-1" }
+        settings.updateRadio(uhf) { $0.callsign = "K0EPI-1" }
         engine.connectUsingSettings()
         // The coordinator learns the addresses on the main run loop.
         try? await Task.sleep(nanoseconds: 100_000_000)
 
         let peer = AX25Address(call: "PEER", ssid: 1)
-        let sabm = AX25FrameBuilder.buildSABM(from: peer, to: AX25Address(call: "TEST", ssid: 1),
+        let sabm = AX25FrameBuilder.buildSABM(from: peer, to: AX25Address(call: "K0EPI", ssid: 1),
                                               via: DigiPath(), extended: false).encodeAX25()
         link!.injectReceived(kissFrame(port: 0, ax25: sabm))
         await waitForReplies(1)
 
         XCTAssertEqual(replies.count, 1, diagnostics(engine, coordinator, peer: peer,
-                                                      local: AX25Address(call: "TEST", ssid: 1), radio: uhf))
+                                                      local: AX25Address(call: "K0EPI", ssid: 1), radio: uhf))
         XCTAssertEqual(replies.first?.port, 1, "answered on the UHF radio's port, not the one that heard it")
         let decoded = replies.first.flatMap { AX25.decodeFrame(ax25: $0.ax25) }
-        XCTAssertEqual(decoded?.from?.display, "TEST-1")
+        XCTAssertEqual(decoded?.from?.display, "K0EPI-1")
         XCTAssertEqual(decoded?.to?.display, "PEER-1")
     }
 
@@ -236,7 +236,7 @@ final class TwoRadioSessionTraceTests: XCTestCase {
         let sub = engine.packetPublisher.sink { heard.append($0) }
         defer { sub.cancel() }
 
-        let frame = AX25FrameBuilder.buildUI(from: AX25Address(call: "TEST", ssid: 7),
+        let frame = AX25FrameBuilder.buildUI(from: AX25Address(call: "K0EPI", ssid: 7),
                                              to: AX25Address(call: "BEACON"), via: DigiPath(),
                                              pid: 0xF0, payload: Data("beacon".utf8), displayInfo: nil)
         engine.send(frame: frame)
@@ -245,8 +245,34 @@ final class TwoRadioSessionTraceTests: XCTestCase {
 
         XCTAssertEqual(heard.count, 1)
         XCTAssertEqual(heard.first?.isOwnEcho, true)
-        XCTAssertFalse(engine.stations.contains { $0.call == "TEST-7" }, "we are not a station we heard")
+        XCTAssertFalse(engine.stations.contains { $0.call == "K0EPI-7" }, "we are not a station we heard")
         XCTAssertNil(engine.identityCollision, "our own echo is not another station on our callsign")
+    }
+
+    /// A folded copy is still this radio's evidence: the link metrics are per
+    /// radio, so both radios' entries for the sender fill in, and neither
+    /// counts the fold as a retry.
+    func testAFoldedCopyFeedsTheSecondRadiosMetricsWithoutARetry() async {
+        let (engine, coordinator, settings) = makeStation()
+        defer { withExtendedLifetime(coordinator) {} }
+        engine.connectUsingSettings()
+
+        // An I-frame to us, direct: the classifier treats it as real evidence.
+        let frame = AX25FrameBuilder.buildIFrame(from: AX25Address(call: "K0NTS", ssid: 1),
+                                                 to: AX25Address(call: "K0EPI", ssid: 7), via: DigiPath(),
+                                                 ns: 0, nr: 0, pid: 0xF0,
+                                                 payload: Data("hello".utf8), pf: false,
+                                                 sessionId: nil, displayInfo: nil).encodeAX25()
+        link!.injectReceived(kissFrame(port: 0, ax25: frame))
+        link!.injectReceived(kissFrame(port: 1, ax25: frame))
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        let base = settings.radios.first { $0.kissPort == 0 }!.id
+        let uhf = settings.radios.first { $0.kissPort == 1 }!.id
+        let stats = engine.netRomIntegration?.exportLinkStats().filter { $0.fromCall == "K0NTS-1" && $0.toCall == "K0EPI-7" } ?? []
+        XCTAssertEqual(Set(stats.map(\.radioID)), [base, uhf], "evidence on both radios")
+        XCTAssertEqual(stats.map(\.duplicateCount), [0, 0], "a fold is not a retry on either radio")
+        XCTAssertEqual(engine.crossRadioFolds, 1)
     }
 }
 

@@ -520,12 +520,18 @@ nonisolated enum DatabaseManager {
             t.column("dfEstimate", .double)
             t.column("drEstimate", .double)
             t.column("dupCount", .integer).notNull().defaults(to: 0)
+            // The radio that measured it (see `addRadioToLinkQualityHistory`).
+            t.column("radioID", .text).notNull().defaults(to: "radio-primary")
         }
         // Reads are always "this link, recent first".
         try db.create(
             index: "idx_link_quality_history_link",
             on: "link_quality_history",
             columns: ["fromCall", "toCall", "sampledAt"])
+        try db.create(
+            index: "idx_link_quality_history_radio_link",
+            on: "link_quality_history",
+            columns: ["radioID", "fromCall", "toCall", "sampledAt"])
         // Pruning is by age across every link.
         try db.create(
             index: "idx_link_quality_history_time",
@@ -796,8 +802,26 @@ nonisolated enum DatabaseManager {
         registerReportedMigration(&migrator, version: 30, name: "addRadioColumns") { db in
             try addRadioColumns(db)
         }
+        registerReportedMigration(&migrator, version: 31, name: "addRadioToLinkQualityHistory") { db in
+            try addRadioToLinkQualityHistory(db)
+        }
         return migrator
     }()
+
+    /// The radio on the link-quality time series: a link's history is per
+    /// radio, like its present. Added with the primary radio as the default
+    /// for every sample that exists, and only where missing — a fresh
+    /// database has it from the table definition.
+    static func addRadioToLinkQualityHistory(_ db: Database) throws {
+        let columns = try db.columns(in: "link_quality_history").map(\.name)
+        if !columns.contains("radioID") {
+            try db.execute(sql: "ALTER TABLE link_quality_history ADD COLUMN radioID TEXT NOT NULL DEFAULT 'radio-primary'")
+        }
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_link_quality_history_radio_link
+                ON link_quality_history(radioID, fromCall, toCall, sampledAt)
+            """)
+    }
 
     /// The radio dimension, on the rows that are made by a radio: which radio
     /// heard a frame, which radio a terminal session or a mailbox call ran on.

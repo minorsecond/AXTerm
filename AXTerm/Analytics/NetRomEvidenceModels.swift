@@ -89,6 +89,9 @@ nonisolated struct NetRomRouteEvidence: Equatable {
     var reinforcementScore: Double
     /// When set, this evidence is in tombstone state (expired but retained for potential revival).
     var tombstonedAt: Date?
+    /// The radio the next hop was heard on: the route this evidence
+    /// publishes is a way in on that radio.
+    var radio: RadioID = .primary
 
     /// Advertised quality derived from reinforcement increments.
     func advertisedQuality(using config: NetRomInferenceConfig) -> Int {

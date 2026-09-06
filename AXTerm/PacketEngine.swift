@@ -940,11 +940,19 @@ final class PacketEngine: ObservableObject {
         if radioManager.profiles.count > 1,
            case .additionalRadio(let firstRadio) = crossRadioDedup.admit(raw: ax25Data, radio: radio, at: now) {
             crossRadioFolds += 1
+            // The same bytes, as this radio heard them: not a packet, but
+            // evidence about this radio's link to the sender. The metrics are
+            // keyed by radio, so it lands on this radio's entry and no other.
+            let copy = Packet(
+                timestamp: now, from: decoded.from, to: decoded.to, via: decoded.via,
+                frameType: decoded.frameType, control: decoded.control, controlByte1: decoded.controlByte1,
+                pid: decoded.pid, info: decoded.info, rawAx25: ax25Data, kissEndpoint: tcpEndpoint,
+                radioID: radio, kissPort: kissPort, linkDescription: linkDescription)
             if let src = decoded.from?.display {
-                stationTracker.noteHeard(src, on: radio, at: now, via: StationTracker.heardVia(
-                    Packet(from: decoded.from, to: decoded.to, via: decoded.via)))
+                stationTracker.noteHeard(src, on: radio, at: now, via: StationTracker.heardVia(copy))
                 stations = stationTracker.stations
             }
+            observePacketForNetRom(copy)
             debugTrace("Cross-radio duplicate folded", [
                 "radio": radio.rawValue, "first": firstRadio.rawValue, "len": ax25Data.count])
             return

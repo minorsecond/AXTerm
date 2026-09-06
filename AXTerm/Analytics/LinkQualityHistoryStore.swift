@@ -10,8 +10,10 @@ nonisolated struct LinkQualityHistorySample: Equatable, Sendable, Identifiable {
     var dfEstimate: Double?
     var drEstimate: Double?
     var dupCount: Int
+    /// The radio that measured it.
+    var radioID: RadioID = .primary
 
-    var id: String { "\(fromCall)>\(toCall)@\(sampledAt.timeIntervalSince1970)" }
+    var id: String { "\(radioID.rawValue)|\(fromCall)>\(toCall)@\(sampledAt.timeIntervalSince1970)" }
 }
 
 /// Keeps the history of what links have been like.
@@ -62,17 +64,18 @@ nonisolated final class SQLiteLinkQualityHistoryStore: LinkQualityHistoryStore, 
                 // once instead of waiting for the next window.
                 let last = try Date.fetchOne(db, sql: """
                     SELECT MAX(sampledAt) FROM link_quality_history
-                    WHERE fromCall = ? AND toCall = ?
-                    """, arguments: [stat.fromCall, stat.toCall])
+                    WHERE fromCall = ? AND toCall = ? AND radioID = ?
+                    """, arguments: [stat.fromCall, stat.toCall, stat.radioID.rawValue])
                 if let last, time.timeIntervalSince(last) < Self.minimumInterval { continue }
 
                 try db.execute(sql: """
                     INSERT INTO link_quality_history
-                    (fromCall, toCall, sampledAt, quality, dfEstimate, drEstimate, dupCount)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (fromCall, toCall, sampledAt, quality, dfEstimate, drEstimate, dupCount, radioID)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, arguments: [
                         stat.fromCall, stat.toCall, time, stat.quality,
                         stat.dfEstimate, stat.drEstimate, stat.duplicateCount,
+                        stat.radioID.rawValue,
                     ])
             }
         }
@@ -81,7 +84,7 @@ nonisolated final class SQLiteLinkQualityHistoryStore: LinkQualityHistoryStore, 
     func history(from: String, to: String, since: Date) throws -> [LinkQualityHistorySample] {
         try dbQueue.read { db in
             try Self.rows(db, sql: """
-                SELECT fromCall, toCall, sampledAt, quality, dfEstimate, drEstimate, dupCount
+                SELECT fromCall, toCall, sampledAt, quality, dfEstimate, drEstimate, dupCount, radioID
                 FROM link_quality_history
                 WHERE fromCall = ? AND toCall = ? AND sampledAt >= ?
                 ORDER BY sampledAt ASC
@@ -92,7 +95,7 @@ nonisolated final class SQLiteLinkQualityHistoryStore: LinkQualityHistoryStore, 
     func history(between a: String, and b: String, since: Date) throws -> [LinkQualityHistorySample] {
         try dbQueue.read { db in
             try Self.rows(db, sql: """
-                SELECT fromCall, toCall, sampledAt, quality, dfEstimate, drEstimate, dupCount
+                SELECT fromCall, toCall, sampledAt, quality, dfEstimate, drEstimate, dupCount, radioID
                 FROM link_quality_history
                 WHERE ((fromCall = ? AND toCall = ?) OR (fromCall = ? AND toCall = ?))
                   AND sampledAt >= ?
@@ -120,7 +123,8 @@ nonisolated final class SQLiteLinkQualityHistoryStore: LinkQualityHistoryStore, 
                 quality: row["quality"],
                 dfEstimate: row["dfEstimate"],
                 drEstimate: row["drEstimate"],
-                dupCount: row["dupCount"])
+                dupCount: row["dupCount"],
+                radioID: RadioID(rawValue: (row["radioID"] as String?) ?? RadioID.primary.rawValue))
         }
     }
 }

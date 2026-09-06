@@ -91,14 +91,18 @@ nonisolated struct NeighborInfo: Equatable {
     let obsolescenceCount: Int
     let sourceType: String
     let isOfficial: Bool
+    /// The radio this neighbor was heard on. A neighbor reachable on two
+    /// radios is two entries — two antennas, two links, two qualities.
+    let radioID: RadioID
 
-    init(call: String, quality: Int, lastSeen: Date, obsolescenceCount: Int = 1, sourceType: String = "classic", isOfficial: Bool = false) {
+    init(call: String, quality: Int, lastSeen: Date, obsolescenceCount: Int = 1, sourceType: String = "classic", isOfficial: Bool = false, radioID: RadioID = .primary) {
         self.call = call
         self.quality = quality
         self.lastSeen = lastSeen
         self.obsolescenceCount = obsolescenceCount
         self.sourceType = sourceType
         self.isOfficial = isOfficial
+        self.radioID = radioID
     }
 }
 
@@ -110,15 +114,25 @@ nonisolated struct RouteInfo: Equatable {
     let path: [String]
     let lastUpdated: Date
     let sourceType: String
+    /// The radio the next hop is reached on: a route is (destination, radio,
+    /// next hop).
+    let radioID: RadioID
 
-    init(destination: String, origin: String, quality: Int, path: [String], lastUpdated: Date, sourceType: String = "broadcast") {
+    init(destination: String, origin: String, quality: Int, path: [String], lastUpdated: Date, sourceType: String = "broadcast", radioID: RadioID = .primary) {
         self.destination = destination
         self.origin = origin
         self.quality = quality
         self.path = path
         self.lastUpdated = lastUpdated
         self.sourceType = sourceType
+        self.radioID = radioID
     }
+}
+
+/// One neighbor as one radio hears it.
+nonisolated struct NeighborKey: Hashable, Sendable {
+    let radio: RadioID
+    let call: String
 }
 
 /// Path summary for best path lookups.
@@ -129,14 +143,16 @@ nonisolated struct NetRomPath: Equatable, Hashable {
 
 nonisolated private struct NeighborRecord {
     let call: String
+    let radioID: RadioID
     var pathQuality: Int
     var lastUpdate: Date
     var obsolescenceCount: Int
     var sourceType: String  // "classic" or "inferred"
     var isOfficial: Bool
 
-    init(call: String, pathQuality: Int, lastUpdate: Date, obsolescenceCount: Int, sourceType: String, isOfficial: Bool = false) {
+    init(call: String, radioID: RadioID = .primary, pathQuality: Int, lastUpdate: Date, obsolescenceCount: Int, sourceType: String, isOfficial: Bool = false) {
         self.call = call
+        self.radioID = radioID
         self.pathQuality = pathQuality
         self.lastUpdate = lastUpdate
         self.obsolescenceCount = obsolescenceCount
@@ -148,6 +164,7 @@ nonisolated private struct NeighborRecord {
 nonisolated private struct RouteRecord {
     let destination: String
     let origin: String
+    let radioID: RadioID
     var quality: Int
     var path: [String]
     var lastHeard: Date
@@ -162,12 +179,13 @@ nonisolated final class NetRomRouter {
     private static var retainedForTests: [NetRomRouter] = []
     #endif
 
-    private var neighbors: [String: NeighborRecord] = [:]
+    private var neighbors: [NeighborKey: NeighborRecord] = [:]
     private var routesByDestination: [String: [RouteRecord]] = [:]
 
     /// Tracks the currently preferred route per destination for hysteresis.
     private struct PreferredRoute {
         let origin: String
+        let radioID: RadioID
         let selectedAt: Date
     }
     private var preferredRoutes: [String: PreferredRoute] = [:]
@@ -193,11 +211,12 @@ nonisolated final class NetRomRouter {
         guard packet.via.isEmpty else { return }
         guard !isInfrastructurePacket(packet) else { return }
 
+        let radio = packet.radioID ?? .primary
         switch direction {
         case .incoming:
-            updateNeighbor(call: normalizedFrom, observedQuality: observedQuality, timestamp: timestamp, sourceType: "classic")
+            updateNeighbor(call: normalizedFrom, radio: radio, observedQuality: observedQuality, timestamp: timestamp, sourceType: "classic")
         case .outgoing:
-            updateNeighbor(call: normalizedTo, observedQuality: observedQuality, timestamp: timestamp, sourceType: "classic")
+            updateNeighbor(call: normalizedTo, radio: radio, observedQuality: observedQuality, timestamp: timestamp, sourceType: "classic")
         }
     }
 
@@ -215,11 +234,12 @@ nonisolated final class NetRomRouter {
         guard packet.via.isEmpty else { return }
         guard !isInfrastructurePacket(packet) else { return }
 
+        let radio = packet.radioID ?? .primary
         switch direction {
         case .incoming:
-            updateNeighbor(call: normalizedFrom, observedQuality: observedQuality, timestamp: timestamp, sourceType: "inferred")
+            updateNeighbor(call: normalizedFrom, radio: radio, observedQuality: observedQuality, timestamp: timestamp, sourceType: "inferred")
         case .outgoing:
-            updateNeighbor(call: normalizedTo, observedQuality: observedQuality, timestamp: timestamp, sourceType: "inferred")
+            updateNeighbor(call: normalizedTo, radio: radio, observedQuality: observedQuality, timestamp: timestamp, sourceType: "inferred")
         }
     }
 
@@ -227,7 +247,7 @@ nonisolated final class NetRomRouter {
     private static var hasLoggedBroadcast = false
     #endif
 
-    func broadcastRoutes(from origin: String, quality: Int, destinations: [RouteInfo], timestamp: Date) {
+    func broadcastRoutes(from origin: String, radio: RadioID = .primary, quality: Int, destinations: [RouteInfo], timestamp: Date) {
         guard let normalizedOrigin = normalize(origin) else {
             #if DEBUG
             if !Self.hasLoggedBroadcast {
@@ -236,11 +256,11 @@ nonisolated final class NetRomRouter {
             #endif
             return
         }
-        guard let neighbor = neighbors[normalizedOrigin] else {
+        guard let neighbor = neighbors[NeighborKey(radio: radio, call: normalizedOrigin)] else {
             #if DEBUG
             if !Self.hasLoggedBroadcast {
                 print("[NETROM:ROUTER] broadcastRoutes: origin '\(normalizedOrigin)' is NOT a neighbor")
-                print("[NETROM:ROUTER]   Current neighbors: \(neighbors.keys.sorted())")
+                print("[NETROM:ROUTER]   Current neighbors: \(neighbors.keys.map { "\($0.call)@\($0.radio.rawValue)" }.sorted())")
                 Self.hasLoggedBroadcast = true
             }
             #endif
@@ -295,6 +315,7 @@ nonisolated final class NetRomRouter {
             storeRoute(
                 destination: normalizedDestination,
                 origin: normalizedOrigin,
+                radio: radio,
                 quality: storedQuality,
                 path: normalizedPath,
                 timestamp: timestamp,
@@ -307,7 +328,7 @@ nonisolated final class NetRomRouter {
         neighbors
             .values
             .sorted(by: neighborSort)
-            .map { NeighborInfo(call: $0.call, quality: $0.pathQuality, lastSeen: $0.lastUpdate, obsolescenceCount: $0.obsolescenceCount, sourceType: $0.sourceType, isOfficial: $0.isOfficial) }
+            .map { NeighborInfo(call: $0.call, quality: $0.pathQuality, lastSeen: $0.lastUpdate, obsolescenceCount: $0.obsolescenceCount, sourceType: $0.sourceType, isOfficial: $0.isOfficial, radioID: $0.radioID) }
     }
 
     /// O(1) check — avoids the full route array construction of bestRouteTo().
@@ -323,7 +344,7 @@ nonisolated final class NetRomRouter {
         return sortedDestinations.flatMap { destination in
             let bucket = routesByDestination[destination] ?? []
             return bucket.map { route in
-                RouteInfo(destination: destination, origin: route.origin, quality: route.quality, path: route.path, lastUpdated: route.lastHeard, sourceType: route.sourceType)
+                RouteInfo(destination: destination, origin: route.origin, quality: route.quality, path: route.path, lastUpdated: route.lastHeard, sourceType: route.sourceType, radioID: route.radioID)
             }
         }
     }
@@ -370,17 +391,20 @@ nonisolated final class NetRomRouter {
                 // alphabetical, so the same table always yields the same
                 // attempt order.
                 if lhs.lastHeard != rhs.lastHeard { return lhs.lastHeard > rhs.lastHeard }
-                return lhs.origin < rhs.origin
+                if lhs.origin != rhs.origin { return lhs.origin < rhs.origin }
+                return RadioID.deterministicOrder(lhs.radioID, rhs.radioID)
             }
             .compactMap { route in
-                guard seen.insert(route.origin).inserted else { return nil }
+                // The same neighbor on two radios is two ways in.
+                guard seen.insert("\(route.origin)|\(route.radioID.rawValue)").inserted else { return nil }
                 return RouteInfo(
                     destination: normalized,
                     origin: route.origin,
                     quality: route.quality,
                     path: route.path,
                     lastUpdated: route.lastHeard,
-                    sourceType: route.sourceType
+                    sourceType: route.sourceType,
+                    radioID: route.radioID
                 )
             }
     }
@@ -416,7 +440,7 @@ nonisolated final class NetRomRouter {
 
         // Check if we have a preferred route for this destination
         if let preferred = preferredRoutes[normalized],
-           let preferredRoute = candidates.first(where: { $0.origin == preferred.origin }) {
+           let preferredRoute = candidates.first(where: { $0.origin == preferred.origin && $0.radioID == preferred.radioID }) {
             // Hysteresis exists to stop flapping between *comparable*
             // measurements; cross-tier numbers are not comparable. If a
             // higher-tier route appeared (a real broadcast arriving on top of
@@ -425,7 +449,7 @@ nonisolated final class NetRomRouter {
             // source-priority rule — so tier preempts immediately, and the
             // margin/hold logic below only ever arbitrates within a tier.
             if Self.sourceTier(absoluteBest.sourceType) > Self.sourceTier(preferredRoute.sourceType) {
-                preferredRoutes[normalized] = PreferredRoute(origin: absoluteBest.origin, selectedAt: currentDate)
+                preferredRoutes[normalized] = PreferredRoute(origin: absoluteBest.origin, radioID: absoluteBest.radioID, selectedAt: currentDate)
                 Telemetry.breadcrumb(
                     category: "netrom.routing",
                     message: "Next hop switched — higher-tier route appeared",
@@ -447,7 +471,7 @@ nonisolated final class NetRomRouter {
 
             if Double(absoluteBest.quality) > marginThreshold && holdTimeElapsed {
                 // Switch to the new best route
-                preferredRoutes[normalized] = PreferredRoute(origin: absoluteBest.origin, selectedAt: currentDate)
+                preferredRoutes[normalized] = PreferredRoute(origin: absoluteBest.origin, radioID: absoluteBest.radioID, selectedAt: currentDate)
                 // Routing decision (CLAUDE.md observability mandate): next-hop
                 // switches are the moments that explain traffic path changes.
                 Telemetry.breadcrumb(
@@ -470,7 +494,7 @@ nonisolated final class NetRomRouter {
         }
 
         // No preferred route exists (or it expired) — select the best
-        preferredRoutes[normalized] = PreferredRoute(origin: absoluteBest.origin, selectedAt: currentDate)
+        preferredRoutes[normalized] = PreferredRoute(origin: absoluteBest.origin, radioID: absoluteBest.radioID, selectedAt: currentDate)
         Telemetry.breadcrumb(
             category: "netrom.routing",
             message: "Next hop selected",
@@ -486,14 +510,16 @@ nonisolated final class NetRomRouter {
     }
 
     /// Refresh lastUpdated for routes from a specific origin, constrained by source types.
-    func refreshRoutes(from origin: String, timestamp: Date, allowedSourceTypes: Set<String>) {
+    func refreshRoutes(from origin: String, radio: RadioID = .primary, timestamp: Date, allowedSourceTypes: Set<String>) {
         let normalizedOrigin = CallsignValidator.normalize(origin)
         guard !normalizedOrigin.isEmpty else { return }
 
         for (destination, routeList) in routesByDestination {
             var updated = false
             let refreshed = routeList.map { route -> RouteRecord in
-                guard route.origin == normalizedOrigin else { return route }
+                // Hearing the origin on one radio says nothing about the
+                // route learned through it on another.
+                guard route.origin == normalizedOrigin, route.radioID == radio else { return route }
                 guard allowedSourceTypes.contains(route.sourceType) else { return route }
                 var copy = route
                 if copy.lastHeard != timestamp {
@@ -522,8 +548,9 @@ nonisolated final class NetRomRouter {
         for info in infos {
             let normalized = CallsignValidator.normalize(info.call)
             guard !normalized.isEmpty, normalized != localCallsign else { continue }
-            neighbors[normalized] = NeighborRecord(
+            neighbors[NeighborKey(radio: info.radioID, call: normalized)] = NeighborRecord(
                 call: normalized,
+                radioID: info.radioID,
                 pathQuality: info.quality,
                 lastUpdate: info.lastSeen,
                 obsolescenceCount: 1,
@@ -549,6 +576,7 @@ nonisolated final class NetRomRouter {
             let record = RouteRecord(
                 destination: normalizedDest,
                 origin: info.origin,
+                radioID: info.radioID,
                 quality: info.quality,
                 path: normalizedPath,
                 lastHeard: info.lastUpdated,
@@ -556,7 +584,7 @@ nonisolated final class NetRomRouter {
                 sourceType: info.sourceType
             )
             var bucket = routesByDestination[normalizedDest] ?? []
-            if let existingIndex = bucket.firstIndex(where: { $0.origin == info.origin }) {
+            if let existingIndex = bucket.firstIndex(where: { $0.origin == info.origin && $0.radioID == info.radioID }) {
                 bucket[existingIndex] = record
             } else {
                 bucket.append(record)
@@ -599,10 +627,12 @@ nonisolated final class NetRomRouter {
 
     // MARK: - Private helpers
 
-    private func updateNeighbor(call: String, observedQuality: Int, timestamp: Date, sourceType: String = "classic", isOfficial: Bool = false) {
+    private func updateNeighbor(call: String, radio: RadioID = .primary, observedQuality: Int, timestamp: Date, sourceType: String = "classic", isOfficial: Bool = false) {
         guard call != localCallsign else { return }
-        var candidate = neighbors[call] ?? NeighborRecord(
+        let key = NeighborKey(radio: radio, call: call)
+        var candidate = neighbors[key] ?? NeighborRecord(
             call: call,
+            radioID: radio,
             pathQuality: config.neighborBaseQuality,
             lastUpdate: timestamp,
             obsolescenceCount: 1,
@@ -633,26 +663,37 @@ nonisolated final class NetRomRouter {
         if isOfficial {
             candidate.isOfficial = true
         }
-        neighbors[call] = candidate
+        neighbors[key] = candidate
     }
 
     /// Mark a neighbor as an official NET/ROM node (broadcast source).
-    func markAsOfficial(call: String) {
-        guard var neighbor = neighbors[call] else { return }
+    func markAsOfficial(call: String, radio: RadioID = .primary) {
+        let key = NeighborKey(radio: radio, call: call)
+        guard var neighbor = neighbors[key] else { return }
         neighbor.isOfficial = true
-        neighbors[call] = neighbor
+        neighbors[key] = neighbor
+    }
+
+    /// The radio this neighbor is best heard on, when it is heard at all.
+    func radio(forNeighbor call: String) -> RadioID? {
+        guard let normalized = normalize(call) else { return nil }
+        return neighbors.values
+            .filter { $0.call == normalized }
+            .sorted(by: neighborSort)
+            .first?.radioID
     }
 
     private func storeRoute(
         destination: String,
         origin: String,
+        radio: RadioID,
         quality: Int,
         path: [String],
         timestamp: Date,
         sourceType: String = "broadcast"
     ) {
         var bucket = routesByDestination[destination] ?? []
-        if let existingIndex = bucket.firstIndex(where: { $0.origin == origin }) {
+        if let existingIndex = bucket.firstIndex(where: { $0.origin == origin && $0.radioID == radio }) {
             var existing = bucket[existingIndex]
             // Classic NET/ROM: each broadcast carries the node's *current* quality,
             // so a same-or-higher-tier update replaces the figure — max() made
@@ -679,6 +720,7 @@ nonisolated final class NetRomRouter {
             let newRoute = RouteRecord(
                 destination: destination,
                 origin: origin,
+                radioID: radio,
                 quality: quality,
                 path: path,
                 lastHeard: timestamp,
@@ -752,6 +794,9 @@ nonisolated final class NetRomRouter {
         if lhs.origin != rhs.origin {
             return lhs.origin < rhs.origin
         }
+        if lhs.radioID != rhs.radioID {
+            return RadioID.deterministicOrder(lhs.radioID, rhs.radioID)
+        }
         return lhs.path.count < rhs.path.count
     }
 
@@ -759,7 +804,10 @@ nonisolated final class NetRomRouter {
         if lhs.pathQuality != rhs.pathQuality {
             return lhs.pathQuality > rhs.pathQuality
         }
-        return lhs.call < rhs.call
+        if lhs.call != rhs.call {
+            return lhs.call < rhs.call
+        }
+        return RadioID.deterministicOrder(lhs.radioID, rhs.radioID)
     }
 
     private func normalize(_ value: String?) -> String? {

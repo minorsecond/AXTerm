@@ -251,6 +251,13 @@ final class SessionCoordinator: ObservableObject {
         radioOwners[address.display]
     }
 
+    /// The radio a NET/ROM neighbor is best heard on — where a datagram to
+    /// it should leave — falling back to the primary when nothing has been
+    /// heard from it yet.
+    func radio(forNetRomNeighbor neighbor: AX25Address) -> RadioID {
+        packetEngine?.netRomIntegration?.radio(forNeighbor: neighbor.display) ?? .primary
+    }
+
     /// Cancellables for subscriptions
     private var cancellables = Set<AnyCancellable>()
     /// Dedicated subscription for packet processing — kept separate from `cancellables`
@@ -1203,7 +1210,7 @@ final class SessionCoordinator: ObservableObject {
             guard let coordinator else { return nil }
             return MainActor.assumeIsolated {
                 coordinator.sessionManager
-                    .session(for: neighbor, path: DigiPath(), radio: .primary)
+                    .session(for: neighbor, path: DigiPath(), radio: coordinator.radio(forNetRomNeighbor: neighbor))
                     .stateMachine.config.paclen
             }
         }
@@ -1237,7 +1244,7 @@ final class SessionCoordinator: ObservableObject {
                     data,
                     to: neighbor,
                     path: DigiPath(),
-                    radio: .primary,
+                    radio: coordinator.radio(forNetRomNeighbor: neighbor),
                     pid: NetRomWire.pid
                 )
                 for frame in frames { coordinator.sendFrame(frame) }

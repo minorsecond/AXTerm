@@ -200,10 +200,47 @@ world must not double for either.
   counted when it was sent. The digipeated copy of our own frame stays
   foreign, as before: that is what the digipeater put on the air.
 
-Until the link metrics are keyed by radio, a folded copy is not fanned into
-route inference either — with a single-keyed estimator that would count
-twice. When the metrics become per radio the fold will feed the second
-radio's evidence without touching the first's.
+A folded copy is still the second radio's evidence: it is fed to route
+inference as a packet on that radio, where the metrics below keep it on
+that radio's entry and no other — and it never reaches the retry tracker,
+which is per radio and has not seen these bytes.
+
+## Per-radio link metrics
+
+A delivery probability is a property of a path between two antennas on one
+band at one power. Two of our radios hearing the same station are two
+links, and a clean one and a marginal one must not average into a mediocre
+figure that misroutes both (CLAUDE.md §8: evidence-based; `WinlinkSyncPolicy
+.attributed`: "measured from one place with one antenna").
+
+- `LinkQualityEstimator` keys by `LinkKey {radio, from, to}`; df, dr, ETX,
+  dups, recency and the adaptive TTL are all per radio. `linkQuality(from:
+  to:radio:)` defaults to the primary so callers that predate radios keep
+  their meaning; `radios(from:to:)` lists the radios that have measured a
+  link. `LinkStatRecord.radioID` rides through export and import.
+- `NetRomRouter` keys neighbours by `NeighborKey {radio, call}` and routes
+  by (destination, next hop, radio). The same next hop on two radios is two
+  ways in; `candidateRoutes` lists both and `bestRouteTo`'s hysteresis
+  holds (next hop, radio). Hearing an origin on one radio refreshes only the
+  routes learned through it on that radio. `radio(forNeighbor:)` names the
+  radio a neighbour is best heard on, and NET/ROM datagrams to it leave by
+  that radio.
+- **Deterministic tie-breaks** (CLAUDE.md §9) gained the radio as their last
+  term: `RadioID.deterministicOrder` puts the primary radio first, then
+  orders by identifier, so the same tables always yield the same choice.
+- `NetRomIntegration` keeps one duplicate tracker per radio — a retry is a
+  retransmission the *same* receiver heard again — and processes a NODES
+  broadcast against the radio it arrived on. Passive inference carries the
+  radio through its evidence to the routes it publishes.
+- Storage: `netrom_neighbors`, `netrom_routes` and `link_stats` are keyed
+  by radio (`PRIMARY KEY (radioID, call)`, `(destination, origin, radioID)`,
+  `(radioID, fromCall, toCall)`). `NetRomPersistence` rebuilds a table from
+  before the key change on open, every row attributed to the primary radio —
+  SQLite cannot change a key in place. Migration v31 adds `radioID` to
+  `link_quality_history`, so a link's history is per radio like its present.
+
+The one node identity, the ping budget shared by radios on one frequency,
+and the Auto radio for a connect are the next layer.
 
 ## Storage
 
@@ -270,6 +307,10 @@ These are pinned literally in `RadioPresentationTests`,
 6. Two radios on one frequency: one transmission is one packet, and our
    own echo is nobody's evidence.
 
-Next: per-radio link metrics and channel groups, then the services and the
-multi-radio UI. See `Docs/RoutingMetrics.md` for how link
+7. Per-radio link metrics: link quality, neighbours and routes keyed by
+   radio, with the radio as the last deterministic tie-break; storage keyed
+   to match.
+
+Next: the services (node identity, beacons, ping budgets shared on one
+frequency, the Auto radio for a connect) and the multi-radio UI. See `Docs/RoutingMetrics.md` for how link
 quality will be kept per radio.
