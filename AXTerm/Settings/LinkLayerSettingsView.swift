@@ -137,8 +137,8 @@ struct LinkLayerSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
 
-            Button("Open Connection Settings\u{2026}") {
-                SettingsRouter.shared.navigate(to: .network)
+            Button("Open Radio Settings\u{2026}") {
+                SettingsRouter.shared.navigate(to: .radios)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)

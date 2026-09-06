@@ -18,7 +18,7 @@ import SwiftUI
 /// - **Not connected** and **failed** are the ones worth interrupting for, so
 ///   they carry words and colour, and offer the fix.
 ///
-/// Tapping anywhere on it opens Connection settings — the strip states a
+/// Tapping anywhere on it opens the radio's settings — the strip states a
 /// problem, so it also has to lead somewhere.
 struct TNCStatusStrip: View {
     let status: ConnectionStatus
@@ -57,10 +57,10 @@ struct TNCStatusStrip: View {
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
         .contentShape(Rectangle())
-        .onTapGesture { SettingsRouter.shared.navigate(to: .network) }
+        .onTapGesture { SettingsRouter.shared.navigate(to: .radios) }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityText)
-        .accessibilityHint("Opens Connection settings")
+        .accessibilityHint("Opens Radio settings")
         .animation(.easeInOut(duration: 0.2), value: status)
     }
 

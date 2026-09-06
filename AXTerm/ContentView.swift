@@ -2167,7 +2167,7 @@ struct ContentView: View {
                 Divider()
 
                 Button("TNC Settings\u{2026}") {
-                    SettingsRouter.shared.navigate(to: .network)
+                    SettingsRouter.shared.navigate(to: .radios, radio: settings.primaryRadio?.id)
                 }
             } label: {
                 Text(tncCapsuleLabel)

@@ -37,6 +37,9 @@ final class AppSettingsStore: ObservableObject {
     static let sentrySendPacketContentsKey = "sentrySendPacketContents"
     static let sentrySendConnectionDetailsKey = "sentrySendConnectionDetails"
 
+    // Radios: every TNC this station runs, JSON, in the operator's order
+    static let radiosKey = "radios.v1"
+
     // Serial transport settings keys
     static let transportTypeKey = "kissTransportType"
     static let serialDevicePathKey = "serialDevicePath"
@@ -296,6 +299,7 @@ final class AppSettingsStore: ObservableObject {
                 return
             }
             persistHost()
+            syncPrimaryRadioFromLegacy()
         }
     }
 
@@ -309,6 +313,7 @@ final class AppSettingsStore: ObservableObject {
                 return
             }
             persistPort()
+            syncPrimaryRadioFromLegacy()
         }
     }
 
@@ -416,14 +421,36 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistAutoConnect() }
     }
 
+    // MARK: - Radios
+
+    /// Every radio this station runs, in the operator's order. Archived ones
+    /// stay in the list so history that names them keeps a name.
+    ///
+    /// The first enabled radio is the primary, and the single-connection
+    /// scalars below (`transportType`, `host`, `port`, the serial, BLE and
+    /// Mobilinkd fields, `tncCapabilities`) mirror it in both directions —
+    /// the same arrangement `WinlinkSettings.gatewayLadder` uses for its top
+    /// rung. The engine still reads the scalars, so with one radio nothing
+    /// about connecting has changed; with several, the primary is the one it
+    /// connects to until the link layer learns to hold more than one.
+    @Published var radios: [RadioProfile] {
+        didSet {
+            persistRadios()
+            mirrorPrimaryRadioIntoLegacy()
+        }
+    }
+
+    /// Guards the two mirroring directions against feeding each other.
+    private var isSyncingRadios = false
+
     // MARK: - Serial Transport Settings
 
     @Published var transportType: String {
-        didSet { persistTransportType() }
+        didSet { persistTransportType(); syncPrimaryRadioFromLegacy() }
     }
 
     @Published var serialDevicePath: String {
-        didSet { persistSerialDevicePath() }
+        didSet { persistSerialDevicePath(); syncPrimaryRadioFromLegacy() }
     }
 
     @Published var serialBaudRate: Int {
@@ -436,11 +463,12 @@ final class AppSettingsStore: ObservableObject {
                 return
             }
             persistSerialBaudRate()
+            syncPrimaryRadioFromLegacy()
         }
     }
 
     @Published var serialAutoReconnect: Bool {
-        didSet { persistSerialAutoReconnect() }
+        didSet { persistSerialAutoReconnect(); syncPrimaryRadioFromLegacy() }
     }
 
     /// Common baud rates for KISS TNCs
@@ -454,15 +482,15 @@ final class AppSettingsStore: ObservableObject {
     // MARK: - BLE Transport Settings
 
     @Published var blePeripheralUUID: String {
-        didSet { persistBLEPeripheralUUID() }
+        didSet { persistBLEPeripheralUUID(); syncPrimaryRadioFromLegacy() }
     }
 
     @Published var blePeripheralName: String {
-        didSet { persistBLEPeripheralName() }
+        didSet { persistBLEPeripheralName(); syncPrimaryRadioFromLegacy() }
     }
 
     @Published var bleAutoReconnect: Bool {
-        didSet { persistBLEAutoReconnect() }
+        didSet { persistBLEAutoReconnect(); syncPrimaryRadioFromLegacy() }
     }
 
     /// Whether the current transport type is BLE
@@ -473,19 +501,19 @@ final class AppSettingsStore: ObservableObject {
     // MARK: - Mobilinkd Settings
 
     @Published var mobilinkdEnabled: Bool {
-        didSet { persistMobilinkdEnabled() }
+        didSet { persistMobilinkdEnabled(); syncPrimaryRadioFromLegacy() }
     }
 
     @Published var mobilinkdModemType: Int {
-        didSet { persistMobilinkdModemType() }
+        didSet { persistMobilinkdModemType(); syncPrimaryRadioFromLegacy() }
     }
 
     @Published var mobilinkdOutputGain: Int {
-        didSet { persistMobilinkdOutputGain() }
+        didSet { persistMobilinkdOutputGain(); syncPrimaryRadioFromLegacy() }
     }
 
     @Published var mobilinkdInputGain: Int {
-        didSet { persistMobilinkdInputGain() }
+        didSet { persistMobilinkdInputGain(); syncPrimaryRadioFromLegacy() }
     }
 
     @Published var notifyOnWatchHits: Bool {
@@ -775,7 +803,7 @@ final class AppSettingsStore: ObservableObject {
 
     /// TNC capability model — gates which link-layer settings AXTerm can control.
     @Published var tncCapabilities: TNCCapabilities {
-        didSet { persistTNCCapabilities() }
+        didSet { persistTNCCapabilities(); syncPrimaryRadioFromLegacy() }
     }
 
     // MARK: - File Transfer Settings
@@ -1132,6 +1160,27 @@ final class AppSettingsStore: ObservableObject {
             storedTNCCapabilities = TNCCapabilities()
         }
 
+        // Radios. Absent on the first launch after the update, in which case
+        // the one radio the station had is read off the scalars above.
+        let storedRadios: [RadioProfile]
+        if let json = defaults.string(forKey: Self.radiosKey),
+           let data = json.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode([RadioProfile].self, from: data),
+           !decoded.isEmpty {
+            storedRadios = decoded
+        } else {
+            storedRadios = [RadioProfile.migrated(
+                id: RadioIdentity.primaryID(defaults: defaults),
+                transportType: storedTransportType, host: storedHost, port: storedPort,
+                serialDevicePath: storedSerialDevicePath, serialBaudRate: storedSerialBaudRate,
+                serialAutoReconnect: storedSerialAutoReconnect,
+                blePeripheralUUID: storedBLEPeripheralUUID, blePeripheralName: storedBLEPeripheralName,
+                bleAutoReconnect: storedBLEAutoReconnect,
+                mobilinkdEnabled: storedMobilinkdEnabled, mobilinkdModemType: storedMobilinkdModemType,
+                mobilinkdOutputGain: storedMobilinkdOutputGain, mobilinkdInputGain: storedMobilinkdInputGain,
+                capabilities: storedTNCCapabilities)]
+        }
+
         // Clear timestamps (stored as TimeInterval)
         let storedTerminalClearedAt: Date?
         if let timeInterval = defaults.object(forKey: Self.terminalClearedAtKey) as? TimeInterval {
@@ -1167,6 +1216,7 @@ final class AppSettingsStore: ObservableObject {
         // runInMenuBar is computed, no stored property to set
         self.launchAtLogin = storedLaunchAtLogin
         self.autoConnectOnLaunch = storedAutoConnect
+        self.radios = storedRadios
         self.transportType = storedTransportType
         self.serialDevicePath = storedSerialDevicePath
         self.serialBaudRate = Self.commonBaudRates.contains(storedSerialBaudRate) ? storedSerialBaudRate : Self.defaultSerialBaudRate
@@ -1255,10 +1305,130 @@ final class AppSettingsStore: ObservableObject {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             Self.testRetainedStores.append(self)
         }
+
+        // If the profile and the scalars disagree — an older build wrote the
+        // scalars after this one wrote the profile — the profile is the truth
+        // and the scalars follow it. Writing them persists through their own
+        // didSets; the sync back is a no-op because they now agree.
+        mirrorPrimaryRadioIntoLegacy()
     }
 
     var portValue: UInt16 {
         UInt16(port)
+    }
+
+    // MARK: - Radios
+
+    /// The radios the operator can see: everything not archived.
+    var activeRadios: [RadioProfile] { radios.filter { !$0.archived } }
+
+    /// The radio the single-connection scalars describe, and the one the
+    /// engine connects to until it can hold several: the first enabled radio,
+    /// or the first radio at all when none is enabled.
+    var primaryRadio: RadioProfile? {
+        activeRadios.first { $0.enabled } ?? activeRadios.first
+    }
+
+    /// One predicate for every "only when there is more than one" decision
+    /// in the UI, so twenty views cannot each derive it differently.
+    var hasMultipleRadios: Bool { activeRadios.count > 1 }
+
+    func radio(_ id: RadioID) -> RadioProfile? {
+        radios.first { $0.id == id }
+    }
+
+    func updateRadio(_ id: RadioID, _ change: (inout RadioProfile) -> Void) {
+        guard let index = radios.firstIndex(where: { $0.id == id }) else { return }
+        var radio = radios[index]
+        change(&radio)
+        guard radio != radios[index] else { return }
+        radios[index] = radio
+    }
+
+    /// A new radio, named for its position, on the transport most stations
+    /// add second: another Direwolf. Returned so the caller can open it.
+    @discardableResult
+    func addRadio() -> RadioProfile {
+        var radio = RadioProfile(id: RadioID(), name: "Radio \(activeRadios.count + 1)")
+        radio.host = Self.defaultHost
+        radio.port = Self.defaultPort
+        radios.append(radio)
+        return radio
+    }
+
+    /// Archives a radio. Refused for the last one: a station with no radio
+    /// is not a state the rest of the app has an answer for.
+    func archiveRadio(_ id: RadioID) {
+        guard activeRadios.count > 1 else { return }
+        updateRadio(id) { $0.archived = true }
+    }
+
+    /// Reorders the visible list; offsets and destination are in terms of
+    /// `activeRadios`, as SwiftUI's `onMove` supplies them. Done by hand
+    /// because `move(fromOffsets:toOffset:)` lives in SwiftUI, and this
+    /// store does not.
+    func moveRadios(fromOffsets source: IndexSet, toOffset destination: Int) {
+        var active = activeRadios
+        let moving = source.compactMap { active.indices.contains($0) ? active[$0] : nil }
+        guard !moving.isEmpty else { return }
+        let removedBefore = source.filter { $0 < destination }.count
+        for index in source.sorted(by: >) where active.indices.contains(index) {
+            active.remove(at: index)
+        }
+        let insertAt = max(0, min(active.count, destination - removedBefore))
+        active.insert(contentsOf: moving, at: insertAt)
+        let archived = radios.filter(\.archived)
+        radios = active + archived
+    }
+
+    private func persistRadios() {
+        if let data = try? JSONEncoder().encode(radios),
+           let json = String(data: data, encoding: .utf8) {
+            defaults.set(json, forKey: Self.radiosKey)
+        }
+    }
+
+    /// Profile → scalars. Each assignment is guarded by an equality check, so
+    /// a scalar that already agrees is not rewritten and does not sync back.
+    private func mirrorPrimaryRadioIntoLegacy() {
+        guard !isSyncingRadios, let primary = primaryRadio else { return }
+        isSyncingRadios = true
+        defer { isSyncingRadios = false }
+        if transportType != primary.kind.rawValue { transportType = primary.kind.rawValue }
+        if host != primary.host { host = primary.host }
+        if port != primary.port { port = primary.port }
+        if serialDevicePath != primary.serialDevicePath { serialDevicePath = primary.serialDevicePath }
+        if serialBaudRate != primary.serialBaudRate { serialBaudRate = primary.serialBaudRate }
+        if serialAutoReconnect != primary.serialAutoReconnect { serialAutoReconnect = primary.serialAutoReconnect }
+        if blePeripheralUUID != primary.blePeripheralUUID { blePeripheralUUID = primary.blePeripheralUUID }
+        if blePeripheralName != primary.blePeripheralName { blePeripheralName = primary.blePeripheralName }
+        if bleAutoReconnect != primary.bleAutoReconnect { bleAutoReconnect = primary.bleAutoReconnect }
+        if mobilinkdEnabled != primary.mobilinkdEnabled { mobilinkdEnabled = primary.mobilinkdEnabled }
+        if mobilinkdModemType != primary.mobilinkdModemType { mobilinkdModemType = primary.mobilinkdModemType }
+        if mobilinkdOutputGain != primary.mobilinkdOutputGain { mobilinkdOutputGain = primary.mobilinkdOutputGain }
+        if mobilinkdInputGain != primary.mobilinkdInputGain { mobilinkdInputGain = primary.mobilinkdInputGain }
+        if tncCapabilities != primary.capabilities { tncCapabilities = primary.capabilities }
+    }
+
+    /// Scalars → profile, for the writers that still speak the old language:
+    /// the engine's auto-gain telemetry, tests, and anything else that sets a
+    /// scalar directly.
+    private func syncPrimaryRadioFromLegacy() {
+        guard !isSyncingRadios, let primary = primaryRadio,
+              let index = radios.firstIndex(where: { $0.id == primary.id }) else { return }
+        var radio = radios[index]
+        radio.applyLegacy(transportType: transportType, host: host, port: port,
+                          serialDevicePath: serialDevicePath, serialBaudRate: serialBaudRate,
+                          serialAutoReconnect: serialAutoReconnect,
+                          blePeripheralUUID: blePeripheralUUID, blePeripheralName: blePeripheralName,
+                          bleAutoReconnect: bleAutoReconnect,
+                          mobilinkdEnabled: mobilinkdEnabled, mobilinkdModemType: mobilinkdModemType,
+                          mobilinkdOutputGain: mobilinkdOutputGain, mobilinkdInputGain: mobilinkdInputGain,
+                          capabilities: tncCapabilities)
+        guard radio != radios[index] else { return }
+        isSyncingRadios = true
+        defer { isSyncingRadios = false }
+        radios[index] = radio
     }
 
     private func deferUpdate(_ update: @MainActor @escaping () -> Void) {
