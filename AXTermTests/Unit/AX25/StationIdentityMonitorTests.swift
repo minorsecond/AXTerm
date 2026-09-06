@@ -223,4 +223,59 @@ final class SyncStatusIndicatorFormattingTests: XCTestCase {
         let future = SyncStatusIndicator.relative(now.addingTimeInterval(300), now: now)
         XCTAssertEqual(future, "just now")
     }
+
+    // MARK: - The verdict, over every address the station operates as
+
+    /// Our own transmission heard straight back is ours — another of our
+    /// radios on the same frequency — and evidence of nothing.
+    func testADirectEchoIsClassifiedAsOurOwn() {
+        let monitor = StationIdentityMonitor()
+        let sent = Date()
+        monitor.recordTransmitted(source: "K0EPI-7", destination: "CQ", control: 0x03, info: Data("hi".utf8), at: sent)
+        let verdict = monitor.classifyReceived(source: "K0EPI-7", destination: "CQ", control: 0x03,
+                                               info: Data("hi".utf8), ownCallsigns: ["K0EPI-7"],
+                                               frameType: "ui", at: sent.addingTimeInterval(0.2))
+        XCTAssertEqual(verdict, .ownEcho)
+    }
+
+    /// A radio's own callsign counts as us: a frame we sent as K0EPI-1 and
+    /// heard on the other radio is ours, not a stranger on our SSID.
+    func testARadiosOwnCallsignIsOneOfOurs() {
+        let monitor = StationIdentityMonitor()
+        let sent = Date()
+        monitor.recordTransmitted(source: "K0EPI-1", destination: "CQ", control: 0x03, info: Data(), at: sent)
+        let verdict = monitor.classifyReceived(source: "K0EPI-1", destination: "CQ", control: 0x03,
+                                               info: Data(), ownCallsigns: ["K0EPI-7", "K0EPI-1"],
+                                               frameType: "ui", at: sent.addingTimeInterval(0.1))
+        XCTAssertEqual(verdict, .ownEcho)
+    }
+
+    func testSomeoneElseOnARadiosCallsignIsACollision() {
+        let monitor = StationIdentityMonitor()
+        let verdict = monitor.classifyReceived(source: "K0EPI-1", destination: "CQ", control: 0x03,
+                                               info: Data("theirs".utf8), ownCallsigns: ["K0EPI-7", "K0EPI-1"],
+                                               frameType: "ui")
+        guard case .collision(let collision) = verdict else { return XCTFail("expected a collision, got \(verdict)") }
+        XCTAssertEqual(collision.callsign, "K0EPI-1")
+    }
+
+    func testAnotherStationEntirelyIsForeign() {
+        let monitor = StationIdentityMonitor()
+        XCTAssertEqual(monitor.classifyReceived(source: "W0ARP-7", destination: "CQ", control: 0x03,
+                                                info: Data(), ownCallsigns: ["K0EPI-7"], frameType: "ui"),
+                       .foreign)
+    }
+
+    /// The digipeated copy stays foreign: that is what the digipeater put on
+    /// the air, and the route inference reads it as such.
+    func testADigipeatedCopyOfOurOwnFrameStaysForeign() {
+        let monitor = StationIdentityMonitor()
+        let sent = Date()
+        monitor.recordTransmitted(source: "K0EPI-7", destination: "CQ", control: 0x03, info: Data(), at: sent)
+        XCTAssertEqual(monitor.classifyReceived(source: "K0EPI-7", destination: "CQ", control: 0x03,
+                                                info: Data(), ownCallsigns: ["K0EPI-7"], frameType: "ui",
+                                                viaRepeated: true, at: sent.addingTimeInterval(2)),
+                       .foreign)
+    }
 }
+

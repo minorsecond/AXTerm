@@ -36,6 +36,8 @@ nonisolated struct StationTracker {
     mutating func update(with packet: Packet) {
         guard let from = packet.from else { return }
         let call = from.display
+        let radio = packet.radioID ?? .primary
+        let via = Self.heardVia(packet)
 
         if let index = stationIndex[call] {
             stations[index].lastHeard = packet.timestamp
@@ -45,19 +47,40 @@ nonisolated struct StationTracker {
             // "Via DRLNOD, FNKTWN" forever, even while an entire direct
             // session was proving we hear its own transmitter (sidebar said
             // via-digi while the session correctly said direct).
-            stations[index].lastVia = Self.heardVia(packet)
+            stations[index].lastVia = via
+            Self.note(&stations[index], radio: radio, at: packet.timestamp, via: via)
         } else {
-            let station = Station(
+            var station = Station(
                 call: call,
                 lastHeard: packet.timestamp,
                 heardCount: 1,
-                lastVia: Self.heardVia(packet)
+                lastVia: via
             )
+            Self.note(&station, radio: radio, at: packet.timestamp, via: via)
             stations.append(station)
             stationIndex[call] = stations.count - 1
         }
 
         sortStations()
+    }
+
+    /// Another radio heard a frame this tracker already counted — the same
+    /// transmission, a second receiver. The station's count does not move;
+    /// which radios can hear it does.
+    mutating func noteHeard(_ call: String, on radio: RadioID, at when: Date, via: [String]) {
+        guard let index = stationIndex[call] else { return }
+        Self.note(&stations[index], radio: radio, at: when, via: via)
+    }
+
+    private static func note(_ station: inout Station, radio: RadioID, at when: Date, via: [String]) {
+        if var observation = station.perRadio[radio] {
+            observation.lastHeard = max(observation.lastHeard, when)
+            observation.heardCount += 1
+            observation.lastVia = via
+            station.perRadio[radio] = observation
+        } else {
+            station.perRadio[radio] = Station.RadioObservation(lastHeard: when, heardCount: 1, lastVia: via)
+        }
     }
 
     mutating func reset() {
@@ -73,15 +96,26 @@ nonisolated struct StationTracker {
             var lastHeard: Date?
             var heardCount: Int = 0
             var lastVia: [String] = []
+            var perRadio: [RadioID: Station.RadioObservation] = [:]
         }
 
         var aggregates: [String: Aggregation] = [:]
 
-        for packet in packets {
+        for packet in packets where !packet.isOwnEcho {
             guard let from = packet.from else { continue }
             let call = from.display
             var aggregate = aggregates[call, default: Aggregation()]
             aggregate.heardCount += 1
+            let radio = packet.radioID ?? .primary
+            if var observation = aggregate.perRadio[radio] {
+                observation.lastHeard = max(observation.lastHeard, packet.timestamp)
+                observation.heardCount += 1
+                observation.lastVia = Self.heardVia(packet)
+                aggregate.perRadio[radio] = observation
+            } else {
+                aggregate.perRadio[radio] = Station.RadioObservation(
+                    lastHeard: packet.timestamp, heardCount: 1, lastVia: Self.heardVia(packet))
+            }
             if let currentLastHeard = aggregate.lastHeard {
                 if packet.timestamp >= currentLastHeard {
                     aggregate.lastHeard = packet.timestamp
@@ -95,12 +129,14 @@ nonisolated struct StationTracker {
         }
 
         stations = aggregates.map { call, aggregate in
-            Station(
+            var station = Station(
                 call: call,
                 lastHeard: aggregate.lastHeard,
                 heardCount: aggregate.heardCount,
                 lastVia: aggregate.lastVia
             )
+            station.perRadio = aggregate.perRadio
+            return station
         }
         sortStations()
     }

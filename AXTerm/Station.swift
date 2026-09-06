@@ -25,6 +25,22 @@ nonisolated struct Station: Identifiable, Hashable {
     var displayedCount: Int { max(lifetimeCount ?? 0, heardCount) }
     var lastVia: [String]
 
+    /// What each radio heard of this station. One station, several
+    /// receivers: a frame both radios heard counts once in `heardCount` and
+    /// once for each radio here.
+    var perRadio: [RadioID: RadioObservation] = [:]
+
+    struct RadioObservation: Hashable {
+        var lastHeard: Date
+        var heardCount: Int
+        var lastVia: [String]
+    }
+
+    /// The radios that have heard this station, most recently first.
+    var heardOn: [RadioID] {
+        perRadio.sorted { $0.value.lastHeard > $1.value.lastHeard }.map(\.key)
+    }
+
     var id: String { call }
 
     init(call: String, lastHeard: Date? = nil, heardCount: Int = 0, lastVia: [String] = []) {

@@ -51,6 +51,18 @@ nonisolated final class StationIdentityMonitor: @unchecked Sendable {
         }
     }
 
+    /// What a received frame carrying one of our addresses as its source is.
+    enum Verdict: Equatable, Sendable {
+        /// Not ours at all, or nothing this monitor has an opinion on.
+        case foreign
+        /// A frame we transmitted, heard straight back — by the TNC echoing,
+        /// or by another of our radios on the same frequency. Evidence of
+        /// nothing except that two of our antennas share a channel.
+        case ownEcho
+        /// Another station is using our address.
+        case collision(Collision)
+    }
+
     /// How long a transmitted frame stays recognisable as our own echo.
     ///
     /// Generous on purpose: a digipeated frame comes back after the
@@ -105,7 +117,26 @@ nonisolated final class StationIdentityMonitor: @unchecked Sendable {
                          viaRepeated: Bool = false,
                          at now: Date = Date()) -> Collision? {
         let own = Self.normalize(ownCallsign)
-        guard !own.isEmpty, let source, Self.normalize(source) == own else { return nil }
+        guard !own.isEmpty else { return nil }
+        if case .collision(let collision) = classifyReceived(
+            source: source, destination: destination, control: control, info: info,
+            ownCallsigns: [own], frameType: frameType, viaRepeated: viaRepeated, at: now) {
+            return collision
+        }
+        return nil
+    }
+
+    /// The same judgement over every address this station operates as — the
+    /// station callsign and each radio's own — and saying which kind of
+    /// "ours" a frame is, because a station with two radios on one frequency
+    /// hears its own transmissions and must not count them as anyone's.
+    func classifyReceived(source: String?, destination: String?,
+                          control: UInt8, info: Data,
+                          ownCallsigns: Set<String>, frameType: String,
+                          viaRepeated: Bool = false,
+                          at now: Date = Date()) -> Verdict {
+        let own = Set(ownCallsigns.map(Self.normalize).filter { !$0.isEmpty })
+        guard !own.isEmpty, let source, own.contains(Self.normalize(source)) else { return .foreign }
 
         // Our address, arriving out of a digipeater that has already
         // repeated it. Nothing else produces that combination in normal
@@ -121,30 +152,34 @@ nonisolated final class StationIdentityMonitor: @unchecked Sendable {
         // it: an operator who is warned every time they beacon through a
         // digipeater learns to ignore the warning, and then it is no longer
         // a warning about anything.
-        if viaRepeated { return nil }
+        //
+        // Left as `.foreign`, not `.ownEcho`: the repeated copy is what the
+        // digipeater put on the air, and the route inference reads it as
+        // such. Only a direct echo is ours and nobody's.
+        if viaRepeated { return .foreign }
 
         let key = Self.fingerprint(source: source, destination: destination ?? "",
                                    control: control, info: info)
 
         lock.lock()
-        // Our own frame coming back — directly, or repeated by a digipeater.
+        // Our own frame coming straight back.
         if let sentAt = sentFingerprints[key], now.timeIntervalSince(sentAt) <= Self.echoWindow {
             lock.unlock()
-            return nil
+            return .ownEcho
         }
         // Report at most once per interval: a collision emits a frame every
         // few seconds and the operator needs telling once.
         if let last = lastReportedAt, now.timeIntervalSince(last) < Self.reportInterval {
             lock.unlock()
-            return nil
+            return .foreign
         }
         lastReportedAt = now
         lock.unlock()
 
-        return Collision(callsign: own,
-                         destination: destination.map(Self.normalize) ?? "an unknown station",
-                         frameType: frameType,
-                         at: now)
+        return .collision(Collision(callsign: Self.normalize(source),
+                                    destination: destination.map(Self.normalize) ?? "an unknown station",
+                                    frameType: frameType,
+                                    at: now))
     }
 
     /// Forgets everything. Used when the callsign changes, so frames sent

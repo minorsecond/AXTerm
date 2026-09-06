@@ -122,18 +122,21 @@ final class TwoRadioSessionTraceTests: XCTestCase {
         XCTAssertEqual(decoded?.from?.display, "TEST-7")
     }
 
-    /// The same peer calling on the primary radio is a different session,
-    /// answered on port 0.
-    func testTheSamePeerOnThePrimaryRadioIsAnsweredOnPortZero() async {
+    /// A second call on the primary radio is a different session, answered
+    /// on port 0. From a second peer: the same bytes on both ports inside the
+    /// window are one transmission heard twice, and are folded on purpose.
+    func testACallOnThePrimaryRadioIsAnsweredOnPortZero() async {
         let (engine, coordinator, settings) = makeStation()
         engine.connectUsingSettings()
 
         let peer = AX25Address(call: "PEER", ssid: 1)
+        let other = AX25Address(call: "PEER", ssid: 2)
         let local = AX25Address(call: "TEST", ssid: 7)
         let sabm = AX25FrameBuilder.buildSABM(from: peer, to: local, via: DigiPath(), extended: false).encodeAX25()
+        let sabm2 = AX25FrameBuilder.buildSABM(from: other, to: local, via: DigiPath(), extended: false).encodeAX25()
 
         link!.injectReceived(kissFrame(port: 1, ax25: sabm))
-        link!.injectReceived(kissFrame(port: 0, ax25: sabm))
+        link!.injectReceived(kissFrame(port: 0, ax25: sabm2))
         await waitForReplies(2)
         defer { withExtendedLifetime(coordinator) {} }
 
@@ -141,11 +144,30 @@ final class TwoRadioSessionTraceTests: XCTestCase {
         XCTAssertEqual(replies.map(\.port), [1, 0])
         let uhf = settings.radios.first { $0.kissPort == 1 }!.id
         let base = settings.radios.first { $0.kissPort == 0 }!.id
-        let onUHF = coordinator.sessionManager.existingSession(for: peer, path: DigiPath(), radio: uhf)
-        let onBase = coordinator.sessionManager.existingSession(for: peer, path: DigiPath(), radio: base)
-        XCTAssertNotNil(onUHF, "one peer, two radios, two sessions")
-        XCTAssertNotNil(onBase)
-        XCTAssertNotEqual(onUHF?.key, onBase?.key)
+        XCTAssertNotNil(coordinator.sessionManager.existingSession(for: peer, path: DigiPath(), radio: uhf))
+        XCTAssertNotNil(coordinator.sessionManager.existingSession(for: other, path: DigiPath(), radio: base))
+    }
+
+    /// The same peer calling both radios with identical bytes inside the
+    /// window is one transmission heard twice: one session, one UA.
+    func testTheSameCallHeardOnBothRadiosIsAnsweredOnce() async {
+        let (engine, coordinator, settings) = makeStation()
+        defer { withExtendedLifetime(coordinator) {} }
+        engine.connectUsingSettings()
+
+        let peer = AX25Address(call: "PEER", ssid: 1)
+        let local = AX25Address(call: "TEST", ssid: 7)
+        let sabm = AX25FrameBuilder.buildSABM(from: peer, to: local, via: DigiPath(), extended: false).encodeAX25()
+        link!.injectReceived(kissFrame(port: 1, ax25: sabm))
+        link!.injectReceived(kissFrame(port: 0, ax25: sabm))
+        await waitForReplies(1)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        XCTAssertEqual(replies.count, 1, "the second copy was folded")
+        XCTAssertEqual(replies.first?.port, 1, "answered on the radio that heard it first")
+        XCTAssertEqual(engine.crossRadioFolds, 1)
+        let base = settings.radios.first { $0.kissPort == 0 }!.id
+        XCTAssertNil(coordinator.sessionManager.existingSession(for: peer, path: DigiPath(), radio: base))
     }
 
     /// The owner rule. Give the UHF radio its own SSID; a call to that SSID
@@ -173,4 +195,58 @@ final class TwoRadioSessionTraceTests: XCTestCase {
         XCTAssertEqual(decoded?.from?.display, "TEST-1")
         XCTAssertEqual(decoded?.to?.display, "PEER-1")
     }
+
+    // MARK: - Two radios on one frequency
+
+    /// The same transmission heard by both radios is one packet, and the
+    /// station is marked heard on both.
+    func testOneTransmissionHeardByBothRadiosIsOnePacket() async {
+        let (engine, coordinator, settings) = makeStation()
+        defer { withExtendedLifetime(coordinator) {} }
+        engine.connectUsingSettings()
+
+        var heard: [Packet] = []
+        let sub = engine.packetPublisher.sink { heard.append($0) }
+        defer { sub.cancel() }
+
+        let beacon = AX25FrameBuilder.buildUI(from: AX25Address(call: "K0NTS", ssid: 1),
+                                              to: AX25Address(call: "BEACON"), via: DigiPath(),
+                                              pid: 0xF0, payload: Data("hello".utf8), displayInfo: nil).encodeAX25()
+        // Both radios share the link; port 0 and port 1 hear the same frame.
+        link!.injectReceived(kissFrame(port: 0, ax25: beacon))
+        link!.injectReceived(kissFrame(port: 1, ax25: beacon))
+
+        XCTAssertEqual(heard.count, 1, "one transmission, one packet")
+        XCTAssertEqual(engine.crossRadioFolds, 1)
+        let base = settings.radios.first { $0.kissPort == 0 }!.id
+        let uhf = settings.radios.first { $0.kissPort == 1 }!.id
+        let station = engine.stations.first { $0.call == "K0NTS-1" }
+        XCTAssertEqual(station?.heardCount, 1)
+        XCTAssertEqual(Set(station?.heardOn ?? []), [base, uhf])
+    }
+
+    /// Our own transmission on one radio, heard by the other, is logged as
+    /// an echo and counted for no station.
+    func testOurOwnTransmissionHeardByTheOtherRadioIsAnEchoNotAStation() async {
+        let (engine, coordinator, _) = makeStation()
+        defer { withExtendedLifetime(coordinator) {} }
+        engine.connectUsingSettings()
+
+        var heard: [Packet] = []
+        let sub = engine.packetPublisher.sink { heard.append($0) }
+        defer { sub.cancel() }
+
+        let frame = AX25FrameBuilder.buildUI(from: AX25Address(call: "TEST", ssid: 7),
+                                             to: AX25Address(call: "BEACON"), via: DigiPath(),
+                                             pid: 0xF0, payload: Data("beacon".utf8), displayInfo: nil)
+        engine.send(frame: frame)
+        // The other radio hears exactly what left the first.
+        link!.injectReceived(kissFrame(port: 1, ax25: frame.encodeAX25()))
+
+        XCTAssertEqual(heard.count, 1)
+        XCTAssertEqual(heard.first?.isOwnEcho, true)
+        XCTAssertFalse(engine.stations.contains { $0.call == "TEST-7" }, "we are not a station we heard")
+        XCTAssertNil(engine.identityCollision, "our own echo is not another station on our callsign")
+    }
 }
+

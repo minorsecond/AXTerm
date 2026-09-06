@@ -326,6 +326,10 @@ final class PacketEngine: ObservableObject {
     /// from the primary radio's TNC.
     private var injectionParser = KISSFrameParser()
     private var stationTracker = StationTracker()
+    /// One transmission heard by two radios is one packet.
+    private var crossRadioDedup = CrossRadioDedup()
+    /// How many frames were a second radio's copy of one already logged.
+    @Published private(set) var crossRadioFolds = 0
 
     // MARK: - Console Line Duplicate Detection
 
@@ -633,6 +637,11 @@ final class PacketEngine: ObservableObject {
             callsign: frame.source.display, frameBytes: kissData.count, isTransmit: true)
         // Remembered so the same frame arriving back — directly or repeated by
         // a digipeater — is not mistaken for another station using our address.
+        // The monitor is primed to the current callsign here as well as on
+        // receive: priming only on receive reset it on the first frame heard,
+        // which wiped the fingerprint of a transmission just recorded and made
+        // our own echo of it look like a stranger.
+        syncIdentityMonitorCallsign()
         identityMonitor.recordTransmitted(
             source: frame.source.display,
             destination: frame.destination.display,
@@ -921,23 +930,55 @@ final class PacketEngine: ObservableObject {
             "infoHex": hexPrefix(decoded.info)
         ])
 
-        // Another station transmitting as us corrupts every AX.25 link this
-        // station has, and produces no other error. Checked on every frame
-        // because the offending one may be the only evidence.
-        if identityMonitorCallsign != settings.myCallsign {
-            identityMonitorCallsign = settings.myCallsign
-            identityMonitor.reset()
-            identityCollision = nil
+        // One transmission, two receivers. With several radios the same bytes
+        // arriving on a second radio inside the window are the frame already
+        // logged, not another: the station gets a second "heard on", and
+        // nothing else counts twice — not the packet, not the airtime, not
+        // the retry tracker, which would otherwise have scored the copy as a
+        // failed delivery.
+        let now = Date()
+        if radioManager.profiles.count > 1,
+           case .additionalRadio(let firstRadio) = crossRadioDedup.admit(raw: ax25Data, radio: radio, at: now) {
+            crossRadioFolds += 1
+            if let src = decoded.from?.display {
+                stationTracker.noteHeard(src, on: radio, at: now, via: StationTracker.heardVia(
+                    Packet(from: decoded.from, to: decoded.to, via: decoded.via)))
+                stations = stationTracker.stations
+            }
+            debugTrace("Cross-radio duplicate folded", [
+                "radio": radio.rawValue, "first": firstRadio.rawValue, "len": ax25Data.count])
+            return
         }
 
-        if let collision = identityMonitor.inspectReceived(
+        // Another station transmitting as us corrupts every AX.25 link this
+        // station has, and produces no other error. Checked on every frame
+        // because the offending one may be the only evidence. Every address
+        // this station operates as counts as "us": the station callsign and
+        // each radio's own.
+        syncIdentityMonitorCallsign()
+        var ownCallsigns: Set<String> = [settings.myCallsign]
+        for profile in settings.activeRadios where profile.enabled {
+            ownCallsigns.insert(profile.resolvedCallsign(station: settings.myCallsign))
+        }
+
+        var isOwnEcho = false
+        switch identityMonitor.classifyReceived(
             source: decoded.from?.display,
             destination: decoded.to?.display,
             control: decoded.control,
             info: decoded.info,
-            ownCallsign: settings.myCallsign,
+            ownCallsigns: ownCallsigns,
             frameType: decoded.frameType.rawValue,
             viaRepeated: decoded.via.contains { $0.repeated }) {
+        case .foreign:
+            break
+        case .ownEcho:
+            // Our own transmission, heard by another of our radios. It is
+            // logged — the operator can see the two radios share a channel —
+            // but it is evidence of nothing about any other station, and its
+            // airtime was counted when it was sent.
+            isOwnEcho = true
+        case .collision(let collision):
             identityCollision = collision
             addErrorLine("Another station is transmitting as \(collision.callsign) \u{2014} give one device a different SSID.",
                          category: .connection)
@@ -948,7 +989,7 @@ final class PacketEngine: ObservableObject {
                                         "frameType": collision.frameType])
         }
 
-        if let src = decoded.from?.display {
+        if let src = decoded.from?.display, !isOwnEcho {
             ChannelActivityMonitor.shared.record(
                 callsign: src, frameBytes: ax25Data.count, isTransmit: false)
             // Pulse the first RF hop: src → first digipeater, or src → dest.
@@ -975,7 +1016,8 @@ final class PacketEngine: ObservableObject {
             kissEndpoint: endpoint,
             radioID: radio,
             kissPort: kissPort,
-            linkDescription: linkDescription
+            linkDescription: linkDescription,
+            isOwnEcho: isOwnEcho
         )
 
         SentryManager.shared.breadcrumbDecodeSuccessSampled(packet: packet)
@@ -984,8 +1026,17 @@ final class PacketEngine: ObservableObject {
 
     // MARK: - MHeard (Station Tracking)
 
+    /// Frames sent under an old identity are not evidence about the new one:
+    /// a callsign change clears what the monitor remembers.
+    private func syncIdentityMonitorCallsign() {
+        guard identityMonitorCallsign != settings.myCallsign else { return }
+        identityMonitorCallsign = settings.myCallsign
+        identityMonitor.reset()
+        identityCollision = nil
+    }
+
     private func updateMHeard(for packet: Packet) {
-        guard let stationCall = packet.from?.display else { return }
+        guard let stationCall = packet.from?.display, !packet.isOwnEcho else { return }
         stationTracker.update(with: packet)
         stations = stationTracker.stations
         if let heardCount = stationTracker.heardCount(for: stationCall) {
@@ -1485,7 +1536,7 @@ final class PacketEngine: ObservableObject {
     /// Feed a packet to NET/ROM integration for passive route inference.
     /// Called from handleIncomingPacket for live packets.
     private func observePacketForNetRom(_ packet: Packet) {
-        guard let integration = netRomIntegration else { return }
+        guard let integration = netRomIntegration, !packet.isOwnEcho else { return }
 
         integration.observePacket(packet, timestamp: packet.timestamp, isDuplicate: false)
 

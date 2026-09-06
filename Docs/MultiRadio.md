@@ -173,6 +173,38 @@ radio to differ from; with one radio the station callsign under General is
 the whole story. The Radios list flags two enabled radios answering as one
 address — legal on different frequencies, a collision on the same one.
 
+## Two radios on one frequency
+
+Radios may share a channel — a portable rig beside the base on 2 m — and then
+both hear every frame. Two things follow, and the station's count of the
+world must not double for either.
+
+- **One transmission, one packet.** `CrossRadioDedup`
+  (`AXTerm/AX25/CrossRadioDedup.swift`) keys on the exact AX.25 bytes. A
+  second radio's copy inside 1.5 s is folded: the packet is not logged
+  again, no airtime is added, and — the reason this exists — the copy never
+  reaches the per-radio duplicate tracker, whose two-second retry window
+  would have scored it as a *failed delivery* and collapsed df toward 0.5 on
+  a perfectly delivered link. The station is marked heard on the second
+  radio too (`Station.perRadio`, `heardOn`). The window sits between the
+  ingestion-dedup window (0.25 s) and the retry window (2 s), so a fold can
+  never be mistaken for either; a digipeated copy differs by its H bits and
+  is rightly two packets. Off with one radio.
+- **Own echo.** Our transmission on one radio is heard by the other.
+  `StationIdentityMonitor.classifyReceived` judges a received frame from any
+  address this station operates as — the station callsign and every radio's
+  own — as `.foreign`, `.ownEcho` (a frame we sent, heard straight back) or
+  `.collision`. An echo is logged (`Packet.isOwnEcho`) so the operator can
+  see the radios share a channel, but it is counted for no station, fed to
+  no route inference and observed as no network path; its airtime was
+  counted when it was sent. The digipeated copy of our own frame stays
+  foreign, as before: that is what the digipeater put on the air.
+
+Until the link metrics are keyed by radio, a folded copy is not fanned into
+route inference either — with a single-keyed estimator that would count
+twice. When the metrics become per radio the fold will feed the second
+radio's evidence without touching the first's.
+
 ## Storage
 
 Migration v30 (`DatabaseManager.addRadioColumns`) adds the radio to the
@@ -235,6 +267,9 @@ These are pinned literally in `RadioPresentationTests`,
    to an address one radio owns is answered by that radio whichever link
    heard it.
 
-Next: cross-radio duplicate handling and per-radio link metrics, then the
-services and the multi-radio UI. See `Docs/RoutingMetrics.md` for how link
+6. Two radios on one frequency: one transmission is one packet, and our
+   own echo is nobody's evidence.
+
+Next: per-radio link metrics and channel groups, then the services and the
+multi-radio UI. See `Docs/RoutingMetrics.md` for how link
 quality will be kept per radio.

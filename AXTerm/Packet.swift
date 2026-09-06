@@ -35,6 +35,10 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
     /// The link as the operator would name it, for serial and Bluetooth
     /// links that have no host and port.
     let linkDescription: String?
+    /// A frame this station transmitted, heard straight back — by another
+    /// of its radios on the same frequency. Kept in the log, counted for no
+    /// station and fed to no metric.
+    let isOwnEcho: Bool
 
     /// True when every digipeater in the path has set its has-been-repeated (H)
     /// bit, or the path is empty (direct frame).
@@ -194,7 +198,8 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
         infoText: String? = nil,
         radioID: RadioID? = nil,
         kissPort: UInt8 = 0,
-        linkDescription: String? = nil
+        linkDescription: String? = nil,
+        isOwnEcho: Bool = false
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -212,6 +217,7 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
         self.radioID = radioID
         self.kissPort = kissPort
         self.linkDescription = linkDescription
+        self.isOwnEcho = isOwnEcho
     }
 
     static func normalizedViaItems(from via: [AX25Address]) -> [String] {

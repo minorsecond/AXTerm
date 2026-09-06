@@ -134,6 +134,9 @@ nonisolated struct NetworkPathObserver {
 
     /// Derives paths from a window of traffic.
     static func paths(in packets: [Packet], localCallsign: String = "") -> [NetworkPath] {
+        // Our own transmission heard by another of our radios says nothing
+        // about the network; it is filtered here so no caller has to remember.
+        let packets = packets.filter { !$0.isOwnEcho }
         var byID: [String: NetworkPath] = [:]
         // A list, not a single value: a node called every six seconds and
         // never answered is four pieces of negative evidence, and keeping only
