@@ -20,10 +20,7 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
     }
 
     func save(_ packet: Packet) throws {
-        guard let endpoint = packet.kissEndpoint else {
-            throw PacketStoreError.missingKISSEndpoint
-        }
-        let record = try PacketRecord(packet: packet, endpoint: endpoint)
+        let record = PacketRecord(packet: packet)
         try dbQueue.write { db in
             try record.insert(db)
         }
@@ -475,5 +472,4 @@ nonisolated final class SQLitePacketStore: PacketStore, PacketStoreAnalyticsQuer
 }
 
 nonisolated enum PacketStoreError: Error {
-    case missingKISSEndpoint
 }

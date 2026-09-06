@@ -34,8 +34,8 @@ nonisolated final class SQLiteTerminalSessionStore: TerminalSessionStoring, @unc
                 INSERT INTO terminal_sessions
                     (id, remote, remoteBase, via, relayDestination, transport,
                      startedAt, endedAt, outcome, framesSent, framesReceived,
-                     bytesSent, bytesReceived, transcript, note)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     bytesSent, bytesReceived, transcript, note, radioID)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     endedAt = excluded.endedAt,
                     outcome = excluded.outcome,
@@ -54,7 +54,8 @@ nonisolated final class SQLiteTerminalSessionStore: TerminalSessionStoring, @unc
                     session.outcome.rawValue,
                     session.framesSent, session.framesReceived,
                     session.bytesSent, session.bytesReceived,
-                    session.transcript, session.note])
+                    session.transcript, session.note,
+                    session.radioID.rawValue])
             try Self.writeTags(session.tags, for: session.id, in: db)
         }
     }
@@ -162,6 +163,7 @@ nonisolated final class SQLiteTerminalSessionStore: TerminalSessionStoring, @unc
                 via: (row["via"] as String? ?? "").split(separator: ",").map(String.init),
                 relayDestination: row["relayDestination"] as String?,
                 transport: row["transport"] as String? ?? "AX.25",
+                radioID: RadioID(rawValue: row["radioID"] as String? ?? RadioID.primary.rawValue),
                 startedAt: startedAt, endedAt: row["endedAt"] as Date?,
                 outcome: TerminalSession.Outcome(rawValue: row["outcome"] as String? ?? "")
                     ?? .closed,

@@ -239,23 +239,23 @@ final class SQLiteBBSMessageStoreTests: XCTestCase {
     /// Drives `FN`. Must mean "the call before this one", never "this one".
     func testLastVisitIgnoresTheCallInProgress() throws {
         let store = try makeStore()
-        let earlier = try store.beginCall(callsign: "W0ARP", at: t(0))
+        let earlier = try store.beginCall(callsign: "W0ARP", at: t(0), radio: .primary)
         try store.endCall(id: earlier, at: t(60), unexpected: false)
-        let current = try store.beginCall(callsign: "W0ARP", at: t(9_000))
+        let current = try store.beginCall(callsign: "W0ARP", at: t(9_000), radio: .primary)
 
         XCTAssertEqual(try store.lastVisit(callsign: "W0ARP", excluding: current), t(0))
     }
 
     func testFirstCallHasNoLastVisit() throws {
         let store = try makeStore()
-        let current = try store.beginCall(callsign: "W0ARP", at: t(0))
+        let current = try store.beginCall(callsign: "W0ARP", at: t(0), radio: .primary)
         XCTAssertNil(try store.lastVisit(callsign: "W0ARP", excluding: current))
     }
 
     func testLastVisitIsPerCallsign() throws {
         let store = try makeStore()
-        _ = try store.beginCall(callsign: "K0NTS", at: t(0))
-        let current = try store.beginCall(callsign: "W0ARP", at: t(9_000))
+        _ = try store.beginCall(callsign: "K0NTS", at: t(0), radio: .primary)
+        let current = try store.beginCall(callsign: "W0ARP", at: t(9_000), radio: .primary)
         XCTAssertNil(try store.lastVisit(callsign: "W0ARP", excluding: current))
     }
 
@@ -263,7 +263,7 @@ final class SQLiteBBSMessageStoreTests: XCTestCase {
 
     func testCallIsLoggedWithItsActions() throws {
         let store = try makeStore()
-        let id = try store.beginCall(callsign: "w0arp", at: t(0))
+        let id = try store.beginCall(callsign: "w0arp", at: t(0), radio: .primary)
         try store.appendAction(callId: id, action: "read 7")
         try store.appendAction(callId: id, action: "left mail for K0EPI")
         try store.endCall(id: id, at: t(130), unexpected: false)
@@ -278,7 +278,7 @@ final class SQLiteBBSMessageStoreTests: XCTestCase {
 
     func testACallWithNoActionsIsStillLogged() throws {
         let store = try makeStore()
-        let id = try store.beginCall(callsign: "W0ARP", at: t(0))
+        let id = try store.beginCall(callsign: "W0ARP", at: t(0), radio: .primary)
         try store.endCall(id: id, at: t(20), unexpected: false)
         let call = try XCTUnwrap(try store.recentCalls(limit: 10).first)
         XCTAssertTrue(call.actions.isEmpty)
@@ -286,13 +286,13 @@ final class SQLiteBBSMessageStoreTests: XCTestCase {
 
     func testAnOpenCallReadsAsLive() throws {
         let store = try makeStore()
-        _ = try store.beginCall(callsign: "W0ARP", at: t(0))
+        _ = try store.beginCall(callsign: "W0ARP", at: t(0), radio: .primary)
         XCTAssertTrue(try XCTUnwrap(try store.recentCalls(limit: 10).first).isLive)
     }
 
     func testEndCallDoesNotReopenAClosedOne() throws {
         let store = try makeStore()
-        let id = try store.beginCall(callsign: "W0ARP", at: t(0))
+        let id = try store.beginCall(callsign: "W0ARP", at: t(0), radio: .primary)
         try store.endCall(id: id, at: t(20), unexpected: false)
         try store.endCall(id: id, at: t(900), unexpected: true)
         let call = try XCTUnwrap(try store.recentCalls(limit: 10).first)
@@ -304,7 +304,7 @@ final class SQLiteBBSMessageStoreTests: XCTestCase {
     /// "now" would invent a caller who stayed connected for three days.
     func testOrphanedCallsCloseAtTheirConnectTime() throws {
         let store = try makeStore()
-        _ = try store.beginCall(callsign: "W0ARP", at: t(0))
+        _ = try store.beginCall(callsign: "W0ARP", at: t(0), radio: .primary)
         try store.closeOrphanedCalls(at: t(300_000))
 
         let call = try XCTUnwrap(try store.recentCalls(limit: 10).first)
@@ -315,8 +315,8 @@ final class SQLiteBBSMessageStoreTests: XCTestCase {
 
     func testRecentCallsAreNewestFirst() throws {
         let store = try makeStore()
-        _ = try store.beginCall(callsign: "FIRST", at: t(0))
-        _ = try store.beginCall(callsign: "SECOND", at: t(60))
+        _ = try store.beginCall(callsign: "FIRST", at: t(0), radio: .primary)
+        _ = try store.beginCall(callsign: "SECOND", at: t(60), radio: .primary)
         XCTAssertEqual(try store.recentCalls(limit: 10).map(\.callsign), ["SECOND", "FIRST"])
     }
 }

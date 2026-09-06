@@ -142,6 +142,30 @@ through, with `.primary` as the default so callers that predate radios still
 compile. One peer heard on two radios is two sessions. Per-radio callsigns
 are not yet in effect: every radio answers as the station callsign.
 
+## Storage
+
+Migration v30 (`DatabaseManager.addRadioColumns`) adds the radio to the
+rows a radio makes: `packets.radioID` (with `kissPortNibble` and
+`linkDescription`), `terminal_sessions.radioID`, `bbs_calls.radioID`. Added
+with a default rather than by rebuilding: every row that existed belonged
+to the one radio the station had, `RadioID.primary` — the constant
+`"radio-primary"`, fixed so the settings migration and the database
+migration agree without asking each other — and SQLite fills the default in.
+A rebuild of `packets` would rewrite the largest table in the file for no
+gain.
+
+`packets.kissHost`/`kissPort` stay as they were, but a serial or Bluetooth
+frame now stores an empty host and port 0, which `KISSEndpoint`'s failable
+initialiser reads back as "no TCP endpoint". Until this migration such a
+frame was stamped with the settings' TCP address — a lie kept only because
+the columns were NOT NULL and the record initialiser threw on anything
+else. `PacketRecord.init(packet:)` no longer throws and
+`SQLitePacketStore.save` no longer requires an endpoint.
+
+Tables nothing reads by radio yet — link-quality history, the NET/ROM
+neighbour and route tables — are left alone until the phase that keys them
+by radio, so schema and code land together.
+
 ## What an operator with one radio must never notice
 
 Every "only when there is more than one" decision hangs off one predicate,
@@ -172,8 +196,10 @@ These are pinned literally in `RadioPresentationTests`,
    radios, every packet and session bound to its radio, replies leaving by
    the radio that heard the call. All enabled radios connect.
 
-Next: the radio dimension in storage (a migration that lets serial and
-Bluetooth packets stop borrowing the TCP endpoint), per-radio callsigns,
-cross-radio duplicate handling and per-radio link metrics, then the
-services and the multi-radio UI. See `Docs/RoutingMetrics.md` for how link
+4. Storage: migration v30 puts the radio on packets, terminal sessions and
+   mailbox calls; serial and Bluetooth packets stop borrowing the TCP
+   endpoint.
+
+Next: per-radio callsigns, cross-radio duplicate handling and per-radio
+link metrics, then the services and the multi-radio UI. See `Docs/RoutingMetrics.md` for how link
 quality will be kept per radio.

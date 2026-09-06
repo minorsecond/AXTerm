@@ -957,12 +957,9 @@ final class PacketEngine: ObservableObject {
             }
         }
 
-        // Provenance. A serial or Bluetooth link has no host and port, and
-        // until the packets table lets those columns be null (the next
-        // migration) such a frame is stamped with the settings' TCP endpoint,
-        // as it always was — a known lie kept only so storage keeps working.
+        // Provenance: the TCP endpoint of the link that heard the frame, or
+        // nothing for a serial or Bluetooth link, which has none.
         let endpoint = tcpEndpoint
-            ?? KISSEndpoint(host: settings.host, port: settings.portValue)
 
         let packet = Packet(
             timestamp: Date(),

@@ -253,6 +253,13 @@ nonisolated enum DatabaseManager {
             table.column("kissPort", .integer).notNull()
             table.column("pinned", .boolean).notNull().defaults(to: false)
             table.column("tags", .text)
+            // The radio dimension (see `addRadioColumns`, which adds these to
+            // databases created before it): the radio that heard the frame,
+            // the KISS port it arrived with, and the link's name for links
+            // with no host.
+            table.column("radioID", .text).notNull().defaults(to: "radio-primary")
+            table.column("kissPortNibble", .integer).notNull().defaults(to: 0)
+            table.column("linkDescription", .text)
         }
 
         try db.create(index: "idx_packets_receivedAt", on: PacketRecord.databaseTableName, columns: ["receivedAt"])
@@ -267,6 +274,7 @@ nonisolated enum DatabaseManager {
         try db.create(index: "idx_packets_kissEndpoint", on: PacketRecord.databaseTableName, columns: ["kissHost", "kissPort"])
         try db.create(index: "idx_packets_frameType_receivedAt", on: PacketRecord.databaseTableName, columns: ["frameType", "receivedAt"])
         try db.create(index: "idx_packets_pinned_receivedAt", on: PacketRecord.databaseTableName, columns: ["pinned", "receivedAt"])
+        try db.create(index: "idx_packets_radio_receivedAt", on: PacketRecord.databaseTableName, columns: ["radioID", "receivedAt"])
 
         try db.execute(sql: """
             CREATE VIEW v_daily_counts AS
@@ -590,7 +598,8 @@ nonisolated enum DatabaseManager {
                 bytesSent INTEGER NOT NULL DEFAULT 0,
                 bytesReceived INTEGER NOT NULL DEFAULT 0,
                 transcript TEXT NOT NULL DEFAULT '',
-                note TEXT
+                note TEXT,
+                radioID TEXT NOT NULL DEFAULT 'radio-primary'
             )
             """)
         try db.execute(sql: """
@@ -784,8 +793,45 @@ nonisolated enum DatabaseManager {
                                   name: "createRemoteBBSMailbox") { db in
             try createRemoteBBSMailbox(db)
         }
+        registerReportedMigration(&migrator, version: 30, name: "addRadioColumns") { db in
+            try addRadioColumns(db)
+        }
         return migrator
     }()
+
+    /// The radio dimension, on the rows that are made by a radio: which radio
+    /// heard a frame, which radio a terminal session or a mailbox call ran on.
+    ///
+    /// Added with a default rather than by rebuilding the tables. Every row
+    /// that exists belonged to the one radio the station had, which is
+    /// `RadioID.primary` ("radio-primary", a constant for exactly this
+    /// reason), and SQLite fills the default in for them; a rebuild of
+    /// `packets` would rewrite the largest table in the file for no gain.
+    ///
+    /// `kissHost` and `kissPort` stay as they are. A serial or Bluetooth link
+    /// has no TCP endpoint, and from here on such a frame stores an empty
+    /// host and port 0 — which `KISSEndpoint` reads back as "no endpoint" —
+    /// instead of borrowing the settings' TCP address as it did until now.
+    /// `linkDescription` carries what the operator would call that link.
+    static func addRadioColumns(_ db: Database) throws {
+        // Each column is added only where it is missing: a database created
+        // by this build already has them from the table definitions, and
+        // SQLite refuses a duplicate column.
+        func add(_ table: String, _ column: String, _ definition: String) throws {
+            let existing = try db.columns(in: table).map(\.name)
+            guard !existing.contains(column) else { return }
+            try db.execute(sql: "ALTER TABLE \(table) ADD COLUMN \(column) \(definition)")
+        }
+        try add("packets", "radioID", "TEXT NOT NULL DEFAULT 'radio-primary'")
+        try add("packets", "kissPortNibble", "INTEGER NOT NULL DEFAULT 0")
+        try add("packets", "linkDescription", "TEXT")
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_packets_radio_receivedAt
+                ON packets(radioID, receivedAt)
+            """)
+        try add("terminal_sessions", "radioID", "TEXT NOT NULL DEFAULT 'radio-primary'")
+        try add("bbs_calls", "radioID", "TEXT NOT NULL DEFAULT 'radio-primary'")
+    }
 
     /// Terminal sessions that arrived from the operator's other devices.
     ///
@@ -858,7 +904,10 @@ nonisolated enum DatabaseManager {
                 "kissHost",
                 "kissPort",
                 "pinned",
-                "tags"
+                "tags",
+                "radioID",
+                "kissPortNibble",
+                "linkDescription"
             ]
             return !required.isSubset(of: Set(columns))
         }

@@ -292,7 +292,7 @@ final class BBSService: ObservableObject {
             publishesWhitePages: settings.publishWhitePages,
             bytesPerSecond: linkBytesPerSecond())
 
-        let callId = (store.flatMap { try? $0.beginCall(callsign: caller, at: at) }) ?? -1
+        let callId = (store.flatMap { try? $0.beginCall(callsign: caller, at: at, radio: session.radio) }) ?? -1
         live = LiveCall(callsign: caller, startedAt: at, callId: callId)
         // Read before anything else touches the call log, and held for the
         // call: `FN` must mean "since you were last here", not "since a
