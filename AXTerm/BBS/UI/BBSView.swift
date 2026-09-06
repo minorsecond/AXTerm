@@ -16,6 +16,10 @@ struct BBSView: View {
     @ObservedObject var settings: BBSSettings
     @ObservedObject var library: BBSFileLibrary
     let stationCallsign: String
+    /// Other instances' mailboxes, read-only. Nil where mailbox sharing is
+    /// off or the database could not be opened, and then every pane here
+    /// behaves exactly as it did before there was such a thing.
+    var remoteMailbox: BBSMailboxReplicationStore?
 
     /// Chosen in the sidebar, which is where this page's navigation lives
     /// now. The segmented picker that used to sit across the top was a
@@ -44,10 +48,12 @@ struct BBSView: View {
 
             switch pane {
             case .messages:
-                BBSMessagesPane(service: service, sysop: sysop)
+                BBSMessagesPane(service: service, sysop: sysop,
+                                remoteMailbox: remoteMailbox)
             case .callers:
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    BBSCallersPane(service: service, now: context.date)
+                    BBSCallersPane(service: service, now: context.date,
+                                   remoteMailbox: remoteMailbox)
                 }
             case .directory:
                 BBSDirectoryPane(service: service)

@@ -673,7 +673,10 @@ struct ContentView: View {
                 // A courtesy gap: this is someone's free service and the
                 // radio is in no hurry. ~40/minute, and the service's
                 // breaker stops the whole pass the moment the far end
-                // answers 429 or falls over.
+                // answers 429 or falls over. Owed only for a query that
+                // actually left this machine — waiting between local reads
+                // is politeness to nobody.
+                guard origin == .network else { continue }
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
             }
         }
@@ -1683,6 +1686,7 @@ struct ContentView: View {
                     searchModel: searchModel,
                     locationService: winlinkContext.locationService,
                     sessionRecorder: sessionRecorder,
+                    remoteSessionStore: winlinkContext.terminalSessionReplication,
                     onIdentity: { profiles.peek($0) },
                     onIdentityMenu: { profiles.openPage($0) }
                 )
@@ -1734,6 +1738,7 @@ struct ContentView: View {
                     settings: bbsSettings,
                     library: bbsLibrary,
                     stationCallsign: settings.myCallsign,
+                    remoteMailbox: winlinkContext.bbsMailboxReplication,
                     pane: $bbsPane
                 )
             //case .raw:

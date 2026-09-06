@@ -103,7 +103,9 @@ struct AXTermApp: App {
             profile: StationProfile(defaults: defaults),
             contactStore: queue.map { SQLiteContactStore(dbQueue: $0) },
             appSettings: settingsStore,
-            activityStore: queue.map { SQLiteStationActivityStore(dbQueue: $0) })
+            activityStore: queue.map { SQLiteStationActivityStore(dbQueue: $0) },
+            terminalSessionReplication: queue.map { SQLiteTerminalSessionReplicationStore(dbQueue: $0) },
+            bbsMailboxReplication: queue.map { SQLiteBBSMailboxReplicationStore(dbQueue: $0) })
         self.client = PacketEngine(
             settings: settingsStore,
             packetStore: packetStore,

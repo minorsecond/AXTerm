@@ -125,6 +125,14 @@ nonisolated protocol WinlinkStore: Sendable {
 
     /// Cached callsign-directory answers, keyed by base callsign.
     func callsignRecord(callsign: String) throws -> CallsignDirectoryRecord?
+    /// The same answers for a whole list at once.
+    ///
+    /// Filling a map layer means asking about every station the node
+    /// directory names — hundreds of them — and one query per name is a
+    /// round trip per name. Missing callsigns are simply absent from the
+    /// result rather than an error: this is a cache read, and a miss is
+    /// the ordinary answer.
+    func callsignRecords(callsigns: [String]) throws -> [CallsignDirectoryRecord]
     func saveCallsignRecord(_ record: CallsignDirectoryRecord) throws
 
     // Session log
@@ -140,4 +148,13 @@ nonisolated protocol WinlinkStore: Sendable {
     func saveSolarConditions(_ conditions: SolarConditions) throws
     func solarConditions(forDay day: Date) throws -> SolarConditions?
     func saveInbound(_ message: WinlinkB2Message, sessionLogID: Int64?) throws -> Bool
+}
+
+extension WinlinkStore {
+
+    /// One-at-a-time fallback, so a store that has nothing better to offer
+    /// still answers the bulk question correctly.
+    func callsignRecords(callsigns: [String]) throws -> [CallsignDirectoryRecord] {
+        try callsigns.compactMap { try callsignRecord(callsign: $0) }
+    }
 }

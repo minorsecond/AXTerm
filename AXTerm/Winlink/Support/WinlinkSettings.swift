@@ -15,6 +15,8 @@ final class WinlinkSettings: ObservableObject {
     static let heightUnitIsFeetKey = "stationHeightUnitIsFeet"
     static let distanceUnitIsMilesKey = "displayDistanceUnitIsMiles"
     static let shareStationActivityKey = "winlinkShareStationActivity"
+    static let shareTerminalSessionsKey = "winlinkShareTerminalSessions"
+    static let shareBBSMailboxKey = "winlinkShareBBSMailbox"
     static let maxDistanceMilesKey = "winlinkMaxDistanceMiles"
     static let historyHoursKey = "winlinkHistoryHours"
     static let gatewayCallsignKey = "winlinkGatewayCallsign"
@@ -133,6 +135,27 @@ final class WinlinkSettings: ObservableObject {
     /// station's evidence; see `WinlinkSyncPolicy.attributed`.
     @Published var shareStationActivity: Bool {
         didSet { defaults.set(shareStationActivity, forKey: Self.shareStationActivityKey) }
+    }
+
+    /// Whether finished terminal sessions travel to the operator's other
+    /// devices, labelled as this one's.
+    ///
+    /// Off by default for the same reason as station activity: a transcript
+    /// says who this station talked to and what was said, and sending that
+    /// to iCloud is a decision to make deliberately. What arrives from other
+    /// devices is shown under that device's name and never among this
+    /// device's own history; see `WinlinkSyncPolicy.disposition(for:
+    /// .terminalSession)`.
+    @Published var shareTerminalSessions: Bool {
+        didSet { defaults.set(shareTerminalSessions, forKey: Self.shareTerminalSessionsKey) }
+    }
+
+    /// Whether this device's packet mailbox — its messages and callers log —
+    /// travels to the operator's other devices, labelled as this mailbox's.
+    /// Off by default: callers' mail is theirs, and sending it to iCloud is
+    /// a decision. See `WinlinkSyncPolicy.disposition(for: .bbsMessage)`.
+    @Published var shareBBSMailbox: Bool {
+        didSet { defaults.set(shareBBSMailbox, forKey: Self.shareBBSMailboxKey) }
     }
 
     @Published var maxDistanceMiles: Int {
@@ -413,6 +436,8 @@ final class WinlinkSettings: ObservableObject {
             as? Bool) ?? true
         distanceUnitIsMiles = defaults.object(forKey: Self.distanceUnitIsMilesKey) as? Bool ?? true
         shareStationActivity = defaults.bool(forKey: Self.shareStationActivityKey)
+        shareTerminalSessions = defaults.bool(forKey: Self.shareTerminalSessionsKey)
+        shareBBSMailbox = defaults.bool(forKey: Self.shareBBSMailboxKey)
         maxDistanceMiles = defaults.object(forKey: Self.maxDistanceMilesKey) as? Int ?? Self.defaultMaxDistanceMiles
         historyHours = defaults.object(forKey: Self.historyHoursKey) as? Int ?? Self.defaultHistoryHours
         gatewayCallsign = defaults.string(forKey: Self.gatewayCallsignKey) ?? ""
