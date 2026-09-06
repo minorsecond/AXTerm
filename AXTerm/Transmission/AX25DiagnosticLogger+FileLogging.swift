@@ -213,13 +213,13 @@ extension AX25DiagnosticLogger {
     /// Enable file logging in addition to OSLog
     func enableFileLogging() async throws {
         try await DiagnosticFileLogger.shared.enable()
-        await logInfo("File logging enabled")
+        logInfo("File logging enabled")
     }
     
     /// Disable file logging
     func disableFileLogging() async {
         await DiagnosticFileLogger.shared.disable()
-        await logInfo("File logging disabled")
+        logInfo("File logging disabled")
     }
     
     /// Get the current log file URL
@@ -257,14 +257,13 @@ extension AX25DiagnosticLogger {
 extension AX25DiagnosticConfig {
     /// Configuration with file logging enabled
     static var standardWithFile: Self {
-        var config = standard
-        // File logging is enabled separately via enableFileLogging()
-        return config
+        // File logging is enabled separately via enableFileLogging(), so this
+        // differs from `standard` only in intent.
+        standard
     }
-    
+
     static var comprehensiveWithFile: Self {
-        var config = comprehensive
-        return config
+        comprehensive
     }
 }
 

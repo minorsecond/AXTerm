@@ -2,6 +2,7 @@ import SwiftUI
 import MapKit
 import CoreLocation
 import UniformTypeIdentifiers
+import Combine
 
 /// Managing the stored basemap: what is on this device, how to get more, and
 /// how much room it takes.
@@ -161,8 +162,7 @@ struct OfflineMapsView: View {
                 Text(elevation.tileCount == 0
                      ? "None"
                      : "\(elevation.tileCount) tile\(elevation.tileCount == 1 ? "" : "s") \u{00B7} "
-                        + ByteCountFormatter.string(fromByteCount: elevation.byteSize,
-                                                    countStyle: .file))
+                        + ByteCount.string(elevation.byteSize))
                     .foregroundStyle(.secondary)
             }
             .help("Elevation grids covering one degree of latitude and longitude each, about 100 m between samples. A path profile normally touches one or two tiles.")
@@ -405,6 +405,11 @@ struct OfflineMapsView: View {
 /// A menu rather than a sheet: adding a layer is one file pick, and after
 /// that the operator only wants to switch layers on and off — which is a
 /// glance and a click, not a dialog.
+///
+/// The Mac's control. On iOS the same items sit inside the map's Layers
+/// menu as a submenu — `MapOverlayMenuItems` hosted by whatever view owns
+/// the toolbar — because a second top-level menu for boundaries is one more
+/// glyph in a bar that has no room for it.
 struct MapOverlayControl: View {
 
     @ObservedObject var store: MapOverlayStore
@@ -414,63 +419,13 @@ struct MapOverlayControl: View {
     /// Creates a Winlink draft from a layer. Nil hides the send action —
     /// without a mailbox there is nothing to send into.
     var onSendViaWinlink: ((MapOverlayLayer, MapOverlayExport.Format) -> Void)?
-    @State private var isPickingFile = false
-    @State private var pendingExport: ExportableFile?
-    @State private var prompt: TextEntryPrompt?
+    @StateObject private var interaction = MapOverlayInteraction()
 
     var body: some View {
         Menu {
-            if store.layers.isEmpty {
-                Text("No boundary layers loaded")
-            } else {
-                ForEach(store.layers) { layer in
-                    Toggle(isOn: Binding(
-                        get: { layer.isVisible },
-                        set: { store.setVisible($0, for: layer) })) {
-                        Text("\(layer.name) (\(layer.featureCount))")
-                    }
-                }
-                Divider()
-                Button("Remove All", role: .destructive) {
-                    for layer in store.layers { store.remove(layer) }
-                }
-            }
-
-            Divider()
-            if let markCoordinate {
-                Button("Add Mark Here…") {
-                    prompt = TextEntryPrompt(
-                        id: "mark",
-                        title: "Add Mark",
-                        message: "Name this position. It is saved to “\(MapOverlayStore.scratchLayerName)” on this device and can be exported or sent later.",
-                        placeholder: "Staging area",
-                        confirmTitle: "Add") { name in
-                            store.addPoint(at: markCoordinate, name: name)
-                        }
-                }
-            }
-            Button("Add Shapefile or GeoJSON…") { isPickingFile = true }
-
-            if !store.layers.isEmpty {
-                Menu("Export") {
-                    ForEach(store.layers) { layer in
-                        Menu(layer.name) {
-                            Button("Save as GeoJSON…") { export(layer, as: .geoJSON) }
-                            Button("Save as Shapefile (.zip)…") { export(layer, as: .shapefile) }
-                            if let onSendViaWinlink {
-                                Divider()
-                                // GeoJSON only over the air: it is text, so
-                                // LZHUF compresses it, where a zipped
-                                // shapefile is already compressed and gains
-                                // nothing for several times the size.
-                                Button("Send via Winlink (GeoJSON)…") {
-                                    onSendViaWinlink(layer, .geoJSON)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            MapOverlayMenuItems(store: store, interaction: interaction,
+                                markCoordinate: markCoordinate,
+                                onSendViaWinlink: onSendViaWinlink)
         } label: {
             Label(store.visibleLayers.isEmpty ? "Boundaries"
                                               : "Boundaries (\(store.visibleLayers.count))",
@@ -479,28 +434,120 @@ struct MapOverlayControl: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Draw county lines, ARES districts, evacuation zones or any other boundary over the map. Reads ESRI shapefiles (.shp) and GeoJSON. Layers stay on this device and work offline.")
-        .fileImporter(isPresented: $isPickingFile,
-                      allowedContentTypes: [.item],
-                      allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result { load(urls) }
+        .modifier(MapOverlayPresentation(store: store, interaction: interaction))
+    }
+}
+
+/// The boundary menu's rows, without the menu around them.
+///
+/// Separate from `MapOverlayControl` so the same rows can be a submenu of a
+/// larger menu. Everything that presents — the file picker, the export
+/// panel, the naming prompt, the error alert — goes through `interaction`
+/// and is attached by `MapOverlayPresentation` to a view that is really in
+/// the hierarchy: modifiers on a menu row are not, and a `fileImporter` on
+/// one never opens.
+struct MapOverlayMenuItems: View {
+
+    @ObservedObject var store: MapOverlayStore
+    @ObservedObject var interaction: MapOverlayInteraction
+    var markCoordinate: CLLocationCoordinate2D?
+    var onSendViaWinlink: ((MapOverlayLayer, MapOverlayExport.Format) -> Void)?
+
+    var body: some View {
+        if store.layers.isEmpty {
+            Text("No boundary layers loaded")
+        } else {
+            ForEach(store.layers) { layer in
+                Toggle(isOn: Binding(
+                    get: { layer.isVisible },
+                    set: { store.setVisible($0, for: layer) })) {
+                    Text("\(layer.name) (\(layer.featureCount))")
+                }
+            }
+            Divider()
+            Button("Remove All", role: .destructive) {
+                for layer in store.layers { store.remove(layer) }
+            }
         }
-        .exportFile($pendingExport) { store.lastError = $0 }
-        .textEntryPrompt($prompt)
-        .alert("Layer not added", isPresented: Binding(
-            get: { store.lastError != nil },
-            set: { if !$0 { store.lastError = nil } })) {
-            Button("OK") { store.lastError = nil }
-        } message: {
-            Text(store.lastError ?? "")
+
+        Divider()
+        if let markCoordinate {
+            Button("Add Mark Here…") {
+                interaction.prompt = TextEntryPrompt(
+                    id: "mark",
+                    title: "Add Mark",
+                    message: "Name this position. It is saved to “\(MapOverlayStore.scratchLayerName)” on this device and can be exported or sent later.",
+                    placeholder: "Staging area",
+                    confirmTitle: "Add") { name in
+                        store.addPoint(at: markCoordinate, name: name)
+                    }
+            }
+        }
+        Button("Add Shapefile or GeoJSON…") { interaction.isPickingFile = true }
+
+        if !store.layers.isEmpty {
+            Menu("Export") {
+                ForEach(store.layers) { layer in
+                    Menu(layer.name) {
+                        Button("Save as GeoJSON…") { interaction.export(layer, as: .geoJSON, from: store) }
+                        Button("Save as Shapefile (.zip)…") { interaction.export(layer, as: .shapefile, from: store) }
+                        if let onSendViaWinlink {
+                            Divider()
+                            // GeoJSON only over the air: it is text, so
+                            // LZHUF compresses it, where a zipped
+                            // shapefile is already compressed and gains
+                            // nothing for several times the size.
+                            Button("Send via Winlink (GeoJSON)…") {
+                                onSendViaWinlink(layer, .geoJSON)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
+}
+
+/// The presentations the boundary rows trigger, attached to a real view.
+struct MapOverlayPresentation: ViewModifier {
+
+    @ObservedObject var store: MapOverlayStore
+    @ObservedObject var interaction: MapOverlayInteraction
+
+    func body(content: Content) -> some View {
+        content
+            .fileImporter(isPresented: $interaction.isPickingFile,
+                          allowedContentTypes: [.item],
+                          allowsMultipleSelection: true) { result in
+                if case .success(let urls) = result { interaction.load(urls, into: store) }
+            }
+            .exportFile($interaction.pendingExport) { store.lastError = $0 }
+            .textEntryPrompt($interaction.prompt)
+            .alert("Layer not added", isPresented: Binding(
+                get: { store.lastError != nil },
+                set: { if !$0 { store.lastError = nil } })) {
+                Button("OK") { store.lastError = nil }
+            } message: {
+                Text(store.lastError ?? "")
+            }
+    }
+}
+
+/// What the boundary menu is in the middle of: a file pick, an export, a
+/// name being asked for. Owned by whichever view hosts the rows.
+@MainActor
+final class MapOverlayInteraction: ObservableObject {
+    @Published var isPickingFile = false
+    @Published var pendingExport: ExportableFile?
+    @Published var prompt: TextEntryPrompt?
 
     /// Writes a layer out in the chosen format.
     ///
     /// Failure is surfaced rather than swallowed: an export the operator
     /// asked for and did not get is worse than one that visibly refused,
     /// because they will assume they have the file.
-    private func export(_ layer: MapOverlayLayer, as format: MapOverlayExport.Format) {
+    func export(_ layer: MapOverlayLayer, as format: MapOverlayExport.Format,
+                from store: MapOverlayStore) {
         do {
             let data: Data
             switch format {
@@ -522,7 +569,7 @@ struct MapOverlayControl: View {
     /// `.prj` is the only thing that says whether these numbers are degrees.
     /// Without it a projected file is read as latitude/longitude and every
     /// feature lands thousands of miles away — with no error at all.
-    private func load(_ urls: [URL]) {
+    func load(_ urls: [URL], into store: MapOverlayStore) {
         for url in urls {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }

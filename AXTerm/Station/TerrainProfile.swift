@@ -431,7 +431,7 @@ nonisolated struct TerrainProfile: Equatable, Sendable {
 
 // MARK: - Explaining
 
-extension TerrainProfile.Verdict {
+nonisolated extension TerrainProfile.Verdict {
 
     var isUsable: Bool {
         switch self {

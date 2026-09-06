@@ -331,9 +331,12 @@ nonisolated struct InfoPlistReader: InfoPlistReading {
 
 /// Mock Info.plist reader for testing.
 nonisolated struct MockInfoPlistReader: InfoPlistReading {
-    var values: [String: Any]
+    // `any Sendable` rather than `Any`: the struct is Sendable, and a
+    // dictionary of Any is not. Everything a plist holds — strings,
+    // numbers, booleans, arrays of them — already is.
+    var values: [String: any Sendable]
 
-    init(_ values: [String: Any] = [:]) {
+    init(_ values: [String: any Sendable] = [:]) {
         self.values = values
     }
 

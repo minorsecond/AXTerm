@@ -34,14 +34,22 @@ nonisolated enum TerrainShading {
         /// MapKit has no overlay level below the roads, so a terrain layer is
         /// always drawn on top of them — painting it opaquely buries the
         /// street grid, the labels and the network lines the map is for.
-        /// Multiplying instead of painting is what real cartographic relief
-        /// does: it darkens what is already there rather than replacing it,
-        /// so roads still read through the shading.
+        ///
+        /// Both styles composite normally. Hillshade used to ask for
+        /// `.multiply`, on the theory that darkening what is already there is
+        /// what cartographic relief does — and it is, but an overlay renderer
+        /// draws into a layer of its own, so a blend mode set on its context
+        /// only ever blended against that layer's transparent backing, never
+        /// the basemap. What reached the screen was a 75%-opaque near-white
+        /// sheet: invisible over a light map, and over a dark-mode map it
+        /// turned the whole city light grey while MapKit's dark-mode road
+        /// shields and labels stayed dark on top of it — the "dark blocks over
+        /// the highway symbols". The darkening now lives in the pixels
+        /// themselves (`rgba`): flat ground is transparent and slopes are
+        /// translucent black, which composites as relief on any basemap.
         var blendMode: CGBlendMode {
             switch self {
-            case .hillshade: return .multiply
-            // A hypsometric tint multiplied goes muddy, and its job is to
-            // colour rather than to shade. Kept as a light wash instead.
+            case .hillshade: return .normal
             case .elevation: return .normal
             }
         }
@@ -107,7 +115,18 @@ nonisolated enum TerrainShading {
                 let bands = min(ProcessInfo.processInfo.activeProcessorCount, samples)
                 let rowsPerBand = (samples + bands - 1) / bands
 
+                // The pointers are passed through a box the compiler will not
+                // check. It cannot see what makes this safe, which is worth
+                // stating rather than hiding: each band writes a disjoint
+                // range of rows, nothing reads another band's output, and
+                // `concurrentPerform` joins before the pointers go out of
+                // scope. Widen the bands or let them overlap and this stops
+                // being true.
+                let inputBox = UncheckedSendableBox(input)
+                let outputBox = UncheckedSendableBox(output)
                 DispatchQueue.concurrentPerform(iterations: bands) { band in
+                    let input = inputBox.value
+                    let output = outputBox.value
                     let firstRow = band * rowsPerBand
                     let lastRow = min(firstRow + rowsPerBand, samples)
                     guard firstRow < lastRow else { return }
@@ -160,14 +179,19 @@ nonisolated enum TerrainShading {
                                 let shade = hillshade(dzdx: dzdx, dzdy: dzdy, light: light)
                                 let level = UInt8(clamping:
                                     Int((min(shade / flat, 1) * 255).rounded()))
-                                // Opaque here; the layer's own opacity does the
-                                // blending. Per-pixel alpha as well would make
-                                // the two interact and leave the strength
-                                // impossible to reason about.
-                                output[offset] = level
-                                output[offset + 1] = level
-                                output[offset + 2] = level
-                                output[offset + 3] = 255
+                                // Relief as shadow, not as paint: black, with
+                                // alpha for how far the slope turns from the
+                                // light. Flat ground (level 255) is fully
+                                // transparent and changes nothing; a slope
+                                // facing away darkens whatever the basemap
+                                // drew there, roads and labels included, on a
+                                // light map and a dark one alike. Premultiplied
+                                // RGBA, so black stays 0 at any alpha. The
+                                // layer opacity is the one strength knob.
+                                output[offset] = 0
+                                output[offset + 1] = 0
+                                output[offset + 2] = 0
+                                output[offset + 3] = 255 - level
                             case .elevation:
                                 let tint = elevationTint(metres: value)
                                 output[offset] = tint.0
@@ -322,4 +346,16 @@ nonisolated enum TerrainShading {
         return (x: abs(metresPerDegreeLongitude) / perSample,
                 y: metresPerDegreeLatitude / perSample)
     }
+}
+
+
+/// Carries a value into a concurrent closure without a Sendable check.
+///
+/// Only for buffer pointers handed to `DispatchQueue.concurrentPerform`,
+/// where the safety argument is disjoint indices plus the join at the end of
+/// the call. It is deliberately not general: anything else that wants this
+/// should say why at its own call site.
+private nonisolated struct UncheckedSendableBox<T>: @unchecked Sendable {
+    let value: T
+    init(_ value: T) { self.value = value }
 }

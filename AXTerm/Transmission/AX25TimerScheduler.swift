@@ -6,7 +6,10 @@
 import Foundation
 
 public protocol AnyCancellableTask: Sendable {
-    func cancel()
+    // Nonisolated: these are cancelled from `deinit`, which belongs to no
+    // actor. Cancelling a timer is also the one thing that must always be
+    // possible, from wherever the object is being torn down.
+    nonisolated func cancel()
 }
 
 // Wrapper for standard Swift Task
@@ -34,7 +37,9 @@ public protocol AX25TimerScheduler: Sendable {
 }
 
 /// A default clock that uses real wall-clock time via Swift Concurrency `Task.sleep`
-public struct AX25SystemTimerScheduler: AX25TimerScheduler {
+// Nonisolated for the same reason as `CoreLocationGPSProvider`: it is a
+// default argument, evaluated wherever the caller is.
+nonisolated public struct AX25SystemTimerScheduler: AX25TimerScheduler {
     public init() {}
 
     public var currentTime: TimeInterval {

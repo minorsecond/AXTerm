@@ -61,6 +61,8 @@ final class WinlinkSyncController: ObservableObject {
                          identityStore: WinlinkIdentitySyncSource.Store? = nil,
                          contactStore: ContactStore? = nil,
                          activityStore: StationActivityStore? = nil,
+                         terminalSessions: TerminalSessionSyncSource? = nil,
+                         mailboxSources: [WinlinkSyncSource] = [],
                          isEnabled: @escaping @MainActor () -> Bool) -> WinlinkSyncController? {
         guard let store else {
             // Silent nil is why "the Mac isn't pushing" produced no log line
@@ -97,6 +99,15 @@ final class WinlinkSyncController: ObservableObject {
             sources.append(StationActivitySyncSource(
                 store: activityStore, deviceID: transport.deviceID))
         }
+        // Built by the caller, which holds the store and the identity to
+        // stamp on each record; nil when the operator has not opted in, so
+        // the source is absent rather than present-and-idle.
+        if let terminalSessions {
+            sources.append(terminalSessions)
+        }
+        // The packet mailbox's messages and callers, same gate and same
+        // reasoning; empty when the operator has not opted in.
+        sources += mailboxSources
 
         Telemetry.breadcrumb(
             category: "winlink.sync",
@@ -105,7 +116,9 @@ final class WinlinkSyncController: ObservableObject {
                    "kinds": sources.map { $0.kind.rawValue }.joined(separator: ","),
                    "identity": identityStore != nil,
                    "contacts": contactStore != nil,
-                   "stationActivity": activityStore != nil])
+                   "stationActivity": activityStore != nil,
+                   "terminalSessions": terminalSessions != nil,
+                   "mailbox": !mailboxSources.isEmpty])
         log("Configured — \(sources.count) sources: "
             + sources.map { $0.kind.rawValue }.joined(separator: ", "))
 
@@ -323,7 +336,7 @@ extension WinlinkSyncController.Status {
             if report.wasReset {
                 lines.append("The server discarded this device's position, so the pass re-read everything rather than risk missing changes in between.")
             }
-            lines.append("Messages, read flags, folders, contacts and callsign lookups sync. Digipeater paths, the gateway ladder, session logs and grid square do not \u{2014} they describe this antenna at this location.")
+            lines.append("Messages, read flags, folders, contacts and callsign lookups sync. What your other stations heard and connected to arrives labelled with the station that did it. Digipeater paths, the gateway ladder, session logs and grid square do not \u{2014} they describe this antenna at this location.")
             return lines.joined(separator: "\n\n")
         }
     }

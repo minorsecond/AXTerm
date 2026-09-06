@@ -87,7 +87,7 @@ nonisolated enum B2FProposal {
         guard trimmed.uppercased().hasPrefix("FS") else { return nil }
 
         var answers = [Answer]()
-        var characters = Array(trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces).uppercased())
+        let characters = Array(trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces).uppercased())
         var index = 0
         while index < characters.count {
             let char = characters[index]

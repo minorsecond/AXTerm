@@ -105,32 +105,35 @@ final class WinlinkInMemorySyncTransport: WinlinkSyncTransport, @unchecked Senda
 
     func isAvailable() async -> Bool { true }
 
+    // `withLock` rather than lock/defer-unlock. In an async function the
+    // manual pair is unavailable — and an error under Swift 6 — because
+    // nothing stops a suspension point creeping in between them, and a lock
+    // held across a suspension is a deadlock waiting for the right
+    // scheduling. The scoped form cannot be split that way.
     func fetchChanges(since token: Data?) async throws -> WinlinkSyncChangeSet {
-        lock.lock()
-        defer { lock.unlock() }
-        let after = token.flatMap { String(data: $0, encoding: .utf8) }.flatMap(Int.init) ?? -1
-        let changed = storage.values
-            .filter { (order[$0.recordName] ?? 0) > after }
-            .sorted { $0.recordName < $1.recordName }
-        return WinlinkSyncChangeSet(
-            records: changed,
-            token: String(sequence).data(using: .utf8))
+        lock.withLock {
+            let after = token.flatMap { String(data: $0, encoding: .utf8) }.flatMap(Int.init) ?? -1
+            let changed = storage.values
+                .filter { (order[$0.recordName] ?? 0) > after }
+                .sorted { $0.recordName < $1.recordName }
+            return WinlinkSyncChangeSet(
+                records: changed,
+                token: String(sequence).data(using: .utf8))
+        }
     }
 
     func push(_ records: [WinlinkSyncRecord]) async throws {
         if let pushFailure { throw pushFailure }
-        lock.lock()
-        defer { lock.unlock() }
-        for record in records {
-            sequence += 1
-            storage[record.recordName] = record
-            order[record.recordName] = sequence
+        lock.withLock {
+            for record in records {
+                sequence += 1
+                storage[record.recordName] = record
+                order[record.recordName] = sequence
+            }
         }
     }
 
     var allRecords: [WinlinkSyncRecord] {
-        lock.lock()
-        defer { lock.unlock() }
-        return storage.values.sorted { $0.recordName < $1.recordName }
+        lock.withLock { storage.values.sorted { $0.recordName < $1.recordName } }
     }
 }

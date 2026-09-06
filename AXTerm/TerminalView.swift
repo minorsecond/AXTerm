@@ -1804,6 +1804,9 @@ struct TerminalView: View {
     var locationService: StationLocationService?
     /// Keeps what happened. Nil disables recording rather than the session.
     var sessionRecorder: TerminalSessionRecorder?
+    /// What the operator's other devices connected to, for the History pane's
+    /// "Other devices" switch. Nil where sync has no database.
+    var remoteSessionStore: TerminalSessionReplicationStore?
 
     @State private var selectedTab: TerminalTab = .session
     @State private var showingTransferSheet = false
@@ -1839,6 +1842,7 @@ struct TerminalView: View {
         searchModel: AppToolbarSearchModel,
         locationService: StationLocationService? = nil,
         sessionRecorder: TerminalSessionRecorder? = nil,
+        remoteSessionStore: TerminalSessionReplicationStore? = nil,
         onIdentity: ((String) -> Void)? = nil,
         onIdentityMenu: ((String) -> Void)? = nil
     ) {
@@ -1854,6 +1858,7 @@ struct TerminalView: View {
         self.searchModel = searchModel
         self.locationService = locationService
         self.sessionRecorder = sessionRecorder
+        self.remoteSessionStore = remoteSessionStore
 
         _txViewModel = ObservedObject(wrappedValue: txViewModel)
         _connectBarViewModel = StateObject(wrappedValue: ConnectBarViewModel())
@@ -2089,6 +2094,7 @@ struct TerminalView: View {
                 transfersView
             case .history:
                 SessionHistoryView(store: client.terminalSessions,
+                                   remoteStore: remoteSessionStore,
                                    onOpenCallsign: onIdentity)
             }
         }

@@ -287,8 +287,7 @@ struct SessionBudgetView: View {
             return "Measuring throughput…"
         }
         let secondsNeeded = Double(bytesRemaining) / bytesPerSecond
-        let remainingText = ByteCountFormatter.string(
-            fromByteCount: Int64(bytesRemaining), countStyle: .file)
+        let remainingText = ByteCount.string(Int64(bytesRemaining))
 
         guard let secondsToCap, let bytesBeforeCap else {
             return "\(remainingText) to go — about \(Self.clock(secondsNeeded)) at "
@@ -303,9 +302,9 @@ struct SessionBudgetView: View {
 
         let carried = budget.bytesCarriedToNextSession
         return "\(remainingText) to go, but only about "
-            + "\(ByteCountFormatter.string(fromByteCount: Int64(bytesBeforeCap), countStyle: .file)) "
+            + "\(ByteCount.string(Int64(bytesBeforeCap))) "
             + "fits before the cap. The remaining "
-            + "\(ByteCountFormatter.string(fromByteCount: Int64(carried), countStyle: .file)) "
+            + "\(ByteCount.string(Int64(carried))) "
             + "will be saved and resumed on the next exchange — not re-downloaded."
     }
 

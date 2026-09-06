@@ -58,16 +58,45 @@ struct OfflineBasemapMapView {
 
     // MARK: - Annotations
 
+    /// How often the map accepts structural mutations — annotation
+    /// arrivals and departures, line rebuilds. Anything inserted makes
+    /// MapKit re-resolve its label layer, which reads as the basemap's
+    /// own dots and shields rippling; on a busy channel someone new is
+    /// placed every few seconds, so unpaced mutations kept that ripple
+    /// running continuously (field video 2026-09-01 11:28). Deferred
+    /// changes are re-derived and applied by a later pass.
+    static let structuralMutationInterval: TimeInterval = 10
+
     /// One station, carried into MapKit.
+    ///
+    /// Mutable, deliberately: the object *is* the marker's identity. A
+    /// station that persists across updates keeps its annotation, and a
+    /// changed position is written into `coordinate` — KVO-compliant, so
+    /// MapKit slides that one view — instead of the whole layer being torn
+    /// down and rebuilt because one field of one station moved.
     final class SiteAnnotation: NSObject, MKAnnotation {
         let id: String
-        let coordinate: CLLocationCoordinate2D
-        let title: String?
-        let subtitle: String?
-        let signal: StationScope.Signal
-        let isApproximate: Bool
+        /// KVO-observed, and the only one that should be: this is how MapKit
+        /// is told a marker moved, and it is the whole reason the annotation
+        /// object persists across updates.
+        @objc dynamic var coordinate: CLLocationCoordinate2D
+        /// Deliberately *not* `@objc dynamic`.
+        ///
+        /// MapKit observes an annotation's title and subtitle to keep
+        /// callouts current, and answers a change by re-laying out the
+        /// annotations it holds. The subtitle carries this station's detail
+        /// text — last heard, counts, distance — which is rewritten every
+        /// staleness bucket, so making these observable had the whole marker
+        /// layer shuffle on a timer. These dots set `canShowCallout = false`
+        /// and draw their own label, so MapKit never needs to hear about it;
+        /// the view is reconfigured explicitly when `absorb` says the title
+        /// changed.
+        var title: String?
+        var subtitle: String?
+        var signal: StationScope.Signal
+        var isApproximate: Bool
         let isObserver: Bool
-        let isNode: Bool
+        var isNode: Bool
 
         init(id: String, coordinate: CLLocationCoordinate2D, title: String?,
              subtitle: String?, signal: StationScope.Signal,
@@ -80,6 +109,67 @@ struct OfflineBasemapMapView {
             self.isApproximate = isApproximate
             self.isObserver = isObserver
             self.isNode = isNode
+        }
+
+        #if DEBUG
+        /// Counts how often an annotation's fields are rewritten, by field.
+        /// A field nobody looks at being written constantly is cheap on its
+        /// own and expensive if MapKit is observing it.
+        nonisolated(unsafe) private static var fieldWrites: [String: Int] = [:]
+        nonisolated(unsafe) private static var fieldWindow = Date.distantPast
+
+        private static func noteFieldWrite(_ field: String) {
+            fieldWrites[field, default: 0] += 1
+            let elapsed = Date().timeIntervalSince(fieldWindow)
+            guard elapsed >= 5 else { return }
+            if fieldWindow != .distantPast, !fieldWrites.isEmpty {
+                let summary = fieldWrites.sorted { $0.key < $1.key }
+                    .map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+                print(String(format: "[MAPDIAG] annotation field writes in %.1fs: %@",
+                             elapsed, summary))
+            }
+            fieldWrites.removeAll()
+            fieldWindow = Date()
+        }
+        #endif
+
+        /// Folds a rebuilt annotation's values into this one, returning
+        /// whether anything the *view* draws — tint, glyph, label — changed
+        /// and it therefore needs reconfiguring. The coordinate is written
+        /// only when it moved, so MapKit is not KVO-poked on every pass.
+        func absorb(_ next: SiteAnnotation) -> Bool {
+            if coordinate.latitude != next.coordinate.latitude
+                || coordinate.longitude != next.coordinate.longitude {
+                #if DEBUG
+                let metres = GreatCircle.kilometres(
+                    from: GreatCircle.Point(latitude: coordinate.latitude,
+                                            longitude: coordinate.longitude),
+                    to: GreatCircle.Point(latitude: next.coordinate.latitude,
+                                          longitude: next.coordinate.longitude)) * 1000
+                print(String(format: "[MAPDIAG] move %@ %.2f m", id, metres))
+                #endif
+                coordinate = next.coordinate
+            }
+            if subtitle != next.subtitle {
+                subtitle = next.subtitle
+                #if DEBUG
+                Self.noteFieldWrite("subtitle")
+                #endif
+            }
+            let redraws = title != next.title
+                || signal != next.signal
+                || isApproximate != next.isApproximate
+                || isNode != next.isNode
+            if redraws {
+                #if DEBUG
+                Self.noteFieldWrite("title/tint")
+                #endif
+                title = next.title
+                signal = next.signal
+                isApproximate = next.isApproximate
+                isNode = next.isNode
+            }
+            return redraws
         }
     }
 
@@ -144,8 +234,10 @@ struct OfflineBasemapMapView {
             subtitle: "This station",
             signal: .good, isApproximate: false, isObserver: true)]
 
+        var seen: Set<String> = [result[0].id]
         for site in scope.sites {
-            guard let position = coordinates[site.id] else { continue }
+            guard let position = coordinates[site.id],
+                  seen.insert(site.id).inserted else { continue }
             result.append(SiteAnnotation(
                 id: site.id,
                 coordinate: position.clCoordinate,
@@ -215,6 +307,38 @@ struct OfflineBasemapMapView {
         /// Links keep their evidence so the renderer can dash the ones that
         /// have never actually been travelled.
         var linkStyles: [ObjectIdentifier: MapPathLink] = [:]
+        /// Installed path lines by link id, with the signature of what each
+        /// was built from. A line whose signature is unchanged is left
+        /// exactly where it is; one whose evidence or endpoints changed is
+        /// rebuilt alone, instead of every line on the map being torn down
+        /// because one path was heard again.
+        var linkLines: [String: MKPolyline] = [:]
+        /// Where each line runs, and how it is painted, tracked apart. A
+        /// path whose evidence improves is the same line in a new colour;
+        /// replacing the overlay for that made MapKit re-resolve its label
+        /// layer, and evidence improves constantly on a busy channel.
+        var linkGeometry: [String: String] = [:]
+        var linkStyleSignatures: [String: String] = [:]
+        /// When the map was last structurally mutated — an annotation added
+        /// or removed, a line rebuilt. Inserting anything makes MapKit
+        /// re-resolve its own label layer: an animated ripple of the city
+        /// dots and road shields. One new station every few seconds meant
+        /// that ripple ran continuously, so mutations are batched on this
+        /// clock — the first after a quiet spell applies at once, the ones
+        /// behind it coalesce into the next pass.
+        var lastStructuralMutation = Date.distantPast
+        /// One decision per update pass, taken before any section runs, so
+        /// annotations and lines mutate in the same batch instead of one
+        /// section stamping the clock and starving the other.
+        var structuralMutationsAllowed = true
+        var structuralMutationDidOccur = false
+        #if DEBUG
+        /// Update-pass rate, so a map that redraws at packet rate is
+        /// distinguishable from one MapKit is animating on its own.
+        var passCount = 0
+        var passWindowStart = Date.distantPast
+        var lastLoggedRegion: MKCoordinateRegion?
+        #endif
         var installedTerrainIDs: [String] = []
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
@@ -342,6 +466,7 @@ struct OfflineBasemapMapView {
                            approximate: site.isApproximate,
                            isNode: site.isNode,
                            callsign: site.title)
+            view.setOverDarkBasemap(parent.store == nil && parent.basemap.isDark)
             view.setLabelVisible(
                 labelsVisible || site.isObserver || site.id == parent.selection)
             // The callout has to earn the tap: a bubble carrying only the
@@ -382,7 +507,7 @@ struct OfflineBasemapMapView {
             return label
         }
 
-        private static func tint(for site: SiteAnnotation) -> PlatformColor {
+        static func tint(for site: SiteAnnotation) -> PlatformColor {
             if site.isObserver { return .systemBlue }
             // Infrastructure wears one colour so it reads apart from
             // traffic; recency still shows through the label and callout.
@@ -399,6 +524,10 @@ struct OfflineBasemapMapView {
         /// deselection MapKit reports as a side effect is not mistaken for the
         /// operator dismissing a selection.
         var isRebuildingAnnotations = false
+        /// Set while the map is being driven to match `selection` rather than
+        /// by the operator, so the callbacks that causes are not mistaken for
+        /// a fresh choice and written back into SwiftUI.
+        var isApplyingSelection = false
 
         /// Whether callsign labels are shown at the current zoom — see
         /// MapLabelPolicy. The observer's and the selection's labels stay
@@ -407,6 +536,25 @@ struct OfflineBasemapMapView {
         var labelsVisible = true
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            #if DEBUG
+            // A region that oscillates moves every marker at once, which is
+            // what "the points jump very slightly" would look like. Logged
+            // with the delta so a genuine pan reads differently from a
+            // micro-wobble nobody asked for.
+            let region = mapView.region
+            if let last = lastLoggedRegion {
+                let dLat = abs(region.center.latitude - last.center.latitude)
+                let dLon = abs(region.center.longitude - last.center.longitude)
+                let dSpan = abs(region.span.latitudeDelta - last.span.latitudeDelta)
+                // Both axes, or an east-west drift reads as no movement.
+                let metres = (dLat + dLon * cos(region.center.latitude * .pi / 180)) * 111_320
+                if metres > 0 || dSpan > 0 {
+                    print(String(format: "[MAPDIAG] region %@ centre %.1f m  span %.8f",
+                                 animated ? "anim" : "still", metres, dSpan))
+                }
+            }
+            lastLoggedRegion = region
+            #endif
             let shows = MapLabelPolicy.showsLabels(
                 latitudeDelta: mapView.region.span.latitudeDelta)
             guard shows != labelsVisible else { return }
@@ -415,6 +563,9 @@ struct OfflineBasemapMapView {
         }
 
         func applyLabelVisibility(on mapView: MKMapView) {
+            #if DEBUG
+            print("[MAPDIAG] label visibility sweep -> \(labelsVisible)")
+            #endif
             for annotation in mapView.annotations {
                 guard let site = annotation as? SiteAnnotation,
                       let view = mapView.view(for: annotation) as? StationDotAnnotationView
@@ -425,7 +576,7 @@ struct OfflineBasemapMapView {
         }
 
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
-            guard !isRebuildingAnnotations,
+            guard !isRebuildingAnnotations, !isApplyingSelection,
                   let site = view.annotation as? SiteAnnotation else { return }
             // A selected station's name is always worth ink, even zoomed out.
             (view as? StationDotAnnotationView)?.setLabelVisible(true)
@@ -438,7 +589,7 @@ struct OfflineBasemapMapView {
         }
 
         func mapView(_ mapView: MKMapView, didDeselect view: MKAnnotationView) {
-            guard !isRebuildingAnnotations else { return }
+            guard !isRebuildingAnnotations, !isApplyingSelection else { return }
             if let site = view.annotation as? SiteAnnotation {
                 (view as? StationDotAnnotationView)?.setLabelVisible(
                     labelsVisible || site.isObserver)
@@ -452,8 +603,91 @@ struct OfflineBasemapMapView {
 
     // MARK: - Shared make/update
 
+    /// An `MKMapView` that ignores sub-point resizing.
+    ///
+    /// See `MapFrameStability` for why: MapKit re-anchors every annotation
+    /// view whenever it presents a frame, so a map whose size wobbles below
+    /// a point shuffles all of its markers and nothing in the app's own data
+    /// can explain it. Reproduced in isolation — a width alternating by
+    /// 0.5pt at 2 Hz moved fifty markers 1910 times in ten seconds; with
+    /// this, zero — and a genuine resize still lays out normally.
+    final class StableFrameMapView: MKMapView {
+        #if DEBUG
+        /// Did the frame hypothesis even apply here? Counted separately for
+        /// proposals swallowed and proposals applied, because "no frame
+        /// changes at all" and "frame changes we absorbed" call for
+        /// completely different next steps.
+        nonisolated(unsafe) static var swallowed = 0
+        nonisolated(unsafe) static var applied = 0
+        nonisolated(unsafe) static var window = Date.distantPast
+
+        static func note(applied didApply: Bool, detail: String) {
+            if didApply { applied += 1 } else { swallowed += 1 }
+            let elapsed = Date().timeIntervalSince(window)
+            guard elapsed >= 5 else { return }
+            if window != .distantPast {
+                print(String(format: "[MAPDIAG] map frame in %.1fs: %d applied, %d swallowed  last=%@",
+                             elapsed, applied, swallowed, detail))
+            }
+            applied = 0
+            swallowed = 0
+            window = Date()
+        }
+        #endif
+
+        #if os(macOS)
+        override func setFrameSize(_ newSize: NSSize) {
+            let real = MapFrameStability.isRealResize(
+                width: newSize.width, height: newSize.height,
+                currentWidth: frame.width, currentHeight: frame.height)
+            #if DEBUG
+            Self.note(applied: real,
+                      detail: String(format: "size %.3fx%.3f -> %.3fx%.3f",
+                                     frame.width, frame.height,
+                                     newSize.width, newSize.height))
+            #endif
+            guard real else { return }
+            super.setFrameSize(NSSize(width: MapFrameStability.settled(newSize.width),
+                                      height: MapFrameStability.settled(newSize.height)))
+        }
+
+        override func setFrameOrigin(_ newOrigin: NSPoint) {
+            let real = MapFrameStability.isRealMove(
+                x: newOrigin.x, y: newOrigin.y,
+                currentX: frame.origin.x, currentY: frame.origin.y)
+            #if DEBUG
+            Self.note(applied: real,
+                      detail: String(format: "origin %.3f,%.3f -> %.3f,%.3f",
+                                     frame.origin.x, frame.origin.y,
+                                     newOrigin.x, newOrigin.y))
+            #endif
+            guard real else { return }
+            super.setFrameOrigin(NSPoint(x: MapFrameStability.settled(newOrigin.x),
+                                         y: MapFrameStability.settled(newOrigin.y)))
+        }
+        #else
+        override var frame: CGRect {
+            get { super.frame }
+            set {
+                let real = MapFrameStability.isRealResize(
+                    width: newValue.width, height: newValue.height,
+                    currentWidth: super.frame.width, currentHeight: super.frame.height)
+                    || MapFrameStability.isRealMove(
+                        x: newValue.origin.x, y: newValue.origin.y,
+                        currentX: super.frame.origin.x, currentY: super.frame.origin.y)
+                guard real else { return }
+                super.frame = CGRect(
+                    x: MapFrameStability.settled(newValue.origin.x),
+                    y: MapFrameStability.settled(newValue.origin.y),
+                    width: MapFrameStability.settled(newValue.width),
+                    height: MapFrameStability.settled(newValue.height))
+            }
+        }
+        #endif
+    }
+
     fileprivate func makeMapView(context: Context) -> MKMapView {
-        let mapView = MKMapView()
+        let mapView = StableFrameMapView()
         mapView.delegate = context.coordinator
         context.coordinator.mapView = mapView
         // MapKit's own basemap is switched off: the whole point is that what
@@ -519,12 +753,34 @@ struct OfflineBasemapMapView {
     /// boundary — an operator glancing at a half-drawn zone must be able to
     /// tell it is not one.
     private func applyDrawingPreview(to mapView: MKMapView, coordinator: Coordinator) {
-        mapView.removeOverlays(coordinator.previewOverlays)
-        mapView.removeAnnotations(coordinator.previewAnnotations)
-        coordinator.previewOverlays = []
-        coordinator.previewAnnotations = []
-
         let vertices = drawing.previewVertices()
+
+        // Nothing drawn and nothing to draw: leave the map alone entirely.
+        //
+        // This used to clear the preview unconditionally, and
+        // `removeAnnotations([])` is not free — handing MKMapView an empty
+        // array still invalidates its annotation layout, and it responds by
+        // repositioning every annotation view it holds. With no drawing in
+        // progress, which is essentially always, that ran on every update
+        // pass: the field log measured 560 marker moves in 5.4 seconds
+        // against 1.0 update passes per second and ~110 markers, so
+        // every marker was being nudged about a point once per pass. That
+        // is the bouncing.
+        if vertices.isEmpty,
+           coordinator.previewOverlays.isEmpty,
+           coordinator.previewAnnotations.isEmpty {
+            return
+        }
+
+        if !coordinator.previewOverlays.isEmpty {
+            mapView.removeOverlays(coordinator.previewOverlays)
+            coordinator.previewOverlays = []
+        }
+        if !coordinator.previewAnnotations.isEmpty {
+            mapView.removeAnnotations(coordinator.previewAnnotations)
+            coordinator.previewAnnotations = []
+        }
+
         guard vertices.count >= 2 else {
             // A single vertex has no line to draw, but the operator still
             // needs to see it landed.
@@ -561,38 +817,136 @@ struct OfflineBasemapMapView {
         // path link appeared would make every new packet stutter the map.
         let terrainChanged = applyTerrain(to: mapView, coordinator: coordinator)
 
-        let wanted = overlays.map(\.id) + pathLinks.map(\.id)
+        // Boundaries rebuild only when the layer set itself changes — not,
+        // as before, whenever a path link appeared. The two were keyed
+        // together, so every newly heard path tore down every county
+        // boundary and every line on the map at once, and on a busy channel
+        // that was a visible flicker of the whole network every few seconds.
+        //
         // Order within a level is insertion order, so terrain added *after*
-        // the network would cover it. Re-adding the vectors whenever terrain
-        // changes keeps them on top no matter which was toggled first.
-        guard terrainChanged || coordinator.installedOverlayIDs != wanted else { return }
-        coordinator.installedOverlayIDs = wanted
+        // the network would cover it. A terrain change therefore forces both
+        // sections to re-add on top of it — the one remaining wholesale
+        // rebuild, and it happens only when the operator toggles terrain.
+        let wantedVectors = overlays.map(\.id)
+        if terrainChanged || coordinator.installedOverlayIDs != wantedVectors {
+            #if DEBUG
+            print("[MAPDIAG] vector rebuild terrainChanged=\(terrainChanged)")
+            #endif
+            coordinator.installedOverlayIDs = wantedVectors
 
-        let coverageIDs = Set(coordinator.coverageCircles.map(ObjectIdentifier.init))
-        let existing = mapView.overlays.filter {
-            !($0 is MKTileOverlay) && !($0 is ElevationOverlay)
-                && !coverageIDs.contains(ObjectIdentifier($0))
-        }
-        mapView.removeOverlays(existing)
-        coordinator.overlayColors.removeAll()
-        coordinator.linkStyles.removeAll()
+            let coverageIDs = Set(coordinator.coverageCircles.map(ObjectIdentifier.init))
+            let linkIDs = Set(coordinator.linkLines.values.map(ObjectIdentifier.init))
+            let existing = mapView.overlays.filter {
+                !($0 is MKTileOverlay) && !($0 is ElevationOverlay)
+                    && !coverageIDs.contains(ObjectIdentifier($0))
+                    && !linkIDs.contains(ObjectIdentifier($0))
+            }
+            mapView.removeOverlays(existing)
+            for id in coordinator.overlayColors.keys where !linkIDs.contains(id) {
+                coordinator.overlayColors.removeValue(forKey: id)
+            }
 
-        for layer in overlays {
-            let color = Self.platformColor(named: layer.colorName)
-            for overlay in layer.mapKitOverlays() {
-                coordinator.overlayColors[ObjectIdentifier(overlay)] = color
-                mapView.addOverlay(overlay, level: .aboveLabels)
+            for layer in overlays {
+                let color = Self.platformColor(named: layer.colorName)
+                for overlay in layer.mapKitOverlays() {
+                    coordinator.overlayColors[ObjectIdentifier(overlay)] = color
+                    mapView.addOverlay(overlay, level: .aboveLabels)
+                }
+            }
+
+            if terrainChanged {
+                // Sweep the lines so they re-add above the fresh terrain.
+                mapView.removeOverlays(Array(coordinator.linkLines.values))
+                for (_, line) in coordinator.linkLines {
+                    coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(line))
+                    coordinator.linkStyles.removeValue(forKey: ObjectIdentifier(line))
+                }
+                coordinator.linkLines.removeAll()
+                coordinator.linkGeometry.removeAll()
+                coordinator.linkStyleSignatures.removeAll()
             }
         }
 
-        // Below the labels: the network is context for the stations, and a
-        // web of lines over the place names would bury what they connect.
-        for link in pathLinks {
+        // Links reconciled one by one, below the labels: the network is
+        // context for the stations, and a web of lines over the place names
+        // would bury what they connect. A line is touched only when the
+        // link it draws actually changed — new, gone, restyled, or moved.
+        let wantedLinks = Dictionary(pathLinks.map { ($0.id, $0) },
+                                     uniquingKeysWith: { first, _ in first })
+        // Same batching clock as the annotations, same reasoning: a line
+        // inserted or removed ripples the basemap's label layer. Deferred
+        // work is re-derived by a later pass, never lost.
+        let mayMutateLinks = coordinator.structuralMutationsAllowed
+        for (id, line) in coordinator.linkLines where wantedLinks[id] == nil {
+            guard mayMutateLinks else { break }
+            mapView.removeOverlay(line)
+            coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(line))
+            coordinator.linkStyles.removeValue(forKey: ObjectIdentifier(line))
+            coordinator.linkLines.removeValue(forKey: id)
+            coordinator.linkGeometry.removeValue(forKey: id)
+            coordinator.linkStyleSignatures.removeValue(forKey: id)
+            coordinator.structuralMutationDidOccur = true
+        }
+        for (id, link) in wantedLinks {
+            let geometry = Self.linkGeometrySignature(link)
+            let style = Self.linkStyleSignature(link)
+
+            if coordinator.linkGeometry[id] == geometry,
+               let line = coordinator.linkLines[id] {
+                // The line already runs where it should. Its label may carry
+                // new numbers — that feeds the tap card, which should not
+                // read stale — and its colour may have changed, which is a
+                // repaint of the overlay already on the map. Neither adds or
+                // removes anything, so neither disturbs MapKit's labels and
+                // neither waits on the batching clock.
+                coordinator.linkStyles[ObjectIdentifier(line)] = link
+                if coordinator.linkStyleSignatures[id] != style {
+                    #if DEBUG
+                    print("[MAPDIAG] link restyle \(id) \(coordinator.linkStyleSignatures[id] ?? "-") -> \(style)")
+                    #endif
+                    coordinator.overlayColors[ObjectIdentifier(line)] = Self.linkColor(for: link)
+                    coordinator.linkStyleSignatures[id] = style
+                    mapView.renderer(for: line)?.setNeedsDisplay()
+                }
+                continue
+            }
+
+            guard mayMutateLinks else { continue }
+            #if DEBUG
+            print("[MAPDIAG] link rebuild \(id) geom \(coordinator.linkGeometry[id] ?? "none") -> \(geometry)")
+            #endif
+            if let stale = coordinator.linkLines[id] {
+                mapView.removeOverlay(stale)
+                coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(stale))
+                coordinator.linkStyles.removeValue(forKey: ObjectIdentifier(stale))
+            }
             let line = link.polyline
             coordinator.overlayColors[ObjectIdentifier(line)] = Self.linkColor(for: link)
             coordinator.linkStyles[ObjectIdentifier(line)] = link
+            coordinator.linkLines[id] = line
+            coordinator.linkGeometry[id] = geometry
+            coordinator.linkStyleSignatures[id] = style
             mapView.addOverlay(line, level: .aboveRoads)
+            coordinator.structuralMutationDidOccur = true
         }
+    }
+
+    /// Where a link runs. Only a change here needs a new polyline; the
+    /// endpoints are rounded to about a decimetre, far under what any zoom
+    /// resolves, so floating-point drift cannot pass for a move.
+    static func linkGeometrySignature(_ link: MapPathLink) -> String {
+        String(format: "%.6f,%.6f|%.6f,%.6f", link.from.latitude, link.from.longitude,
+               link.to.latitude, link.to.longitude)
+    }
+
+    /// How a link is painted. A change here repaints the line already on
+    /// the map rather than replacing it. Evidence improves whenever a path
+    /// is proven, which on a busy channel is constant, and tearing the
+    /// overlay out for a colour change made MapKit re-resolve its labels
+    /// every time. The label is deliberately absent — it feeds the tap
+    /// card, not the pixels, and `linkStyles` is refreshed either way.
+    static func linkStyleSignature(_ link: MapPathLink) -> String {
+        "\(link.evidence.rawValue)|\(link.isSuspect)|\(link.isPrediction)"
     }
 
     /// Adds or removes shaded elevation tiles.
@@ -604,6 +958,9 @@ struct OfflineBasemapMapView {
     private func applyTerrain(to mapView: MKMapView, coordinator: Coordinator) -> Bool {
         let wanted = terrainOverlays.map(\.id)
         guard coordinator.installedTerrainIDs != wanted else { return false }
+        #if DEBUG
+        print("[MAPDIAG] terrain rebuild \(coordinator.installedTerrainIDs.count) -> \(wanted.count)")
+        #endif
         coordinator.installedTerrainIDs = wanted
 
         mapView.removeOverlays(mapView.overlays.compactMap { $0 as? ElevationOverlay })
@@ -626,6 +983,9 @@ struct OfflineBasemapMapView {
             coordinator.installedCoverage = nil
         }
         guard coordinator.installedCoverage != coverage else { return }
+        #if DEBUG
+        print("[MAPDIAG] coverage rebuild")
+        #endif
         coordinator.installedCoverage = coverage
         mapView.removeOverlays(coordinator.coverageCircles)
         coordinator.coverageCircles = []
@@ -669,6 +1029,25 @@ struct OfflineBasemapMapView {
 
     fileprivate func updateMapView(_ mapView: MKMapView, context: Context) {
         context.coordinator.parent = self
+        context.coordinator.structuralMutationsAllowed = Date().timeIntervalSince(
+            context.coordinator.lastStructuralMutation) >= Self.structuralMutationInterval
+        context.coordinator.structuralMutationDidOccur = false
+        #if DEBUG
+        // Counted, not printed per pass: printing at the rate we are trying
+        // to measure would itself be the load.
+        let coordinator = context.coordinator
+        coordinator.passCount += 1
+        let elapsed = Date().timeIntervalSince(coordinator.passWindowStart)
+        if elapsed >= 5 {
+            if coordinator.passWindowStart != .distantPast {
+                print(String(format: "[MAPDIAG] %d update passes in %.1fs (%.1f/s)",
+                             coordinator.passCount, elapsed,
+                             Double(coordinator.passCount) / elapsed))
+            }
+            coordinator.passCount = 0
+            coordinator.passWindowStart = Date()
+        }
+        #endif
 
         // `applyBasemap` owns the tile overlay's lifecycle and swaps it only
         // when the basemap actually changes — rebuilding it on every update
@@ -679,21 +1058,82 @@ struct OfflineBasemapMapView {
         applyCoverage(to: mapView, coordinator: context.coordinator)
         applyDrawingPreview(to: mapView, coordinator: context.coordinator)
 
-        // Compared as *sets*: `mapView.annotations` is unordered, so an
-        // ordered comparison reported a difference on almost every pass and
-        // tore down every annotation for nothing — including the selected
-        // one, which is what turned a tap into an infinite loop.
+        // Reconciled station by station, never wholesale. This used to
+        // compare id-sets and, on any difference, remove every annotation
+        // and add them all back — so each newly placed station (every few
+        // seconds on a busy channel) made the entire marker layer blink and
+        // resettle. The operator saw the map pulse. Now a station that
+        // persists keeps its annotation object: a moved position slides that
+        // one dot via KVO, a changed signal reconfigures that one view, and
+        // only genuinely new or departed stations are added or removed.
+        // Keeping identity also means the selected annotation survives
+        // updates instead of being torn down and re-selected.
         let existing = mapView.annotations.compactMap { $0 as? SiteAnnotation }
+        // Tolerant of duplicate ids, not trusting that upstream never emits
+        // one: `Dictionary(uniqueKeysWithValues:)` traps on a repeat, and a
+        // trap in a map update is a crash the operator sees (field capture
+        // 2026-09-01 11:03 — DRLNOD arrived as both a heard station and a
+        // via alias). The first annotation keeps the id; the surplus copies
+        // are swept off the map with the departed.
+        var existingByID: [String: SiteAnnotation] = [:]
+        var surplus: [SiteAnnotation] = []
+        for annotation in existing {
+            if existingByID[annotation.id] == nil {
+                existingByID[annotation.id] = annotation
+            } else {
+                surplus.append(annotation)
+            }
+        }
         let wanted = annotations()
-        if Set(existing.map(\.id)) != Set(wanted.map(\.id)) {
-            // Rebuilding annotations deselects whatever was selected, and
-            // MapKit reports that as a user deselection. Suppressed, or the
-            // delegate writes `selection = nil` straight back into the state
-            // that caused the rebuild.
+        let wantedIDs = Set(wanted.map(\.id))
+
+        let departed = surplus + existing.filter {
+            existingByID[$0.id] === $0 && !wantedIDs.contains($0.id)
+        }
+
+        // The batching clock. Structural changes are deferred, not dropped:
+        // the body re-evaluates with every packet, so a deferred arrival is
+        // re-derived and applied by a pass a few seconds later.
+        let mayMutate = context.coordinator.structuralMutationsAllowed
+        #if DEBUG
+        if !departed.isEmpty {
+            print("[MAPDIAG] departed\(mayMutate ? "" : " (deferred)") \(departed.map(\.id).joined(separator: ","))")
+        }
+        #endif
+        if !departed.isEmpty, mayMutate {
+            // Removing a selected annotation fires `didDeselect`; suppressed,
+            // or the delegate writes `selection = nil` straight back into the
+            // state that caused this update.
             context.coordinator.isRebuildingAnnotations = true
-            mapView.removeAnnotations(existing)
-            mapView.addAnnotations(wanted)
+            mapView.removeAnnotations(departed)
             context.coordinator.isRebuildingAnnotations = false
+            context.coordinator.structuralMutationDidOccur = true
+        }
+
+        var arrived: [SiteAnnotation] = []
+        for annotation in wanted {
+            if let current = existingByID[annotation.id] {
+                if current.absorb(annotation),
+                   let view = mapView.view(for: current) as? StationDotAnnotationView {
+                    #if DEBUG
+                    print("[MAPDIAG] reconfigure \(current.id)")
+                    #endif
+                    view.configure(tint: Coordinator.tint(for: current),
+                                   isObserver: current.isObserver,
+                                   approximate: current.isApproximate,
+                                   isNode: current.isNode,
+                                   callsign: current.title)
+                }
+            } else {
+                arrived.append(annotation)
+            }
+        }
+        if !arrived.isEmpty, mayMutate {
+            #if DEBUG
+            print("[MAPDIAG] arrived \(arrived.map(\.id).joined(separator: ","))")
+            #endif
+            mapView.addAnnotations(arrived)
+            context.coordinator.structuralMutationDidOccur = true
         }
 
         // Feature labels are rebuilt with the overlays they belong to, keyed
@@ -701,6 +1141,9 @@ struct OfflineBasemapMapView {
         let existingLabels = mapView.annotations.compactMap { $0 as? FeatureLabelAnnotation }
         let wantedLabels = featureLabels()
         if Set(existingLabels.map { $0.title ?? "" }) != Set(wantedLabels.map { $0.title ?? "" }) {
+            #if DEBUG
+            print("[MAPDIAG] feature labels rebuild")
+            #endif
             mapView.removeAnnotations(existingLabels)
             mapView.addAnnotations(wantedLabels)
         }
@@ -709,7 +1152,27 @@ struct OfflineBasemapMapView {
            let match = mapView.annotations.compactMap({ $0 as? SiteAnnotation })
                .first(where: { $0.id == selection }),
            mapView.selectedAnnotations.first !== match {
-            mapView.selectAnnotation(match, animated: true)
+            // Not inline. `selectAnnotation` deselects whatever was selected
+            // first, and MapKit delivers `didDeselect` synchronously — which
+            // writes `parent.selection`, and this runs inside the SwiftUI
+            // view update. Writing state mid-update is undefined behaviour
+            // and the runtime says as much in the log; it also fed the write
+            // straight back in as another update.
+            //
+            // So hop off the update before touching the map, and flag the
+            // round trip so the callbacks it causes are read as "the map
+            // catching up with the selection" rather than as the operator
+            // picking something new.
+            let coordinator = context.coordinator
+            coordinator.isApplyingSelection = true
+            DispatchQueue.main.async {
+                mapView.selectAnnotation(match, animated: true)
+                coordinator.isApplyingSelection = false
+            }
+        }
+
+        if context.coordinator.structuralMutationDidOccur {
+            context.coordinator.lastStructuralMutation = Date()
         }
     }
 }

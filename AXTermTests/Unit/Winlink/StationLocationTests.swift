@@ -105,6 +105,96 @@ final class StationLocationTests: XCTestCase {
         XCTAssertEqual(service.manualLocation()?.source, .manualGrid)
     }
 
+    // MARK: - Fix lifetime
+
+    /// Counts CoreLocation round trips so the cache can be proven to absorb
+    /// callers.
+    private final class CountingGPS: GPSProviding, @unchecked Sendable {
+        private let lock = NSLock()
+        private var _calls = 0
+        var calls: Int { lock.withLock { _calls } }
+        var result: Result<(latitude: Double, longitude: Double), GPSError> =
+            .success((39.7392, -104.9903))
+        func requestOneShotFix(timeout: TimeInterval) async throws -> (latitude: Double, longitude: Double) {
+            lock.withLock { _calls += 1 }
+            return try result.get()
+        }
+    }
+
+    /// Reference clock the tests can advance.
+    private final class Clock: @unchecked Sendable {
+        var now = Date(timeIntervalSince1970: 1_000_000)
+    }
+
+    /// The whole app reads through one fix: the map, the chip, Winlink
+    /// field status and compose all call this freely, and each call used to
+    /// be a live CoreLocation request.
+    func testAFreshFixServesEveryCallerWithoutRereadingGPS() async {
+        let gps = CountingGPS()
+        let clock = Clock()
+        let service = StationLocationService(
+            gps: gps, manualGridProvider: { "" }, now: { clock.now })
+
+        _ = await service.currentLocation()
+        clock.now += 60
+        let second = await service.currentLocation()
+        clock.now += 120
+        let third = await service.currentLocation()
+
+        XCTAssertEqual(gps.calls, 1, "one fix serves everyone inside the lifetime")
+        XCTAssertEqual(second?.source, .gps)
+        XCTAssertEqual(third?.timestamp, Date(timeIntervalSince1970: 1_000_000))
+    }
+
+    func testAnExpiredFixIsReRead() async {
+        let gps = CountingGPS()
+        let clock = Clock()
+        let service = StationLocationService(
+            gps: gps, manualGridProvider: { "" }, now: { clock.now })
+
+        _ = await service.currentLocation()
+        clock.now += StationLocationService.gpsFixLifetime + 1
+        let refreshed = await service.currentLocation()
+
+        XCTAssertEqual(gps.calls, 2)
+        XCTAssertEqual(refreshed?.timestamp, clock.now)
+    }
+
+    /// The settings pane's refresh is the one deliberate re-read.
+    func testMaxFixAgeZeroForcesAReRead() async {
+        let gps = CountingGPS()
+        let clock = Clock()
+        let service = StationLocationService(
+            gps: gps, manualGridProvider: { "" }, now: { clock.now })
+
+        _ = await service.currentLocation()
+        clock.now += 5
+        _ = await service.currentLocation(maxFixAge: 0)
+        XCTAssertEqual(gps.calls, 2)
+    }
+
+    /// A station with no GPS must not be re-interrogated once per caller —
+    /// failure backs off on the same clock success does.
+    func testAFailedAttemptIsNotRetriedFasterThanTheLifetime() async {
+        let gps = CountingGPS()
+        gps.result = .failure(.timeout)
+        let clock = Clock()
+        let service = StationLocationService(
+            gps: gps, manualGridProvider: { "DM79po" }, now: { clock.now })
+
+        let first = await service.currentLocation()
+        clock.now += 60
+        let second = await service.currentLocation()
+
+        XCTAssertEqual(gps.calls, 1, "the failure backs off; the fallback answers")
+        XCTAssertEqual(first?.source, .manualGrid)
+        XCTAssertEqual(second?.source, .manualGrid)
+
+        clock.now += StationLocationService.gpsFixLifetime
+        _ = await service.currentLocation()
+        XCTAssertEqual(gps.calls, 2, "the backoff expires with the lifetime")
+    }
+
     // MARK: - Profile
 
     func testProfileNameWithTitleAndContactBlock() async {

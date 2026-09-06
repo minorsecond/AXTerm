@@ -152,7 +152,7 @@ nonisolated final class ElevationStore: @unchecked Sendable {
         var byteSize: Int
 
         var sizeDescription: String {
-            ByteCountFormatter.string(fromByteCount: Int64(byteSize), countStyle: .file)
+            ByteCount.string(Int64(byteSize))
         }
     }
 

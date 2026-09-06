@@ -171,16 +171,20 @@ struct WinlinkFieldStatusSheet: View {
         return "\(hour.label) — answered \(hour.answered) of \(hour.attempts) attempts (\(percent)%)."
     }
 
+    // A `guard`/`return` inside the closure stopped it being a ViewBuilder,
+    // which made the first line an ordinary discarded statement: the
+    // "Daylight & moon" heading was built and thrown away, so the section
+    // rendered without one. `if`/`else` keeps the builder, and the heading.
     private var daylightSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             sectionTitle("Daylight & moon", systemImage: "sun.horizon")
-            guard let solar, let location else {
-                return AnyView(
-                    Text("No position known, so sun and moon cannot be computed. Set a grid square in Settings → Winlink, or wait for a GPS fix.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary))
+            if let solar, let location {
+                solarBody(solar, location: location)
+            } else {
+                Text("No position known, so sun and moon cannot be computed. Set a grid square in Settings → Winlink, or wait for a GPS fix.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
-            return AnyView(solarBody(solar, location: location))
         }
     }
 

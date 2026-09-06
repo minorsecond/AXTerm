@@ -63,11 +63,24 @@ final class WinlinkContext: ObservableObject {
     /// operator has not opted in.
     let activityStore: SQLiteStationActivityStore?
 
+    /// Terminal sessions from the operator's other devices, kept apart from
+    /// this device's own history. Nil when the database could not open.
+    let terminalSessionReplication: SQLiteTerminalSessionReplicationStore?
+
+    /// Other devices' packet mailboxes — their messages and callers — kept
+    /// apart from this device's own mailbox. Nil when the database could not
+    /// open.
+    let bbsMailboxReplication: SQLiteBBSMailboxReplicationStore?
+
     init(store: WinlinkStore?, settings: WinlinkSettings, profile: StationProfile? = nil,
          contactStore: ContactStore? = nil,
          appSettings: AppSettingsStore? = nil,
-         activityStore: SQLiteStationActivityStore? = nil) {
+         activityStore: SQLiteStationActivityStore? = nil,
+         terminalSessionReplication: SQLiteTerminalSessionReplicationStore? = nil,
+         bbsMailboxReplication: SQLiteBBSMailboxReplicationStore? = nil) {
         self.activityStore = activityStore
+        self.terminalSessionReplication = terminalSessionReplication
+        self.bbsMailboxReplication = bbsMailboxReplication
         self.store = store
         self.contactStore = contactStore
         self.settings = settings
@@ -97,6 +110,45 @@ final class WinlinkContext: ObservableObject {
             // source is then absent rather than present-and-idle, so
             // nothing is published and nothing arrives to store.
             activityStore: settings.shareStationActivity ? activityStore : nil,
+            // Same gate. The callsign and grid are read from defaults at
+            // publish time rather than captured: the sync engine is an
+            // actor and the settings objects live on the main actor, and
+            // UserDefaults is the one thing both can read without a hop.
+            terminalSessions: settings.shareTerminalSessions
+                ? terminalSessionReplication.map { store in
+                    let defaults = AppEnvironment.defaults
+                    return TerminalSessionSyncSource(
+                        store: store,
+                        deviceID: WinlinkSyncDevice.identifier(),
+                        deviceName: WinlinkSyncDevice.localName(),
+                        station: { defaults.string(forKey: AppSettingsStore.myCallsignKey) ?? "" },
+                        gridSquare: { defaults.string(forKey: WinlinkSettings.gridSquareKey) })
+                }
+                : nil,
+            mailboxSources: settings.shareBBSMailbox
+                ? (bbsMailboxReplication.map { store -> [WinlinkSyncSource] in
+                    let defaults = AppEnvironment.defaults
+                    let deviceID = WinlinkSyncDevice.identifier()
+                    let deviceName = WinlinkSyncDevice.localName()
+                    // The mailbox's own callsign is a BBS setting; empty
+                    // means it answers as the station.
+                    let mailbox: @Sendable () -> String = {
+                        defaults.string(forKey: BBSSettings.callsignKey) ?? ""
+                    }
+                    let station: @Sendable () -> String = {
+                        defaults.string(forKey: AppSettingsStore.myCallsignKey) ?? ""
+                    }
+                    let grid: @Sendable () -> String? = {
+                        defaults.string(forKey: WinlinkSettings.gridSquareKey)
+                    }
+                    return [
+                        BBSMessageSyncSource(store: store, deviceID: deviceID, deviceName: deviceName,
+                                             mailbox: mailbox, station: station, gridSquare: grid),
+                        BBSCallSyncSource(store: store, deviceID: deviceID, deviceName: deviceName,
+                                          mailbox: mailbox, station: station, gridSquare: grid),
+                    ]
+                } ?? [])
+                : [],
             isEnabled: { [weak settings] in settings?.mailboxSyncEnabled ?? false })
         // Every exchange stamps its session log with where we were, so the
         // Stations list can say whether a stored measurement still applies

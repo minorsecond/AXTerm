@@ -21,6 +21,14 @@ struct AXTermiOSRootView: View {
     @ObservedObject var client: PacketEngine
 
     @ObservedObject private var sessionCoordinator: SessionCoordinator
+    /// The personal mailbox: settings, the service that answers calls, and
+    /// the folders it shares. Built here for the same reason the Mac builds
+    /// them in `ContentView.init` — this is the one place holding both the
+    /// coordinator (which owns inbound calls) and the engine (which owns the
+    /// database and the frame sink).
+    @ObservedObject var bbsSettings: BBSSettings
+    @StateObject private var bbsService: BBSService
+    @StateObject private var bbsLibrary: BBSFileLibrary
     @StateObject private var connectCoordinator = ConnectCoordinator()
     @StateObject private var analyticsViewModel: AnalyticsDashboardViewModel
     @StateObject private var callsignLookup: CallsignLookupService
@@ -39,6 +47,11 @@ struct AXTermiOSRootView: View {
     @State private var routesScraper = BpqRoutesScraper()
     /// One door to the identity view, wherever a callsign is named.
     @StateObject private var profiles = NodeProfileCoordinator()
+    /// Writes each connected-mode session to the history store as it opens
+    /// and closes. The Mac has had one since the store existed; without it
+    /// here, History on a handheld was empty by construction — nothing was
+    /// ever wrong with the screen, nothing was ever written for it to show.
+    @State private var sessionRecorder: TerminalSessionRecorder?
     @State private var profileMenuTarget: String?
     /// "Show on Map" hands the map a station to select.
     @State private var mapFocusCallsign: String?
@@ -59,10 +72,30 @@ struct AXTermiOSRootView: View {
     /// Holds the screen on while something would break if the device slept.
     @StateObject private var keepAwake = KeepAwakeController()
     @Environment(\.scenePhase) private var scenePhase
+    /// Decides the tab bar's shape: an iPad seats six tabs, a phone five.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     /// Restored across launches: an operator who lives in the terminal should
     /// not land somewhere else every time.
     @AppStorage("ios.selectedTab") private var selection: NavigationItem = .terminal
+
+    // The same three position sources the Mac shell offers, read from the
+    // same defaults. The ladder itself is shared; only the storage keys are
+    // repeated, because `@AppStorage` has to be declared per view.
+    @AppStorage("station.useDeviceLocation") private var useDeviceLocation = false
+    @AppStorage("station.manualLatitude") private var manualLatitude = ""
+    @AppStorage("station.manualLongitude") private var manualLongitude = ""
+
+    /// Where this station is. Drives the map's own pin, its coverage rings
+    /// and every distance it measures.
+    private var myPosition: StationPosition? {
+        StationPositionResolver.ownStation(
+            gridSquare: context.settings.gridSquare,
+            manualLatitude: manualLatitude,
+            manualLongitude: manualLongitude,
+            usesDeviceLocation: useDeviceLocation,
+            deviceLocation: context.locationService.lastLocation)
+    }
 
     @State private var packetSelection = Set<Packet.ID>()
     @State private var inspectedPacket: Packet?
@@ -70,6 +103,34 @@ struct AXTermiOSRootView: View {
     /// Where the More tab is pushed to, so "Open Settings" can land on the
     /// screen that holds the setting rather than on a menu.
     @State private var settingsPath: [SettingsDestination] = []
+
+    /// Puts the TNC link strip above the tab bar, on every tab.
+    ///
+    /// Every screen shows it because the link is a property of the station,
+    /// not of whichever screen is open: a dropped TNC looks exactly like a
+    /// quiet channel from the map or the mailbox.
+    ///
+    /// It wraps each tab's content rather than the `TabView`. Applied to the
+    /// `TabView` the inset landed on the tab container, and on iPhone the
+    /// strip was drawn across the tab bar — the icons lost their bottom half
+    /// and their labels entirely.
+    ///
+    /// A `VStack`, not a `safeAreaInset`. An inset only moves views that
+    /// consult the safe area, and a tab whose root is a plain `VStack`
+    /// filling its frame does not: it kept laying out to the full height and
+    /// the strip was painted over the bottom of it. On the terminal that was
+    /// the message field and the Send button, cut in half — on iPad too,
+    /// with most of the screen empty above them, which is what ruled out the
+    /// obvious reading that the screen was simply too short. Stacking gives
+    /// the strip its own space and hands the rest to the tab.
+    private func withTNCStrip<Content: View>(_ content: Content) -> some View {
+        VStack(spacing: 0) {
+            content
+            TNCStatusStrip(status: client.status,
+                           host: settings.host,
+                           port: settings.port)
+        }
+    }
 
     /// Says what the station is currently set up as, so the section is not
     /// four nouns the operator has to open one at a time to check.
@@ -89,7 +150,9 @@ struct AXTermiOSRootView: View {
     /// router speaks in `SettingsTab`, so the mapping lives here rather than
     /// asking every caller to know which shell it is talking to.
     fileprivate enum SettingsDestination: Hashable {
-        case identity, winlink, connection, transmission, diagnostics
+        case identity, winlink, connection, transmission, diagnostics, mailbox
+        /// The mailbox itself, pushed — the phone's home for it.
+        case bbs
 
         init(_ tab: SettingsTab) {
             switch tab {
@@ -98,17 +161,17 @@ struct AXTermiOSRootView: View {
             case .network: self = .connection
             case .transmission: self = .transmission
             case .notifications, .linkDebug: self = .diagnostics
-            // No mailbox UI on a handheld yet; the closest thing it has is
-            // the station's own identity.
-            case .bbs: self = .identity
+            case .bbs: self = .mailbox
             }
         }
     }
 
-    init(context: WinlinkContext, settings: AppSettingsStore, client: PacketEngine) {
+    init(context: WinlinkContext, settings: AppSettingsStore, client: PacketEngine,
+         bbsSettings: BBSSettings) {
         self.context = context
         self.settings = settings
         self.client = client
+        _bbsSettings = ObservedObject(wrappedValue: bbsSettings)
         // The Mac wires the coordinator to the station's identity and to the
         // radio in `ContentView.init`; this shell has to do the same or the
         // transmit path runs with neither. Field capture 2026-08-25: a connect
@@ -155,9 +218,56 @@ struct AXTermiOSRootView: View {
                 return (events.connects, events.disconnects, isLive)
             }))
 
-        _callsignLookup = StateObject(wrappedValue: CallsignLookupService(
+        // Built before the mailbox so the mailbox can read its cache.
+        let lookup = CallsignLookupService(
             store: context.store,
-            isNetworkEnabled: context.settings.callsignLookupEnabled))
+            isNetworkEnabled: context.settings.callsignLookupEnabled)
+        _callsignLookup = StateObject(wrappedValue: lookup)
+
+        // The mailbox, wired exactly as the Mac wires it. Hoisted closures
+        // rather than one expression, which pushes the type checker past
+        // its budget.
+        let sendFrames: ([OutboundFrame]) -> Void = { [weak client] frames in
+            for frame in frames { client?.send(frame: frame) }
+        }
+        let stationCallsign: () -> String = { settings.myCallsign }
+        let winlinkArmed: () -> Bool = { context.settings.p2pListenEnabled }
+        let winlinkCallsign: () -> String = {
+            context.settings.effectiveP2PCallsign(stationCallsign: settings.myCallsign)
+        }
+        let contested: () -> String? = { context.contestedIdentityHolder }
+        let library = BBSFileLibrary(store: client.bbsMessages)
+        _bbsLibrary = StateObject(wrappedValue: library)
+        let supportsAXDP: (String) -> Bool = { [weak client] callsign in
+            client?.capabilityStore.hasCapabilities(for: callsign) ?? false
+        }
+        // Cached only: the mailbox answers calls unattended, and looking a
+        // caller up over the internet the moment they connect would tell a
+        // third party who is talking to this station.
+        let licence: (String) -> CallsignRecord? = { [weak lookup] callsign in
+            lookup?.cached(callsign)
+        }
+        let heard: () -> [BBSShell.HeardStation] = { [weak client] in
+            (client?.stations ?? []).compactMap { station in
+                guard let lastHeard = station.lastHeard else { return nil }
+                return BBSShell.HeardStation(callsign: station.call, lastHeard: lastHeard)
+            }
+        }
+        _bbsService = StateObject(wrappedValue: BBSService(
+            store: client.bbsMessages,
+            settings: bbsSettings,
+            coordinator: coordinator,
+            sendFrames: sendFrames,
+            stationCallsign: stationCallsign,
+            isWinlinkP2PArmed: winlinkArmed,
+            winlinkP2PCallsign: winlinkCallsign,
+            heardStations: heard,
+            library: library,
+            peerSupportsAXDP: supportsAXDP,
+            licenceRecord: licence,
+            announce: { [weak client] line in client?.appendSystemNotification(line) },
+            resolveLicences: { [weak lookup] callsigns in await lookup?.resolveAll(callsigns) },
+            contestedIdentityHolder: contested))
     }
 
     var body: some View {
@@ -190,8 +300,45 @@ struct AXTermiOSRootView: View {
             // iOS ignores the flag there anyway — leaving it set would only
             // confuse the next foreground pass.
             if phase == .active { applyKeepAwake() } else { keepAwake.release() }
+            // Saying goodbye costs one frame. iOS suspends a backgrounded app
+            // and drops the TCP link to the TNC with it, so a caller mid-
+            // session would otherwise be left retrying into an address that
+            // stopped existing (Docs/PacketBBS.md §2). `.background`, not
+            // `.inactive`: a pulled-down notification shade is inactive and
+            // the socket survives it. iOS gives no reliable termination
+            // notice, so this is the moment.
+            switch phase {
+            case .background:
+                bbsService.shutdown(reason: "this device is going to sleep")
+                // Detached as well, so a call that somehow arrives while the
+                // app is suspended is not half-answered by a service whose
+                // socket is gone. Re-attached on return, below.
+                bbsService.detach()
+            case .active:
+                bbsService.attach()
+                syncServiceAddresses()
+            default:
+                break
+            }
         }
         .task { applyKeepAwake() }
+        // A remembered BBS tab on a device that has no BBS tab: land on the
+        // More list with the mailbox already pushed, rather than on nothing.
+        .task(id: horizontalSizeClass) {
+            if horizontalSizeClass != .regular, selection == .bbs {
+                selection = .analytics
+                settingsPath = [.bbs]
+            }
+        }
+        // Attaching the station: which addresses it answers on. The mailbox
+        // registers itself only while on air; the address set is watched as
+        // one value rather than five modifiers.
+        .task {
+            bbsService.attach()
+            syncServiceAddresses()
+            bbsLibrary.rescan()
+        }
+        .onChange(of: serviceAddressSignature) { _, _ in syncServiceAddresses() }
         .task {
             // Without this, every "Open Settings" button in the shared views
             // is dead on iOS: the action is supplied by the macOS Settings
@@ -220,34 +367,48 @@ struct AXTermiOSRootView: View {
 
     private var tabs: some View {
         TabView(selection: $selection) {
-            terminal
+            withTNCStrip(terminal)
                 .tabItem { Label("Terminal", systemImage: "terminal") }
                 .tag(NavigationItem.terminal)
 
-            packets
+            withTNCStrip(packets)
                 .tabItem { Label("Packets", systemImage: "list.bullet.rectangle") }
                 .tag(NavigationItem.packets)
 
-            mail
+            withTNCStrip(mail)
                 .tabItem { Label("Mail", systemImage: "envelope") }
                 .badge(context.unreadCount)
                 .tag(NavigationItem.mail)
 
-            map
+            withTNCStrip(map)
                 .tabItem { Label("Map", systemImage: "map") }
                 .tag(NavigationItem.map)
 
-            more
-                .tabItem { Label("Settings", systemImage: "gearshape") }
+            // A sixth tab on an iPad, whose bar seats it. A phone seats five,
+            // and the system's own overflow wraps whatever it files under
+            // "More" in a second navigation controller — the mailbox's own
+            // navigation then drew two back buttons. So on a phone the
+            // mailbox is the first row of a More list this shell owns, and
+            // nothing the operator lives in — terminal, packets, mail, map —
+            // moves.
+            if horizontalSizeClass == .regular {
+                withTNCStrip(bbs)
+                    .tabItem { Label("BBS", systemImage: "tray.full") }
+                    .badge(bbsService.suggestions.count)
+                    .tag(NavigationItem.bbs)
+            }
+
+            withTNCStrip(more)
+                .tabItem {
+                    if horizontalSizeClass == .regular {
+                        Label("Settings", systemImage: "gearshape")
+                    } else {
+                        Label("More", systemImage: "ellipsis")
+                    }
+                }
+                .badge(horizontalSizeClass == .regular ? 0 : bbsService.suggestions.count)
                 .tag(NavigationItem.analytics)
         }
-        // On the TabView rather than in each tab: the link is a property of
-        // the station, not of whichever screen is open, and a dropped TNC
-        // looks exactly like a quiet channel from the map or the mailbox.
-        //
-        // Bottom edge, not top: iPadOS floats the tab bar over the top of the
-        // content, so a top inset sits underneath it and hides the tabs. The
-        // bottom is free on iPad and lands just above the tab bar on iPhone.
         .task {
             // Analytics owns the derivation; the context owns the decision
             // to publish. Wired here because this is the one place holding
@@ -313,11 +474,6 @@ struct AXTermiOSRootView: View {
         // Any view can ask for an identity page without threading a callback
         // through four levels of navigation.
         .environmentObject(profiles)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            TNCStatusStrip(status: client.status,
-                           host: settings.host,
-                           port: settings.port)
-        }
         // Keep the alias store learning wherever the operator happens to be:
         // aliases are heard in ID beacons, not in the tab that shows them.
         .onReceive(client.$packets.throttle(for: .seconds(5), scheduler: RunLoop.main, latest: true)) { packets in
@@ -379,6 +535,9 @@ struct AXTermiOSRootView: View {
                     // missing on iOS — the iPad scraped packets only.
                     nodeAliases.ingest(text: text, source: peer)
                     nodeCapabilities.ingest(line: text, peer: peer)
+                    // White pages facts are read out of the same bytes, as
+                    // on the Mac: what a node said about who runs what.
+                    bbsService.observeSessionText(text, from: peer)
                     if let row = routesScraper.ingest(line: text, peer: peer, at: Date()) {
                         let decision = HarvestedRoutePolicy.decide(
                             rows: [row],
@@ -394,9 +553,16 @@ struct AXTermiOSRootView: View {
                 },
                 searchModel: searchModel,
                 locationService: context.locationService,
+                sessionRecorder: sessionRecorder,
+                remoteSessionStore: context.terminalSessionReplication,
                 onIdentity: { profiles.peek($0) },
                 onIdentityMenu: { profileMenuTarget = $0.uppercased() }
             )
+            .task {
+                if sessionRecorder == nil {
+                    sessionRecorder = TerminalSessionRecorder(store: client.terminalSessions)
+                }
+            }
         }
     }
 
@@ -404,6 +570,7 @@ struct AXTermiOSRootView: View {
         NavigationStack {
             PacketTableView(
                 packets: client.packets,
+                isLoadingHistory: client.isLoadingPersistedPackets,
                 selection: $packetSelection,
                 onInspectSelection: {
                     inspectedPacket = client.packets.first { packetSelection.contains($0.id) }
@@ -474,6 +641,48 @@ struct AXTermiOSRootView: View {
         }
     }
 
+    /// The mailbox. `BBSScreen` owns its navigation, so — like the Winlink
+    /// mailbox — it is a tab's content directly and not inside a stack.
+    private var bbs: some View {
+        BBSScreen(service: bbsService,
+                  settings: bbsSettings,
+                  library: bbsLibrary,
+                  stationCallsign: settings.myCallsign,
+                  isWinlinkP2PArmed: context.settings.p2pListenEnabled,
+                  onOpenProfile: { profiles.openPage($0) },
+                  remoteMailbox: context.bbsMailboxReplication)
+    }
+
+    /// Which addresses this station accepts calls on, as one value, so one
+    /// change handler covers the callsign, the mailbox and Winlink P2P.
+    private var serviceAddressSignature: String {
+        let winlink = context.settings
+        return [settings.myCallsign,
+                bbsSettings.onAir ? "1" : "0",
+                bbsSettings.callsign,
+                winlink.p2pListenEnabled ? "1" : "0",
+                winlink.p2pListenCallsign].joined(separator: "|")
+    }
+
+    /// Registers the addresses the session layer answers on.
+    ///
+    /// Frames not addressed to a registered address never reach the session
+    /// layer, so a mailbox on its own SSID is unreachable without this — the
+    /// Mac has done it since the mailbox existed and this shell never did,
+    /// which is why an iPad could not answer a call on any address but its
+    /// own.
+    private func syncServiceAddresses() {
+        bbsService.syncServiceAddress()
+
+        let winlink = context.settings
+        let address = winlink.p2pListenEnabled
+            ? winlink.effectiveP2PCallsign(stationCallsign: settings.myCallsign)
+            : ""
+        sessionCoordinator.sessionManager.setServiceAddress(
+            address.isEmpty ? nil : CallsignNormalizer.toAddress(address),
+            for: "winlink.p2p")
+    }
+
     private var map: some View {
         NavigationStack {
             StationsMapView(
@@ -481,6 +690,7 @@ struct AXTermiOSRootView: View {
                 recentPackets: Array(client.packets.suffix(600)),
                 gatewayGrids: gatewayGrids,
                 observerGrid: context.settings.gridSquare,
+                observerPosition: myPosition,
                 myCallsign: settings.myCallsign,
                 lookup: callsignLookup,
                 aliases: nodeAliases,
@@ -506,6 +716,20 @@ struct AXTermiOSRootView: View {
     private var more: some View {
         NavigationStack(path: $settingsPath) {
             List {
+                if horizontalSizeClass != .regular {
+                    Section {
+                        NavigationLink(value: SettingsDestination.bbs) {
+                            Label("BBS", systemImage: "tray.full")
+                                .badge(bbsService.suggestions.count)
+                        }
+                        .accessibilityHint("The personal mailbox: mail callers left, who called, the directory and shared files")
+                    } footer: {
+                        Text(bbsSettings.onAir
+                             ? "On air as \(bbsSettings.effectiveCallsign(stationCallsign: settings.myCallsign)). Callers can connect and leave mail."
+                             : "Off air. Switch it on inside to answer calls.")
+                    }
+                }
+
                 Section {
                     // First, and present at all: without this the callsign
                     // could not be entered anywhere on iOS, so every transmit
@@ -526,6 +750,11 @@ struct AXTermiOSRootView: View {
                     NavigationLink(value: SettingsDestination.transmission) {
                         Label("Transmission", systemImage: "antenna.radiowaves.left.and.right")
                     }
+
+                    NavigationLink(value: SettingsDestination.mailbox) {
+                        Label("Mailbox", systemImage: "tray.full")
+                    }
+                    .accessibilityHint("What the BBS answers as, its greeting, and what it shares")
                 } header: {
                     Text("Station")
                 } footer: {
@@ -562,7 +791,7 @@ struct AXTermiOSRootView: View {
                     Text("Connection history and decode errors, for working out why a session failed.")
                 }
             }
-            .navigationTitle("Settings")
+            .navigationTitle(horizontalSizeClass == .regular ? "Settings" : "More")
             .navigationDestination(for: SettingsDestination.self, destination: settingsScreen)
         }
     }
@@ -628,7 +857,33 @@ struct AXTermiOSRootView: View {
             DiagnosticsView(settings: settings, eventStore: nil)
                 .navigationTitle("Diagnostics")
                 .navigationBarTitleDisplayMode(.inline)
+        case .mailbox:
+            mailboxSettingsScreen
+        case .bbs:
+            pushedBBSScreen
         }
+    }
+
+    // Lifted out of `settingsScreen`: two more arms in that switch pushed the
+    // type checker past what it will solve in reasonable time.
+    private var mailboxSettingsScreen: some View {
+        BBSSettingsScreen(settings: bbsSettings,
+                          stationCallsign: settings.myCallsign,
+                          isWinlinkP2PArmed: context.settings.p2pListenEnabled)
+            .navigationTitle("Mailbox")
+            .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// The mailbox on a phone: inside the More stack, owning no navigation.
+    private var pushedBBSScreen: some View {
+        BBSScreen(service: bbsService,
+                  settings: bbsSettings,
+                  library: bbsLibrary,
+                  stationCallsign: settings.myCallsign,
+                  isWinlinkP2PArmed: context.settings.p2pListenEnabled,
+                  onOpenProfile: { profiles.openPage($0) },
+                  remoteMailbox: context.bbsMailboxReplication,
+                  presentation: .pushed)
     }
 
     /// Imports a spatial attachment onto the map and switches to it.
@@ -782,7 +1037,7 @@ struct AXTermiOSRootView: View {
 
     /// Read on demand: another device may sync between screens.
     private var remoteObservations: [StationActivityPayload] {
-        (try? context.activityStore?.remoteStationActivity()) as? [StationActivityPayload] ?? []
+        (try? context.activityStore?.remoteStationActivity()) ?? []
     }
 
     private var gatewayGrids: [String: String] {

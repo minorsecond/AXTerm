@@ -14,21 +14,34 @@ import SwiftUI
 struct BBSMessagesPane: View {
     @ObservedObject var service: BBSService
     let sysop: String
+    /// Other instances' mailboxes. Nil where mailbox sharing is off, and then
+    /// this pane behaves exactly as it did before there was such a thing.
+    var remoteMailbox: BBSMailboxReplicationStore?
 
-    enum Filter: String, CaseIterable, Identifiable {
-        case mine = "Mine"
-        case bulletins = "Bulletins"
-        case all = "All"
-        case killed = "Killed"
-        var id: String { rawValue }
-    }
+    /// Shared with the iOS mailbox, along with the empty-state wording — see
+    /// `BBSMailboxModels`. Two platforms deciding separately what counts as
+    /// the sysop's mail is two chances to get the access model wrong.
+    typealias Filter = BBSMessageFilter
 
     @State private var filter: Filter = .mine
-    @State private var selection: Int64?
+    /// A row id, not a message number: two mailboxes can both hold a
+    /// "Message 12" and they are different messages.
+    @State private var selection: String?
     @State private var composing = false
     @State private var replyTo: BBSMessage?
 
+    /// Off, and remembered — see `BBSCallersPane`. Nothing from another
+    /// station appears in this list until the operator asks for it.
+    @AppStorage("bbs.showsOtherMailboxes") private var showsOtherMailboxes = false
+    @State private var remoteMessages: [BBSMessagePayload] = []
+
     var body: some View {
+        splitView
+            .task { reloadRemote() }
+            .onChange(of: showsOtherMailboxes) { _, _ in reloadRemote() }
+    }
+
+    private var splitView: some View {
         HSplitView {
             list
                 .frame(minWidth: 280, idealWidth: 340)
@@ -44,15 +57,35 @@ struct BBSMessagesPane: View {
 
     // MARK: - List
 
-    private var visible: [BBSMessage] {
-        let all = service.messages
-        let filtered: [BBSMessage] = switch filter {
-        case .mine: all.filter { $0.killedAt == nil && $0.isAddressed(to: sysop) }
-        case .bulletins: all.filter { $0.killedAt == nil && $0.isBulletin }
-        case .all: all.filter { $0.killedAt == nil }
-        case .killed: all.filter { $0.killedAt != nil }
+    /// This mailbox first, then one section per other mailbox — never
+    /// interleaved, so a message number is always read against the mailbox
+    /// that issued it.
+    private var sections: [BBSUnifiedListing.Section<BBSUnifiedListing.MessageRow>] {
+        BBSUnifiedListing.messageSections(local: service.messages,
+                                          remote: remoteMessages,
+                                          showsOtherInstances: showsOtherMailboxes,
+                                          filter: filter, sysop: sysop)
+    }
+
+    private var rows: [BBSUnifiedListing.MessageRow] { sections.flatMap(\.rows) }
+
+    private var selectedRow: BBSUnifiedListing.MessageRow? {
+        rows.first { $0.id == selection }
+    }
+
+    private var showsChip: Bool {
+        BBSRemoteMailbox.showsToggle(hasStore: remoteMailbox != nil,
+                                     remoteCount: remoteMessages.count,
+                                     isOn: showsOtherMailboxes)
+    }
+
+    private func reloadRemote() {
+        guard BBSRemoteMailbox.shouldLoadRemote(hasStore: remoteMailbox != nil) else {
+            remoteMessages = []
+            return
         }
-        return filtered.sorted { $0.receivedAt > $1.receivedAt }
+        remoteMessages = (try? remoteMailbox?.remoteMessages(limit: 500)) ?? []
+        if let selection, !rows.contains(where: { $0.id == selection }) { self.selection = nil }
     }
 
     private var list: some View {
@@ -64,29 +97,66 @@ struct BBSMessagesPane: View {
             .labelsHidden()
             .padding(8)
 
-            if visible.isEmpty {
+            if showsChip {
+                HStack {
+                    BBSOtherMailboxesChip(isOn: $showsOtherMailboxes)
+                    Spacer()
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 6)
+            }
+
+            if rows.isEmpty {
                 emptyList
             } else {
-                List(visible, selection: $selection) { message in
-                    row(message).tag(message.id)
+                List(selection: $selection) {
+                    ForEach(sections) { section in
+                        Section {
+                            ForEach(section.rows) { messageRow in
+                                row(messageRow).tag(messageRow.id)
+                            }
+                        } header: {
+                            if let title = section.title {
+                                BBSMailboxSectionHeader(title: title,
+                                                        attribution: section.attribution,
+                                                        isRemote: section.isRemote)
+                            }
+                        }
+                    }
                 }
                 .listStyle(.inset)
+            }
+
+            if showsChip {
+                Text(BBSUnifiedListing.countLine(
+                    local: sections.first(where: { !$0.isRemote })?.rows.count ?? 0,
+                    remote: sections.filter(\.isRemote).reduce(0) { $0 + $1.rows.count },
+                    noun: "message"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
             }
         }
     }
 
-    private func row(_ message: BBSMessage) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+    private func row(_ messageRow: BBSUnifiedListing.MessageRow) -> some View {
+        let message = messageRow.message
+        let isUnread = BBSMessageActions.forRow(message: message, origin: messageRow.origin,
+                                                sysop: sysop).showsUnread
+        return HStack(alignment: .top, spacing: 8) {
             Circle()
-                .fill(isUnread(message) ? Color.accentColor : .clear)
+                .fill(isUnread ? Color.accentColor : .clear)
                 .frame(width: 7, height: 7)
                 .padding(.top, 5)
 
             VStack(alignment: .leading, spacing: 2) {
+                BBSOriginLabel(label: messageRow.origin.label)
                 HStack(spacing: 6) {
                     Text(message.from.uppercased())
                         .font(.system(.callout, design: .monospaced))
-                        .fontWeight(isUnread(message) ? .semibold : .regular)
+                        .fontWeight(isUnread ? .semibold : .regular)
                     if message.isBulletin {
                         Text("BULLETIN")
                             .font(.system(size: 9, weight: .semibold))
@@ -112,10 +182,6 @@ struct BBSMessagesPane: View {
         .padding(.vertical, 2)
     }
 
-    private func isUnread(_ message: BBSMessage) -> Bool {
-        message.readAt == nil && message.isAddressed(to: sysop)
-    }
-
     private var emptyList: some View {
         VStack(spacing: 8) {
             Image(systemName: "tray")
@@ -131,29 +197,15 @@ struct BBSMessagesPane: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var emptyTitle: String {
-        switch filter {
-        case .mine: "No mail for you"
-        case .bulletins: "No bulletins"
-        case .all: "Mailbox empty"
-        case .killed: "Nothing killed"
-        }
-    }
+    private var emptyTitle: String { filter.emptyTitle }
 
-    private var emptyDetail: String {
-        switch filter {
-        case .mine: "Callers leave mail with S \(sysop) at the prompt."
-        case .bulletins: "Post one with New Message addressed to ALL — every caller can read it."
-        case .all: "Nothing has been left here yet."
-        case .killed: "Killed messages stay here so a mistaken K can be undone."
-        }
-    }
+    private var emptyDetail: String { filter.emptyDetail(sysop: sysop) }
 
     // MARK: - Detail
 
     @ViewBuilder
     private var detail: some View {
-        if let selected = visible.first(where: { $0.id == selection }) {
+        if let selected = selectedRow {
             messageView(selected)
         } else {
             VStack(spacing: 10) {
@@ -167,9 +219,21 @@ struct BBSMessagesPane: View {
         }
     }
 
-    private func messageView(_ message: BBSMessage) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+    private func messageView(_ row: BBSUnifiedListing.MessageRow) -> some View {
+        let message = row.message
+        let actions = BBSMessageActions.forRow(message: message, origin: row.origin,
+                                               sysop: sysop)
+        return VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
+                // Which station actually took this, said before anything else
+                // about it: the number and the read flag below belong to that
+                // mailbox, not to this one.
+                if let banner = BBSRemoteMailbox.banner(for: row.origin) {
+                    Label(banner, systemImage: "laptopcomputer.and.iphone")
+                        .font(.caption)
+                        .foregroundStyle(.tint)
+                        .explain(BBSRemoteMailbox.attributionExplanation)
+                }
                 Text(message.subject)
                     .font(.title3.weight(.semibold))
                     .textSelection(.enabled)
@@ -203,29 +267,33 @@ struct BBSMessagesPane: View {
                     .padding(16)
             }
         }
-        .toolbar { toolbar(for: message) }
-        .onAppear { markReadIfMine(message) }
-        .onChange(of: selection) { markReadIfMine(message) }
+        .toolbar { toolbar(for: message, actions: actions) }
+        .onAppear { markRead(message, actions: actions) }
+        .onChange(of: selection) { markRead(message, actions: actions) }
     }
 
+    /// What the toolbar offers is decided in `BBSMessageActions`, so a
+    /// surface cannot quietly grow a Kill button over another mailbox's
+    /// history by forgetting a condition.
     @ToolbarContentBuilder
-    private func toolbar(for message: BBSMessage) -> some ToolbarContent {
+    private func toolbar(for message: BBSMessage,
+                         actions: BBSMessageActions) -> some ToolbarContent {
         ToolbarItemGroup {
             Button {
                 replyTo = message
                 composing = true
             } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
-                .disabled(message.isBulletin && message.from.isEmpty)
+                .disabled(!actions.canReply)
 
             Button { replyTo = nil; composing = true } label: {
                 Label("New Message", systemImage: "square.and.pencil")
             }
 
-            if message.killedAt == nil {
+            if actions.canKill {
                 Button(role: .destructive) { service.sysopKill(id: message.id) } label: {
                     Label("Kill", systemImage: "trash")
                 }
-            } else {
+            } else if actions.canRestore {
                 Button { service.sysopRestore(id: message.id) } label: {
                     Label("Restore", systemImage: "arrow.uturn.backward")
                 }
@@ -233,10 +301,11 @@ struct BBSMessagesPane: View {
         }
     }
 
-    private func markReadIfMine(_ message: BBSMessage) {
+    private func markRead(_ message: BBSMessage, actions: BBSMessageActions) {
         // Reading your own mail in the app is the same fact as reading it over
-        // the air — see `BBSMessage.readAt`.
-        guard message.readAt == nil, message.isAddressed(to: sysop) else { return }
+        // the air — see `BBSMessage.readAt`. Reading somebody else's mailbox's
+        // mail here is not that fact at all, so it stamps nothing.
+        guard actions.marksRead else { return }
         service.sysopMarkRead(id: message.id)
     }
 }

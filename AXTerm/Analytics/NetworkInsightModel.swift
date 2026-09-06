@@ -21,7 +21,10 @@ import Combine
 @MainActor
 final class NetworkInsightModel: ObservableObject {
 
-    struct Snapshot: Equatable, Sendable {
+    // Nonisolated: it is built inside a detached task and declared Sendable
+    // precisely so it can cross back. Only the project's main-actor default
+    // put its memberwise initialiser on the main actor.
+    nonisolated struct Snapshot: Equatable, Sendable {
         /// Stations whose loss would split the network, with what it splits
         /// into. The partition sizes are the point: "removing this isolates
         /// four stations" is actionable, "this is an articulation point" is

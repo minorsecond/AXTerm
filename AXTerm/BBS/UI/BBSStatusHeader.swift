@@ -5,11 +5,6 @@
 
 import SwiftUI
 
-// The mailbox UI is macOS-only, like the window layout it lives in. The shell,
-// the store and the service are platform-neutral, so an iOS view can be added
-// later without touching anything below this layer.
-#if os(macOS)
-
 /// Whether the mailbox is reachable, answered in one glance.
 ///
 /// A mailbox is off the air far more often than it is on, and the two states
@@ -42,9 +37,16 @@ struct BBSStatusHeader: View {
                          ? "On air as \(service.answeringCallsign)"
                          : "Off air")
                         .font(.headline)
+                    // The explanation hangs here rather than on the switch.
+                    // `.explain` wraps what it decorates in a container of its
+                    // own, and on iOS that stops a `Toggle` responding to
+                    // taps at all — the switch drew, the popover worked, and
+                    // the mailbox could not be put on the air. A caption is
+                    // inert, so decorating it costs nothing.
                     Text(subtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .explain(onAirExplanation)
                 }
 
                 Spacer()
@@ -52,10 +54,13 @@ struct BBSStatusHeader: View {
                 Toggle("On air", isOn: $settings.onAir)
                     .toggleStyle(.switch)
                     .labelsHidden()
+                    #if os(macOS)
                     .help(settings.onAir
                           ? "Stop answering calls"
                           : "Answer calls while AXTerm is running")
+                    #endif
                     .accessibilityLabel("Mailbox on air")
+                    .accessibilityHint(onAirExplanation)
             }
 
             // Named separately from the subtitle: a mailbox switched on that
@@ -72,6 +77,18 @@ struct BBSStatusHeader: View {
         .background(.bar)
     }
 
+    /// Why this switch matters, in the words CLAUDE.md §11 asks for: what the
+    /// value means, not what the control is called.
+    private var onAirExplanation: String {
+        settings.onAir
+            ? "The mailbox answers calls while AXTerm is running and registers its "
+              + "address with the station. Switching it off stops both: callers get no "
+              + "answer at all."
+            : "Switch on to answer calls while AXTerm is running. Answering means "
+              + "transmitting with nobody present, which in the US is automatic control "
+              + "— which is why it is off until you say otherwise."
+    }
+
     private var subtitle: String {
         if !settings.onAir {
             return "Nobody can reach the mailbox. Callers get no answer."
@@ -83,4 +100,3 @@ struct BBSStatusHeader: View {
         return "Answering calls while AXTerm is running."
     }
 }
-#endif

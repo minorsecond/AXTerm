@@ -91,6 +91,22 @@ nonisolated enum WinlinkSyncPolicy {
             .deviceLocal("Link quality is measured from one place with one antenna. WinlinkLinkQuality already refuses to treat a measurement taken elsewhere as a prediction; copying another device's log would smuggle exactly that in.")
         case .stationActivity:
             .attributed("What another station heard is real evidence and worth reading when away from it — but it was measured by a different antenna in a different place. Shown as that station's observations, never merged into this one's routing metrics, which CLAUDE.md requires to stay packet-derived from *this* receiver.")
+        case .terminalSession:
+            // The line against `sessionLog`: a Winlink session log is a
+            // measurement of the link and stays home; a terminal transcript
+            // is what was said over it. What was said is worth reading from
+            // any device — but it was said by a different radio in a
+            // different place, so it arrives labelled with that device and
+            // sits in its own table, never among this device's own history.
+            .attributed("A transcript is what was said over the air, not a measurement of the air — that is why it may travel where a session log may not. It was still said from a different radio in a different place, so it is shown under that device's name and kept apart from this device's own history. Frame counts in it are that link's, never folded into this one's metrics.")
+        case .bbsMessage:
+            // Not `.synced`, although mail is immutable: a mailbox's message
+            // numbers are promises made to callers over the air ("Message 12
+            // stored."), and every device's mailbox hands out its own. Merged
+            // into one numbering, two mailboxes would both have promised 12.
+            .attributed("Mail another of your mailboxes took is worth reading from any device, but each mailbox numbers its own messages and those numbers were promised to callers. It is shown under that mailbox's name, kept apart from this mailbox's numbering, and never answered to callers here.")
+        case .bbsCall:
+            .attributed("Who called another of your mailboxes, and what they did there, is that mailbox's log. Shown under its name, never merged into this mailbox's callers.")
         case .gridSquare:
             .deviceLocal("Where the station is. A handheld's position is not the home rig's.")
         }
@@ -114,6 +130,9 @@ nonisolated enum WinlinkSyncPolicy {
         case sessionLog
         case gridSquare
         case stationActivity
+        case terminalSession
+        case bbsMessage
+        case bbsCall
     }
 
     /// Everything the engine replicates: merged *and* attributed.

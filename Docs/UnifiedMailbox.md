@@ -48,6 +48,8 @@ Winlink subsystem persists. Each carries its reason in the source, and
 | `catalogFavorite` | synced | An operator preference; travels with the operator. |
 | `callsignDirectory` | synced | A licence address is the same fact everywhere. A device with no network benefits most from another's lookups. |
 | `nodeAlias` | synced | `DRLNOD` is `KE0NCQ` regardless of which radio heard the beacon. |
+| `stationActivity` | **attributed** | What another station heard is evidence worth reading, measured by a different antenna. Shown as that station's observations under "Other Stations"; never merged into routing metrics. |
+| `terminalSession` | **attributed** | A finished terminal transcript is what was *said* over the air, not a measurement of it — so it may travel where `sessionLog` may not. It arrives in its own table (`remote_terminal_sessions`), is listed in the Terminal's History only behind the "Other devices" switch, in a section per device, with "From K0EPI-7 on Ross's Mac" on every row, and cannot be tagged or annotated. Only sessions ended in the last week are published; transcripts are cut at 200 KB and say so. Tags and notes never travel. |
 | `partialInboundBody` | **session-local** | An `FS !offset` resume belongs to the one in-flight stream that started it. |
 | `stationPreferences` | **device-local** | Digipeater paths are a property of *this* antenna. |
 | `gatewayLadder` | **device-local** | An ordered list of gateways *this* radio can hear. |

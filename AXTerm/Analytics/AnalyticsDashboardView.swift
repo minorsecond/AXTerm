@@ -405,7 +405,7 @@ struct AnalyticsDashboardView: View {
                     )
                     SummaryMetricCard(
                         title: "Payload bytes",
-                        value: ByteCountFormatter.string(fromByteCount: Int64(summary.totalPayloadBytes), countStyle: .file),
+                        value: ByteCount.string(Int64(summary.totalPayloadBytes)),
                         tooltip: "Sum of AX.25 information-field bytes. Headers, control fields, and FCS are not counted; supervisory frames carry 0."
                     )
                     SummaryMetricCard(
@@ -464,7 +464,7 @@ struct AnalyticsDashboardView: View {
                             points: viewModel.viewState.series.bytesPerBucket,
                             valueLabel: "Bytes",
                             bucket: viewModel.resolvedBucket,
-                            valueFormatter: { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) },
+                            valueFormatter: { ByteCount.string(Int64($0)) },
                             uncoveredIntervals: viewModel.uncoveredWindowIntervals
                         )
                     } else {
@@ -2307,7 +2307,7 @@ private struct ObservedSessionsCard: View {
             parts.append(durationText(duration))
         }
         if session.byteCount > 0 {
-            parts.append(ByteCountFormatter.string(fromByteCount: Int64(session.byteCount), countStyle: .file))
+            parts.append(ByteCount.string(Int64(session.byteCount)))
         }
         if !session.viaDigipeaters.isEmpty {
             parts.append("via \(session.viaDigipeaters.joined(separator: ","))")

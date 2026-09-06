@@ -270,7 +270,7 @@ nonisolated struct PathSuggester: Sendable {
 
 // MARK: - DigiPath Extension
 
-extension DigiPath {
+nonisolated extension DigiPath {
     /// Unique signature for this path
     var signature: String {
         digis.map { "\($0.call)-\($0.ssid)" }.joined(separator: ",")

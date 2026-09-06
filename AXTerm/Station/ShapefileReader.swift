@@ -290,7 +290,10 @@ nonisolated enum ShapefileReader {
 
 // MARK: - Byte reading
 
-private extension Data {
+// Byte arithmetic on a `Data`, which belongs to no actor. The project
+// defaults un-annotated declarations to the main actor, which put these
+// helpers there and made every parser that calls them a warning.
+nonisolated private extension Data {
     /// Reads without assuming the buffer starts at zero — `Data` slices keep
     /// their parent's indices, which has silently broken more binary parsers
     /// than any other single thing.

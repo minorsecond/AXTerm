@@ -317,8 +317,7 @@ final class WinlinkSessionRunner: ObservableObject {
             // with it, or it sits there collecting ticks the engine will
             // ignore.
             if kind == .selection, let stale = pendingSelection {
-                let threshold = ByteCountFormatter.string(
-                    fromByteCount: Int64(stale.autoAcceptUnderBytes), countStyle: .file)
+                let threshold = ByteCount.string(Int64(stale.autoAcceptUnderBytes))
                 log(.event, "No answer in time — taking what is under \(threshold), "
                     + "the rest stays on the server")
                 statusText = "No answer in time — taking what is under \(threshold)"
@@ -328,7 +327,7 @@ final class WinlinkSessionRunner: ObservableObject {
         case .requestInboundSelection(let offers, let timeoutSeconds, let autoAcceptUnderBytes):
             let total = offers.reduce(0) { $0 + $1.bytesOnTheAir }
             log(.event, "\(offers.count) message\(offers.count == 1 ? "" : "s") offered, "
-                + "\(ByteCountFormatter.string(fromByteCount: Int64(total), countStyle: .file)) "
+                + "\(ByteCount.string(Int64(total))) "
                 + "(about \(sessionAirtime.airtimeTextOnTheAir(compressedBytes: total)) on the air) — waiting for a choice")
             statusText = "Choose which messages to download…"
             pendingSelection = InboundSelectionRequest(
@@ -382,7 +381,9 @@ final class WinlinkSessionRunner: ObservableObject {
                 log(.event, "Catalog index received \u{2014} \(catalogItems.count) products cached")
             }
             Task { [worker] in
-                try? await worker.saveInbound(message)
+                // Discarded deliberately: a failed save must not abort the
+                // rest of the exchange.
+                _ = try? await worker.saveInbound(message)
                 if let catalogItems {
                     try? await worker.replaceCatalogCache(catalogItems)
                 }

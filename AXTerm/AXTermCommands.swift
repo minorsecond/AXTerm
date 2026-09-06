@@ -92,36 +92,19 @@ struct AXTermCommands: Commands {
             .keyboardShortcut("k", modifiers: [.command])
         }
 
-        CommandMenu("View") {
-            Button("Terminal") {
-                selectNavigation?.action(.terminal)
+        // The standard View menu, not a second one. `CommandMenu("View")`
+        // does not merge with the View menu SwiftUI already provides — it
+        // adds another, so the menu bar read "File Edit View Connection View
+        // Window Help". Navigating between views is what the View menu is
+        // for, so these belong in it.
+        CommandGroup(after: .sidebar) {
+            Divider()
+            ForEach(NavigationItem.allCases, id: \.self) { item in
+                Button(item.rawValue) {
+                    selectNavigation?.action(item)
+                }
+                .keyboardShortcut(KeyEquivalent(item.menuShortcut), modifiers: [.command])
             }
-            .keyboardShortcut("1", modifiers: [.command])
-
-            Button("Packets") {
-                selectNavigation?.action(.packets)
-            }
-            .keyboardShortcut("2", modifiers: [.command])
-
-            Button("Routes") {
-                selectNavigation?.action(.routes)
-            }
-            .keyboardShortcut("3", modifiers: [.command])
-
-            Button("Analytics") {
-                selectNavigation?.action(.analytics)
-            }
-            .keyboardShortcut("4", modifiers: [.command])
-
-            Button("Mail") {
-                selectNavigation?.action(.mail)
-            }
-            .keyboardShortcut("5", modifiers: [.command])
-
-            //Button("Raw") {
-            //    selectNavigation?.action(.raw)
-            //}
-            //.keyboardShortcut("5", modifiers: [.command])
         }
 
         CommandGroup(after: .help) {

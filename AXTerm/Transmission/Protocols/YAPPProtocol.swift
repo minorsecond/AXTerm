@@ -66,7 +66,12 @@ nonisolated enum YAPPReceiverState: Equatable, Sendable {
 // MARK: - YAPP Protocol Implementation
 
 /// YAPP file transfer protocol implementation
-nonisolated final class YAPPProtocol: FileTransferProtocol {
+// `@unchecked Sendable`: the transfer schedules its own continuation with
+// `DispatchQueue.main.asyncAfter` and is driven entirely from the main
+// thread, so the weak capture in that `@Sendable` closure is confined in
+// practice. A convention, not a proof — but the same one the rest of the
+// transmission layer runs on.
+nonisolated final class YAPPProtocol: FileTransferProtocol, @unchecked Sendable {
     let protocolType: TransferProtocolType = .yapp
 
     weak var delegate: FileTransferProtocolDelegate?

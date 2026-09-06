@@ -484,6 +484,27 @@ struct ContentView: View {
             // Load console history for the default Terminal view
             client.loadPersistedConsole()
         }
+        .task(id: useDeviceLocation) {
+            // Ask for a fix at launch, not only when Settings is open.
+            //
+            // Requesting one was wired on the Settings page and nowhere
+            // else, so an operator who had switched device location on got a
+            // grid centre until they happened to open that page — and the
+            // toolbar, correctly, reported "No GPS fix" the whole time. The
+            // switch is a station-level setting; honouring it is the shell's
+            // job, not a side effect of visiting a preferences pane.
+            guard useDeviceLocation else { return }
+            _ = await winlinkContext.locationService.currentLocation()
+            // ...and keep it no staler than the fix lifetime. This loop is
+            // the app's only GPS cadence: everyone else reads through the
+            // service's cache, so however often the map or Winlink ask,
+            // CoreLocation hears about it once per lifetime.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(StationLocationService.gpsFixLifetime))
+                guard !Task.isCancelled, useDeviceLocation else { return }
+                _ = await winlinkContext.locationService.currentLocation()
+            }
+        }
         .task {
             // Warm analytics caches in the background so first tab-open is fast.
             analyticsViewModel.prewarmIfNeeded(with: client.packets)
@@ -594,6 +615,21 @@ struct ContentView: View {
         // callsign per launch, and the whole thing is inert unless the
         // operator opted in to online lookups.
         .task(id: stationLookupKey) {
+            // Everything this app already knows, first and unconditionally.
+            //
+            // The node layer draws a marker only when the operator's record
+            // is in memory, and memory starts empty at every launch — so a
+            // position cached weeks ago was invisible until something asked
+            // for it again. That put a local cache read behind the online
+            // toggle and behind the courtesy pacing, and the layer came back
+            // a name every second and a half instead of at launch (field ask
+            // 2026-09-03: 150 of 170 node operators were sitting in the
+            // cache while the map drew a handful).
+            callsignLookup.preload(
+                client.stations.map(\.call)
+                + HeardStationMap.directoryOperatorCallsigns(
+                    aliases: nodeAliases.directory))
+
             guard winlinkContext.settings.callsignLookupEnabled else { return }
             callsignLookup.isNetworkEnabled = true
             let unknown = Set(client.stations.map { CallsignQuery.normalize($0.call) })
@@ -609,6 +645,8 @@ struct ContentView: View {
             // 533 placed after three presses). Bounded by the list
             // itself: one paced attempt per callsign per launch, results
             // persisted, heard bases skipped because they fold anyway.
+            // After the preload above this is only the genuinely unknown
+            // remainder — the twenty or so nobody has ever answered for.
             guard showsDirectoryNodes else { return }
             let directory = HeardStationMap.directoryLookupCandidates(
                 aliases: nodeAliases.directory,
@@ -625,7 +663,8 @@ struct ContentView: View {
             var sinceFlush = 0
             for call in directory {
                 guard !Task.isCancelled, !callsignLookup.isCoolingDown else { return }
-                _ = await callsignLookup.resolve(call, publishImmediately: false)
+                let origin = await callsignLookup.resolving(
+                    call, publishImmediately: false).origin
                 sinceFlush += 1
                 if sinceFlush >= 15 {
                     callsignLookup.flushStaged()
@@ -634,7 +673,10 @@ struct ContentView: View {
                 // A courtesy gap: this is someone's free service and the
                 // radio is in no hurry. ~40/minute, and the service's
                 // breaker stops the whole pass the moment the far end
-                // answers 429 or falls over.
+                // answers 429 or falls over. Owed only for a query that
+                // actually left this machine — waiting between local reads
+                // is politeness to nobody.
+                guard origin == .network else { continue }
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
             }
         }
@@ -1371,6 +1413,7 @@ struct ContentView: View {
                                         issueStationConnectRequest(
                                             stationCall: capturedCall,
                                             mode: capturedMode,
+                                            viaDigis: capturedPath,
                                             executeImmediately: false
                                         )
                                     }
@@ -1556,6 +1599,7 @@ struct ContentView: View {
             gatewayGrids: gatewayGrids,
             announcedGrids: announcedGrids.grids,
             observerGrid: winlinkContext.settings.gridSquare,
+            observerPosition: myPosition,
             myCallsign: settings.myCallsign,
             lookup: callsignLookup,
             aliases: nodeAliases,
@@ -1642,6 +1686,7 @@ struct ContentView: View {
                     searchModel: searchModel,
                     locationService: winlinkContext.locationService,
                     sessionRecorder: sessionRecorder,
+                    remoteSessionStore: winlinkContext.terminalSessionReplication,
                     onIdentity: { profiles.peek($0) },
                     onIdentityMenu: { profiles.openPage($0) }
                 )
@@ -1693,6 +1738,7 @@ struct ContentView: View {
                     settings: bbsSettings,
                     library: bbsLibrary,
                     stationCallsign: settings.myCallsign,
+                    remoteMailbox: winlinkContext.bbsMailboxReplication,
                     pane: $bbsPane
                 )
             //case .raw:
@@ -1710,6 +1756,7 @@ struct ContentView: View {
         return VStack(spacing: 0) {
         PacketTableView(
             packets: rows,
+            isLoadingHistory: client.isLoadingPersistedPackets,
             selection: $selection,
             onInspectSelection: {
                 inspectSelectedPacket()
@@ -1822,30 +1869,22 @@ struct ContentView: View {
     }
 
     /// The coordinate the operator typed in Settings, if it is a coordinate.
-    private var manualStationPoint: GreatCircle.Point? {
-        guard let latitude = Double(manualLatitude.trimmingCharacters(in: .whitespaces)),
-              let longitude = Double(manualLongitude.trimmingCharacters(in: .whitespaces)),
-              (-90...90).contains(latitude), (-180...180).contains(longitude)
-        else { return nil }
-        return GreatCircle.Point(latitude: latitude, longitude: longitude)
-    }
-
     /// Where this station is, and how well that is known.
     ///
-    /// GPS is offered but never taken silently. The radio is not necessarily
-    /// with the device: this operator reaches their TNC over a network, so
-    /// the laptop's position and the transmitter's are different facts. The
-    /// operator chooses, and the choice is remembered.
+    /// The ladder itself lives on `StationPositionResolver` so the two
+    /// shells, the settings page and the toolbar chip cannot drift apart
+    /// again.
     private var myPosition: StationPosition? {
-        var candidates = StationPositionResolver.Candidates()
-        candidates.surveyed = manualStationPoint
-        candidates.gridSquare = Maidenhead.center(of: winlinkContext.settings.gridSquare)
-            .map(GreatCircle.Point.init)
-        if useDeviceLocation, let fix = winlinkContext.locationService.lastLocation {
-            candidates.deviceGPS = GreatCircle.Point(latitude: fix.latitude,
-                                                     longitude: fix.longitude)
-        }
-        return StationPositionResolver.resolve(candidates)
+        StationPositionResolver.ownStation(
+            gridSquare: winlinkContext.settings.gridSquare,
+            manualLatitude: manualLatitude,
+            manualLongitude: manualLongitude,
+            usesDeviceLocation: useDeviceLocation,
+            deviceLocation: winlinkContext.locationService.lastLocation)
+    }
+
+    private var deviceGPSFix: StationLocation? {
+        StationPositionResolver.deviceFix(winlinkContext.locationService.lastLocation)
     }
 
     /// The two ends of the path a station page is about.
@@ -1921,12 +1960,13 @@ struct ContentView: View {
         let mine = winlinkContext.settings.antennaHeightMetres
         let theirs = noted ?? winlinkContext.settings.assumedRemoteHeightMetres
         let destination = placement.position
+        let frequencyHz = StationsMapView.vhfCalculationFrequency
 
         let computed = await Task.detached(priority: .userInitiated) {
             TerrainProfile.between(
                 origin: observer, destination: destination,
                 originHeight: mine, destinationHeight: theirs,
-                frequencyHz: StationsMapView.vhfCalculationFrequency,
+                frequencyHz: frequencyHz,
                 sampler: StoredElevationSampler(store: store))
         }.value
         return (computed, noted == nil)
@@ -2060,6 +2100,14 @@ struct ContentView: View {
             if let sync = winlinkContext.sync {
                 SyncStatusIndicator(sync: sync)
             }
+            // Same group, same test: a station with no usable position has a
+            // quietly broken map and terrain. Silent unless it has something
+            // to say — see PositionStatusChip.
+            PositionStatusChip(
+                position: myPosition,
+                usesDeviceLocation: useDeviceLocation,
+                deviceFix: deviceGPSFix,
+                gpsError: winlinkContext.locationService.lastGPSError)
             tncToolbarMenu
         }
     }

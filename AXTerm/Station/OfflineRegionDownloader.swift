@@ -64,7 +64,7 @@ final class OfflineRegionDownloader: ObservableObject {
         var isLarge: Bool
 
         var sizeDescription: String {
-            ByteCountFormatter.string(fromByteCount: Int64(estimatedBytes), countStyle: .file)
+            ByteCount.string(Int64(estimatedBytes))
         }
     }
 

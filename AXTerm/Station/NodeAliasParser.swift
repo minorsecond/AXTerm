@@ -827,7 +827,8 @@ final class NodeAliasStore: ObservableObject {
     /// Only ID and beacon destinations are inspected: those are where a
     /// station announces what it offers. Reading every frame would cost
     /// more and teach nothing extra.
-    static let announcementDestinations: Set<String> = ["ID", "BEACON", "NODES", "NODE"]
+    // A fixed set of destination names, read by nonisolated parsers.
+    nonisolated static let announcementDestinations: Set<String> = ["ID", "BEACON", "NODES", "NODE"]
 
     func ingest(packets: [Packet]) {
         for packet in packets {

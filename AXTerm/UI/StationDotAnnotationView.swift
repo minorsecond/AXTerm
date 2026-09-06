@@ -57,6 +57,139 @@ final class StationDotAnnotationView: MKAnnotationView {
     private let ring = CAShapeLayer()
     private let label = PlatformLabel()
 
+    /// Implicit animation is the default for a bare `CALayer`, and it is
+    /// never wanted here. These layers are not view-backed, so setting a
+    /// path or a colour on one starts a quarter-second animation of its
+    /// own accord — a marker whose recency tint changes should snap to the
+    /// new colour, and one MapKit repositions should arrive where it was
+    /// put rather than easing toward it.
+    private static let noImplicitAnimations: [String: CAAction] = [
+        "position": NSNull(), "bounds": NSNull(), "path": NSNull(),
+        "fillColor": NSNull(), "strokeColor": NSNull(), "lineWidth": NSNull(),
+        "lineDashPattern": NSNull(), "shadowOpacity": NSNull(),
+        "shadowRadius": NSNull(), "shadowOffset": NSNull(),
+        "transform": NSNull(), "opacity": NSNull(), "hidden": NSNull(),
+        "contents": NSNull()
+    ]
+
+    #if DEBUG
+    /// Counts how often MapKit repositions a marker on screen, which is the
+    /// phenomenon actually being reported. Every other mutation the map
+    /// makes is already logged and none of them fire while the points move,
+    /// so the movement is either MapKit's or nobody's.
+    private static var moveCount = 0
+    private static var moveWindow = Date.distantPast
+    private static var moveMax = 0.0
+    private static var stackWindows = 0
+    private static var wantsStack = false
+    private static var lastRect: MKMapRect?
+    private static var rectChanges = 0
+    private static var rectMaxDrift = 0.0
+    private static var rectMaxZoom = 0.0
+    private static var lastWindowOrigin: CGPoint?
+    private static var windowMoves = 0
+    private static var windowMaxDrift = 0.0
+    private static var windowFraction = 0.0
+
+    /// The map this view is inside, found by walking up rather than being
+    /// handed down, so the diagnostic needs no wiring.
+    private var enclosingMap: MKMapView? {
+        var candidate = superview
+        while let view = candidate {
+            if let map = view as? MKMapView { return map }
+            candidate = view.superview
+        }
+        return nil
+    }
+
+    /// Where the map sits in the window, which is what pixel alignment is
+    /// actually relative to. The map's own frame can read a constant 0,0
+    /// inside its parent while an ancestor slides it a fraction of a point
+    /// across the screen — and that is enough to flip every marker between
+    /// two adjacent pixels.
+    private var mapOriginInWindow: CGPoint? {
+        guard let map = enclosingMap else { return nil }
+        #if os(macOS)
+        return map.convert(NSPoint.zero, to: nil)
+        #else
+        return map.convert(CGPoint.zero, to: nil)
+        #endif
+    }
+
+    private static func noteMove(_ distance: Double, mapRect: MKMapRect?,
+                                 windowOrigin: CGPoint?) {
+        guard distance > 0.01 else { return }
+        moveCount += 1
+        moveMax = max(moveMax, distance)
+
+        // The discriminator. If the visible rect is identical between two
+        // moves, the camera is still and MapKit is re-snapping to pixels for
+        // its own reasons. If it drifts, something is re-projecting the map,
+        // and the size hypothesis was only one way that could happen.
+        if let rect = mapRect {
+            if let last = lastRect {
+                let dx = abs(rect.origin.x - last.origin.x)
+                let dy = abs(rect.origin.y - last.origin.y)
+                let dw = abs(rect.size.width - last.size.width)
+                if dx > 0 || dy > 0 || dw > 0 { rectChanges += 1 }
+                rectMaxDrift = max(rectMaxDrift, max(dx, dy))
+                rectMaxZoom = max(rectMaxZoom, dw)
+            }
+            lastRect = rect
+        }
+
+        if let origin = windowOrigin {
+            if let last = lastWindowOrigin {
+                let dx = abs(origin.x - last.x), dy = abs(origin.y - last.y)
+                if dx > 0 || dy > 0 { windowMoves += 1 }
+                windowMaxDrift = max(windowMaxDrift, max(dx, dy))
+            }
+            lastWindowOrigin = origin
+            windowFraction = max(windowFraction,
+                                 max(origin.x - origin.x.rounded(.down),
+                                     origin.y - origin.y.rounded(.down)))
+        }
+
+        // Who is actually calling. Every theory about *what* moves these
+        // markers has been wrong, and the stack does not need a theory —
+        // captured once per window, since symbolicating on every move would
+        // itself be the load.
+        if wantsStack {
+            wantsStack = false
+            let frames = Thread.callStackSymbols.dropFirst(2).prefix(14)
+                .map { line -> String in
+                    // Keep the symbol, drop the address columns.
+                    let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+                    return parts.count > 3 ? parts[1...].joined(separator: " ") : line
+                }
+            print("[MAPDIAG] marker move stack:\n  " + frames.joined(separator: "\n  "))
+        }
+
+        let elapsed = Date().timeIntervalSince(moveWindow)
+        guard elapsed >= 5 else { return }
+        if moveWindow != .distantPast {
+            print(String(format: "[MAPDIAG] MapKit moved markers %d times in %.1fs (max %.1f pt); visible rect changed %d times (max drift %.3f, zoom %.3f)",
+                         moveCount, elapsed, moveMax,
+                         rectChanges, rectMaxDrift, rectMaxZoom)
+                  + String(format: "; map in window moved %d times (max %.4f pt, fraction %.4f)",
+                           windowMoves, windowMaxDrift, windowFraction))
+        }
+        moveCount = 0
+        moveMax = 0
+        rectChanges = 0
+        rectMaxDrift = 0
+        rectMaxZoom = 0
+        windowMoves = 0
+        windowMaxDrift = 0
+        windowFraction = 0
+        moveWindow = Date()
+        // One stack per window, and skip the first: that window is the
+        // initial layout, which is legitimate and not what is being chased.
+        stackWindows += 1
+        wantsStack = stackWindows >= 2 && stackWindows <= 4
+    }
+    #endif
+
     override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
         super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
         // No MapKit callout: selecting a station opens the selection
@@ -72,6 +205,8 @@ final class StationDotAnnotationView: MKAnnotationView {
         #if os(macOS)
         wantsLayer = true
         #endif
+        fill.actions = Self.noImplicitAnimations
+        ring.actions = Self.noImplicitAnimations
         host.addSublayer(fill)
         host.addSublayer(ring)
         configureLabel()
@@ -81,35 +216,85 @@ final class StationDotAnnotationView: MKAnnotationView {
     /// The callsign under the dot.
     ///
     /// `MKMarkerAnnotationView` drew this for free; a plain annotation view
-    /// draws nothing, which is how the dots ended up anonymous. Rendered with
-    /// a dark halo rather than a plate, so it stays readable over both the
-    /// light and the dark basemap without boxing in the terrain.
+    /// draws nothing, which is how the dots ended up anonymous. A halo
+    /// rather than a plate, so a dense cluster of callsigns does not box in
+    /// the terrain they sit on.
     private func configureLabel() {
         #if os(iOS)
         label.font = .systemFont(ofSize: 10, weight: .medium)
-        label.textColor = .white
         label.textAlignment = .center
         label.numberOfLines = 1
         label.lineBreakMode = .byTruncatingTail
-        label.layer.shadowColor = PlatformColor.black.cgColor
-        label.layer.shadowOpacity = 0.85
+        label.layer.shadowOpacity = 1
         label.layer.shadowRadius = 1.5
         label.layer.shadowOffset = .zero
         #else
         label.font = .systemFont(ofSize: 10, weight: .medium)
-        label.textColor = .white
         label.alignment = .center
         label.isBezeled = false
         label.isEditable = false
         label.drawsBackground = false
         label.lineBreakMode = .byTruncatingTail
         label.wantsLayer = true
-        label.layer?.shadowColor = PlatformColor.black.cgColor
-        label.layer?.shadowOpacity = 0.85
+        label.layer?.shadowOpacity = 1
         label.layer?.shadowRadius = 1.5
         label.layer?.shadowOffset = .zero
         #endif
+        setOverDarkBasemap(false)
     }
+
+    /// Matches the label to the basemap under it.
+    ///
+    /// This used to be white with a black glow on every basemap, on the
+    /// theory that one halo would carry both. It does not: a blurred shadow
+    /// is not an outline, so white-on-light-grey left the callsigns — the
+    /// operator's own among them — barely legible on the standard map. Ink
+    /// takes the basemap's contrast and the halo takes the opposite, which
+    /// is how a paper map has always done it.
+    func setOverDarkBasemap(_ isDark: Bool) {
+        overDarkBasemap = isDark
+        applyLabelColours()
+    }
+
+    /// Remembered so the halo can be re-resolved when the appearance flips.
+    private var overDarkBasemap = false
+
+    /// Ink follows the basemap; the halo is the ink's opposite.
+    ///
+    /// Over imagery the ink is white and the halo black, whatever the
+    /// system appearance. Over the standard map the ink is the system label
+    /// colour — black in light mode, white in dark — and the halo has to be
+    /// the system *background*, not a fixed white: in dark mode a white halo
+    /// around white ink was a glow with no edge, and the callsigns were
+    /// barely legible over the dark map. A shadow colour is a plain CGColor,
+    /// resolved once, so it is re-applied on every appearance change.
+    private func applyLabelColours() {
+        #if os(iOS)
+        let ink: UIColor = overDarkBasemap ? .white : .label
+        let halo: UIColor = overDarkBasemap ? .black : .systemBackground
+        label.textColor = ink
+        label.layer.shadowColor = halo.resolvedColor(with: traitCollection).cgColor
+        #else
+        let ink: NSColor = overDarkBasemap ? .white : .labelColor
+        let halo: NSColor = overDarkBasemap ? .black : .windowBackgroundColor
+        label.textColor = ink
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            label.layer?.shadowColor = halo.cgColor
+        }
+        #endif
+    }
+
+    #if os(iOS)
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        applyLabelColours()
+    }
+    #else
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyLabelColours()
+    }
+    #endif
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -193,6 +378,27 @@ final class StationDotAnnotationView: MKAnnotationView {
         // problem the operator can solve by zooming; a hidden station is not.
         displayPriority = .required
     }
+
+    #if os(macOS)
+    override func setFrameOrigin(_ newOrigin: NSPoint) {
+        #if DEBUG
+        Self.noteMove(hypot(newOrigin.x - frame.origin.x, newOrigin.y - frame.origin.y),
+                      mapRect: enclosingMap?.visibleMapRect,
+                      windowOrigin: mapOriginInWindow)
+        #endif
+        super.setFrameOrigin(newOrigin)
+    }
+    #else
+    override var center: CGPoint {
+        didSet {
+            #if DEBUG
+            Self.noteMove(hypot(center.x - oldValue.x, center.y - oldValue.y),
+                          mapRect: enclosingMap?.visibleMapRect,
+                      windowOrigin: mapOriginInWindow)
+            #endif
+        }
+    }
+    #endif
 
     /// A rotated square, point-up — the node marker's silhouette.
     private static func diamondPath(in rect: CGRect) -> CGPath {

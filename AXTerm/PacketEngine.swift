@@ -220,6 +220,12 @@ final class PacketEngine: ObservableObject {
     @Published private(set) var connectedPort: UInt16?
 
     @Published private(set) var packets: [Packet] = []
+    /// True while the stored packet history is being read back.
+    ///
+    /// The table has nothing to draw until this finishes, and drawing an
+    /// empty table with column headers and no rows reads as "no packets",
+    /// not as "still reading" — a wrong answer held for several seconds.
+    @Published private(set) var isLoadingPersistedPackets = false
     @Published var packetsClearedAt: Date? = nil
     @Published private(set) var consoleLines: [ConsoleLine] = []
     @Published private(set) var rawChunks: [RawChunk] = []
@@ -372,7 +378,9 @@ final class PacketEngine: ObservableObject {
                 self.bbsMessages = SQLiteBBSMessageStore(dbQueue: queue)
                 // A path nobody has seen for a fortnight is not evidence any
                 // more; leaving it in would draw a neighbour that moved away.
-                try? self.networkPaths?.prune(
+                // Discarded deliberately: pruning is housekeeping, and a
+                // failure here must not take down the packet path.
+                _ = try? self.networkPaths?.prune(
                     before: Date().addingTimeInterval(-SQLiteNetworkPathStore.retention))
             }
             self.netRomPersistence = try? NetRomPersistence(database: writer)
@@ -1416,14 +1424,19 @@ final class PacketEngine: ObservableObject {
     /// is a different feature.
     func loadLifetimeStationCounts() {
         guard let store = stationStats else { return }
+        // The hop is a method call, not a nested `MainActor.run` closure.
+        // That closure captured the weak `self` variable from the enclosing
+        // concurrent one, which is a data race the compiler rejects outright
+        // in Swift 6 — and awaiting an optional does the same job.
         Task.detached(priority: .utility) { [weak self] in
             guard let counts = try? store.allStationCounts(), !counts.isEmpty else { return }
-            await MainActor.run {
-                guard let self else { return }
-                self.stationTracker.applyLifetimeCounts(counts)
-                self.stations = self.stationTracker.stations
-            }
+            await self?.applyLifetimeCounts(counts)
         }
+    }
+
+    private func applyLifetimeCounts(_ counts: [String: Int]) {
+        stationTracker.applyLifetimeCounts(counts)
+        stations = stationTracker.stations
     }
 
     func isPinned(_ id: Packet.ID) -> Bool {
@@ -1694,6 +1707,12 @@ final class PacketEngine: ObservableObject {
 
     private func loadPersistedPackets(reason: String) {
         guard settings.persistHistory, let persistenceWorker else { return }
+        // One read at a time. Startup and the first connect both ask for
+        // this, and they arrive close enough together that neither sees the
+        // other's result: the history was being read twice, concurrently,
+        // in full — 5,000 packets each — which is most of the delay before
+        // the table drew anything.
+        guard !isLoadingPersistedPackets else { return }
         if !packets.isEmpty {
             if stations.isEmpty {
                 rebuildStations(from: packets)
@@ -1713,7 +1732,9 @@ final class PacketEngine: ObservableObject {
             level: .info,
             data: ["retentionLimit": limit, "reason": reason]
         )
+        isLoadingPersistedPackets = true
         Task {
+            defer { isLoadingPersistedPackets = false }
             do {
                 let result = try await persistenceWorker.loadPackets(limit: limit)
                 applyLoadedPackets(result.packets, pinnedIDs: result.pinnedIDs)

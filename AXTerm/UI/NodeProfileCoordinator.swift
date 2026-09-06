@@ -16,7 +16,9 @@ final class NodeProfileCoordinator: ObservableObject {
     /// same view do not both work — SwiftUI honours the last one — which is
     /// why a peek opened once and then silently stopped after the first time
     /// the full page was shown.
-    enum Presentation: Identifiable, Hashable {
+    // Nonisolated: it is the identity of a sheet, read by the nonisolated
+    // route enum that wraps it.
+    nonisolated enum Presentation: Identifiable, Hashable {
         /// A dismissible look, with a way deeper in.
         case peek(String)
         /// The whole thing.

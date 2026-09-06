@@ -116,11 +116,9 @@ struct WinlinkComposeWindow: View {
                                 Image(systemName: item.isCompressed ? "doc.zipper" : "paperclip")
                                 Text(item.name).font(.caption)
                                 if let original = item.original {
-                                    Text(ByteCountFormatter.string(
-                                        fromByteCount: Int64(original.data.count), countStyle: .file)
+                                    Text(ByteCount.string(Int64(original.data.count))
                                         + " → "
-                                        + ByteCountFormatter.string(
-                                            fromByteCount: Int64(item.data.count), countStyle: .file))
+                                        + ByteCount.string(Int64(item.data.count)))
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
                                         .help("Zipped before sending — LZHUF (the only compression "
@@ -129,8 +127,7 @@ struct WinlinkComposeWindow: View {
                                               + "the zip with any tool. Right-click to send the "
                                               + "original instead.")
                                 } else {
-                                    Text(ByteCountFormatter.string(
-                                        fromByteCount: Int64(item.data.count), countStyle: .file))
+                                    Text(ByteCount.string(Int64(item.data.count)))
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
                                 }

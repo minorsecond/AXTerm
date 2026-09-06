@@ -288,7 +288,7 @@ nonisolated enum DecayCalculator {
 
 // MARK: - NeighborInfo Freshness Extension
 
-extension NeighborInfo {
+nonisolated extension NeighborInfo {
     /// Compute freshness fraction based on lastSeen timestamp.
     ///
     /// Uses plateau + smoothstep model for intuitive UX.
@@ -367,7 +367,7 @@ extension NeighborInfo {
 
 // MARK: - RouteInfo Freshness Extension
 
-extension RouteInfo {
+nonisolated extension RouteInfo {
     /// Compute freshness fraction based on lastUpdated timestamp.
     ///
     /// Uses plateau + smoothstep model for intuitive UX.
@@ -487,7 +487,7 @@ nonisolated struct RouteDecayInfo {
 
 // MARK: - LinkStatRecord Freshness Extension
 
-extension LinkStatRecord {
+nonisolated extension LinkStatRecord {
     /// Compute freshness fraction based on lastUpdated timestamp.
     ///
     /// Uses plateau + smoothstep model for intuitive UX.

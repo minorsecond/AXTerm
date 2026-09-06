@@ -232,6 +232,95 @@ final class PingPolicyTests: XCTestCase {
     // MARK: - Backoff
 
     /// Being ignored costs progressively more; being heard costs nothing.
+    // MARK: - One box, one probe
+
+    /// Field capture 2026-09-03: K0NTS-1, -7, -10 and -14 all came due at
+    /// once and went out back to back at the channel spacing — four
+    /// transmissions in eight minutes asking one radio the same question.
+    /// The per-address cooldown cannot see that they are one box.
+    func testASiblingSSIDIsNotProbedRightAfterItsBox() {
+        let s = settings { $0.boxCooldownMinutes = 60 }
+        let histories = ["K0NTS-10": PingPolicy.History(
+            lastProbed: noon.addingTimeInterval(-150))]
+        XCTAssertEqual(
+            PingPolicy.decide(candidates: [candidate("K0NTS-1")], histories: histories,
+                              settings: s, conditions: conditions()),
+            .hold("nothing is due"))
+    }
+
+    func testTheBoxComesDueAgainWhenItsCooldownIsSpent() {
+        let s = settings { $0.boxCooldownMinutes = 60 }
+        let histories = ["K0NTS-10": PingPolicy.History(
+            lastProbed: noon.addingTimeInterval(-61 * 60))]
+        XCTAssertEqual(
+            PingPolicy.decide(candidates: [candidate("K0NTS-1")], histories: histories,
+                              settings: s, conditions: conditions()),
+            .probe("K0NTS-1"))
+    }
+
+    /// The rule is about one box, not about everybody. A probe of K0NTS
+    /// must not hold up KB5YZB.
+    func testAnotherStationIsUnaffectedByTheBoxRule() {
+        let s = settings { $0.boxCooldownMinutes = 60 }
+        let histories = ["K0NTS-10": PingPolicy.History(
+            lastProbed: noon.addingTimeInterval(-150))]
+        XCTAssertEqual(
+            PingPolicy.decide(candidates: [candidate("KB5YZB-7")], histories: histories,
+                              settings: s, conditions: conditions()),
+            .probe("KB5YZB-7"))
+    }
+
+    /// Zero is the off switch, and off means the addresses are paced on
+    /// their own the way they were before this rule existed.
+    func testZeroTurnsTheBoxRuleOff() {
+        let s = settings { $0.boxCooldownMinutes = 0 }
+        let histories = ["K0NTS-10": PingPolicy.History(
+            lastProbed: noon.addingTimeInterval(-150))]
+        XCTAssertEqual(
+            PingPolicy.decide(candidates: [candidate("K0NTS-1")], histories: histories,
+                              settings: s, conditions: conditions()),
+            .probe("K0NTS-1"))
+    }
+
+    /// The bare callsign is one of the box's addresses too — DRLNOD's node
+    /// link addresses bare KB5YZB while KB5YZB-7 is the voice that answers.
+    func testTheBareCallsignSharesTheBoxWithItsSSIDs() {
+        let s = settings { $0.boxCooldownMinutes = 60 }
+        let histories = ["KB5YZB": PingPolicy.History(
+            lastProbed: noon.addingTimeInterval(-60))]
+        XCTAssertEqual(
+            PingPolicy.decide(candidates: [candidate("KB5YZB-1")], histories: histories,
+                              settings: s, conditions: conditions()),
+            .hold("nothing is due"))
+    }
+
+    /// A box is held by whichever of its addresses was probed *last*, not
+    /// by whichever the dictionary happens to yield first.
+    func testTheBoxIsHeldByItsMostRecentProbe() {
+        let latest = PingPolicy.lastProbedByBase([
+            "K0NTS-1": PingPolicy.History(lastProbed: noon.addingTimeInterval(-3600)),
+            "K0NTS-7": PingPolicy.History(lastProbed: noon.addingTimeInterval(-60)),
+            "K0NTS-14": PingPolicy.History(lastProbed: noon.addingTimeInterval(-1800)),
+            "KB5YZB-7": PingPolicy.History(lastProbed: nil)])
+        XCTAssertEqual(latest["K0NTS"], noon.addingTimeInterval(-60))
+        XCTAssertNil(latest["KB5YZB"], "never probed holds nobody up")
+    }
+
+    /// The box floor does not double on silence — the per-address backoff
+    /// is the part that responds to evidence. A box asked an hour ago is
+    /// due again whether or not it answered.
+    func testTheBoxFloorDoesNotBackOff() {
+        let s = settings { $0.boxCooldownMinutes = 60; $0.stationCooldownMinutes = 10 }
+        let histories = [
+            "K0NTS-10": PingPolicy.History(lastProbed: noon.addingTimeInterval(-61 * 60),
+                                           consecutiveSilences: 8)]
+        XCTAssertEqual(
+            PingPolicy.decide(candidates: [candidate("K0NTS-1")], histories: histories,
+                              settings: s, conditions: conditions()),
+            .probe("K0NTS-1"),
+            "K0NTS-1 has never been probed; its sibling's backoff is not its own")
+    }
+
     func testSilenceDoublesTheWait() {
         let s = settings { $0.stationCooldownMinutes = 60 }
         XCTAssertEqual(PingPolicy.backoff(for: nil, settings: s), 3600)

@@ -11,6 +11,7 @@ struct TransmissionSettingsView: View {
     @ObservedObject var settings: AppSettingsStore
     @ObservedObject var client: PacketEngine
     @EnvironmentObject var router: SettingsRouter
+    @Environment(\.openWindow) private var openWindow
     
     @State private var txAdaptiveSettings = TxAdaptiveSettings()
     
@@ -247,24 +248,34 @@ struct TransmissionSettingsView: View {
                     .onChange(of: settings.pingMaxProbesPerHour) { _, _ in applyNetRomSettings() }
                     .help("A hard ceiling, whatever the spacing below would allow.")
 
-                    durationRow(
+                    IntervalPicker(
                         "At least",
-                        value: $settings.pingMinSecondsBetween,
-                        presets: [30, 60, 90, 120, 180, 300, 600, 900],
-                        label: { "\(Self.secondsLabel($0)) apart" }
-                    )
+                        seconds: $settings.pingMinSecondsBetween,
+                        presetSeconds: [30, 60, 90, 120, 180, 300, 600, 900])
                     .onChange(of: settings.pingMinSecondsBetween) { _, _ in applyNetRomSettings() }
                     .help("Between any two probes, whoever they are for.")
 
-                    durationRow(
+                    IntervalPicker(
                         "Each station at most every",
-                        value: $settings.pingStationCooldownMinutes,
-                        presets: [10, 15, 20, 30, 45, 60, 120, 240, 480, 720],
-                        label: Self.minutesLabel
-                    )
+                        minutes: $settings.pingBoxCooldownMinutes,
+                        presetMinutes: [15, 30, 45, 60, 120, 240, 480, 720, 1440],
+                        offLabel: "No limit")
+                    .onChange(of: settings.pingBoxCooldownMinutes) { _, _ in applyNetRomSettings() }
+                    .help("One station, whatever its SSIDs. K0NTS-1, -7, -10 and -14 "
+                          + "are one radio on one antenna, and asking the second "
+                          + "address learns nothing the first did not \u{2014} but "
+                          + "without this they come due together and go out back to "
+                          + "back. Set it to No limit to pace each address alone.")
+
+                    IntervalPicker(
+                        "Each SSID at most every",
+                        minutes: $settings.pingStationCooldownMinutes,
+                        presetMinutes: [10, 15, 20, 30, 45, 60, 120, 240, 480, 720, 1440])
                     .onChange(of: settings.pingStationCooldownMinutes) { _, _ in applyNetRomSettings() }
-                    .help("Doubles each time a station does not answer, up to a day, "
-                          + "so a silent station is asked less and less rather than more.")
+                    .help("The exact address, SSID and all. Doubles each time it does "
+                          + "not answer, up to a day, so a silent address is asked "
+                          + "less and less rather than more. Only adds to the rule "
+                          + "above when set longer than it.")
 
                     Toggle("Also stations others are calling",
                            isOn: $settings.pingProbeStationsOthersCall)
@@ -294,6 +305,13 @@ struct TransmissionSettingsView: View {
                                 .foregroundStyle(record.lastAnswered == nil ? .secondary : .primary)
                         }
                     }
+                    // The eight most recent answer "is it running". Which
+                    // stations answer, how the round trips spread and how
+                    // much of the channel this is using need the log.
+                    Button("Ping Activity\u{2026}") { openWindow(id: "pingActivity") }
+                        .buttonStyle(.borderless)
+                        .help("Every probe sent, what answered, when, and how long "
+                              + "it took.")
                 }
             }
 

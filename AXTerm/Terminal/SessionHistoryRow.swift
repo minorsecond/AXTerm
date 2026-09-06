@@ -4,9 +4,19 @@ import SwiftUI
 struct SessionHistoryRow: View {
 
     let session: TerminalSession
+    /// "From K0EPI-7 on Ross's Mac" for a session another device recorded;
+    /// nil for this device's own. On the row itself, not only in the section
+    /// heading, because a row is what gets read, copied and remembered.
+    var originLabel: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
+            if let originLabel {
+                Label(originLabel, systemImage: "laptopcomputer.and.iphone")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.tint)
+                    .accessibilityLabel("Recorded elsewhere. \(originLabel)")
+            }
             HStack(spacing: 6) {
                 Text(session.correspondent)
                     .font(.system(.subheadline, design: .monospaced).weight(.medium))

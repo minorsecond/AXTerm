@@ -934,30 +934,24 @@ struct ConsoleLineView: View {
             // Enhanced indicator bar with premium styling for system/error messages
             indicatorBar
 
-            // Printed once per run rather than once per row. The rows
-            // underneath keep the column's width and hang from a hairline, so
-            // the blank reads as "same time as above" rather than as a time
-            // that failed to appear.
+            // Printed on every row, dimmed where it repeats the row above.
+            //
+            // Suppressing it outright left a blank, and a blank in the
+            // leftmost column reads as a time that failed to appear rather
+            // than one that was inherited. The fix for that was a hairline
+            // tying the run together — but a full-height rule between two
+            // columns is a column divider, and one that exists only on
+            // grouped runs appears and disappears as the log scrolls. It read
+            // as broken chrome for as long as it existed.
+            //
+            // So don't create the blank. A quiet repeat says "same second"
+            // without inventing a mark to explain itself, every row can be
+            // read on its own, and nothing in the gutter flickers.
             Text(line.timestampString)
                 .foregroundStyle(.tertiary)
                 .font(.system(size: fontSize, design: .monospaced))
-                .opacity(timestampRun.printsTimestamp ? 1 : 0)
-                .accessibilityHidden(!timestampRun.printsTimestamp)
+                .opacity(timestampRun.printsTimestamp ? 1 : ConsoleTheme.repeatedTimestampOpacity)
                 .help(line.timestampString)
-
-            // A sibling of the timestamp rather than an overlay on it, and
-            // stretched past the row on both sides. As an overlay it was only
-            // as tall as the digits, so it drew a stub per row with the row's
-            // padding and the list's spacing showing through — a dotted line
-            // where a continuous one was the whole point. The negative
-            // padding covers this row's own vertical padding and half the
-            // gap to its neighbours, so consecutive rows meet.
-            TimestampRunConnector(position: timestampRun)
-                .frame(maxHeight: .infinity)
-                .padding(.vertical, -(ConsoleTheme.rowPadding + ConsoleTheme.rowSpacing))
-                // Claws back most of the stack's spacing so the thread sits
-                // just off the digits instead of a full gap away from them.
-                .padding(.leading, -4)
 
             // Which transmitter we actually heard. Shown for *any* repeated
             // copy, not just echoes of our own frames: a station's beacon
@@ -1011,8 +1005,13 @@ struct ConsoleLineView: View {
         .font(.system(size: 12, design: .monospaced))
         .padding(.vertical, ConsoleTheme.rowPadding)
         .padding(.horizontal, ConsoleTheme.rowPadding)
-        .background(premiumBackground)
-        .cornerRadius(ConsoleTheme.rowCornerRadius)
+        // Shaped background, not a clip. `.cornerRadius` clips the row's
+        // contents to the rounded rect, which silently truncates anything
+        // that means to overhang the row; `.background(_:in:)` paints the
+        // same shape without imposing a clip on the children.
+        .background(premiumBackground,
+                    in: RoundedRectangle(cornerRadius: ConsoleTheme.rowCornerRadius,
+                                         style: .continuous))
         .opacity(isDigipeatEcho ? 0.6 : 1.0)
     }
     
@@ -1270,58 +1269,6 @@ private struct SoloTapGesture: ViewModifier {
         #else
         content.onTapGesture(perform: onToggle)
         #endif
-    }
-}
-
-/// The hairline tying a row to the timestamp above it.
-///
-/// Suppressing a repeated timestamp leaves a blank, and a blank in the
-/// leftmost column reads as missing data rather than as inherited. This is
-/// the difference: the time hangs a thread, and the rows sharing it hang from
-/// it. The run closes at the last row's centre rather than running off the
-/// bottom, so where one second ends and the next begins stays legible without
-/// reading the numbers.
-///
-/// Drawn on the trailing edge of the timestamp — the side nearest the content
-/// it labels — and quietly enough to be a guide rather than a rule. The left
-/// of the row already carries the message-kind indicator; a second bar of
-/// equal weight would compete with it.
-private struct TimestampRunConnector: View {
-
-    let position: ConsoleTimestampRuler.RunPosition
-
-    var body: some View {
-        GeometryReader { geometry in
-            let height = geometry.size.height
-            let middle = height / 2
-            Path { path in
-                switch position {
-                case .alone:
-                    break
-                case .start:
-                    // Clears the digits and runs to the row's edge, where the
-                    // next row's line begins.
-                    path.move(to: CGPoint(x: 0, y: middle + 3))
-                    path.addLine(to: CGPoint(x: 0, y: height))
-                case .middle:
-                    path.move(to: CGPoint(x: 0, y: 0))
-                    path.addLine(to: CGPoint(x: 0, y: height))
-                case .end:
-                    // Stops at the centre: the run has to close somewhere, or
-                    // there is no telling one second from the next without
-                    // reading the digits.
-                    path.move(to: CGPoint(x: 0, y: 0))
-                    path.addLine(to: CGPoint(x: 0, y: middle))
-                }
-            }
-            // Butt caps, not round: a round cap adds half a line width at
-            // each end, which on a join between rows is a visible bulge and
-            // at the run's close overshoots the centre it is meant to stop at.
-            .stroke(.secondary.opacity(0.3),
-                    style: StrokeStyle(lineWidth: 1, lineCap: .butt))
-        }
-        .frame(width: 1)
-        .accessibilityHidden(true)
     }
 }
 

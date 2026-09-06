@@ -427,7 +427,11 @@ extension PlatformColor {
     }
 
     /// Highlight behind a search match.
-    static var platformSearchHighlight: PlatformColor {
+    ///
+    /// Nonisolated: a fixed colour with a fixed alpha, not one that resolves
+    /// against the trait collection, and it is read while building an
+    /// attributed string rather than while drawing.
+    nonisolated static var platformSearchHighlight: PlatformColor {
         #if os(macOS)
         return NSColor.systemYellow.withAlphaComponent(0.35)
         #else

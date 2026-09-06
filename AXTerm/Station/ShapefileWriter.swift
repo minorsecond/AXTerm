@@ -350,7 +350,10 @@ nonisolated enum DBFWriter {
 
 // MARK: - Byte helpers
 
-extension Data {
+// Byte arithmetic on a `Data`, which belongs to no actor. The project
+// defaults un-annotated declarations to the main actor, which put these
+// helpers there and made every parser that calls them a warning.
+nonisolated extension Data {
     mutating func append(bigEndian value: Int32) {
         var raw = value.bigEndian
         append(Data(bytes: &raw, count: 4))

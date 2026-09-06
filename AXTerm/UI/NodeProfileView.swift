@@ -634,7 +634,43 @@ struct NodeProfileView: View {
                 spacing: 8) {
                 ForEach(tiles) { statTile($0) }
             }
+            distanceProvenance
         }
+    }
+
+    /// Where the Distance tile's number came from, when that is worth
+    /// knowing.
+    ///
+    /// The distance is a great-circle from *our* position to the station, so
+    /// it inherits our position's error whole. From a device fix that is
+    /// twenty metres and not worth a word. From a grid centre it is over
+    /// four kilometres, which on a short path is most of the answer — and
+    /// the tile was quoting one decimal place either way.
+    ///
+    /// A line rather than a suffix in the tile: at about 110 points the tile
+    /// has no room for it. And a line rather than a control, because the
+    /// position source is one global setting and this card is not the place
+    /// to have a third copy of it — saying which one is in force, and where
+    /// it lives, is the part that was missing.
+    @ViewBuilder
+    private var distanceProvenance: some View {
+        if profile.placement?.distanceKilometres != nil,
+           let origin = terrainOriginPosition,
+           origin.accuracyMetres > 1_000 {
+            Text("Measured from your \(origin.source.label.lowercased()), "
+                 + "\(accuracyText(origin.accuracyMetres)). "
+                 + "Settings \u{203A} General sets a better one.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func accuracyText(_ metres: Double) -> String {
+        metres >= 1_000
+            ? String(format: "\u{00B1}%.1f km", metres / 1_000)
+            : String(format: "\u{00B1}%.0f m", metres)
     }
 
     /// How far back the count reaches, which is the thing that makes a

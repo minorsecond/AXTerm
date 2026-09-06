@@ -2981,7 +2981,7 @@ final class SessionCoordinator: ObservableObject {
             TxLog.inbound(.axdp, "File saved successfully", [
                 "path": targetURL.path,
                 "size": data.count,
-                "sizeFormatted": ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
+                "sizeFormatted": ByteCount.string(Int64(data.count))
             ])
             return targetURL.path
         } catch {

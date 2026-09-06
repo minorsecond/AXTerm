@@ -36,7 +36,11 @@ import Combine
 /// note is on `SessionCoordinator`'s transport adapter, for the same
 /// reason. Everything here runs on the main run loop regardless — the
 /// timer is scheduled there and the radio callbacks arrive there.
-nonisolated final class PingProber: ObservableObject {
+// `@unchecked Sendable` for the reason stated above: everything here runs
+// on the main run loop, so the weak capture in the timer's `@Sendable`
+// closure is confined in practice. The compiler cannot check a convention;
+// the convention is the one this class already documents.
+nonisolated final class PingProber: ObservableObject, @unchecked Sendable {
 
     /// What a probe learned. Persisted, because the useful thing is the
     /// pattern over days, not the last result.
@@ -58,6 +62,46 @@ nonisolated final class PingProber: ObservableObject {
         }
     }
 
+    /// One probe, from the frame going out to whatever came back.
+    ///
+    /// `Record` keeps the running totals and the last result, which is what
+    /// the policy needs and all it needs. This keeps the individual events,
+    /// which is what a person needs: a rate says a station answers half the
+    /// time, and only the log says whether that is a station fading in and
+    /// out or one that stopped answering on Tuesday.
+    ///
+    /// Bounded at `attemptLogLimit` and persisted with the records, oldest
+    /// dropped first.
+    struct Attempt: Codable, Equatable, Identifiable {
+
+        enum Outcome: String, Codable, Equatable {
+            /// On the air, nothing back yet.
+            case waiting
+            case answered
+            /// Both frames went unanswered inside the timeout.
+            case silent
+        }
+
+        var call: String
+        var sentAt: Date
+        var answeredAt: Date?
+        /// Round trip, measured from the frame that actually drew the
+        /// answer — the DISC when it took one, not the XID before it.
+        var rtt: TimeInterval?
+        /// What answered: "XID", "DM", "FRMR", "UA". Nil for silence.
+        var answerKind: String?
+        /// Whether the DISC fallback was needed. An answer that took the
+        /// escalation is still an answer, but it says the far end ignores
+        /// XID, which is a different fact about it.
+        var escalated: Bool = false
+        /// The operator asked for this one; the rotation did not choose it.
+        var manual: Bool = false
+        var outcome: Outcome = .waiting
+
+        /// Unique in practice: only one probe is ever outstanding.
+        var id: String { "\(call)@\(sentAt.timeIntervalSince1970)" }
+    }
+
     /// A probe on the air, waiting.
     private struct Outstanding {
         let call: String
@@ -66,7 +110,22 @@ nonisolated final class PingProber: ObservableObject {
         var escalated: Bool
     }
 
-    @Published private(set) var records: [String: Record] = [:]
+    /// Announced by hand: a property wrapper cannot be `nonisolated`, and
+    /// this class has to be (see above). `objectWillChange` fires where
+    /// `@Published` did, and nothing observes the projected value.
+    private(set) var records: [String: Record] = [:] {
+        willSet { objectWillChange.send() }
+    }
+
+    /// The probe log, oldest first.
+    private(set) var attempts: [Attempt] = [] {
+        willSet { objectWillChange.send() }
+    }
+
+    /// How many probes the log keeps. Weeks of history at any sane
+    /// probing rate, and small enough to stay a defaults blob rather than
+    /// becoming a table nobody asked for.
+    static let attemptLogLimit = 600
 
     /// How long to wait for an answer before escalating from XID to DISC,
     /// and again before calling it silence. Generous: a node answers when
@@ -100,12 +159,25 @@ nonisolated final class PingProber: ObservableObject {
     private var timer: Timer?
     private let defaults: UserDefaults
     private static let storageKey = "ping.records"
+    private static let attemptsKey = "ping.attempts"
 
     init(defaults: UserDefaults = AppEnvironment.defaults) {
         self.defaults = defaults
         if let data = defaults.data(forKey: Self.storageKey),
            let stored = try? JSONDecoder().decode([String: Record].self, from: data) {
             records = stored
+        }
+        if let data = defaults.data(forKey: Self.attemptsKey),
+           let stored = try? JSONDecoder().decode([Attempt].self, from: data) {
+            // A probe still marked waiting was outstanding when the app
+            // stopped. Nothing is coming for it now, and leaving it open
+            // would show a probe pending forever.
+            attempts = stored.map { attempt in
+                guard attempt.outcome == .waiting else { return attempt }
+                var closed = attempt
+                closed.outcome = .silent
+                return closed
+            }
         }
     }
 
@@ -155,12 +227,13 @@ nonisolated final class PingProber: ObservableObject {
     func probeNow(_ call: String, at now: Date = Date()) {
         let key = PingPolicy.normalize(call)
         guard outstanding == nil else { return }
-        send(.xid, to: key, now: now)
+        send(.xid, to: key, now: now, manual: true)
     }
 
     private enum ProbeKind { case xid, disc }
 
-    private func send(_ kind: ProbeKind, to call: String, now: Date) {
+    private func send(_ kind: ProbeKind, to call: String, now: Date,
+                      manual: Bool = false) {
         guard let localAddress = localAddress?() else { return }
         let peer = CallsignNormalizer.toAddress(call)
         let frame: OutboundFrame
@@ -182,9 +255,15 @@ nonisolated final class PingProber: ObservableObject {
             record.lastProbed = now
             record.probes += 1
             records[call] = record
+            appendAttempt(Attempt(call: call, sentAt: now, manual: manual))
             persist()
         } else {
             outstanding?.escalated = true
+            // The XID and the DISC are one question asked twice, not two
+            // probes: the log would otherwise read as double the traffic
+            // this station actually puts out.
+            updateOpenAttempt { $0.escalated = true }
+            persist()
         }
     }
 
@@ -211,6 +290,12 @@ nonisolated final class PingProber: ObservableObject {
         record.consecutiveSilences = 0
         record.answers += 1
         records[key] = record
+        updateOpenAttempt { attempt in
+            attempt.answeredAt = now
+            attempt.rtt = rtt
+            attempt.answerKind = uType.rawValue
+            attempt.outcome = .answered
+        }
         outstanding = nil
         persist()
 
@@ -244,13 +329,47 @@ nonisolated final class PingProber: ObservableObject {
         var record = records[pending.call] ?? Record(call: pending.call)
         record.consecutiveSilences += 1
         records[pending.call] = record
+        updateOpenAttempt { $0.outcome = .silent }
         outstanding = nil
         persist()
     }
 
+    private func appendAttempt(_ attempt: Attempt) {
+        var log = attempts
+        log.append(attempt)
+        if log.count > Self.attemptLogLimit {
+            log.removeFirst(log.count - Self.attemptLogLimit)
+        }
+        attempts = log
+    }
+
+    /// Applies a change to the probe currently on the air.
+    ///
+    /// Matched by position rather than by callsign: the log holds every
+    /// earlier probe of the same station, and only the last one is open.
+    private func updateOpenAttempt(_ change: (inout Attempt) -> Void) {
+        guard let index = attempts.lastIndex(where: { $0.outcome == .waiting })
+        else { return }
+        var log = attempts
+        change(&log[index])
+        attempts = log
+    }
+
     private func persist() {
-        guard let data = try? JSONEncoder().encode(records) else { return }
-        defaults.set(data, forKey: Self.storageKey)
+        if let data = try? JSONEncoder().encode(records) {
+            defaults.set(data, forKey: Self.storageKey)
+        }
+        if let data = try? JSONEncoder().encode(attempts) {
+            defaults.set(data, forKey: Self.attemptsKey)
+        }
+    }
+
+    /// Forget every probe ever sent. The operator's own history is theirs
+    /// to discard; nothing else reads it.
+    func clearHistory() {
+        records = [:]
+        attempts = []
+        persist()
     }
 
     /// Newest first, for display.

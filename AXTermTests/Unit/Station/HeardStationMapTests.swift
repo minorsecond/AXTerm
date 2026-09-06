@@ -254,8 +254,12 @@ final class HeardStationMapTests: XCTestCase {
             observerLabel: "DM79po",
             observer: .init(latitude: 39.6, longitude: -104.7),
             entries: entries, now: now)
-        XCTAssertEqual(scope.sites.first?.signal, .good)
-        XCTAssertFalse(scope.sites.first?.isStale ?? true)
+        // By id, not by `first`. Sites sort by distance from the observer,
+        // so which one leads depends on where the fan happens to put them —
+        // nothing to do with what this test is about.
+        let lively = scope.sites.first { $0.id == "K0NTS-7" }
+        XCTAssertEqual(lively?.signal, .good)
+        XCTAssertFalse(lively?.isStale ?? true)
     }
 
     // MARK: - The operator's own station
@@ -571,6 +575,45 @@ final class HeardStationMapTests: XCTestCase {
         XCTAssertTrue(HeardStationMap.directoryLookupCandidates(
             aliases: aliases, cachedCallsigns: ["W0POP"], limit: 40)
             .allSatisfy { $0 != "W0POP" }, "already-cached callsigns are not re-fetched")
+    }
+
+    /// Filling the layer from this app's own cache is a different question
+    /// from asking hamdb.org, and must not inherit the rationing that only
+    /// the second one needs: a position already on disk is a marker the map
+    /// would otherwise fail to draw for no reason (field ask 2026-09-03).
+    func testTheCacheReadCoversTheWholeDirectoryUnlikeTheRemoteAsk() {
+        var aliases = NodeAliasDirectory()
+        for index in 0..<60 {
+            aliases.record(.init(alias: "N\(index)X", callsign: "N\(index)XA", service: "N"),
+                           at: now, from: "COSCO")
+        }
+
+        let all = HeardStationMap.directoryOperatorCallsigns(aliases: aliases)
+        XCTAssertEqual(all.count, 60, "no cap on reading our own cache")
+
+        XCTAssertEqual(
+            HeardStationMap.directoryLookupCandidates(
+                aliases: aliases, cachedCallsigns: [], limit: 40).count,
+            40,
+            "the remote ask stays rationed")
+    }
+
+    /// The cache read wants the box whose position is already known, even
+    /// when it is heard and even when it is cached — the exclusions exist
+    /// to spend a network budget, and there is no budget here.
+    func testTheCacheReadKeepsHeardAndCachedOperators() {
+        var aliases = NodeAliasDirectory()
+        aliases.record(.init(alias: "ZIABBS", callsign: "K0ZIA-1", service: "N"), at: now)
+        aliases.record(.init(alias: "INRMS", callsign: "W9OTR", service: "N"), at: now)
+
+        XCTAssertEqual(
+            Set(HeardStationMap.directoryOperatorCallsigns(aliases: aliases)),
+            ["K0ZIA", "W9OTR"])
+        XCTAssertEqual(
+            HeardStationMap.directoryLookupCandidates(
+                aliases: aliases, cachedCallsigns: ["W9OTR"], heardBases: ["K0ZIA"]),
+            [],
+            "nothing left worth a round trip")
     }
 
     /// A station that beaconed its own locator is placed by it — the

@@ -547,6 +547,20 @@ nonisolated final class SQLiteWinlinkStore: WinlinkStore, @unchecked Sendable {
         }
     }
 
+    /// One query for the whole list, in one read transaction.
+    ///
+    /// The node layer asks about every operator the alias directory names,
+    /// and the per-callsign path made that hundreds of separate reads —
+    /// which is why the layer used to refill a name at a time instead of
+    /// appearing at launch.
+    func callsignRecords(callsigns: [String]) throws -> [CallsignDirectoryRecord] {
+        let keys = Set(callsigns.map(CallsignQuery.normalize)).filter { !$0.isEmpty }
+        guard !keys.isEmpty else { return [] }
+        return try dbQueue.read { db in
+            try CallsignDirectoryRecord.fetchAll(db, keys: Array(keys))
+        }
+    }
+
     func saveCallsignRecord(_ record: CallsignDirectoryRecord) throws {
         try dbQueue.write { db in
             try record.save(db)

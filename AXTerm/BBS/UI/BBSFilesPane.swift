@@ -81,18 +81,17 @@ struct BBSFilesPane: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(library.index.areas, selection: $selectedArea) { area in
-                    let files = library.index.files(in: area.name)
-                    let bytes = files.reduce(0) { $0 + $1.byteCount }
+                    let model = BBSAreaRowModel.make(
+                        area, files: library.index.files(in: area.name))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(area.name)
+                        Text(model.name)
                             .font(.system(.callout, design: .monospaced))
                             .fontWeight(.medium)
-                        Text("\(files.count) file\(files.count == 1 ? "" : "s") · "
-                             + BBSFileIndex.size(bytes))
+                        Text(model.subtitle)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        if !area.about.isEmpty {
-                            Text(area.about).font(.caption).foregroundStyle(.tertiary)
+                        if !model.about.isEmpty {
+                            Text(model.about).font(.caption).foregroundStyle(.tertiary)
                         }
                     }
                     .padding(.vertical, 2)
@@ -146,13 +145,19 @@ struct BBSFilesPane: View {
 
             if settings.acceptUploads {
                 if let inbox = library.inboxName {
+                    let box = BBSUploadInboxModel.make(count: library.inboxCount,
+                                                       bytes: library.inboxBytes,
+                                                       quotaBytes: settings.uploadQuotaBytes)
                     HStack(spacing: 4) {
                         Image(systemName: "tray.and.arrow.down").font(.caption)
                         Text(inbox).font(.caption).lineLimit(1)
-                        Text("· \(library.inboxCount) file\(library.inboxCount == 1 ? "" : "s"), "
-                             + BBSFileIndex.size(library.inboxBytes))
+                        // The quota is stated with the usage rather than
+                        // surfaced as an error later: an operator whose uploads
+                        // start being refused cannot tell a full inbox from a
+                        // broken transfer.
+                        Text("· " + box.label)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(box.isFull ? Color.orange : Color.secondary)
                         Spacer()
                         Button("Change…") { showingInboxPicker = true }
                             .controlSize(.small)
@@ -175,10 +180,10 @@ struct BBSFilesPane: View {
                 HStack {
                     Text("Largest file").font(.caption)
                     Picker("", selection: $settings.maxUploadBytes) {
-                        Text("50K").tag(50 * 1024)
-                        Text("100K").tag(100 * 1024)
-                        Text("500K").tag(500 * 1024)
-                        Text("2M").tag(2 * 1024 * 1024)
+                        ForEach(BBSUploadSizeOption.options(
+                            including: settings.maxUploadBytes)) { option in
+                            Text(option.label).tag(option.bytes)
+                        }
                     }
                     .labelsHidden()
                     .frame(width: 80)
@@ -224,18 +229,17 @@ struct BBSFilesPane: View {
                     }
                 }
                 TableColumn("Size") { file in
-                    Text(BBSFileIndex.size(file.byteCount)).monospacedDigit()
+                    Text(BBSFileRowModel.make(file, bytesPerSecond: bytesPerSecond).size)
+                        .monospacedDigit()
                 }
                 .width(60)
                 TableColumn("On air") { file in
-                    let time = BBSFileIndex.duration(bytes: file.byteCount,
-                                                     bytesPerSecond: bytesPerSecond)
-                    Text(time)
+                    let model = BBSFileRowModel.make(file, bytesPerSecond: bytesPerSecond)
+                    Text(model.airtime)
                         .monospacedDigit()
                         // The number that decides whether a caller should ask
                         // for this at all.
-                        .foregroundStyle(Double(file.byteCount) / bytesPerSecond > 900
-                                         ? Color.orange : Color.primary)
+                        .foregroundStyle(model.isLongTransfer ? Color.orange : Color.primary)
                 }
                 .width(70)
                 TableColumn("Description") { file in

@@ -47,18 +47,14 @@ struct TNCStatusStrip: View {
         .padding(.horizontal, 12)
         .padding(.vertical, needsAttention ? 6 : 3)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // The material runs to the physical bottom edge while the text stays
-        // above the home indicator.
+        // A plain background.
         //
-        // As a plain `.background(.bar)` the bar stopped where the safe area
-        // began, leaving a band of window background below it — a dead chin
-        // no Apple app has. Bleeding only the background keeps the content
-        // clear of the indicator, which is what the inset is for.
-        .background {
-            Rectangle()
-                .fill(.bar)
-                .ignoresSafeArea(edges: .bottom)
-        }
+        // This used to bleed a `Rectangle().ignoresSafeArea(edges: .bottom)`
+        // so the material reached the physical bottom edge with no dead chin
+        // below it. The strip is not the last thing on screen any more — the
+        // tab bar sits below it — so there is no chin to fill, and a plain
+        // background is what a bar between two things should have.
+        .background(.bar)
         .overlay(alignment: .top) { Divider() }
         .contentShape(Rectangle())
         .onTapGesture { SettingsRouter.shared.navigate(to: .network) }

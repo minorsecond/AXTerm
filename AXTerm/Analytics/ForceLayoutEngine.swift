@@ -150,7 +150,7 @@ nonisolated enum ForceLayoutEngine {
     }
 }
 
-private extension CGVector {
+nonisolated private extension CGVector {
     static func + (lhs: CGVector, rhs: CGVector) -> CGVector {
         CGVector(dx: lhs.dx + rhs.dx, dy: lhs.dy + rhs.dy)
     }

@@ -73,6 +73,9 @@ struct ConnectionModeToggle: View {
             RoundedRectangle(cornerRadius: 6)
                 .stroke(Color(platform: .platformSeparator), lineWidth: 0.5)
         )
+        // Two words that must stay two words. Squeezed by a narrow row this
+        // wrapped to "Bro adc ast" over three lines and took the bar with it.
+        .fixedSize()
         .help(mode.description)
     }
 }
@@ -881,6 +884,20 @@ private struct InlineConnectBar: View {
     }
 }
 
+/// Lets one segmented control be intrinsically sized on a wide bar and
+/// row-filling on a narrow one, without writing the picker out twice.
+private struct SegmentedWidth: ViewModifier {
+    let fillsRow: Bool
+
+    func body(content: Content) -> some View {
+        if fillsRow {
+            content.frame(maxWidth: .infinity)
+        } else {
+            content.fixedSize()
+        }
+    }
+}
+
 private struct ConnectBarPrimaryRow: View {
     @ObservedObject var viewModel: ConnectBarViewModel
     let context: ConnectSourceContext
@@ -1337,6 +1354,11 @@ private struct BroadcastComposerStrip: View {
 
 /// Compose box for terminal TX functionality
 struct TerminalComposeView: View {
+    #if os(iOS)
+    /// Drives the setup row's one-line/two-line split. Compact means a
+    /// phone, where the single-line bar does not fit and never did.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     @Binding var destinationCall: String
     @Binding var digiPath: String
     @Binding var composeText: String
@@ -1417,113 +1439,55 @@ struct TerminalComposeView: View {
             VStack(alignment: .leading, spacing: 6) {
                 // Row 0 — setup. The mode toggle, then (Session) the routing
                 // switch + destination + Connect, or (Broadcast) the unproto
-                // pill. Folding these up beside the toggle keeps the bar two
-                // rows instead of three.
-                HStack(spacing: 8) {
-                    ConnectionModeToggle(
-                        mode: $connectionMode,
-                        sessionState: sessionState,
-                        onDisconnect: onDisconnect,
-                        onForceDisconnect: onForceDisconnect
-                    )
-
-                    if connectionMode == .connected {
-                        // Destination first — the primary input, kept left and
-                        // vertically centred with its neighbours (no reserved
-                        // error row in the compact bar).
-                        if sessionState == .connected {
-                            Text(relayDestination ?? connectBarViewModel.toCall)
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .accessibilityIdentifier("connectBar.lockedDestination")
+                // pill.
+                //
+                // One line on a Mac window or an iPad; two on a phone. These
+                // controls want about 700 points and an iPhone offers 402,
+                // and an HStack that cannot fit does not shrink — it
+                // overflows, and SwiftUI centres the overflow. That widened
+                // the whole terminal VStack past the screen, so the tab
+                // strip, the connection line and the message field were all
+                // clipped at both edges by a bar three views away. Splitting
+                // only at a compact width costs the desktop nothing: it is
+                // the one width where a single line was never possible.
+                if isCompactWidth {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            connectionModeToggle
+                            Spacer(minLength: 8)
+                            if connectionMode == .connected {
+                                connectStatusText
+                                sessionActionButton
+                            } else {
+                                broadcastStrip
+                            }
+                        }
+                        if connectionMode == .connected {
+                            HStack(spacing: 8) {
+                                destinationControl
+                                routingCapsule
+                            }
+                            // Full width rather than intrinsic: four segments
+                            // across a phone is 90 points each, which is a
+                            // readable control. Intrinsic width plus the
+                            // toggle overflows the row all over again.
+                            routingPicker
+                        }
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        connectionModeToggle
+                        if connectionMode == .connected {
+                            destinationControl
+                            routingPicker
+                            routingCapsule
+                            Spacer(minLength: 8)
+                            connectStatusText
+                            sessionActionButton
                         } else {
-                            DestinationPickerControl(
-                                viewModel: destinationPickerViewModel,
-                                externalText: connectBarViewModel.toCall,
-                                groups: connectBarViewModel.toSuggestionGroups,
-                                reachableVia: connectBarViewModel.claimedRouteVia,
-                                disabled: sessionState == .connecting || sessionState == .disconnecting,
-                                showsInlineError: false,
-                                onDestinationChanged: { value in
-                                    connectBarViewModel.applySuggestedTo(value)
-                                },
-                                onDestinationCommitted: { value in
-                                    connectBarViewModel.applySuggestedTo(value)
-                                    if !primaryActionDisabled {
-                                        handlePrimaryAction()
-                                    }
-                                }
-                            )
-                            .frame(maxWidth: 240)
+                            broadcastStrip
+                            Spacer(minLength: 8)
                         }
-
-                        // The visible routing switch — how to reach that station.
-                        Picker("Routing", selection: routingChoiceBinding) {
-                            ForEach(ConnectRoutingChoice.allCases) { choice in
-                                Text(choice.label).tag(choice)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .controlSize(.small)
-                        .fixedSize()
-                        .disabled(sessionState == .connected)
-                        .help("Auto tries the best route it knows — direct, then a digipeater, then a NET/ROM circuit, then a node relay. Or force one.")
-                        .accessibilityIdentifier("connectBar.routingChoice")
-
-                        // Path / next-hop details — only when a protocol that has
-                        // them is forced, or while a session is locked in.
-                        if sessionState == .connected
-                            || connectBarViewModel.routingChoice == .digi
-                            || connectBarViewModel.routingChoice == .netrom {
-                            RoutingCapsuleButton(
-                                viewModel: connectBarViewModel,
-                                onAutoConnect: onAutoConnect,
-                                isLocked: sessionState == .connected,
-                                onRequestChange: sessionState == .connected ? {
-                                    showRoutingChangeConfirmation = true
-                                } : nil
-                            )
-                        }
-
-                        Spacer(minLength: 8)
-
-                        // Validation / auto-routing status (subtle, only when relevant)
-                        if let validation = nonDestinationValidationError,
-                           sessionState != .connected,
-                           !connectBarViewModel.isAutoAttemptInProgress {
-                            Text(validation)
-                                .font(.system(size: 10))
-                                .foregroundStyle(.red.opacity(0.7))
-                                .lineLimit(1)
-                        } else if let autoStatus = connectBarViewModel.autoAttemptStatus {
-                            Text(autoStatus)
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-
-                        if sessionState == .connected {
-                            Button(sessionActionTitle) {
-                                handleSessionAction()
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .accessibilityIdentifier("connectBar.disconnectButton")
-                        } else {
-                            Button(sessionActionTitle) {
-                                handleSessionAction()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .disabled(sessionActionDisabled)
-                            .accessibilityIdentifier(connectBarViewModel.isAutoAttemptInProgress ? "connectBar.stopAutoButton" : "connectBar.connectButton")
-                        }
-                    } else {
-                        // Broadcast — the unproto pill inline, not a separate row.
-                        if case let .broadcastComposer(broadcast) = connectBarViewModel.barState {
-                            BroadcastComposerStrip(unprotoPath: broadcast.unprotoPath)
-                        }
-                        Spacer(minLength: 8)
                     }
                 }
 
@@ -1601,6 +1565,140 @@ struct TerminalComposeView: View {
             } message: {
                 Text("Changing routing will disconnect the current session and reconnect with new settings.")
             }
+        }
+    }
+
+    // MARK: Setup row pieces
+
+    // Extracted so the compact and regular arrangements share one definition
+    // of each control rather than two that drift apart.
+
+    /// True only on a phone-width screen. The Mac and the iPad both have room
+    /// for the single-line bar, and a Mac window has a minimum width.
+    #if os(iOS)
+    private var isCompactWidth: Bool { horizontalSizeClass == .compact }
+    #else
+    private var isCompactWidth: Bool { false }
+    #endif
+
+    private var connectionModeToggle: some View {
+        ConnectionModeToggle(
+            mode: $connectionMode,
+            sessionState: sessionState,
+            onDisconnect: onDisconnect,
+            onForceDisconnect: onForceDisconnect
+        )
+    }
+
+    /// The primary input: who we are talking to. A locked session shows the
+    /// station as text, because it is no longer a choice.
+    @ViewBuilder
+    private var destinationControl: some View {
+        if sessionState == .connected {
+            Text(relayDestination ?? connectBarViewModel.toCall)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .accessibilityIdentifier("connectBar.lockedDestination")
+        } else {
+            DestinationPickerControl(
+                viewModel: destinationPickerViewModel,
+                externalText: connectBarViewModel.toCall,
+                groups: connectBarViewModel.toSuggestionGroups,
+                reachableVia: connectBarViewModel.claimedRouteVia,
+                disabled: sessionState == .connecting || sessionState == .disconnecting,
+                showsInlineError: false,
+                onDestinationChanged: { value in
+                    connectBarViewModel.applySuggestedTo(value)
+                },
+                onDestinationCommitted: { value in
+                    connectBarViewModel.applySuggestedTo(value)
+                    if !primaryActionDisabled {
+                        handlePrimaryAction()
+                    }
+                }
+            )
+            .frame(maxWidth: isCompactWidth ? .infinity : 240)
+        }
+    }
+
+    /// The visible routing switch — how to reach that station.
+    private var routingPicker: some View {
+        Picker("Routing", selection: routingChoiceBinding) {
+            ForEach(ConnectRoutingChoice.allCases) { choice in
+                Text(choice.label).tag(choice)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        // Intrinsic width beside its neighbours on a wide bar; the full row
+        // on a phone, where it has the row to itself.
+        .modifier(SegmentedWidth(fillsRow: isCompactWidth))
+        .disabled(sessionState == .connected)
+        .help("Auto tries the best route it knows — direct, then a digipeater, then a NET/ROM circuit, then a node relay. Or force one.")
+        .accessibilityIdentifier("connectBar.routingChoice")
+    }
+
+    /// Path / next-hop details — only when a protocol that has them is
+    /// forced, or while a session is locked in.
+    @ViewBuilder
+    private var routingCapsule: some View {
+        if sessionState == .connected
+            || connectBarViewModel.routingChoice == .digi
+            || connectBarViewModel.routingChoice == .netrom {
+            RoutingCapsuleButton(
+                viewModel: connectBarViewModel,
+                onAutoConnect: onAutoConnect,
+                isLocked: sessionState == .connected,
+                onRequestChange: sessionState == .connected ? {
+                    showRoutingChangeConfirmation = true
+                } : nil
+            )
+        }
+    }
+
+    /// Validation / auto-routing status (subtle, only when relevant).
+    @ViewBuilder
+    private var connectStatusText: some View {
+        if let validation = nonDestinationValidationError,
+           sessionState != .connected,
+           !connectBarViewModel.isAutoAttemptInProgress {
+            Text(validation)
+                .font(.system(size: 10))
+                .foregroundStyle(.red.opacity(0.7))
+                .lineLimit(1)
+        } else if let autoStatus = connectBarViewModel.autoAttemptStatus {
+            Text(autoStatus)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    @ViewBuilder
+    private var sessionActionButton: some View {
+        if sessionState == .connected {
+            Button(sessionActionTitle) {
+                handleSessionAction()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .accessibilityIdentifier("connectBar.disconnectButton")
+        } else {
+            Button(sessionActionTitle) {
+                handleSessionAction()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(sessionActionDisabled)
+            .accessibilityIdentifier(connectBarViewModel.isAutoAttemptInProgress ? "connectBar.stopAutoButton" : "connectBar.connectButton")
+        }
+    }
+
+    /// Broadcast — the unproto pill inline, not a separate row.
+    @ViewBuilder
+    private var broadcastStrip: some View {
+        if case let .broadcastComposer(broadcast) = connectBarViewModel.barState {
+            BroadcastComposerStrip(unprotoPath: broadcast.unprotoPath)
         }
     }
 

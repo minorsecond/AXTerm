@@ -49,8 +49,6 @@ struct ConnectionStatusStripView: View {
             return "AX.25"
         case .netrom:
             return "NET/ROM"
-        default:
-            return "AX.25"
         }
     }
     

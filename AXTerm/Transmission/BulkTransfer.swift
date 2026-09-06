@@ -318,7 +318,10 @@ nonisolated enum CompressionAnalyzer {
 
 // MARK: - Algorithm Display Extension
 
-extension AXDPCompression.Algorithm {
+// Nonisolated: a name for a compression algorithm is a fact about the
+// algorithm, and it is read while assembling breadcrumb metadata off the
+// main actor.
+nonisolated extension AXDPCompression.Algorithm {
     /// Human-readable display name
     var displayName: String {
         switch self {

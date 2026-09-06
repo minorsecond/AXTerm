@@ -104,8 +104,7 @@ extension WinlinkLinkQuality {
                      + (completed > 0 ? "; \(completed) completed the full exchange." : "."))
 
         if let rate = effectiveBytesPerSecond {
-            let bytes = ByteCountFormatter.string(
-                fromByteCount: Int64(bytesSent + bytesReceived), countStyle: .file)
+            let bytes = ByteCount.string(Int64(bytesSent + bytesReceived))
             lines.append("Goodput \(Int(rate.rounded())) B/s — \(bytes) of mail over "
                          + "\(Self.durationText(measuredSeconds)) connected. "
                          + "That is payload divided by wall-clock link time, so "

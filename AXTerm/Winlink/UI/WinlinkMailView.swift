@@ -395,6 +395,12 @@ struct WinlinkMailView: View {
                 Label("Connect & Exchange", systemImage: "envelope.arrow.triangle.branch")
             }
             .help(WinlinkCopy.connectExchangeTooltip)
+            // A Menu is the last thing in this row and takes every point
+            // left over, so the one control that starts an over-the-air
+            // session was stretched to about 400 points beside neighbours
+            // half that. Intrinsic width; the Spacer earlier in the row
+            // keeps it against the trailing edge.
+            .fixedSize()
         }
     }
 

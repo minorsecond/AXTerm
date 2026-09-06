@@ -27,9 +27,18 @@ final class StationLocationService: ObservableObject {
     @Published private(set) var isResolving = false
     @Published private(set) var lastGPSError: GPSError?
 
+    /// How long one GPS fix answers for the whole app before CoreLocation
+    /// is asked again. Stations do not move on the scale of minutes — and
+    /// when one genuinely is mobile, five minutes is still tighter than the
+    /// grid square everything here degrades to anyway.
+    nonisolated static let gpsFixLifetime: TimeInterval = 5 * 60
+
     private let gps: GPSProviding?
     private let manualGridProvider: () -> String
     private let now: () -> Date
+    /// When CoreLocation was last actually asked, success or not, so a
+    /// station with no GPS is not re-interrogated once per caller.
+    private var lastGPSAttempt: Date?
 
     init(
         gps: GPSProviding? = CoreLocationGPSProvider(),
@@ -43,11 +52,30 @@ final class StationLocationService: ObservableObject {
 
     /// Best available position: a fresh GPS fix when possible, otherwise
     /// the configured grid square's center. Nil when neither exists.
-    func currentLocation(gpsTimeout: TimeInterval = 8) async -> StationLocation? {
+    ///
+    /// "Fresh" is deliberately coarse. Every subsystem — the map, the
+    /// toolbar chip, Winlink field status, compose, position reports —
+    /// calls this freely, and each call used to be a live CoreLocation
+    /// request. The wobble between fixes redrew the map around our own
+    /// station roughly once a second. One fix now serves everyone for
+    /// `gpsFixLifetime`; pass `maxFixAge: 0` for a deliberate re-read,
+    /// which is the settings pane's refresh and nothing else.
+    ///
+    /// Failure backs off on the same clock: a denied or absent GPS is not
+    /// retried any faster than a working one is re-read.
+    func currentLocation(gpsTimeout: TimeInterval = 8,
+                         maxFixAge: TimeInterval = StationLocationService.gpsFixLifetime) async -> StationLocation? {
+        if let held = lastLocation, held.source == .gps,
+           now().timeIntervalSince(held.timestamp) < maxFixAge {
+            return held
+        }
+
         isResolving = true
         defer { isResolving = false }
 
-        if let gps {
+        if let gps,
+           now().timeIntervalSince(lastGPSAttempt ?? .distantPast) >= maxFixAge {
+            lastGPSAttempt = now()
             do {
                 let fix = try await gps.requestOneShotFix(timeout: gpsTimeout)
                 let grid = Maidenhead.gridSquare(latitude: fix.latitude, longitude: fix.longitude) ?? ""
@@ -90,7 +118,10 @@ final class StationLocationService: ObservableObject {
 // MARK: - CoreLocation provider
 
 /// Real GPS via CoreLocation (Wi-Fi positioning on most Macs).
-final class CoreLocationGPSProvider: NSObject, GPSProviding, CLLocationManagerDelegate, @unchecked Sendable {
+// Nonisolated: it is already `@unchecked Sendable` and guards its own
+// state, and it is used as a default argument, which is evaluated in the
+// caller's context rather than this type's.
+nonisolated final class CoreLocationGPSProvider: NSObject, GPSProviding, CLLocationManagerDelegate, @unchecked Sendable {
 
     private var manager: CLLocationManager?
     private var continuation: CheckedContinuation<(latitude: Double, longitude: Double), Error>?

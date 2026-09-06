@@ -181,8 +181,15 @@ nonisolated struct NetworkPathObserver {
             case .answer:
                 // One answer clears every outstanding request on that path:
                 // the retries were all asking the same question.
+                //
+                // The answer has to come from the *other* end. A path id is
+                // undirected, so on its own it cannot tell an answer from a
+                // second frame by the same station — and promoting one of
+                // those to `.sessionEstablished` would claim both directions
+                // carried a frame when only one did.
                 if let waiting = pendingConnects.removeValue(forKey: path.id),
-                   let earliest = waiting.map(\.date).min(),
+                   let earliest = waiting.filter({ $0.path.from != from })
+                       .map(\.date).min(),
                    packet.timestamp.timeIntervalSince(earliest) <= answerWindow {
                     var proven = path
                     proven.evidence = .sessionEstablished
@@ -212,15 +219,17 @@ nonisolated struct NetworkPathObserver {
 
     private enum ConnectRole { case request, answer, none }
 
-    /// SABM opens a link; UA accepts it. DM is a refusal — the station is
-    /// reachable but not listening, which says the *path* works even though
-    /// the session did not.
+    /// SABM opens a link; UA accepts it. DM is a refusal and FRMR a
+    /// complaint — but a station only sends either after decoding a frame
+    /// addressed to it, so both say the *path* works even though the
+    /// session did not.
     private static func connectRole(of packet: Packet) -> ConnectRole {
         guard packet.frameType == .u else { return .none }
         switch packet.control & 0xEF {
         case 0x2F: return .request   // SABM
         case 0x63: return .answer    // UA
         case 0x0F: return .answer    // DM — refused, but it answered
+        case 0x87: return .answer    // FRMR — objected, but it answered
         default: return .none
         }
     }

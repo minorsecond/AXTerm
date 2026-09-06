@@ -776,8 +776,55 @@ nonisolated enum DatabaseManager {
                                   name: "createTerminalSessions") { db in
             try createTerminalSessions(db)
         }
+        registerReportedMigration(&migrator, version: 28,
+                                  name: "createRemoteTerminalSessions") { db in
+            try createRemoteTerminalSessions(db)
+        }
+        registerReportedMigration(&migrator, version: 29,
+                                  name: "createRemoteBBSMailbox") { db in
+            try createRemoteBBSMailbox(db)
+        }
         return migrator
     }()
+
+    /// Terminal sessions that arrived from the operator's other devices.
+    ///
+    /// A separate table from `terminal_sessions`, on purpose: the local
+    /// history store cannot reach these rows and the replication store
+    /// cannot write local ones, so "another device's transcript is never
+    /// mistaken for this one's" is structural rather than a convention.
+    /// Keyed by device and session so two devices can never overwrite each
+    /// other. The provenance columns are the attribution every row shows.
+    static func createRemoteTerminalSessions(_ db: Database) throws {
+        try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS remote_terminal_sessions (
+                deviceID TEXT NOT NULL,
+                sessionId TEXT NOT NULL,
+                station TEXT NOT NULL,
+                gridSquare TEXT,
+                observedAt DATETIME NOT NULL,
+                deviceName TEXT,
+                remote TEXT NOT NULL,
+                via TEXT NOT NULL DEFAULT '',
+                relayDestination TEXT,
+                transport TEXT NOT NULL DEFAULT 'AX.25',
+                startedAt DATETIME NOT NULL,
+                endedAt DATETIME NOT NULL,
+                outcome TEXT NOT NULL,
+                framesSent INTEGER NOT NULL DEFAULT 0,
+                framesReceived INTEGER NOT NULL DEFAULT 0,
+                bytesSent INTEGER NOT NULL DEFAULT 0,
+                bytesReceived INTEGER NOT NULL DEFAULT 0,
+                transcript TEXT NOT NULL DEFAULT '',
+                transcriptTruncated INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (deviceID, sessionId)
+            )
+            """)
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_remote_terminal_sessions_ended
+                ON remote_terminal_sessions(endedAt)
+            """)
+    }
 
     private static func needsDevReset(_ queue: DatabaseQueue) throws -> Bool {
         try queue.read { db in

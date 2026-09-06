@@ -45,7 +45,12 @@ nonisolated enum SevenPlusState: Equatable, Sendable {
 // MARK: - 7plus Protocol Implementation
 
 /// 7plus ASCII encoding file transfer protocol
-nonisolated final class SevenPlusProtocol: FileTransferProtocol {
+// `@unchecked Sendable`: the transfer schedules its own continuation with
+// `DispatchQueue.main.asyncAfter` and is driven entirely from the main
+// thread, so the weak capture in that `@Sendable` closure is confined in
+// practice. A convention, not a proof — but the same one the rest of the
+// transmission layer runs on.
+nonisolated final class SevenPlusProtocol: FileTransferProtocol, @unchecked Sendable {
     let protocolType: TransferProtocolType = .sevenPlus
 
     weak var delegate: FileTransferProtocolDelegate?

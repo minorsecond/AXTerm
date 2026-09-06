@@ -146,6 +146,15 @@ struct MapLegend: View {
     let kind: Kind
     /// Drawn over imagery needs a stronger backing than over a light map.
     var overDarkBasemap = false
+    /// Nine points is legible beside a pointer and not on a phone held at
+    /// arm's length; caption2 is the smallest text style the platform ships.
+    private var legendFootnoteFont: Font {
+        #if os(macOS)
+        .system(size: 9)
+        #else
+        .caption2
+        #endif
+    }
     /// True when coverage rings are on the map, so the legend explains
     /// what each ring means without the operator having to find the chip.
     var showsCoverage = false
@@ -256,11 +265,16 @@ struct MapLegend: View {
                 .help("The dashed outer ring: the most distant station that has demonstrably decoded you in the last two weeks. Your best proven reach \u{2014} not a promise, and not a propagation model. Terrain will bend both rings.")
             }
 
+            // A fixed width, not a maximum. Under the legend's `fixedSize()`
+            // a `maxWidth` frame measures the sentence on one line, clamps
+            // the width, and reports one line of height — the text then
+            // wraps to three and the last line hangs out of the box, off the
+            // bottom of the map. A fixed width proposes the width first, so
+            // the height reported is the height drawn.
             Text(kind.footnote)
-                .font(.system(size: 9))
+                .font(legendFootnoteFont)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 180, alignment: .leading)
+                .frame(width: 180, alignment: .leading)
             }
         }
         .padding(7)

@@ -9,6 +9,8 @@ import SwiftUI
 
 struct PacketTableView: View {
     let packets: [Packet]
+    /// True while stored history is still being read back.
+    var isLoadingHistory = false
     @Binding var selection: Set<Packet.ID>
     let onInspectSelection: () -> Void
     let onCopyInfo: (Packet) -> Void
@@ -19,6 +21,38 @@ struct PacketTableView: View {
     @State private var scrollToBottomToken = 0
 
     var body: some View {
+        table.overlay { emptyState }
+    }
+
+    /// What the page says when there are no rows.
+    ///
+    /// A table with column headers and nothing under them reads as "no
+    /// packets" — which was the wrong answer for the several seconds the
+    /// stored history took to come back, and no answer at all on a fresh
+    /// install. Say which it is.
+    @ViewBuilder
+    private var emptyState: some View {
+        if packets.isEmpty {
+            if isLoadingHistory {
+                VStack(spacing: 8) {
+                    ProgressView()
+                    Text("Reading stored packets\u{2026}")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+            } else {
+                ContentUnavailableView(
+                    "No packets yet",
+                    systemImage: "dot.radiowaves.left.and.right",
+                    description: Text("Frames appear here as the radio hears them."))
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var table: some View {
         #if os(macOS)
         appKitTable
         #else

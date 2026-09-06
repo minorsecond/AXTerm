@@ -112,6 +112,15 @@ nonisolated enum AnalyticsStyle {
         static let topLimit: Int = 6
     }
 
+    /// Main-actor, because the colours underneath it are.
+    ///
+    /// `UIColor.systemPurple` and friends are dynamic: they resolve against
+    /// the current trait collection, which is main-actor state. Reading them
+    /// from anywhere else is the data race the compiler is describing, not a
+    /// technicality — so the honest fix is to say where they may be read
+    /// rather than to silence it. Everything that draws is already on the
+    /// main actor, so nothing at the call sites has to change.
+    @MainActor
     enum Colors {
         static let cardBackground = Color(platform: .platformCardBackground)
         static let cardStroke = Color(platform: .platformSeparator)

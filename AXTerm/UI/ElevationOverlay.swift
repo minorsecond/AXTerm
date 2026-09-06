@@ -7,7 +7,10 @@ import CoreGraphics
 /// A tile per overlay rather than one overlay for everything: MapKit only
 /// asks for the renderers whose bounding rects are on screen, so panning away
 /// from a tile stops it costing anything.
-nonisolated final class ElevationOverlay: NSObject, MKOverlay {
+// `@unchecked Sendable`, earned by the lock: every mutable field is read
+// and written under `lock`, which is what lets the tile be built on a
+// background queue and handed back.
+nonisolated final class ElevationOverlay: NSObject, MKOverlay, @unchecked Sendable {
 
     let tileLatitude: Int
     let tileLongitude: Int
@@ -94,12 +97,14 @@ nonisolated final class ElevationOverlay: NSObject, MKOverlay {
             state = .rendering
             lock.unlock()
 
-            let key = id as NSString
+            // The Swift String crosses, not the NSString: `NSString` is not
+            // Sendable and this closure is.
+            let key = id
             let build = makeImage
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 let image = build()
                 if let image {
-                    Self.cache.setObject(image, forKey: key,
+                    Self.cache.setObject(image, forKey: key as NSString,
                                          cost: image.height * image.bytesPerRow)
                 }
                 self?.lock.lock()
@@ -147,7 +152,34 @@ nonisolated final class ElevationOverlay: NSObject, MKOverlay {
 }
 
 /// Draws a shaded elevation tile.
-nonisolated final class ElevationOverlayRenderer: MKOverlayRenderer {
+// `@unchecked Sendable` because MapKit says so: it calls renderers from
+// its own drawing queues, and an overlay renderer that refused to cross a
+// thread could not be used at all.
+nonisolated final class ElevationOverlayRenderer: MKOverlayRenderer, @unchecked Sendable {
+
+    #if DEBUG
+    /// Counts terrain repaints. A tile that never reports itself ready, or
+    /// a renderer that invalidates itself, keeps MapKit redrawing — and a
+    /// map redrawing continuously re-resolves its own label layer, which is
+    /// the remaining candidate for movement nothing else accounts for.
+    nonisolated(unsafe) private static var drawCount = 0
+    nonisolated(unsafe) private static var pendingCount = 0
+    nonisolated(unsafe) private static var drawWindow = Date.distantPast
+
+    private static func noteDraw(ready: Bool) {
+        drawCount += 1
+        if !ready { pendingCount += 1 }
+        let elapsed = Date().timeIntervalSince(drawWindow)
+        guard elapsed >= 5 else { return }
+        if drawWindow != .distantPast {
+            print(String(format: "[MAPDIAG] terrain draws %d in %.1fs (%d still shading)",
+                         drawCount, elapsed, pendingCount))
+        }
+        drawCount = 0
+        pendingCount = 0
+        drawWindow = Date()
+    }
+    #endif
 
     override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale,
                        in context: CGContext) {
@@ -156,18 +188,22 @@ nonisolated final class ElevationOverlayRenderer: MKOverlayRenderer {
         // this tile when it finishes is what keeps the map responsive: the
         // terrain fades in a tile at a time instead of the whole map
         // stalling until every tile is ready.
-        guard let image = overlay.image(onReady: { [weak self] in
+        let pending = overlay.image(onReady: { [weak self] in
             guard let self else { return }
             DispatchQueue.main.async {
                 self.setNeedsDisplay(overlay.boundingMapRect)
             }
-        }) else { return }
+        })
+        #if DEBUG
+        Self.noteDraw(ready: pending != nil)
+        #endif
+        guard let image = pending else { return }
 
         let rect = rect(for: overlay.boundingMapRect)
         context.saveGState()
-        // Blend rather than paint: MapKit has no overlay level beneath the
-        // roads, so anything drawn opaquely here buries the street grid and
-        // the network lines. Multiplying darkens what is already there.
+        // The shading is in the tile's own alpha (see
+        // `TerrainShading.Style.blendMode` for why a blend mode here could
+        // never reach the basemap); this context only sets the strength.
         context.setBlendMode(overlay.style.blendMode)
         context.setAlpha(overlay.style.opacity)
         // Core Graphics draws images bottom-up; the map's context runs

@@ -72,7 +72,7 @@ nonisolated enum AnalyticsBucketSelection: String, CaseIterable, Hashable, Senda
     }
 }
 
-private extension TimeBucket {
+nonisolated private extension TimeBucket {
     var seconds: Double {
         switch self {
         case .tenSeconds:

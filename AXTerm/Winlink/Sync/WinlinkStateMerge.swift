@@ -227,7 +227,9 @@ nonisolated enum WinlinkStateMerge {
     }
 }
 
-extension WinlinkStateMerge.State {
+// Nonisolated, like the type it extends. Only the project's main-actor
+// default put these members on an actor.
+nonisolated extension WinlinkStateMerge.State {
     /// Builds merge state from a stored row.
     ///
     /// The claim and the offset's owner are sync-layer facts the local

@@ -16,7 +16,10 @@ import Foundation
 // MARK: - Int Clamped Extension
 
 extension Int {
-    func clamped(to range: ClosedRange<Int>) -> Int {
+    // Arithmetic, so it belongs to no actor. The project defaults
+    // un-annotated declarations to the main actor, which made clamping an
+    // integer a main-actor call and every nonisolated caller a warning.
+    nonisolated func clamped(to range: ClosedRange<Int>) -> Int {
         Swift.min(range.upperBound, Swift.max(range.lowerBound, self))
     }
 }

@@ -30,9 +30,9 @@ nonisolated enum ConsoleTimestampRuler {
         /// Inherits the time, and closes the run.
         case end
 
-        /// Whether this row draws the timestamp itself.
+        /// Whether this row prints the timestamp at full strength.
         var printsTimestamp: Bool { self == .alone || self == .start }
-        /// Whether a line is drawn down from the time above.
+        /// Whether this row's time repeats the row above, and so is dimmed.
         var isContinuation: Bool { self == .middle || self == .end }
     }
 

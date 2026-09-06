@@ -92,8 +92,10 @@ actor WinlinkSyncEngine {
             // The policy is enforced here rather than trusted to the sources.
             // A future source that tried to replicate session logs or a
             // digipeater path would be stopped by the same check that
-            // documents why it must not.
-            guard case .synced = WinlinkSyncPolicy.disposition(for: source.kind) else {
+            // documents why it must not. Attributed kinds pass: they are
+            // replicated, and it is the *receiving* side's store that keeps
+            // them apart — `replicatedKinds` is the one list of what may go.
+            guard WinlinkSyncPolicy.replicatedKinds.contains(source.kind) else {
                 report.refused += 1
                 continue
             }
@@ -154,7 +156,10 @@ nonisolated protocol WinlinkSyncTokenStore: Sendable {
     func savePushLedger(_ ledger: [String: Date])
 }
 
-nonisolated struct WinlinkDefaultsTokenStore: WinlinkSyncTokenStore {
+// `@unchecked` for `defaults`, and only for that. `UserDefaults` is
+// documented as thread-safe, so sharing one across actors is sound; the
+// compiler cannot see that because the class predates Sendable.
+nonisolated struct WinlinkDefaultsTokenStore: WinlinkSyncTokenStore, @unchecked Sendable {
     let defaults: UserDefaults
     let key: String
 

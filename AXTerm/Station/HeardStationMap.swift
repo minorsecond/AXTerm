@@ -264,20 +264,17 @@ nonisolated enum HeardStationMap {
     static func fannedPositions(_ entries: [Entry]) -> [String: GreatCircle.Point] {
         var result = [String: GreatCircle.Point]()
         for cluster in clusters(entries) {
-            guard let centre = cluster.first?.position else { continue }
+            guard let anchor = cluster.first?.position else { continue }
             if cluster.count == 1 {
-                result[cluster[0].callsign] = centre
+                result[cluster[0].callsign] = anchor
                 continue
             }
-            // Even spacing around the centre, starting due north, in a
-            // fixed order so the arrangement never jitters on redraw.
-            let ordered = cluster.sorted { $0.callsign < $1.callsign }
-            for (index, entry) in ordered.enumerated() {
+            let centre = clusterCentre(anchor)
+            for entry in cluster {
                 let radius = entry.isExactPosition
                     ? exactFanRadiusMetres : gridFanRadiusMetres
-                let bearing = 2 * Double.pi * Double(index) / Double(ordered.count)
-                let metresNorth = radius * cos(bearing)
-                let metresEast = radius * sin(bearing)
+                let (metresNorth, metresEast) = fanOffset(
+                    callsign: entry.callsign, radius: radius)
                 let cosLat = max(0.01, cos(centre.latitude * .pi / 180))
                 result[entry.callsign] = GreatCircle.Point(
                     latitude: centre.latitude + metresNorth / 111_320,
@@ -285,6 +282,59 @@ nonisolated enum HeardStationMap {
             }
         }
         return result
+    }
+
+    /// The one point a cluster fans around, whoever is in it.
+    ///
+    /// `clusters` groups on coordinates rounded to five decimals, so members
+    /// agree to about a metre without being identical. Taking any member's
+    /// raw position as the centre therefore moved the whole cluster whenever
+    /// its membership changed. Re-deriving the grouping key instead — via the
+    /// same formatting, so the two can never disagree — gives a centre that
+    /// depends on the square, not on who is standing in it.
+    static func clusterCentre(_ point: GreatCircle.Point) -> GreatCircle.Point {
+        GreatCircle.Point(
+            latitude: Double(String(format: "%.5f", point.latitude)) ?? point.latitude,
+            longitude: Double(String(format: "%.5f", point.longitude)) ?? point.longitude)
+    }
+
+    /// Where one station sits in its cluster's fan, in metres north and east.
+    ///
+    /// Derived from the callsign alone, which is the whole point. The fan
+    /// used to space stations evenly — `2pi * index / count` — and the
+    /// comment beside it claimed the arrangement therefore never jittered.
+    /// It only held for fixed membership: both the index and the count move
+    /// when a station joins or leaves the square, so every *other* marker in
+    /// that cluster jumped, by up to the fan radius, every time a new station
+    /// was heard from the same grid. On a busy channel that is most of the
+    /// time, and it is what made the map look unsettled.
+    ///
+    /// The cost is that spacing is no longer perfectly even, and two
+    /// callsigns can hash to nearby bearings. The radius varies with the
+    /// hash as well so they still separate, and a pair sitting a little
+    /// closer than ideal beats every marker in a cluster moving whenever the
+    /// radio hears someone new.
+    static func fanOffset(callsign: String, radius: Double) -> (north: Double, east: Double) {
+        let hash = stableHash(callsign)
+        let bearing = 2 * Double.pi * Double(hash % 3_600) / 3_600
+        // Never the full radius for everyone: two stations that land on
+        // similar bearings are pushed apart by sitting on different rings.
+        let ring = radius * (0.6 + 0.4 * Double((hash >> 24) % 1_000) / 1_000)
+        return (ring * cos(bearing), ring * sin(bearing))
+    }
+
+    /// FNV-1a over the callsign's bytes.
+    ///
+    /// Swift's own `hashValue` is seeded per process, so a marker placed
+    /// with it would sit somewhere different every launch — trading a jitter
+    /// on redraw for a jitter on relaunch. This is fixed for all time.
+    static func stableHash(_ text: String) -> UInt64 {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in text.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x0000_0100_0000_01b3
+        }
+        return hash
     }
 
     /// How many *other* stations share each station's exact position.
@@ -404,6 +454,20 @@ nonisolated enum HeardStationMap {
             .reduce(into: [String]()) { unique, call in
                 if !unique.contains(call) { unique.append(call) }
             }
+    }
+
+    /// Appends alias entries to heard ones, dropping any alias the radio has
+    /// also heard directly.
+    ///
+    /// `DRLNOD` transmits its own beacons *and* appears as a hop in via
+    /// paths, so it arrived once as a heard station and again as an alias
+    /// placed through its operator — two entries with one callsign. Every
+    /// consumer downstream keys on the callsign, so the pair drew as two
+    /// stacked markers and trapped the map's annotation reconciler outright.
+    /// The heard entry wins: it is the station itself, not a lead to it.
+    static func addingAliases(_ nodes: [Entry], toHeard heard: [Entry]) -> [Entry] {
+        let heardCalls = Set(heard.map { $0.callsign.uppercased() })
+        return heard + nodes.filter { !heardCalls.contains($0.callsign.uppercased()) }
     }
 
     // MARK: - Node aliases
@@ -537,19 +601,42 @@ nonisolated enum HeardStationMap {
                     let base = entry.name ?? "Node"
                     entry.name = "\(base) — also \(others.joined(separator: ", "))"
                 }
-                if entry.isPlaced { return entry }
-                // Second chance before dropping: the entry's own callsign
-                // may have beaconed a locator, which places the station
-                // itself — better than the operator's address.
-                let call = aliases.callsign(for: entry.callsign)?.uppercased()
-                guard let grid = call.flatMap({ announcedGrids[$0] }),
-                      let center = Maidenhead.center(of: grid) else { return nil }
-                entry.position = GreatCircle.Point(center)
-                entry.positionSource = "locator announced in its own beacon"
-                entry.confidence = .gridSquare
-                entry.gridSquare = grid.uppercased()
-                return entry
+                let placed = placingFromAnnouncedGrid(
+                    entry, aliases: aliases, announcedGrids: announcedGrids)
+                return placed.isPlaced ? placed : nil
             }
+    }
+
+    /// Places an alias from a locator it beaconed itself, if it is not
+    /// placed already.
+    ///
+    /// Shared by both node layers, and it has to be. The via-path aliases in
+    /// `coreEntries` and the rest of the directory are the same kind of
+    /// thing, drawn from the same table, differing only in whether traffic
+    /// has lately used them — and traffic moves an alias between the two as
+    /// via paths change. When only the directory layer knew this step, an
+    /// alias placed by its own beacon appeared while it sat in that layer
+    /// and vanished the moment a packet routed through it, because the core
+    /// layer could not place it and the directory layer no longer claimed
+    /// it. Then it came back. That flapping is what the map's remaining
+    /// pulse turned out to be (field log 2026-09-01: the same fifteen BBS
+    /// aliases arriving and departing together).
+    ///
+    /// A locator the station announced beats its operator's licence
+    /// address, so this is a genuine refinement rather than a fallback.
+    static func placingFromAnnouncedGrid(_ entry: Entry,
+                                         aliases: NodeAliasDirectory,
+                                         announcedGrids: [String: String]) -> Entry {
+        guard !entry.isPlaced else { return entry }
+        let call = aliases.callsign(for: entry.callsign)?.uppercased()
+        guard let grid = call.flatMap({ announcedGrids[$0] }),
+              let center = Maidenhead.center(of: grid) else { return entry }
+        var entry = entry
+        entry.position = GreatCircle.Point(center)
+        entry.positionSource = "locator announced in its own beacon"
+        entry.confidence = .gridSquare
+        entry.gridSquare = grid.uppercased()
+        return entry
     }
 
     /// Operator callsigns worth asking a directory about to place more of
@@ -567,15 +654,29 @@ nonisolated enum HeardStationMap {
                                           cachedCallsigns: Set<String>,
                                           heardBases: Set<String> = [],
                                           limit: Int = 40) -> [String] {
+        directoryOperatorCallsigns(aliases: aliases)
+            .filter { !cachedCallsigns.contains($0) && !heardBases.contains($0) }
+            .prefix(limit).map { $0 }
+    }
+
+    /// Every operator callsign the alias directory names, best-vouched
+    /// first — the whole set whose positions this layer draws from,
+    /// unfiltered.
+    ///
+    /// Separate from `directoryLookupCandidates` because the two questions
+    /// are not the same one. Asking a remote directory has to be rationed
+    /// and has to skip what is already known; reading this app's own cache
+    /// wants the complete list, because a position sitting in the local
+    /// cache and not in memory is a marker the map is failing to draw for
+    /// no reason at all.
+    static func directoryOperatorCallsigns(aliases: NodeAliasDirectory) -> [String] {
         aliases.allEntries
             .sorted { ($0.tellers.count, $1.alias) > ($1.tellers.count, $0.alias) }
             .map { CallsignQuery.normalize($0.callsign) }
-            .filter { CallsignQuery.isPlausible($0) && !cachedCallsigns.contains($0)
-                && !heardBases.contains($0) }
+            .filter { CallsignQuery.isPlausible($0) }
             .reduce(into: [String]()) { unique, call in
                 if !unique.contains(call) { unique.append(call) }
             }
-            .prefix(limit).map { $0 }
     }
 
     /// The directory aliases that fold into heard stations, by base

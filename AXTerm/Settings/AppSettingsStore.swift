@@ -109,6 +109,10 @@ final class AppSettingsStore: ObservableObject {
     static let pingWindowEndKey = "pingWindowEndHour"
     static let pingSpacingKey = "pingMinSecondsBetween"
     static let pingCooldownKey = "pingStationCooldownMinutes"
+    /// Added 2026-09-03. Absent storage means an install from before the
+    /// box rule existed, and it takes the default like a new one would:
+    /// the old behaviour it would otherwise preserve is the bug.
+    static let pingBoxCooldownKey = "pingBoxCooldownMinutes"
     static let pingMaxPerHourKey = "pingMaxProbesPerHour"
     static let pingProbeCalledKey = "pingProbeStationsOthersCall"
 
@@ -692,6 +696,11 @@ final class AppSettingsStore: ObservableObject {
     @Published var pingStationCooldownMinutes: Int {
         didSet { defaults.set(pingStationCooldownMinutes, forKey: Self.pingCooldownKey) }
     }
+    /// Minutes one *box* is left alone after any of its SSIDs is probed.
+    /// Zero means the rule is off and each address is paced on its own.
+    @Published var pingBoxCooldownMinutes: Int {
+        didSet { defaults.set(pingBoxCooldownMinutes, forKey: Self.pingBoxCooldownKey) }
+    }
     @Published var pingMaxProbesPerHour: Int {
         didSet { defaults.set(pingMaxProbesPerHour, forKey: Self.pingMaxPerHourKey) }
     }
@@ -713,6 +722,7 @@ final class AppSettingsStore: ObservableObject {
             windowEndHour: pingWindowEndHour,
             minSecondsBetweenProbes: pingMinSecondsBetween,
             stationCooldownMinutes: pingStationCooldownMinutes,
+            boxCooldownMinutes: pingBoxCooldownMinutes,
             maxProbesPerHour: pingMaxProbesPerHour,
             sources: sources)
     }
@@ -1102,6 +1112,7 @@ final class AppSettingsStore: ObservableObject {
         let storedPingEnd = defaults.object(forKey: Self.pingWindowEndKey) as? Int ?? pingDefaults.windowEndHour
         let storedPingSpacing = defaults.object(forKey: Self.pingSpacingKey) as? Int ?? pingDefaults.minSecondsBetweenProbes
         let storedPingCooldown = defaults.object(forKey: Self.pingCooldownKey) as? Int ?? pingDefaults.stationCooldownMinutes
+        let storedPingBoxCooldown = defaults.object(forKey: Self.pingBoxCooldownKey) as? Int ?? pingDefaults.boxCooldownMinutes
         let storedPingMax = defaults.object(forKey: Self.pingMaxPerHourKey) as? Int ?? pingDefaults.maxProbesPerHour
         let storedPingCalled = defaults.object(forKey: Self.pingProbeCalledKey) as? Bool ?? false
         let storedAXDPAutoNegotiate = defaults.object(forKey: Self.axdpAutoNegotiateKey) as? Bool ?? Self.defaultAXDPAutoNegotiate
@@ -1222,6 +1233,7 @@ final class AppSettingsStore: ObservableObject {
         self.pingWindowEndHour = storedPingEnd
         self.pingMinSecondsBetween = storedPingSpacing
         self.pingStationCooldownMinutes = storedPingCooldown
+        self.pingBoxCooldownMinutes = storedPingBoxCooldown
         self.pingMaxProbesPerHour = storedPingMax
         self.pingProbeStationsOthersCall = storedPingCalled
         self.axdpAutoNegotiateCapabilities = storedAXDPAutoNegotiate

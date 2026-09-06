@@ -1,12 +1,19 @@
 import SwiftUI
 
 /// One session, in full.
+///
+/// A session from one of the operator's other devices is read-only here:
+/// the banner says whose it is, and the tag and note editors are absent
+/// rather than disabled, because there is nothing on this device to edit —
+/// annotations never travelled (see `TerminalSessionPayload`).
 struct SessionHistoryDetail: View {
 
     let session: TerminalSession
     let store: TerminalSessionStoring?
     var onOpenCallsign: ((String) -> Void)?
     var onChanged: () -> Void
+    /// Where the session came from. This device unless said otherwise.
+    var origin: SessionHistoryListing.Origin = .thisDevice
 
     @State private var tagDraft = ""
     @State private var note = ""
@@ -15,10 +22,15 @@ struct SessionHistoryDetail: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                if case .otherDevice(let remote) = origin {
+                    originBanner(remote)
+                }
                 header
                 Divider()
-                tagEditor
-                noteEditor
+                if case .thisDevice = origin {
+                    tagEditor
+                    noteEditor
+                }
                 transcript
             }
             .padding(16)
@@ -31,6 +43,31 @@ struct SessionHistoryDetail: View {
             tagDraft = ""
             loadedNoteFor = session.id
         }
+    }
+
+    /// Said first and said plainly: this is another radio's session. The
+    /// label is what keeps a transcript from the home rig from reading as
+    /// something the handheld did.
+    private func originBanner(_ remote: SessionHistoryListing.RemoteOrigin) -> some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(origin.label ?? "From another device")
+                    .font(.callout.weight(.semibold))
+                Text("Recorded by that device, with its antenna, at "
+                     + (remote.gridSquare.map { "\($0)" } ?? "an unknown location")
+                     + ". Read-only here: tags and notes stay on the device that made them.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } icon: {
+            Image(systemName: "laptopcomputer.and.iphone")
+                .foregroundStyle(.tint)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
     }
 
     private var header: some View {
@@ -157,6 +194,14 @@ struct SessionHistoryDetail: View {
                     .padding(8)
                     .background(Color.primary.opacity(0.04),
                                 in: RoundedRectangle(cornerRadius: 6))
+            }
+            if case .otherDevice(let remote) = origin, remote.transcriptTruncated {
+                // A cut transcript must say so, or a conversation that ended
+                // mid-sentence would read as one that did.
+                Label("The transcript was cut to fit sync limits; the rest is on \(remote.deviceTitle).",
+                      systemImage: "scissors")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
         }
     }

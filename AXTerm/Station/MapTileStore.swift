@@ -145,7 +145,7 @@ nonisolated final class MapTileStore: @unchecked Sendable {
         /// Human-readable size. Offline map storage is the one thing in this
         /// app that can consume gigabytes, so it is always shown.
         var sizeDescription: String {
-            ByteCountFormatter.string(fromByteCount: Int64(byteSize), countStyle: .file)
+            ByteCount.string(Int64(byteSize))
         }
     }
 

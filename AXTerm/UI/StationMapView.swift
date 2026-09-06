@@ -91,10 +91,13 @@ struct StationMapView: View {
             selection: $selection,
             region: MapRegionFit.region(covering: framingPoints)?.mkRegion,
             coverage: coverage)
+        .modifier(MapTopBleed())
         .overlay(alignment: .bottomLeading) {
-            MapLegend(kind: legend, overDarkBasemap: false,
-                      showsCoverage: coverage != nil, showsNodes: hasNodeSites)
-                .padding(10)
+            if !legendGivesWayToSelection {
+                MapLegend(kind: legend, overDarkBasemap: store == nil && basemap.isDark,
+                          showsCoverage: coverage != nil, showsNodes: hasNodeSites)
+                    .padding(10)
+            }
         }
         .overlay(alignment: .topTrailing) { coverageChip }
         .overlay(alignment: .bottomTrailing) {
@@ -157,18 +160,42 @@ struct StationMapView: View {
             MapZoomStepper()
             #endif
         }
+        .modifier(MapTopBleed())
         .overlay(alignment: .bottomLeading) {
-            MapLegend(kind: legend, overDarkBasemap: basemap.isDark,
-                      showsCoverage: coverage != nil, showsNodes: hasNodeSites)
-                .padding(10)
-                // The map ignores the safe area so the terrain runs to the
-                // edges; anything floating on top of it must put the inset
-                // back, or the legend sits on the home indicator.
-                .padding(.bottom, safeAreaBottomInset)
+            if !legendGivesWayToSelection {
+                MapLegend(kind: legend, overDarkBasemap: basemap.isDark,
+                          showsCoverage: coverage != nil, showsNodes: hasNodeSites)
+                    .padding(10)
+                    // The map ignores the safe area so the terrain runs to
+                    // the edges; anything floating on top of it must put the
+                    // inset back, or the legend sits on the home indicator.
+                    .padding(.bottom, safeAreaBottomInset)
+            }
         }
         .overlay(alignment: .topTrailing) { coverageChip }
         .onAppear(perform: frameEverything)
         .onChange(of: scope.sites.count) { _, _ in frameEverything() }
+    }
+
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
+
+    /// Whether the legend steps aside for the selection card.
+    ///
+    /// On a phone the card is the width of the screen and sits where the
+    /// legend does, so the two overlapped and neither could be read. The
+    /// legend is the permanent fixture and the card is the errand, so the
+    /// legend yields for the moment and is back when the card is dismissed
+    /// — the way a place card covers Maps' own controls. Anywhere wider,
+    /// both fit and both stay.
+    private var legendGivesWayToSelection: Bool {
+        #if os(iOS)
+        horizontalSizeClass == .compact
+            && selection != nil && selection != "__observer__"
+        #else
+        false
+        #endif
     }
 
     /// Bottom safe-area inset, or zero where there is no such thing.
@@ -349,5 +376,27 @@ struct StationMapView: View {
 extension GreatCircle.Point {
     var clCoordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+}
+
+/// Runs the map under the bar above it.
+///
+/// On iOS the navigation bar — and on iPad the tab bar — floats over
+/// content that reaches the top edge, the way Maps draws its own map under
+/// its controls. A map that stopped at the bar's bottom edge left a solid
+/// band across the top of the screen with nothing in it. Only the top edge
+/// bleeds: the bottom meets the TNC strip, which is not a safe-area inset.
+///
+/// Applied to the map itself and not to its overlays, which follow in the
+/// chain: the modifier reports the safe-area frame to its parent, so the
+/// legend and the chips align to the visible map and stay out from under
+/// the bar. The Mac has no bar to run under and gets the map unchanged.
+private struct MapTopBleed: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content.ignoresSafeArea(.container, edges: .top)
+        #else
+        content
+        #endif
     }
 }

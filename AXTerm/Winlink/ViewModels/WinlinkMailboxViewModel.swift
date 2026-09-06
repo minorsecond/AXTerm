@@ -294,7 +294,7 @@ final class WinlinkMailboxViewModel: ObservableObject {
         let original = stored.message
         let me = myCallsign()
 
-        var recipients = [original.from]
+        let recipients = [original.from]
         var cc = [String]()
         if replyAll {
             let others = (original.to + original.cc).filter {

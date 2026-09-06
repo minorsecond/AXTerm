@@ -37,6 +37,16 @@ Availability is disclosed, not engineered around:
 - On quit and on system sleep, open sessions get a closing line and a DISC
   rather than silence. Vanishing mid-session is the expensive failure: the
   caller's software retries into an address that stopped existing.
+- **On iPhone and iPad the same rule fires when the scene leaves `.active`.**
+  iOS suspends an app that leaves the screen and takes the socket to the TNC
+  with it, so backgrounding is this platform's system sleep — and it happens
+  many times a day rather than once a night. The shell drives it: an
+  `onChange(of: scenePhase)` away from `.active` calls
+  `BBSService.shutdown(reason:)` and then `detach()`, and coming back to
+  `.active` calls `attach()` and `syncServiceAddress()` again. Leaving it to
+  the socket dropping would have every caller's session end as a dropped link
+  — the marker in the callers log that is supposed to mean something went
+  wrong.
 
 Nothing is lost while the mailbox is down. Messages are in SQLite and
 immutable once delivered (CLAUDE.md §7); a caller during the gap simply cannot
@@ -399,6 +409,114 @@ said `B` got what they came for and one whose link dropped may not have.
 The Settings pane previews the greeting **using the real shell**, so the
 preview cannot drift from what is transmitted.
 
+### Every mailbox you run, in one list
+
+Each device runs its own mailbox, and each keeps its own numbering: "Message 12
+stored." is a promise one mailbox made to one caller, and no other mailbox may
+reuse it. So what the other instances hold travels here **attributed, never
+merged** — filed in its own tables (`remote_bbs_messages`, `remote_bbs_calls`,
+keyed by device *and* the originating mailbox's own number), listed in its own
+section under that mailbox's name, and never folded into this station's log.
+
+An **Other mailboxes** chip above the Messages and Callers lists brings them
+in. Off by default and remembered: an operator reading their own callers log
+should never meet a row from another station by surprise. It appears only once
+something has arrived — a control for data that has never come is a promise the
+screen cannot keep — and stays visible while it is on so it can always be
+switched off. The chip carries no `.explain`; the explanation sits on each
+remote section's attribution line, beside the rows it describes.
+
+Rows from elsewhere are **read-only**, and the reason is the same one that
+keeps the tables apart:
+
+- Reading one **marks nothing**. That mailbox's read flag records what its
+  operator did there, and this device cannot know.
+- **No kill and no restore.** A kill is that mailbox's append-only history
+  (§9); killing from here would invent a state the station that made the
+  promise knows nothing about.
+- **No unread dot** — a badge nothing here can clear teaches the operator to
+  stop reading badges.
+- **Reply is allowed**, because it writes nothing there: the reply is composed
+  in *this* mailbox, addressed to whoever wrote the original.
+
+Every remote row carries "From K0EPI-9's mailbox on iPad" on the row itself,
+not only in the section heading — a row is what gets read and remembered — and
+opening one shows that line again over the message with "Recorded by that
+mailbox; read-only here." The count line under the list says the split:
+"4 messages · 2 from other mailboxes". Which actions a row offers is decided in
+one place, `BBSMessageActions.forRow(message:origin:sysop:)`, so a new surface
+cannot grow a Kill button over somebody else's history by forgetting a
+condition.
+
+Sharing is the *other* device's decision: "Share my packet mailbox" under
+Settings → Winlink → Unified mailbox. A device that has not switched it on
+publishes nothing, and a device with nothing to read from shows no chip.
+
+### On iPhone and iPad
+
+`BBSScreen` is the same four panes, in two placements the shell chooses between
+with `presentation:`.
+
+**`.tab`** (the default, and what an iPad uses) is a `NavigationSplitView`:
+sidebar of panes, a list, and a detail. It owns that navigation, so the shell
+places it directly as a tab's content — a split view nested in a
+`NavigationStack` renders as one squeezed column under two navigation bars.
+
+**`.pushed`** is one `List` inside a stack the shell owns, for the compact
+"More" screen, whose own navigation controller would otherwise give every page
+two back buttons. Same content, same order: reachability, the live call, then
+the four panes as links.
+
+Reachability rides the **content column**, not the sidebar and not above the
+split view. Both of those were tried and both hid it: `columnVisibility = .all`
+is a request iPadOS declines in portrait — at 834pt three columns do not fit,
+so the sidebar goes behind a toolbar button whatever the binding says, taking
+the on-air switch with it — and anything placed above the split view is drawn
+underneath the floating tab bar. The middle column is the one that is always on
+screen, and the switch that decides whether the station answers at all belongs
+where the operator opens the page, not one tap into a drawer.
+
+Three things are deliberately different, and only three:
+
+- **Lists, not tables.** A `Table` in the narrow content column of a split view
+  draws its first column and nothing else, which for the message list would be
+  a page of blank rows over a mailbox holding mail. Rows are purpose-built and
+  stack what the Mac spreads across columns.
+- **Explanations are tapped, not hovered.** Everything the Mac says through
+  `.help()` is said here through `.explain()`, which is a tooltip where there
+  is a pointer and a tap-to-reveal popover where there is not. `.help()`
+  compiles on iOS and renders nothing, so porting it as-is would have deleted
+  every explanation on the platform where the operator is most likely to be
+  standing in a field (CLAUDE.md §11).
+- **Sheets and importers are singular.** Reply is offered in the reader and New
+  Message in the list, but there is one compose sheet, held by `BBSScreen`:
+  two `.sheet` modifiers on one view leave only the last one working, silently.
+  The Files screen picks a shared folder and an upload inbox through one
+  `fileImporter` for the same reason — what the folder is *for* is state, not a
+  second presenter.
+- **Links are destination links, never `NavigationLink(value:)`.** The shell
+  pushes the mailbox into a `NavigationStack(path:)` typed to its own settings
+  route, and a typed path accepts only that type: a value link carrying a
+  `BBSPane` compiles, draws, highlights when pressed, and appends nothing. The
+  row just does not push, with no error anywhere.
+- **An explanation never wraps a control.** `.explain` puts its content in a
+  container of its own, and on iOS that stops a `Toggle` responding at all —
+  the on-air switch drew correctly, its popover worked, and the mailbox could
+  not be put on the air. Explanations hang on captions and labels, which are
+  inert; a control gets an `accessibilityHint` instead.
+
+Everything else is the same code. The decisions both platforms make — which
+messages count as yours, what a caller who left nothing is called, what a file
+costs on the air, what a field's provenance reads as, the greeting preview —
+live in `BBSMailboxModels.swift`, unguarded and tested, because two platforms
+deciding separately what the sysop's mail is would be two chances to get the
+access model wrong and only one of them ever looked at.
+
+Settings → Mailbox (`BBSSettingsScreen`) holds exactly what the Mac's settings
+tab holds, including the live greeting preview. Shared folders and uploads stay
+in the mailbox's own Files pane on both platforms, for the reason above: the
+upload switch belongs beside the folder it fills.
+
 ## 11. Bounds, because this runs unattended
 
 - Message body: 100 lines / 8 KB, **refused rather than truncated** — a caller
@@ -437,6 +555,14 @@ says so rather than returning an empty list.
   confirmation, and that the command letters match FBB.
 - `BBSUploadPolicyTests` — the gates, and the filename, which is the part a
   stranger chooses.
+- `BBSMailboxModelsTests` — what the operator's own views decide: which
+  messages a filter shows, what counts as unread, how a call with no actions is
+  described, the airtime beside a file, a field's provenance caption, and that
+  the greeting preview is byte-for-byte what the shell transmits.
+- `BBSFileLibraryTests` — sharing a folder end to end against a real one on
+  disk: flat, no symlinks, no hidden files, the size cap, descriptions that
+  live in the database rather than in the operator's folder, and an inbox that
+  is counted but never served.
 - `SQLiteBBSMessageStoreTests` — promised message numbers, kill/restore,
   read-flag monotonicity, the call log, file areas, last-visit, and the white
   pages merge rule as the store applies it.
@@ -558,8 +684,12 @@ nothing.
 
 ## 15. Known limits
 
-- **macOS only.** `BBSShell`, `BBSService`, the white pages model and the
-  store are platform-neutral; only `AXTerm/BBS/UI` is gated to macOS.
+- **The mailbox answers only while AXTerm is running**, and on iOS only while
+  it is in the foreground (§2). Both platforms have the whole mailbox: the
+  shell, the service, the store and the white pages model were always
+  platform-neutral, and `AXTerm/BBS/UI` now holds a Mac window (`BBSView` and
+  its panes), an iOS screen (`BBSScreen` and its panes) and the shared models
+  and views both use.
 - **No forwarding, by choice** (§1). White pages are learned locally and never
   exchanged with other BBSs, which is the other half of that decision.
 - **Areas are flat.** Subfolders are not scanned, which keeps `D <name>`
