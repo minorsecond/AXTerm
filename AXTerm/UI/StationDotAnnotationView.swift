@@ -252,15 +252,49 @@ final class StationDotAnnotationView: MKAnnotationView {
     /// takes the basemap's contrast and the halo takes the opposite, which
     /// is how a paper map has always done it.
     func setOverDarkBasemap(_ isDark: Bool) {
-        let halo: PlatformColor = isDark ? .black : .white
+        overDarkBasemap = isDark
+        applyLabelColours()
+    }
+
+    /// Remembered so the halo can be re-resolved when the appearance flips.
+    private var overDarkBasemap = false
+
+    /// Ink follows the basemap; the halo is the ink's opposite.
+    ///
+    /// Over imagery the ink is white and the halo black, whatever the
+    /// system appearance. Over the standard map the ink is the system label
+    /// colour — black in light mode, white in dark — and the halo has to be
+    /// the system *background*, not a fixed white: in dark mode a white halo
+    /// around white ink was a glow with no edge, and the callsigns were
+    /// barely legible over the dark map. A shadow colour is a plain CGColor,
+    /// resolved once, so it is re-applied on every appearance change.
+    private func applyLabelColours() {
         #if os(iOS)
-        label.textColor = isDark ? .white : .label
-        label.layer.shadowColor = halo.cgColor
+        let ink: UIColor = overDarkBasemap ? .white : .label
+        let halo: UIColor = overDarkBasemap ? .black : .systemBackground
+        label.textColor = ink
+        label.layer.shadowColor = halo.resolvedColor(with: traitCollection).cgColor
         #else
-        label.textColor = isDark ? .white : .labelColor
-        label.layer?.shadowColor = halo.cgColor
+        let ink: NSColor = overDarkBasemap ? .white : .labelColor
+        let halo: NSColor = overDarkBasemap ? .black : .windowBackgroundColor
+        label.textColor = ink
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            label.layer?.shadowColor = halo.cgColor
+        }
         #endif
     }
+
+    #if os(iOS)
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        applyLabelColours()
+    }
+    #else
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyLabelColours()
+    }
+    #endif
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("not used") }

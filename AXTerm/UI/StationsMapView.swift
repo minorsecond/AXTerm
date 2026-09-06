@@ -208,25 +208,6 @@ struct StationsMapView: View {
         return heights
     }
 
-    /// Names the stations the filter affects, rather than only what it does.
-    ///
-    /// An operator should be able to tell from the tooltip whether the thing
-    /// about to disappear is the one they were looking for.
-    private var distantFilterTooltip: String {
-        let names = distantStations.prefix(4).map(\.callsign).joined(separator: ", ")
-        let more = distantStations.count > 4
-            ? " and \(distantStations.count - 4) more" : ""
-        let action = hidesDistantStations ? "Showing" : "Hiding"
-        return "\(action) \(distantStations.count) station"
-            + "\(distantStations.count == 1 ? "" : "s") further than "
-            + "\(Int(StationPlausibility.defaultRangeKilometres)) km away: \(names)\(more). "
-            + "A packet network bridged to the internet puts frames from the "
-            + "far side of the country on the same stream as the neighbour "
-            + "down the road, and one of them stretches the map until every "
-            + "local station is a dot. Nothing is deleted, and a node placed "
-            + "at its operator's licence address is never filtered \u{2014} "
-            + "that distance would be measuring a mailing address."
-    }
 
     private var terrainStyle: TerrainShading.Style? {
         TerrainShading.Style(rawValue: terrainStyleRaw)
@@ -589,39 +570,85 @@ struct StationsMapView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // The Mac has a control row above the map. iOS has a navigation
+            // bar, and that is where its controls go — see `mapToolbar`.
+            #if os(macOS)
             header
             Divider()
+            #endif
             if observer == nil {
                 noPosition
             } else {
-                if !unplaced.isEmpty { unplacedBanner }
+                if showsUnplacedBanner { unplacedBanner }
                 if hidesDistantStations, !distantStations.isEmpty { distantBanner }
+                // A draggable split is a Mac affordance. On a touch screen
+                // the list is a sheet over the map — the way Maps shows its
+                // results — so the map keeps the whole screen instead of
+                // being squeezed by a pane the operator cannot resize.
+                #if os(macOS)
                 if showsList {
-                    // A draggable split is a Mac affordance; on a touch
-                    // screen the same two panes stack, so the map keeps a
-                    // usable size instead of being squeezed by a list the
-                    // operator cannot resize.
-                    #if os(macOS)
                     HSplitView {
                         mapPane
                             .frame(minWidth: 380)
                         stationList
                             .frame(minWidth: 260, idealWidth: 320, maxWidth: 460)
                     }
-                    #else
-                    VStack(spacing: 0) {
-                        mapPane
-                            .frame(minHeight: 260)
-                        Divider()
-                        stationList
-                            .frame(maxHeight: 260)
-                    }
-                    #endif
                 } else {
                     mapPane
                 }
+                #else
+                mapPane
+                #endif
             }
         }
+        .sheet(isPresented: $showingCapture) { captureSheet }
+        .sheet(isPresented: $showingDirectory) {
+            NavigationStack {
+                StationDirectoryView(store: serviceStore) { callsign in
+                    showingDirectory = false
+                    onOpenProfile?(callsign)
+                }
+                .navigationTitle("Station Directory")
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingDirectory = false }
+                    }
+                }
+            }
+            .frame(minWidth: 440, minHeight: 460)
+        }
+        .sheet(isPresented: $showingOfflineMaps) {
+            NavigationStack {
+                OfflineMapsView(
+                    store: offlineTiles,
+                    elevation: elevation,
+                    observer: observer,
+                    drawnRegion: downloadRegion,
+                    suggestedRegion: downloadRegion ?? MapRegionFit.region(
+                        covering: [observer].compactMap { $0 } + Array(coordinates.values))?.mkRegion,
+                    suggestedRegionName: downloadRegion == nil
+                        ? "this area" : "the area you drew")
+                .navigationTitle("Offline Data")
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            showingOfflineMaps = false
+                            downloadRegion = nil
+                        }
+                    }
+                }
+            }
+            .frame(minWidth: 460, minHeight: 520)
+        }
+        #if os(iOS)
+        .toolbar { mapToolbar }
+        .sheet(isPresented: $showingStationList) { stationListSheet }
+        // Picking a row is the end of the errand: the sheet goes and the
+        // map shows the selection card where the sheet was.
+        .onChange(of: selection) { _, picked in
+            if picked != nil { showingStationList = false }
+        }
+        #endif
         // Both off the view-update path: `preload` writes @Published
         // state, and the service's flag is set at construction and would
         // otherwise never see the setting being turned on later — which
@@ -671,6 +698,15 @@ struct StationsMapView: View {
             var wanted = stations.map(\.call)
             wanted += HeardStationMap.aliasesInUse(stations)
                 .compactMap { aliases.directory.callsign(for: $0) }
+            // The node layer's operators too, when it is on. This is a read
+            // of this app's own cache, not a fetch — the bulk-fetch rule the
+            // layer obeys is about other people's servers. Without it the
+            // layer could only draw what some *other* screen had happened to
+            // ask about, which at launch is nothing.
+            if showsDirectoryNodes {
+                wanted += HeardStationMap.directoryOperatorCallsigns(
+                    aliases: aliases.directory)
+            }
             lookup.preload(wanted)
             await autoLookUpUnplaced()
         }
@@ -683,11 +719,18 @@ struct StationsMapView: View {
     private var preloadKey: PositionPreloadKey {
         PositionPreloadKey(
             networkEnabled: settings.callsignLookupEnabled,
+            showsDirectory: showsDirectoryNodes,
+            directorySize: aliases.directory.allEntries.count,
             callsigns: Set(stations.map(\.call)).sorted())
     }
 
     private struct PositionPreloadKey: Hashable {
         let networkEnabled: Bool
+        /// Turning the layer on has to fetch its operators out of the cache,
+        /// or it draws nothing until the heard list next changes.
+        let showsDirectory: Bool
+        /// New aliases bring new operators to place.
+        let directorySize: Int
         let callsigns: [String]
     }
 
@@ -695,38 +738,20 @@ struct StationsMapView: View {
 
     /// Hit target for the header's icon-only controls.
     ///
-    /// A glyph is about 17pt, which is a fine *pointer* target and far too
-    /// small for a finger — Apple's own guidance is 44pt, and on an iPad the
-    /// row of bare icons at the end of this bar was noticeably fiddly. The
-    /// icon does not change size; the tappable area around it does.
-    private var iconHitTarget: CGFloat {
-        #if os(iOS)
-        return 44
-        #else
-        return 24
-        #endif
-    }
+    /// A glyph is about 17pt; the tappable area around it is grown to a
+    /// comfortable pointer target without the icon itself changing size.
+    /// Mac only — on iOS these controls are navigation-bar items, which the
+    /// system already sizes for a finger.
+    private let iconHitTarget: CGFloat = 24
 
+    #if os(macOS)
     /// The map's control row.
     ///
-    /// Scrolls sideways where it does not fit. On an iPhone this row holds
-    /// more than 402 points of controls, and an HStack that overflows is
-    /// centred and clipped at both ends — the terrain menu was cut in half
-    /// by the right edge of the screen with no way to reach it. Scrolling
-    /// keeps every control reachable; on a Mac window or an iPad it never
-    /// engages, because everything already fits.
+    /// A Mac window is wide enough for every control at once. iOS is not —
+    /// on an iPhone this row ran to more than 402 points and on an iPad it
+    /// ran off the right edge of the screen — so there the same controls
+    /// are navigation-bar items and menus instead (`mapToolbar`).
     private var header: some View {
-        #if os(iOS)
-        ScrollView(.horizontal, showsIndicators: false) {
-            headerContent
-        }
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-        #else
-        headerContent
-        #endif
-    }
-
-    private var headerContent: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Stations Heard").font(.headline)
@@ -791,63 +816,8 @@ struct StationsMapView: View {
             .labelsHidden()
             .fixedSize()
             .help("Map draws real geography and needs tiles, which need the network. Scope plots bearing and range from positions already cached, and keeps working with everything else down.")
-            // iPhone and iPad have no sidebar to host these. On macOS the
-            // same toggles live in the sidebar's Layers section and there is
-            // deliberately no second copy here.
-            #if !os(macOS)
-            Menu {
-                Toggle("Observed Paths", isOn: $showsPaths)
-                    .help("Draw the paths that have been observed between stations. Colour is evidence: green completed a connect end to end, blue arrived through a digipeater, teal was heard direct, and grey dashed is inferred from two stations sharing a digipeater without anything having travelled it. Red means connect attempts went unanswered.")
-                Toggle("Predicted Paths", isOn: $showsPredictedPaths)
-                    .disabled(!elevation.hasTerrain)
-                    .help(elevation.hasTerrain
-                          ? "Purple dotted lines between stations that have never been heard talking, drawn where the stored terrain says a signal would get across. A forecast from ground elevation and Fresnel geometry \u{2014} not a measurement, which is why it is drawn differently from everything else."
-                          : "Needs terrain data. Download the elevation tiles for this area from the offline maps control first.")
-                if !elevation.hasTerrain {
-                    Text("No terrain data downloaded")
-                }
-                if insights.snapshot.terrainUnavailable {
-                    Text("No terrain covers these stations")
-                }
-                if showsPredictedPaths, let summary = forecastSummary {
-                    Divider()
-                    Text(summary)
-                }
-                Divider()
-                Toggle("Node Directory", isOn: $showsDirectoryNodes)
-                    .help("Draw every station the network has claimed reachable — node tables, ROUTES scrapes, made relay hops — that can be placed from cached positions. Indigo markers, dashed when the position is the operator's address rather than the node's own. Nothing is looked up online for this layer.")
-                if showsDirectoryNodes {
-                    // Why the layer looks the way it does, stated where
-                    // the toggle is: what draws, what folded into heard
-                    // stations, and how to grow it — "enabled but
-                    // invisible" was reported as a bug twice (2026-08-29
-                    // 05:07 and 05:35) before this line said so.
-                    Text("\(placedDirectoryCount) drawn · \(mergedNodeBoxCount) folded "
-                         + "into heard stations · \(aliases.directory.allEntries.count) known — "
-                         + "Find Positions places up to 40 more per press")
-                }
-                Toggle("Coverage Rings", isOn: $showsCoverageRing)
-                    .help("Rings around your station drawn from the stations that answered you directly — a UA, DM or FRMR to your frames proves they decoded you. Inner ring: half of them are closer than this. Outer ring: the farthest answer. Measurements, not a propagation model.")
-            } label: {
-                Label("Layers", systemImage: showsPaths || showsPredictedPaths || showsDirectoryNodes
-                      ? "point.topleft.down.to.point.bottomright.curvepath.fill"
-                      : "point.topleft.down.to.point.bottomright.curvepath")
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help("Choose what the map draws: paths observed between stations, paths the terrain says are possible, the node directory, and your station's measured coverage.")
-            if !distantStations.isEmpty {
-                Button {
-                    hidesDistantStations.toggle()
-                } label: {
-                    Image(systemName: hidesDistantStations
-                          ? "line.3.horizontal.decrease.circle.fill"
-                          : "line.3.horizontal.decrease.circle")
-                        .iconHitTarget(iconHitTarget)
-                }
-                .help(distantFilterTooltip)
-            }
-            #endif
+            // The layer toggles live in the sidebar's Layers section and
+            // there is deliberately no second copy here.
             Menu {
                 Picker("Terrain", selection: $terrainStyleRaw) {
                     Text("No Terrain").tag("")
@@ -906,45 +876,232 @@ struct StationsMapView: View {
                             : "Show the station list.")
         }
         .padding(12)
-        .sheet(isPresented: $showingCapture) { captureSheet }
-        .sheet(isPresented: $showingDirectory) {
-            NavigationStack {
-                StationDirectoryView(store: serviceStore) { callsign in
-                    showingDirectory = false
-                    onOpenProfile?(callsign)
-                }
-                .navigationTitle("Station Directory")
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { showingDirectory = false }
-                    }
+    }
+    #endif
+
+    #if os(iOS)
+    // MARK: - iOS controls
+
+    /// The station list, as a sheet. A separate flag from `showsList`, which
+    /// is the Mac's remembered pane: a sheet that re-presented itself on
+    /// every launch would be a modal the operator did not ask for.
+    @State private var showingStationList = false
+    /// What the boundaries submenu is in the middle of — see
+    /// `MapOverlayInteraction`. The rows live in a menu and cannot present
+    /// anything themselves; `mapWithDrawing` attaches the presentations.
+    @StateObject private var overlayInteraction = MapOverlayInteraction()
+
+    /// The map's controls, as navigation-bar items.
+    ///
+    /// Three glyphs: the station list, what the map draws, and what can be
+    /// done to it. Everything the Mac's control row spells out in words is
+    /// behind one of these — the platform idiom for a screen whose content
+    /// is the whole screen, and the only shape that fits an iPhone's bar.
+    /// On an iPad the same three sit at the trailing end of the tab bar.
+    @ToolbarContentBuilder
+    private var mapToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Button {
+                showingStationList = true
+            } label: {
+                Label("Stations", systemImage: "list.bullet")
+            }
+            .accessibilityHint("Every station heard, with or without a position")
+
+            Menu {
+                layersMenu
+            } label: {
+                Label("Layers", systemImage: "square.3.layers.3d")
+            }
+            .accessibilityHint("Basemap, terrain, and which layers the map draws")
+
+            Menu {
+                actionsMenu
+            } label: {
+                Label("More", systemImage: "ellipsis.circle")
+            }
+        }
+    }
+
+    /// What the map draws: view, basemap, terrain, layers, boundaries.
+    ///
+    /// Pickers rather than inline rows, so each shows its current value on
+    /// one line and opens to the choices — the menu stays short enough to
+    /// read at a glance on a phone.
+    @ViewBuilder
+    private var layersMenu: some View {
+        Picker("View", selection: $modeRaw) {
+            Label("Map", systemImage: "map").tag("Map")
+            Label("Scope", systemImage: "scope").tag("Scope")
+        }
+        .pickerStyle(.menu)
+
+        if modeRaw == "Map" {
+            Picker("Basemap", selection: $basemapRaw) {
+                ForEach(MapBasemap.allCases.filter {
+                    $0 != .none && ($0 != .offline || offlineTiles.hasStoredTiles)
+                }) { option in
+                    Label(option.rawValue, systemImage: option.systemImage)
+                        .tag(option.rawValue)
                 }
             }
-            .frame(minWidth: 440, minHeight: 460)
-        }
-        .sheet(isPresented: $showingOfflineMaps) {
-            NavigationStack {
-                OfflineMapsView(
-                    store: offlineTiles,
-                    elevation: elevation,
-                    observer: observer,
-                    drawnRegion: downloadRegion,
-                    suggestedRegion: downloadRegion ?? MapRegionFit.region(
-                        covering: [observer].compactMap { $0 } + Array(coordinates.values))?.mkRegion,
-                    suggestedRegionName: downloadRegion == nil
-                        ? "this area" : "the area you drew")
-                .navigationTitle("Offline Data")
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") {
-                            showingOfflineMaps = false
-                            downloadRegion = nil
-                        }
-                    }
+            .pickerStyle(.menu)
+
+            Picker("Terrain", selection: $terrainStyleRaw) {
+                Text("None").tag("")
+                ForEach(TerrainShading.Style.allCases) { style in
+                    Text(style.label).tag(style.rawValue)
                 }
             }
-            .frame(minWidth: 460, minHeight: 520)
+            .pickerStyle(.menu)
+            .disabled(!elevation.hasTerrain)
+            if !elevation.hasTerrain {
+                Text("No terrain downloaded")
+            }
+
+            Divider()
+            Toggle("Observed Paths", isOn: $showsPaths)
+            Toggle("Predicted Paths", isOn: $showsPredictedPaths)
+                .disabled(!elevation.hasTerrain)
+            if showsPredictedPaths, let summary = forecastSummary {
+                Text(summary)
+            }
+            Toggle("Node Directory", isOn: $showsDirectoryNodes)
+            if showsDirectoryNodes {
+                Text("\(placedDirectoryCount) drawn · \(mergedNodeBoxCount) folded "
+                     + "into heard stations · \(aliases.directory.allEntries.count) known")
+            }
+            Toggle("Coverage Rings", isOn: $showsCoverageRing)
+
+            Divider()
+            Menu {
+                MapOverlayMenuItems(store: overlayStore, interaction: overlayInteraction,
+                                    markCoordinate: observer?.clCoordinate,
+                                    onSendViaWinlink: onSendLayer)
+            } label: {
+                Label(overlayStore.visibleLayers.isEmpty
+                      ? "Boundaries"
+                      : "Boundaries (\(overlayStore.visibleLayers.count))",
+                      systemImage: "square.on.square.dashed")
+            }
         }
+
+        if !distantStations.isEmpty {
+            Divider()
+            Toggle("Hide Distant Stations", isOn: $hidesDistantStations)
+            Text("\(distantStations.count) further than "
+                 + "\(Int(StationPlausibility.defaultRangeKilometres)) km")
+        }
+    }
+
+    /// What can be done to the map: lookups, drawing, offline data, and the
+    /// station directory.
+    @ViewBuilder
+    private var actionsMenu: some View {
+        if !unplaced.isEmpty || showsDirectoryNodes {
+            Button {
+                Task { await lookUpUnplaced() }
+            } label: {
+                Label(isLookingUp ? "Finding Positions\u{2026}" : "Find Positions",
+                      systemImage: "mappin.and.ellipse")
+            }
+            .disabled(isLookingUp || !settings.callsignLookupEnabled)
+        }
+
+        if modeRaw == "Map" {
+            // Drawing starts here rather than from a permanent strip over
+            // the map. The strip appears once a tool is active.
+            Menu {
+                ForEach([MapDrawingMode.point, .line, .area]) { mode in
+                    Button {
+                        drawing.begin(mode)
+                    } label: {
+                        Label(mode.title, systemImage: mode.systemImage)
+                    }
+                }
+            } label: {
+                Label("Add to Map", systemImage: "plus")
+            }
+
+            Divider()
+            Button {
+                showingOfflineMaps = true
+            } label: {
+                Label(offlineTiles.hasStoredTiles
+                      ? "Offline Map (\(offlineTiles.statistics.sizeDescription))"
+                      : "Offline Map\u{2026}",
+                      systemImage: "square.stack.3d.down.right")
+            }
+            Button {
+                drawing.begin(.download)
+            } label: {
+                Label("Draw an Area to Download\u{2026}", systemImage: "square.dashed")
+            }
+            Button {
+                captureName = defaultCaptureName
+                showingCapture = true
+            } label: {
+                Label("Save Map for Offline Use\u{2026}", systemImage: "square.and.arrow.down")
+            }
+        }
+
+        if serviceStore != nil {
+            Divider()
+            Button {
+                showingDirectory = true
+            } label: {
+                Label("Station Directory", systemImage: "text.book.closed")
+            }
+        }
+    }
+
+    /// The station list as a sheet, half-height by default so the map stays
+    /// in view above it, the way Maps shows a result list.
+    private var stationListSheet: some View {
+        NavigationStack {
+            stationList
+                .navigationTitle("Stations Heard")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingStationList = false }
+                    }
+                }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+    }
+
+    /// The coverage summary the Mac's header states in words, as a chip on
+    /// the map — shown only while there is something to say. "All placed"
+    /// is the map itself; "3 of 20" is a fact the map cannot show, and the
+    /// chip opens the list where the missing three are named.
+    @ViewBuilder
+    private var coverageChip: some View {
+        if !unplaced.isEmpty, !showsUnplacedBanner, !drawing.isDrawing {
+            Button {
+                showingStationList = true
+            } label: {
+                Label("\(placed.count) of \(entries.count) placed",
+                      systemImage: "mappin.slash")
+                    .font(.caption.weight(.medium))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().stroke(.primary.opacity(0.1), lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .padding(10)
+        }
+    }
+    #endif
+
+    /// Whether the "no position" banner is up, so nothing else says the
+    /// same thing at the same time.
+    private var showsUnplacedBanner: Bool {
+        !unplaced.isEmpty
+            && !settings.callsignLookupEnabled
+            && HeardStationMap.lookupCandidates(unplaced, aliases: aliases.directory).count > 0
     }
 
     /// Says plainly how much of what was heard could be placed. A map
@@ -1046,11 +1203,38 @@ struct StationsMapView: View {
                                coverage: coverageRing,
                                selection: $selection)
             .overlay(alignment: .bottomTrailing) { selectionCard }
+            #if os(iOS)
+            .overlay(alignment: .topLeading) { coverageChip }
+            .modifier(MapOverlayPresentation(store: overlayStore, interaction: overlayInteraction))
+            #endif
 
-            MapDrawingToolbar(session: $drawing, onComplete: finishShape)
+            MapDrawingToolbar(session: $drawing, onComplete: finishShape,
+                              showsModePicker: showsDrawingModePicker)
                 .padding(.top, 8)
         }
         .textEntryPrompt($drawPrompt)
+    }
+
+    /// The Mac keeps the drawing tools in view; a touch screen starts them
+    /// from the More menu and shows the strip only while one is active.
+    private var showsDrawingModePicker: Bool {
+        #if os(macOS)
+        true
+        #else
+        false
+        #endif
+    }
+
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
+
+    private var selectionCardIsFullWidth: Bool {
+        #if os(iOS)
+        horizontalSizeClass == .compact
+        #else
+        false
+        #endif
     }
 
     /// A floating card for the selected marker: what the tooltip says, in
@@ -1120,8 +1304,10 @@ struct StationsMapView: View {
                 }
             }
             .padding(12)
-            .frame(maxWidth: 300, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            // A card on a phone is the width of the screen, the way a place
+            // card is; on anything wider it floats at the corner.
+            .frame(maxWidth: selectionCardIsFullWidth ? .infinity : 300, alignment: .leading)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
             .padding(12)
             .transition(.opacity)
