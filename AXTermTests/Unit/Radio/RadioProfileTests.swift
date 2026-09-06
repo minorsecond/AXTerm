@@ -77,6 +77,12 @@ final class RadioProfileTests: XCTestCase {
         XCTAssertEqual(radios[0].kissPort, 0)
         XCTAssertTrue(radios[0].enabled)
         XCTAssertFalse(radios[0].archived)
+        // Every station-wide service runs on a radio unless switched off.
+        XCTAssertTrue(radios[0].sendsBeacons)
+        XCTAssertTrue(radios[0].pings)
+        XCTAssertTrue(radios[0].announcesNode)
+        XCTAssertTrue(radios[0].answersMailbox)
+        XCTAssertEqual(radios[0].netRomAlias, "")
     }
 
     // MARK: - Two radios that cannot both be

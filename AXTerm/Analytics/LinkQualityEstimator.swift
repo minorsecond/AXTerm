@@ -385,6 +385,15 @@ nonisolated struct LinkQualityEstimator {
         return min(255, max(0, Int(symmetric.rounded())))
     }
 
+    /// Expected transmissions over a directional link, or nil before the
+    /// link has produced a forward-delivery estimate. The same formula the
+    /// quality score uses, so the Auto radio and the Stations list agree.
+    func etx(from: String, to: String, radio: RadioID = .primary) -> Double? {
+        let s = linkStats(from: from, to: to, radio: radio)
+        guard let df = s.dfEstimate else { return nil }
+        return DirectionalLinkStats.etx(df: df, dr: s.drEstimate, config: config)
+    }
+
     /// Compute the effective TTL for a directional link based on its inter-arrival pattern.
     func effectiveTTL(from: String, to: String, radio: RadioID = .primary) -> TimeInterval {
         let key = LinkKey(radio: radio, from: CallsignValidator.normalize(from), to: CallsignValidator.normalize(to))
@@ -850,7 +859,7 @@ nonisolated private struct DirectionalLinkStats {
         return nil
     }
 
-    private static func etx(df: Double, dr: Double?, config: LinkQualityConfig) -> Double {
+    static func etx(df: Double, dr: Double?, config: LinkQualityConfig) -> Double {
         if let dr {
             let product = max(config.minDeliveryRatio, df) * max(config.minDeliveryRatio, dr)
             return min(config.maxETX, max(1.0, 1.0 / product))

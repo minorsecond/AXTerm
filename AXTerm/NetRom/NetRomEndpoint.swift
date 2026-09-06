@@ -81,8 +81,17 @@ nonisolated final class NetRomEndpoint {
     // MARK: Identity & configuration
 
     /// This station's node callsign — the L3 origin of everything we send
-    /// and the only L3 destination we accept.
+    /// and, with `additionalLocalNodes`, the L3 destinations we accept.
     var localNode: AX25Address
+    /// Other node callsigns this station answers as: one per radio when the
+    /// operator runs one node per radio. A circuit opened to one of these
+    /// replies from it, not from `localNode`.
+    var additionalLocalNodes: [AX25Address] = []
+
+    func isLocalNode(_ address: AX25Address) -> Bool {
+        CallsignNormalizer.addressesMatch(address, localNode)
+            || additionalLocalNodes.contains { CallsignNormalizer.addressesMatch(address, $0) }
+    }
     /// The operator callsign carried in CONREQ's user field.
     var localUser: AX25Address
     var circuitConfig: NetRomCircuitConfig
@@ -226,7 +235,7 @@ nonisolated final class NetRomEndpoint {
         // Not addressed to this node. Offer it for transit; with no
         // handler installed this is simply a drop, which is the correct
         // behavior for a station that is not a router.
-        guard CallsignNormalizer.addressesMatch(datagram.destination, localNode) else {
+        guard isLocalNode(datagram.destination) else {
             TxLog.debug(.session, "NET/ROM datagram for another node", [
                 "origin": datagram.origin.display,
                 "destination": datagram.destination.display,
@@ -299,12 +308,14 @@ nonisolated final class NetRomEndpoint {
         }
 
         let (index, id) = allocateHandle()
+        // Answer as the node that was called, which is `localNode` unless
+        // the operator runs one node per radio.
         let box = CircuitBox(
             id: NetRomCircuitID(),
             machine: NetRomCircuitStateMachine(
                 config: circuitConfig,
                 localUser: localUser,
-                localNode: localNode,
+                localNode: datagram.destination,
                 remoteNode: datagram.origin,
                 myIndex: index,
                 myId: id
@@ -324,7 +335,7 @@ nonisolated final class NetRomEndpoint {
     /// zeros in 17/18, single zero data byte.
     private func transmitRefusal(of datagram: NetRomDatagram, theirIndex: UInt8, theirId: UInt8) {
         let refusal = NetRomDatagram(
-            origin: localNode,
+            origin: datagram.destination,
             destination: datagram.origin,
             ttl: circuitConfig.ttl,
             transport: .connectAck(
@@ -380,7 +391,7 @@ nonisolated final class NetRomEndpoint {
             switch action {
             case .send(let frame):
                 let datagram = NetRomDatagram(
-                    origin: localNode,
+                    origin: box.machine.localNode,
                     destination: box.machine.remoteNode,
                     ttl: circuitConfig.ttl,
                     transport: frame

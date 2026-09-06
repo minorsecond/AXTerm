@@ -266,6 +266,76 @@ Tables nothing reads by radio yet — link-quality history, the NET/ROM
 neighbour and route tables — are left alone until the phase that keys them
 by radio, so schema and code land together.
 
+## Services across radios
+
+Every station-wide service runs on every radio unless the operator switches
+it off for one. The switches live on the radio profile — `sendsBeacons`,
+`pings`, `announcesNode`, `answersMailbox` — all on by default, shown only
+when there are two radios. `SessionCoordinator.serviceRadios(_:)` is the one
+rule: with one radio it returns that radio, connected or not, exactly as
+before radios existed; with several it returns the enabled radios that have
+the service on and whose link is up.
+
+**Stagger.** When one announcement leaves several radios, the k-th radio
+waits k × 2 s (`SessionCoordinator.radioStagger`). Two radios on one
+frequency would otherwise key up together and collide with themselves; on
+different frequencies the delay costs nothing. Beacons and NODES both use it.
+
+**Beacons** leave each beaconing radio from that radio's own callsign. The
+console line gains " on IC-705, Base" only when several radios carried it.
+
+**NODES and the node identity.** `netRomNodeIdentity` is operator-selectable:
+
+- `unified` (default, BPQ's NODECALL over several PORTCALLs): the station
+  callsign and alias are the node. Every announcing radio sends the same
+  payload under its own L2 callsign, and a connect request for the node is
+  accepted on any radio. The console reads "Announced this station as
+  EPINOD on 2 radios."
+- `perRadio`: each radio's callsign is its own node with its own alias
+  (`RadioProfile.netRomAlias`, falling back to the station alias). The
+  endpoint answers as the node that was called
+  (`NetRomEndpoint.additionalLocalNodes`; an inbound circuit's origin is
+  the address the CONREQ named), and each alias answers plain AX.25
+  connects too. The nodes do not forward to each other; the setting says so.
+
+The driver asks the coordinator for its `announcements()` —
+`[(radio, node, alias)]` — so the identity rule lives in one place and
+the driver only encodes what it is given.
+
+**Ping.** A candidate carries the radio that heard it most recently among
+the pinging radios, and the probe leaves as that radio's callsign; the DISC
+escalation follows it. A station heard only on a radio whose pinging is off
+is not a candidate. The hourly budget stays station-wide.
+
+**Mailbox.** `PersonalBBSListener.servesThisRadio` refuses a call that
+arrived on a radio with `answersMailbox` off, and says which switch to look
+at. The mailbox itself is one mailbox.
+
+**Winlink.** `WinlinkSettings.preferredRadioID` names a radio for Connect &
+Exchange; empty is Auto. P2P answers stay on the radio the call came in on.
+
+**Terminal.** The connect bar's radio is Auto unless the operator picks one;
+a session's radio is fixed when it opens and data follows it, whatever the
+picker says later.
+
+### Auto
+
+`RadioSelector` picks the radio for a connect left on Auto and says why in
+one sentence the connect bar shows verbatim. It ranks what the radios
+already know about the *first hop* — the first digipeater, or the
+destination — read off the same per-radio evidence as the Stations list:
+
+1. A radio that heard the first hop within that link's own TTL, lowest ETX
+   first; readings within 0.05 are equal and the more recent hearing wins.
+2. Otherwise the radio that heard it most recently, past TTL.
+3. Otherwise the radio a NET/ROM route to the destination was learned on.
+4. Otherwise the first connected radio in the operator's list.
+
+Ties fall to the operator's order, so the same inputs always pick the same
+radio. A radio that is not connected is never chosen, and the sentence
+says so: "Auto → IC-705: heard K0NTS-1 there 4 min ago, ETX 1.2. Base last
+heard it 3 h ago, past its TTL."
+
 ## What an operator with one radio must never notice
 
 Every "only when there is more than one" decision hangs off one predicate,
@@ -311,6 +381,10 @@ These are pinned literally in `RadioPresentationTests`,
    radio, with the radio as the last deterministic tie-break; storage keyed
    to match.
 
-Next: the services (node identity, beacons, ping budgets shared on one
-frequency, the Auto radio for a connect) and the multi-radio UI. See `Docs/RoutingMetrics.md` for how link
-quality will be kept per radio.
+8. Services across radios: per-radio switches for beacons, ping, NODES and
+   the mailbox; staggered announcements; both node identities; the Auto
+   radio and its sentence; Winlink's preferred radio; the terminal's radio.
+
+Next: the multi-radio UI — the sidebar's radios and visibility switches,
+the Radio column, the connect bar's picker, the per-radio rows in
+Transmission settings — all hidden until a second radio exists.

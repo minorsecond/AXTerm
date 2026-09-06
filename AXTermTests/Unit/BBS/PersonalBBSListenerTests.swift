@@ -24,6 +24,17 @@ final class PersonalBBSListenerTests: XCTestCase {
         XCTAssertEqual(listener().decide(called: "K0EPI-2", isInitiator: false), .answer)
     }
 
+    /// A radio the operator switched the mailbox off for refuses, and says
+    /// which switch to look at.
+    func testARadioTheMailboxIsOffForRefuses() {
+        var sut = listener()
+        sut.servesThisRadio = false
+        let decision = sut.decide(called: "K0EPI-2", isInitiator: false)
+        XCTAssertEqual(decision, .radioNotServed)
+        XCTAssertEqual(decision.explanation,
+                       "ignored — the mailbox is switched off on the radio this call came in on (Settings → Radios)")
+    }
+
     func testMatchIgnoresCaseAndWhitespace() {
         XCTAssertEqual(listener().decide(called: " k0epi-2 ", isInitiator: false), .answer)
     }

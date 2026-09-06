@@ -414,6 +414,14 @@ final class NetRomIntegration {
         linkEstimator.linkQuality(from: from, to: to, radio: radio)
     }
 
+    func linkETX(from: String, to: String, radio: RadioID = .primary) -> Double? {
+        linkEstimator.etx(from: from, to: to, radio: radio)
+    }
+
+    func effectiveTTL(from: String, to: String, radio: RadioID = .primary) -> TimeInterval {
+        linkEstimator.effectiveTTL(from: from, to: to, radio: radio)
+    }
+
     /// The radio a neighbor is best heard on, for choosing where a datagram
     /// to it should leave.
     func radio(forNeighbor call: String) -> RadioID? {

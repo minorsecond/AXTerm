@@ -383,6 +383,17 @@ struct WinlinkMailView: View {
                     startExchange(useTelnet: true)
                 }
 
+                if appSettings.hasMultipleRadios {
+                    Divider()
+                    Picker("Radio", selection: $winlinkSettings.preferredRadioID) {
+                        Text("Auto").tag("")
+                        ForEach(appSettings.activeRadios.filter(\.enabled)) { radio in
+                            Text(radio.name.isEmpty ? RadioProfile.defaultName(for: radio) : radio.name)
+                                .tag(radio.id.rawValue)
+                        }
+                    }
+                }
+
                 Divider()
 
                 Button("Queue Loopback Test Message") {
@@ -1004,7 +1015,9 @@ struct WinlinkMailView: View {
                     for frame in frames { client?.send(frame: frame) }
                 },
                 destination: destination,
-                path: path)
+                path: path,
+                radio: sessionCoordinator.radio(
+                    preferring: winlinkSettings.preferredRadioID, for: destination, path: path))
 
             // Point the adaptive toolbar at this exchange's route so the
             // popover shows the session scope instead of "Global Network".

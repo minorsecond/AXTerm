@@ -153,6 +153,11 @@ struct TransmissionSettingsView: View {
                     .onChange(of: settings.beaconEnabled) { _, _ in applyNetRomSettings() }
 
                 if settings.beaconEnabled {
+                    RadioServiceRows(
+                        settings: settings, verb: "Send on", keyPath: \.sendsBeacons,
+                        help: "Two of your radios on one frequency should not both beacon; "
+                            + "on different frequencies each one should. When several do, "
+                            + "they take turns two seconds apart.")
                     VStack(alignment: .leading, spacing: 4) {
                         // Short prompts on purpose. In a settings row a
                         // TextField renders its prompt as a label beside the
@@ -221,6 +226,11 @@ struct TransmissionSettingsView: View {
                     .onChange(of: settings.pingEnabled) { _, _ in applyNetRomSettings() }
 
                 if settings.pingEnabled {
+                    RadioServiceRows(
+                        settings: settings, verb: "Ping on", keyPath: \.pings,
+                        help: "A station is pinged on the radio that heard it. A radio "
+                            + "switched off here asks nobody, and stations heard only "
+                            + "there are left alone. The hourly budget is the station's.")
                     LabeledContent("Only between") {
                         HStack(spacing: 6) {
                             Picker("", selection: $settings.pingWindowStartHour) {
@@ -369,7 +379,15 @@ struct TransmissionSettingsView: View {
                           + "can route to it. Every node that hears one writes this station "
                           + "into its own routing table.")
 
+                NetRomNodeIdentityRows(settings: settings, onChange: applyNetRomSettings)
+
                 if settings.netRomAdvertiseSelf {
+                    RadioServiceRows(
+                        settings: settings, verb: "Announce on", keyPath: \.announcesNode,
+                        help: "Which radios carry the NODES broadcast. Each radio's frame "
+                            + "leaves under that radio's own callsign; several take turns "
+                            + "two seconds apart.",
+                        onChange: applyNetRomSettings)
                     durationRow(
                         "Announce every",
                         value: $settings.netRomBroadcastMinutes,

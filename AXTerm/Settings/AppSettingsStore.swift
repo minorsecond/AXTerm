@@ -78,6 +78,7 @@ final class AppSettingsStore: ObservableObject {
     static let netRomForwardingKey = "netRomForwarding"
     static let netRomNodeAliasKey = "netRomNodeAlias"
     static let netRomBroadcastMinutesKey = "netRomBroadcastMinutes"
+    static let netRomNodeIdentityKey = "netRomNodeIdentity"
 
     /// Announcing this station and carrying other people's traffic both
     /// default OFF. Each changes what other operators' nodes do, so each
@@ -634,6 +635,12 @@ final class AppSettingsStore: ObservableObject {
     /// Minutes between NODES broadcasts.
     @Published var netRomBroadcastMinutes: Int {
         didSet { defaults.set(netRomBroadcastMinutes, forKey: Self.netRomBroadcastMinutesKey) }
+    }
+
+    /// Whether several radios are one node or one node each. Meaningless
+    /// with one radio, and not shown then.
+    @Published var netRomNodeIdentity: NetRomNodeIdentity {
+        didSet { defaults.set(netRomNodeIdentity.rawValue, forKey: Self.netRomNodeIdentityKey) }
     }
 
     // MARK: - Beacon
@@ -1274,6 +1281,8 @@ final class AppSettingsStore: ObservableObject {
         self.netRomForwarding = storedNetRomForwarding
         self.netRomNodeAlias = storedNetRomNodeAlias
         self.netRomBroadcastMinutes = storedNetRomBroadcastMinutes
+        self.netRomNodeIdentity = NetRomNodeIdentity(
+            rawValue: defaults.string(forKey: Self.netRomNodeIdentityKey) ?? "") ?? .unified
         self.beaconEnabled = storedBeaconEnabled
         self.beaconText = storedBeaconText
         self.beaconMinutes = storedBeaconMinutes

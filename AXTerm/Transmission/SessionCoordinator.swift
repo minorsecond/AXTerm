@@ -244,6 +244,7 @@ final class SessionCoordinator: ObservableObject {
         sessionManager.setLocalAddresses(addresses)
         radioOwners = owners.compactMapValues { $0.count == 1 ? $0[0] : nil }
             .filter { !CallsignNormalizer.addressMatchesDisplay(station, $0.key) }
+        applyNodeIdentities()
     }
 
     /// The radio that operates as `address`, when exactly one does.
@@ -913,6 +914,79 @@ final class SessionCoordinator: ObservableObject {
         let node = CallsignNormalizer.toAddress(localCallsign)
         netRomDriver.localNode = node
         netRomDriver.localUser = node
+        applyNodeIdentities()
+    }
+
+    static func nodeAlias(_ raw: String) -> String {
+        String(raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+            .filter { $0.isLetter || $0.isNumber }
+            .prefix(6))
+    }
+
+    /// The radios that announce, in the operator's order, each with the node
+    /// it announces: the station's node on every radio, or — one node per
+    /// radio — that radio's own callsign under its own alias.
+    func announcements() -> [NetRomAnnouncement] {
+        guard let appSettings else { return [] }
+        let radios = appSettings.activeRadios.filter { $0.enabled && $0.announcesNode }
+        let stationNode = CallsignNormalizer.toAddress(localCallsign)
+        let stationAlias = netRomDriver.localAlias
+        switch appSettings.netRomNodeIdentity {
+        case .unified:
+            return radios.map { NetRomAnnouncement(radio: $0.id, node: stationNode, alias: stationAlias) }
+        case .perRadio:
+            return radios.map { radio in
+                let alias = Self.nodeAlias(radio.netRomAlias)
+                return NetRomAnnouncement(
+                    radio: radio.id,
+                    node: sessionManager.localAddress(for: radio.id),
+                    alias: alias.isEmpty ? stationAlias : alias)
+            }
+        }
+    }
+
+    /// One node per radio means each radio's callsign is an L3 destination
+    /// this station answers as; one node on every radio means only the
+    /// station's is.
+    private func applyNodeIdentities() {
+        guard let appSettings else { return }
+        let stationNode = CallsignNormalizer.toAddress(localCallsign)
+        switch appSettings.netRomNodeIdentity {
+        case .unified:
+            netRomDriver.additionalLocalNodes = []
+        case .perRadio:
+            netRomDriver.additionalLocalNodes = appSettings.activeRadios
+                .filter(\.enabled)
+                .map { sessionManager.localAddress(for: $0.id) }
+                .filter { !CallsignNormalizer.addressesMatch($0, stationNode) }
+        }
+    }
+
+    /// Service keys under which node aliases currently answer at L2.
+    private var nodeL2AliasKeys: Set<String> = []
+    /// Every alias the node shell answers on, uppercased.
+    private var nodeL2Aliases: Set<String> = []
+
+    private func registerNodeL2Aliases(accepting: Bool) {
+        var wanted: [String: String] = [:]   // service key → alias
+        if accepting {
+            let station = netRomDriver.localAlias
+            if !station.isEmpty { wanted["netromNodeL2"] = station }
+            if appSettings?.netRomNodeIdentity == .perRadio {
+                for announcement in announcements() where announcement.alias != station {
+                    wanted["netromNodeL2.\(announcement.radio.rawValue)"] = announcement.alias
+                }
+            }
+        }
+        for stale in nodeL2AliasKeys.subtracting(wanted.keys) {
+            sessionManager.setServiceAddress(nil, for: stale)
+        }
+        for (key, alias) in wanted {
+            sessionManager.setServiceAddress(CallsignNormalizer.toAddress(alias), for: key)
+        }
+        nodeL2AliasKeys = Set(wanted.keys)
+        nodeL2Aliases = Set(wanted.values.map { $0.uppercased() })
     }
 
     /// Push the operator's NET/ROM node policy into the driver and start
@@ -926,26 +1000,17 @@ final class SessionCoordinator: ObservableObject {
         netRomDriver.advertisesItself = settings.netRomAdvertiseSelf
         netRomDriver.forwardingEnabled = settings.netRomForwarding
         netRomNodeHost.isEnabled = settings.netRomAcceptInbound
-        // The L2 door: a KA-node neighbor cannot open circuits, so the
-        // node alias also answers plain AX.25 connects while the node
-        // service is on. Same shell, same rules, different transport.
-        let aliasAddress: AX25Address? = {
-            guard settings.netRomAcceptInbound else { return nil }
-            let alias = netRomDriver.localAlias
-            guard !alias.isEmpty else { return nil }
-            return CallsignNormalizer.toAddress(alias)
-        }()
-        sessionManager.setServiceAddress(aliasAddress, for: "netromNodeL2")
-        ensureNodeL2Subscription()
         // Six characters, uppercase, alphanumeric — the shape BPQ shows
         // beside a callsign. Sanitised at the boundary because whatever
         // is here goes into every neighbour's node list.
-        netRomDriver.localAlias = String(
-            settings.netRomNodeAlias
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .uppercased()
-                .filter { $0.isLetter || $0.isNumber }
-                .prefix(6))
+        netRomDriver.localAlias = Self.nodeAlias(settings.netRomNodeAlias)
+        netRomDriver.announcementsProvider = { [weak self] in self?.announcements() ?? [] }
+        applyNodeIdentities()
+        // The L2 door: a KA-node neighbor cannot open circuits, so the
+        // node alias also answers plain AX.25 connects while the node
+        // service is on. Same shell, same rules, different transport.
+        registerNodeL2Aliases(accepting: settings.netRomAcceptInbound)
+        ensureNodeL2Subscription()
         scheduleNetRomBroadcasts(everyMinutes: settings.netRomBroadcastMinutes,
                                  enabled: settings.netRomAdvertiseSelf)
         scheduleBeacon(settings)
@@ -968,10 +1033,7 @@ final class SessionCoordinator: ObservableObject {
     /// the same shell a circuit caller gets.
     private func answerNodeL2(_ session: AX25Session) {
         guard !session.isInitiator, netRomNodeHost.isEnabled else { return }
-        let alias = netRomDriver.localAlias
-        guard !alias.isEmpty,
-              session.localAddress.display.uppercased() == alias.uppercased()
-        else { return }
+        guard nodeL2Aliases.contains(session.localAddress.display.uppercased()) else { return }
 
         let write: (Data) -> Void = { [weak self] data in
             guard let self else { return }
@@ -1045,6 +1107,11 @@ final class SessionCoordinator: ObservableObject {
         var seen = Set<String>()
         var candidates: [PingPolicy.Candidate] = []
 
+        // A probe goes out on the radio that heard the station — most
+        // recently, among those that ping. A station heard only on a radio
+        // whose pinging is off is not a candidate; with one radio, every
+        // station is heard on it.
+        let pingRadios = serviceRadios(\.pings)
         for station in packetEngine?.stations ?? [] {
             let key = PingPolicy.normalize(station.call)
             // Heard *directly*: a station only ever heard through a
@@ -1052,9 +1119,18 @@ final class SessionCoordinator: ObservableObject {
             // test with one frame.
             guard station.lastVia.isEmpty, !mine.contains(key), !seen.contains(key) else { continue }
             guard CallsignQuery.isPlausible(key) else { continue }
+            let radio: RadioID
+            if pingRadios.count == 1 {
+                radio = pingRadios[0]
+            } else if let heardOn = station.heardOn.first(where: { pingRadios.contains($0) }) {
+                radio = heardOn
+            } else {
+                continue
+            }
             seen.insert(key)
             candidates.append(PingPolicy.Candidate(
-                call: key, source: .heardDirect, lastActivity: station.lastHeard ?? .distantPast))
+                call: key, source: .heardDirect, lastActivity: station.lastHeard ?? .distantPast,
+                radio: radio))
         }
         // Digipeater bases join the yield set: nobody has heard bare
         // W2CRS transmit, but W2CRS-7 repeats half the channel — a bare
@@ -1071,16 +1147,19 @@ final class SessionCoordinator: ObservableObject {
         for (call, when) in overheardCallees where !mine.contains(call) && !seen.contains(call)
             && !digiBases.contains(CallsignQuery.normalize(call)) {
             seen.insert(call)
+            // Nobody heard this station, so no radio is the obvious one;
+            // the first pinging radio asks.
             candidates.append(PingPolicy.Candidate(
-                call: call, source: .calledByOthers, lastActivity: when))
+                call: call, source: .calledByOthers, lastActivity: when,
+                radio: pingRadios.first ?? .primary))
         }
         return candidates
     }
 
     private func wirePingProber() {
         pingProber.sendFrame = { [weak self] frame in self?.sendFrame(frame) ?? false }
-        pingProber.localAddress = { [weak self] in
-            self?.sessionManager.localCallsign ?? AX25Address(call: "NOCALL", ssid: 0)
+        pingProber.localAddress = { [weak self] radio in
+            self?.sessionManager.localAddress(for: radio) ?? AX25Address(call: "NOCALL", ssid: 0)
         }
         pingProber.candidateProvider = { [weak self] in self?.pingCandidates() ?? [] }
         pingProber.connectedPeers = { [weak self] in
@@ -1182,17 +1261,94 @@ final class SessionCoordinator: ObservableObject {
     func sendBeacon(_ settings: AppSettingsStore) {
         guard case let .success(beacon) = BeaconPlan.plan(
             text: settings.beaconText, path: settings.beaconPath) else { return }
-        let frame = AX25FrameBuilder.buildUI(
-            from: sessionManager.localCallsign,
-            to: AX25Address(call: BeaconPlan.destinationCall, ssid: 0),
-            via: DigiPath.from(beacon.digis),
-            pid: 0xF0,
-            payload: Data(beacon.text.utf8),
-            displayInfo: beacon.text)
-        sendFrame(frame)
+        let radios = serviceRadios(\.sendsBeacons)
+        for (index, radio) in radios.enumerated() {
+            let frame = AX25FrameBuilder.buildUI(
+                from: sessionManager.localAddress(for: radio),
+                to: AX25Address(call: BeaconPlan.destinationCall, ssid: 0),
+                via: DigiPath.from(beacon.digis),
+                pid: 0xF0,
+                payload: Data(beacon.text.utf8),
+                displayInfo: beacon.text).onRadio(radio)
+            transmit(frame, staggeredBy: index)
+        }
         let pathText = beacon.digis.isEmpty
             ? "direct" : "via \(beacon.digis.joined(separator: " → "))"
-        packetEngine?.appendSystemNotification("Beacon sent \(pathText).")
+        packetEngine?.appendSystemNotification("Beacon sent \(pathText)\(radioSuffix(radios)).")
+    }
+
+    // MARK: - Services across radios
+
+    /// Seconds between the same announcement leaving two radios. Two radios
+    /// on one frequency would otherwise key up together and collide with
+    /// themselves; on different frequencies the delay costs nothing.
+    static let radioStagger: TimeInterval = 2.0
+
+    /// The radios a station-wide service transmits on: the enabled radios
+    /// whose profile has the service switched on and whose link is up. With
+    /// one radio that is simply the radio, connected or not, exactly as
+    /// before radios existed — the engine already refuses frames for a link
+    /// that is down.
+    func serviceRadios(_ uses: (RadioProfile) -> Bool) -> [RadioID] {
+        guard let appSettings else { return [.primary] }
+        let enabled = appSettings.activeRadios.filter(\.enabled)
+        guard enabled.count > 1 else { return [enabled.first?.id ?? .primary] }
+        return enabled
+            .filter(uses)
+            .filter { packetEngine?.radioManager.state(of: $0.id) == .connected }
+            .map(\.id)
+    }
+
+    /// " on IC-705, Base" when several radios carried something; nothing
+    /// when one did, so a one-radio station's messages do not change.
+    func radioSuffix(_ radios: [RadioID]) -> String {
+        guard let appSettings, appSettings.hasMultipleRadios, !radios.isEmpty else { return "" }
+        let names = radios.compactMap { appSettings.radio($0)?.name }
+        return names.isEmpty ? "" : " on \(names.joined(separator: ", "))"
+    }
+
+    /// Send now for the first radio; the k-th radio waits k staggers.
+    @discardableResult
+    private func transmit(_ frame: OutboundFrame, staggeredBy index: Int) -> Bool {
+        guard index > 0 else { return sendFrame(frame) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * Self.radioStagger) { [weak self] in
+            _ = self?.sendFrame(frame)
+        }
+        return true
+    }
+
+    /// A radio the operator named, if it is still an enabled radio; otherwise
+    /// Auto's choice. An empty preference is Auto.
+    func radio(preferring preferredID: String, for destination: AX25Address, path: DigiPath) -> RadioID {
+        if !preferredID.isEmpty,
+           let radio = appSettings?.radio(RadioID(rawValue: preferredID)),
+           radio.enabled, !radio.archived {
+            return radio.id
+        }
+        return autoRadio(for: destination, path: path)?.radio ?? .primary
+    }
+
+    /// The radio a connect left on Auto should use, and why — nil with no
+    /// settings wired, when the caller falls back to the primary.
+    func autoRadio(for destination: AX25Address, path: DigiPath) -> RadioSelector.Choice? {
+        guard let appSettings else { return nil }
+        let firstHop = (path.digis.first ?? destination).display.uppercased()
+        let station = packetEngine?.stations.first { $0.call.uppercased() == firstHop }
+        let integration = packetEngine?.netRomIntegration
+        let evidence = appSettings.activeRadios.filter(\.enabled).map { radio -> RadioSelector.Evidence in
+            let me = sessionManager.localAddress(for: radio.id).display
+            return RadioSelector.Evidence(
+                radio: radio.id,
+                name: radio.name,
+                connected: packetEngine?.radioManager.state(of: radio.id) == .connected,
+                lastHeard: station?.perRadio[radio.id]?.lastHeard,
+                etx: integration?.linkETX(from: firstHop, to: me, radio: radio.id),
+                ttl: integration?.effectiveTTL(from: firstHop, to: me, radio: radio.id) ?? 3600)
+        }
+        return RadioSelector.choose(
+            firstHop: firstHop, radios: evidence,
+            routeRadio: integration?.bestRouteTo(destination.display)?.radioID,
+            now: Date())
     }
 
     /// Adapter giving the driver exactly the two things it needs from
@@ -1219,17 +1375,22 @@ final class SessionCoordinator: ObservableObject {
         /// "NODES" reaches every neighbor listening on the channel, with
         /// no links to establish and nothing to acknowledge.
         func sendNodesBroadcast(_ payload: Data, summary: String) -> Bool {
+            sendNodesBroadcast(payload, summary: summary, radio: .primary)
+        }
+
+        func sendNodesBroadcast(_ payload: Data, summary: String, radio: RadioID) -> Bool {
             guard let coordinator else { return false }
             return MainActor.assumeIsolated {
                 let frame = AX25FrameBuilder.buildUI(
-                    from: coordinator.sessionManager.localCallsign,
+                    from: coordinator.sessionManager.localAddress(for: radio),
                     to: AX25Address(call: NetRomNodesBroadcast.destinationCall, ssid: 0),
                     via: DigiPath(),
                     pid: NetRomWire.pid,
                     payload: payload,
                     displayInfo: "NODES: \(summary)"
-                )
-                return coordinator.sendFrame(frame)
+                ).onRadio(radio)
+                let order = coordinator.announcements().map(\.radio)
+                return coordinator.transmit(frame, staggeredBy: order.firstIndex(of: radio) ?? 0)
             }
         }
 

@@ -26,6 +26,7 @@ final class WinlinkSettings: ObservableObject {
     static let stationPreferencesKey = "winlinkStationPreferences"
     static let callsignLookupEnabledKey = "winlinkCallsignLookupEnabled"
     static let preferredTransportKey = "winlinkPreferredTransport"
+    static let preferredRadioKey = "winlinkPreferredRadio"
     static let clientProductKey = "winlinkClientProduct"
     static let gatewayLadderKey = "winlinkGatewayLadder"
     static let mailboxSyncEnabledKey = "winlinkMailboxSyncEnabled"
@@ -178,6 +179,12 @@ final class WinlinkSettings: ObservableObject {
 
     @Published var preferredTransport: TransportPreference {
         didSet { defaults.set(preferredTransport.rawValue, forKey: Self.preferredTransportKey) }
+    }
+
+    /// The radio Connect & Exchange places its calls on. Empty means Auto:
+    /// the radio that has heard the gateway most recently and best.
+    @Published var preferredRadioID: String {
+        didSet { defaults.set(preferredRadioID, forKey: Self.preferredRadioKey) }
     }
 
     /// Answer inbound Winlink calls as a P2P mail peer.
@@ -472,6 +479,7 @@ final class WinlinkSettings: ObservableObject {
             ?? WinlinkStationPreferences()
         preferredTransport = TransportPreference(
             rawValue: defaults.string(forKey: Self.preferredTransportKey) ?? "") ?? .ax25
+        preferredRadioID = defaults.string(forKey: Self.preferredRadioKey) ?? ""
         clientProduct = defaults.string(forKey: Self.clientProductKey) ?? "AXTerm"
 
         if let json = defaults.string(forKey: Self.gatewayLadderKey),

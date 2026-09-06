@@ -32,6 +32,34 @@ final class ConnectBarViewModel: ObservableObject {
     @Published private(set) var viaInputError: String?
     @Published var nextHopSelection: String = "__AUTO__"
     @Published private(set) var nextHopOptions: [String] = ["__AUTO__"]
+    /// The radio the operator picked for the next connect; nil is Auto.
+    @Published var radioSelection: RadioID?
+    /// The enabled radios, in the operator's order. The picker shows only
+    /// when there are two.
+    @Published private(set) var radioOptions: [RadioOption] = []
+    /// Auto's current answer for the draft, in words, for the picker's help.
+    var autoRadioDescriber: ((_ destination: String, _ digis: [String]) -> String?)?
+
+    struct RadioOption: Equatable, Identifiable {
+        let id: RadioID
+        let name: String
+    }
+
+    func setRadioOptions(_ options: [RadioOption]) {
+        guard options != radioOptions else { return }
+        radioOptions = options
+        // A radio that went away, or the last but one, takes Auto with it.
+        if let selected = radioSelection, !options.contains(where: { $0.id == selected }) {
+            radioSelection = nil
+        }
+        if options.count < 2 { radioSelection = nil }
+    }
+
+    /// "Auto (IC-705)" while the picker is on Auto — what Auto would do
+    /// right now for what is typed — and why, for the tooltip.
+    var autoRadioHelp: String {
+        autoRadioDescriber?(toCall, viaDigipeaters) ?? "Auto picks the radio that has heard the first hop most recently and best."
+    }
     @Published private(set) var routePreview: String = "No known route"
     @Published private(set) var routeOverrideWarning: String?
     @Published private(set) var inlineNote: String?

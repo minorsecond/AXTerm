@@ -227,17 +227,18 @@ final class BBSService: ObservableObject {
 
     // MARK: - Answering
 
-    private func listener() -> PersonalBBSListener {
+    private func listener(for radio: RadioID = .primary) -> PersonalBBSListener {
         PersonalBBSListener(
             isArmed: settings.onAir,
             winlinkP2PAddress: isWinlinkP2PArmed() ? winlinkP2PCallsign() : nil,
             myCallsign: answeringCallsign,
             contestedBy: contestedIdentityHolder(),
-            currentCaller: live?.callsign)
+            currentCaller: live?.callsign,
+            servesThisRadio: coordinator.appSettings?.radio(radio)?.answersMailbox ?? true)
     }
 
     private func handleInbound(_ session: AX25Session) {
-        let decision = listener().decide(
+        let decision = listener(for: session.radio).decide(
             called: session.localAddress.display,
             isInitiator: session.isInitiator)
 

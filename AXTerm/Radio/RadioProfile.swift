@@ -54,6 +54,18 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
     var enabled: Bool = true
     var autoConnect: Bool = true
     var frequencyHz: Int? = nil
+
+    // MARK: Services on this radio
+    // All on by default, so one radio behaves exactly as it always has; the
+    // switches are only shown once there are two. "Two of your radios on one
+    // frequency should not both beacon" is the case they exist for.
+    var sendsBeacons: Bool = true
+    var pings: Bool = true
+    var announcesNode: Bool = true
+    var answersMailbox: Bool = true
+    /// The alias this radio's node announces under when the NET/ROM node
+    /// identity is per radio. Empty means the station alias.
+    var netRomAlias: String = ""
     /// Removed radios are archived, not deleted, so rows that name them keep
     /// resolving to a name.
     var archived: Bool = false
@@ -90,6 +102,11 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         autoConnect = try c.decodeIfPresent(Bool.self, forKey: .autoConnect) ?? true
         frequencyHz = try c.decodeIfPresent(Int.self, forKey: .frequencyHz)
+        sendsBeacons = try c.decodeIfPresent(Bool.self, forKey: .sendsBeacons) ?? true
+        pings = try c.decodeIfPresent(Bool.self, forKey: .pings) ?? true
+        announcesNode = try c.decodeIfPresent(Bool.self, forKey: .announcesNode) ?? true
+        answersMailbox = try c.decodeIfPresent(Bool.self, forKey: .answersMailbox) ?? true
+        netRomAlias = try c.decodeIfPresent(String.self, forKey: .netRomAlias) ?? ""
         archived = try c.decodeIfPresent(Bool.self, forKey: .archived) ?? false
     }
 

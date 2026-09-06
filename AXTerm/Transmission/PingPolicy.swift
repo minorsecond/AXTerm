@@ -54,6 +54,8 @@ nonisolated enum PingPolicy {
         /// When this station was last heard, or last called for. Only used
         /// to prefer fresher candidates.
         let lastActivity: Date
+        /// The radio that heard it, and so the one to ask from.
+        var radio: RadioID = .primary
     }
 
     /// What has happened to this station's probes so far.

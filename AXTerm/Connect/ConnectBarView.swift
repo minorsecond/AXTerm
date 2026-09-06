@@ -26,6 +26,10 @@ struct ConnectBarView: View {
                 )
                 .frame(width: 240)
 
+                if viewModel.radioOptions.count > 1 {
+                    radioPicker
+                }
+
                 Spacer(minLength: 8)
 
                 Button {
@@ -118,6 +122,22 @@ struct ConnectBarView: View {
         .onAppear {
             viewModel.applyContext(context)
         }
+    }
+
+    /// Which radio the call leaves on. Auto is the default and explains
+    /// itself; a named radio is the operator overriding it.
+    private var radioPicker: some View {
+        Picker("Radio", selection: $viewModel.radioSelection) {
+            Text("Auto").tag(RadioID?.none)
+            ForEach(viewModel.radioOptions) { option in
+                Text(option.name).tag(RadioID?.some(option.id))
+            }
+        }
+        .pickerStyle(.menu)
+        .frame(width: 150)
+        .help(viewModel.radioSelection == nil
+              ? viewModel.autoRadioHelp
+              : "Chosen by you. The session stays on this radio once it opens; Auto would pick by evidence.")
     }
 
     private var modeBinding: Binding<ConnectBarMode> {

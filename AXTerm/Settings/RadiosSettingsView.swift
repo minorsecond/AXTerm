@@ -320,6 +320,21 @@ struct RadioDetailView: View {
 
             if settings.hasMultipleRadios {
                 Section {
+                    Toggle("Send beacons", isOn: serviceBinding(\.sendsBeacons))
+                    Toggle("Ping stations", isOn: serviceBinding(\.pings))
+                    Toggle("Announce the NET/ROM node", isOn: serviceBinding(\.announcesNode))
+                    Toggle("Answer mailbox calls", isOn: serviceBinding(\.answersMailbox))
+                } header: {
+                    Text("Services on this radio")
+                } footer: {
+                    Text("Every service runs on every radio unless switched off here. Whether a "
+                         + "service runs at all is set under Transmission and BBS; these rows only "
+                         + "say which radios it uses.")
+                }
+            }
+
+            if settings.hasMultipleRadios {
+                Section {
                     Button("Remove Radio", role: .destructive) {
                         settings.archiveRadio(radioID)
                         dismiss()
@@ -360,4 +375,15 @@ struct RadioDetailView: View {
     }
 
     private var stationCallsign: String { settings.myCallsign.uppercased() }
+
+    private func serviceBinding(_ keyPath: WritableKeyPath<RadioProfile, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { settings.radio(radioID)?[keyPath: keyPath] ?? true },
+            set: { value in
+                settings.updateRadio(radioID) { $0[keyPath: keyPath] = value }
+                // The node's L2 aliases are registered when configured, not
+                // when announced.
+                SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+            })
+    }
 }
