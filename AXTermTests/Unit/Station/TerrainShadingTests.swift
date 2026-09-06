@@ -105,17 +105,34 @@ final class TerrainShadingTests: XCTestCase {
         XCTAssertEqual(pixels.count, samples * samples * 4)
     }
 
-    /// Shaded pixels are opaque; the layer's own opacity does the blending.
+    /// Relief is a shadow, not a coat of paint: flat ground is transparent
+    /// and a slope facing away from the light is translucent black.
     ///
-    /// Per-pixel alpha *and* layer opacity would multiply together, leaving
-    /// the strength of the wash impossible to reason about from either value.
-    /// Only a no-data gap is transparent.
-    func testShadedPixelsAreOpaqueAndTheLayerOpacityBlendsThem() {
-        let grid = slopedGrid(risingToward: "east")
-        let pixels = TerrainShading.rgba(from: grid, samples: samples,
+    /// An opaque grey tile composited over the map was a whitewash — an
+    /// overlay renderer cannot multiply against the basemap, so "flat = white"
+    /// lightened everything under it. In dark mode that turned Denver light
+    /// grey under MapKit's dark-mode shields and labels.
+    func testFlatGroundIsTransparentAndSlopesAreShadow() {
+        let flat = [Float](repeating: 1600, count: samples * samples)
+        let flatPixels = TerrainShading.rgba(from: flat, samples: samples,
+                                             style: .hillshade,
+                                             metresPerSampleX: 100, metresPerSampleY: 100)
+        XCTAssertEqual(flatPixels[(4 * samples + 4) * 4 + 3], 0, "flat ground changes nothing")
+
+        let away = TerrainShading.rgba(from: slopedGrid(risingToward: "north"), samples: samples,
+                                       style: .hillshade,
+                                       metresPerSampleX: 100, metresPerSampleY: 100)
+        let offset = (4 * samples + 4) * 4
+        XCTAssertGreaterThan(away[offset + 3], 0, "a slope facing away from the light casts shadow")
+        XCTAssertEqual(away[offset], 0)
+        XCTAssertEqual(away[offset + 1], 0)
+        XCTAssertEqual(away[offset + 2], 0)
+
+        let toward = TerrainShading.rgba(from: slopedGrid(risingToward: "south"), samples: samples,
                                          style: .hillshade,
                                          metresPerSampleX: 100, metresPerSampleY: 100)
-        XCTAssertEqual(pixels[(4 * samples + 4) * 4 + 3], 255)
+        XCTAssertLessThan(toward[offset + 3], away[offset + 3],
+                          "a slope facing the light is lighter than one facing away")
         XCTAssertLessThan(TerrainShading.Style.hillshade.opacity, 1)
     }
 
@@ -190,10 +207,12 @@ final class TerrainShadingTests: XCTestCase {
         }
     }
 
-    /// Hillshade multiplies so roads read through; a colour ramp multiplied
-    /// goes muddy, so it stays a light wash instead.
+    /// Both styles composite normally: an overlay renderer's blend mode never
+    /// reaches the basemap, so the shading has to be in the pixels. The
+    /// hillshade is still the stronger of the two — it is the subject when
+    /// it is on; the elevation tint is background.
     func testEachStyleBlendsInTheWayItsJobNeeds() {
-        XCTAssertEqual(TerrainShading.Style.hillshade.blendMode, .multiply)
+        XCTAssertEqual(TerrainShading.Style.hillshade.blendMode, .normal)
         XCTAssertEqual(TerrainShading.Style.elevation.blendMode, .normal)
         XCTAssertLessThan(TerrainShading.Style.elevation.opacity,
                           TerrainShading.Style.hillshade.opacity)
@@ -254,7 +273,8 @@ final class TerrainShadingTests: XCTestCase {
         for (row, column) in [(2, 2), (4, 4), (5, 3)] {
             let expected = TerrainShading.relief(
                 from: try XCTUnwrap(shade(grid, row: row, column: column)))
-            let actual = Double(pixels[(row * samples + column) * 4]) / 255
+            // Relief rides in the alpha channel as shadow: 1 - alpha.
+            let actual = 1 - Double(pixels[(row * samples + column) * 4 + 3]) / 255
             XCTAssertEqual(actual, expected, accuracy: 1.0 / 255)
         }
     }

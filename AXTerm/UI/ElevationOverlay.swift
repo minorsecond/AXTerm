@@ -201,9 +201,9 @@ nonisolated final class ElevationOverlayRenderer: MKOverlayRenderer, @unchecked 
 
         let rect = rect(for: overlay.boundingMapRect)
         context.saveGState()
-        // Blend rather than paint: MapKit has no overlay level beneath the
-        // roads, so anything drawn opaquely here buries the street grid and
-        // the network lines. Multiplying darkens what is already there.
+        // The shading is in the tile's own alpha (see
+        // `TerrainShading.Style.blendMode` for why a blend mode here could
+        // never reach the basemap); this context only sets the strength.
         context.setBlendMode(overlay.style.blendMode)
         context.setAlpha(overlay.style.opacity)
         // Core Graphics draws images bottom-up; the map's context runs
