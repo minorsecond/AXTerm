@@ -22,7 +22,9 @@
 //    - a session is running; someone's traffic is not ours to interrupt
 //    - the hourly budget is spent
 //    - too soon after the last probe of any station
-//    - too soon after the last probe of *this* station
+//    - too soon after the last probe of this station's *box*, whatever
+//      SSID answers to it
+//    - too soon after the last probe of *this exact address*
 //    - this station has ignored us before, so wait longer each time
 //
 //  A station that answers is not proof of anything except that radio
@@ -77,8 +79,26 @@ nonisolated enum PingPolicy {
         /// Floor between any two probes, whoever they are for. The channel
         /// budget, in one number.
         var minSecondsBetweenProbes: Int = 120
-        /// Floor between two probes of the same station.
+        /// Floor between two probes of the same *address*, SSID and all.
         var stationCooldownMinutes: Int = 60
+        /// Floor between two probes of the same **box** — any SSID sharing
+        /// a base callsign.
+        ///
+        /// The per-address floor above cannot see that K0NTS-1, -7, -10 and
+        /// -14 are one radio on one antenna. Field capture 2026-09-03: all
+        /// four came due within the same minute and went out back to back at
+        /// the channel spacing, four transmissions in eight minutes asking
+        /// one box the same question, and it answered none of them. Probing
+        /// a second SSID of a box learns nothing the first did not: this
+        /// measures whether radio reaches the box, and a box has one
+        /// transmitter.
+        ///
+        /// Flat, deliberately — no doubling on silence. The per-address
+        /// backoff is the evidence-driven part; this is only the rule that
+        /// keeps a box's addresses from arriving together. Zero turns it
+        /// off, which the picker says in words rather than leaving it to be
+        /// discovered.
+        var boxCooldownMinutes: Int = 60
         /// Ceiling on transmissions per hour, whatever the other numbers
         /// would allow.
         var maxProbesPerHour: Int = 12
@@ -178,7 +198,8 @@ nonisolated enum PingPolicy {
             .filter { ownBase.isEmpty || CallsignQuery.normalize($0.call) != ownBase }
             .filter { $0.source != .calledByOthers
                 || !heardBases.contains(CallsignQuery.normalize($0.call)) }
-            .filter { isDue($0, histories: histories, settings: settings, now: conditions.now) }
+            .filter { isDue($0, histories: histories, boxes: lastProbedByBase(histories),
+                            settings: settings, now: conditions.now) }
 
         guard !eligible.isEmpty else { return .hold("nothing is due") }
 
@@ -209,12 +230,36 @@ nonisolated enum PingPolicy {
         return min(base * pow(2, Double(doublings)), maxBackoff)
     }
 
+    /// When each box was last probed, whichever of its addresses it was.
+    ///
+    /// Keyed by base callsign, so a probe of KB5YZB-7 is what KB5YZB-1 has
+    /// to wait behind.
+    static func lastProbedByBase(_ histories: [String: History]) -> [String: Date] {
+        var result: [String: Date] = [:]
+        for (call, history) in histories {
+            guard let probed = history.lastProbed else { continue }
+            let base = CallsignQuery.normalize(call)
+            if let known = result[base], known >= probed { continue }
+            result[base] = probed
+        }
+        return result
+    }
+
     private static func isDue(
         _ candidate: Candidate,
         histories: [String: History],
+        boxes: [String: Date],
         settings: Settings,
         now: Date
     ) -> Bool {
+        // The box first: a station whose sibling SSID was just asked is not
+        // due however long ago this particular address was asked.
+        if settings.boxCooldownMinutes > 0,
+           let boxProbed = boxes[CallsignQuery.normalize(candidate.call)],
+           now.timeIntervalSince(boxProbed)
+            < TimeInterval(settings.boxCooldownMinutes * 60) {
+            return false
+        }
         let history = histories[normalize(candidate.call)]
         guard let lastProbed = history?.lastProbed else { return true }
         return now.timeIntervalSince(lastProbed) >= backoff(for: history, settings: settings)

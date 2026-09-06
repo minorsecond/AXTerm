@@ -241,6 +241,21 @@ struct AXTermApp: App {
         }
         .defaultSize(width: 820, height: 700)
 
+        // A window, not a settings pane: the probe log is something to
+        // leave open beside the terminal while the rotation works, and a
+        // settings sheet closes the moment you look away from it.
+        Window("Ping Activity", id: "pingActivity") {
+            if let coordinator = SessionCoordinator.shared {
+                PingActivityView(prober: coordinator.pingProber, settings: settings)
+            } else {
+                ContentUnavailableView(
+                    "Radio not started",
+                    systemImage: "antenna.radiowaves.left.and.right.slash",
+                    description: Text("Probe history appears once the radio is running."))
+            }
+        }
+        .defaultSize(width: 760, height: 560)
+
         // No MenuBarExtra scene: the menu bar item is an AppKit
         // NSStatusItem owned by StatusItemController (created in init).
         // SwiftUI's MenuBarExtraController re-set the status button
