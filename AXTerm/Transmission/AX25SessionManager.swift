@@ -482,6 +482,31 @@ final class AX25SessionManager: ObservableObject {
     /// Local callsign (from settings)
     var localCallsign: AX25Address
 
+    /// The address each radio operates as, where it differs from the station
+    /// callsign. A radio absent here answers as `localCallsign`.
+    ///
+    /// Two radios on one licence are two stations on the air — an HF and a
+    /// VHF station, say — and each may carry its own SSID so a remote
+    /// station can reach one in particular. Set through
+    /// `setLocalAddresses`, which tears down the sessions of a radio whose
+    /// address changed: a session is bound to the address it opened under.
+    private(set) var localAddresses: [RadioID: AX25Address] = [:]
+
+    /// The address this radio operates as.
+    func localAddress(for radio: RadioID) -> AX25Address {
+        localAddresses[radio] ?? localCallsign
+    }
+
+    func setLocalAddresses(_ addresses: [RadioID: AX25Address]) {
+        let changed = Set(addresses.keys).union(localAddresses.keys).filter { radio in
+            let before = localAddresses[radio] ?? localCallsign
+            let after = addresses[radio] ?? localCallsign
+            return !CallsignNormalizer.addressesMatch(before, after)
+        }
+        localAddresses = addresses
+        for radio in changed { purgeSessions(on: radio) }
+    }
+
     /// Extra addresses this station answers on, keyed by the service owning each.
     ///
     /// A node answers on several addresses at once — a mailbox, a Winlink P2P
@@ -506,6 +531,7 @@ final class AX25SessionManager: ObservableObject {
     /// Whether a frame addressed to `address` belongs to this station at all.
     func answers(_ address: AX25Address) -> Bool {
         if CallsignNormalizer.addressesMatch(address, localCallsign) { return true }
+        if localAddresses.values.contains(where: { CallsignNormalizer.addressesMatch(address, $0) }) { return true }
         return serviceAddresses.values.contains {
             CallsignNormalizer.addressesMatch(address, $0)
         }
@@ -513,7 +539,12 @@ final class AX25SessionManager: ObservableObject {
 
     /// Every address currently answered, station callsign first. For diagnostics.
     var answeredAddresses: [AX25Address] {
-        [localCallsign] + serviceAddresses.values.sorted { $0.display < $1.display }
+        var seen: [AX25Address] = [localCallsign]
+        for address in localAddresses.values.sorted(by: { $0.display < $1.display })
+        where !seen.contains(where: { CallsignNormalizer.addressesMatch($0, address) }) {
+            seen.append(address)
+        }
+        return seen + serviceAddresses.values.sorted { $0.display < $1.display }
     }
 
     /// Callback when frames need to be sent
@@ -865,7 +896,7 @@ final class AX25SessionManager: ObservableObject {
         axDebugPrint("========================================")
 
         let session = AX25Session(
-            localAddress: localCallsign,
+            localAddress: localAddress(for: radio),
             remoteAddress: destination,
             path: path,
             radio: radio,
@@ -971,6 +1002,29 @@ final class AX25SessionManager: ObservableObject {
     /// Purge all sessions after a local callsign change.
     /// Active sessions (connecting/connected/disconnecting) are force-disconnected first,
     /// then ALL sessions are removed since they retain the stale `localAddress`.
+    /// Ends every session on one radio: its address changed, and a session is
+    /// bound to the address it opened under.
+    func purgeSessions(on radio: RadioID) {
+        let keys = sessions.keys.filter { $0.radio == radio }
+        guard !keys.isEmpty else { return }
+        for key in keys {
+            guard let session = sessions[key] else { continue }
+            session.t1TimerTask?.cancel()
+            session.t1PendingRetransmitTask?.cancel()
+            session.t3TimerTask?.cancel()
+            switch session.state {
+            case .connecting, .connected, .disconnecting:
+                forceDisconnect(session: session)
+            case .disconnected, .error:
+                break
+            }
+            sessions.removeValue(forKey: key)
+        }
+        TxLog.debug(.session, "Purged sessions for a radio's callsign change", [
+            "radio": radio.rawValue, "purgedCount": keys.count
+        ])
+    }
+
     func purgeSessionsForCallsignChange() {
         guard !sessions.isEmpty else { return }
 
@@ -2116,7 +2170,7 @@ final class AX25SessionManager: ObservableObject {
             // peer clear its stale session instead of retrying until N2.
             if pf {
                 debugTrace("I-frame poll with no session -> DM", ["from": source.display])
-                return AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path).onRadio(radio)
+                return AX25FrameBuilder.buildDM(from: localAddress(for: radio), to: source, via: path).onRadio(radio)
             }
             TxLog.warning(.session, "I-frame received with no matching session; ignoring", [
                 "from": source.display,
@@ -2267,7 +2321,7 @@ final class AX25SessionManager: ObservableObject {
             // or restarted) clear it promptly instead of polling until its N2 expires.
             // P=0 frames and response frames are ignored per the same sentence.
             if pf && isCommand {
-                return [AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path).onRadio(radio)]
+                return [AX25FrameBuilder.buildDM(from: localAddress(for: radio), to: source, via: path).onRadio(radio)]
             }
             return []
         }
@@ -2579,7 +2633,7 @@ final class AX25SessionManager: ObservableObject {
             debugTrace("RNR for unknown session", ["from": source.display])
             // §6.3.5: DM(F=1) to a P=1 command with no session (see RR handler).
             if pf && isCommand {
-                return [AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path).onRadio(radio)]
+                return [AX25FrameBuilder.buildDM(from: localAddress(for: radio), to: source, via: path).onRadio(radio)]
             }
             return []
         }
@@ -2747,7 +2801,7 @@ final class AX25SessionManager: ObservableObject {
             ])
             // §6.3.5: DM(F=1) to a P=1 command with no session (see RR handler).
             if pf && isCommand {
-                return [AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path).onRadio(radio)]
+                return [AX25FrameBuilder.buildDM(from: localAddress(for: radio), to: source, via: path).onRadio(radio)]
             }
             return []
         }

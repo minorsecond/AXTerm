@@ -43,6 +43,10 @@ final class ConnectionTransportViewModel: ObservableObject {
     @Published var enabled: Bool = true {
         didSet { update { $0.enabled = enabled } }
     }
+    /// The callsign this radio operates as; empty means the station callsign.
+    @Published var callsign: String = "" {
+        didSet { update { $0.callsign = callsign } }
+    }
     /// Whether this is the radio the engine connects to.
     @Published private(set) var isPrimary: Bool = true
     /// What the TNC said it is — see PacketEngine.tncIdentity.
@@ -142,6 +146,7 @@ final class ConnectionTransportViewModel: ObservableObject {
         if selectedTransport != transport { selectedTransport = transport }
         if name != profile.name { name = profile.name }
         if enabled != profile.enabled { enabled = profile.enabled }
+        if callsign != profile.callsign { callsign = profile.callsign }
         if selectedSerialDevicePath != profile.serialDevicePath { selectedSerialDevicePath = profile.serialDevicePath }
 
         // Only a valid UUID is worth showing as a selection.

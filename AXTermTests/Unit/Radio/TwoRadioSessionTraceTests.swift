@@ -42,6 +42,7 @@ final class TwoRadioSessionTraceTests: XCTestCase {
         })
         let coordinator = SessionCoordinator()
         coordinator.localCallsign = "TEST-7"
+        coordinator.appSettings = settings
         coordinator.subscribeToPackets(from: engine)
         return (engine, coordinator, settings)
     }
@@ -145,5 +146,31 @@ final class TwoRadioSessionTraceTests: XCTestCase {
         XCTAssertNotNil(onUHF, "one peer, two radios, two sessions")
         XCTAssertNotNil(onBase)
         XCTAssertNotEqual(onUHF?.key, onBase?.key)
+    }
+
+    /// The owner rule. Give the UHF radio its own SSID; a call to that SSID
+    /// heard on the primary radio's port — both radios on one frequency —
+    /// is answered by the UHF radio, on its port, from its callsign.
+    func testACallToOneRadiosCallsignIsAnsweredByThatRadioWhicheverLinkHeardIt() async {
+        let (engine, coordinator, settings) = makeStation()
+        defer { withExtendedLifetime(coordinator) {} }
+        let uhf = settings.radios.first { $0.kissPort == 1 }!.id
+        settings.updateRadio(uhf) { $0.callsign = "TEST-1" }
+        engine.connectUsingSettings()
+        // The coordinator learns the addresses on the main run loop.
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        let peer = AX25Address(call: "PEER", ssid: 1)
+        let sabm = AX25FrameBuilder.buildSABM(from: peer, to: AX25Address(call: "TEST", ssid: 1),
+                                              via: DigiPath(), extended: false).encodeAX25()
+        link!.injectReceived(kissFrame(port: 0, ax25: sabm))
+        await waitForReplies(1)
+
+        XCTAssertEqual(replies.count, 1, diagnostics(engine, coordinator, peer: peer,
+                                                      local: AX25Address(call: "TEST", ssid: 1), radio: uhf))
+        XCTAssertEqual(replies.first?.port, 1, "answered on the UHF radio's port, not the one that heard it")
+        let decoded = replies.first.flatMap { AX25.decodeFrame(ax25: $0.ax25) }
+        XCTAssertEqual(decoded?.from?.display, "TEST-1")
+        XCTAssertEqual(decoded?.to?.display, "PEER-1")
     }
 }

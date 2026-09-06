@@ -139,8 +139,39 @@ speak them — and do not write settings.
 The session layer's dimension is the radio: `SessionKey.radio` (was
 `channel: UInt8`, always 0) and `AX25Session.radio`. Every handler threads it
 through, with `.primary` as the default so callers that predate radios still
-compile. One peer heard on two radios is two sessions. Per-radio callsigns
-are not yet in effect: every radio answers as the station callsign.
+compile. One peer heard on two radios is two sessions.
+
+## Per-radio callsigns
+
+Each radio operates as an address: its own callsign+SSID if the operator gave
+it one (`RadioProfile.callsign`), else the station callsign. Two radios on
+one licence are two stations on the air — an HF and a VHF station, say —
+and a remote station may need to reach one in particular.
+
+- `AX25SessionManager.localAddresses` holds the addresses that differ from
+  the station callsign; `localAddress(for:)` answers for every radio.
+  Outbound sessions open under the radio's address, `answers` accepts every
+  radio's address, and the DM for a stranger's poll comes from the address
+  of the radio that heard it. `setLocalAddresses` ends the sessions of a
+  radio whose address changed — a session is bound to the address it
+  opened under — and no others.
+- `SessionCoordinator` watches the radio list and the station callsign
+  through `appSettings` and keeps the manager's addresses current. It also
+  keeps `radioOwners`: for each address exactly one radio operates as, that
+  radio. The station callsign, shared by every radio without its own, is
+  deliberately not owned.
+- **The owner rule.** A frame addressed to an address one radio owns runs
+  on that radio and is answered by it, whichever link heard it: two radios
+  on one frequency both hear the call, and the one it was for replies. A
+  frame to a shared address runs on the radio that heard it. Pinned end to
+  end in `TwoRadioSessionTraceTests`.
+- The digipeater repeats frames addressed to the hearing radio's callsign
+  as well as the station's.
+
+The Identity section of a radio's form appears only when there is another
+radio to differ from; with one radio the station callsign under General is
+the whole story. The Radios list flags two enabled radios answering as one
+address — legal on different frequencies, a collision on the same one.
 
 ## Storage
 
@@ -200,6 +231,10 @@ These are pinned literally in `RadioPresentationTests`,
    mailbox calls; serial and Bluetooth packets stop borrowing the TCP
    endpoint.
 
-Next: per-radio callsigns, cross-radio duplicate handling and per-radio
-link metrics, then the services and the multi-radio UI. See `Docs/RoutingMetrics.md` for how link
+5. Per-radio callsigns: each radio operates as its own address, and a call
+   to an address one radio owns is answered by that radio whichever link
+   heard it.
+
+Next: cross-radio duplicate handling and per-radio link metrics, then the
+services and the multi-radio UI. See `Docs/RoutingMetrics.md` for how link
 quality will be kept per radio.

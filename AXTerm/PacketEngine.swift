@@ -1047,6 +1047,10 @@ final class PacketEngine: ObservableObject {
     private func digipeatIfAsked(_ raw: Data, radio: RadioID) {
         guard settings.digipeatEnabled else { return }
         var addresses = [settings.myCallsign]
+        if let profile = settings.radio(radio) {
+            // The radio that heard it may operate as its own callsign.
+            addresses.append(profile.resolvedCallsign(station: settings.myCallsign))
+        }
         let alias = settings.digipeatAlias
             .trimmingCharacters(in: .whitespaces).uppercased()
         if !alias.isEmpty { addresses.append(alias) }

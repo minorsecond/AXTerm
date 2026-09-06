@@ -213,6 +213,22 @@ struct RadioDetailView: View {
                 }
             }
 
+            // With one radio its callsign is the station callsign, set under
+            // General; a second field saying the same thing would be noise.
+            if settings.hasMultipleRadios {
+                Section {
+                    CallsignField(title: stationCallsign.isEmpty ? "NOCALL" : stationCallsign,
+                                  text: $viewModel.callsign)
+                } header: {
+                    Text("Identity")
+                } footer: {
+                    Text("Leave empty to operate as \(stationCallsign.isEmpty ? "your station callsign" : stationCallsign). "
+                         + "Give this radio its own SSID when two radios share a frequency, or when a "
+                         + "remote station should be able to reach this radio in particular. A call to "
+                         + "an SSID only one radio uses is answered by that radio whichever link heard it.")
+                }
+            }
+
             Section {
                 Picker("Transport", selection: transportBinding) {
                     ForEach(TransportSelection.allCases) { type in
@@ -342,4 +358,6 @@ struct RadioDetailView: View {
     private var profile: RadioProfile {
         settings.radio(radioID) ?? RadioProfile(id: radioID, name: "")
     }
+
+    private var stationCallsign: String { settings.myCallsign.uppercased() }
 }

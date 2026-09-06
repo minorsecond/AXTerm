@@ -204,7 +204,51 @@ final class SessionCoordinator: ObservableObject {
             // XID negotiation is manager-level state; sync it here and on
             // every toggle (AppSettingsStore.didSet pushes via `shared`).
             sessionManager.negotiateV22 = appSettings?.ax25NegotiateV22 ?? false
+            observeRadioAddresses()
         }
+    }
+
+    /// Which radio each callsign belongs to, for addresses that exactly one
+    /// radio operates as. The station callsign, shared by every radio that
+    /// has not named its own, is deliberately absent: a call to it is
+    /// answered by whichever radio heard it.
+    private var radioOwners: [String: RadioID] = [:]
+    private var radioAddressSubscription: AnyCancellable?
+
+    private func observeRadioAddresses() {
+        radioAddressSubscription?.cancel()
+        guard let appSettings else { return }
+        // The station callsign arrives through `localCallsign`, whose setter
+        // re-resolves the radios' addresses; only the list needs watching.
+        radioAddressSubscription = appSettings.$radios
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.updateRadioAddresses() }
+    }
+
+    /// Each radio's address, from its profile. Called whenever the radios or
+    /// the station callsign change.
+    private func updateRadioAddresses() {
+        guard let appSettings else { return }
+        let station = CallsignNormalizer.toAddress(localCallsign)
+        var addresses: [RadioID: AX25Address] = [:]
+        var owners: [String: [RadioID]] = [:]
+        for radio in appSettings.activeRadios where radio.enabled {
+            let resolved = radio.resolvedCallsign(station: appSettings.myCallsign)
+            guard !resolved.isEmpty else { continue }
+            let address = CallsignNormalizer.toAddress(resolved)
+            if !CallsignNormalizer.addressesMatch(address, station) {
+                addresses[radio.id] = address
+            }
+            owners[address.display, default: []].append(radio.id)
+        }
+        sessionManager.setLocalAddresses(addresses)
+        radioOwners = owners.compactMapValues { $0.count == 1 ? $0[0] : nil }
+            .filter { !CallsignNormalizer.addressMatchesDisplay(station, $0.key) }
+    }
+
+    /// The radio that operates as `address`, when exactly one does.
+    func radioOwning(_ address: AX25Address) -> RadioID? {
+        radioOwners[address.display]
     }
 
     /// Cancellables for subscriptions
@@ -1820,6 +1864,8 @@ final class SessionCoordinator: ObservableObject {
 
         sessionManager.localCallsign = newAddress
         syncNetRomIdentity()
+        // The radios' own addresses are resolved against the station callsign.
+        updateRadioAddresses()
     }
 
     /// Subscribe to incoming packets from PacketEngine.
@@ -1969,10 +2015,13 @@ final class SessionCoordinator: ObservableObject {
             return
         }
 
-        // The radio that heard the frame is the radio the session runs on and
-        // the radio the reply leaves by. Frames from before radios existed carry
-        // none and fall to the primary.
-        let radio = packet.radioID ?? .primary
+        // The owner rule. A frame to an address exactly one radio operates
+        // as belongs to that radio, whichever link heard it — two radios on
+        // one frequency both hear the call, and the one it was for answers.
+        // Otherwise the radio that heard the frame is the radio the session
+        // runs on and the reply leaves by. Frames from before radios existed
+        // carry none and fall to the primary.
+        let radio = radioOwning(to) ?? packet.radioID ?? .primary
 
         switch decoded.frameClass {
         case .U:
