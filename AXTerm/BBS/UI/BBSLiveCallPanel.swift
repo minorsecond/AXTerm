@@ -5,11 +5,6 @@
 
 import SwiftUI
 
-// The mailbox UI is macOS-only, like the window layout it lives in. The shell,
-// the store and the service are platform-neutral, so an iOS view can be added
-// later without touching anything below this layer.
-#if os(macOS)
-
 /// The caller's session as it happens, exactly as they see it.
 ///
 /// The one thing a hardware mailbox can never show its sysop. It is also the
@@ -25,7 +20,7 @@ struct BBSLiveCallPanel: View {
             Divider()
             transcript
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(Color(platform: .platformTextBackground))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay {
             RoundedRectangle(cornerRadius: 8)
@@ -42,13 +37,20 @@ struct BBSLiveCallPanel: View {
                 .font(.system(.body, design: .monospaced))
                 .fontWeight(.semibold)
             if let started = service.live?.startedAt {
-                Text(Self.elapsed(from: started, to: now))
+                Text(BBSElapsed.format(from: started, to: now))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Button("Disconnect") { service.shutdown(reason: "sysop ended the session") }
                 .controlSize(.small)
+                // Not silence: a caller whose station vanishes mid-session
+                // retries into an address that stopped existing.
+                // Indicator on: an explanation with none takes the tap for
+                // itself, and this one is attached to a button.
+                .explain("Sends the caller a closing line and a DISC, so their "
+                         + "software knows the session ended rather than retrying "
+                         + "into a station that went quiet.")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -88,13 +90,4 @@ struct BBSLiveCallPanel: View {
         }
     }
 
-    static func elapsed(_ interval: TimeInterval) -> String {
-        let seconds = max(0, Int(interval))
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
-    }
-
-    static func elapsed(from start: Date, to end: Date) -> String {
-        elapsed(end.timeIntervalSince(start))
-    }
 }
-#endif

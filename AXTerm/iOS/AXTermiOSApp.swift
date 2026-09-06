@@ -21,6 +21,10 @@ struct AXTermiOSApp: App {
     @StateObject private var winlinkContext: WinlinkContext
     @StateObject private var settings: AppSettingsStore
     @StateObject private var client: PacketEngine
+    /// The mailbox's own settings — on air, callsign, greeting. A standalone
+    /// store, as on the Mac (`AXTermApp.bbsSettings`), because the mailbox is
+    /// a service the station runs rather than a preference of the app.
+    @StateObject private var bbsSettings = BBSSettings()
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -61,12 +65,15 @@ struct AXTermiOSApp: App {
             profile: StationProfile(defaults: defaults),
             contactStore: queue.map { SQLiteContactStore(dbQueue: $0) },
             appSettings: settingsStore,
-            activityStore: queue.map { SQLiteStationActivityStore(dbQueue: $0) }))
+            activityStore: queue.map { SQLiteStationActivityStore(dbQueue: $0) },
+            terminalSessionReplication: queue.map { SQLiteTerminalSessionReplicationStore(dbQueue: $0) },
+            bbsMailboxReplication: queue.map { SQLiteBBSMailboxReplicationStore(dbQueue: $0) }))
     }
 
     var body: some Scene {
         WindowGroup {
-            AXTermiOSRootView(context: winlinkContext, settings: settings, client: client)
+            AXTermiOSRootView(context: winlinkContext, settings: settings, client: client,
+                              bbsSettings: bbsSettings)
                 .environmentObject(winlinkContext)
                 // Launch is not a scene-phase *change*: the phase is already
                 // .active by the time the observer below is attached, so

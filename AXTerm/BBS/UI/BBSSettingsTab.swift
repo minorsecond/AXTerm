@@ -153,19 +153,18 @@ struct BBSSettingsTab: View {
             }
         }
         .padding(10)
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(Color(platform: .platformTextBackground))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .textSelection(.enabled)
     }
 
     /// Built by the real shell, not a mock-up of it, so the preview cannot
-    /// drift away from what is transmitted.
+    /// drift away from what is transmitted. Shared with the iOS settings
+    /// screen — see `BBSGreetingPreview`.
     private var previewLines: [String] {
-        let sysop = settings.effectiveCallsign(stationCallsign: stationCallsign)
-        var shell = BBSShell(caller: "W0ARP", sysop: sysop, banner: settings.banner)
-        var lines = shell.greeting(mailbox: BBSShell.Mailbox(), now: Date()).lines
-        lines.append(BBSShell.commandPrompt)
-        return lines
+        BBSGreetingPreview.lines(
+            sysop: settings.effectiveCallsign(stationCallsign: stationCallsign),
+            banner: settings.banner)
     }
 }
 #endif

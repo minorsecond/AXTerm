@@ -50,6 +50,14 @@ final class BBSFileLibrary: ObservableObject {
     /// a security-scoped bookmark is what survives, and without one the file
     /// area works until the operator quits and then quietly serves nothing.
     func addArea(name: String, about: String, url: URL) {
+        // The scope has to be *open* while the bookmark is minted. On iOS a
+        // URL from the document picker arrives scoped-but-closed, and a
+        // bookmark taken outside the scope resolves to a URL that reads
+        // nothing — the area would list zero files with no error to explain
+        // it. Harmless on macOS, where an open-panel URL is already usable
+        // and `startAccessing` simply answers false.
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         do {
             let bookmark = try url.bookmarkData(
                 options: Self.bookmarkOptions,
@@ -178,6 +186,9 @@ final class BBSFileLibrary: ObservableObject {
             refreshInbox()
             return
         }
+        // Same reason as `addArea`: minted inside the scope or not at all.
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         do {
             let bookmark = try url.bookmarkData(
                 options: Self.bookmarkOptions,

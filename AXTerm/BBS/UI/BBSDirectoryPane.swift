@@ -46,7 +46,7 @@ struct BBSDirectoryPane: View {
     private var suggestions: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Label("\(service.suggestions.count) spotted in BBS sessions",
+                Label(BBSDirectorySuggestions.headline(service.suggestions),
                       systemImage: "sparkle.magnifyingglass")
                     .font(.callout)
                 Spacer()
@@ -144,13 +144,14 @@ struct BBSDirectoryPane: View {
     }
 
     private func row(_ entry: WhitePagesEntry) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(entry.callsign)
+        let model = BBSDirectoryRowModel.make(entry)
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(model.callsign)
                 .font(.system(.callout, design: .monospaced))
                 .fontWeight(.medium)
-            Text(entry.value(.name) ?? "no name on file")
+            Text(model.subtitle)
                 .font(.caption)
-                .foregroundStyle(entry.value(.name) == nil ? .tertiary : .secondary)
+                .foregroundStyle(model.hasName ? .secondary : .tertiary)
         }
         .padding(.vertical, 2)
     }
@@ -239,17 +240,9 @@ struct BBSDirectoryPane: View {
 
             if let stored = entry.fields[key] {
                 HStack(spacing: 4) {
-                    Image(systemName: stored.source == .selfReported
-                          ? "quote.bubble" : "wand.and.stars")
+                    Image(systemName: BBSDirectoryProvenance.systemImage(for: stored.source))
                         .font(.caption2)
-                    Text(stored.source.explanation)
-                        .font(.caption2)
-                    // The command only means anything for something a person
-                    // typed. "Set by NQ" beside a licence lookup names a
-                    // command nobody ran.
-                    Text(stored.source == .selfReported
-                         ? "· with \(key.command) on \(stored.updatedAt.formatted(date: .abbreviated, time: .omitted))"
-                         : "· \(stored.updatedAt.formatted(date: .abbreviated, time: .omitted))")
+                    Text(BBSDirectoryProvenance.caption(key: key, field: stored))
                         .font(.caption2)
                 }
                 .foregroundStyle(stored.source == .selfReported ? Color.secondary : Color.orange)
