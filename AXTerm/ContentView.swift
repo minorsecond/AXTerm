@@ -615,6 +615,21 @@ struct ContentView: View {
         // callsign per launch, and the whole thing is inert unless the
         // operator opted in to online lookups.
         .task(id: stationLookupKey) {
+            // Everything this app already knows, first and unconditionally.
+            //
+            // The node layer draws a marker only when the operator's record
+            // is in memory, and memory starts empty at every launch — so a
+            // position cached weeks ago was invisible until something asked
+            // for it again. That put a local cache read behind the online
+            // toggle and behind the courtesy pacing, and the layer came back
+            // a name every second and a half instead of at launch (field ask
+            // 2026-09-03: 150 of 170 node operators were sitting in the
+            // cache while the map drew a handful).
+            callsignLookup.preload(
+                client.stations.map(\.call)
+                + HeardStationMap.directoryOperatorCallsigns(
+                    aliases: nodeAliases.directory))
+
             guard winlinkContext.settings.callsignLookupEnabled else { return }
             callsignLookup.isNetworkEnabled = true
             let unknown = Set(client.stations.map { CallsignQuery.normalize($0.call) })
@@ -630,6 +645,8 @@ struct ContentView: View {
             // 533 placed after three presses). Bounded by the list
             // itself: one paced attempt per callsign per launch, results
             // persisted, heard bases skipped because they fold anyway.
+            // After the preload above this is only the genuinely unknown
+            // remainder — the twenty or so nobody has ever answered for.
             guard showsDirectoryNodes else { return }
             let directory = HeardStationMap.directoryLookupCandidates(
                 aliases: nodeAliases.directory,
@@ -646,7 +663,8 @@ struct ContentView: View {
             var sinceFlush = 0
             for call in directory {
                 guard !Task.isCancelled, !callsignLookup.isCoolingDown else { return }
-                _ = await callsignLookup.resolve(call, publishImmediately: false)
+                let origin = await callsignLookup.resolving(
+                    call, publishImmediately: false).origin
                 sinceFlush += 1
                 if sinceFlush >= 15 {
                     callsignLookup.flushStaged()

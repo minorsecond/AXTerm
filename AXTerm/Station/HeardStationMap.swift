@@ -654,15 +654,29 @@ nonisolated enum HeardStationMap {
                                           cachedCallsigns: Set<String>,
                                           heardBases: Set<String> = [],
                                           limit: Int = 40) -> [String] {
+        directoryOperatorCallsigns(aliases: aliases)
+            .filter { !cachedCallsigns.contains($0) && !heardBases.contains($0) }
+            .prefix(limit).map { $0 }
+    }
+
+    /// Every operator callsign the alias directory names, best-vouched
+    /// first — the whole set whose positions this layer draws from,
+    /// unfiltered.
+    ///
+    /// Separate from `directoryLookupCandidates` because the two questions
+    /// are not the same one. Asking a remote directory has to be rationed
+    /// and has to skip what is already known; reading this app's own cache
+    /// wants the complete list, because a position sitting in the local
+    /// cache and not in memory is a marker the map is failing to draw for
+    /// no reason at all.
+    static func directoryOperatorCallsigns(aliases: NodeAliasDirectory) -> [String] {
         aliases.allEntries
             .sorted { ($0.tellers.count, $1.alias) > ($1.tellers.count, $0.alias) }
             .map { CallsignQuery.normalize($0.callsign) }
-            .filter { CallsignQuery.isPlausible($0) && !cachedCallsigns.contains($0)
-                && !heardBases.contains($0) }
+            .filter { CallsignQuery.isPlausible($0) }
             .reduce(into: [String]()) { unique, call in
                 if !unique.contains(call) { unique.append(call) }
             }
-            .prefix(limit).map { $0 }
     }
 
     /// The directory aliases that fold into heard stations, by base

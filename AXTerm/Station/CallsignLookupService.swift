@@ -76,14 +76,38 @@ final class CallsignLookupService: ObservableObject {
 
     /// Fills memory from the persistent cache. Call from `.task`, never
     /// from a view body.
+    ///
+    /// One store query and one publish for the whole list, however long it
+    /// is. Both matter at the scale the node layer works at: the map places
+    /// a directory node only if its operator's record is in `records`, so
+    /// this is the step that decides whether hundreds of markers are on the
+    /// map at launch or trickle back over the following minutes. Publishing
+    /// per record would also re-render every observer once per callsign,
+    /// which is the churn `flushStaged` exists to avoid.
     func preload(_ callsigns: [String]) {
         guard let store else { return }
-        for callsign in callsigns {
-            let key = CallsignQuery.normalize(callsign)
-            guard records[key] == nil else { continue }
-            guard let stored = try? store.callsignRecord(callsign: key) else { continue }
-            records[key] = Self.record(from: stored)
+        let wanted = Set(callsigns.map(CallsignQuery.normalize))
+            .filter { !$0.isEmpty && records[$0] == nil && staged[$0] == nil }
+        guard !wanted.isEmpty else { return }
+        guard let stored = try? store.callsignRecords(callsigns: Array(wanted)) else { return }
+        guard !stored.isEmpty else { return }
+        var fetched: [String: CallsignRecord] = [:]
+        for record in stored {
+            fetched[CallsignQuery.normalize(record.callsign)] = Self.record(from: record)
         }
+        records.merge(fetched) { existing, _ in existing }
+    }
+
+    /// Where an answer came from, so a caller pacing itself against someone
+    /// else's free service can tell a network round trip from a local read.
+    enum Origin: Equatable, Sendable {
+        /// Already in memory, or read from this app's own cache.
+        case cache
+        /// A request actually went out to the remote directory.
+        case network
+        /// No answer: not cached, and the network was unavailable,
+        /// disabled, already tried, or had nothing.
+        case none
     }
 
     /// Resolves a callsign, consulting the network only if enabled and
@@ -91,33 +115,45 @@ final class CallsignLookupService: ObservableObject {
     @discardableResult
     func resolve(_ callsign: String,
                  publishImmediately: Bool = true) async -> CallsignRecord? {
+        await resolving(callsign, publishImmediately: publishImmediately).record
+    }
+
+    /// `resolve`, and where the answer came from.
+    ///
+    /// A bulk caller has to wait between *network* lookups and must not wait
+    /// between cache reads: pausing on a local hit turned a four-second
+    /// refill of the node layer into a four-minute one.
+    @discardableResult
+    func resolving(_ callsign: String,
+                   publishImmediately: Bool = true)
+    async -> (record: CallsignRecord?, origin: Origin) {
         let key = CallsignQuery.normalize(callsign)
-        guard CallsignQuery.isPlausible(key) else { return nil }
-        if let record = cached(key) { return record }
+        guard CallsignQuery.isPlausible(key) else { return (nil, .none) }
+        if let record = cached(key) { return (record, .cache) }
         // The persistent cache is still authoritative even if memory is
         // cold — check it before spending a network round trip.
         if let stored = try? store?.callsignRecord(callsign: key) {
             let record = Self.record(from: stored)
             if publishImmediately { records[key] = record } else { staged[key] = record }
-            return record
+            return (record, .cache)
         }
         guard isNetworkEnabled, !attempted.contains(key), !isCoolingDown
-        else { return nil }
+        else { return (nil, .none) }
         attempted.insert(key)
 
         do {
-            guard let record = try await remote.lookup(key) else { return nil }
+            guard let record = try await remote.lookup(key) else { return (nil, .network) }
             if publishImmediately { records[key] = record } else { staged[key] = record }
             // Write through so this survives the network going away.
             try? store?.saveCallsignRecord(Self.stored(from: record))
-            return record
+            return (record, .network)
         } catch {
             // The directory refused or is unreachable. Open the breaker
             // and give this callsign back — it was never answered, so
             // "attempted" would wrongly turn a throttle into a miss.
             attempted.remove(key)
             cooldownUntil = Date().addingTimeInterval(cooldownSeconds)
-            return nil
+            return (nil, .network)
         }
     }
 
