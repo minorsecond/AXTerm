@@ -315,7 +315,6 @@ final class PacketEngine: ObservableObject {
 
     // MARK: - Private State
 
-    private var connection: NWConnection?
     private var link: KISSLink?
     private var parser = KISSFrameParser()
     private var stationTracker = StationTracker()
@@ -623,8 +622,6 @@ final class PacketEngine: ObservableObject {
         let previousStatus = status
         link?.close()
         link = nil
-        connection?.cancel()
-        connection = nil
         parser.reset()
         status = .disconnected
         tncIdentity = nil
@@ -650,9 +647,7 @@ final class PacketEngine: ObservableObject {
     /// - Parameter completion: Callback with success or error
     func send(frame: OutboundFrame, completion: ((Result<Void, Error>) -> Void)? = nil) {
         lastTxTime = Date()
-        let activeLink = link
-        let activeConn = connection
-        guard status == .connected, (activeLink != nil || activeConn != nil) else {
+        guard status == .connected, let activeLink = link else {
             let error = NSError(domain: "PacketEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not connected"])
             TxLog.error(.transport, "Send failed: not connected", error: error, ["frameId": String(frame.id.uuidString.prefix(8))])
             addErrorLine("Send failed: not connected", category: .transmission)
@@ -733,7 +728,6 @@ final class PacketEngine: ObservableObject {
             ]
         )
 
-        // Send via link (preferred) or legacy connection
         let sendCompletion: (Error?) -> Void = { [weak self] error in
             guard let self else { return }
             Task { @MainActor in
@@ -764,14 +758,8 @@ final class PacketEngine: ObservableObject {
             }
         }
 
-        if let activeLink = activeLink {
-            activeLink.send(kissData) { error in
-                sendCompletion(error)
-            }
-        } else if let conn = activeConn {
-            conn.send(content: kissData, completion: .contentProcessed { error in
-                sendCompletion(error)
-            })
+        activeLink.send(kissData) { error in
+            sendCompletion(error)
         }
     }
 
@@ -829,74 +817,6 @@ final class PacketEngine: ObservableObject {
         activeLink.send(frame) { _ in }
     }
 
-    private func handleConnectionState(_ state: NWConnection.State, host: String, port: UInt16) {
-        switch state {
-        case .ready:
-            status = .connected
-            addSystemLine("Connected to \(host):\(port)", category: .connection)
-            eventLogger?.log(level: .info, category: .connection, message: "Connected to \(host):\(port)", metadata: nil)
-            SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Connected", level: .info, data: nil)
-            startReceiving()
-            // Ask the TNC to name itself — an advisory SetHardware frame
-            // on the TCP link, never transmitted on RF. Direwolf answers;
-            // anything that does not implement the extension ignores it.
-            // Network transport only: poking hardware-dependent commands
-            // at serial or BLE TNCs is Mobilinkd's lane.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                self?.identifyTNC()
-            }
-
-        case .failed(let error):
-            status = .failed
-            lastError = error.localizedDescription
-            addErrorLine("Connection failed: \(error.localizedDescription)", category: .connection)
-            eventLogger?.log(level: .error, category: .connection, message: "Connection failed: \(error.localizedDescription)", metadata: nil)
-            SentryManager.shared.captureConnectionFailure("Connection failed: \(error.localizedDescription)", error: error)
-
-        case .cancelled:
-            status = .disconnected
-        tncIdentity = nil
-            addSystemLine("Disconnected", category: .connection)
-            eventLogger?.log(level: .info, category: .connection, message: "Disconnected", metadata: nil)
-            SentryManager.shared.addBreadcrumb(category: "kiss.connection", message: "Cancelled", level: .info, data: nil)
-
-        case .waiting(let error):
-            lastError = error.localizedDescription
-            eventLogger?.log(level: .warning, category: .connection, message: "Waiting: \(error.localizedDescription)", metadata: nil)
-            SentryManager.shared.captureConnectionFailure("Connection waiting: \(error.localizedDescription)", error: error)
-
-        default:
-            break
-        }
-    }
-
-    private func startReceiving() {
-        connection?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] content, _, isComplete, error in
-            guard let self else { return }
-            Task { @MainActor in
-
-                if let data = content, !data.isEmpty {
-                    self.handleIncomingData(data)
-                }
-
-                if let error = error {
-                    self.lastError = error.localizedDescription
-                    self.addErrorLine("Receive error: \(error.localizedDescription)", category: .connection)
-                    self.eventLogger?.log(level: .error, category: .connection, message: "Receive error: \(error.localizedDescription)", metadata: nil)
-                    return
-                }
-
-                if isComplete {
-                    self.disconnect(reason: "legacy NWConnection receive complete")
-                    return
-                }
-
-                // Continue receiving
-                self.startReceiving()
-            }
-        }
-    }
-
     func handleIncomingData(_ data: Data) {
         bytesReceived += data.count
         lastRxTime = Date()
@@ -912,16 +832,16 @@ final class PacketEngine: ObservableObject {
         appendRawChunk(RawChunk(data: data))
 
         // Parse KISS frames from the chunk
-        let kissFrames = parser.feed(data)
+        let kissFrames = parser.feedFrames(data)
 
         if !kissFrames.isEmpty {
             TxLog.debug(.kiss, "Parsed KISS frames", ["count": kissFrames.count])
         }
 
-        for frameOutput in kissFrames {
-            switch frameOutput {
+        for frame in kissFrames {
+            switch frame.output {
             case .ax25(let ax25Data):
-                debugTrace("KISS AX.25 frame parsed", ["len": ax25Data.count])
+                debugTrace("KISS AX.25 frame parsed", ["len": ax25Data.count, "port": frame.port])
                 frameStats.recordFrame(type: "AX.25", size: ax25Data.count)
                 LinkDebugLog.shared.recordFrame(LinkDebugFrameEntry(
                     timestamp: Date(), direction: .rx, rawBytes: ax25Data,

@@ -117,5 +117,53 @@ struct TNCStatusStrip: View {
             case .failed: return "TNC connection failed\(endpoint)"
             }
         }
+
+        // MARK: Several radios
+
+        /// One radio: exactly the single-radio decisions above, so nothing
+        /// changes for the operator who has one. Several: any radio worth
+        /// attention makes the strip worth attention.
+        static func needsAttention(_ radios: [RadioStatusSummary]) -> Bool {
+            guard radios.count > 1 else {
+                return needsAttention(radios.first?.status ?? .disconnected)
+            }
+            return radios.contains { needsAttention($0.status) }
+        }
+
+        /// Names the one radio that needs attention, or counts them; the
+        /// restraint rule holds — every radio working says nothing.
+        static func label(_ radios: [RadioStatusSummary]) -> String? {
+            guard radios.count > 1 else { return label(radios.first?.status ?? .disconnected) }
+            let down = radios.filter { needsAttention($0.status) }
+            if down.count == 1, let one = down.first {
+                return one.status == .failed
+                    ? "\(one.name) connection failed"
+                    : "\(one.name) not connected"
+            }
+            if down.count > 1 { return "\(down.count) radios not connected" }
+            if let connecting = radios.first(where: { $0.status == .connecting }) {
+                return "Connecting to \(connecting.name)\u{2026}"
+            }
+            return nil
+        }
+
+        /// Every radio in turn, because there is no other place on the
+        /// screen that lists them.
+        static func spoken(_ radios: [RadioStatusSummary]) -> String {
+            guard radios.count > 1 else {
+                let radio = radios.first
+                return spoken(radio?.status ?? .disconnected,
+                              host: radio?.host ?? "", port: radio?.port ?? 0)
+            }
+            return radios.map { radio in
+                let endpoint = radio.endpoint.isEmpty ? "" : " at \(radio.endpoint)"
+                switch radio.status {
+                case .connected: return "\(radio.name) connected\(endpoint)"
+                case .connecting: return "\(radio.name) connecting\(endpoint)"
+                case .disconnected: return "\(radio.name) not connected"
+                case .failed: return "\(radio.name) connection failed"
+                }
+            }.joined(separator: "; ")
+        }
     }
 }

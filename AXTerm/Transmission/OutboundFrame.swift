@@ -236,6 +236,37 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
         )
     }
 
+    /// The same frame, addressed to a TNC port.
+    ///
+    /// Sessions carry their channel, but the frame builders never did, so
+    /// every frame a session produced left on port 0 whatever the session
+    /// said. `AX25SessionManager.processActions` stamps the session's
+    /// channel here, once, on the way out. The id is kept: this is the same
+    /// transmission, not a retry.
+    func onChannel(_ channel: UInt8) -> OutboundFrame {
+        guard channel != self.channel else { return self }
+        return OutboundFrame(
+            id: id,
+            channel: channel,
+            destination: destination,
+            source: source,
+            path: path,
+            createdAt: createdAt,
+            payload: payload,
+            priority: priority,
+            frameType: frameType,
+            pid: pid,
+            sessionId: sessionId,
+            axdpMessageId: axdpMessageId,
+            controlByte: controlByte,
+            ns: ns,
+            nr: nr,
+            displayInfo: displayInfo,
+            isUserPayload: isUserPayload,
+            isCommand: isCommand
+        )
+    }
+
     /// Encode as raw AX.25 frame bytes (for KISS transport)
     func encodeAX25() -> Data {
         var data = Data()

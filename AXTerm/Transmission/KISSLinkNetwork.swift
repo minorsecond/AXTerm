@@ -193,3 +193,26 @@ final class KISSLinkNetwork: KISSLink, @unchecked Sendable {
         }
     }
 }
+
+// MARK: - Errors
+
+/// Failures a KISS link reports through its send completion.
+///
+/// Named for the TCP client it came from, which is gone: `KISSLinkNetwork`
+/// replaced it long ago and nothing else constructed it.
+nonisolated enum KISSTransportError: Error, LocalizedError {
+    case notConnected
+    case connectionFailed(String)
+    case sendFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notConnected:
+            return "Transport not connected"
+        case .connectionFailed(let reason):
+            return "Connection failed: \(reason)"
+        case .sendFailed(let reason):
+            return "Send failed: \(reason)"
+        }
+    }
+}

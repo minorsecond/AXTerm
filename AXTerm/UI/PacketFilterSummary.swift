@@ -60,14 +60,19 @@ extension PacketFilters {
 
     /// The status line under the table. `station` is the sidebar's filter,
     /// which hides rows just as effectively and belongs in the same sentence.
-    func statusLine(shown: Int, total: Int, station: String?) -> String {
+    /// `radios` names the radios still shown when the operator has hidden
+    /// some; nil when every radio is visible, or there is only one, and then
+    /// it costs no words.
+    func statusLine(shown: Int, total: Int, station: String?, radios: [String]? = nil) -> String {
         var parts: [String] = []
-        if shown == total && restrictionSummary == nil && station == nil {
+        let scoped = station != nil || !(radios ?? []).isEmpty
+        if shown == total && restrictionSummary == nil && !scoped {
             parts.append(total == 1 ? "1 frame" : "\(total.formatted()) frames")
         } else {
             parts.append("\(shown.formatted()) of \(total.formatted()) frames")
         }
         if let station { parts.append("from \(station)") }
+        if let radios, !radios.isEmpty { parts.append("on \(radios.joined(separator: ", "))") }
         if let restrictionSummary { parts.append(restrictionSummary) }
         return parts.joined(separator: " \u{b7} ")
     }

@@ -97,4 +97,30 @@ final class SessionRecordLabelTests: XCTestCase {
     func testNoRecordsProducesNoLabels() {
         XCTAssertTrue(SessionRecordLabel.labels(for: []).isEmpty)
     }
+
+
+    // MARK: - Radios
+
+    /// The radio is where the frames go, fixed when the session opened, so
+    /// it is part of the name whenever there is one to state — not only when
+    /// two rows collide.
+    func testTheRadioIsPartOfTheNameWheneverGiven() {
+        var a = item("ax25|DRLBBS", "DRLBBS", .ax25)
+        a.radioName = "IC-705"
+        let labels = SessionRecordLabel.labels(for: [a, item("ax25|KB5YZB-1", "KB5YZB-1", .ax25)])
+        XCTAssertEqual(labels["ax25|DRLBBS"], "DRLBBS · on IC-705")
+        XCTAssertEqual(labels["ax25|KB5YZB-1"], "KB5YZB-1")
+    }
+
+    /// Two sessions to one station on two radios differ by radio alone; the
+    /// transport qualifier is not needed on top.
+    func testTwoRadiosToOneStationAreToldApartByRadio() {
+        var a = item("ax25|DRLBBS|r1", "DRLBBS", .ax25)
+        a.radioName = "Direwolf"
+        var b = item("ax25|DRLBBS|r2", "DRLBBS", .ax25)
+        b.radioName = "IC-705"
+        let labels = SessionRecordLabel.labels(for: [a, b])
+        XCTAssertEqual(labels["ax25|DRLBBS|r1"], "DRLBBS · on Direwolf")
+        XCTAssertEqual(labels["ax25|DRLBBS|r2"], "DRLBBS · on IC-705")
+    }
 }

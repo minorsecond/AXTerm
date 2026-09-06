@@ -113,6 +113,37 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             case .disconnected, .failed: return "Connect"
             }
         }
+
+        // MARK: Several radios
+
+        /// The header line. One radio: the string the menu has always shown,
+        /// endpoint and all. Several: how many are up, because the header is
+        /// the one line the operator reads before deciding whether to open
+        /// the submenus.
+        static func headerTitle(radios: [RadioStatusSummary], packetCount: Int) -> String {
+            let packets = "\(packetCount) packets"
+            guard radios.count > 1 else {
+                let radio = radios.first
+                let status = statusTitle(for: radio?.status ?? .disconnected)
+                return "\(status) \u{2014} \(radio?.endpoint ?? "") \u{2022} \(packets)"
+            }
+            let connected = radios.filter { $0.status == .connected }.count
+            if connected == radios.count {
+                return "\(radios.count) radios connected \u{2022} \(packets)"
+            }
+            return "\(connected) of \(radios.count) radios connected \u{2022} \(packets)"
+        }
+
+        /// The ⌘K item. One radio keeps its verb; several act on all of them,
+        /// and any link up or coming up makes the action "Disconnect All" so
+        /// ⌘K always means "stop".
+        static func connectionAction(for statuses: [ConnectionStatus]) -> String {
+            guard statuses.count > 1 else {
+                return connectionAction(for: statuses.first ?? .disconnected)
+            }
+            let anyUp = statuses.contains { $0 == .connected || $0 == .connecting }
+            return anyUp ? "Disconnect All" : "Connect All"
+        }
     }
 
     /// Live state is read here and nowhere else — when the operator

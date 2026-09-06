@@ -2116,7 +2116,7 @@ final class AX25SessionManager: ObservableObject {
             // peer clear its stale session instead of retrying until N2.
             if pf {
                 debugTrace("I-frame poll with no session -> DM", ["from": source.display])
-                return AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path)
+                return AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path).onChannel(channel)
             }
             TxLog.warning(.session, "I-frame received with no matching session; ignoring", [
                 "from": source.display,
@@ -2267,7 +2267,7 @@ final class AX25SessionManager: ObservableObject {
             // or restarted) clear it promptly instead of polling until its N2 expires.
             // P=0 frames and response frames are ignored per the same sentence.
             if pf && isCommand {
-                return [AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path)]
+                return [AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path).onChannel(channel)]
             }
             return []
         }
@@ -2579,7 +2579,7 @@ final class AX25SessionManager: ObservableObject {
             debugTrace("RNR for unknown session", ["from": source.display])
             // §6.3.5: DM(F=1) to a P=1 command with no session (see RR handler).
             if pf && isCommand {
-                return [AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path)]
+                return [AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path).onChannel(channel)]
             }
             return []
         }
@@ -2747,7 +2747,7 @@ final class AX25SessionManager: ObservableObject {
             ])
             // §6.3.5: DM(F=1) to a P=1 command with no session (see RR handler).
             if pf && isCommand {
-                return [AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path)]
+                return [AX25FrameBuilder.buildDM(from: localCallsign, to: source, via: path).onChannel(channel)]
             }
             return []
         }
@@ -3456,6 +3456,8 @@ final class AX25SessionManager: ObservableObject {
             }
         }
 
-        return frames
+        // Every frame a session produces leaves on the session's channel; the
+        // builders above know nothing about ports.
+        return frames.map { $0.onChannel(session.channel) }
     }
 }

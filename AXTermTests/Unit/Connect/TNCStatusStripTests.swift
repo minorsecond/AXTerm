@@ -69,4 +69,60 @@ final class TNCStatusStripTests: XCTestCase {
             XCTAssertFalse(Strip.spoken(status, host: "h", port: 1).isEmpty, status.rawValue)
         }
     }
+
+
+    // MARK: - Several radios
+
+    /// One radio through the array overloads is the single-radio strip,
+    /// word for word: parity for the operator with one TNC.
+    func testOneRadioIsTheSingleRadioStrip() {
+        for status in [ConnectionStatus.connected, .connecting, .disconnected, .failed] {
+            let radio = RadioStatusSummary.fixture(status: status)
+            XCTAssertEqual(Strip.label([radio]), Strip.label(status))
+            XCTAssertEqual(Strip.needsAttention([radio]), Strip.needsAttention(status))
+            XCTAssertEqual(Strip.spoken([radio]),
+                           Strip.spoken(status, host: "192.168.3.218", port: 8001))
+        }
+    }
+
+    /// Two working radios earn the same silence one did.
+    func testTwoWorkingRadiosSayNothing() {
+        let radios: [RadioStatusSummary] = [.fixture(id: "a"), .fixture(id: "b", name: "IC-705")]
+        XCTAssertNil(Strip.label(radios))
+        XCTAssertFalse(Strip.needsAttention(radios))
+    }
+
+    /// The one that is down is named — "a radio is down" would send the
+    /// operator hunting.
+    func testTheRadioThatNeedsAttentionIsNamed() {
+        let base = RadioStatusSummary.fixture(id: "a", name: "Direwolf")
+        XCTAssertEqual(Strip.label([base, .fixture(id: "b", name: "IC-705", status: .disconnected)]),
+                       "IC-705 not connected")
+        XCTAssertEqual(Strip.label([base, .fixture(id: "b", name: "IC-705", status: .failed)]),
+                       "IC-705 connection failed")
+        XCTAssertEqual(Strip.label([base, .fixture(id: "b", name: "IC-705", status: .connecting)]),
+                       "Connecting to IC-705\u{2026}")
+        XCTAssertTrue(Strip.needsAttention([base, .fixture(id: "b", status: .failed)]))
+    }
+
+    func testSeveralDownAreCounted() {
+        let radios: [RadioStatusSummary] = [
+            .fixture(id: "a", status: .disconnected),
+            .fixture(id: "b", name: "IC-705", status: .failed),
+            .fixture(id: "c", name: "Remote", status: .connected),
+        ]
+        XCTAssertEqual(Strip.label(radios), "2 radios not connected")
+    }
+
+    /// Spoken, every radio is listed; there is nowhere else on the screen
+    /// that names them.
+    func testSpokenListsEveryRadio() {
+        let radios: [RadioStatusSummary] = [
+            .fixture(id: "a", name: "Direwolf"),
+            .fixture(id: "b", name: "IC-705", status: .disconnected, host: "", port: nil,
+                     endpoint: "/dev/cu.usbserial-1420"),
+        ]
+        XCTAssertEqual(Strip.spoken(radios),
+                       "Direwolf connected at 192.168.3.218:8001; IC-705 not connected")
+    }
 }

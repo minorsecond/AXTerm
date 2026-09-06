@@ -101,10 +101,23 @@ nonisolated enum KISS {
 // MARK: - KISS Frame Parser
 
 /// Output from the KISS frame parser
-nonisolated enum KISSFrameOutput {
+nonisolated enum KISSFrameOutput: Equatable {
     case ax25(Data)
     case mobilinkdTelemetry(Data) // Raw hardware frame payload
     case unknown(command: UInt8, payload: Data)
+}
+
+/// One deframed KISS frame together with the port it arrived on.
+///
+/// The command byte's high nibble is the TNC port. Direwolf numbers its
+/// channels this way, so a multi-port TNC is several radios behind one byte
+/// stream. For years this parser read the nibble for a log line and then
+/// returned the payload alone, which folded every port into one.
+/// `feedFrames` keeps the port; `feed` is the older, port-less view kept for
+/// the callers (and the many tests) that only want the bytes.
+nonisolated struct KISSParsedFrame: Equatable {
+    let port: UInt8
+    let output: KISSFrameOutput
 }
 
 /// Stateful parser for extracting KISS frames from a TCP byte stream.
@@ -117,7 +130,12 @@ nonisolated struct KISSFrameParser {
 
     /// Feed a chunk of data from TCP. Returns zero or more processed KISS frames.
     mutating func feed(_ chunk: Data) -> [KISSFrameOutput] {
-        var frames: [KISSFrameOutput] = []
+        feedFrames(chunk).map(\.output)
+    }
+
+    /// Like `feed`, but every frame carries the KISS port it arrived on.
+    mutating func feedFrames(_ chunk: Data) -> [KISSParsedFrame] {
+        var frames: [KISSParsedFrame] = []
 
         for byte in chunk {
             if byte == KISS.FEND {
@@ -147,7 +165,7 @@ nonisolated struct KISSFrameParser {
 
     /// Process a complete KISS frame buffer.
     /// Returns nil for malformed or unrecognized frames (logged, not passed downstream).
-    private func processKISSFrame(_ data: Data) -> KISSFrameOutput? {
+    private func processKISSFrame(_ data: Data) -> KISSParsedFrame? {
         guard !data.isEmpty else { return nil }
 
         // First byte is KISS command byte
@@ -155,6 +173,7 @@ nonisolated struct KISSFrameParser {
 
         // Command byte format: high nibble = port, low nibble = command type
         let cmdType = command & 0x0F
+        let port = (command >> 4) & 0x0F
 
         let escapedPayload = data.count > 1 ? data.subdata(in: 1..<data.count) : Data()
         let payload = KISS.unescape(escapedPayload)
@@ -162,7 +181,7 @@ nonisolated struct KISSFrameParser {
         TxLog.debug(.kiss, "KISS frame received", [
             "command": String(format: "0x%02X", command),
             "cmdType": String(format: "0x%02X", cmdType),
-            "port": String(format: "0x%02X", (command >> 4) & 0x0F),
+            "port": String(format: "0x%02X", port),
             "payloadLen": payload.count
         ])
 
@@ -177,7 +196,7 @@ nonisolated struct KISSFrameParser {
                 TxLog.warning(.kiss, "Discarding DATA frame with empty payload")
                 return nil
             }
-            return .ax25(payload)
+            return KISSParsedFrame(port: port, output: .ax25(payload))
         }
 
         // Handle Mobilinkd Hardware Command (0x06)
@@ -186,7 +205,7 @@ nonisolated struct KISSFrameParser {
             // Reconstruct full frame: parseBatteryLevel expects [CMD, SUB, DATA...]
             var fullFrame = Data([command])
             fullFrame.append(payload)
-            return .mobilinkdTelemetry(fullFrame)
+            return KISSParsedFrame(port: port, output: .mobilinkdTelemetry(fullFrame))
         }
 
         // Unrecognized command type — log and discard.
