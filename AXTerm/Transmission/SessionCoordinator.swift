@@ -1247,8 +1247,8 @@ final class SessionCoordinator: ObservableObject {
         // the radio, so an added radio never inherits another's beacon and a
         // packet node and an APRS node do not cross-transmit.
         for radio in settings.activeRadios where radio.enabled && radio.beacon.enabled {
-            guard case .success = BeaconPlan.plan(text: radio.beacon.text, path: radio.beacon.path)
-            else { continue }
+            // Arm the timer for any enabled beacon; the send builds the frame
+            // from the radio's kind (text or APRS) and no-ops if it cannot.
             let interval = TimeInterval(max(5, radio.beacon.intervalMinutes) * 60)
             let id = radio.id
             let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
@@ -1287,18 +1287,61 @@ final class SessionCoordinator: ObservableObject {
     /// is off or its plan does not validate. (APRS-position beacons are wired
     /// in the APRS phase; text is the only kind today.)
     private func buildBeaconFrame(for radio: RadioProfile) -> (OutboundFrame, String)? {
-        guard case let .success(beacon) = BeaconPlan.plan(
-            text: radio.beacon.text, path: radio.beacon.path) else { return nil }
+        switch radio.beacon.kind {
+        case .aprsPosition:
+            return buildAPRSBeaconFrame(for: radio)
+        case .text:
+            guard case let .success(beacon) = BeaconPlan.plan(
+                text: radio.beacon.text, path: radio.beacon.path) else { return nil }
+            let frame = AX25FrameBuilder.buildUI(
+                from: sessionManager.localAddress(for: radio.id),
+                to: AX25Address(call: BeaconPlan.destinationCall, ssid: 0),
+                via: DigiPath.from(beacon.digis),
+                pid: 0xF0,
+                payload: Data(beacon.text.utf8),
+                displayInfo: beacon.text).onRadio(radio.id)
+            let pathText = beacon.digis.isEmpty
+                ? "direct" : "via \(beacon.digis.joined(separator: " → "))"
+            return (frame, "Beacon sent \(pathText)")
+        }
+    }
+
+    /// The last known station position for an APRS beacon, when `useGPS`.
+    /// Wired by the app from the location service; a fixed lat/lon needs no
+    /// provider. Returns nil when there is no fix yet.
+    var aprsLocationProvider: (() -> (latitude: Double, longitude: Double)?)?
+
+    private func buildAPRSBeaconFrame(for radio: RadioProfile) -> (OutboundFrame, String)? {
+        guard let aprs = radio.beacon.aprs else { return nil }
+        let coordinate: (latitude: Double, longitude: Double)?
+        if aprs.useGPS {
+            coordinate = aprsLocationProvider?()
+        } else if let lat = aprs.latitude, let lon = aprs.longitude {
+            coordinate = (lat, lon)
+        } else {
+            coordinate = nil
+        }
+        guard let (lat, lon) = coordinate else { return nil }  // no position → no beacon
+
+        let report = APRSBeacon.PositionReport(
+            latitude: lat, longitude: lon,
+            symbolTable: aprs.symbolTable.first ?? "/",
+            symbolCode: aprs.symbolCode.first ?? "-",
+            ambiguity: aprs.ambiguityDigits,
+            comment: aprs.comment,
+            compressed: aprs.compressed)
+        let info = APRSBeacon.infoField(report)
+        // Reuse the beacon path validator; the destination is the APRS tocall.
+        guard case let .success(planned) = BeaconPlan.plan(text: info, path: radio.beacon.path)
+        else { return nil }
         let frame = AX25FrameBuilder.buildUI(
             from: sessionManager.localAddress(for: radio.id),
-            to: AX25Address(call: BeaconPlan.destinationCall, ssid: 0),
-            via: DigiPath.from(beacon.digis),
+            to: AX25Address(call: APRSBeacon.tocall, ssid: 0),
+            via: DigiPath.from(planned.digis),
             pid: 0xF0,
-            payload: Data(beacon.text.utf8),
-            displayInfo: beacon.text).onRadio(radio.id)
-        let pathText = beacon.digis.isEmpty
-            ? "direct" : "via \(beacon.digis.joined(separator: " → "))"
-        return (frame, "Beacon sent \(pathText)")
+            payload: Data(info.utf8),
+            displayInfo: info).onRadio(radio.id)
+        return (frame, "APRS position sent")
     }
 
     // MARK: - Services across radios

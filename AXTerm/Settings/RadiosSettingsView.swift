@@ -187,6 +187,8 @@ struct RadioDetailView: View {
     /// Supplied by the single-radio pane: the one door to a second radio.
     var onAddSecondRadio: (() -> Void)?
 
+    @State private var showingSymbolPicker = false
+
     init(radioID: RadioID, settings: AppSettingsStore, client: PacketEngine,
          onAddSecondRadio: (() -> Void)? = nil) {
         self.radioID = radioID
@@ -353,14 +355,14 @@ struct RadioDetailView: View {
                 Section {
                     Toggle("Beacon on this radio", isOn: beaconBinding(\.enabled))
                     if beaconBinding(\.enabled).wrappedValue {
-                        VStack(alignment: .leading, spacing: 4) {
-                            TextField("Beacon text", text: beaconBinding(\.text), axis: .vertical)
-                                .textFieldStyle(.roundedBorder)
-                                .lineLimit(1...3)
-                            Text("\(beaconBinding(\.text).wrappedValue.utf8.count) of "
-                                 + "\(BeaconPlan.maxTextBytes) bytes · sent to BEACON")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                        Picker("Type", selection: beaconBinding(\.kind)) {
+                            Text("Text").tag(BeaconKind.text)
+                            Text("APRS position").tag(BeaconKind.aprsPosition)
+                        }
+                        if beaconBinding(\.kind).wrappedValue == .aprsPosition {
+                            aprsBeaconEditor
+                        } else {
+                            textBeaconEditor
                         }
                         LabeledContent("Via digipeaters") {
                             TextField("direct", text: beaconBinding(\.path))
@@ -369,21 +371,13 @@ struct RadioDetailView: View {
                         }
                         Stepper("Send every \(beaconBinding(\.intervalMinutes).wrappedValue) min",
                                 value: beaconBinding(\.intervalMinutes), in: 5...240, step: 5)
-                        if case let .failure(problem) = BeaconPlan.plan(
-                            text: beaconBinding(\.text).wrappedValue,
-                            path: beaconBinding(\.path).wrappedValue) {
-                            Text(problem.operatorText)
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
                     }
                 } header: {
                     Text("Beacon")
                 } footer: {
-                    Text("This radio's own beacon — its own words, path and interval. "
-                         + "An added radio does not beacon until you switch it on here, so "
-                         + "one radio's identity never goes out on another's channel.")
+                    Text("This radio's own beacon — text or an APRS position, its own path "
+                         + "and interval. An added radio does not beacon until you switch it "
+                         + "on here, so one radio's identity never goes out on another's channel.")
                 }
 
                 Section {
@@ -421,6 +415,18 @@ struct RadioDetailView: View {
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $showingSymbolPicker) {
+            APRSSymbolPicker(
+                selectedTable: currentSymbol.table,
+                selectedCode: currentSymbol.code) { table, code in
+                    settings.updateRadio(radioID) {
+                        if $0.beacon.aprs == nil { $0.beacon.aprs = APRSPositionConfig() }
+                        $0.beacon.aprs?.symbolTable = String(table)
+                        $0.beacon.aprs?.symbolCode = String(code)
+                    }
+                    SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+                }
+        }
         .navigationTitle(settings.hasMultipleRadios
                          ? (viewModel.name.isEmpty ? RadioProfile.defaultName(for: profile) : viewModel.name)
                          : "Connection")
@@ -442,6 +448,111 @@ struct RadioDetailView: View {
 
     private var stationCallsign: String { settings.myCallsign.uppercased() }
 
+    @ViewBuilder
+    private var textBeaconEditor: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            TextField("Beacon text", text: beaconBinding(\.text), axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1...3)
+            Text("\(beaconBinding(\.text).wrappedValue.utf8.count) of "
+                 + "\(BeaconPlan.maxTextBytes) bytes · sent to BEACON")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            if case let .failure(problem) = BeaconPlan.plan(
+                text: beaconBinding(\.text).wrappedValue,
+                path: beaconBinding(\.path).wrappedValue) {
+                Text(problem.operatorText)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var aprsBeaconEditor: some View {
+        let symbol = currentSymbol
+        LabeledContent("Symbol") {
+            HStack(spacing: 8) {
+                Text("\(String(symbol.table))\(String(symbol.code))")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Text(symbol.label).lineLimit(1)
+                Spacer()
+                Button("Choose\u{2026}") { showingSymbolPicker = true }
+            }
+        }
+
+        Toggle("Use GPS position", isOn: aprsBinding(\.useGPS, default: false))
+        if !aprsBinding(\.useGPS, default: false).wrappedValue {
+            LabeledContent("Latitude") {
+                TextField("39.5000", text: coordString(\.latitude))
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 140)
+            }
+            LabeledContent("Longitude") {
+                TextField("-105.2500", text: coordString(\.longitude))
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 140)
+            }
+        }
+
+        TextField("Comment (optional)", text: aprsBinding(\.comment, default: ""))
+            .textFieldStyle(.roundedBorder)
+        Stepper("Position ambiguity: \(aprsBinding(\.ambiguityDigits, default: 0).wrappedValue)",
+                value: aprsBinding(\.ambiguityDigits, default: 0), in: 0...4)
+        Toggle("Compressed position", isOn: aprsBinding(\.compressed, default: false))
+
+        if let example = aprsExample {
+            Text(example)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+    }
+
+    /// The symbol the beacon currently uses, resolved to its catalog label.
+    private var currentSymbol: APRSSymbol {
+        let aprs = settings.radio(radioID)?.beacon.aprs
+        let table = aprs?.symbolTable.first ?? "/"
+        let code = aprs?.symbolCode.first ?? "-"
+        return APRSSymbolCatalog.symbol(table: table, code: code)
+            ?? APRSSymbol(table: table, code: code, label: "Custom")
+    }
+
+    /// The exact info field this beacon would send, for the operator to see
+    /// before it goes out. Nil when there is no fixed position to show.
+    private var aprsExample: String? {
+        guard let aprs = settings.radio(radioID)?.beacon.aprs else { return nil }
+        let lat = aprs.useGPS ? 39.5 : aprs.latitude
+        let lon = aprs.useGPS ? -105.25 : aprs.longitude
+        guard let la = lat, let lo = lon else { return nil }
+        let report = APRSBeacon.PositionReport(
+            latitude: la, longitude: lo,
+            symbolTable: aprs.symbolTable.first ?? "/",
+            symbolCode: aprs.symbolCode.first ?? "-",
+            ambiguity: aprs.ambiguityDigits, comment: aprs.comment, compressed: aprs.compressed)
+        let prefix = aprs.useGPS ? "e.g. " : ""
+        return prefix + APRSBeacon.infoField(report)
+    }
+
+    /// A text binding for an optional coordinate field.
+    private func coordString(_ keyPath: WritableKeyPath<APRSPositionConfig, Double?>) -> Binding<String> {
+        Binding(
+            get: {
+                if let v = settings.radio(radioID)?.beacon.aprs?[keyPath: keyPath] {
+                    return String(v)
+                }
+                return ""
+            },
+            set: { str in
+                let value = Double(str.trimmingCharacters(in: .whitespaces))
+                settings.updateRadio(radioID) {
+                    if $0.beacon.aprs == nil { $0.beacon.aprs = APRSPositionConfig() }
+                    $0.beacon.aprs?[keyPath: keyPath] = value
+                }
+                SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+            })
+    }
+
     private func serviceBinding(_ keyPath: WritableKeyPath<RadioProfile, Bool>) -> Binding<Bool> {
         Binding(
             get: { settings.radio(radioID)?[keyPath: keyPath] ?? true },
@@ -460,6 +571,21 @@ struct RadioDetailView: View {
             get: { (settings.radio(radioID)?.beacon ?? BeaconConfig())[keyPath: keyPath] },
             set: { value in
                 settings.updateRadio(radioID) { $0.beacon[keyPath: keyPath] = value }
+                SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+            })
+    }
+
+    /// Bind one field of this radio's APRS position config, creating it on
+    /// first write so switching a beacon to APRS needs no separate step.
+    private func aprsBinding<V>(_ keyPath: WritableKeyPath<APRSPositionConfig, V>,
+                               default def: V) -> Binding<V> {
+        Binding(
+            get: { settings.radio(radioID)?.beacon.aprs?[keyPath: keyPath] ?? def },
+            set: { value in
+                settings.updateRadio(radioID) {
+                    if $0.beacon.aprs == nil { $0.beacon.aprs = APRSPositionConfig() }
+                    $0.beacon.aprs?[keyPath: keyPath] = value
+                }
                 SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
             })
     }
