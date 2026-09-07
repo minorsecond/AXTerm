@@ -76,7 +76,7 @@ final class NetRomPidDemuxTests: XCTestCase {
     private func connectedManagerSession() -> (AX25SessionManager, AX25Address) {
         let manager = AX25SessionManager(localCallsign: AX25Address(call: "K0EPI", ssid: 7))
         let neighbor = AX25Address(call: "KE0NCQ", ssid: 0)
-        let session = manager.session(for: neighbor, path: DigiPath(), channel: 0)
+        let session = manager.session(for: neighbor, path: DigiPath(), radio: .primary)
         _ = session.stateMachine.handle(event: .connectRequest)
         _ = session.stateMachine.handle(event: .receivedUA)
         XCTAssertEqual(session.state, .connected)
@@ -95,7 +95,7 @@ final class NetRomPidDemuxTests: XCTestCase {
 
         let datagram = Data([0xDE, 0xAD, 0xBE, 0xEF])
         _ = manager.handleInboundIFrame(
-            from: neighbor, path: DigiPath(), channel: 0,
+            from: neighbor, path: DigiPath(), radio: .primary,
             ns: 0, nr: 0, pf: false, payload: datagram, pid: 0xCF)
 
         XCTAssertEqual(netromPayloads, [datagram], "0xCF goes to the NET/ROM tap")
@@ -113,7 +113,7 @@ final class NetRomPidDemuxTests: XCTestCase {
 
         let text = Data("HELLO\r".utf8)
         _ = manager.handleInboundIFrame(
-            from: neighbor, path: DigiPath(), channel: 0,
+            from: neighbor, path: DigiPath(), radio: .primary,
             ns: 0, nr: 0, pf: false, payload: text, pid: 0xF0)
 
         XCTAssertEqual(terminalPayloads, [text])
@@ -133,11 +133,11 @@ final class NetRomPidDemuxTests: XCTestCase {
         let banner = Data("###CONNECTED TO NODE\r".utf8)
         let datagram1 = Data([0x01, 0x02])
         let datagram2 = Data([0x03, 0x04])
-        _ = manager.handleInboundIFrame(from: neighbor, path: DigiPath(), channel: 0,
+        _ = manager.handleInboundIFrame(from: neighbor, path: DigiPath(), radio: .primary,
                                         ns: 0, nr: 0, pf: false, payload: banner, pid: 0xF0)
-        _ = manager.handleInboundIFrame(from: neighbor, path: DigiPath(), channel: 0,
+        _ = manager.handleInboundIFrame(from: neighbor, path: DigiPath(), radio: .primary,
                                         ns: 1, nr: 0, pf: false, payload: datagram1, pid: 0xCF)
-        _ = manager.handleInboundIFrame(from: neighbor, path: DigiPath(), channel: 0,
+        _ = manager.handleInboundIFrame(from: neighbor, path: DigiPath(), radio: .primary,
                                         ns: 2, nr: 0, pf: false, payload: datagram2, pid: 0xCF)
 
         XCTAssertEqual(terminalPayloads, [banner])
@@ -156,9 +156,9 @@ final class NetRomPidDemuxTests: XCTestCase {
         _ = manager.claimDelivery(for: session.key, handler: { _, data in claimed.append(data) })
         manager.onNetRomDatagram = { _, data in netrom.append(data) }
 
-        _ = manager.handleInboundIFrame(from: neighbor, path: DigiPath(), channel: 0,
+        _ = manager.handleInboundIFrame(from: neighbor, path: DigiPath(), radio: .primary,
                                         ns: 0, nr: 0, pf: false, payload: Data([0xAA]), pid: 0xCF)
-        _ = manager.handleInboundIFrame(from: neighbor, path: DigiPath(), channel: 0,
+        _ = manager.handleInboundIFrame(from: neighbor, path: DigiPath(), radio: .primary,
                                         ns: 1, nr: 0, pf: false, payload: Data([0xBB]), pid: 0xF0)
 
         XCTAssertEqual(netrom, [Data([0xAA])])

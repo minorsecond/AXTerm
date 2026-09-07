@@ -255,6 +255,17 @@ final class ObservableTerminalTxViewModel: ObservableObject {
     /// Current session (if any) for the active destination
     @Published private(set) var currentSession: AX25Session?
 
+    /// The radio the operator picked for the next connect; nil is Auto.
+    @Published var radioSelection: RadioID?
+    /// Auto's answer for a destination and path — the coordinator's
+    /// `autoRadio`, when the shell has wired it. Without it, the primary.
+    var autoRadio: ((AX25Address, DigiPath) -> RadioID?)?
+
+    /// The radio a connect to `dest` via `path` leaves on.
+    func radio(for dest: AX25Address, path: DigiPath) -> RadioID {
+        radioSelection ?? autoRadio?(dest, path) ?? .primary
+    }
+
     /// When a peer sends peerAxdpEnabled, set this to trigger a toast. View clears after showing.
     @Published var pendingPeerAxdpNotification: String?
 
@@ -1415,7 +1426,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         let cr = Data("\r".utf8)
         let prompt = sessionManager.sendData(cr, to: session.remoteAddress,
                                              path: session.path,
-                                             channel: session.channel, pid: 0xF0)
+                                             radio: session.radio, pid: 0xF0)
         onSendFrames?(prompt)
         TxLog.outbound(.session, "Node-prompt relay: prompted a silent node with CR", [
             "nextHop": session.remoteAddress.display, "frames": prompt.count
@@ -1528,7 +1539,7 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         relayAskedNode = relayWaitingOn ?? session.remoteAddress.display
 
         let command = Data("C \(destination)\r".utf8)
-        let frames = sessionManager.sendData(command, to: session.remoteAddress, path: session.path, channel: session.channel, pid: 0xF0)
+        let frames = sessionManager.sendData(command, to: session.remoteAddress, path: session.path, radio: session.radio, pid: 0xF0)
         onSendFrames?(frames)
         TxLog.outbound(.session, "Node-prompt relay connect command queued", [
             "destination": destination,
@@ -1593,8 +1604,9 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         let dest = parseCallsign(viewModel.destinationCall)
         let path = parsePath(viewModel.digiPath)
 
-        currentSession = sessionManager.session(for: dest, path: path)
-        return sessionManager.connect(to: dest, path: path)
+        let radio = radio(for: dest, path: path)
+        currentSession = sessionManager.session(for: dest, path: path, radio: radio)
+        return sessionManager.connect(to: dest, path: path, radio: radio)
     }
 
     /// Disconnect from the current session
@@ -1634,10 +1646,13 @@ final class ObservableTerminalTxViewModel: ObservableObject {
         let dest = parseCallsign(wire.call)
         let path = parsePath(wire.path)
 
+        // The session's radio when there is one: a link cannot move radios
+        // once it is up, whatever the picker says now.
         return sessionManager.sendData(
             payload,
             to: dest,
             path: path,
+            radio: currentSession?.radio ?? radio(for: dest, path: path),
             displayInfo: displayInfo
         )
     }
@@ -1755,6 +1770,9 @@ private struct SessionRecord: Identifiable, Hashable {
     let via: [String]
     var statusText: String
     var relayDestination: String?
+    /// The radio carrying the session, named only when the station has
+    /// several. Fixed when the session opened; a link cannot move radios.
+    var radioName: String?
 
     var label: String {
         if let relay = relayDestination {
@@ -2209,6 +2227,18 @@ struct TerminalView: View {
         sessionCoordinator.onForeignUFrame = { [weak txViewModel] from, to, uType in
             txViewModel?.noteForeignUFrame(from: from, to: to, uType: uType)
         }
+        // Auto picks the radio from the coordinator's per-radio evidence;
+        // with one radio the answer is that radio.
+        txViewModel.autoRadio = { [weak sessionCoordinator] dest, path in
+            sessionCoordinator?.autoRadio(for: dest, path: path)?.radio
+        }
+        connectBarViewModel.autoRadioDescriber = { [weak sessionCoordinator] destination, digis in
+            let parsed = CallsignNormalizer.parse(destination)
+            guard !parsed.call.isEmpty else { return nil }
+            return sessionCoordinator?.autoRadio(
+                for: AX25Address(call: parsed.call, ssid: parsed.ssid),
+                path: DigiPath.from(digis))?.explanation
+        }
 
         sessionCoordinator.onOutboundRelayHeard = { [weak txViewModel] destination, digis in
             txViewModel?.recordOutboundRelay(destination: destination, digis: digis)
@@ -2325,6 +2355,11 @@ struct TerminalView: View {
             favorites: settings.watchCallsigns,
             directoryRoutes: nodeAliases.directory.connectRoutes()
         )
+        // The picker appears only once there are two radios to choose from.
+        connectBarViewModel.setRadioOptions(settings.activeRadios.filter(\.enabled).map {
+            ConnectBarViewModel.RadioOption(
+                id: $0.id, name: $0.name.isEmpty ? RadioProfile.defaultName(for: $0) : $0.name)
+        })
     }
 
     // Debounced entry point for packet/station stream handlers.
@@ -2391,6 +2426,7 @@ struct TerminalView: View {
 
     private func syncLegacyFieldsFromConnectBar() {
         txViewModel.destinationCall.wrappedValue = connectBarViewModel.toCall
+        txViewModel.radioSelection = connectBarViewModel.radioSelection
         if connectBarViewModel.mode == .ax25ViaDigi {
             txViewModel.digiPath.wrappedValue = connectBarViewModel.viaDigipeaters.joined(separator: ",")
         } else {
@@ -2777,7 +2813,8 @@ struct TerminalView: View {
                 }(),
                 via: record.via,
                 relayDestination: record.relayDestination,
-                statusText: record.statusText)
+                statusText: record.statusText,
+                radioName: record.radioName)
         })
     }
 
@@ -4460,8 +4497,9 @@ struct TerminalView: View {
         } else {
             // The same event, kept. `sessionRecords` is a strip of live tabs
             // capped at twenty and gone on relaunch; this is the history.
+            let radio = txViewModel.currentSession?.radio ?? .primary
             sessionRecorder?.began(id: key, remote: intent.normalizedTo,
-                                   via: via, transport: mode.rawValue)
+                                   via: via, transport: mode.rawValue, radio: radio)
             sessionRecords.insert(
                 SessionRecord(
                     id: key,
@@ -4469,7 +4507,10 @@ struct TerminalView: View {
                     mode: mode,
                     via: via,
                     statusText: statusText,
-                    relayDestination: nil
+                    relayDestination: nil,
+                    radioName: settings.hasMultipleRadios
+                        ? settings.radio(radio).map { $0.name.isEmpty ? RadioProfile.defaultName(for: $0) : $0.name }
+                        : nil
                 ),
                 at: 0
             )

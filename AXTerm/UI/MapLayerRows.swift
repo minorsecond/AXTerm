@@ -17,6 +17,10 @@ import SwiftUI
 struct MapLayerRows: View {
 
     @ObservedObject var status: MapLayerStatus
+    /// "Showing stations heard on IC-705 only" while the sidebar's radio
+    /// switches hide some radio; nil otherwise. The switches themselves live
+    /// in the Radios section — this only says that they are in effect here.
+    var radioScope: String? = nil
 
     @AppStorage("stations.showsPaths") private var showsPaths = false
     @AppStorage("stations.showsPredictedPaths") private var showsPredictedPaths = false
@@ -64,6 +68,15 @@ struct MapLayerRows: View {
                   help: "Sets aside stations too far away to have arrived by radio. One "
                       + "internet-bridged station on the far coast stretches the zoom until every "
                       + "local station is a single cluster.")
+
+            if let radioScope {
+                Text(radioScope)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help("The Radios section's switches hide a radio's stations here too. "
+                          + "A station heard on a visible radio stays on the map.")
+            }
         }
         .toggleStyle(.switch)
         .controlSize(.mini)

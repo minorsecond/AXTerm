@@ -102,4 +102,30 @@ final class PacketFilterSummaryTests: XCTestCase {
     func testTheUnfilteredCountReadsNaturallyAtOne() {
         XCTAssertEqual(PacketFilters().statusLine(shown: 1, total: 1, station: nil), "1 frame")
     }
+
+
+    // MARK: - Radios
+
+    /// Hiding a radio hides rows as surely as a frame-class switch, so the
+    /// radios still shown belong in the same sentence.
+    func testTheVisibleRadiosAreNamedWhenSomeAreHidden() {
+        let filters = PacketFilters()
+        XCTAssertEqual(filters.statusLine(shown: 120, total: 300, station: nil, radios: ["IC-705"]),
+                       "120 of 300 frames \u{b7} on IC-705")
+        XCTAssertEqual(filters.statusLine(shown: 250, total: 300, station: "KB5YZB-7",
+                                          radios: ["IC-705", "Direwolf"]),
+                       "250 of 300 frames \u{b7} from KB5YZB-7 \u{b7} on IC-705, Direwolf")
+    }
+
+    /// Every radio visible costs no words — the one-radio operator, and the
+    /// two-radio operator who has hidden nothing, read the same line.
+    func testAllRadiosVisibleSaysNothingAboutRadios() {
+        let filters = PacketFilters()
+        XCTAssertEqual(filters.statusLine(shown: 300, total: 300, station: nil, radios: nil),
+                       "300 frames")
+        XCTAssertEqual(filters.statusLine(shown: 300, total: 300, station: nil, radios: []),
+                       "300 frames")
+        XCTAssertEqual(filters.statusLine(shown: 300, total: 300, station: nil),
+                       filters.statusLine(shown: 300, total: 300, station: nil, radios: nil))
+    }
 }

@@ -84,7 +84,7 @@ final class SessionCoordinatorTests: XCTestCase {
             localAddress: AX25Address(call: "LOCAL"),
             remoteAddress: AX25Address(call: "PEER"),
             path: DigiPath(),
-            channel: 0,
+            radio: .primary,
             config: AX25SessionConfig(),
             isInitiator: true
         )
@@ -737,10 +737,10 @@ final class SessionCoordinatorTests: XCTestCase {
         // The merged branch requires LIVE sessions: ended sessions linger in
         // the manager's dictionary and must not force merged config onto a
         // reconnect (audit 2026-08-22), so connect both for real.
-        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath(), channel: 0)
-        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath.from(["DIGI-1"]), channel: 0)
-        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath.from(["DIGI-1"]), channel: 0)
+        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath(), radio: .primary)
+        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath.from(["DIGI-1"]), radio: .primary)
+        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath.from(["DIGI-1"]), radio: .primary)
 
         let mergedConfig = coordinator.sessionManager.getConfigForDestination?("PEER-0", "other") ?? AX25SessionConfig()
         XCTAssertEqual(mergedConfig.windowSize, 1, "Merged config should use min(window) when multiple sessions to same destination")
@@ -847,8 +847,8 @@ final class SessionCoordinatorTests: XCTestCase {
 
         // Set up a connected session
         let peer = AX25Address(call: "PEER", ssid: 7)
-        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath(), channel: 0)
-        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath(), radio: .primary)
+        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
 
         // Count data deliveries to detect duplicate processing
         var dataDeliveryCount = 0
@@ -901,8 +901,8 @@ final class SessionCoordinatorTests: XCTestCase {
 
         // Set up connected session
         let peer = AX25Address(call: "PEER", ssid: 7)
-        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath(), channel: 0)
-        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        _ = coordinator.sessionManager.connect(to: peer, path: DigiPath(), radio: .primary)
+        coordinator.sessionManager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
 
         var deliveryCount = 0
         coordinator.sessionManager.onDataReceived = { _, _ in

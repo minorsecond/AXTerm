@@ -31,6 +31,11 @@ class SettingsRouter: ObservableObject {
     
     /// The specific section to highlight/scroll to within the selected tab
     @Published var highlightSection: SettingsSection?
+
+    /// The radio a deep link wants opened inside the Radios pane. The pane
+    /// consumes it on arrival, so the operator lands on that radio's form
+    /// rather than on a list they then have to pick from.
+    @Published var pendingRadio: RadioID?
     
     // MARK: - Navigation
     
@@ -39,7 +44,9 @@ class SettingsRouter: ObservableObject {
     ///   - tab: The destination tab.
     ///   - section: Optional section ID to scroll to and highlight.
     @MainActor
-    func navigate(to tab: SettingsTab, section: SettingsSection? = nil) {
+    func navigate(to tab: SettingsTab, section: SettingsSection? = nil, radio: RadioID? = nil) {
+        if let radio { pendingRadio = radio }
+
         // 1. Switch Tab
         if selectedTab != tab {
             selectedTab = tab
@@ -74,7 +81,7 @@ class SettingsRouter: ObservableObject {
 nonisolated enum SettingsTab: Hashable {
     case general
     case notifications
-    case network
+    case radios
     case transmission
     case winlink
     case bbs

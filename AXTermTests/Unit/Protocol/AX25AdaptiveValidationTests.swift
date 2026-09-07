@@ -72,7 +72,7 @@ final class AdaptiveObservabilityTests: XCTestCase {
     // O-3: SRTT is nil before the first round-trip and non-nil after.
     func testSRTTNilBeforeFirstRoundTrip() {
         let h = makeHarness()
-        _ = h.alice.connect(to: AX25Address(call: "BOB-1", ssid: 0), path: DigiPath(), channel: 0)
+        _ = h.alice.connect(to: AX25Address(call: "BOB-1", ssid: 0), path: DigiPath(), radio: .primary)
         let preConnectSession = h.alice.session(for: AX25Address(call: "BOB-1", ssid: 0))
 
         // Before UA arrives: no RTT sample
@@ -652,15 +652,15 @@ final class FairnessTests: XCTestCase {
         let peerBad  = AX25Address(call: "BADPEER",  ssid: 0)
 
         // Connect to both peers
-        _ = alice.connect(to: peerGood, path: DigiPath(), channel: 0)
-        _ = alice.connect(to: peerBad,  path: DigiPath(), channel: 1)
+        _ = alice.connect(to: peerGood, path: DigiPath(), radio: .primary)
+        _ = alice.connect(to: peerBad,  path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
 
         // Simulate UA from both peers
-        alice.handleInboundUA(from: peerGood, path: DigiPath(), channel: 0)
-        alice.handleInboundUA(from: peerBad,  path: DigiPath(), channel: 1)
+        alice.handleInboundUA(from: peerGood, path: DigiPath(), radio: .primary)
+        alice.handleInboundUA(from: peerBad,  path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
 
-        let goodSession = alice.session(for: peerGood, path: DigiPath(), channel: 0)
-        let badSession  = alice.session(for: peerBad,  path: DigiPath(), channel: 1)
+        let goodSession = alice.session(for: peerGood, path: DigiPath(), radio: .primary)
+        let badSession  = alice.session(for: peerBad,  path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
 
         // Inject good RTT for good session, no RTT for bad session
         goodSession.timers.updateRTT(sample: 0.2)
@@ -681,16 +681,16 @@ final class FairnessTests: XCTestCase {
         let peerA = AX25Address(call: "PEERA", ssid: 0)
         let peerB = AX25Address(call: "PEERB", ssid: 0)
 
-        _ = alice.connect(to: peerA, path: DigiPath(), channel: 0)
-        alice.handleInboundUA(from: peerA, path: DigiPath(), channel: 0)
-        _ = alice.connect(to: peerB, path: DigiPath(), channel: 1)
-        alice.handleInboundUA(from: peerB, path: DigiPath(), channel: 1)
+        _ = alice.connect(to: peerA, path: DigiPath(), radio: .primary)
+        alice.handleInboundUA(from: peerA, path: DigiPath(), radio: .primary)
+        _ = alice.connect(to: peerB, path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
+        alice.handleInboundUA(from: peerB, path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
 
-        let sessionA = alice.session(for: peerA, path: DigiPath(), channel: 0)
-        let sessionB = alice.session(for: peerB, path: DigiPath(), channel: 1)
+        let sessionA = alice.session(for: peerA, path: DigiPath(), radio: .primary)
+        let sessionB = alice.session(for: peerB, path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
 
         // Send data on session A so the send buffer is populated and T1 timeouts can retransmit.
-        _ = alice.sendData(Data("hello".utf8), to: peerA, path: DigiPath(), channel: 0)
+        _ = alice.sendData(Data("hello".utf8), to: peerA, path: DigiPath(), radio: .primary)
 
         // Inject T1 timeouts on session A (simulates frames being lost / no ACK received).
         // Each timeout retransmits outstanding frames from the send buffer.
@@ -715,13 +715,13 @@ final class FairnessTests: XCTestCase {
         let clean = AX25Address(call: "CLEANPEER", ssid: 0)
         let noisy = AX25Address(call: "NOISYPEER", ssid: 0)
 
-        _ = alice.connect(to: clean, path: DigiPath(), channel: 0)
-        alice.handleInboundUA(from: clean, path: DigiPath(), channel: 0)
-        _ = alice.connect(to: noisy, path: DigiPath(), channel: 1)
-        alice.handleInboundUA(from: noisy, path: DigiPath(), channel: 1)
+        _ = alice.connect(to: clean, path: DigiPath(), radio: .primary)
+        alice.handleInboundUA(from: clean, path: DigiPath(), radio: .primary)
+        _ = alice.connect(to: noisy, path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
+        alice.handleInboundUA(from: noisy, path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
 
-        let cleanSession = alice.session(for: clean, path: DigiPath(), channel: 0)
-        let noisySession = alice.session(for: noisy, path: DigiPath(), channel: 1)
+        let cleanSession = alice.session(for: clean, path: DigiPath(), radio: .primary)
+        let noisySession = alice.session(for: noisy, path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
 
         // Feed clean session with good RTT samples
         cleanSession.timers.updateRTT(sample: 0.15)
@@ -758,20 +758,20 @@ final class AdaptiveRTOTests: XCTestCase {
         let peer = AX25Address(call: "PEER", ssid: 0)
         manager.defaultConfig = AX25SessionConfig(rtoMin: 1.0, rtoMax: 16.0, initialRto: 2.0)
 
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
 
         // Send a frame
         clock.advance(by: 0.001)   // t = 0.001
-        _ = manager.sendData(Data("karn-test".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.sendData(Data("karn-test".utf8), to: peer, path: DigiPath(), radio: .primary)
 
         // Simulate time passing and RR arriving (no T1 yet = no retransmit = non-Karn)
         clock.advance(by: 0.2)     // t = 0.201: simulated RTT = ~0.2s
 
         XCTAssertNil(session.timers.srtt, "SRTT before RR: should be nil until first RTT sample")
 
-        _ = manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: 1, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: 1, isPoll: false)
 
         XCTAssertNotNil(session.timers.srtt,
             "SRTT should be set after first non-retransmitted RR ack")
@@ -790,11 +790,11 @@ final class AdaptiveRTOTests: XCTestCase {
         manager.defaultConfig = config
         let peer = AX25Address(call: "PEER", ssid: 0)
 
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
 
-        _ = manager.sendData(Data("karn".utf8), to: peer, path: DigiPath(), channel: 0)
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        _ = manager.sendData(Data("karn".utf8), to: peer, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
 
         // Force T1 timeout + grace period → retransmit happens → marks NS as Karn-excluded
         clock.advance(by: 0.5 + 0.21)   // 0.5s RTO + 0.21s grace
@@ -805,7 +805,7 @@ final class AdaptiveRTOTests: XCTestCase {
         let srttAfterRetransmit = session.timers.srtt
 
         // Deliver RR — should NOT update SRTT because frame is Karn-excluded
-        _ = manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: 1, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: 1, isPoll: false)
 
         XCTAssertEqual(session.timers.srtt, srttAfterRetransmit,
             "Karn's algorithm: SRTT must not be updated by an ACK for a retransmitted frame. " +
@@ -823,22 +823,22 @@ final class AdaptiveRTOTests: XCTestCase {
         manager.defaultConfig = config
         let peer = AX25Address(call: "PEER", ssid: 0)
 
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
 
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
 
         // Send and force retransmit
-        _ = manager.sendData(Data("retx".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.sendData(Data("retx".utf8), to: peer, path: DigiPath(), radio: .primary)
         clock.advance(by: 0.5 + 0.21)
         // Ack the retransmitted frame (Karn-excluded)
-        _ = manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: 1, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: 1, isPoll: false)
         XCTAssertNil(session.timers.srtt, "SRTT should be nil after Karn-excluded ack")
 
         // Now send a fresh frame — this one has not been retransmitted
-        _ = manager.sendData(Data("fresh".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.sendData(Data("fresh".utf8), to: peer, path: DigiPath(), radio: .primary)
         clock.advance(by: 0.1)   // Normal ACK delay
-        _ = manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: 2, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: 2, isPoll: false)
 
         XCTAssertNotNil(session.timers.srtt,
             "RTT estimation should resume for the next fresh (non-retransmitted) frame")
@@ -856,10 +856,10 @@ final class AdaptiveRTOTests: XCTestCase {
         manager.defaultConfig = config
         let peer = AX25Address(call: "PEER", ssid: 0)
 
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-        _ = manager.sendData(Data("backoff".utf8), to: peer, path: DigiPath(), channel: 0)
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        _ = manager.sendData(Data("backoff".utf8), to: peer, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
 
         // Fire many T1 timeouts
         for _ in 0..<6 {
@@ -1009,13 +1009,13 @@ final class WindowAdaptationTests: XCTestCase {
         manager.defaultConfig = config
         let peer = AX25Address(call: "PEER", ssid: 0)
 
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
 
         // Try to send more frames than the window allows
         for _ in 0..<10 {
-            _ = manager.sendData(Data("wtest".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("wtest".utf8), to: peer, path: DigiPath(), radio: .primary)
         }
 
         XCTAssertLessThanOrEqual(session.outstandingCount, config.windowSize,
@@ -1035,17 +1035,17 @@ final class WindowAdaptationTests: XCTestCase {
         manager.defaultConfig = config
         let peer = AX25Address(call: "PEER", ssid: 0)
 
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
 
         // Grow the AIMD window by sending and acking several frames so the pre-loss
         // cwnd is well above 1 (otherwise halving from 1→1 would look like no change).
-        _ = manager.sendData(Data("hello".utf8), to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+        _ = manager.sendData(Data("hello".utf8), to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: session.vs)
 
         // Send another frame so there is something outstanding before the timeout.
-        _ = manager.sendData(Data("world".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.sendData(Data("world".utf8), to: peer, path: DigiPath(), radio: .primary)
 
         let cwndBefore = session.aimdWindow.cwnd
         XCTAssertGreaterThan(cwndBefore, 1.0,
@@ -1072,12 +1072,12 @@ final class WindowAdaptationTests: XCTestCase {
         manager.defaultConfig = config
         let peer = AX25Address(call: "PEER", ssid: 0)
 
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
 
         // Send a frame and trigger a T1 timeout to REDUCE cwnd via multiplicative decrease.
-        _ = manager.sendData(Data("hello".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.sendData(Data("hello".utf8), to: peer, path: DigiPath(), radio: .primary)
         _ = manager.handleT1Timeout(session: session)  // cwnd halves: 4→2
         let cwndAfterLoss = session.aimdWindow.cwnd
         XCTAssertLessThan(cwndAfterLoss, 4.0,
@@ -1085,7 +1085,7 @@ final class WindowAdaptationTests: XCTestCase {
 
         // Now ack the frame with an RR — cwnd should grow from its reduced value.
         let vsBeforeAck = session.vs
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: vsBeforeAck)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: vsBeforeAck)
 
         XCTAssertGreaterThan(session.aimdWindow.cwnd, cwndAfterLoss,
             "RR ACK must grow AIMD cwnd after loss: was \(cwndAfterLoss), now \(session.aimdWindow.cwnd)")
@@ -1112,14 +1112,14 @@ final class WindowAdaptationTests: XCTestCase {
         manager.defaultConfig = config
         let peer = AX25Address(call: "PEER", ssid: 0)
 
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
 
         // 1. Fill the protocol window: send 4 frames directly (cwnd=4=windowSize).
         //    Also queue 4 more in pendingDataQueue for the drain test.
         for i in 0..<8 {
-            _ = manager.sendData(Data("chunk\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("chunk\(i)".utf8), to: peer, path: DigiPath(), radio: .primary)
         }
         XCTAssertEqual(session.outstandingCount, config.windowSize,
             "Protocol window must be full after 8 sends (4 sent, 4 queued)")
@@ -1138,7 +1138,7 @@ final class WindowAdaptationTests: XCTestCase {
         //    This triggers drainPendingDataQueue.  After drain, outstanding must not
         //    exceed the current AIMD effectiveWindow.
         let partialNR = (session.va + 2) % 8  // ack 2 frames from va
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: partialNR)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: partialNR)
 
         // 4. After the partial ack + drain, verify the AIMD bound holds.
         //    outstanding after partial ack: was 4, acked 2, drained at most effectiveWindow-2.
@@ -1169,9 +1169,9 @@ final class PersistentLearningTests: XCTestCase {
         let peer = AX25Address(call: "PEER", ssid: 0)
 
         // First connect and accumulate RTT
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-        let s1 = manager.session(for: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        let s1 = manager.session(for: peer, path: DigiPath(), radio: .primary)
         s1.timers.updateRTT(sample: 0.5)
         s1.timers.updateRTT(sample: 0.6)
         XCTAssertNotNil(s1.timers.srtt)
@@ -1181,9 +1181,9 @@ final class PersistentLearningTests: XCTestCase {
         manager.removeSession(s1)
 
         // Second connect — new session object → fresh SRTT
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-        let s2 = manager.session(for: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        let s2 = manager.session(for: peer, path: DigiPath(), radio: .primary)
 
         XCTAssertNil(s2.timers.srtt,
             "New session after reconnect must start with nil SRTT (no stale learned state)")
@@ -1463,9 +1463,9 @@ final class AdaptiveSoakTests: XCTestCase {
         let peer = AX25Address(call: "PEER", ssid: 0)
 
         for cycle in 0..<10 {
-            _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-            manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-            let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+            _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+            manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+            let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
             XCTAssertEqual(session.state, .connected, "Cycle \(cycle): must connect")
 
             manager.forceDisconnect(session: session)
@@ -1487,19 +1487,19 @@ final class AdaptiveSoakTests: XCTestCase {
         manager.defaultConfig = config
         let peer = AX25Address(call: "PEER", ssid: 0)
 
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
 
         let checker = AdaptiveInvariantChecker()
         var violations: [AdaptiveInvariantChecker.Violation] = []
 
         // Send > 3 modulo-8 cycles (= 24 frames) in window-1 batches
         for batch in 0..<24 {
-            _ = manager.sendData(Data("wrap\(batch)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("wrap\(batch)".utf8), to: peer, path: DigiPath(), radio: .primary)
             // Acknowledge each frame immediately (simulating a perfect responder)
             let newVA = (session.va + 1) % 8
-            _ = manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: newVA, isPoll: false)
+            _ = manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: newVA, isPoll: false)
             clock.advance(by: 0.05)
             violations.append(contentsOf: checker.check(session: session, context: "batch-\(batch)"))
         }
@@ -1733,10 +1733,10 @@ final class ArchitecturalDeterminismTests: XCTestCase {
         let peer = AX25Address(call: "PEER", ssid: 0)
         manager.defaultConfig = AX25SessionConfig(rtoMin: 1.0, rtoMax: 8.0, initialRto: 1.0)
 
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-        _ = manager.sendData(Data("clock-test".utf8), to: peer, path: DigiPath(), channel: 0)
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        _ = manager.sendData(Data("clock-test".utf8), to: peer, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
 
         // Virtual clock has not advanced → T1 must not have fired yet
         XCTAssertEqual(session.stateMachine.retryCount, 0,
@@ -1760,10 +1760,10 @@ final class ArchitecturalDeterminismTests: XCTestCase {
         manager.defaultConfig = AX25SessionConfig(rtoMin: 0.5, rtoMax: 10.0, initialRto: 2.0)
 
         // Connect: SABM at t=0, UA at t=0.3 → virtual RTT = 0.3s
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
         clock.advance(by: 0.3)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
 
         // SRTT should equal the virtual-clock RTT, not wall-clock time
         XCTAssertNotNil(session.timers.srtt,
@@ -1784,13 +1784,13 @@ final class ArchitecturalDeterminismTests: XCTestCase {
         let peerA = AX25Address(call: "PEERA", ssid: 0)
         let peerB = AX25Address(call: "PEERB", ssid: 0)
 
-        _ = manager.connect(to: peerA, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peerA, path: DigiPath(), channel: 0)
-        _ = manager.connect(to: peerB, path: DigiPath(), channel: 1)
-        manager.handleInboundUA(from: peerB, path: DigiPath(), channel: 1)
+        _ = manager.connect(to: peerA, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peerA, path: DigiPath(), radio: .primary)
+        _ = manager.connect(to: peerB, path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
+        manager.handleInboundUA(from: peerB, path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
 
-        let sessionA = manager.session(for: peerA, path: DigiPath(), channel: 0)
-        let sessionB = manager.session(for: peerB, path: DigiPath(), channel: 1)
+        let sessionA = manager.session(for: peerA, path: DigiPath(), radio: .primary)
+        let sessionB = manager.session(for: peerB, path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
 
         // Mutate session A's RTT
         sessionA.timers.updateRTT(sample: 5.0)
@@ -1866,9 +1866,9 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
         )
         manager.defaultConfig = config
         let peer = AX25Address(call: "PEER", ssid: 0)
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
         return (manager, session, peer, clock)
     }
 
@@ -1943,14 +1943,14 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
             "Precondition: cwnd starts at windowSize=4")
 
         // Send 1 frame, T1 timeout → cwnd halves from 4 to 2.
-        _ = manager.sendData(Data("hello".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.sendData(Data("hello".utf8), to: peer, path: DigiPath(), radio: .primary)
         _ = manager.handleT1Timeout(session: session)
         XCTAssertEqual(session.aimdWindow.cwnd, 2.0, accuracy: 0.001,
             "Precondition: cwnd must be 2.0 after T1 loss from cwnd=4")
 
         // Ack that outstanding frame to get outstanding back to 0.
         let nrToAck = session.vs
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: nrToAck)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: nrToAck)
         XCTAssertEqual(session.outstandingCount, 0,
             "Precondition: outstanding must be 0 after full ACK")
         // cwnd grows slightly from the 1 ack: 2 + 1/2 = 2.5, effectiveWindow = 2
@@ -1961,19 +1961,19 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
         // Now send 4 new chunks.  AIMD effectiveWindow=2 < K=4, so only 2 go direct.
         _ = manager.sendData(
             Data(Array(repeating: 65, count: 4)),  // 4 bytes = 4 chunks at paclen≥1
-            to: peer, path: DigiPath(), channel: 0
+            to: peer, path: DigiPath(), radio: .primary
         )
         // Allow fragmentation to produce 4 separate frames (paclen default is large,
         // so 4 bytes = 1 chunk at any reasonable paclen).  Instead send 4 separate calls.
         // Reset: ack everything first.
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: session.vs)
 
         // Now the real test: outstanding=0, cwnd≈2.5, effectiveWindow=2.
         // Send 4 individual small frames (each a separate sendData call).
         var directSent = 0
         for i in 0..<4 {
             let preOutstanding = session.outstandingCount
-            _ = manager.sendData(Data("x\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("x\(i)".utf8), to: peer, path: DigiPath(), radio: .primary)
             if session.outstandingCount > preOutstanding {
                 directSent += 1  // frame went direct (not to queue)
             }
@@ -1999,7 +1999,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
         // Drive cwnd to minWindow via two T1 timeouts.
         // Do NOT ack the outstanding frame — we need outstanding=1 as the "occupied slot"
         // so that additional sends must queue rather than going direct.
-        _ = manager.sendData(Data("a".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.sendData(Data("a".utf8), to: peer, path: DigiPath(), radio: .primary)
         _ = manager.handleT1Timeout(session: session)  // cwnd: 4 → 2
         _ = manager.handleT1Timeout(session: session)  // cwnd: 2 → 1 (minWindow)
 
@@ -2018,7 +2018,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
         // The B1 fix ensures `session.outstandingCount < effectiveSendWindowDirect` fails
         // immediately, so every new frame goes to the queue, not to direct transmit.
         for i in 0..<3 {
-            _ = manager.sendData(Data("x\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("x\(i)".utf8), to: peer, path: DigiPath(), radio: .primary)
         }
 
         XCTAssertEqual(session.outstandingCount, 1,
@@ -2035,16 +2035,16 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
         let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
 
         // Send a frame; force a T1 loss so cwnd < maxWindow (making growth detectable).
-        _ = manager.sendData(Data("probe".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.sendData(Data("probe".utf8), to: peer, path: DigiPath(), radio: .primary)
         _ = manager.handleT1Timeout(session: session)  // cwnd: 4→2
 
         // First RR acks the frame and grows cwnd.
         let nrToAck = session.vs
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: nrToAck)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: nrToAck)
         let cwndAfterFirstRR = session.aimdWindow.cwnd  // 2 + 1/2 = 2.5
 
         // Second RR with the same nr (duplicate — vaBefore == vaAfter = nrToAck).
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: nrToAck)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: nrToAck)
         let cwndAfterDupe = session.aimdWindow.cwnd
 
         XCTAssertEqual(cwndAfterDupe, cwndAfterFirstRR, accuracy: 0.001,
@@ -2060,7 +2060,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
         let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
 
         // Send one frame: vs=1, va=0, outstanding=1.
-        _ = manager.sendData(Data("probe".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.sendData(Data("probe".utf8), to: peer, path: DigiPath(), radio: .primary)
         XCTAssertEqual(session.vs, 1, "Precondition: vs=1 after one send")
         XCTAssertEqual(session.va, 0, "Precondition: va=0")
 
@@ -2071,7 +2071,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
         // Send RR with nr=3 — out of window (vs=1, nr=3 > vs=1 → invalid).
         // isValidNR(3) with va=0, vs=1: 3 >= 0 && 3 <= 1 → false → state machine rejects.
         // B3 fix ensures vaAfter = va (unchanged) = 0, ackedCount = 0, no onAck().
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: 3)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: 3)
         let cwndAfterInvalidRR = session.aimdWindow.cwnd
 
         XCTAssertEqual(cwndAfterInvalidRR, cwndBeforeInvalidRR, accuracy: 0.001,
@@ -2088,13 +2088,13 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
 
         // Send 4 frames to fill the window.
         for i in 0..<4 {
-            _ = manager.sendData(Data("d\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("d\(i)".utf8), to: peer, path: DigiPath(), radio: .primary)
         }
         XCTAssertEqual(session.outstandingCount, 4, "Precondition: window full")
 
         let cwndBefore = session.aimdWindow.cwnd  // 4.0
         // REJ(nr=0): peer says "I need retransmission from frame 0; nothing acked."
-        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0, nr: 0)
+        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), radio: .primary, nr: 0)
         let cwndAfter = session.aimdWindow.cwnd
 
         XCTAssertLessThan(cwndAfter, cwndBefore,
@@ -2110,15 +2110,15 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
     func testDuplicateREJDoesNotDoubleDecrement() {
         let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
         for i in 0..<4 {
-            _ = manager.sendData(Data("d\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("d\(i)".utf8), to: peer, path: DigiPath(), radio: .primary)
         }
 
         // First REJ: triggers retransmit + onLoss() → cwnd=2.
-        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0, nr: 0)
+        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), radio: .primary, nr: 0)
         let cwndAfterFirstREJ = session.aimdWindow.cwnd  // 2.0
 
         // Duplicate REJ (same nr=0, va still 0 — no ack progress): must be suppressed.
-        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0, nr: 0)
+        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), radio: .primary, nr: 0)
         let cwndAfterDuplicateREJ = session.aimdWindow.cwnd
 
         XCTAssertEqual(cwndAfterDuplicateREJ, cwndAfterFirstREJ, accuracy: 0.001,
@@ -2130,12 +2130,12 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
     // cwnd must halve twice but always stay >= minWindow (1.0).
     func testREJThenT1DoubleLossIsBoundedByMinWindow() {
         let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
-        _ = manager.sendData(Data("payload".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.sendData(Data("payload".utf8), to: peer, path: DigiPath(), radio: .primary)
 
         let cwndBefore = session.aimdWindow.cwnd  // 4.0
 
         // Step 1: REJ → cwnd=2 (first loss event).
-        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), channel: 0, nr: 0)
+        _ = manager.handleInboundREJ(from: peer, path: DigiPath(), radio: .primary, nr: 0)
         let cwndAfterREJ = session.aimdWindow.cwnd
         XCTAssertEqual(cwndAfterREJ, cwndBefore * 0.5, accuracy: 0.01,
             "J3: REJ must halve cwnd; expected \(cwndBefore * 0.5), got \(cwndAfterREJ)")
@@ -2176,10 +2176,10 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
             "K1: repeated losses must not reduce effectiveWindow below 1")
 
         // Send and ack must still work
-        _ = manager.sendData(Data("k1test".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.sendData(Data("k1test".utf8), to: peer, path: DigiPath(), radio: .primary)
         XCTAssertEqual(session.outstandingCount, 1,
             "K1: exactly 1 frame outstanding after sendData with K=1")
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: session.vs)
         XCTAssertEqual(session.outstandingCount, 0,
             "K1: outstanding clears to 0 after RR acks the single frame")
     }
@@ -2193,19 +2193,19 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
 
         // Send 7 frames (fills modulo-8 window; V(S) goes from 0 to 7).
         for i in 0..<7 {
-            _ = manager.sendData(Data("first-\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("first-\(i)".utf8), to: peer, path: DigiPath(), radio: .primary)
         }
         XCTAssertEqual(session.outstandingCount, 7, "K7: 7 frames outstanding after 7 sends")
         XCTAssertEqual(session.vs, 7, "K7: V(S)=7 after 7 sends")
 
         // RR(nr=7) acks all 7.  V(A) → 7.
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: 7)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: 7)
         XCTAssertEqual(session.outstandingCount, 0, "K7: outstanding=0 after full ACK")
         XCTAssertEqual(session.va, 7, "K7: V(A)=7 after RR(7)")
 
         // Send 7 more.  V(S) wraps: 7,0,1,2,3,4,5 → V(S) ends at 6.
         for i in 0..<7 {
-            _ = manager.sendData(Data("wrap-\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("wrap-\(i)".utf8), to: peer, path: DigiPath(), radio: .primary)
         }
         XCTAssertEqual(session.outstandingCount, 7, "K7: 7 frames outstanding after wraparound send")
 
@@ -2216,7 +2216,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
             "K7: send buffer must contain sequence numbers {7,0,1,2,3,4,5} after wraparound; got \(bufferKeys.sorted())")
 
         // RR(nr=6) acks all 7 wrapped frames: acknowledgeUpTo(from: 7, to: 6) removes 7,0,1,2,3,4,5.
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: 6)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: 6)
         XCTAssertEqual(session.outstandingCount, 0, "K7: outstanding=0 after wraparound RR(6)")
         XCTAssertTrue(session.sendBuffer.isEmpty, "K7: send buffer must be empty after full wraparound ack")
     }
@@ -2242,19 +2242,19 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
 
         // Send 8 chunks (paclen default is large, so 8 separate calls = 8 queued/sent)
         for i in 0..<8 {
-            _ = manager.sendData(Data("q\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("q\(i)".utf8), to: peer, path: DigiPath(), radio: .primary)
         }
         // After 8 sends with K=4 and cwnd=4: 4 outstanding, 4 queued.
         XCTAssertEqual(session.outstandingCount, 4, "Q1: 4 outstanding after 8 sends (K=4)")
         XCTAssertEqual(session.pendingDataQueue.count, 4, "Q1: 4 queued after 8 sends")
 
         // ACK all outstanding → drain sends 4 more → outstanding=4, queue=0
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: session.vs)
         XCTAssertEqual(session.pendingDataQueue.count, 0,
             "Q1: queue must drain to empty after full RR ACK on stable link")
 
         // ACK the second batch → outstanding=0, queue=0
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: session.vs)
         XCTAssertEqual(session.outstandingCount, 0, "Q1: outstanding=0 after all ACKs")
         XCTAssertEqual(session.pendingDataQueue.count, 0, "Q1: queue still empty after second ACK")
     }
@@ -2266,7 +2266,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
 
         // Fill window and queue: 4 outstanding, 4 queued.
         for i in 0..<8 {
-            _ = manager.sendData(Data("r\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("r\(i)".utf8), to: peer, path: DigiPath(), radio: .primary)
         }
         XCTAssertEqual(session.outstandingCount, 4)
         XCTAssertEqual(session.pendingDataQueue.count, 4)
@@ -2279,7 +2279,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
         // Partial RR acks 2 frames: outstanding 4→2.
         // Drain: available = min(4,2) − 2 = 0 → no drain.
         let partialNR = (session.va + 2) % 8
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: partialNR)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: partialNR)
 
         // After partial RR + drain with cwnd=2: outstanding=2, queue still has 4.
         // (drain sent 0 new frames because effectiveSendWindow=2 and outstanding=2)
@@ -2296,7 +2296,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
 
         // Fill window and queue: 4 outstanding, 4 queued.
         for i in 0..<8 {
-            _ = manager.sendData(Data("p\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("p\(i)".utf8), to: peer, path: DigiPath(), radio: .primary)
         }
         XCTAssertEqual(session.outstandingCount, 4)
         XCTAssertEqual(session.pendingDataQueue.count, 4)
@@ -2304,7 +2304,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
         // Partial RR acks exactly 2 frames (nr = va + 2).
         // No loss: cwnd stays at 4. Drain: available = 4 − 2 = 2 → sends 2 from queue.
         let partialNR = (session.va + 2) % 8
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: partialNR)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: partialNR)
 
         XCTAssertEqual(session.outstandingCount, 4,
             "Q3: after partial ack of 2 + drain of 2: outstanding stays at 4 (2 old + 2 drained)")
@@ -2325,8 +2325,8 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
 
         // 20 send+ack cycles.
         for _ in 0..<20 {
-            _ = manager.sendData(Data("clean".utf8), to: peer, path: DigiPath(), channel: 0)
-            manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+            _ = manager.sendData(Data("clean".utf8), to: peer, path: DigiPath(), radio: .primary)
+            manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: session.vs)
             let c = session.aimdWindow.cwnd
             minObserved = Swift.min(minObserved, c)
             maxObserved = Swift.max(maxObserved, c)
@@ -2346,7 +2346,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
         let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
 
         // Send one frame to give T1 something to retransmit.
-        _ = manager.sendData(Data("burst".utf8), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.sendData(Data("burst".utf8), to: peer, path: DigiPath(), radio: .primary)
 
         // 5 consecutive T1 timeouts.
         // cwnd trajectory: 4 → 2 → 1 → 1 → 1 → 1 (hits minWindow at step 2)
@@ -2359,15 +2359,15 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
             "C2: effectiveWindow=1 at minWindow")
 
         // Recovery: ACK the outstanding frame, then send+ack several more cycles.
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: session.vs)
         let cwndAfterFirstAck = session.aimdWindow.cwnd
         XCTAssertGreaterThan(cwndAfterFirstAck, 1.0,
             "C2: first ACK after minWindow must grow cwnd (liveness): got \(cwndAfterFirstAck)")
 
         // 10 more send+ack cycles → cwnd should converge back toward maxWindow.
         for _ in 0..<10 {
-            _ = manager.sendData(Data("rec".utf8), to: peer, path: DigiPath(), channel: 0)
-            manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+            _ = manager.sendData(Data("rec".utf8), to: peer, path: DigiPath(), radio: .primary)
+            manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: session.vs)
         }
         XCTAssertGreaterThan(session.aimdWindow.cwnd, 1.0,
             "C2: cwnd must recover above minWindow after 10 clean cycles")
@@ -2391,13 +2391,13 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
         var lossEvents = 0
 
         for _ in 0..<50 {
-            _ = manager.sendData(Data("sim".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("sim".utf8), to: peer, path: DigiPath(), radio: .primary)
 
             if rng.nextDouble() < lossProb {
                 _ = manager.handleT1Timeout(session: session)
                 lossEvents += 1
             } else {
-                manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+                manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: session.vs)
             }
 
             let c = session.aimdWindow.cwnd
@@ -2431,11 +2431,11 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
         var cwndSamples: [Double] = []
 
         for i in 0..<40 {
-            _ = manager.sendData(Data("alt\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("alt\(i)".utf8), to: peer, path: DigiPath(), radio: .primary)
             if i % 2 == 0 {
                 _ = manager.handleT1Timeout(session: session)  // loss
             } else {
-                manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+                manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: session.vs)
             }
             cwndSamples.append(session.aimdWindow.cwnd)
         }
@@ -2473,18 +2473,18 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
         let peerA = AX25Address(call: "PEERA", ssid: 0)
         let peerB = AX25Address(call: "PEERB", ssid: 1)
 
-        _ = manager.connect(to: peerA, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peerA, path: DigiPath(), channel: 0)
-        _ = manager.connect(to: peerB, path: DigiPath(), channel: 1)
-        manager.handleInboundUA(from: peerB, path: DigiPath(), channel: 1)
+        _ = manager.connect(to: peerA, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peerA, path: DigiPath(), radio: .primary)
+        _ = manager.connect(to: peerB, path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
+        manager.handleInboundUA(from: peerB, path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
 
-        let sessionA = manager.session(for: peerA, path: DigiPath(), channel: 0)
-        let sessionB = manager.session(for: peerB, path: DigiPath(), channel: 1)
+        let sessionA = manager.session(for: peerA, path: DigiPath(), radio: .primary)
+        let sessionB = manager.session(for: peerB, path: DigiPath(), radio: RadioID(rawValue: "radio-1"))
 
         let cwndBInit = sessionB.aimdWindow.cwnd  // 4.0
 
         // Send on A, trigger 3 T1 losses → cwnd_A collapses.
-        _ = manager.sendData(Data("loss-a".utf8), to: peerA, path: DigiPath(), channel: 0)
+        _ = manager.sendData(Data("loss-a".utf8), to: peerA, path: DigiPath(), radio: .primary)
         for _ in 0..<3 {
             _ = manager.handleT1Timeout(session: sessionA)
         }
@@ -2508,11 +2508,11 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
 
         // Stress: alternate T1 losses and RR acks in a tight cycle.
         for i in 0..<30 {
-            _ = manager.sendData(Data("inv\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("inv\(i)".utf8), to: peer, path: DigiPath(), radio: .primary)
             if i % 3 == 0 {
                 _ = manager.handleT1Timeout(session: session)
             } else {
-                manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+                manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: session.vs)
             }
 
             let cwnd = session.aimdWindow.cwnd
@@ -2530,7 +2530,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
         let (manager, session, peer, _) = makeConnectedSession(windowSize: 4)
 
         for i in 0..<20 {
-            _ = manager.sendData(Data("ew\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("ew\(i)".utf8), to: peer, path: DigiPath(), radio: .primary)
             _ = manager.handleT1Timeout(session: session)  // aggressive losses
 
             XCTAssertGreaterThanOrEqual(session.aimdWindow.effectiveWindow, 1,
@@ -2558,7 +2558,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
             // Send a batch of frames.
             for i in 0..<4 {
                 _ = manager.sendData(Data("inv\(round)-\(i)".utf8),
-                    to: peer, path: DigiPath(), channel: 0)
+                    to: peer, path: DigiPath(), radio: .primary)
             }
 
             // Verify send-site invariant: after sendData, no more than
@@ -2572,7 +2572,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
                 + "(cwnd=\(String(format: "%.2f", session.aimdWindow.cwnd)))")
 
             // Ack all to prepare next round.
-            manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: session.vs)
+            manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: session.vs)
         }
     }
 
@@ -2583,7 +2583,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
 
         // Queue more than K frames so drain has work to do.
         for i in 0..<8 {
-            _ = manager.sendData(Data("d\(i)".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data("d\(i)".utf8), to: peer, path: DigiPath(), radio: .primary)
         }
         XCTAssertEqual(session.pendingDataQueue.count, 4, "I4 precondition: 4 items queued")
 
@@ -2592,7 +2592,7 @@ final class AIMDCongestionControlAuditTests: XCTestCase {
 
         // Partial RR acks 2 frames: outstanding 4→2; drain runs.
         let partialNR = (session.va + 2) % 8
-        manager.handleInboundRR(from: peer, path: DigiPath(), channel: 0, nr: partialNR)
+        manager.handleInboundRR(from: peer, path: DigiPath(), radio: .primary, nr: partialNR)
 
         // After drain: outstandingCount must be <= effectiveSendWindow.
         let effectiveSendWindow = min(session.stateMachine.config.windowSize,

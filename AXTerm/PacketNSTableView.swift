@@ -18,6 +18,7 @@ struct PacketNSTableView: NSViewRepresentable {
 
     enum ColumnIdentifier: String, CaseIterable {
         case time
+        case radio
         case from
         case to
         case via
@@ -26,6 +27,9 @@ struct PacketNSTableView: NSViewRepresentable {
     }
 
     let packets: [Packet]
+    /// Radio names by id. Empty with one radio, and then there is no Radio
+    /// column — a column that always said the same thing would be noise.
+    var radioNames: [RadioID: String] = [:]
     @Binding var selection: Set<Packet.ID>
     @Binding var isAtBottom: Bool
     @Binding var followNewest: Bool
@@ -70,7 +74,7 @@ struct PacketNSTableView: NSViewRepresentable {
 
         context.coordinator.attach(tableView: tableView)
         configureColumns(for: tableView)
-        let initialRows = packets.map { PacketRowViewModel.fromPacket($0) }
+        let initialRows = packets.map { PacketRowViewModel.fromPacket($0, radioNames: radioNames) }
         PacketNSTableView.sizeColumnsToFitContent(in: tableView, rows: initialRows)
         PacketNSTableView.expandInfoColumnToFill(in: tableView)
 
@@ -95,6 +99,7 @@ struct PacketNSTableView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
+        context.coordinator.radioNames = radioNames
         context.coordinator.enqueueUpdate(
             packets: packets,
             selection: selection,
@@ -106,6 +111,8 @@ struct PacketNSTableView: NSViewRepresentable {
         if !tableView.tableColumns.isEmpty { return }
 
         let timeColumn = makeColumn(id: .time, title: "Time", minWidth: 70, width: 80, toolTip: "Received time")
+        let radioColumn = makeColumn(id: .radio, title: "Radio", minWidth: 50, width: 80,
+                                     toolTip: "Which radio decoded this frame, not which the sender used")
         let fromColumn = makeColumn(id: .from, title: "From", minWidth: 80, width: 100, toolTip: "Source callsign")
         let toColumn = makeColumn(id: .to, title: "To", minWidth: 80, width: 100, toolTip: "Destination callsign")
         let viaColumn = makeColumn(id: .via, title: "Via", minWidth: 60, width: 120, toolTip: "Digipeater path")
@@ -114,6 +121,7 @@ struct PacketNSTableView: NSViewRepresentable {
         infoColumn.resizingMask = [.autoresizingMask, .userResizingMask]
 
         tableView.addTableColumn(timeColumn)
+        if !radioNames.isEmpty { tableView.addTableColumn(radioColumn) }
         tableView.addTableColumn(fromColumn)
         tableView.addTableColumn(toColumn)
         tableView.addTableColumn(viaColumn)
@@ -236,6 +244,7 @@ extension PacketNSTableView {
 
         private(set) var rows: [PacketRowViewModel] = []
         private(set) var packets: [Packet] = []
+        var radioNames: [RadioID: String] = [:]
         private var isApplyingSelection = false
         private var lastContextRow: Int?
         private var lastScrollToBottomToken = 0
@@ -508,6 +517,13 @@ extension PacketNSTableView {
                 field.textColor = .secondaryLabelColor
                 field.alignment = .left
                 field.toolTip = row.timeText
+            case ColumnIdentifier.radio.rawValue:
+                field.stringValue = row.radioName ?? ""
+                field.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+                field.textColor = .secondaryLabelColor
+                field.alignment = .left
+                field.lineBreakMode = .byTruncatingTail
+                field.toolTip = row.radioName.map { "Decoded by \($0)" }
             case ColumnIdentifier.from.rawValue:
                 field.stringValue = row.fromText
                 field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
@@ -649,7 +665,7 @@ extension PacketNSTableView {
             }
 
             if rows.isEmpty {
-                rows = packets.map { PacketRowViewModel.fromPacket($0) }
+                rows = packets.map { PacketRowViewModel.fromPacket($0, radioNames: radioNames) }
                 self.packets = packets
                 tableView.reloadData()
                 return .reload
@@ -658,7 +674,7 @@ extension PacketNSTableView {
             if newIDs.count >= oldIDs.count {
                 let delta = newIDs.count - oldIDs.count
                 if delta > 0, Array(newIDs.prefix(oldIDs.count)) == oldIDs {
-                    let newRows = packets.suffix(delta).map { PacketRowViewModel.fromPacket($0) }
+                    let newRows = packets.suffix(delta).map { PacketRowViewModel.fromPacket($0, radioNames: radioNames) }
                     let startRow = rows.count
                     rows.append(contentsOf: newRows)
                     self.packets = packets
@@ -682,7 +698,7 @@ extension PacketNSTableView {
                 }
             }
 
-            rows = packets.map { PacketRowViewModel.fromPacket($0) }
+            rows = packets.map { PacketRowViewModel.fromPacket($0, radioNames: radioNames) }
             self.packets = packets
             tableView.reloadData()
             return .reload
@@ -763,6 +779,7 @@ nonisolated private struct PacketTableColumnSizer {
         let title: String
         switch column {
         case .time: title = "Time"
+        case .radio: title = "Radio"
         case .from: title = "From"
         case .to: title = "To"
         case .via: title = "Via"
@@ -779,6 +796,9 @@ nonisolated private struct PacketTableColumnSizer {
         case .time:
             font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
             values = rows.map { $0.timeText }
+        case .radio:
+            font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            values = rows.map { $0.radioName ?? "" }
         case .from:
             font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
             values = rows.map { $0.fromText }
@@ -805,6 +825,7 @@ nonisolated private struct PacketTableColumnSizer {
     private func columnMaxWidth(for column: PacketNSTableView.ColumnIdentifier) -> CGFloat {
         switch column {
         case .time: return 140
+        case .radio: return 160
         case .from, .to: return 200
         case .via: return 420
         case .type: return 80

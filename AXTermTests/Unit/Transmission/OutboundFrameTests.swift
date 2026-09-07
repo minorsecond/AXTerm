@@ -103,7 +103,7 @@ final class OutboundFrameTests: XCTestCase {
         XCTAssertEqual(frame.priority, .normal)
         XCTAssertEqual(frame.frameType, "ui")
         XCTAssertEqual(frame.pid, 0xF0)
-        XCTAssertEqual(frame.channel, 0)
+        XCTAssertEqual(frame.radio, .primary)
         XCTAssertNil(frame.sessionId)
     }
 

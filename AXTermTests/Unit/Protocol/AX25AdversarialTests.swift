@@ -18,18 +18,18 @@ final class AX25AdversarialTests: XCTestCase {
     /// Verifies the stack does not crash or infinite loop when a peer sends an endless stream of REJs
     func testREJStormHandling() {
         let manager = makeManager()
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
         
-        let session = manager.session(for: peer, path: path, channel: 0)
+        let session = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, AX25SessionState.connected)
         
         // Send a frame
-        _ = manager.sendData(Data("Target".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("Target".utf8), to: peer, path: path, radio: .primary)
         
         // Subject to REJ storm
         for _ in 0..<100 {
-            _ = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 0)
+            _ = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 0)
         }
         
         // Assert session survived and constraints are met
@@ -42,20 +42,20 @@ final class AX25AdversarialTests: XCTestCase {
     func testPartialWindowACKRecovery() {
         let manager = makeManager()
         manager.defaultConfig = AX25SessionConfig(windowSize: 4)
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
         
-        let session = manager.session(for: peer, path: path, channel: 0)
+        let session = manager.session(for: peer, path: path, radio: .primary)
         
-        _ = manager.sendData(Data("Frame0".utf8), to: peer, path: path, channel: 0)
-        _ = manager.sendData(Data("Frame1".utf8), to: peer, path: path, channel: 0)
-        _ = manager.sendData(Data("Frame2".utf8), to: peer, path: path, channel: 0)
-        _ = manager.sendData(Data("Frame3".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("Frame0".utf8), to: peer, path: path, radio: .primary)
+        _ = manager.sendData(Data("Frame1".utf8), to: peer, path: path, radio: .primary)
+        _ = manager.sendData(Data("Frame2".utf8), to: peer, path: path, radio: .primary)
+        _ = manager.sendData(Data("Frame3".utf8), to: peer, path: path, radio: .primary)
         
         XCTAssertEqual(session.outstandingCount, 4)
         
         // Peer acks up to 2 (acks frame 0 and 1)
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 2, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 2, isPoll: false)
         
         XCTAssertEqual(session.va, 2)
         XCTAssertEqual(session.outstandingCount, 2) // frames 2 and 3 remain
@@ -66,16 +66,16 @@ final class AX25AdversarialTests: XCTestCase {
     /// Peer sends DISC while we are transmitting DATA, or we send DISC while they send DATA.
     func testDISCDataCollision() {
         let manager = makeManager()
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
-        let session = manager.session(for: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
+        let session = manager.session(for: peer, path: path, radio: .primary)
         
         // We disconnect
         _ = manager.disconnect(session: session)
         XCTAssertEqual(session.state, AX25SessionState.disconnecting)
         
         // In the meantime, peer sent us an I-Frame (collision)
-        _ = manager.handleInboundIFrame(from: peer, path: path, channel: 0, ns: 0, nr: 0, pf: false, payload: Data("Too late".utf8))
+        _ = manager.handleInboundIFrame(from: peer, path: path, radio: .primary, ns: 0, nr: 0, pf: false, payload: Data("Too late".utf8))
         
         // State should still be disconnecting, and frame should be ignored
         XCTAssertEqual(session.state, AX25SessionState.disconnecting)
@@ -85,15 +85,15 @@ final class AX25AdversarialTests: XCTestCase {
     /// Peer maliciously or accidentally repeatedly sends SABM during an active connection.
     func testDuplicateSABMHandling() {
         let manager = makeManager()
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
         
-        let session = manager.session(for: peer, path: path, channel: 0)
-        _ = manager.sendData(Data("Hello".utf8), to: peer, path: path, channel: 0)
+        let session = manager.session(for: peer, path: path, radio: .primary)
+        _ = manager.sendData(Data("Hello".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.vs, 1)
         
         // Receive duplicate SABM
-        let uaFrame = manager.handleInboundSABM(from: peer, to: local, path: path, channel: 0)
+        let uaFrame = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
         
         XCTAssertNotNil(uaFrame) // We must acknowledge it with UA
         XCTAssertEqual(uaFrame?.frameType, "u")
@@ -109,8 +109,8 @@ final class AX25AdversarialTests: XCTestCase {
     /// Peer sends the same I-Frame repeatedly, we should only deliver it to app once and ack it.
     func testDuplicateFrameSuppression() {
         let manager = makeManager()
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
         
         var receivedCount = 0
         manager.onDataReceived = { _, _ in
@@ -119,13 +119,13 @@ final class AX25AdversarialTests: XCTestCase {
         
         // Receive same frame 3 times
         for _ in 0..<3 {
-            _ = manager.handleInboundIFrame(from: peer, path: path, channel: 0, ns: 0, nr: 0, pf: false, payload: Data("Dupe".utf8))
+            _ = manager.handleInboundIFrame(from: peer, path: path, radio: .primary, ns: 0, nr: 0, pf: false, payload: Data("Dupe".utf8))
         }
         
         // Should only be delivered once!
         XCTAssertEqual(receivedCount, 1)
         
-        let session = manager.session(for: peer, path: path, channel: 0)
+        let session = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertEqual(session.vr, 1) // V(R) advanced once
     }
 }

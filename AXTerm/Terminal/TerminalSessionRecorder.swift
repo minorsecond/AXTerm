@@ -35,10 +35,11 @@ nonisolated final class TerminalSessionRecorder: @unchecked Sendable {
     /// crash or a power cut leaves a record that something was attempted
     /// instead of nothing at all.
     func began(id: String, remote: String, via: [String], transport: String,
-               relayDestination: String? = nil, at when: Date = Date()) {
+               relayDestination: String? = nil, radio: RadioID = .primary,
+               at when: Date = Date()) {
         let session = TerminalSession(
             remote: remote, via: via, relayDestination: relayDestination,
-            transport: transport, startedAt: when, outcome: .live)
+            transport: transport, radioID: radio, startedAt: when, outcome: .live)
         lock.withLock { open[id] = session }
         persist(session)
     }

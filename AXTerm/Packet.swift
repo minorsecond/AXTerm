@@ -25,7 +25,20 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
     /// Cached text decoding of `info` (if mostly printable ASCII).
     let infoText: String?
     let rawAx25: Data
+    /// The TCP endpoint of the link that heard this frame, when it was TCP.
     let kissEndpoint: KISSEndpoint?
+    /// The radio that heard this frame. Nil on frames read back from storage
+    /// written before radios existed, and on synthetic frames.
+    let radioID: RadioID?
+    /// The KISS port nibble the frame arrived with.
+    let kissPort: UInt8
+    /// The link as the operator would name it, for serial and Bluetooth
+    /// links that have no host and port.
+    let linkDescription: String?
+    /// A frame this station transmitted, heard straight back — by another
+    /// of its radios on the same frequency. Kept in the log, counted for no
+    /// station and fed to no metric.
+    let isOwnEcho: Bool
 
     /// True when every digipeater in the path has set its has-been-repeated (H)
     /// bit, or the path is empty (direct frame).
@@ -182,7 +195,11 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
         info: Data = Data(),
         rawAx25: Data = Data(),
         kissEndpoint: KISSEndpoint? = nil,
-        infoText: String? = nil
+        infoText: String? = nil,
+        radioID: RadioID? = nil,
+        kissPort: UInt8 = 0,
+        linkDescription: String? = nil,
+        isOwnEcho: Bool = false
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -197,6 +214,10 @@ nonisolated struct Packet: Identifiable, Hashable, Sendable {
         self.infoText = infoText ?? Self.computeInfoText(from: info)
         self.rawAx25 = rawAx25
         self.kissEndpoint = kissEndpoint
+        self.radioID = radioID
+        self.kissPort = kissPort
+        self.linkDescription = linkDescription
+        self.isOwnEcho = isOwnEcho
     }
 
     static func normalizedViaItems(from via: [AX25Address]) -> [String] {

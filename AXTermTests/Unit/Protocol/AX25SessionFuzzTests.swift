@@ -96,9 +96,9 @@ final class AX25SessionFuzzTests: XCTestCase {
         )
         manager.defaultConfig = config
         let peer = AX25Address(call: "PEER", ssid: 0)
-        _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-        let session = manager.session(for: peer, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+        let session = manager.session(for: peer, path: DigiPath(), radio: .primary)
         return (manager, session, peer, clock)
     }
 
@@ -451,17 +451,17 @@ extension AX25SessionFuzzTests {
         let initialCount = manager.sessions.count
 
         // UA for unknown session — must be silently ignored
-        manager.handleInboundUA(from: stranger, path: path, channel: 0)
+        manager.handleInboundUA(from: stranger, path: path, radio: .primary)
         XCTAssertEqual(manager.sessions.count, initialCount,
             "UA for unknown session must not create a session")
 
         // DM for unknown session — must be silently ignored
-        manager.handleInboundDM(from: stranger, path: path, channel: 0)
+        manager.handleInboundDM(from: stranger, path: path, radio: .primary)
         XCTAssertEqual(manager.sessions.count, initialCount,
             "DM for unknown session must not create a session")
 
         // DISC for unknown session — must return DM frame, not crash
-        let discResponse = manager.handleInboundDISC(from: stranger, path: path, channel: 0)
+        let discResponse = manager.handleInboundDISC(from: stranger, path: path, radio: .primary)
         // Either nil (no session, no response) or DM (correct protocol)
         if let r = discResponse {
             // If there's a response, it must be a DM
@@ -473,16 +473,16 @@ extension AX25SessionFuzzTests {
             "DISC for unknown session must not create a session")
 
         // RR for unknown session — must return nil
-        let rrResponse = manager.handleInboundRR(from: stranger, path: path, channel: 0, nr: 0)
+        let rrResponse = manager.handleInboundRR(from: stranger, path: path, radio: .primary, nr: 0)
         XCTAssertNil(rrResponse, "RR for unknown session must return nil")
 
         // REJ for unknown session — must return empty
-        let rejFrames = manager.handleInboundREJ(from: stranger, path: path, channel: 0, nr: 0)
+        let rejFrames = manager.handleInboundREJ(from: stranger, path: path, radio: .primary, nr: 0)
         XCTAssertTrue(rejFrames.isEmpty, "REJ for unknown session must return no frames")
 
         // I-frame for unknown session — must return nil, must not create session
         let iResponse = manager.handleInboundIFrame(
-            from: stranger, path: path, channel: 0,
+            from: stranger, path: path, radio: .primary,
             ns: 0, nr: 0, pf: false,
             payload: Data("hello".utf8)
         )
@@ -505,20 +505,20 @@ extension AX25SessionFuzzTests {
 
         let before = manager.sessions.count
         // First SABM — should create session and return UA
-        let r1 = manager.handleInboundSABM(from: peer, to: local, path: path, channel: 0)
+        let r1 = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
         XCTAssertNotNil(r1, "First SABM should return UA")
         XCTAssertEqual(manager.sessions.count, before + 1,
             "First SABM must create exactly one session")
 
         // Second SABM from same peer — should re-use session (not create a new one)
-        let r2 = manager.handleInboundSABM(from: peer, to: local, path: path, channel: 0)
+        let r2 = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
         _ = r2  // May return UA again; that's fine
         XCTAssertEqual(manager.sessions.count, before + 1,
             "Repeated SABM from same peer must not create additional sessions (seed: F-S2)")
 
         // Flood: 20 more SABMs
         for _ in 0..<20 {
-            _ = manager.handleInboundSABM(from: peer, to: local, path: path, channel: 0)
+            _ = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
         }
         XCTAssertEqual(manager.sessions.count, before + 1,
             "SABM flood from same peer must stay at 1 session (seed: F-S2)")
@@ -537,7 +537,7 @@ extension AX25SessionFuzzTests {
 
         for ssid in 0...7 {
             let peer = AX25Address(call: "PEER", ssid: ssid)
-            _ = manager.handleInboundSABM(from: peer, to: local, path: path, channel: 0)
+            _ = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
         }
 
         XCTAssertEqual(manager.sessions.count, before + 8,
@@ -557,13 +557,13 @@ extension AX25SessionFuzzTests {
         let path = DigiPath()
 
         // Send 2 frames to have outstanding work
-        _ = manager.sendData(Data("ping".utf8), to: peer, path: path, channel: 0)
-        _ = manager.sendData(Data("pong".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("ping".utf8), to: peer, path: path, radio: .primary)
+        _ = manager.sendData(Data("pong".utf8), to: peer, path: path, radio: .primary)
 
         let cwindBefore = session.aimdWindow.cwnd
 
         for nr in 0...7 {
-            _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: nr)
+            _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: nr)
             assertAllInvariants(session, context: "RR(nr=\(nr))")
         }
 
@@ -580,13 +580,13 @@ extension AX25SessionFuzzTests {
 
         // Send 4 frames to fill window
         for i in 0..<4 {
-            _ = manager.sendData(Data("chunk\(i)".utf8), to: peer, path: path, channel: 0)
+            _ = manager.sendData(Data("chunk\(i)".utf8), to: peer, path: path, radio: .primary)
         }
 
         for nr in 0...7 {
             // Reset REJ dedup state so each REJ is independently processed
             session.lastREJRetransmitNR = nil
-            _ = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: nr)
+            _ = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: nr)
             assertAllInvariants(session, context: "REJ(nr=\(nr))")
         }
         _ = clock
@@ -601,7 +601,7 @@ extension AX25SessionFuzzTests {
         for ns in 0...7 {
             for nr in 0...7 {
                 _ = manager.handleInboundIFrame(
-                    from: peer, path: path, channel: 0,
+                    from: peer, path: path, radio: .primary,
                     ns: ns, nr: nr, pf: false,
                     payload: Data("data".utf8)
                 )
@@ -617,7 +617,7 @@ extension AX25SessionFuzzTests {
         let path = DigiPath()
 
         _ = manager.handleInboundIFrame(
-            from: peer, path: path, channel: 0,
+            from: peer, path: path, radio: .primary,
             ns: 0, nr: 0, pf: false,
             payload: Data()
         )
@@ -632,7 +632,7 @@ extension AX25SessionFuzzTests {
 
         let bigPayload = Data(repeating: 0xFF, count: 256)
         _ = manager.handleInboundIFrame(
-            from: peer, path: path, channel: 0,
+            from: peer, path: path, radio: .primary,
             ns: 0, nr: 0, pf: false,
             payload: bigPayload
         )
@@ -647,7 +647,7 @@ extension AX25SessionFuzzTests {
 
         let zeroPayload = Data(repeating: 0x00, count: 128)
         _ = manager.handleInboundIFrame(
-            from: peer, path: path, channel: 0,
+            from: peer, path: path, radio: .primary,
             ns: 0, nr: 0, pf: false,
             payload: zeroPayload
         )
@@ -663,7 +663,7 @@ extension AX25SessionFuzzTests {
 
         // I-frame with P=1 — session must respond with F=1 RR
         let iResp = manager.handleInboundIFrame(
-            from: peer, path: path, channel: 0,
+            from: peer, path: path, radio: .primary,
             ns: 0, nr: 0, pf: true,
             payload: Data("pf-test".utf8)
         )
@@ -675,7 +675,7 @@ extension AX25SessionFuzzTests {
         }
 
         // RR poll (P=1) — session must respond with RR(F=1)
-        let rrResp = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 0, isPoll: true)
+        let rrResp = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 0, isPoll: true)
         if let r = rrResp {
             let decoded = AX25ControlFieldDecoder.decode(control: r.controlByte ?? 0)
             XCTAssertEqual(decoded.frameClass, .S,
@@ -701,13 +701,13 @@ extension AX25SessionFuzzTests {
         _ = clock
 
         // Send 1 frame (N(S)=0) so there's something to reject
-        _ = manager.sendData(Data("data".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("data".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 1, "Precondition: 1 outstanding frame")
 
         for i in 0..<50 {
             // Reset REJ dedup to allow the first REJ each T1 cycle to trigger onLoss()
             if i % 5 == 0 { session.lastREJRetransmitNR = nil }
-            _ = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 0)
+            _ = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 0)
             let cwnd = session.aimdWindow.cwnd
             XCTAssertFalse(cwnd.isNaN,    "REJ storm: cwnd NaN after \(i+1) iterations")
             XCTAssertTrue(cwnd.isFinite,  "REJ storm: cwnd Inf after \(i+1) iterations")
@@ -730,15 +730,15 @@ extension AX25SessionFuzzTests {
         _ = clock
 
         // Send 2 frames
-        _ = manager.sendData(Data("a".utf8), to: peer, path: path, channel: 0)
-        _ = manager.sendData(Data("b".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("a".utf8), to: peer, path: path, radio: .primary)
+        _ = manager.sendData(Data("b".utf8), to: peer, path: path, radio: .primary)
 
         let cwindBefore = session.aimdWindow.cwnd
         let currentVA = session.va
 
         // 50 RRs all with nr=V(A) — zero ack progress
         for i in 0..<50 {
-            _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: currentVA)
+            _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: currentVA)
             let cwnd = session.aimdWindow.cwnd
             // cwnd must not grow beyond starting value (ackedCount=0 → no onAck() calls)
             XCTAssertLessThanOrEqual(cwnd, cwindBefore + 0.001,
@@ -761,13 +761,13 @@ extension AX25SessionFuzzTests {
 
         // Fill the effective window
         for i in 0..<K {
-            _ = manager.sendData(Data("frame\(i)".utf8), to: peer, path: path, channel: 0)
+            _ = manager.sendData(Data("frame\(i)".utf8), to: peer, path: path, radio: .primary)
         }
         let outstanding = session.outstandingCount
         let vsAfterSend = session.vs
 
         // One RR that acknowledges all outstanding frames
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: vsAfterSend)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: vsAfterSend)
 
         let cwndAfter = session.aimdWindow.cwnd
         // cwnd should have grown by ackedCount/cwnd (congestion avoidance) or +ackedCount (slow start)
@@ -784,13 +784,13 @@ extension AX25SessionFuzzTests {
         _ = clock
 
         // Send 1 frame; V(S) = 1
-        _ = manager.sendData(Data("test".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("test".utf8), to: peer, path: path, radio: .primary)
         let cwindBefore = session.aimdWindow.cwnd
         let vsBefore = session.vs
 
         // Inject RR(nr) where nr is ahead of V(S) by 2 (invalid)
         let invalidNR = (vsBefore + 2) % 8
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: invalidNR)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: invalidNR)
 
         // cwnd must not have changed (state machine should reject out-of-window nr)
         // Note: the session manager uses vaAfter-vaBefore for ackedCount; if state machine
@@ -807,7 +807,7 @@ extension AX25SessionFuzzTests {
 
         // Send 4 frames so there's always outstanding work for T1 to trigger on
         for i in 0..<4 {
-            _ = manager.sendData(Data("frame\(i)".utf8), to: peer, path: path, channel: 0)
+            _ = manager.sendData(Data("frame\(i)".utf8), to: peer, path: path, radio: .primary)
         }
 
         // Fire T1 50 times
@@ -838,7 +838,7 @@ extension AX25SessionFuzzTests {
         for i in 0..<200 {
             // Keep 1–2 frames outstanding at all times
             if session.outstandingCount == 0 {
-                _ = manager.sendData(Data("x".utf8), to: peer, path: path, channel: 0)
+                _ = manager.sendData(Data("x".utf8), to: peer, path: path, radio: .primary)
             }
 
             let action = rng.nextInt(3)
@@ -846,13 +846,13 @@ extension AX25SessionFuzzTests {
             case 0:
                 // REJ(nr=V(A)): loss event, no ack progress
                 session.lastREJRetransmitNR = nil
-                _ = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: session.va)
+                _ = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: session.va)
             case 1:
                 // RR(nr=V(S)): ack all outstanding
-                _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: session.vs)
+                _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: session.vs)
             default:
                 // RR(nr=V(A)): no progress
-                _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: session.va)
+                _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: session.va)
             }
 
             let cwnd = session.aimdWindow.cwnd
@@ -886,14 +886,14 @@ extension AX25SessionFuzzTests {
         let initialTimers = clock.activeTaskCount
 
         // Establish session (SABM → UA → connected)
-        _ = manager.handleInboundSABM(from: peer, to: local, path: path, channel: 0)
-        _ = manager.handleInboundUA(from: peer, path: path, channel: 0)
+        _ = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
+        _ = manager.handleInboundUA(from: peer, path: path, radio: .primary)
 
         XCTAssertEqual(manager.sessions.count, initialCount + 1,
             "Session must be created after SABM+UA (seed: F-L1)")
 
         // Tear down via DISC from remote peer
-        _ = manager.handleInboundDISC(from: peer, path: path, channel: 0)
+        _ = manager.handleInboundDISC(from: peer, path: path, radio: .primary)
 
         // After DISC, session should be in disconnected state or removed.
         // The session count should not have grown; it may stay at +1 (disconnected) or
@@ -919,12 +919,12 @@ extension AX25SessionFuzzTests {
         let peer  = AX25Address(call: "PEER",  ssid: 0)
         let path  = DigiPath()
 
-        _ = manager.handleInboundSABM(from: peer, to: local, path: path, channel: 0)
+        _ = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
 
         let before = manager.sessions.count
 
         // DM during connecting state (peer rejected our SABM)
-        manager.handleInboundDM(from: peer, path: path, channel: 0)
+        manager.handleInboundDM(from: peer, path: path, radio: .primary)
 
         XCTAssertLessThanOrEqual(manager.sessions.count, before,
             "DM must not increase session count (seed: F-L2)")
@@ -950,9 +950,9 @@ extension AX25SessionFuzzTests {
         // Create 4 sessions and send data on each
         for ssid in 0..<4 {
             let peer = AX25Address(call: "PEER", ssid: ssid)
-            _ = manager.connect(to: peer, path: DigiPath(), channel: 0)
-            manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
-            _ = manager.sendData(Data("data".utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.connect(to: peer, path: DigiPath(), radio: .primary)
+            manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
+            _ = manager.sendData(Data("data".utf8), to: peer, path: DigiPath(), radio: .primary)
         }
 
         // Advance clock far enough for all T1 retries to expire
@@ -990,7 +990,7 @@ extension AX25SessionFuzzTests {
 
         // Flood 100 SABMs
         for _ in 0..<100 {
-            _ = manager.handleInboundSABM(from: peer, to: local, path: path, channel: 0)
+            _ = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
         }
 
         // Must have exactly 1 session for this peer
@@ -1019,7 +1019,7 @@ extension AX25SessionFuzzTests {
         XCTAssertEqual(stateBefore, .connected, "Precondition: session is connected")
 
         // Feed a spurious UA
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
 
         // State must not have regressed or changed unexpectedly
         assertAllInvariants(session, context: "unsolicited UA on connected session")
@@ -1034,7 +1034,7 @@ extension AX25SessionFuzzTests {
 
         XCTAssertEqual(session.state, .connected, "Precondition")
 
-        manager.handleInboundDM(from: peer, path: path, channel: 0)
+        manager.handleInboundDM(from: peer, path: path, radio: .primary)
 
         // After DM on a connected session, state must be disconnected or error
         let validTerminalStates: [AX25SessionState] = [.disconnected, .error]
@@ -1058,12 +1058,12 @@ extension AX25SessionFuzzTests {
         let path = DigiPath()
 
         // Start connection (SABM sent, waiting for UA)
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        let session = manager.session(for: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        let session = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connecting, "Precondition: session in connecting state")
 
         // Peer sends DISC before UA
-        let response = manager.handleInboundDISC(from: peer, path: path, channel: 0)
+        let response = manager.handleInboundDISC(from: peer, path: path, radio: .primary)
 
         // SDL C4.2: answered with DM, connect attempt continues
         XCTAssertEqual(session.state, .connecting,
@@ -1072,7 +1072,7 @@ extension AX25SessionFuzzTests {
             "the DISC must be answered with DM, never UA (seed: F-E3)")
 
         // The peer then refuses the retried SABM with DM — attempt aborts cleanly.
-        manager.handleInboundDM(from: peer, path: path, channel: 0)
+        manager.handleInboundDM(from: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, .disconnected,
             "peer DM must abort the connect attempt (seed: F-E3)")
     }
@@ -1091,11 +1091,11 @@ extension AX25SessionFuzzTests {
         let path  = DigiPath()
 
         // Establish initial connection (responder path)
-        _ = manager.handleInboundSABM(from: peer, to: local, path: path, channel: 0)
+        _ = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
         let before = manager.sessions.count
 
         // SABM arrives again while we're in connected state
-        _ = manager.handleInboundSABM(from: peer, to: local, path: path, channel: 0)
+        _ = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
 
         XCTAssertEqual(manager.sessions.count, before,
             "SABM on connected session must not create a new session (seed: F-E4)")
@@ -1128,9 +1128,9 @@ extension AX25SessionFuzzTests {
         let path = DigiPath()
 
         // Establish a connected session to start
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
-        var session = manager.session(for: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
+        var session = manager.session(for: peer, path: path, radio: .primary)
 
         let iterationCount = 1000
         for i in 0..<iterationCount {
@@ -1140,13 +1140,13 @@ extension AX25SessionFuzzTests {
             case 0:
                 // RR with random N(R)
                 let nr = rng.nextInt(8)
-                _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: nr)
+                _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: nr)
 
             case 1:
                 // REJ with random N(R)
                 let nr = rng.nextInt(8)
                 session.lastREJRetransmitNR = nil  // prevent duplicate suppression masking bugs
-                _ = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: nr)
+                _ = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: nr)
 
             case 2:
                 // I-frame with random N(S), N(R), random payload size
@@ -1155,7 +1155,7 @@ extension AX25SessionFuzzTests {
                 let pLen = rng.nextInt(in: 0...256)
                 let payload = rng.nextData(count: pLen)
                 _ = manager.handleInboundIFrame(
-                    from: peer, path: path, channel: 0,
+                    from: peer, path: path, radio: .primary,
                     ns: ns, nr: nr, pf: false, payload: payload
                 )
 
@@ -1163,7 +1163,7 @@ extension AX25SessionFuzzTests {
                 // Send data (add to outbound queue)
                 let pLen = rng.nextInt(in: 1...64)
                 let payload = rng.nextData(count: pLen)
-                _ = manager.sendData(payload, to: peer, path: path, channel: 0)
+                _ = manager.sendData(payload, to: peer, path: path, radio: .primary)
 
             case 4:
                 // T1 timeout
@@ -1174,43 +1174,43 @@ extension AX25SessionFuzzTests {
                 let dt = Double(rng.nextInt(in: 1...200)) / 100.0
                 clock.advance(by: dt)
                 // Re-fetch session (it may have changed state)
-                if let s = manager.existingSession(for: peer, path: path, channel: 0) {
+                if let s = manager.existingSession(for: peer, path: path, radio: .primary) {
                     session = s
                 }
 
             case 6:
                 // UA (unsolicited on established session, or may re-complete connecting)
-                manager.handleInboundUA(from: peer, path: path, channel: 0)
+                manager.handleInboundUA(from: peer, path: path, radio: .primary)
 
             case 7:
                 // DM — forces disconnection; re-connect immediately
-                manager.handleInboundDM(from: peer, path: path, channel: 0)
-                _ = manager.connect(to: peer, path: path, channel: 0)
-                manager.handleInboundUA(from: peer, path: path, channel: 0)
-                session = manager.session(for: peer, path: path, channel: 0)
+                manager.handleInboundDM(from: peer, path: path, radio: .primary)
+                _ = manager.connect(to: peer, path: path, radio: .primary)
+                manager.handleInboundUA(from: peer, path: path, radio: .primary)
+                session = manager.session(for: peer, path: path, radio: .primary)
 
             case 8:
                 // SABM from peer (peer-initiated reset)
-                _ = manager.handleInboundSABM(from: peer, to: local, path: path, channel: 0)
+                _ = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
 
             case 9:
                 // DISC from peer then reconnect
-                _ = manager.handleInboundDISC(from: peer, path: path, channel: 0)
-                _ = manager.connect(to: peer, path: path, channel: 0)
-                manager.handleInboundUA(from: peer, path: path, channel: 0)
-                session = manager.session(for: peer, path: path, channel: 0)
+                _ = manager.handleInboundDISC(from: peer, path: path, radio: .primary)
+                _ = manager.connect(to: peer, path: path, radio: .primary)
+                manager.handleInboundUA(from: peer, path: path, radio: .primary)
+                session = manager.session(for: peer, path: path, radio: .primary)
 
             case 10:
                 // RR poll
                 let nr = rng.nextInt(8)
-                _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: nr, isPoll: true)
+                _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: nr, isPoll: true)
 
             default:
                 // I-frame with P=1 (requires response)
                 let ns = rng.nextInt(8)
                 let nr = rng.nextInt(8)
                 _ = manager.handleInboundIFrame(
-                    from: peer, path: path, channel: 0,
+                    from: peer, path: path, radio: .primary,
                     ns: ns, nr: nr, pf: true,
                     payload: Data("pf".utf8)
                 )
@@ -1255,14 +1255,14 @@ extension AX25SessionFuzzTests {
             let ns = rng.nextInt(8)
 
             switch action {
-            case 0: manager.handleInboundUA(from: peer, path: path, channel: 0)
-            case 1: manager.handleInboundDM(from: peer, path: path, channel: 0)
-            case 2: _ = manager.handleInboundDISC(from: peer, path: path, channel: 0)
-            case 3: _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: nr)
-            case 4: _ = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: nr)
+            case 0: manager.handleInboundUA(from: peer, path: path, radio: .primary)
+            case 1: manager.handleInboundDM(from: peer, path: path, radio: .primary)
+            case 2: _ = manager.handleInboundDISC(from: peer, path: path, radio: .primary)
+            case 3: _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: nr)
+            case 4: _ = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: nr)
             default:
                 _ = manager.handleInboundIFrame(
-                    from: peer, path: path, channel: 0,
+                    from: peer, path: path, radio: .primary,
                     ns: ns, nr: nr, pf: false,
                     payload: rng.nextData(count: rng.nextInt(in: 0...64))
                 )
@@ -1289,21 +1289,21 @@ extension AX25SessionFuzzTests {
 
         // Send 3 frames: N(S) = 0, 1, 2
         for _ in 0..<3 {
-            _ = manager.sendData(Data("test".utf8), to: peer, path: path, channel: 0)
+            _ = manager.sendData(Data("test".utf8), to: peer, path: path, radio: .primary)
         }
 
         let outstandingBefore = session.outstandingCount
         XCTAssertGreaterThan(outstandingBefore, 0, "Precondition: frames in flight")
 
         // Simulate receipt of RR(nr=2) — acks N(S)=0,1
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 2)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 2)
 
         let vaAfterRR = session.va
         XCTAssertEqual(vaAfterRR, 2, "V(A) should be 2 after RR(nr=2)")
 
         // Now inject a STALE REJ: nr=1 which is behind V(A)=2
         // This must NOT corrupt the send buffer (Bug D regression check)
-        _ = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 1)
+        _ = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 1)
 
         // send buffer must still contain N(S)=2 (not deleted by stale REJ)
         let vaAfterREJ = session.va
@@ -1320,18 +1320,18 @@ extension AX25SessionFuzzTests {
         let path = DigiPath()
         _ = clock
 
-        _ = manager.sendData(Data("test".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("test".utf8), to: peer, path: path, radio: .primary)
 
         // First REJ — clears lastREJRetransmitNR=nil → shouldRetransmit=true → onLoss()
         session.lastREJRetransmitNR = nil
         let cwndBefore = session.aimdWindow.cwnd
-        _ = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 0)
+        _ = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 0)
         let cwndAfterFirst = session.aimdWindow.cwnd
         XCTAssertLessThan(cwndAfterFirst, cwndBefore,
             "First REJ must trigger onLoss() and halve cwnd")
 
         // Second REJ with same nr and no ack progress — must be suppressed
-        _ = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 0)
+        _ = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 0)
         let cwndAfterSecond = session.aimdWindow.cwnd
         XCTAssertEqual(cwndAfterSecond, cwndAfterFirst, accuracy: 0.001,
             "Duplicate REJ must NOT trigger second onLoss() — cwnd must not halve again (Bug A+B2 regression)")
@@ -1346,7 +1346,7 @@ extension AX25SessionFuzzTests {
         _ = clock
 
         // Send 1 frame: V(S)=1, V(A)=0
-        _ = manager.sendData(Data("test".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("test".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.vs, 1, "Precondition: V(S)=1")
         XCTAssertEqual(session.va, 0, "Precondition: V(A)=0")
 
@@ -1355,7 +1355,7 @@ extension AX25SessionFuzzTests {
         // Inject RR(nr=7) — N(R)=7 is outside the valid window [V(A), V(S)]=[0,1]
         // The state machine should reject this; vaAfter must equal vaBefore (=0),
         // so ackedCount=(0-0+8)%8=0, and onAck() must NOT be called.
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 7)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 7)
 
         let cwindAfter = session.aimdWindow.cwnd
         // cwnd must not have grown if the RR was rejected (B3 regression check)
@@ -1378,13 +1378,13 @@ extension AX25SessionFuzzTests {
         XCTAssertEqual(session.aimdWindow.effectiveWindow, 1, "Precondition: effectiveWindow=1")
 
         // Send 1 frame to fill the effective window
-        _ = manager.sendData(Data("first".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("first".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 1,
             "Precondition: exactly 1 frame in flight after first send (Bug B1)")
 
         // Send 3 more frames — with outstandingCount=1 == effectiveWindow=1, all must queue
         for i in 0..<3 {
-            _ = manager.sendData(Data("extra\(i)".utf8), to: peer, path: path, channel: 0)
+            _ = manager.sendData(Data("extra\(i)".utf8), to: peer, path: path, radio: .primary)
         }
 
         // Outstanding must still be 1 (not 4)
@@ -1423,8 +1423,8 @@ extension AX25SessionFuzzTests {
         let path = DigiPath()
 
         // Send 2 frames: V(S)=2, V(A)=0, sendBuffer keys={0,1}
-        _ = manager.sendData(Data("frame0".utf8), to: peer, path: path, channel: 0)
-        _ = manager.sendData(Data("frame1".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("frame0".utf8), to: peer, path: path, radio: .primary)
+        _ = manager.sendData(Data("frame1".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.vs, 2,              "Precondition: V(S)=2 (Bug J regression)")
         XCTAssertEqual(session.va, 0,              "Precondition: V(A)=0 (Bug J regression)")
         XCTAssertEqual(session.outstandingCount, 2, "Precondition: 2 frames in flight (Bug J regression)")
@@ -1436,7 +1436,7 @@ extension AX25SessionFuzzTests {
         // sendBuffer[0..5] — but only 0 and 1 exist — corrupting the invariant.
         let iFramePayload = Data("peer0".utf8)
         _ = manager.handleInboundIFrame(
-            from: peer, path: path, channel: 0,
+            from: peer, path: path, radio: .primary,
             ns: 0, nr: 6, pf: false, payload: iFramePayload
         )
 
@@ -1490,15 +1490,15 @@ extension AX25SessionFuzzTests {
         let path = DigiPath()
 
         // Initiate connection — SABM sent, session now in .connecting
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        let session = manager.session(for: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        let session = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connecting,
             "Precondition: session must be in .connecting before DISC injection (Bug I regression)")
 
         // Peer sends DISC before UA. SDL C4.2: answered with DM, SABM retries
         // continue — the original Bug I concern (stuck forever) is prevented not by
         // aborting, but by the guarantee that termination is still bounded below.
-        _ = manager.handleInboundDISC(from: peer, path: path, channel: 0)
+        _ = manager.handleInboundDISC(from: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connecting,
             "SDL C4.2: DISC while connecting must not abort the attempt")
         XCTAssertGreaterThan(clock.activeTaskCount, 0,

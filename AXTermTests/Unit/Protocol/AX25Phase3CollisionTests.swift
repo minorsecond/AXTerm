@@ -53,9 +53,9 @@ final class AX25Phase3CollisionTests: XCTestCase {
     }
 
     private func connect(_ manager: AX25SessionManager) -> AX25Session {
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
-        let s = manager.session(for: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
+        let s = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertEqual(s.state, .connected, "Pre-condition: session must be connected")
         return s
     }
@@ -76,7 +76,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         let (manager, _) = makeManager()
         let session = connect(manager)
 
-        _ = manager.sendData(Data("StormTarget".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("StormTarget".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 1)
         XCTAssertEqual(session.va, 0)
         XCTAssertEqual(session.vs, 1)
@@ -84,7 +84,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         // Count I-frame retransmissions returned by handleInboundREJ
         var iFramesRetransmitted = 0
         for _ in 0..<100 {
-            let frames = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 0)
+            let frames = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 0)
             iFramesRetransmitted += frames.filter { $0.frameType == "i" }.count
         }
 
@@ -104,22 +104,22 @@ final class AX25Phase3CollisionTests: XCTestCase {
         let (manager, clock) = makeManager(rto: 2.0)
         let session = connect(manager)
 
-        _ = manager.sendData(Data("FrameA".utf8), to: peer, path: path, channel: 0)
-        _ = manager.sendData(Data("FrameB".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("FrameA".utf8), to: peer, path: path, radio: .primary)
+        _ = manager.sendData(Data("FrameB".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 2)
 
         // First REJ: retransmit both frames (correct behavior)
-        let first = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 0)
+        let first = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 0)
         let firstICount = first.filter { $0.frameType == "i" }.count
         XCTAssertEqual(firstICount, 2, "First REJ must retransmit both outstanding frames")
 
         // Duplicate REJ before T1 fires: must NOT retransmit again
-        let second = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 0)
+        let second = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 0)
         let secondICount = second.filter { $0.frameType == "i" }.count
         XCTAssertEqual(secondICount, 0,
             "Duplicate REJ(same N(R)) while T1 running must not retransmit")
 
-        let third = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 0)
+        let third = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 0)
         XCTAssertEqual(third.filter { $0.frameType == "i" }.count, 0,
             "Third duplicate REJ must also be suppressed")
 
@@ -141,17 +141,17 @@ final class AX25Phase3CollisionTests: XCTestCase {
 
         // Send 4 frames: ns=0,1,2,3
         for i in 0..<4 {
-            _ = manager.sendData(Data("F\(i)".utf8), to: peer, path: path, channel: 0)
+            _ = manager.sendData(Data("F\(i)".utf8), to: peer, path: path, radio: .primary)
         }
         XCTAssertEqual(session.outstandingCount, 4)
 
         // Peer acks 0 and 1 (RR(2))
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 2, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 2, isPoll: false)
         XCTAssertEqual(session.va, 2)
         XCTAssertEqual(session.outstandingCount, 2)
 
         // REJ(2): peer wants retransmit starting from ns=2
-        let rejFrames = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 2)
+        let rejFrames = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 2)
         let retransmittedNS = rejFrames.filter { $0.frameType == "i" }.compactMap { f -> Int? in
             guard let ctrl = f.controlByte else { return nil }
             return Int((ctrl >> 1) & 0x07)
@@ -174,15 +174,15 @@ final class AX25Phase3CollisionTests: XCTestCase {
         let session = connect(manager)
 
         for i in 0..<4 {
-            _ = manager.sendData(Data("X\(i)".utf8), to: peer, path: path, channel: 0)
+            _ = manager.sendData(Data("X\(i)".utf8), to: peer, path: path, radio: .primary)
         }
 
         // First REJ(0): retransmit all
-        let first = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 0)
+        let first = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 0)
         XCTAssertEqual(first.filter { $0.frameType == "i" }.count, 4)
 
         // REJ(2): NEW ack progress (va advances to 2), retransmit from 2
-        let second = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 2)
+        let second = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 2)
         XCTAssertEqual(session.va, 2)
         let retransmittedNS2 = second.filter { $0.frameType == "i" }.compactMap { f -> Int? in
             guard let ctrl = f.controlByte else { return nil }
@@ -204,24 +204,24 @@ final class AX25Phase3CollisionTests: XCTestCase {
         let session = connect(manager)
 
         // Send 3 frames: ns=0,1,2
-        _ = manager.sendData(Data("F0".utf8), to: peer, path: path, channel: 0)
-        _ = manager.sendData(Data("F1".utf8), to: peer, path: path, channel: 0)
-        _ = manager.sendData(Data("F2".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("F0".utf8), to: peer, path: path, radio: .primary)
+        _ = manager.sendData(Data("F1".utf8), to: peer, path: path, radio: .primary)
+        _ = manager.sendData(Data("F2".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 3)
 
         // Ack all: va=3, vs=3, outstanding=0
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 3, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 3, isPoll: false)
         XCTAssertEqual(session.va, 3)
         XCTAssertEqual(session.outstandingCount, 0)
 
         // Send a new frame: ns=3, va=3, vs=4, outstanding=1
-        _ = manager.sendData(Data("F3".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("F3".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 1)
         XCTAssertNotNil(session.sendBuffer[3], "Frame ns=3 must be in sendBuffer")
 
         // REJ(1): stale — nr=1 < va=3
         // This MUST be ignored entirely; it must not corrupt sendBuffer
-        _ = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 1)
+        _ = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 1)
 
         XCTAssertEqual(session.outstandingCount, 1,
             "Stale REJ(1) must not delete frame ns=3 from sendBuffer (Bug D)")
@@ -235,15 +235,15 @@ final class AX25Phase3CollisionTests: XCTestCase {
         let (manager, _) = makeManager()
         let session = connect(manager)
 
-        _ = manager.sendData(Data("Single".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("Single".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 1)
 
         // Ack the frame
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 1, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 1, isPoll: false)
         XCTAssertEqual(session.outstandingCount, 0)
 
         // REJ(0): asking to retransmit a frame we no longer have (already acked)
-        let frames = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 0)
+        let frames = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 0)
         XCTAssertEqual(frames.filter { $0.frameType == "i" }.count, 0,
             "REJ for already-acked frame must produce no retransmits")
         XCTAssertEqual(session.outstandingCount, 0)
@@ -266,12 +266,12 @@ final class AX25Phase3CollisionTests: XCTestCase {
         let session = connect(manager)
 
         // Send a frame so T1 is running
-        _ = manager.sendData(Data("Pending".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("Pending".utf8), to: peer, path: path, radio: .primary)
         XCTAssertNotNil(session.t1TimerTask, "Pre-condition: T1 must be running")
         XCTAssertEqual(session.outstandingCount, 1)
 
         // Peer sends DISC while we have outstanding frames
-        _ = manager.handleInboundDISC(from: peer, path: path, channel: 0)
+        _ = manager.handleInboundDISC(from: peer, path: path, radio: .primary)
 
         XCTAssertEqual(session.state, .disconnected)
         XCTAssertNil(session.t1TimerTask,
@@ -297,12 +297,12 @@ final class AX25Phase3CollisionTests: XCTestCase {
 
         // Fill window
         for i in 0..<4 {
-            _ = manager.sendData(Data("Frame\(i)".utf8), to: peer, path: path, channel: 0)
+            _ = manager.sendData(Data("Frame\(i)".utf8), to: peer, path: path, radio: .primary)
         }
         XCTAssertEqual(session.outstandingCount, 4)
         XCTAssertNotNil(session.t1TimerTask)
 
-        _ = manager.handleInboundDISC(from: peer, path: path, channel: 0)
+        _ = manager.handleInboundDISC(from: peer, path: path, radio: .primary)
 
         XCTAssertEqual(session.state, .disconnected)
         XCTAssertEqual(session.outstandingCount, 0,
@@ -330,7 +330,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
             "Pre-condition: we must be in disconnecting state")
 
         // Peer also sends DISC (collision)
-        let response = manager.handleInboundDISC(from: peer, path: path, channel: 0)
+        let response = manager.handleInboundDISC(from: peer, path: path, radio: .primary)
 
         // SDL C4.3: DISC in awaiting release is answered with DM; §6.3.4 confirms
         // the peer accepts UA or DM in reply to its DISC. (The Bug C guarantee that
@@ -354,12 +354,12 @@ final class AX25Phase3CollisionTests: XCTestCase {
         let session = connect(manager)
 
         // Send data then disconnect (T1 running, then DISC starts T1 again for DISC retry)
-        _ = manager.sendData(Data("Data".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("Data".utf8), to: peer, path: path, radio: .primary)
         _ = manager.disconnect(session: session)
         XCTAssertEqual(session.state, .disconnecting)
 
         // Peer sends DISC back
-        _ = manager.handleInboundDISC(from: peer, path: path, channel: 0)
+        _ = manager.handleInboundDISC(from: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, .disconnected)
 
         // No activity after disconnect
@@ -375,7 +375,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         let (manager, _) = makeManager()
         let unknownPeer = AX25Address(call: "GHOST-9", ssid: 0)
 
-        let response = manager.handleInboundDISC(from: unknownPeer, path: path, channel: 0)
+        let response = manager.handleInboundDISC(from: unknownPeer, path: path, radio: .primary)
 
         XCTAssertNotNil(response, "DISC with no session must return DM")
         XCTAssertEqual(response?.displayInfo, "DM",
@@ -389,13 +389,13 @@ final class AX25Phase3CollisionTests: XCTestCase {
 
         // Send full window worth of frames
         for i in 0..<4 {
-            _ = manager.sendData(Data("Chunk\(i)".utf8), to: peer, path: path, channel: 0)
+            _ = manager.sendData(Data("Chunk\(i)".utf8), to: peer, path: path, radio: .primary)
         }
         XCTAssertEqual(session.outstandingCount, 4)
         XCTAssertNotNil(session.t1TimerTask)
 
         // DISC arrives mid-transfer
-        _ = manager.handleInboundDISC(from: peer, path: path, channel: 0)
+        _ = manager.handleInboundDISC(from: peer, path: path, radio: .primary)
 
         XCTAssertEqual(session.state, .disconnected)
         XCTAssertEqual(session.outstandingCount, 0,
@@ -421,13 +421,13 @@ final class AX25Phase3CollisionTests: XCTestCase {
         let session = connect(manager)
 
         // Build up state: send 2 frames, advance vs
-        _ = manager.sendData(Data("Before".utf8), to: peer, path: path, channel: 0)
-        _ = manager.sendData(Data("SABM".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("Before".utf8), to: peer, path: path, radio: .primary)
+        _ = manager.sendData(Data("SABM".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.vs, 2)
         XCTAssertEqual(session.outstandingCount, 2)
 
         // Peer re-sends SABM (link reset)
-        let ua = manager.handleInboundSABM(from: peer, to: local, path: path, channel: 0)
+        let ua = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
 
         // Must respond with UA to acknowledge the re-connection
         XCTAssertNotNil(ua)
@@ -449,13 +449,13 @@ final class AX25Phase3CollisionTests: XCTestCase {
     func testSABM_OutboundCollision_TransitionsToConnected() {
         let (manager, _) = makeManager()
 
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        let session = manager.session(for: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        let session = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connecting,
             "Pre-condition: we must be in connecting state")
 
         // Peer sends SABM back (collision)
-        let ua = manager.handleInboundSABM(from: peer, to: local, path: path, channel: 0)
+        let ua = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
 
         XCTAssertEqual(session.state, .connected,
             "SABM collision must transition to connected")
@@ -472,7 +472,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
 
         // Receive 5 SABMs from the same peer
         for _ in 0..<5 {
-            _ = manager.handleInboundSABM(from: peer, to: local, path: path, channel: 0)
+            _ = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
         }
 
         XCTAssertEqual(manager.sessions.count, countBefore + 1,
@@ -492,7 +492,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         // Peer sends SABM (they don't know we're disconnecting, or it crossed in transit)
         // The state machine doesn't handle (.disconnecting, .receivedSABM) explicitly
         // so it falls through to the catch-all. Verify no crash and clean state.
-        let response = manager.handleInboundSABM(from: peer, to: local, path: path, channel: 0)
+        let response = manager.handleInboundSABM(from: peer, to: local, path: path, radio: .primary)
 
         // Don't crash; session should be in a consistent state
         XCTAssertTrue(
@@ -515,12 +515,12 @@ final class AX25Phase3CollisionTests: XCTestCase {
 
         // Send 4 frames
         for i in 0..<4 {
-            _ = manager.sendData(Data("Chunk\(i)".utf8), to: peer, path: path, channel: 0)
+            _ = manager.sendData(Data("Chunk\(i)".utf8), to: peer, path: path, radio: .primary)
         }
         XCTAssertEqual(session.outstandingCount, 4)
 
         // Ack first two (V(A) = 2)
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 2, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 2, isPoll: false)
         XCTAssertEqual(session.va, 2)
         XCTAssertEqual(session.outstandingCount, 2)
         XCTAssertNil(session.sendBuffer[0], "Acked frame ns=0 must be removed")
@@ -529,7 +529,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         XCTAssertNotNil(session.sendBuffer[3], "Outstanding frame ns=3 must remain")
 
         // Ack remaining
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 4, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 4, isPoll: false)
         XCTAssertEqual(session.va, 4)
         XCTAssertEqual(session.outstandingCount, 0)
         XCTAssertNil(session.t1TimerTask, "T1 must stop when window empties")
@@ -541,17 +541,17 @@ final class AX25Phase3CollisionTests: XCTestCase {
         let (manager, clock) = makeManager(rto: 2.0)
         let session = connect(manager)
 
-        _ = manager.sendData(Data("Msg0".utf8), to: peer, path: path, channel: 0)
-        _ = manager.sendData(Data("Msg1".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("Msg0".utf8), to: peer, path: path, radio: .primary)
+        _ = manager.sendData(Data("Msg1".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 2)
 
         // REJ(0): peer missed frame 0
-        let rejFrames = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 0)
+        let rejFrames = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 0)
         XCTAssertEqual(rejFrames.filter { $0.frameType == "i" }.count, 2,
             "REJ(0) must retransmit both outstanding frames")
 
         // Delayed ACK arrives after retransmit
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 2, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 2, isPoll: false)
         XCTAssertEqual(session.va, 2)
         XCTAssertEqual(session.outstandingCount, 0)
         XCTAssertNil(session.t1TimerTask, "T1 stops when all acked")
@@ -569,7 +569,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         let (manager, clock) = makeManager(windowSize: 2, rto: 1.0, maxRetries: 4)
         let session = connect(manager)
 
-        _ = manager.sendData(Data("Stable".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("Stable".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 1)
 
         var allRetransmits: [OutboundFrame] = []
@@ -603,7 +603,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         // Same frame 10 times
         for _ in 0..<10 {
             _ = manager.handleInboundIFrame(
-                from: peer, path: path, channel: 0,
+                from: peer, path: path, radio: .primary,
                 ns: 0, nr: 0, pf: false,
                 payload: Data("Repeat".utf8)
             )
@@ -619,13 +619,13 @@ final class AX25Phase3CollisionTests: XCTestCase {
         let session = connect(manager)
 
         for i in 0..<4 {
-            _ = manager.sendData(Data("D\(i)".utf8), to: peer, path: path, channel: 0)
+            _ = manager.sendData(Data("D\(i)".utf8), to: peer, path: path, radio: .primary)
         }
         XCTAssertEqual(session.outstandingCount, 4)
 
         // Same RR(2) received 10 times
         for _ in 0..<10 {
-            _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 2, isPoll: false)
+            _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 2, isPoll: false)
         }
 
         // V(A) must be exactly 2 (not over-advanced)
@@ -647,7 +647,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         // First delivery — V(R) advances to 1. P=1 keeps the RR synchronous
         // (P=0 acks are batched onto T2; see DelayedAckTests).
         let first = manager.handleInboundIFrame(
-            from: peer, path: path, channel: 0,
+            from: peer, path: path, radio: .primary,
             ns: 0, nr: 0, pf: true,
             payload: Data("Hello".utf8)
         )
@@ -656,7 +656,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
 
         // Duplicate delivery — V(R) must NOT advance again; must still RR
         let dup = manager.handleInboundIFrame(
-            from: peer, path: path, channel: 0,
+            from: peer, path: path, radio: .primary,
             ns: 0, nr: 0, pf: true,
             payload: Data("Hello".utf8)
         )
@@ -675,7 +675,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         var retransmits: [OutboundFrame] = []
         manager.onSendFrame = { retransmits.append($0) }
 
-        _ = manager.sendData(Data("RaceTest".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("RaceTest".utf8), to: peer, path: path, radio: .primary)
 
         // Advance to T1 fire point (grace period starts)
         clock.advance(by: 2.0)
@@ -683,7 +683,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
             "Grace period active — no retransmit yet")
 
         // RR arrives during grace period (t=2.0 + 0.1s, before grace expires at t=2.2s)
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 1, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 1, isPoll: false)
         XCTAssertEqual(session.outstandingCount, 0, "RR must ack the frame")
 
         // Advance through rest of grace period and beyond
@@ -705,7 +705,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         XCTAssertNotNil(session.t3TimerTask)
 
         // Sending data stops T3 and starts T1
-        _ = manager.sendData(Data("KillT3".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("KillT3".utf8), to: peer, path: path, radio: .primary)
         XCTAssertNil(session.t3TimerTask, "T3 must stop when data is sent")
         XCTAssertNotNil(session.t1TimerTask, "T1 must be running")
 
@@ -730,7 +730,7 @@ final class AX25Phase3CollisionTests: XCTestCase {
         let (manager, clock) = makeManager(rto: 1.0, maxRetries: 2)
         let session = connect(manager)
 
-        _ = manager.sendData(Data("Stale".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("Stale".utf8), to: peer, path: path, radio: .primary)
 
         // Exhaust N2 retries → session enters .error
         for _ in 0..<(2 + 1) {
@@ -743,12 +743,12 @@ final class AX25Phase3CollisionTests: XCTestCase {
             "Send buffer must be cleared on link failure")
 
         // Reconnect: must start fresh
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        let reconnected = manager.session(for: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        let reconnected = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertEqual(reconnected.state, .connecting)
 
         // Accept the reconnect
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
         XCTAssertEqual(reconnected.state, .connected)
         XCTAssertEqual(reconnected.vs, 0, "V(S) must be reset after reconnect")
         XCTAssertEqual(reconnected.vr, 0, "V(R) must be reset after reconnect")
@@ -769,17 +769,17 @@ final class AX25Phase3CollisionTests: XCTestCase {
 
         // Phase 1: Send full window
         for i in 0..<4 {
-            _ = manager.sendData(Data("Block\(i)".utf8), to: peer, path: path, channel: 0)
+            _ = manager.sendData(Data("Block\(i)".utf8), to: peer, path: path, radio: .primary)
         }
         XCTAssertEqual(session.outstandingCount, 4)
 
         // Phase 2: Partial ACK — only frames 0,1 received by peer
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 2, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 2, isPoll: false)
         XCTAssertEqual(session.va, 2, "Partial ACK: V(A)=2")
         XCTAssertEqual(session.outstandingCount, 2)
 
         // Phase 3: REJ from peer — frame 2 was lost, restart from 2
-        let rejFrames = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 2)
+        let rejFrames = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 2)
         let retransmittedNS = rejFrames.filter { $0.frameType == "i" }.compactMap { f -> Int? in
             guard let ctrl = f.controlByte else { return nil }
             return Int((ctrl >> 1) & 0x07)
@@ -787,12 +787,12 @@ final class AX25Phase3CollisionTests: XCTestCase {
         XCTAssertEqual(retransmittedNS, [2, 3], "REJ(2) must retransmit exactly frames 2,3")
 
         // Phase 4: Duplicate REJ during retransmit cycle — must not amplify
-        let dupRej = manager.handleInboundREJ(from: peer, path: path, channel: 0, nr: 2)
+        let dupRej = manager.handleInboundREJ(from: peer, path: path, radio: .primary, nr: 2)
         XCTAssertEqual(dupRej.filter { $0.frameType == "i" }.count, 0,
             "Duplicate REJ during active retransmit must be suppressed")
 
         // Phase 5: Final ACK from peer
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 4, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 4, isPoll: false)
         XCTAssertEqual(session.va, 4)
         XCTAssertEqual(session.outstandingCount, 0)
         XCTAssertNil(session.t1TimerTask, "T1 must stop when window clears")

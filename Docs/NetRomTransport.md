@@ -282,6 +282,28 @@ transmitter to other people's packets. Neither should arrive as a side
 effect of an app update. Auto-try is an explicit operator action on the
 Routes page, not a background behaviour.
 
+## Several radios
+
+The driver does not know radios; the coordinator does. Three seams carry
+the difference (`Docs/MultiRadio.md`):
+
+- `NetRomLinkTransport.sendNodesBroadcast(_:summary:radio:)` — the same
+  broadcast leaving by one radio under that radio's L2 callsign. The default
+  extension forwards to the two-argument form, so a one-radio transport is
+  unchanged.
+- `NetRomLinkDriver.announcementsProvider` — `[(radio, node, alias)]`. Nil
+  or empty means the one node the driver was given from the primary radio.
+  The coordinator computes the list from the operator's node identity
+  (`unified`: the station's node from every announcing radio; `perRadio`:
+  each radio's own callsign and alias).
+- `NetRomEndpoint.additionalLocalNodes` — other node callsigns this
+  station answers as. An inbound circuit's state machine is built with
+  `localNode = datagram.destination`, so the CONACK, the data and the
+  refusal all originate from the node that was actually called.
+
+Datagrams to a neighbour leave on the radio that neighbour is best heard
+on (`NetRomRouter.radio(forNeighbor:)`).
+
 ## Names vs addresses
 
 NET/ROM addresses stations by **callsign**; operators, node tables, and

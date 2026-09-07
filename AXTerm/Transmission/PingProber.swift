@@ -108,6 +108,8 @@ nonisolated final class PingProber: ObservableObject, @unchecked Sendable {
         let sentAt: Date
         /// Whether the DISC fallback has already been tried.
         var escalated: Bool
+        /// The radio the question went out on; the DISC follows it there.
+        var radio: RadioID = .primary
     }
 
     /// Announced by hand: a property wrapper cannot be `nonisolated`, and
@@ -137,7 +139,8 @@ nonisolated final class PingProber: ObservableObject, @unchecked Sendable {
     /// Send one frame. Returns whether it reached the radio.
     var sendFrame: ((OutboundFrame) -> Bool)?
     /// This station's address, for building probes.
-    var localAddress: (() -> AX25Address)?
+    /// Our address on a given radio — the probe's source.
+    var localAddress: ((RadioID) -> AX25Address)?
     /// Stations heard directly, and stations others were heard calling.
     var candidateProvider: (() -> [PingPolicy.Candidate])?
     /// Peers with a live session — never probed, and their traffic is not
@@ -205,8 +208,9 @@ nonisolated final class PingProber: ObservableObject, @unchecked Sendable {
         expireOutstanding(now: now)
         guard outstanding == nil else { return }
 
+        let candidates = candidateProvider?() ?? []
         let decision = PingPolicy.decide(
-            candidates: candidateProvider?() ?? [],
+            candidates: candidates,
             histories: records.mapValues(\.history),
             settings: settings,
             conditions: PingPolicy.Conditions(
@@ -215,11 +219,19 @@ nonisolated final class PingProber: ObservableObject, @unchecked Sendable {
                 probesInLastHour: probeTimestamps,
                 lastTrafficAt: lastTrafficAt?(),
                 connectedPeers: connectedPeers?() ?? [],
-                localCallsign: localAddress?().display ?? "",
+                localCallsign: localAddress?(.primary).display ?? "",
                 spacingJitter: Double.random(in: 0...1)))
 
         guard case let .probe(call) = decision else { return }
-        send(.xid, to: call, now: now)
+        send(.xid, to: call, radio: Self.radio(for: call, among: candidates), now: now)
+    }
+
+    /// The radio a candidate was heard on; the primary for a station the
+    /// candidate list does not know, which is where a manual probe of a
+    /// typed callsign goes.
+    private static func radio(for call: String, among candidates: [PingPolicy.Candidate]) -> RadioID {
+        let key = PingPolicy.normalize(call)
+        return candidates.first { PingPolicy.normalize($0.call) == key }?.radio ?? .primary
     }
 
     /// Probe one station now, regardless of policy. The operator asked;
@@ -227,30 +239,31 @@ nonisolated final class PingProber: ObservableObject, @unchecked Sendable {
     func probeNow(_ call: String, at now: Date = Date()) {
         let key = PingPolicy.normalize(call)
         guard outstanding == nil else { return }
-        send(.xid, to: key, now: now, manual: true)
+        send(.xid, to: key, radio: Self.radio(for: key, among: candidateProvider?() ?? []),
+             now: now, manual: true)
     }
 
     private enum ProbeKind { case xid, disc }
 
-    private func send(_ kind: ProbeKind, to call: String, now: Date,
+    private func send(_ kind: ProbeKind, to call: String, radio: RadioID, now: Date,
                       manual: Bool = false) {
-        guard let localAddress = localAddress?() else { return }
+        guard let localAddress = localAddress?(radio) else { return }
         let peer = CallsignNormalizer.toAddress(call)
         let frame: OutboundFrame
         switch kind {
         case .xid:
             frame = AX25FrameBuilder.buildXID(
                 from: localAddress, to: peer,
-                parameters: AX25XIDParameters(), isCommand: true)
+                parameters: AX25XIDParameters(), isCommand: true).onRadio(radio)
         case .disc:
-            frame = AX25FrameBuilder.buildDISC(from: localAddress, to: peer)
+            frame = AX25FrameBuilder.buildDISC(from: localAddress, to: peer).onRadio(radio)
         }
         guard sendFrame?(frame) == true else { return }
 
         if case .xid = kind {
             probeTimestamps.append(now)
             probeTimestamps = probeTimestamps.filter { now.timeIntervalSince($0) < 3600 }
-            outstanding = Outstanding(call: call, sentAt: now, escalated: false)
+            outstanding = Outstanding(call: call, sentAt: now, escalated: false, radio: radio)
             var record = records[call] ?? Record(call: call)
             record.lastProbed = now
             record.probes += 1
@@ -322,8 +335,8 @@ nonisolated final class PingProber: ObservableObject, @unchecked Sendable {
         if !pending.escalated {
             // XID went unanswered. That is not silence yet: a pre-2.2 stack
             // may simply discard it, where a DISC it must answer.
-            send(.disc, to: pending.call, now: now)
-            outstanding = Outstanding(call: pending.call, sentAt: now, escalated: true)
+            send(.disc, to: pending.call, radio: pending.radio, now: now)
+            outstanding = Outstanding(call: pending.call, sentAt: now, escalated: true, radio: pending.radio)
             return
         }
         var record = records[pending.call] ?? Record(call: pending.call)

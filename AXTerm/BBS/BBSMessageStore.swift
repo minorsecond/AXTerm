@@ -23,6 +23,9 @@ nonisolated struct BBSCall: Equatable, Sendable, Identifiable {
     var actions: [String]
     /// Set when the link dropped rather than the caller saying B.
     var endedUnexpectedly: Bool
+    /// The radio the call came in on. `.primary` for calls logged before the
+    /// station had several.
+    var radioID: RadioID = .primary
 
     var duration: TimeInterval? {
         disconnectedAt.map { $0.timeIntervalSince(connectedAt) }
@@ -93,7 +96,7 @@ nonisolated protocol BBSMessageStore: Sendable {
     func setUploadInbox(_ bookmark: Data?) throws
 
     @discardableResult
-    func beginCall(callsign: String, at date: Date) throws -> Int64
+    func beginCall(callsign: String, at date: Date, radio: RadioID) throws -> Int64
     func appendAction(callId: Int64, action: String) throws
     func endCall(id: Int64, at date: Date, unexpected: Bool) throws
     func recentCalls(limit: Int) throws -> [BBSCall]
@@ -386,12 +389,12 @@ nonisolated final class SQLiteBBSMessageStore: BBSMessageStore, @unchecked Senda
     // MARK: - Calls
 
     @discardableResult
-    func beginCall(callsign: String, at date: Date) throws -> Int64 {
+    func beginCall(callsign: String, at date: Date, radio: RadioID) throws -> Int64 {
         try dbQueue.write { db in
             try db.execute(sql: """
-                INSERT INTO bbs_calls (callsign, connectedAt, actions, endedUnexpectedly)
-                VALUES (?, ?, '', 0)
-                """, arguments: [callsign.uppercased(), date])
+                INSERT INTO bbs_calls (callsign, connectedAt, actions, endedUnexpectedly, radioID)
+                VALUES (?, ?, '', 0, ?)
+                """, arguments: [callsign.uppercased(), date, radio.rawValue])
             return db.lastInsertedRowID
         }
     }
@@ -429,7 +432,8 @@ nonisolated final class SQLiteBBSMessageStore: BBSMessageStore, @unchecked Senda
                     connectedAt: row["connectedAt"],
                     disconnectedAt: row["disconnectedAt"],
                     actions: joined.isEmpty ? [] : joined.components(separatedBy: "\n"),
-                    endedUnexpectedly: row["endedUnexpectedly"])
+                    endedUnexpectedly: row["endedUnexpectedly"],
+                    radioID: RadioID(rawValue: (row["radioID"] as String?) ?? RadioID.primary.rawValue))
             }
         }
     }

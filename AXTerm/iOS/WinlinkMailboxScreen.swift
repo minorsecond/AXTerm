@@ -112,6 +112,12 @@ struct WinlinkMailboxScreen: View {
 
     private var mailbox: WinlinkMailboxViewModel { viewModel.mailbox }
 
+    /// Connect & Exchange's radio; empty is Auto.
+    private var radioBinding: Binding<String> {
+        Binding(get: { context.settings.preferredRadioID },
+                set: { context.settings.preferredRadioID = $0 })
+    }
+
     var body: some View {
         NavigationSplitView {
             folderList
@@ -402,6 +408,15 @@ struct WinlinkMailboxScreen: View {
                     Menu("Specific Gateway") {
                         ForEach(context.settings.gatewayLadder, id: \.callsign) { rung in
                             Button(rung.callsign) { startExchange(gatewayOverride: rung) }
+                        }
+                    }
+                }
+                if appSettings.hasMultipleRadios {
+                    Picker("Radio", selection: radioBinding) {
+                        Text("Auto").tag("")
+                        ForEach(appSettings.activeRadios.filter(\.enabled)) { radio in
+                            Text(radio.name.isEmpty ? RadioProfile.defaultName(for: radio) : radio.name)
+                                .tag(radio.id.rawValue)
                         }
                     }
                 }
@@ -775,7 +790,9 @@ struct WinlinkMailboxScreen: View {
                     for frame in frames { client?.send(frame: frame) }
                 },
                 destination: destination,
-                path: path)
+                path: path,
+                radio: sessionCoordinator.radio(
+                    preferring: context.settings.preferredRadioID, for: destination, path: path))
 
             sessionCoordinator.selectAdaptiveSession(
                 destination: rung.callsign, path: rung.path.isEmpty ? nil : rung.path)

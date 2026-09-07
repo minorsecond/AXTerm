@@ -29,6 +29,9 @@ nonisolated struct TestModeConfiguration {
 
     /// Auto-connect on launch in test mode
     let autoConnect: Bool
+    /// TCP radios to run at once (`--radios host:port,host:port`); empty
+    /// means the single --host/--port connection.
+    let radios: [(host: String, port: Int)]
 
     /// Host to connect to
     let host: String?
@@ -79,6 +82,21 @@ nonisolated struct TestModeConfiguration {
 
         // Parse flags
         self.autoConnect = args.contains("--auto-connect")
+
+        // Several radios at once, for the rig's dual profile:
+        //   --radios 127.0.0.1:8010,127.0.0.1:8020
+        // Each becomes a TCP radio named "Hub A", "Hub B", … and the app
+        // connects to all of them; --host/--port are then ignored.
+        if let radiosIndex = args.firstIndex(of: "--radios"),
+           radiosIndex + 1 < args.count {
+            self.radios = args[radiosIndex + 1].split(separator: ",").compactMap { entry in
+                let parts = entry.split(separator: ":", maxSplits: 1).map(String.init)
+                guard parts.count == 2, let port = Int(parts[1]), !parts[0].isEmpty else { return nil }
+                return (host: parts[0], port: port)
+            }
+        } else {
+            self.radios = []
+        }
         self.ephemeralDatabase = args.contains("--ephemeral-db")
     }
 

@@ -9,6 +9,8 @@ import SwiftUI
 
 struct PacketTableView: View {
     let packets: [Packet]
+    /// Radio names by id; empty with one radio, and then no row names one.
+    var radioNames: [RadioID: String] = [:]
     /// True while stored history is still being read back.
     var isLoadingHistory = false
     @Binding var selection: Set<Packet.ID>
@@ -62,6 +64,7 @@ struct PacketTableView: View {
         // table with six columns nobody can read.
         PacketTableTouchView(
             packets: packets,
+            radioNames: radioNames,
             selection: $selection,
             onInspectSelection: onInspectSelection,
             onCopyInfo: onCopyInfo,
@@ -74,6 +77,7 @@ struct PacketTableView: View {
         ZStack(alignment: .bottomTrailing) {
             PacketNSTableView(
                 packets: packets,
+                radioNames: radioNames,
                 selection: $selection,
                 isAtBottom: $isAtBottom, // Corrected binding name
                 followNewest: $followNewest,

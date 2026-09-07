@@ -17,9 +17,9 @@ final class AX25SessionTests: XCTestCase {
         path: DigiPath,
         uaSource: AX25Address? = nil
     ) -> AX25Session {
-        _ = manager.connect(to: destination, path: path, channel: 0)
-        let session = manager.session(for: destination, path: path, channel: 0)
-        manager.handleInboundUA(from: uaSource ?? destination, path: path, channel: 0)
+        _ = manager.connect(to: destination, path: path, radio: .primary)
+        let session = manager.session(for: destination, path: path, radio: .primary)
+        manager.handleInboundUA(from: uaSource ?? destination, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connected)
         return session
     }
@@ -223,13 +223,13 @@ final class AX25SessionTests: XCTestCase {
         let originalPath = DigiPath.from(["W0ARP-7"])
         let requestedPath = DigiPath.from(["WIDE1-1"])
 
-        let session = manager.session(for: destination, path: originalPath, channel: 0)
+        let session = manager.session(for: destination, path: originalPath, radio: .primary)
         _ = session.stateMachine.handle(event: .connectRequest)
         _ = session.stateMachine.handle(event: .receivedUA)
 
         XCTAssertEqual(session.state, .connected)
 
-        let frames = manager.sendData(Data([0x41]), to: destination, path: requestedPath, channel: 0)
+        let frames = manager.sendData(Data([0x41]), to: destination, path: requestedPath, radio: .primary)
 
         XCTAssertEqual(manager.sessions.count, 1)
         XCTAssertEqual(frames.count, 1)
@@ -243,13 +243,13 @@ final class AX25SessionTests: XCTestCase {
         let destination = AX25Address(call: "N0HI", ssid: 7)
         let path = DigiPath.from(["W0ARP-7"])
 
-        let session = manager.session(for: destination, path: path, channel: 0)
+        let session = manager.session(for: destination, path: path, radio: .primary)
         _ = session.stateMachine.handle(event: .connectRequest)
         _ = session.stateMachine.handle(event: .receivedUA)
 
         XCTAssertEqual(session.state, .connected)
 
-        let frames = manager.sendData(Data([0x41]), to: destination, path: path, channel: 0)
+        let frames = manager.sendData(Data([0x41]), to: destination, path: path, radio: .primary)
         XCTAssertEqual(frames.count, 1)
 
         let firstTimeoutFrames = manager.handleT1Timeout(session: session)
@@ -275,7 +275,7 @@ final class AX25SessionTests: XCTestCase {
         let path = DigiPath()
         let session = connectSession(manager: manager, destination: destination, path: path)
 
-        let frames = manager.sendData(Data("c kb5yzb-7\r".utf8), to: destination, path: path, channel: 0)
+        let frames = manager.sendData(Data("c kb5yzb-7\r".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(frames.count, 1)
 
         let timeoutFrames = manager.handleT1Timeout(session: session)
@@ -302,7 +302,7 @@ final class AX25SessionTests: XCTestCase {
         let path = DigiPath()
         let session = connectSession(manager: manager, destination: destination, path: path)
 
-        _ = manager.sendData(Data("Help\r".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("Help\r".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.timers.rto, 4.0, accuracy: 0.01)
 
         _ = manager.handleT1Timeout(session: session)
@@ -347,10 +347,10 @@ final class AX25SessionTests: XCTestCase {
         let session = connectSession(manager: manager, destination: destination, path: path)
 
         // Outstanding I-frame so T1 is running when the FRMR lands.
-        _ = manager.sendData(Data("hello\r".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("hello\r".utf8), to: destination, path: path, radio: .primary)
         XCTAssertNotNil(session.t1TimerTask, "precondition: T1 armed")
 
-        manager.handleInboundFRMR(from: destination, path: path, channel: 0)
+        manager.handleInboundFRMR(from: destination, path: path, radio: .primary)
 
         XCTAssertEqual(session.state, .error, "FRMR is an unrecoverable protocol error")
         XCTAssertNil(session.t1TimerTask, "a dead session must not keep retransmitting")
@@ -391,7 +391,7 @@ final class AX25SessionTests: XCTestCase {
         _ = manager.handleInboundIFrame(
             from: destination,
             path: path,
-            channel: 0,
+            radio: .primary,
             ns: 1,
             nr: 0,
             pf: false,
@@ -399,7 +399,7 @@ final class AX25SessionTests: XCTestCase {
         )
         XCTAssertTrue(session.hasReceiveSequenceGap)
 
-        let frames = manager.sendData(Data("c kb5yzb-7\r".utf8), to: destination, path: path, channel: 0)
+        let frames = manager.sendData(Data("c kb5yzb-7\r".utf8), to: destination, path: path, radio: .primary)
 
         XCTAssertTrue(frames.isEmpty, "Do not transmit new terminal data while waiting for a missing inbound I-frame")
         XCTAssertEqual(session.pendingDataQueue.count, 1)
@@ -414,17 +414,17 @@ final class AX25SessionTests: XCTestCase {
         let originalPath = DigiPath.from(["W0ARP-7"])
         let incomingPath = DigiPath.from(["WIDE1-1"])
 
-        let session = manager.session(for: destination, path: originalPath, channel: 0)
+        let session = manager.session(for: destination, path: originalPath, radio: .primary)
         _ = session.stateMachine.handle(event: .connectRequest)
         _ = session.stateMachine.handle(event: .receivedUA)
 
         XCTAssertEqual(session.state, .connected)
 
-        let frames = manager.sendData(Data([0x41]), to: destination, path: originalPath, channel: 0)
+        let frames = manager.sendData(Data([0x41]), to: destination, path: originalPath, radio: .primary)
         XCTAssertEqual(frames.count, 1)
 
         // Capture retransmissions returned by handleInboundREJ
-        let retransmitFrames = manager.handleInboundREJ(from: destination, path: incomingPath, channel: 0, nr: 0)
+        let retransmitFrames = manager.handleInboundREJ(from: destination, path: incomingPath, radio: .primary, nr: 0)
         
         XCTAssertEqual(retransmitFrames.count, 1)
         XCTAssertEqual(retransmitFrames.first?.sessionId, session.id)
@@ -439,11 +439,11 @@ final class AX25SessionTests: XCTestCase {
         let uaSource = AX25Address(call: "N0HI", ssid: 9)
         let path = DigiPath.from(["W0ARP-7"])
 
-        _ = manager.connect(to: destination, path: path, channel: 0)
-        let session = manager.session(for: destination, path: path, channel: 0)
+        _ = manager.connect(to: destination, path: path, radio: .primary)
+        let session = manager.session(for: destination, path: path, radio: .primary)
 
         // Return value of handleInboundUA is irrelevant here, checking state transition
-        _ = manager.handleInboundUA(from: uaSource, path: path, channel: 0)
+        _ = manager.handleInboundUA(from: uaSource, path: path, radio: .primary)
 
         XCTAssertEqual(session.state, .connected)
         XCTAssertEqual(session.remoteAddress.display, destination.display)
@@ -463,7 +463,7 @@ final class AX25SessionTests: XCTestCase {
         let sentFrame = manager.handleInboundIFrame(
             from: mismatchSource,
             path: path,
-            channel: 0,
+            radio: .primary,
             ns: 0,
             nr: 0,
             pf: true,
@@ -485,10 +485,10 @@ final class AX25SessionTests: XCTestCase {
         let path = DigiPath.from(["W0ARP-7"])
 
         let session = connectSession(manager: manager, destination: destination, path: path)
-        _ = manager.sendData(Data([0x41]), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data([0x41]), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 1)
 
-        _ = manager.handleInboundRR(from: mismatchSource, path: path, channel: 0, nr: 1, isPoll: false)
+        _ = manager.handleInboundRR(from: mismatchSource, path: path, radio: .primary, nr: 1, isPoll: false)
 
         XCTAssertEqual(session.outstandingCount, 0)
     }
@@ -502,10 +502,10 @@ final class AX25SessionTests: XCTestCase {
         let path = DigiPath.from(["W0ARP-7"])
 
         let session = connectSession(manager: manager, destination: destination, path: path)
-        _ = manager.sendData(Data([0x41]), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data([0x41]), to: destination, path: path, radio: .primary)
 
         // Capture retransmissions returned by handleInboundREJ
-        let retransmitFrames = manager.handleInboundREJ(from: mismatchSource, path: path, channel: 0, nr: 0)
+        let retransmitFrames = manager.handleInboundREJ(from: mismatchSource, path: path, radio: .primary, nr: 0)
         
         XCTAssertEqual(retransmitFrames.count, 1)
         XCTAssertEqual(retransmitFrames.first?.sessionId, session.id)
@@ -522,7 +522,7 @@ final class AX25SessionTests: XCTestCase {
         let session = connectSession(manager: manager, destination: destination, path: path)
 
         // Only checking side effect on session state
-        _ = manager.handleInboundDM(from: mismatchSource, path: path, channel: 0)
+        _ = manager.handleInboundDM(from: mismatchSource, path: path, radio: .primary)
 
         XCTAssertEqual(session.state, .disconnected)
     }
@@ -535,11 +535,11 @@ final class AX25SessionTests: XCTestCase {
         let path = DigiPath()
         let session = connectSession(manager: manager, destination: destination, path: path)
 
-        _ = manager.sendData(Data("HELP\r".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("HELP\r".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 1)
         XCTAssertNotNil(session.t1TimerTask)
 
-        manager.handleInboundDM(from: destination, path: path, channel: 0)
+        manager.handleInboundDM(from: destination, path: path, radio: .primary)
 
         XCTAssertEqual(session.state, .disconnected)
         XCTAssertEqual(session.outstandingCount, 0)
@@ -579,12 +579,12 @@ final class AX25SessionTests: XCTestCase {
         let destination = AX25Address(call: "N0HI", ssid: 7)
         let path = DigiPath.from(["W0ARP-7*"])
 
-        _ = manager.connect(to: destination, path: path, channel: 0)
+        _ = manager.connect(to: destination, path: path, radio: .primary)
 
         let sentFrame = manager.handleInboundIFrame(
             from: destination,
             path: path,
-            channel: 0,
+            radio: .primary,
             ns: 0,
             nr: 0,
             pf: true,
@@ -592,7 +592,7 @@ final class AX25SessionTests: XCTestCase {
         )
 
         XCTAssertNil(sentFrame, "§6.3.1: I-frame while our SABM is outstanding must be ignored — DM here tears down a freshly established peer")
-        let session = manager.session(for: destination, path: path, channel: 0)
+        let session = manager.session(for: destination, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connecting, "Session must stay .connecting — SABM retransmit loop continues")
     }
 
@@ -607,15 +607,15 @@ final class AX25SessionTests: XCTestCase {
         let destination = AX25Address(call: "KB5YZB", ssid: 7)
         let path = DigiPath()
 
-        _ = manager.connect(to: destination, path: path, channel: 0)
-        let session = manager.session(for: destination, path: path, channel: 0)
+        _ = manager.connect(to: destination, path: path, radio: .primary)
+        let session = manager.session(for: destination, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connecting)
 
         // The exact frame from the field capture: RR(nr=0, P=1) command while connecting
         let response = manager.handleInboundRR(
             from: destination,
             path: path,
-            channel: 0,
+            radio: .primary,
             nr: 0,
             isPoll: true
         )
@@ -636,7 +636,7 @@ final class AX25SessionTests: XCTestCase {
         let sentFrame = manager.handleInboundIFrame(
             from: source,
             path: path,
-            channel: 0,
+            radio: .primary,
             ns: 0,
             nr: 0,
             pf: false,
@@ -664,7 +664,7 @@ final class AX25SessionTests: XCTestCase {
         let firstResponse = manager.handleInboundIFrame(
             from: destination,
             path: path,
-            channel: 0,
+            radio: .primary,
             ns: 0,
             nr: 0,
             pf: true,
@@ -681,7 +681,7 @@ final class AX25SessionTests: XCTestCase {
         let duplicateResponse = manager.handleInboundIFrame(
             from: destination,
             path: altPath,
-            channel: 0,
+            radio: .primary,
             ns: 0,
             nr: 0,
             pf: true,
@@ -709,7 +709,7 @@ final class AX25SessionTests: XCTestCase {
         let sentFrame = manager.handleInboundRR(
             from: source,
             path: path,
-            channel: 0,
+            radio: .primary,
             nr: 1,
             isPoll: false
         )
@@ -724,13 +724,13 @@ final class AX25SessionTests: XCTestCase {
         let path = DigiPath()
         let session = connectSession(manager: manager, destination: destination, path: path)
 
-        _ = manager.sendData(Data("Help\r".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("Help\r".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 1)
 
         let response = manager.handleInboundRR(
             from: destination,
             path: path,
-            channel: 0,
+            radio: .primary,
             nr: 1,
             pf: true,
             isCommand: false
@@ -752,7 +752,7 @@ final class AX25SessionTests: XCTestCase {
         let retransmitFrames = manager.handleInboundREJ(
             from: source,
             path: path,
-            channel: 0,
+            radio: .primary,
             nr: 0
         )
 
@@ -786,7 +786,7 @@ final class AX25SessionTests: XCTestCase {
         let stranger = AX25Address(call: "N0HI", ssid: 7)
 
         let frames = manager.handleInboundRRFrames(
-            from: stranger, path: DigiPath(), channel: 0,
+            from: stranger, path: DigiPath(), radio: .primary,
             nr: 0, pf: true, isCommand: true
         )
 
@@ -801,14 +801,14 @@ final class AX25SessionTests: XCTestCase {
         let stranger = AX25Address(call: "N0HI", ssid: 7)
 
         let rnrFrames = manager.handleInboundRNR(
-            from: stranger, path: DigiPath(), channel: 0,
+            from: stranger, path: DigiPath(), radio: .primary,
             nr: 0, pf: true, isCommand: true
         )
         XCTAssertEqual(rnrFrames.count, 1)
         assertIsDM(rnrFrames.first)
 
         let rejFrames = manager.handleInboundREJ(
-            from: stranger, path: DigiPath(), channel: 0,
+            from: stranger, path: DigiPath(), radio: .primary,
             nr: 0, pf: true, isCommand: true
         )
         XCTAssertEqual(rejFrames.count, 1)
@@ -824,7 +824,7 @@ final class AX25SessionTests: XCTestCase {
         let stranger = AX25Address(call: "N0HI", ssid: 7)
 
         let frame = manager.handleInboundIFrame(
-            from: stranger, path: DigiPath(), channel: 0,
+            from: stranger, path: DigiPath(), radio: .primary,
             ns: 0, nr: 0, pf: true, payload: Data("INFO".utf8)
         )
 
@@ -839,7 +839,7 @@ final class AX25SessionTests: XCTestCase {
         let stranger = AX25Address(call: "N0HI", ssid: 7)
 
         let frames = manager.handleInboundRRFrames(
-            from: stranger, path: DigiPath(), channel: 0,
+            from: stranger, path: DigiPath(), radio: .primary,
             nr: 0, pf: true, isCommand: false
         )
         XCTAssertTrue(frames.isEmpty, "§6.3.5 covers command frames; responses are discarded silently")
@@ -859,12 +859,12 @@ final class AX25SessionTests: XCTestCase {
         let destination = AX25Address(call: "N0HI", ssid: 7)
         let path = DigiPath()
 
-        _ = manager.connect(to: destination, path: path, channel: 0)
-        manager.handleInboundUA(from: destination, path: path, channel: 0)
-        _ = manager.sendData(Data("DATA".utf8), to: destination, path: path, channel: 0)
+        _ = manager.connect(to: destination, path: path, radio: .primary)
+        manager.handleInboundUA(from: destination, path: path, radio: .primary)
+        _ = manager.sendData(Data("DATA".utf8), to: destination, path: path, radio: .primary)
 
         let frames = manager.handleInboundREJ(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             nr: 0, pf: true, isCommand: true
         )
 
@@ -884,15 +884,15 @@ final class AX25SessionTests: XCTestCase {
         let destination = AX25Address(call: "N0HI", ssid: 7)
         let path = DigiPath()
 
-        _ = manager.connect(to: destination, path: path, channel: 0)
-        let session = manager.session(for: destination, path: path, channel: 0)
-        _ = manager.sendData(Data("EARLY".utf8), to: destination, path: path, channel: 0)
+        _ = manager.connect(to: destination, path: path, radio: .primary)
+        let session = manager.session(for: destination, path: path, radio: .primary)
+        _ = manager.sendData(Data("EARLY".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.pendingDataQueue.count, 1, "precondition: data queued while connecting")
 
         var emitted: [OutboundFrame] = []
         manager.onSendFrame = { emitted.append($0) }
         let returned = manager.handleInboundRRFrames(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             nr: 0, pf: true, isCommand: true
         )
 
@@ -1270,19 +1270,19 @@ final class AX25SessionTests: XCTestCase {
         let session = connectSession(manager: manager, destination: destination, path: path)
 
         // Send an I-frame (simulating AXDP PING). V(R) is 0 at this point.
-        let frames = manager.sendData(Data([0x41, 0x58, 0x54, 0x31]), to: destination, path: path, channel: 0)
+        let frames = manager.sendData(Data([0x41, 0x58, 0x54, 0x31]), to: destination, path: path, radio: .primary)
         XCTAssertEqual(frames.count, 1)
         XCTAssertEqual(frames.first?.nr, 0, "Initial I-frame should have N(R)=0")
 
         // Now receive two I-frames from the remote (welcome messages).
         // This advances V(R) to 2.
         _ = manager.handleInboundIFrame(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             ns: 0, nr: 0, pf: false,
             payload: Data("Welcome part 1".utf8)
         )
         _ = manager.handleInboundIFrame(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             ns: 1, nr: 0, pf: false,
             payload: Data("Welcome part 2".utf8)
         )
@@ -1408,29 +1408,29 @@ final class AX25SessionTests: XCTestCase {
 
         // Step 1: Send AXDP PING immediately after connect
         let axdpPayload = Data([0x41, 0x58, 0x54, 0x31, 0x01, 0x00])
-        let axdpFrames = manager.sendData(axdpPayload, to: destination, path: path, channel: 0)
+        let axdpFrames = manager.sendData(axdpPayload, to: destination, path: path, radio: .primary)
         XCTAssertEqual(axdpFrames.count, 1)
         XCTAssertEqual(axdpFrames.first?.nr, 0, "AXDP PING sent before welcome, N(R)=0")
 
         // Step 2: Receive welcome I-frames from KB5YZB-7
         _ = manager.handleInboundIFrame(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             ns: 0, nr: 0, pf: false,
             payload: Data("Welcome to YZBBPQ".utf8)
         )
         _ = manager.handleInboundIFrame(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             ns: 1, nr: 0, pf: false,
             payload: Data("S USERS MHEARD".utf8)
         )
         XCTAssertEqual(session.vr, 2)
 
         // Step 3: Remote ACKs our AXDP frame (RR nr=1)
-        _ = manager.handleInboundRR(from: destination, path: path, channel: 0, nr: 1)
+        _ = manager.handleInboundRR(from: destination, path: path, radio: .primary, nr: 1)
         XCTAssertEqual(session.outstandingCount, 0, "AXDP frame should be ACKed")
 
         // Step 4: Send "?" command
-        let cmdFrames = manager.sendData(Data("?\r".utf8), to: destination, path: path, channel: 0)
+        let cmdFrames = manager.sendData(Data("?\r".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(cmdFrames.count, 1)
         let cmdFrame = cmdFrames.first!
         XCTAssertEqual(cmdFrame.nr, 2, "Command should carry current V(R)=2")
@@ -1461,19 +1461,19 @@ final class AX25SessionTests: XCTestCase {
         let session = connectSession(manager: manager, destination: destination, path: path)
 
         // Send 3 frames
-        _ = manager.sendData(Data("A".utf8), to: destination, path: path, channel: 0)
-        _ = manager.sendData(Data("B".utf8), to: destination, path: path, channel: 0)
-        _ = manager.sendData(Data("C".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("A".utf8), to: destination, path: path, radio: .primary)
+        _ = manager.sendData(Data("B".utf8), to: destination, path: path, radio: .primary)
+        _ = manager.sendData(Data("C".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 3)
 
         // Receive 2 I-frames from remote (V(R) advances to 2)
         _ = manager.handleInboundIFrame(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             ns: 0, nr: 2, pf: false,
             payload: Data("resp1".utf8)
         )
         _ = manager.handleInboundIFrame(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             ns: 1, nr: 2, pf: false,
             payload: Data("resp2".utf8)
         )
@@ -1506,7 +1506,7 @@ final class AX25SessionTests: XCTestCase {
         // First processing: ns=0, P=1 → in-sequence → immediate RR(nr=1) F=1.
         // (A P=0 frame would arm T2 instead — the delayed cumulative ack.)
         let rr1 = manager.handleInboundIFrame(
-            from: peer, path: DigiPath(), channel: 0,
+            from: peer, path: DigiPath(), radio: .primary,
             ns: 0, nr: 0, pf: true,
             payload: Data("Welcome".utf8)
         )
@@ -1516,7 +1516,7 @@ final class AX25SessionTests: XCTestCase {
         // Second processing of same frame: ns=0 arrives when V(R)=1 → outside window.
         // P=1 demands the re-ack synchronously.
         let rr2 = manager.handleInboundIFrame(
-            from: peer, path: DigiPath(), channel: 0,
+            from: peer, path: DigiPath(), radio: .primary,
             ns: 0, nr: 0, pf: true,
             payload: Data("Welcome".utf8)
         )
@@ -1541,7 +1541,7 @@ final class AX25SessionTests: XCTestCase {
 
         // First processing delivers data
         manager.handleInboundIFrame(
-            from: peer, path: DigiPath(), channel: 0,
+            from: peer, path: DigiPath(), radio: .primary,
             ns: 0, nr: 0, pf: false,
             payload: Data("Hello".utf8)
         )
@@ -1549,7 +1549,7 @@ final class AX25SessionTests: XCTestCase {
 
         // Second processing (duplicate) must NOT deliver data again
         manager.handleInboundIFrame(
-            from: peer, path: DigiPath(), channel: 0,
+            from: peer, path: DigiPath(), radio: .primary,
             ns: 0, nr: 0, pf: false,
             payload: Data("Hello".utf8)
         )
@@ -1578,7 +1578,7 @@ final class AX25SessionTests: XCTestCase {
         let sentFrame = manager.handleInboundIFrame(
             from: destination,
             path: path,
-            channel: 0,
+            radio: .primary,
             ns: 0,
             nr: 0,
             pf: true,
@@ -1600,7 +1600,7 @@ final class AX25SessionTests: XCTestCase {
         _ = connectSession(manager: manager, destination: destination, path: path)
 
         let twoChunks = Data(repeating: 0x41, count: AX25Constants.defaultPacketLength + 1)
-        let multiFrameBurst = manager.sendData(twoChunks, to: destination, path: path, channel: 0)
+        let multiFrameBurst = manager.sendData(twoChunks, to: destination, path: path, radio: .primary)
         let iFrames = multiFrameBurst.filter { $0.frameType == "i" }
 
         XCTAssertEqual(iFrames.count, 2)
@@ -1616,13 +1616,13 @@ final class AX25SessionTests: XCTestCase {
         let path = DigiPath()
         let session = connectSession(manager: manager, destination: destination, path: path)
 
-        let helpFrames = manager.sendData(Data("Help\r".utf8), to: destination, path: path, channel: 0)
+        let helpFrames = manager.sendData(Data("Help\r".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(helpFrames.first?.controlByte.map { Int($0 & 0x10) }, 0x10)
 
-        _ = manager.handleInboundRR(from: destination, path: path, channel: 0, nr: session.vs, isPoll: false)
+        _ = manager.handleInboundRR(from: destination, path: path, radio: .primary, nr: session.vs, isPoll: false)
         XCTAssertEqual(session.outstandingCount, 0)
 
-        let commandFrames = manager.sendData(Data("c kb5yzb-7\r".utf8), to: destination, path: path, channel: 0)
+        let commandFrames = manager.sendData(Data("c kb5yzb-7\r".utf8), to: destination, path: path, radio: .primary)
         let commandIFrame = commandFrames.first { $0.frameType == "i" }
 
         XCTAssertEqual(commandIFrame?.ns, 1)
@@ -1641,7 +1641,7 @@ final class AX25SessionTests: XCTestCase {
         var timerDrivenFrames: [OutboundFrame] = []
         manager.onSendFrame = { timerDrivenFrames.append($0) }
 
-        let helpFrames = manager.sendData(Data("Help\r".utf8), to: destination, path: path, channel: 0)
+        let helpFrames = manager.sendData(Data("Help\r".utf8), to: destination, path: path, radio: .primary)
         let originalIFrame = helpFrames.first { $0.frameType == "i" }
         XCTAssertEqual(originalIFrame?.controlByte.map { Int($0 & 0x10) }, 0x10)
 
@@ -1649,7 +1649,7 @@ final class AX25SessionTests: XCTestCase {
         let responses = manager.handleInboundRRFrames(
             from: destination,
             path: path,
-            channel: 0,
+            radio: .primary,
             nr: 0,
             pf: true,
             isCommand: true
@@ -1697,10 +1697,10 @@ final class AX25SessionTests: XCTestCase {
 
         // 2. Receive UA
         // [0.5] KB5YZB-7>K0EPI-7,DRL*:(UA res, f=1)
-        manager.handleInboundUA(from: dest, path: path, channel: 0)
+        manager.handleInboundUA(from: dest, path: path, radio: .primary)
 
         // Session should be connected
-        let session = manager.session(for: dest, path: path, channel: 0)
+        let session = manager.session(for: dest, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connected, "Session should be connected after receiving UA")
 
         // 3. Receive I-frame 0
@@ -1708,7 +1708,7 @@ final class AX25SessionTests: XCTestCase {
         let sentFrame1 = manager.handleInboundIFrame(
             from: dest,
             path: path,
-            channel: 0,
+            radio: .primary,
             ns: 0,
             nr: 0,
             pf: false,
@@ -1723,7 +1723,7 @@ final class AX25SessionTests: XCTestCase {
         let sentFrame2 = manager.handleInboundIFrame(
             from: dest,
             path: path,
-            channel: 0,
+            radio: .primary,
             ns: 1,
             nr: 0,
             pf: true, // Poll bit set!
@@ -1780,7 +1780,7 @@ final class AX25SessionTests: XCTestCase {
         
         // 1. Establish connection (simulate receiving UA)
         manager.connect(to: dest, path: path)
-        manager.handleInboundUA(from: dest, path: path, channel: 0)
+        manager.handleInboundUA(from: dest, path: path, radio: .primary)
         
         guard let session = manager.connectedSession(withPeer: dest) else {
             XCTFail("Session not connected")
@@ -1794,7 +1794,7 @@ final class AX25SessionTests: XCTestCase {
         let digiRepeated = AX25Address(call: "DRL", ssid: 0, repeated: true)
         let mismatchPath = DigiPath([digiRepeated])
         
-        let capturedFrames = manager.handleInboundDISC(from: dest, path: mismatchPath, channel: 0)
+        let capturedFrames = manager.handleInboundDISC(from: dest, path: mismatchPath, radio: .primary)
         
         // Should send UA (Response) indicating we accepted the disconnect
         // Should NOT send DM
@@ -1823,8 +1823,8 @@ final class AX25SessionTests: XCTestCase {
         // Check if DigiPath displays are equal (since SessionKey uses display string)
         XCTAssertEqual(path1.display, path2.display, "DigiPath display should match regardless of repeated status")
         
-        let key1 = SessionKey(destination: dest, path: path1, channel: 0)
-        let key2 = SessionKey(destination: dest, path: path2, channel: 0)
+        let key1 = SessionKey(destination: dest, path: path1, radio: .primary)
+        let key2 = SessionKey(destination: dest, path: path2, radio: .primary)
         
         XCTAssertEqual(key1, key2, "SessionKey should be equal regardless of repeated status in path")
         XCTAssertEqual(key1.hashValue, key2.hashValue, "SessionKey hashes should be equal")
@@ -1888,7 +1888,7 @@ final class AX25SessionTests: XCTestCase {
         _ = sessionManager.handleInboundRR(
             from: dest,
             path: pathRepeated,
-            channel: 0,
+            radio: .primary,
             nr: 2,
             isPoll: false
         )
@@ -1964,7 +1964,7 @@ final class AX25SessionTests: XCTestCase {
         let response = manager.handleInboundIFrame(
             from: destination,
             path: path,
-            channel: 0,
+            radio: .primary,
             ns: 0,
             nr: 0,
             pf: true,  // P=1 keeps the RR synchronous; delivery is what's under test

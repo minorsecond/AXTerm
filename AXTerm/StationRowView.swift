@@ -32,6 +32,11 @@ struct StationRowView: View {
     /// DRLNOD carrying their own session (field question 2026-08-28 18:53).
     var relayLegOf: String?
 
+    /// "IC-705, Direwolf" — the radios that heard this station, most recent
+    /// first. Nil with one radio, when it would say the same thing on every
+    /// row.
+    var heardOn: String?
+
     var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 1) {
@@ -65,10 +70,11 @@ struct StationRowView: View {
                     }
                 }
 
-                Text(station.subtitle)
+                Text(heardOn.map { "\(station.subtitle) | \($0)" } ?? station.subtitle)
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-                    .help("Packet count and last heard time")
+                    .help(heardOn.map { "Packet count, last heard time, and the radios that heard it: \($0), most recent first." }
+                          ?? "Packet count and last heard time")
 
                 if !station.lastViaDisplay.isEmpty {
                     Text("Via \(station.lastViaDisplay)")

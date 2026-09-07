@@ -159,17 +159,17 @@ final class KISSLinkBLETests: XCTestCase {
         let defaults = UserDefaults(suiteName: "KISSLinkBLETests_\(UUID().uuidString)")!
         let settings = AppSettingsStore(defaults: defaults)
 
-        settings.transportType = "ble"
-        XCTAssertTrue(settings.isBLETransport)
-        XCTAssertFalse(settings.isSerialTransport)
+        settings.updateRadio(settings.primaryRadio!.id) { $0.kind = .ble }
+        XCTAssertTrue((settings.primaryRadio?.kind == .ble))
+        XCTAssertFalse((settings.primaryRadio?.kind == .serial))
 
-        settings.blePeripheralUUID = "AABBCCDD-1234-5678-9ABC-DEF012345678"
-        settings.blePeripheralName = "Test TNC"
-        settings.bleAutoReconnect = false
+        settings.updateRadio(settings.primaryRadio!.id) { $0.blePeripheralUUID = "AABBCCDD-1234-5678-9ABC-DEF012345678" }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.blePeripheralName = "Test TNC" }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.bleAutoReconnect = false }
 
-        XCTAssertEqual(settings.blePeripheralUUID, "AABBCCDD-1234-5678-9ABC-DEF012345678")
-        XCTAssertEqual(settings.blePeripheralName, "Test TNC")
-        XCTAssertFalse(settings.bleAutoReconnect)
+        XCTAssertEqual(settings.primaryRadio!.blePeripheralUUID, "AABBCCDD-1234-5678-9ABC-DEF012345678")
+        XCTAssertEqual(settings.primaryRadio!.blePeripheralName, "Test TNC")
+        XCTAssertFalse(settings.primaryRadio!.bleAutoReconnect)
 
         defaults.removePersistentDomain(forName: "KISSLinkBLETests_\(UUID().uuidString)")
     }
@@ -178,9 +178,9 @@ final class KISSLinkBLETests: XCTestCase {
         let defaults = UserDefaults(suiteName: "KISSLinkBLEDefaultsTests_\(UUID().uuidString)")!
         let settings = AppSettingsStore(defaults: defaults)
 
-        XCTAssertEqual(settings.blePeripheralUUID, "")
-        XCTAssertEqual(settings.blePeripheralName, "")
-        XCTAssertTrue(settings.bleAutoReconnect)
-        XCTAssertFalse(settings.isBLETransport)  // Default transport is "network"
+        XCTAssertEqual(settings.primaryRadio!.blePeripheralUUID, "")
+        XCTAssertEqual(settings.primaryRadio!.blePeripheralName, "")
+        XCTAssertTrue(settings.primaryRadio!.bleAutoReconnect)
+        XCTAssertFalse((settings.primaryRadio?.kind == .ble))  // Default transport is "network"
     }
 }

@@ -74,9 +74,9 @@ final class AX25FieldScenarioTests: XCTestCase {
         var timerDrivenFrames: [OutboundFrame] = []
         manager.onSendFrame = { timerDrivenFrames.append($0) }
 
-        let sabm = manager.connect(to: peer, path: digiPath, channel: 0)
+        let sabm = manager.connect(to: peer, path: digiPath, radio: .primary)
         XCTAssertNotNil(sabm)
-        let session = manager.session(for: peer, path: digiPath, channel: 0)
+        let session = manager.session(for: peer, path: digiPath, radio: .primary)
         XCTAssertEqual(session.timers.rto, 12.0, accuracy: 0.01,
                        "one digi must scale the 4 s T1 seed to 12 s")
 
@@ -87,7 +87,7 @@ final class AX25FieldScenarioTests: XCTestCase {
         XCTAssertTrue(timerDrivenFrames.isEmpty,
                       "no SABM retry may go on the air before the digipeated UA arrives")
 
-        manager.handleInboundUA(from: peer, path: digiPath, channel: 0)
+        manager.handleInboundUA(from: peer, path: digiPath, radio: .primary)
         XCTAssertEqual(session.state, .connected)
         XCTAssertNotNil(session.timers.srtt,
                         "the SABM→UA round trip must seed the adaptive RTT estimate")
@@ -104,13 +104,13 @@ final class AX25FieldScenarioTests: XCTestCase {
         var timerDrivenFrames: [OutboundFrame] = []
         manager.onSendFrame = { timerDrivenFrames.append($0) }
 
-        _ = manager.connect(to: peer, path: digiPath, channel: 0)
+        _ = manager.connect(to: peer, path: digiPath, radio: .primary)
         clock.advance(by: 4.34)
-        manager.handleInboundUA(from: peer, path: digiPath, channel: 0)
-        let session = manager.session(for: peer, path: digiPath, channel: 0)
+        manager.handleInboundUA(from: peer, path: digiPath, radio: .primary)
+        let session = manager.session(for: peer, path: digiPath, radio: .primary)
         XCTAssertEqual(session.state, .connected)
 
-        let sent = manager.sendData(Data("bbs\r".utf8), to: peer, path: digiPath, channel: 0)
+        let sent = manager.sendData(Data("bbs\r".utf8), to: peer, path: digiPath, radio: .primary)
         XCTAssertEqual(sent.count, 1)
 
         // Worst captured ack latency: 8.1 s. Still under the 12 s scaled RTO.
@@ -118,7 +118,7 @@ final class AX25FieldScenarioTests: XCTestCase {
         XCTAssertTrue(timerDrivenFrames.filter { $0.frameType == "i" }.isEmpty,
                       "no retransmit may fire while the digipeated ack is in flight")
 
-        _ = manager.handleInboundRRFrames(from: peer, path: digiPath, channel: 0,
+        _ = manager.handleInboundRRFrames(from: peer, path: digiPath, radio: .primary,
                                           nr: 1, pf: false, isCommand: false)
         XCTAssertEqual(session.outstandingCount, 0)
         XCTAssertEqual(session.stateMachine.retryCount, 0)
@@ -143,15 +143,15 @@ final class AX25FieldScenarioTests: XCTestCase {
         var delivered: [Data] = []
         manager.onDataReceived = { _, data in delivered.append(data) }
 
-        _ = manager.connect(to: peer, path: digiPath, channel: 0)
-        manager.handleInboundUA(from: peer, path: digiPath, channel: 0)
-        let session = manager.session(for: peer, path: digiPath, channel: 0)
+        _ = manager.connect(to: peer, path: digiPath, radio: .primary)
+        manager.handleInboundUA(from: peer, path: digiPath, radio: .primary)
+        let session = manager.session(for: peer, path: digiPath, radio: .primary)
         XCTAssertEqual(session.state, .connected)
 
         // Chunks 0–5 arrive cleanly, one per second.
         for ns in 0...5 {
             clock.advance(by: 1.0)
-            _ = manager.handleInboundIFrame(from: peer, path: digiPath, channel: 0,
+            _ = manager.handleInboundIFrame(from: peer, path: digiPath, radio: .primary,
                                             ns: ns, nr: 0, pf: false,
                                             payload: nodesListing[ns])
         }
@@ -159,7 +159,7 @@ final class AX25FieldScenarioTests: XCTestCase {
 
         // ns=6 is lost on RF. ns=7 arrives → out of sequence, buffered, REJ(6).
         clock.advance(by: 1.0)
-        let rejResponse = manager.handleInboundIFrame(from: peer, path: digiPath, channel: 0,
+        let rejResponse = manager.handleInboundIFrame(from: peer, path: digiPath, radio: .primary,
                                                       ns: 7, nr: 0, pf: true,
                                                       payload: nodesListing[7])
         XCTAssertEqual(rejResponse?.frameType, "s", "out-of-sequence frame must draw an S-frame response")
@@ -167,7 +167,7 @@ final class AX25FieldScenarioTests: XCTestCase {
 
         // Digi echo: the same ns=7 arrives again. No re-delivery, no REJ storm.
         clock.advance(by: 0.4)
-        _ = manager.handleInboundIFrame(from: peer, path: digiPath, channel: 0,
+        _ = manager.handleInboundIFrame(from: peer, path: digiPath, radio: .primary,
                                         ns: 7, nr: 0, pf: true,
                                         payload: nodesListing[7])
         XCTAssertEqual(delivered.count, 6, "a duplicated frame must not be delivered twice")
@@ -183,7 +183,7 @@ final class AX25FieldScenarioTests: XCTestCase {
         // REJ recovery finally lands: the missing ns=6 arrives, then the peer's
         // retransmitted ns=7 (already buffered — delivered from the buffer).
         clock.advance(by: 1.0)
-        _ = manager.handleInboundIFrame(from: peer, path: digiPath, channel: 0,
+        _ = manager.handleInboundIFrame(from: peer, path: digiPath, radio: .primary,
                                         ns: 6, nr: 0, pf: false,
                                         payload: nodesListing[6])
 
@@ -192,7 +192,7 @@ final class AX25FieldScenarioTests: XCTestCase {
 
         // The peer's own retransmit of ns=7 may still arrive — must be ignored.
         clock.advance(by: 1.0)
-        _ = manager.handleInboundIFrame(from: peer, path: digiPath, channel: 0,
+        _ = manager.handleInboundIFrame(from: peer, path: digiPath, radio: .primary,
                                         ns: 7, nr: 0, pf: true,
                                         payload: nodesListing[7])
         XCTAssertEqual(delivered, nodesListing, "late retransmits must not duplicate delivery")
@@ -201,7 +201,7 @@ final class AX25FieldScenarioTests: XCTestCase {
         let disc = manager.disconnect(session: session)
         XCTAssertEqual(disc?.frameType, "u")
         clock.advance(by: 4.34)
-        manager.handleInboundUA(from: peer, path: digiPath, channel: 0)
+        manager.handleInboundUA(from: peer, path: digiPath, radio: .primary)
         XCTAssertEqual(session.state, .disconnected)
     }
 

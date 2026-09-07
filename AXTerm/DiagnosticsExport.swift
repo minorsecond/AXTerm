@@ -61,8 +61,8 @@ nonisolated enum DiagnosticsExporter {
         )
 
         let snapshot = DiagnosticsReport.SettingsSnapshot(
-            host: settings.host,
-            port: settings.port,
+            host: settings.primaryRadio?.host ?? "",
+            port: settings.primaryRadio?.port ?? 0,
             persistHistory: settings.persistHistory,
             packetRetention: settings.retentionLimit,
             consoleRetention: settings.consoleRetentionLimit,

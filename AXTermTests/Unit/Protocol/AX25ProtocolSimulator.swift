@@ -30,21 +30,21 @@ final class AX25SimulatorNode {
     func receive(frame: OutboundFrame) {
         let from = frame.source
         let path = frame.path.normalized
-        let channel = frame.channel
+        let radio = frame.radio
         let type = frame.frameType.lowercased()
         let desc = frame.displayInfo ?? ""
 
         if type == "u" {
             if desc.contains("SABM") {
-                if let f = manager.handleInboundSABM(from: from, to: frame.destination, path: path, channel: channel) {
+                if let f = manager.handleInboundSABM(from: from, to: frame.destination, path: path, radio: radio) {
                     manager.onSendFrame?(f)
                 }
             } else if desc.contains("UA") {
-                manager.handleInboundUA(from: from, path: path, channel: channel)
+                manager.handleInboundUA(from: from, path: path, radio: radio)
             } else if desc.contains("DM") {
-                manager.handleInboundDM(from: from, path: path, channel: channel)
+                manager.handleInboundDM(from: from, path: path, radio: radio)
             } else if desc.contains("DISC") {
-                if let f = manager.handleInboundDISC(from: from, path: path, channel: channel) {
+                if let f = manager.handleInboundDISC(from: from, path: path, radio: radio) {
                     manager.onSendFrame?(f)
                 }
             }
@@ -52,7 +52,7 @@ final class AX25SimulatorNode {
             if let f = manager.handleInboundIFrame(
                 from: from,
                 path: path,
-                channel: channel,
+                radio: radio,
                 ns: frame.ns ?? 0,
                 nr: frame.nr ?? 0,
                 pf: false,
@@ -62,11 +62,11 @@ final class AX25SimulatorNode {
             }
         } else if type == "s" {
             if desc.starts(with: "RR") {
-                if let f = manager.handleInboundRR(from: from, path: path, channel: channel, nr: frame.nr ?? 0, isPoll: false) {
+                if let f = manager.handleInboundRR(from: from, path: path, radio: radio, nr: frame.nr ?? 0, isPoll: false) {
                     manager.onSendFrame?(f)
                 }
             } else if desc.starts(with: "REJ") {
-                let frames = manager.handleInboundREJ(from: from, path: path, channel: channel, nr: frame.nr ?? 0)
+                let frames = manager.handleInboundREJ(from: from, path: path, radio: radio, nr: frame.nr ?? 0)
                 for f in frames {
                     manager.onSendFrame?(f)
                 }
@@ -168,7 +168,7 @@ final class AX25ProtocolSimulator {
         
         return OutboundFrame(
             id: frame.id,
-            channel: frame.channel,
+            radio: frame.radio,
             destination: frame.destination,
             source: frame.source,
             path: frame.path,

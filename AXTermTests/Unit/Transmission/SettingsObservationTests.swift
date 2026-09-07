@@ -27,8 +27,8 @@ final class SettingsObservationTests: XCTestCase {
 
     func testSuspendCapturesSnapshot() {
         let (engine, settings) = makeEngine()
-        settings.host = "192.168.1.1"
-        settings.port = 8001
+        settings.updateRadio(settings.primaryRadio!.id) { $0.host = "192.168.1.1" }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.port = 8001 }
 
         engine.isConnectionLogicSuspended = true
 
@@ -46,9 +46,9 @@ final class SettingsObservationTests: XCTestCase {
 
     func testResumeWithNoChangesDoesNotReconnect() {
         let (engine, settings) = makeEngine()
-        settings.transportType = "network"
-        settings.host = "localhost"
-        settings.port = 8001
+        settings.updateRadio(settings.primaryRadio!.id) { $0.kind = .tcp }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.host = "localhost" }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.port = 8001 }
 
         let statusBefore = engine.status
 
@@ -64,10 +64,10 @@ final class SettingsObservationTests: XCTestCase {
 
     func testResumeWithTransportChangeTriggersReconnect() {
         let (engine, settings) = makeEngine()
-        settings.transportType = "network"
+        settings.updateRadio(settings.primaryRadio!.id) { $0.kind = .tcp }
 
         engine.isConnectionLogicSuspended = true
-        settings.host = "192.168.3.218"  // Transport-level change
+        settings.updateRadio(settings.primaryRadio!.id) { $0.host = "192.168.3.218" }  // Transport-level change
         engine.isConnectionLogicSuspended = false
 
         // The engine should have called connectUsingSettings()
@@ -78,11 +78,11 @@ final class SettingsObservationTests: XCTestCase {
 
     func testResumeWithSerialPathChangeTriggersReconnect() {
         let (engine, settings) = makeEngine()
-        settings.transportType = "serial"
-        settings.serialDevicePath = "/dev/cu.usbmodem1234"
+        settings.updateRadio(settings.primaryRadio!.id) { $0.kind = .serial }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.serialDevicePath = "/dev/cu.usbmodem1234" }
 
         engine.isConnectionLogicSuspended = true
-        settings.serialDevicePath = "/dev/cu.usbmodem5678"  // Transport change
+        settings.updateRadio(settings.primaryRadio!.id) { $0.serialDevicePath = "/dev/cu.usbmodem5678" }  // Transport change
         engine.isConnectionLogicSuspended = false
 
         // Serial transport should attempt reconnect (status changes from disconnected)
@@ -95,11 +95,11 @@ final class SettingsObservationTests: XCTestCase {
 
     func testResumeWithMobilinkdEnabledChangeDoesNotReconnect() {
         let (engine, settings) = makeEngine()
-        settings.transportType = "serial"
-        settings.serialDevicePath = "/dev/cu.usbmodem1234"
+        settings.updateRadio(settings.primaryRadio!.id) { $0.kind = .serial }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.serialDevicePath = "/dev/cu.usbmodem1234" }
 
         engine.isConnectionLogicSuspended = true
-        settings.mobilinkdEnabled = !settings.mobilinkdEnabled
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = !$0.mobilinkdEnabled }
         engine.isConnectionLogicSuspended = false
 
         XCTAssertEqual(engine.status, .disconnected,
@@ -108,11 +108,11 @@ final class SettingsObservationTests: XCTestCase {
 
     func testResumeWithMobilinkdGainChangeDoesNotReconnect() {
         let (engine, settings) = makeEngine()
-        settings.mobilinkdEnabled = true
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
 
         engine.isConnectionLogicSuspended = true
-        settings.mobilinkdInputGain = 3
-        settings.mobilinkdOutputGain = 200
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 3 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdOutputGain = 200 }
         engine.isConnectionLogicSuspended = false
 
         XCTAssertEqual(engine.status, .disconnected,
@@ -121,10 +121,10 @@ final class SettingsObservationTests: XCTestCase {
 
     func testResumeWithMobilinkdModemTypeChangeDoesNotReconnect() {
         let (engine, settings) = makeEngine()
-        settings.mobilinkdEnabled = true
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
 
         engine.isConnectionLogicSuspended = true
-        settings.mobilinkdModemType = 5
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdModemType = 5 }
         engine.isConnectionLogicSuspended = false
 
         XCTAssertEqual(engine.status, .disconnected,
@@ -133,17 +133,17 @@ final class SettingsObservationTests: XCTestCase {
 
     func testResumeWithAllMobilinkdFieldsChangedDoesNotReconnect() {
         let (engine, settings) = makeEngine()
-        settings.mobilinkdEnabled = true
-        settings.mobilinkdModemType = 1
-        settings.mobilinkdOutputGain = 128
-        settings.mobilinkdInputGain = 4
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdModemType = 1 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdOutputGain = 128 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 4 }
 
         engine.isConnectionLogicSuspended = true
         // Change every Mobilinkd field
-        settings.mobilinkdEnabled = false
-        settings.mobilinkdModemType = 9
-        settings.mobilinkdOutputGain = 255
-        settings.mobilinkdInputGain = 0
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = false }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdModemType = 9 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdOutputGain = 255 }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 0 }
         engine.isConnectionLogicSuspended = false
 
         XCTAssertEqual(engine.status, .disconnected,
@@ -154,14 +154,14 @@ final class SettingsObservationTests: XCTestCase {
 
     func testSettingsChangeWhileSuspendedDoesNotAutoReconnect() async throws {
         let (engine, settings) = makeEngine()
-        settings.transportType = "network"
-        settings.host = "localhost"
-        settings.port = 8001
+        settings.updateRadio(settings.primaryRadio!.id) { $0.kind = .tcp }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.host = "localhost" }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.port = 8001 }
 
         engine.isConnectionLogicSuspended = true
 
         // Change a transport setting while suspended
-        settings.host = "192.168.1.100"
+        settings.updateRadio(settings.primaryRadio!.id) { $0.host = "192.168.1.100" }
 
         // Wait for debounce (500ms) + buffer
         try await Task.sleep(nanoseconds: 700_000_000)

@@ -53,6 +53,28 @@ nonisolated protocol NetRomLinkTransport: AnyObject {
     ///   The payload is binary, so without this the operator sees a
     ///   broadcast go out and has no way to learn what was in it.
     func sendNodesBroadcast(_ payload: Data, summary: String) -> Bool
+
+    /// The same broadcast, leaving by one particular radio under that
+    /// radio's own callsign. A transport with one radio may ignore the
+    /// radio; the default does.
+    func sendNodesBroadcast(_ payload: Data, summary: String, radio: RadioID) -> Bool
+}
+
+extension NetRomLinkTransport {
+    func sendNodesBroadcast(_ payload: Data, summary: String, radio: RadioID) -> Bool {
+        sendNodesBroadcast(payload, summary: summary)
+    }
+}
+
+/// One node identity announced from one radio.
+///
+/// With one node on every radio (the default) every announcement carries
+/// the same node and alias and differs only by radio; with one node per
+/// radio each carries that radio's own callsign and alias.
+nonisolated struct NetRomAnnouncement: Equatable, Sendable {
+    let radio: RadioID
+    let node: AX25Address
+    let alias: String
 }
 
 // MARK: - UI-facing summary
@@ -139,6 +161,10 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
     /// consulted when `forwardingEnabled` — advertising a route we will
     /// not carry black-holes the network.
     var advertisableRoutesProvider: (() -> [NetRomNodesBroadcast.KnownRoute])?
+    /// Which node identities to announce, and from which radios. Nil, or an
+    /// empty list, means the one node this driver was given, from the
+    /// primary radio — a station with one radio never sets this.
+    var announcementsProvider: (() -> [NetRomAnnouncement])?
 
     /// Alias → callsign, from the node directory. NET/ROM addresses
     /// stations by callsign; operators and node tables name them by
@@ -371,32 +397,54 @@ nonisolated final class NetRomLinkDriver: ObservableObject {
     func broadcastNodes() -> Int {
         guard advertisesItself else { return 0 }
         let routes = forwardingEnabled ? (advertisableRoutesProvider?() ?? []) : []
-        let entries = NetRomNodesBroadcast.advertisement(
-            localNode: endpoint.localNode,
-            localAlias: localAlias,
-            forwarding: forwardingEnabled,
-            routes: routes,
-            callsignForAlias: { [weak self] alias in
-                self?.callsignForAliasResolver?(alias)
-            }
-        )
-        let payloads = NetRomNodesBroadcast.encode(originAlias: localAlias, entries: entries)
-        let summary = Self.summarize(alias: localAlias, entries: entries)
-        var sent = 0
-        for payload in payloads
-        where transport?.sendNodesBroadcast(payload, summary: summary) == true {
-            sent += 1
+        var announcements = announcementsProvider?() ?? []
+        if announcements.isEmpty {
+            announcements = [NetRomAnnouncement(radio: .primary, node: endpoint.localNode, alias: localAlias)]
         }
-        if sent > 0 {
+        var total = 0
+        var notes: [String] = []
+        for announcement in announcements {
+            let entries = NetRomNodesBroadcast.advertisement(
+                localNode: announcement.node,
+                localAlias: announcement.alias,
+                forwarding: forwardingEnabled,
+                routes: routes,
+                callsignForAlias: { [weak self] alias in
+                    self?.callsignForAliasResolver?(alias)
+                }
+            )
+            let payloads = NetRomNodesBroadcast.encode(originAlias: announcement.alias, entries: entries)
+            let summary = Self.summarize(alias: announcement.alias, entries: entries)
+            var sent = 0
+            for payload in payloads
+            where transport?.sendNodesBroadcast(payload, summary: summary, radio: announcement.radio) == true {
+                sent += 1
+            }
+            guard sent > 0 else { continue }
+            total += sent
             TxLog.debug(.session, "NET/ROM NODES broadcast sent", [
                 "frames": sent,
                 "entries": entries.count,
                 "forwarding": forwardingEnabled,
+                "radio": announcement.radio.rawValue,
                 "contents": summary
             ])
-            onOperatorNote?("Announced \(summary).")
+            if !notes.contains(summary) { notes.append(summary) }
         }
-        return sent
+        if total > 0 {
+            // One line for one node however many radios carried it; one
+            // line per node when each radio is its own.
+            let radios = announcements.count > 1 && notes.count == 1 ? " on \(announcements.count) radios" : ""
+            onOperatorNote?("Announced \(notes.joined(separator: "; "))\(radios).")
+        }
+        return total
+    }
+
+    /// Other node callsigns this station answers as — see
+    /// `NetRomEndpoint.additionalLocalNodes`.
+    var additionalLocalNodes: [AX25Address] {
+        get { endpoint.additionalLocalNodes }
+        set { endpoint.additionalLocalNodes = newValue }
     }
 
     /// What went out, in words.

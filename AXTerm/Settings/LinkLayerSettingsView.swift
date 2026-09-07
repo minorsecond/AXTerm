@@ -17,7 +17,7 @@ struct LinkLayerSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             t1TimeoutContent
-            if settings.tncCapabilities.supportsLinkTuning {
+            if (settings.primaryRadio?.capabilities ?? TNCCapabilities()).supportsLinkTuning {
                 supportedContent
             } else {
                 unsupportedContent
@@ -137,8 +137,8 @@ struct LinkLayerSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
 
-            Button("Open Connection Settings\u{2026}") {
-                SettingsRouter.shared.navigate(to: .network)
+            Button("Open Radio Settings\u{2026}") {
+                SettingsRouter.shared.navigate(to: .radios)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)

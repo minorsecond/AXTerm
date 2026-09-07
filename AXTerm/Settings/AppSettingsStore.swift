@@ -37,6 +37,9 @@ final class AppSettingsStore: ObservableObject {
     static let sentrySendPacketContentsKey = "sentrySendPacketContents"
     static let sentrySendConnectionDetailsKey = "sentrySendConnectionDetails"
 
+    // Radios: every TNC this station runs, JSON, in the operator's order
+    static let radiosKey = "radios.v1"
+
     // Serial transport settings keys
     static let transportTypeKey = "kissTransportType"
     static let serialDevicePathKey = "serialDevicePath"
@@ -75,6 +78,7 @@ final class AppSettingsStore: ObservableObject {
     static let netRomForwardingKey = "netRomForwarding"
     static let netRomNodeAliasKey = "netRomNodeAlias"
     static let netRomBroadcastMinutesKey = "netRomBroadcastMinutes"
+    static let netRomNodeIdentityKey = "netRomNodeIdentity"
 
     /// Announcing this station and carrying other people's traffic both
     /// default OFF. Each changes what other operators' nodes do, so each
@@ -286,31 +290,7 @@ final class AppSettingsStore: ObservableObject {
     static let consoleClearedAtKey = "consoleClearedAt"
     static let rawClearedAtKey = "rawClearedAt"
 
-    @Published var host: String {
-        didSet {
-            let sanitized = Self.sanitizeHost(host)
-            guard sanitized == host else {
-                deferUpdate { [weak self, sanitized] in
-                    self?.host = sanitized
-                }
-                return
-            }
-            persistHost()
-        }
-    }
 
-    @Published var port: Int {
-        didSet {
-            let sanitized = Self.sanitizePort(port)
-            guard sanitized == port else {
-                deferUpdate { [weak self, sanitized] in
-                    self?.port = sanitized
-                }
-                return
-            }
-            persistPort()
-        }
-    }
 
     @Published var retentionLimit: Int {
         didSet {
@@ -416,77 +396,41 @@ final class AppSettingsStore: ObservableObject {
         didSet { persistAutoConnect() }
     }
 
+    // MARK: - Radios
+
+    /// Every radio this station runs, in the operator's order. Archived ones
+    /// stay in the list so history that names them keeps a name.
+    ///
+    /// The first enabled radio is the primary, and the single-connection
+    /// scalars below (`transportType`, `host`, `port`, the serial, BLE and
+    /// Mobilinkd fields, `tncCapabilities`) mirror it in both directions —
+    /// the same arrangement `WinlinkSettings.gatewayLadder` uses for its top
+    /// rung. The engine still reads the scalars, so with one radio nothing
+    /// about connecting has changed; with several, the primary is the one it
+    /// connects to until the link layer learns to hold more than one.
+    @Published var radios: [RadioProfile] {
+        didSet { persistRadios() }
+    }
+
     // MARK: - Serial Transport Settings
 
-    @Published var transportType: String {
-        didSet { persistTransportType() }
-    }
 
-    @Published var serialDevicePath: String {
-        didSet { persistSerialDevicePath() }
-    }
 
-    @Published var serialBaudRate: Int {
-        didSet {
-            let clamped = Self.commonBaudRates.contains(serialBaudRate) ? serialBaudRate : Self.defaultSerialBaudRate
-            guard clamped == serialBaudRate else {
-                deferUpdate { [weak self, clamped] in
-                    self?.serialBaudRate = clamped
-                }
-                return
-            }
-            persistSerialBaudRate()
-        }
-    }
 
-    @Published var serialAutoReconnect: Bool {
-        didSet { persistSerialAutoReconnect() }
-    }
 
     /// Common baud rates for KISS TNCs
     static let commonBaudRates = [1200, 9600, 19200, 38400, 57600, 115200, 230400]
 
-    /// Whether the current transport type is serial
-    var isSerialTransport: Bool {
-        transportType == "serial"
-    }
-
     // MARK: - BLE Transport Settings
 
-    @Published var blePeripheralUUID: String {
-        didSet { persistBLEPeripheralUUID() }
-    }
 
-    @Published var blePeripheralName: String {
-        didSet { persistBLEPeripheralName() }
-    }
 
-    @Published var bleAutoReconnect: Bool {
-        didSet { persistBLEAutoReconnect() }
-    }
-
-    /// Whether the current transport type is BLE
-    var isBLETransport: Bool {
-        transportType == "ble"
-    }
 
     // MARK: - Mobilinkd Settings
 
-    @Published var mobilinkdEnabled: Bool {
-        didSet { persistMobilinkdEnabled() }
-    }
 
-    @Published var mobilinkdModemType: Int {
-        didSet { persistMobilinkdModemType() }
-    }
 
-    @Published var mobilinkdOutputGain: Int {
-        didSet { persistMobilinkdOutputGain() }
-    }
 
-    @Published var mobilinkdInputGain: Int {
-        didSet { persistMobilinkdInputGain() }
-    }
 
     @Published var notifyOnWatchHits: Bool {
         didSet { persistNotifyOnWatch() }
@@ -606,6 +550,12 @@ final class AppSettingsStore: ObservableObject {
     /// Minutes between NODES broadcasts.
     @Published var netRomBroadcastMinutes: Int {
         didSet { defaults.set(netRomBroadcastMinutes, forKey: Self.netRomBroadcastMinutesKey) }
+    }
+
+    /// Whether several radios are one node or one node each. Meaningless
+    /// with one radio, and not shown then.
+    @Published var netRomNodeIdentity: NetRomNodeIdentity {
+        didSet { defaults.set(netRomNodeIdentity.rawValue, forKey: Self.netRomNodeIdentityKey) }
     }
 
     // MARK: - Beacon
@@ -773,10 +723,6 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
-    /// TNC capability model — gates which link-layer settings AXTerm can control.
-    @Published var tncCapabilities: TNCCapabilities {
-        didSet { persistTNCCapabilities() }
-    }
 
     // MARK: - File Transfer Settings
 
@@ -1132,6 +1078,33 @@ final class AppSettingsStore: ObservableObject {
             storedTNCCapabilities = TNCCapabilities()
         }
 
+        // Radios. Absent on the first launch after the update, in which case
+        // the one radio the station had is read off the old single-connection
+        // keys — once. Nothing writes those keys any more; the list is the
+        // record, and `radios.v1` is written below so the migration is over
+        // before anything else runs.
+        let storedRadios: [RadioProfile]
+        let migratedRadios: Bool
+        if let json = defaults.string(forKey: Self.radiosKey),
+           let data = json.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode([RadioProfile].self, from: data),
+           !decoded.isEmpty {
+            storedRadios = decoded
+            migratedRadios = false
+        } else {
+            migratedRadios = true
+            storedRadios = [RadioProfile.migrated(
+                id: RadioIdentity.primaryID(defaults: defaults),
+                transportType: storedTransportType, host: storedHost, port: storedPort,
+                serialDevicePath: storedSerialDevicePath, serialBaudRate: storedSerialBaudRate,
+                serialAutoReconnect: storedSerialAutoReconnect,
+                blePeripheralUUID: storedBLEPeripheralUUID, blePeripheralName: storedBLEPeripheralName,
+                bleAutoReconnect: storedBLEAutoReconnect,
+                mobilinkdEnabled: storedMobilinkdEnabled, mobilinkdModemType: storedMobilinkdModemType,
+                mobilinkdOutputGain: storedMobilinkdOutputGain, mobilinkdInputGain: storedMobilinkdInputGain,
+                capabilities: storedTNCCapabilities)]
+        }
+
         // Clear timestamps (stored as TimeInterval)
         let storedTerminalClearedAt: Date?
         if let timeInterval = defaults.object(forKey: Self.terminalClearedAtKey) as? TimeInterval {
@@ -1154,8 +1127,6 @@ final class AppSettingsStore: ObservableObject {
             storedRawClearedAt = nil
         }
 
-        self.host = Self.sanitizeHost(storedHost)
-        self.port = Self.sanitizePort(storedPort)
         self.retentionLimit = Self.sanitizeRetention(storedRetention)
         self.consoleRetentionLimit = Self.sanitizeLogRetention(storedConsoleRetention)
         self.rawRetentionLimit = Self.sanitizeLogRetention(storedRawRetention)
@@ -1167,18 +1138,8 @@ final class AppSettingsStore: ObservableObject {
         // runInMenuBar is computed, no stored property to set
         self.launchAtLogin = storedLaunchAtLogin
         self.autoConnectOnLaunch = storedAutoConnect
-        self.transportType = storedTransportType
-        self.serialDevicePath = storedSerialDevicePath
-        self.serialBaudRate = Self.commonBaudRates.contains(storedSerialBaudRate) ? storedSerialBaudRate : Self.defaultSerialBaudRate
-        self.serialAutoReconnect = storedSerialAutoReconnect
-        self.blePeripheralUUID = storedBLEPeripheralUUID
-        self.blePeripheralName = storedBLEPeripheralName
-        self.bleAutoReconnect = storedBLEAutoReconnect
+        self.radios = storedRadios
 
-        self.mobilinkdEnabled = storedMobilinkdEnabled
-        self.mobilinkdModemType = storedMobilinkdModemType
-        self.mobilinkdOutputGain = storedMobilinkdOutputGain
-        self.mobilinkdInputGain = storedMobilinkdInputGain
 
         self.notifyOnWatchHits = storedNotifyOnWatch
         self.notifyOnNodeMail = storedNotifyOnNodeMail
@@ -1224,6 +1185,8 @@ final class AppSettingsStore: ObservableObject {
         self.netRomForwarding = storedNetRomForwarding
         self.netRomNodeAlias = storedNetRomNodeAlias
         self.netRomBroadcastMinutes = storedNetRomBroadcastMinutes
+        self.netRomNodeIdentity = NetRomNodeIdentity(
+            rawValue: defaults.string(forKey: Self.netRomNodeIdentityKey) ?? "") ?? .unified
         self.beaconEnabled = storedBeaconEnabled
         self.beaconText = storedBeaconText
         self.beaconMinutes = storedBeaconMinutes
@@ -1243,7 +1206,6 @@ final class AppSettingsStore: ObservableObject {
         self.axdpShowDecodeDetails = storedAXDPShowDecodeDetails
         self.adaptiveTransmissionEnabled = storedAdaptiveTransmissionEnabled
         self.ax25T1TimeoutSeconds = Self.sanitizeAX25T1TimeoutSeconds(storedAX25T1TimeoutSeconds)
-        self.tncCapabilities = storedTNCCapabilities
 
         // Clear timestamps
         self.terminalClearedAt = storedTerminalClearedAt
@@ -1255,10 +1217,83 @@ final class AppSettingsStore: ObservableObject {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             Self.testRetainedStores.append(self)
         }
+
+        // The first launch after the update: the list was read off the old
+        // keys above; write it now so the migration is over before anything
+        // else runs, and the old keys are never consulted again.
+        if migratedRadios { persistRadios() }
     }
 
-    var portValue: UInt16 {
-        UInt16(port)
+
+    // MARK: - Radios
+
+    /// The radios the operator can see: everything not archived.
+    var activeRadios: [RadioProfile] { radios.filter { !$0.archived } }
+
+    /// The radio the single-connection scalars describe, and the one the
+    /// engine connects to until it can hold several: the first enabled radio,
+    /// or the first radio at all when none is enabled.
+    var primaryRadio: RadioProfile? {
+        activeRadios.first { $0.enabled } ?? activeRadios.first
+    }
+
+    /// One predicate for every "only when there is more than one" decision
+    /// in the UI, so twenty views cannot each derive it differently.
+    var hasMultipleRadios: Bool { activeRadios.count > 1 }
+
+    func radio(_ id: RadioID) -> RadioProfile? {
+        radios.first { $0.id == id }
+    }
+
+    func updateRadio(_ id: RadioID, _ change: (inout RadioProfile) -> Void) {
+        guard let index = radios.firstIndex(where: { $0.id == id }) else { return }
+        var radio = radios[index]
+        change(&radio)
+        guard radio != radios[index] else { return }
+        radios[index] = radio
+    }
+
+    /// A new radio, named for its position, on the transport most stations
+    /// add second: another Direwolf. Returned so the caller can open it.
+    @discardableResult
+    func addRadio() -> RadioProfile {
+        var radio = RadioProfile(id: RadioID(), name: "Radio \(activeRadios.count + 1)")
+        radio.host = Self.defaultHost
+        radio.port = Self.defaultPort
+        radios.append(radio)
+        return radio
+    }
+
+    /// Archives a radio. Refused for the last one: a station with no radio
+    /// is not a state the rest of the app has an answer for.
+    func archiveRadio(_ id: RadioID) {
+        guard activeRadios.count > 1 else { return }
+        updateRadio(id) { $0.archived = true }
+    }
+
+    /// Reorders the visible list; offsets and destination are in terms of
+    /// `activeRadios`, as SwiftUI's `onMove` supplies them. Done by hand
+    /// because `move(fromOffsets:toOffset:)` lives in SwiftUI, and this
+    /// store does not.
+    func moveRadios(fromOffsets source: IndexSet, toOffset destination: Int) {
+        var active = activeRadios
+        let moving = source.compactMap { active.indices.contains($0) ? active[$0] : nil }
+        guard !moving.isEmpty else { return }
+        let removedBefore = source.filter { $0 < destination }.count
+        for index in source.sorted(by: >) where active.indices.contains(index) {
+            active.remove(at: index)
+        }
+        let insertAt = max(0, min(active.count, destination - removedBefore))
+        active.insert(contentsOf: moving, at: insertAt)
+        let archived = radios.filter(\.archived)
+        radios = active + archived
+    }
+
+    private func persistRadios() {
+        if let data = try? JSONEncoder().encode(radios),
+           let json = String(data: data, encoding: .utf8) {
+            defaults.set(json, forKey: Self.radiosKey)
+        }
     }
 
     private func deferUpdate(_ update: @MainActor @escaping () -> Void) {
@@ -1308,13 +1343,7 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
-    private func persistHost() {
-        defaults.set(host, forKey: Self.hostKey)
-    }
 
-    private func persistPort() {
-        defaults.set(port, forKey: Self.portKey)
-    }
 
     private func persistRetention() {
         defaults.set(retentionLimit, forKey: Self.retentionKey)
@@ -1359,49 +1388,16 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(autoConnectOnLaunch, forKey: Self.autoConnectKey)
     }
 
-    private func persistTransportType() {
-        defaults.set(transportType, forKey: Self.transportTypeKey)
-    }
 
-    private func persistSerialDevicePath() {
-        defaults.set(serialDevicePath, forKey: Self.serialDevicePathKey)
-    }
 
-    private func persistSerialBaudRate() {
-        defaults.set(serialBaudRate, forKey: Self.serialBaudRateKey)
-    }
 
-    private func persistSerialAutoReconnect() {
-        defaults.set(serialAutoReconnect, forKey: Self.serialAutoReconnectKey)
-    }
 
-    private func persistBLEPeripheralUUID() {
-        defaults.set(blePeripheralUUID, forKey: Self.blePeripheralUUIDKey)
-    }
 
-    private func persistBLEPeripheralName() {
-        defaults.set(blePeripheralName, forKey: Self.blePeripheralNameKey)
-    }
 
-    private func persistBLEAutoReconnect() {
-        defaults.set(bleAutoReconnect, forKey: Self.bleAutoReconnectKey)
-    }
 
-    private func persistMobilinkdEnabled() {
-        defaults.set(mobilinkdEnabled, forKey: Self.mobilinkdEnabledKey)
-    }
 
-    private func persistMobilinkdModemType() {
-        defaults.set(mobilinkdModemType, forKey: Self.mobilinkdModemTypeKey)
-    }
 
-    private func persistMobilinkdOutputGain() {
-        defaults.set(mobilinkdOutputGain, forKey: Self.mobilinkdOutputGainKey)
-    }
 
-    private func persistMobilinkdInputGain() {
-        defaults.set(mobilinkdInputGain, forKey: Self.mobilinkdInputGainKey)
-    }
 
     private func persistNotifyOnWatch() {
         defaults.set(notifyOnWatchHits, forKey: Self.notifyOnWatchKey)
@@ -1489,11 +1485,6 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(ax25T1TimeoutSeconds, forKey: Self.ax25T1TimeoutSecondsKey)
     }
 
-    private func persistTNCCapabilities() {
-        if let data = try? JSONEncoder().encode(tncCapabilities) {
-            defaults.set(data, forKey: Self.tncCapabilitiesKey)
-        }
-    }
 
     private func persistAllowedFileTransferCallsigns() {
         defaults.set(allowedFileTransferCallsigns, forKey: Self.allowedFileTransferCallsignsKey)
@@ -1597,8 +1588,6 @@ final class AppSettingsStore: ObservableObject {
 
     private static func registerDefaultsIfNeeded(on defaults: UserDefaults) {
         defaults.register(defaults: [
-            Self.hostKey: Self.defaultHost,
-            Self.portKey: String(Self.defaultPort),
             Self.retentionKey: Self.defaultRetention,
             Self.consoleRetentionKey: Self.defaultConsoleRetention,
             Self.rawRetentionKey: Self.defaultRawRetention,
@@ -1609,13 +1598,6 @@ final class AppSettingsStore: ObservableObject {
             Self.runInMenuBarKey: Self.defaultRunInMenuBar,
             Self.launchAtLoginKey: Self.defaultLaunchAtLogin,
             Self.autoConnectKey: Self.defaultAutoConnect,
-            Self.transportTypeKey: Self.defaultTransportType,
-            Self.serialDevicePathKey: Self.defaultSerialDevicePath,
-            Self.serialBaudRateKey: Self.defaultSerialBaudRate,
-            Self.serialAutoReconnectKey: Self.defaultSerialAutoReconnect,
-            Self.blePeripheralUUIDKey: Self.defaultBLEPeripheralUUID,
-            Self.blePeripheralNameKey: Self.defaultBLEPeripheralName,
-            Self.bleAutoReconnectKey: Self.defaultBLEAutoReconnect,
             Self.notifyOnWatchKey: Self.defaultNotifyOnWatch,
             Self.notifyPlaySoundKey: Self.defaultNotifyPlaySound,
             Self.notifyOnlyWhenInactiveKey: Self.defaultNotifyOnlyWhenInactive,

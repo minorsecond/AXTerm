@@ -44,7 +44,7 @@ final class AX25SessionCallsignChangeTests: XCTestCase {
         XCTAssertEqual(session.state, .connecting)
 
         // Simulate UA to move to connected
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
         XCTAssertEqual(session.state, .connected)
         XCTAssertEqual(manager.sessions.count, 1)
 
@@ -108,7 +108,7 @@ final class AX25SessionCallsignChangeTests: XCTestCase {
 
         // Create and connect a session
         _ = manager.connect(to: peer)
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
         XCTAssertEqual(manager.sessions.count, 1)
 
         // Simulate SSID change (K0EPI-7 -> K0EPI-6) — same base call, different SSID

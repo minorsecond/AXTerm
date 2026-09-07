@@ -79,6 +79,7 @@ nonisolated private struct NeighborRecord: Codable, FetchableRecord, Persistable
     static let databaseTableName = "netrom_neighbors"
 
     let call: String
+    let radioID: String
     let quality: Int
     let lastSeen: Double  // TimeInterval since 1970
     let obsolescenceCount: Int
@@ -91,6 +92,7 @@ nonisolated private struct RouteRecord: Codable, FetchableRecord, PersistableRec
 
     let destination: String
     let origin: String
+    let radioID: String
     let quality: Int
     let pathJson: String
     let sourceType: String
@@ -103,6 +105,7 @@ nonisolated private struct LinkStatDBRecord: Codable, FetchableRecord, Persistab
 
     let fromCall: String
     let toCall: String
+    let radioID: String
     let quality: Int
     let lastUpdated: Double  // TimeInterval since 1970
     let dfEstimate: Double?
@@ -164,27 +167,34 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
 
     private func createTables() throws {
         try database.write { db in
+            // Keyed by radio as well as callsign: a neighbor reachable on two
+            // radios is two links with two qualities (CLAUDE.md §8 — evidence
+            // gathered by one antenna is not evidence about another).
             try db.create(table: "netrom_neighbors", ifNotExists: true) { t in
-                t.column("call", .text).primaryKey()
+                t.column("call", .text).notNull()
+                t.column("radioID", .text).notNull().defaults(to: "radio-primary")
                 t.column("quality", .integer).notNull()
                 t.column("lastSeen", .double).notNull()
                 t.column("obsolescenceCount", .integer).notNull().defaults(to: 1)
                 t.column("sourceType", .text).notNull().defaults(to: "classic")
+                t.primaryKey(["radioID", "call"])
             }
 
             try db.create(table: "netrom_routes", ifNotExists: true) { t in
                 t.column("destination", .text).notNull()
                 t.column("origin", .text).notNull()
+                t.column("radioID", .text).notNull().defaults(to: "radio-primary")
                 t.column("quality", .integer).notNull()
                 t.column("pathJson", .text).notNull()
                 t.column("sourceType", .text).notNull().defaults(to: "broadcast")
                 t.column("lastUpdate", .double).notNull().defaults(to: 0)
-                t.primaryKey(["destination", "origin"])
+                t.primaryKey(["destination", "origin", "radioID"])
             }
 
             try db.create(table: "link_stats", ifNotExists: true) { t in
                 t.column("fromCall", .text).notNull()
                 t.column("toCall", .text).notNull()
+                t.column("radioID", .text).notNull().defaults(to: "radio-primary")
                 t.column("quality", .integer).notNull()
                 t.column("lastUpdated", .double).notNull()
                 t.column("dfEstimate", .double)
@@ -192,7 +202,7 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
                 t.column("dupCount", .integer).notNull().defaults(to: 0)
                 t.column("ewmaQuality", .integer).notNull().defaults(to: 0)
                 t.column("obsCount", .integer).notNull().defaults(to: 0)  // observation count for evidence rehydration
-                t.primaryKey(["fromCall", "toCall"])
+                t.primaryKey(["radioID", "fromCall", "toCall"])
             }
 
             try db.create(table: "netrom_snapshot_meta", ifNotExists: true) { t in
@@ -214,6 +224,67 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
             // Migration: Add obsCount column to existing link_stats tables
             // This handles databases created before the obsCount column was added
             try migrateAddObsCountColumn(db)
+            // Migration: key the three tables by radio as well as callsign.
+            try migrateAddRadioKey(db)
+        }
+    }
+
+    /// Rebuilds a table created before the radio was part of its key.
+    ///
+    /// SQLite cannot change a primary key in place, so each old-shape table
+    /// is copied into its new shape with every row attributed to the one
+    /// radio the station had — `RadioID.primary`, the constant
+    /// "radio-primary" — and swapped in. Idempotent: a table that already has
+    /// the column is left alone.
+    private func migrateAddRadioKey(_ db: Database) throws {
+        func hasRadio(_ table: String) throws -> Bool {
+            try db.columns(in: table).contains { $0.name == "radioID" }
+        }
+        if try !hasRadio("netrom_neighbors") {
+            try db.execute(sql: """
+                CREATE TABLE netrom_neighbors_v2 (
+                    call TEXT NOT NULL, radioID TEXT NOT NULL DEFAULT 'radio-primary',
+                    quality INTEGER NOT NULL, lastSeen DOUBLE NOT NULL,
+                    obsolescenceCount INTEGER NOT NULL DEFAULT 1,
+                    sourceType TEXT NOT NULL DEFAULT 'classic',
+                    PRIMARY KEY (radioID, call));
+                INSERT INTO netrom_neighbors_v2 (call, radioID, quality, lastSeen, obsolescenceCount, sourceType)
+                    SELECT call, 'radio-primary', quality, lastSeen, obsolescenceCount, sourceType FROM netrom_neighbors;
+                DROP TABLE netrom_neighbors;
+                ALTER TABLE netrom_neighbors_v2 RENAME TO netrom_neighbors;
+                """)
+        }
+        if try !hasRadio("netrom_routes") {
+            try db.execute(sql: """
+                CREATE TABLE netrom_routes_v2 (
+                    destination TEXT NOT NULL, origin TEXT NOT NULL,
+                    radioID TEXT NOT NULL DEFAULT 'radio-primary',
+                    quality INTEGER NOT NULL, pathJson TEXT NOT NULL,
+                    sourceType TEXT NOT NULL DEFAULT 'broadcast',
+                    lastUpdate DOUBLE NOT NULL DEFAULT 0,
+                    PRIMARY KEY (destination, origin, radioID));
+                INSERT INTO netrom_routes_v2 (destination, origin, radioID, quality, pathJson, sourceType, lastUpdate)
+                    SELECT destination, origin, 'radio-primary', quality, pathJson, sourceType, lastUpdate FROM netrom_routes;
+                DROP TABLE netrom_routes;
+                ALTER TABLE netrom_routes_v2 RENAME TO netrom_routes;
+                """)
+        }
+        if try !hasRadio("link_stats") {
+            try db.execute(sql: """
+                CREATE TABLE link_stats_v2 (
+                    fromCall TEXT NOT NULL, toCall TEXT NOT NULL,
+                    radioID TEXT NOT NULL DEFAULT 'radio-primary',
+                    quality INTEGER NOT NULL, lastUpdated DOUBLE NOT NULL,
+                    dfEstimate DOUBLE, drEstimate DOUBLE,
+                    dupCount INTEGER NOT NULL DEFAULT 0,
+                    ewmaQuality INTEGER NOT NULL DEFAULT 0,
+                    obsCount INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (radioID, fromCall, toCall));
+                INSERT INTO link_stats_v2 (fromCall, toCall, radioID, quality, lastUpdated, dfEstimate, drEstimate, dupCount, ewmaQuality, obsCount)
+                    SELECT fromCall, toCall, 'radio-primary', quality, lastUpdated, dfEstimate, drEstimate, dupCount, ewmaQuality, obsCount FROM link_stats;
+                DROP TABLE link_stats;
+                ALTER TABLE link_stats_v2 RENAME TO link_stats;
+                """)
         }
     }
 
@@ -249,6 +320,7 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
             for neighbor in neighbors {
                 let record = NeighborRecord(
                     call: neighbor.call,
+                    radioID: neighbor.radioID.rawValue,
                     quality: neighbor.quality,
                     lastSeen: neighbor.lastSeen.timeIntervalSince1970,
                     obsolescenceCount: neighbor.obsolescenceCount,
@@ -263,14 +335,15 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
     func loadNeighbors() throws -> [NeighborInfo] {
         try database.read { db in
             // Deterministic ordering: desc quality, then callsign asc
-            let records = try NeighborRecord.order(Column("quality").desc, Column("call").asc).fetchAll(db)
+            let records = try NeighborRecord.order(Column("quality").desc, Column("call").asc, Column("radioID").asc).fetchAll(db)
             return records.map { record in
                 NeighborInfo(
                     call: record.call,
                     quality: record.quality,
                     lastSeen: Date(timeIntervalSince1970: record.lastSeen),
                     obsolescenceCount: record.obsolescenceCount,
-                    sourceType: record.sourceType
+                    sourceType: record.sourceType,
+                    radioID: RadioID(rawValue: record.radioID)
                 )
             }
         }
@@ -291,6 +364,7 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
                 let record = RouteRecord(
                     destination: route.destination,
                     origin: route.origin,
+                    radioID: route.radioID.rawValue,
                     quality: route.quality,
                     pathJson: pathJson,
                     sourceType: route.sourceType,
@@ -305,7 +379,7 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
     func loadRoutes() throws -> [RouteInfo] {
         try database.read { db in
             // Deterministic ordering: destination asc, then quality desc
-            let records = try RouteRecord.order(Column("destination").asc, Column("quality").desc).fetchAll(db)
+            let records = try RouteRecord.order(Column("destination").asc, Column("quality").desc, Column("origin").asc, Column("radioID").asc).fetchAll(db)
             return records.map { record in
                 let path = (try? JSONDecoder().decode([String].self, from: Data(record.pathJson.utf8))) ?? []
                 return RouteInfo(
@@ -314,7 +388,8 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
                     quality: record.quality,
                     path: path,
                     lastUpdated: Date(timeIntervalSince1970: record.lastUpdate),
-                    sourceType: record.sourceType
+                    sourceType: record.sourceType,
+                    radioID: RadioID(rawValue: record.radioID)
                 )
             }
         }
@@ -334,6 +409,7 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
                 let record = LinkStatDBRecord(
                     fromCall: stat.fromCall,
                     toCall: stat.toCall,
+                    radioID: stat.radioID.rawValue,
                     quality: stat.quality,
                     lastUpdated: stat.lastUpdated.timeIntervalSince1970,
                     dfEstimate: stat.dfEstimate,
@@ -351,7 +427,7 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
     func loadLinkStats(now: Date) throws -> [LinkStatRecord] {
         return try database.read { db in
             // Deterministic ordering: fromCall asc, then toCall asc
-            let records = try LinkStatDBRecord.order(Column("fromCall").asc, Column("toCall").asc).fetchAll(db)
+            let records = try LinkStatDBRecord.order(Column("fromCall").asc, Column("toCall").asc, Column("radioID").asc).fetchAll(db)
             return records.map { record in
                 // Sanitize timestamp: reject Date.distantPast, epoch 0, or very old dates
                 let rawDate = Date(timeIntervalSince1970: record.lastUpdated)
@@ -365,7 +441,8 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
                     dfEstimate: record.dfEstimate,
                     drEstimate: record.drEstimate,
                     duplicateCount: record.dupCount,
-                    observationCount: record.obsCount  // Load persisted evidence count
+                    observationCount: record.obsCount,  // Load persisted evidence count
+                    radioID: RadioID(rawValue: record.radioID)
                 )
             }
         }
@@ -407,6 +484,7 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
             for neighbor in neighbors {
                 let record = NeighborRecord(
                     call: neighbor.call,
+                    radioID: neighbor.radioID.rawValue,
                     quality: neighbor.quality,
                     lastSeen: neighbor.lastSeen.timeIntervalSince1970,
                     obsolescenceCount: neighbor.obsolescenceCount,
@@ -421,6 +499,7 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
                 let record = RouteRecord(
                     destination: route.destination,
                     origin: route.origin,
+                    radioID: route.radioID.rawValue,
                     quality: route.quality,
                     pathJson: pathJson,
                     sourceType: route.sourceType,
@@ -434,6 +513,7 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
                 let record = LinkStatDBRecord(
                     fromCall: stat.fromCall,
                     toCall: stat.toCall,
+                    radioID: stat.radioID.rawValue,
                     quality: stat.quality,
                     lastUpdated: stat.lastUpdated.timeIntervalSince1970,
                     dfEstimate: stat.dfEstimate,
@@ -549,7 +629,9 @@ nonisolated final class NetRomPersistence: @unchecked Sendable {
                 quality: decayedQuality,
                 lastSeen: neighbor.lastSeen,
                 obsolescenceCount: neighbor.obsolescenceCount,
-                sourceType: neighbor.sourceType
+                sourceType: neighbor.sourceType,
+                isOfficial: neighbor.isOfficial,
+                radioID: neighbor.radioID
             )
         }
     }

@@ -13,9 +13,14 @@ nonisolated enum PacketFilter {
         search: String,
         filters: PacketFilters,
         stationCall: String?,
-        pinnedIDs: Set<Packet.ID> = []
+        pinnedIDs: Set<Packet.ID> = [],
+        hiddenRadios: Set<RadioID> = []
     ) -> [Packet] {
         packets.filter { packet in
+            // A frame from before radios existed belongs to the primary.
+            if !hiddenRadios.isEmpty, hiddenRadios.contains(packet.radioID ?? .primary) {
+                return false
+            }
             if let call = stationCall {
                 guard packet.fromDisplay == call else { return false }
             }

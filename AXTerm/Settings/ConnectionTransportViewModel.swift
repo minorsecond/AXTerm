@@ -18,10 +18,37 @@ enum TransportSelection: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// The form behind one radio: every field of its profile as a published
+/// value, the transport discovery it needs, and the link as the engine
+/// reports it.
+///
+/// Writes go to the radio's `RadioProfile` in settings; the settings store
+/// mirrors the primary radio's profile into the single-connection scalars the
+/// engine still reads, so editing here still reconnects the TNC the way the
+/// Connection pane always did.
 @MainActor
 final class ConnectionTransportViewModel: ObservableObject {
     private let settings: AppSettingsStore
     private let packetEngine: PacketEngine
+    /// The radio this form edits.
+    let radioID: RadioID
+
+    /// Set while the profile is being copied into the published fields, so
+    /// their didSets do not write the same values straight back.
+    private var isApplyingProfile = false
+
+    @Published var name: String = "" {
+        didSet { update { $0.name = name } }
+    }
+    @Published var enabled: Bool = true {
+        didSet { update { $0.enabled = enabled } }
+    }
+    /// The callsign this radio operates as; empty means the station callsign.
+    @Published var callsign: String = "" {
+        didSet { update { $0.callsign = callsign } }
+    }
+    /// Whether this is the radio the engine connects to.
+    @Published private(set) var isPrimary: Bool = true
     /// What the TNC said it is — see PacketEngine.tncIdentity.
     @Published var tncIdentity: String?
     
@@ -40,7 +67,7 @@ final class ConnectionTransportViewModel: ObservableObject {
     @Published var selectedSerialDevicePath: String = "" {
         didSet {
             if selectedTransport == .serial {
-                settings.serialDevicePath = selectedSerialDevicePath
+                update { $0.serialDevicePath = selectedSerialDevicePath }
             }
         }
     }
@@ -55,23 +82,23 @@ final class ConnectionTransportViewModel: ObservableObject {
             if selectedTransport == .ble {
                 // Only persist valid UUIDs or empty string
                 if selectedBLEPeripheralID.isEmpty || UUID(uuidString: selectedBLEPeripheralID) != nil {
-                    settings.blePeripheralUUID = selectedBLEPeripheralID
+                    update { $0.blePeripheralUUID = selectedBLEPeripheralID }
                 }
                 
                 // Also update name if found
                 if let device = bleDevices.first(where: { $0.id.uuidString == selectedBLEPeripheralID }) {
-                    settings.blePeripheralName = device.name
+                    update { $0.blePeripheralName = device.name }
                 }
             }
         }
     }
     
     @Published var host: String = "" {
-        didSet { settings.host = host }
+        didSet { update { $0.host = AppSettingsStore.sanitizeHost(host) } }
     }
     
     @Published var port: Int = 8001 {
-        didSet { settings.port = port }
+        didSet { update { $0.port = AppSettingsStore.sanitizePort(port) } }
     }
     
     // MARK: - Error State
@@ -87,41 +114,79 @@ final class ConnectionTransportViewModel: ObservableObject {
     
     func identifyTNC() { packetEngine.identifyTNC() }
 
-    init(settings: AppSettingsStore, packetEngine: PacketEngine) {
+    init(radioID: RadioID, settings: AppSettingsStore, packetEngine: PacketEngine) {
         self.settings = settings
         self.packetEngine = packetEngine
-        
-        // Initialize state from settings
-        if settings.isSerialTransport {
-            self.selectedTransport = .serial
-        } else if settings.isBLETransport {
-            self.selectedTransport = .ble
-        } else {
-            self.selectedTransport = .network
-        }
-        
-        self.selectedSerialDevicePath = settings.serialDevicePath
-        
-        // Validate persisted BLE UUID
-        let persistedUUID = settings.blePeripheralUUID
-        if !persistedUUID.isEmpty, UUID(uuidString: persistedUUID) != nil {
-            self.selectedBLEPeripheralID = persistedUUID
-        } else {
-            self.selectedBLEPeripheralID = ""
-        }
-        
-        self.host = settings.host
-        self.port = settings.port
-        
-        self.mobilinkdEnabled = settings.mobilinkdEnabled
-        self.mobilinkdModemType = MobilinkdTNC.ModemType(rawValue: UInt8(settings.mobilinkdModemType)) ?? .afsk1200
-        self.mobilinkdInputGain = Double(settings.mobilinkdInputGain)
-        self.mobilinkdOutputGain = Double(settings.mobilinkdOutputGain)
-        
+        self.radioID = radioID
+
+        // A placeholder until the profile is applied below; the property
+        // wrappers need a value before `self` can be used.
+        self.selectedTransport = .network
+
+        applyProfile(settings.radio(radioID) ?? RadioProfile(id: radioID, name: ""))
         setupSubscriptions()
+    }
+
+    /// The profile's transport kind as the picker names it.
+    private static func selection(for kind: RadioTransportKind) -> TransportSelection {
+        switch kind {
+        case .tcp: .network
+        case .serial: .serial
+        case .ble: .ble
+        }
+    }
+
+    /// Copies the profile into the published fields, touching only the ones
+    /// that differ so SwiftUI is not told about changes that are not.
+    private func applyProfile(_ profile: RadioProfile) {
+        isApplyingProfile = true
+        defer { isApplyingProfile = false }
+
+        let transport = Self.selection(for: profile.kind)
+        if selectedTransport != transport { selectedTransport = transport }
+        if name != profile.name { name = profile.name }
+        if enabled != profile.enabled { enabled = profile.enabled }
+        if callsign != profile.callsign { callsign = profile.callsign }
+        if selectedSerialDevicePath != profile.serialDevicePath { selectedSerialDevicePath = profile.serialDevicePath }
+
+        // Only a valid UUID is worth showing as a selection.
+        let persistedUUID = profile.blePeripheralUUID
+        let bleID = (!persistedUUID.isEmpty && UUID(uuidString: persistedUUID) != nil) ? persistedUUID : ""
+        if selectedBLEPeripheralID != bleID { selectedBLEPeripheralID = bleID }
+
+        if host != profile.host { host = profile.host }
+        if port != profile.port { port = profile.port }
+
+        if mobilinkdEnabled != profile.mobilinkdEnabled { mobilinkdEnabled = profile.mobilinkdEnabled }
+        let modem = MobilinkdTNC.ModemType(rawValue: UInt8(clamping: profile.mobilinkdModemType)) ?? .afsk1200
+        if mobilinkdModemType != modem { mobilinkdModemType = modem }
+        if mobilinkdInputGain != Double(profile.mobilinkdInputGain) { mobilinkdInputGain = Double(profile.mobilinkdInputGain) }
+        if mobilinkdOutputGain != Double(profile.mobilinkdOutputGain) { mobilinkdOutputGain = Double(profile.mobilinkdOutputGain) }
+
+        let primary = settings.primaryRadio?.id == radioID
+        if isPrimary != primary { isPrimary = primary }
+    }
+
+    /// One write to the profile. Skipped while the profile is being read
+    /// into the fields, which is the other direction.
+    private func update(_ change: (inout RadioProfile) -> Void) {
+        guard !isApplyingProfile else { return }
+        settings.updateRadio(radioID, change)
     }
     
     private func setupSubscriptions() {
+        // Follow the profile: the legacy scalars still have writers (the
+        // engine's auto-gain, for one), and their changes arrive here through
+        // the store's mirror.
+        settings.$radios
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] radios in
+                guard let self, let profile = radios.first(where: { $0.id == self.radioID }) else { return }
+                self.applyProfile(profile)
+            }
+            .store(in: &cancellables)
+
         // Bind PacketEngine status & map errors
         packetEngine.$status
             .receive(on: RunLoop.main)
@@ -417,36 +482,35 @@ final class ConnectionTransportViewModel: ObservableObject {
         // If we want to prevent churn, we can ask PacketEngine to pause monitoring?
         // Or we rely on the single-flight logic we added to KISSLinkSerial to mitigate thrashing.
         
+        let kind: RadioTransportKind
         switch selectedTransport {
-        case .network:
-            settings.transportType = "network"
-        case .serial:
-            settings.transportType = "serial"
-        case .ble:
-            settings.transportType = "ble"
+        case .network: kind = .tcp
+        case .serial: kind = .serial
+        case .ble: kind = .ble
         }
+        update { $0.kind = kind }
     }
 
     var isSerialTransport: Bool {
-        settings.transportType == "serial"
+        settings.radio(radioID)?.kind == .serial
     }
 
     // MARK: - Mobilinkd Settings
 
     @Published var mobilinkdEnabled: Bool = false {
-        didSet { settings.mobilinkdEnabled = mobilinkdEnabled }
+        didSet { update { $0.mobilinkdEnabled = mobilinkdEnabled } }
     }
 
     @Published var mobilinkdModemType: MobilinkdTNC.ModemType = .afsk1200 {
-        didSet { settings.mobilinkdModemType = Int(mobilinkdModemType.rawValue) }
+        didSet { update { $0.mobilinkdModemType = Int(mobilinkdModemType.rawValue) } }
     }
 
     @Published var mobilinkdInputGain: Double = 4.0 {
-        didSet { settings.mobilinkdInputGain = Int(mobilinkdInputGain) }
+        didSet { update { $0.mobilinkdInputGain = Int(mobilinkdInputGain) } }
     }
 
     @Published var mobilinkdOutputGain: Double = 128.0 {
-        didSet { settings.mobilinkdOutputGain = Int(mobilinkdOutputGain) }
+        didSet { update { $0.mobilinkdOutputGain = Int(mobilinkdOutputGain) } }
     }
     
     @Published var mobilinkdBatteryLevel: String = ""
@@ -459,6 +523,4 @@ final class ConnectionTransportViewModel: ObservableObject {
     /// Timestamp of the last input level measurement
     @Published var lastInputLevelMeasurement: Date?
 
-    // MARK: - Subscriptions
-    
 }

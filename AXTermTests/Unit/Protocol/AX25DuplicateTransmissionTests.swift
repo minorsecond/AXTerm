@@ -29,9 +29,9 @@ final class AX25DuplicateTransmissionTests: XCTestCase {
         destination: AX25Address,
         path: DigiPath
     ) -> AX25Session {
-        _ = manager.connect(to: destination, path: path, channel: 0)
-        let session = manager.session(for: destination, path: path, channel: 0)
-        manager.handleInboundUA(from: destination, path: path, channel: 0)
+        _ = manager.connect(to: destination, path: path, radio: .primary)
+        let session = manager.session(for: destination, path: path, radio: .primary)
+        manager.handleInboundUA(from: destination, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connected)
         return session
     }

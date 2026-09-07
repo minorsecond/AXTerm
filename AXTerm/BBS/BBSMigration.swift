@@ -38,6 +38,9 @@ extension DatabaseManager {
             t.column("disconnectedAt", .datetime)
             t.column("actions", .text).notNull().defaults(to: "")
             t.column("endedUnexpectedly", .boolean).notNull().defaults(to: false)
+            // The radio the call came in on; `DatabaseManager.addRadioColumns`
+            // adds it to tables created before it existed.
+            t.column("radioID", .text).notNull().defaults(to: "radio-primary")
         }
         try db.create(index: "idx_bbsCalls_connectedAt",
                       on: "bbs_calls", columns: ["connectedAt"])

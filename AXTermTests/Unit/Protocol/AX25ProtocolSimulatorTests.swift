@@ -25,7 +25,7 @@ final class AX25ProtocolSimulatorTests: XCTestCase {
         sim.addNode(nodeB)
         
         // Node A initiates connection to Node B
-        if let sabm = nodeA.manager.connect(to: nodeB.callsign, path: DigiPath(), channel: 0) {
+        if let sabm = nodeA.manager.connect(to: nodeB.callsign, path: DigiPath(), radio: .primary) {
             nodeA.manager.onSendFrame?(sabm)
         }
         
@@ -33,7 +33,7 @@ final class AX25ProtocolSimulatorTests: XCTestCase {
         // parallel load: the simulator delivers frames via unstructured
         // Task { Task.sleep } hops, so on a saturated cooperative pool a 100 ms
         // window is not a guarantee. Poll with a generous deadline instead.
-        let sessionA = nodeA.manager.session(for: nodeB.callsign, path: DigiPath(), channel: 0)
+        let sessionA = nodeA.manager.session(for: nodeB.callsign, path: DigiPath(), radio: .primary)
         try await waitUntil("both nodes connected") {
             sessionA.state == .connected &&
             nodeB.manager.sessions.values.first(where: { $0.remoteAddress == nodeA.callsign })?.state == .connected
@@ -46,7 +46,7 @@ final class AX25ProtocolSimulatorTests: XCTestCase {
         
         // Node A sends data
         let testData = Data("Hello, Node B!".utf8)
-        let frames = nodeA.manager.sendData(testData, to: nodeB.callsign, path: DigiPath(), channel: 0)
+        let frames = nodeA.manager.sendData(testData, to: nodeB.callsign, path: DigiPath(), radio: .primary)
         for frame in frames {
             nodeA.manager.onSendFrame?(frame)
         }
@@ -88,10 +88,10 @@ final class AX25ProtocolSimulatorTests: XCTestCase {
         sim.addNode(nodeA)
         sim.addNode(nodeB)
         
-        let sessionA = nodeA.manager.session(for: nodeB.callsign, path: DigiPath(), channel: 0)
+        let sessionA = nodeA.manager.session(for: nodeB.callsign, path: DigiPath(), radio: .primary)
         sessionA.timers = AX25SessionTimers(rtoMin: 0.05, rtoMax: 0.1, initialRto: 0.05)
         
-        if let sabm = nodeA.manager.connect(to: nodeB.callsign, path: DigiPath(), channel: 0) {
+        if let sabm = nodeA.manager.connect(to: nodeB.callsign, path: DigiPath(), radio: .primary) {
             nodeA.manager.onSendFrame?(sabm)
         }
         

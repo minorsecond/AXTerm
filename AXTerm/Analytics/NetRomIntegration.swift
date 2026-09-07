@@ -30,7 +30,11 @@ final class NetRomIntegration {
     private let router: NetRomRouter
     private var passiveInference: NetRomPassiveInference?
     private var linkEstimator: LinkQualityEstimator
-    private var duplicateTracker: PacketDuplicateTracker
+    /// One retry/duplicate tracker per radio. Two radios on one frequency
+    /// each hear the same frame; the copy folded onto the second radio must
+    /// not be judged against the first radio's sighting, or it is dropped as
+    /// an ingestion artefact before it can count as that radio's evidence.
+    private var duplicateTrackers: [RadioID: PacketDuplicateTracker] = [:]
 
     private let routerConfig: NetRomConfig
     private let inferenceConfig: NetRomInferenceConfig
@@ -74,11 +78,6 @@ final class NetRomIntegration {
 
         self.router = NetRomRouter(localCallsign: localCallsign, config: routerConfig)
         self.linkEstimator = LinkQualityEstimator(config: linkConfig)
-        self.duplicateTracker = PacketDuplicateTracker(
-            source: linkConfig.source,
-            ingestionDedupWindow: linkConfig.ingestionDedupWindow,
-            retryDuplicateWindow: linkConfig.retryDuplicateWindow
-        )
 
         if mode == .inference || mode == .hybrid {
             self.passiveInference = NetRomPassiveInference(
@@ -129,7 +128,8 @@ final class NetRomIntegration {
     // MARK: - Packet Observation
 
     func observePacket(_ packet: Packet, timestamp: Date, isDuplicate: Bool = false) {
-        var duplicateStatus = duplicateTracker.status(for: packet, at: timestamp)
+        let radio = packet.radioID ?? .primary
+        var duplicateStatus = duplicateTrackers[radio, default: makeDuplicateTracker()].status(for: packet, at: timestamp)
         if isDuplicate && duplicateStatus != .ingestionDedup {
             duplicateStatus = .retryDuplicate
         }
@@ -410,8 +410,22 @@ final class NetRomIntegration {
         router.candidateRoutes(to: destination)
     }
 
-    func linkQuality(from: String, to: String) -> Int {
-        linkEstimator.linkQuality(from: from, to: to)
+    func linkQuality(from: String, to: String, radio: RadioID = .primary) -> Int {
+        linkEstimator.linkQuality(from: from, to: to, radio: radio)
+    }
+
+    func linkETX(from: String, to: String, radio: RadioID = .primary) -> Double? {
+        linkEstimator.etx(from: from, to: to, radio: radio)
+    }
+
+    func effectiveTTL(from: String, to: String, radio: RadioID = .primary) -> TimeInterval {
+        linkEstimator.effectiveTTL(from: from, to: to, radio: radio)
+    }
+
+    /// The radio a neighbor is best heard on, for choosing where a datagram
+    /// to it should leave.
+    func radio(forNeighbor call: String) -> RadioID? {
+        router.radio(forNeighbor: call)
     }
 
     // MARK: - Maintenance
@@ -496,6 +510,14 @@ final class NetRomIntegration {
 
     /// Reset all routing state. Used by debug rebuild functionality.
     /// Creates fresh router and link estimator instances.
+    private func makeDuplicateTracker() -> PacketDuplicateTracker {
+        PacketDuplicateTracker(
+            source: linkConfig.source,
+            ingestionDedupWindow: linkConfig.ingestionDedupWindow,
+            retryDuplicateWindow: linkConfig.retryDuplicateWindow
+        )
+    }
+
     func reset(localCallsign: String? = nil) {
         let callsign = localCallsign ?? self.localCallsign
 
@@ -504,11 +526,7 @@ final class NetRomIntegration {
 
         // Create fresh link estimator
         linkEstimator = LinkQualityEstimator(config: linkConfig)
-        duplicateTracker = PacketDuplicateTracker(
-            source: linkConfig.source,
-            ingestionDedupWindow: linkConfig.ingestionDedupWindow,
-            retryDuplicateWindow: linkConfig.retryDuplicateWindow
-        )
+        duplicateTrackers.removeAll()
 
         // Recreate passive inference if needed
         if mode == .inference || mode == .hybrid {

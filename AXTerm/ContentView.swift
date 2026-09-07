@@ -1126,6 +1126,76 @@ struct ContentView: View {
     /// route, searchable, sortable. Here a node is one line that says how much
     /// it reaches and takes you there.
     @ViewBuilder
+    /// The station's radios, each with a switch that shows or hides its
+    /// traffic everywhere. Absent with one radio: there is nothing to choose.
+    private var radiosSection: some View {
+        if settings.hasMultipleRadios {
+            let summaries = client.radioSummaries
+            let connected = summaries.filter { $0.status == .connected }.count
+            Section(RadioPresentation.sidebarTitle(total: summaries.count, connected: connected,
+                                                   hidden: client.hiddenRadioIDs.count)) {
+                HStack {
+                    Label("All Radios", systemImage: "antenna.radiowaves.left.and.right")
+                        .font(.system(.subheadline))
+                    Spacer()
+                    if client.hiddenRadioIDs.isEmpty {
+                        Image(systemName: "checkmark")
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .foregroundStyle(client.hiddenRadioIDs.isEmpty ? .secondary : .primary)
+                .padding(.vertical, 2)
+                .contentShape(Rectangle())
+                .onTapGesture { client.hiddenRadioIDs = [] }
+                .help("Show every radio's traffic together, interleaved.")
+
+                ForEach(summaries, id: \.id) { radio in
+                    RadioRowView(radio: radio, isShown: radioShownBinding(radio.id))
+                        .contextMenu {
+                            switch radio.status {
+                            case .connected:
+                                Button("Disconnect \(radio.name)") { client.radioManager.close(radio.id) }
+                            case .connecting:
+                                Button("Cancel") { client.radioManager.close(radio.id) }
+                            case .disconnected, .failed:
+                                Button("Connect \(radio.name)") { client.radioManager.open(radio.id) }
+                            }
+                            if !radio.callsign.isEmpty {
+                                Button("Copy Callsign") { ClipboardWriter.copy(radio.callsign) }
+                            }
+                            Divider()
+                            Button("Radio Settings\u{2026}") {
+                                SettingsRouter.shared.navigate(to: .radios, radio: radio.id)
+                            }
+                        }
+                }
+            }
+        }
+    }
+
+    private func radioShownBinding(_ id: RadioID) -> Binding<Bool> {
+        Binding(
+            get: { !client.hiddenRadioIDs.contains(id) },
+            set: { shown in
+                if shown { client.hiddenRadioIDs.remove(id) } else { client.hiddenRadioIDs.insert(id) }
+            })
+    }
+
+    /// The radios that heard a station, most recent first, for its row.
+    private func heardOnText(_ station: Station) -> String? {
+        guard settings.hasMultipleRadios, !station.perRadio.isEmpty else { return nil }
+        let names = station.heardOn.compactMap { id in
+            settings.radio(id).map { $0.name.isEmpty ? RadioProfile.defaultName(for: $0) : $0.name }
+        }
+        return names.isEmpty ? nil : names.joined(separator: ", ")
+    }
+
+    /// The map's scope line while some radio is hidden.
+    private var radioScopeNote: String? {
+        client.visibleRadioNames.map { "Showing stations heard on \($0.joined(separator: ", ")) only" }
+    }
+
+    @ViewBuilder
     private var reachableSection: some View {
         if reachableCount > 0 {
             Section("Reachable via nodes (\(reachableCount))") {
@@ -1217,6 +1287,8 @@ struct ContentView: View {
             // here shapes them — showing it anyway left two sidebars
             // competing before the content started.
             if showsRadioSections {
+                radiosSection
+
                 reachableSection
 
                 circuitSection
@@ -1230,7 +1302,7 @@ struct ContentView: View {
             case .radio:
                 EmptyView()   // Drawn above, where its three sections belong.
             case .mapLayers:
-                MapLayerRows(status: mapLayerStatus)
+                MapLayerRows(status: mapLayerStatus, radioScope: radioScopeNote)
             case .mailFolders:
                 WinlinkFolderRows(viewModel: mailboxVM)
             case .bbsPanes:
@@ -1321,7 +1393,8 @@ struct ContentView: View {
                             isConnected: isConnectedStation,
                             capability: client.capabilityStore.capabilities(for: station.call),
                             alsoKnownAs: alsoKnownAs[station.call.uppercased()],
-                            relayLegOf: nodeCapabilities.borrowedLegOwner(station.call)
+                            relayLegOf: nodeCapabilities.borrowedLegOwner(station.call),
+                            heardOn: heardOnText(station)
                         )
                         .contentShape(Rectangle())
                         .contextMenu {
@@ -1594,7 +1667,7 @@ struct ContentView: View {
 
     private var stationsMapDetail: some View {
         StationsMapView(
-            stations: client.stations,
+            stations: client.stations.filter(client.isVisible),
             recentPackets: Array(client.packets.suffix(600)),
             gatewayGrids: gatewayGrids,
             announcedGrids: announcedGrids.grids,
@@ -1756,6 +1829,7 @@ struct ContentView: View {
         return VStack(spacing: 0) {
         PacketTableView(
             packets: rows,
+            radioNames: client.radioNames,
             isLoadingHistory: client.isLoadingPersistedPackets,
             selection: $selection,
             onInspectSelection: {
@@ -1796,18 +1870,20 @@ struct ContentView: View {
         let total = client.visiblePacketCount
         let station = client.selectedStationCall
         HStack(spacing: 8) {
-            Text(filters.statusLine(shown: shown, total: total, station: station))
+            Text(filters.statusLine(shown: shown, total: total, station: station,
+                                    radios: client.visibleRadioNames))
                 .font(.caption)
                 .foregroundStyle(shown == 0 && total > 0 ? .orange : .secondary)
             Spacer()
-            if !filters.isDefault || station != nil {
+            if !filters.isDefault || station != nil || !client.hiddenRadioIDs.isEmpty {
                 Button("Show Everything") {
                     filters = PacketFilters()
                     client.selectedStationCall = nil
+                    client.hiddenRadioIDs = []
                 }
                 .buttonStyle(.link)
                 .font(.caption)
-                .help("Clear the frame filters and the station filter.")
+                .help("Clear the frame filters, the station filter, and any hidden radios.")
             }
         }
         .padding(.horizontal, 10)
@@ -2115,6 +2191,92 @@ struct ContentView: View {
     /// TNC transport status menu — clickable pill with connect/disconnect actions
     @ViewBuilder
     private var tncToolbarMenu: some View {
+        if settings.hasMultipleRadios {
+            radiosToolbarMenu
+        } else {
+            singleRadioToolbarMenu
+        }
+    }
+
+    /// Several radios: one dot each, the blinkenlights for all of them, a
+    /// label that counts, and a menu with a section per radio.
+    private var radiosToolbarMenu: some View {
+        let radios = client.radioSummaries
+        return HStack(spacing: 8) {
+            HStack(spacing: 2) {
+                Blinkenlight(color: .green, trigger: client.lastRxTime)
+                    .help("RX Activity, any radio")
+                Blinkenlight(color: .red, trigger: client.lastTxTime)
+                    .help("TX Activity, any radio")
+            }
+
+            HStack(spacing: 3) {
+                ForEach(radios, id: \.id) { radio in
+                    Circle()
+                        .fill(radioTint(radio.status))
+                        .frame(width: 8, height: 8)
+                        .help(RadioPresentation.dotHelp(radio))
+                }
+            }
+
+            Menu {
+                ForEach(radios, id: \.id) { radio in
+                    Section(radio.name) {
+                        switch radio.status {
+                        case .connected:
+                            Button("Disconnect", role: .destructive) { client.radioManager.close(radio.id) }
+                        case .connecting:
+                            Button("Cancel") { client.radioManager.close(radio.id) }
+                        case .disconnected, .failed:
+                            Button("Connect") { client.radioManager.open(radio.id) }
+                        }
+                        Text(radio.endpoint)
+                        if radio.status == .failed, let error = radio.lastError {
+                            Text(error)
+                        }
+                    }
+                }
+
+                Divider()
+
+                if radios.contains(where: { $0.status == .connected || $0.status == .connecting }) {
+                    Button("Disconnect All", role: .destructive) { client.disconnect(reason: "user disconnect all") }
+                }
+                if radios.contains(where: { $0.status == .disconnected || $0.status == .failed }) {
+                    Button("Connect All") { client.connectUsingSettings() }
+                }
+
+                Divider()
+
+                Button("Radio Settings\u{2026}") {
+                    SettingsRouter.shared.navigate(to: .radios)
+                }
+            } label: {
+                Text(RadioPresentation.capsuleLabel(radios))
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .menuStyle(.borderlessButton)
+            .help("Radio connection actions")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(.thinMaterial, in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(Color(platform: .platformSeparator).opacity(0.35), lineWidth: 0.5)
+        )
+    }
+
+    private func radioTint(_ status: ConnectionStatus) -> Color {
+        switch RadioPresentation.tint(for: status) {
+        case .connected: .green
+        case .connecting: .yellow
+        case .failed: .red
+        case .idle: Color(platform: .platformTertiaryLabel)
+        }
+    }
+
+    private var singleRadioToolbarMenu: some View {
         HStack(spacing: 8) {
             // TX / RX Blinkenlights
             HStack(spacing: 2) {
@@ -2167,7 +2329,7 @@ struct ContentView: View {
                 Divider()
 
                 Button("TNC Settings\u{2026}") {
-                    SettingsRouter.shared.navigate(to: .network)
+                    SettingsRouter.shared.navigate(to: .radios, radio: settings.primaryRadio?.id)
                 }
             } label: {
                 Text(tncCapsuleLabel)
@@ -2185,26 +2347,6 @@ struct ContentView: View {
         )
     }
     
-    private struct Blinkenlight: View {
-        let color: Color
-        let trigger: Date
-        @State private var isActive = false
-        
-        var body: some View {
-            Circle()
-                .fill(isActive ? color : Color.gray.opacity(0.2))
-                .frame(width: 5, height: 5)
-                .animation(isActive ? .easeIn(duration: 0.05) : .easeOut(duration: 0.4), value: isActive)
-                .onChange(of: trigger) { _, _ in
-                    isActive = true
-                    // Turn off after a short delay
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        isActive = false
-                    }
-                }
-        }
-    }
-
     private var tncLedColor: Color {
         switch client.status {
         case .connected: return .green
@@ -2323,7 +2465,7 @@ struct ContentView: View {
     private var tncCapsuleLabel: String {
         switch client.status {
         case .connected:
-            let host = client.connectedHost ?? settings.host
+            let host = client.connectedHost ?? settings.primaryRadio?.host ?? AppSettingsStore.defaultHost
             return "TNC: \(host)"
         case .connecting:
             return "TNC Connecting\u{2026}"
@@ -2335,18 +2477,23 @@ struct ContentView: View {
     }
 
     private var connectionEndpointLabel: String {
-        if settings.isSerialTransport {
-            let device = settings.serialDevicePath.isEmpty
-                ? "No device"
-                : (settings.serialDevicePath as NSString).lastPathComponent
+        switch settings.primaryRadio?.kind ?? .tcp {
+        case .serial:
+            let path = settings.primaryRadio?.serialDevicePath ?? ""
+            let device = path.isEmpty ? "No device" : (path as NSString).lastPathComponent
             return "KISS Serial @ \(device)"
+        case .ble:
+            let name = settings.primaryRadio?.blePeripheralName ?? ""
+            return "KISS Bluetooth @ \(name.isEmpty ? "No peripheral" : name)"
+        case .tcp:
+            return "KISS TCP @ \(connectionHostPort)"
         }
-        return "KISS TCP @ \(connectionHostPort)"
     }
 
     private var connectionHostPort: String {
-        let hostValue = client.connectedHost ?? settings.host
-        let portValue = client.connectedPort.map(String.init) ?? String(settings.port)
+        let primary = settings.primaryRadio
+        let hostValue = client.connectedHost ?? primary?.host ?? AppSettingsStore.defaultHost
+        let portValue = client.connectedPort.map(String.init) ?? String(primary?.port ?? AppSettingsStore.defaultPort)
         return "\(hostValue):\(portValue)"
     }
 
@@ -2384,7 +2531,8 @@ struct ContentView: View {
         client.filteredPackets(
             search: searchModel.query,
             filters: filters,
-            stationCall: client.selectedStationCall
+            stationCall: client.selectedStationCall,
+            hiddenRadios: client.hiddenRadioIDs
         )
     }
 

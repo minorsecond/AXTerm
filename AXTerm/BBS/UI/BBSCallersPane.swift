@@ -162,6 +162,12 @@ struct BBSCallersPane: View {
                     Text(call.connectedAt.formatted(date: .abbreviated, time: .shortened))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if let radio = service.radioName(for: call.radioID) {
+                        Text("on \(radio)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .help("The radio this call came in on.")
+                    }
                     Spacer()
                     Text(model.duration)
                         .font(.caption.monospacedDigit())

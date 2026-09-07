@@ -17,6 +17,8 @@ import SwiftUI
 struct PacketTableTouchView: View {
 
     let packets: [Packet]
+    /// Radio names by id; empty with one radio, and then no row names one.
+    var radioNames: [RadioID: String] = [:]
     @Binding var selection: Set<Packet.ID>
     let onInspectSelection: () -> Void
     let onCopyInfo: (Packet) -> Void
@@ -29,7 +31,7 @@ struct PacketTableTouchView: View {
     @State private var scrollPosition: Packet.ID?
 
     private var rows: [PacketRowViewModel] {
-        packets.map(PacketRowViewModel.fromPacket)
+        packets.map { PacketRowViewModel.fromPacket($0, radioNames: radioNames) }
     }
 
     var body: some View {
@@ -138,6 +140,12 @@ private struct PacketRow: View {
                     Text("via \(row.viaText)")
                         .font(.system(size: 9, design: .monospaced))
                         .lineLimit(1)
+                }
+                if let radio = row.radioName {
+                    Text("\u{b7} \(radio)")
+                        .font(.system(size: 9))
+                        .lineLimit(1)
+                        .explain("Decoded by \(radio) \u{2014} which radio heard it, not which the sender used.", showsIndicator: false)
                 }
             }
             .foregroundStyle(.tertiary)

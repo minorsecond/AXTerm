@@ -183,10 +183,10 @@ final class TransmissionFragmentationTests: XCTestCase {
 
         let dest = AX25Address(call: "TEST2", ssid: 0)
         manager.localCallsign = AX25Address(call: "TEST1", ssid: 0)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
 
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
         XCTAssertEqual(session.state, .connected)
         let paclen = session.stateMachine.config.paclen
         XCTAssertGreaterThanOrEqual(paclen, 32)
@@ -220,10 +220,10 @@ final class TransmissionFragmentationTests: XCTestCase {
 
         let dest = AX25Address(call: "TEST2", ssid: 0)
         manager.localCallsign = AX25Address(call: "TEST1", ssid: 0)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
 
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
         let paclen = session.stateMachine.config.paclen
         let payload = TransmissionSampleData.shortChatPayload
         XCTAssertLessThanOrEqual(payload.count, paclen, "Short chat should fit in one chunk")
@@ -244,10 +244,10 @@ final class TransmissionFragmentationTests: XCTestCase {
 
         let dest = AX25Address(call: "TEST2", ssid: 0)
         manager.localCallsign = AX25Address(call: "TEST1", ssid: 0)
-        _ = manager.connect(to: dest, path: DigiPath(), channel: 0)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
+        _ = manager.connect(to: dest, path: DigiPath(), radio: .primary)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
 
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
         let paclen = session.stateMachine.config.paclen
         let msg = TransmissionSampleData.fileChunkMessage(chunkIndex: 0, totalChunks: 5, payload: TransmissionSampleData.largeFileChunkPayload)
         let encoded = msg.encode()
@@ -452,18 +452,18 @@ final class TransmissionFragmentationTests: XCTestCase {
         manager.localCallsign = AX25Address(call: "TEST1", ssid: 0)
 
         // Connect: SABM -> UA
-        let sabm = manager.connect(to: dest, path: DigiPath(), channel: 0)
+        let sabm = manager.connect(to: dest, path: DigiPath(), radio: .primary)
         XCTAssertNotNil(sabm)
-        manager.handleInboundUA(from: dest, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: dest, path: DigiPath(), radio: .primary)
 
-        let session = manager.session(for: dest, path: DigiPath(), channel: 0)
+        let session = manager.session(for: dest, path: DigiPath(), radio: .primary)
         XCTAssertEqual(session.state, .connected)
 
         // RR (no data sent) - should not drain anything
         var rrResponse: OutboundFrame?
         manager.onSendFrame = { frame in rrResponse = frame }
 
-        manager.handleInboundRR(from: dest, path: DigiPath(), channel: 0, nr: 0, isPoll: false)
+        manager.handleInboundRR(from: dest, path: DigiPath(), radio: .primary, nr: 0, isPoll: false)
         XCTAssertNil(rrResponse)
 
         XCTAssertEqual(session.pendingDataQueue.count, 0)

@@ -27,6 +27,9 @@ nonisolated struct PersonalBBSListener {
         case weInitiated
         /// The operator has not armed the mailbox.
         case notArmed
+        /// The call arrived on a radio the operator has switched the
+        /// mailbox off for.
+        case radioNotServed
         /// Winlink P2P answers on this same address.
         ///
         /// Not a general conflict: Winlink P2P and a mailbox are different
@@ -59,6 +62,9 @@ nonisolated struct PersonalBBSListener {
     var contestedBy: String?
     /// The caller already being served, if any.
     var currentCaller: String?
+    /// Whether the radio the call came in on answers mailbox calls. Always
+    /// true with one radio; the operator switches it per radio with two.
+    var servesThisRadio: Bool = true
 
     /// - Parameters:
     ///   - called: the destination address of the inbound connection — what
@@ -67,6 +73,7 @@ nonisolated struct PersonalBBSListener {
     func decide(called: String, isInitiator: Bool) -> Decision {
         if isInitiator { return .weInitiated }
         guard isArmed else { return .notArmed }
+        guard servesThisRadio else { return .radioNotServed }
 
         // Checked before the callsign match, not after: if a second device is
         // already answering as this callsign, the fact that the call *does*
@@ -121,6 +128,8 @@ extension PersonalBBSListener.Decision {
             "answering"
         case .weInitiated:
             "outbound call — not a mailbox session"
+        case .radioNotServed:
+            "ignored — the mailbox is switched off on the radio this call came in on (Settings → Radios)"
         case .notArmed:
             "ignored — the mailbox is not on air (Settings → BBS)"
         case .addressSharedWithWinlink(let address):

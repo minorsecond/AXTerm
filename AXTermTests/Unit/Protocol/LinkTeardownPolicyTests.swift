@@ -38,9 +38,9 @@ final class LinkTeardownPolicyTests: XCTestCase {
         let peer = AX25Address(call: "NODE", ssid: 0)
         let path = DigiPath()
 
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
-        let session = manager.session(for: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
+        let session = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connected)
         XCTAssertEqual(LinkTeardownPolicy.action(for: session.state), .sendDISC)
 
@@ -59,17 +59,17 @@ final class LinkTeardownPolicyTests: XCTestCase {
         let peer = AX25Address(call: "NODE", ssid: 0)
         let path = DigiPath()
 
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
-        let session = manager.session(for: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
+        let session = manager.session(for: peer, path: path, radio: .primary)
         _ = manager.disconnect(session: session)
         XCTAssertEqual(session.state, .disconnecting)
 
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, .disconnected)
 
         XCTAssertNotNil(
-            manager.connect(to: peer, path: path, channel: 0),
+            manager.connect(to: peer, path: path, radio: .primary),
             "a completed teardown must not block the next connect")
     }
 
@@ -121,8 +121,8 @@ final class LinkTeardownPolicyTests: XCTestCase {
         let peer = AX25Address(call: "NODE", ssid: 0)
         let path = DigiPath()
 
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        let session = manager.session(for: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        let session = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connecting)
         XCTAssertEqual(LinkTeardownPolicy.action(for: session.state), .dropLocally)
 

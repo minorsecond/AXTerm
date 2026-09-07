@@ -95,7 +95,7 @@ final class PingProberXIDVerdictTests: XCTestCase {
         let prober = PingProber(
             defaults: UserDefaults(suiteName: "PingProberXIDVerdictTests.\(UUID().uuidString)")!)
         prober.sendFrame = { _ in true }
-        prober.localAddress = { AX25Address(call: "K0EPI", ssid: 7) }
+        prober.localAddress = { _ in AX25Address(call: "K0EPI", ssid: 7) }
         return prober
     }
 

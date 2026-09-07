@@ -25,23 +25,23 @@ final class DRLNODDisconnectRegressionTests: XCTestCase {
         var timerDrivenFrames: [OutboundFrame] = []
         manager.onSendFrame = { timerDrivenFrames.append($0) }
 
-        let sabm = manager.connect(to: drlnod, path: path, channel: 0)
+        let sabm = manager.connect(to: drlnod, path: path, radio: .primary)
         XCTAssertNotNil(sabm)
-        manager.handleInboundUA(from: drlnod, path: path, channel: 0)
+        manager.handleInboundUA(from: drlnod, path: path, radio: .primary)
 
-        let session = manager.session(for: drlnod, path: path, channel: 0)
+        let session = manager.session(for: drlnod, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connected)
 
         // DRLNOD polls while idle. AXTerm must respond with RR(F=1), but that
         // should not perturb outbound sequence state.
-        let idlePoll1 = manager.handleInboundRR(from: drlnod, path: path, channel: 0, nr: 0, pf: true, isCommand: true)
-        let idlePoll2 = manager.handleInboundRR(from: drlnod, path: path, channel: 0, nr: 0, pf: true, isCommand: true)
+        let idlePoll1 = manager.handleInboundRR(from: drlnod, path: path, radio: .primary, nr: 0, pf: true, isCommand: true)
+        let idlePoll2 = manager.handleInboundRR(from: drlnod, path: path, radio: .primary, nr: 0, pf: true, isCommand: true)
         XCTAssertEqual(idlePoll1?.frameType, "s")
         XCTAssertEqual(idlePoll2?.frameType, "s")
         XCTAssertEqual(session.vs, 0)
         XCTAssertEqual(session.va, 0)
 
-        let helpFrames = manager.sendData(Data("HELP\r".utf8), to: drlnod, path: path, channel: 0)
+        let helpFrames = manager.sendData(Data("HELP\r".utf8), to: drlnod, path: path, radio: .primary)
         XCTAssertEqual(helpFrames.filter { $0.frameType == "i" }.count, 1)
         XCTAssertEqual(session.outstandingCount, 1)
 
@@ -52,7 +52,7 @@ final class DRLNODDisconnectRegressionTests: XCTestCase {
         XCTAssertEqual(timerDrivenFrames.filter { $0.frameType == "i" }.count, 1)
         XCTAssertEqual(timerDrivenFrames.filter { $0.frameType == "i" }.first?.controlByte.map { Int($0 & 0x10) }, 0x10)
 
-        manager.handleInboundDM(from: drlnod, path: path, channel: 0)
+        manager.handleInboundDM(from: drlnod, path: path, radio: .primary)
         XCTAssertEqual(session.state, .disconnected)
         XCTAssertEqual(session.outstandingCount, 0)
         XCTAssertNil(session.t1TimerTask)
@@ -71,13 +71,13 @@ final class DRLNODDisconnectRegressionTests: XCTestCase {
         var timerDrivenFrames: [OutboundFrame] = []
         manager.onSendFrame = { timerDrivenFrames.append($0) }
 
-        _ = manager.connect(to: drlnod, path: path, channel: 0)
-        manager.handleInboundUA(from: drlnod, path: path, channel: 0)
+        _ = manager.connect(to: drlnod, path: path, radio: .primary)
+        manager.handleInboundUA(from: drlnod, path: path, radio: .primary)
 
-        let session = manager.session(for: drlnod, path: path, channel: 0)
+        let session = manager.session(for: drlnod, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connected)
 
-        let helpFrames = manager.sendData(Data("Help\r".utf8), to: drlnod, path: path, channel: 0)
+        let helpFrames = manager.sendData(Data("Help\r".utf8), to: drlnod, path: path, radio: .primary)
         let helpFrame = helpFrames.first { $0.frameType == "i" }
         XCTAssertEqual(helpFrame?.controlByte.map { Int($0 & 0x10) }, 0x10, "First DRLNOD command I-frame should solicit a response with P=1")
         XCTAssertEqual(session.outstandingCount, 1)
@@ -90,7 +90,7 @@ final class DRLNODDisconnectRegressionTests: XCTestCase {
         let responses = manager.handleInboundRRFrames(
             from: drlnod,
             path: path,
-            channel: 0,
+            radio: .primary,
             nr: 0,
             pf: true,
             isCommand: true

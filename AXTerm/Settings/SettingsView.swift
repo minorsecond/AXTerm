@@ -47,7 +47,7 @@ struct SettingsView: View {
                     sidebarRow(.notifications)
                 }
                 Section("Radio") {
-                    sidebarRow(.network)
+                    sidebarRow(.radios)
                     sidebarRow(.transmission)
                 }
                 Section("Services") {
@@ -75,7 +75,7 @@ struct SettingsView: View {
             .navigationSplitViewColumnWidth(min: 185, ideal: 200, max: 240)
         } detail: {
             detail
-                .navigationTitle(router.selectedTab.settingsTitle)
+                .navigationTitle(router.selectedTab.settingsTitle(hasMultipleRadios: settings.hasMultipleRadios))
         }
         .environmentObject(router) // Provide router to all tabs
         .frame(minWidth: 760, idealWidth: 800, minHeight: 560, idealHeight: 660)
@@ -91,8 +91,8 @@ struct SettingsView: View {
                                 locationService: locationService)
         case .notifications:
             NotificationSettingsView(settings: settings, notificationManager: notificationManager)
-        case .network:
-            ConnectionSettingsView(settings: settings, packetEngine: client)
+        case .radios:
+            RadiosSettingsView(settings: settings, client: client)
         case .transmission:
             TransmissionSettingsView(settings: settings, client: client)
         case .winlink:
@@ -126,25 +126,37 @@ struct SettingsView: View {
     /// eye can navigate by colour before it reads a word.
     private func sidebarRow(_ tab: SettingsTab) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: tab.settingsIcon)
+            Image(systemName: tab.settingsIcon(hasMultipleRadios: settings.hasMultipleRadios))
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 22, height: 22)
                 .background(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .fill(tab.settingsTint.gradient))
-            Text(tab.settingsTitle)
+            Text(tab.settingsTitle(hasMultipleRadios: settings.hasMultipleRadios))
         }
         .tag(tab)
     }
 }
 
 extension SettingsTab {
+    /// The pane's name. One radio and it is the Connection pane it always
+    /// was — the word "radios" appears nowhere until there are several.
+    func settingsTitle(hasMultipleRadios: Bool) -> String {
+        if self == .radios, !hasMultipleRadios { return "Connection" }
+        return settingsTitle
+    }
+
+    func settingsIcon(hasMultipleRadios: Bool) -> String {
+        if self == .radios, !hasMultipleRadios { return "cable.connector" }
+        return settingsIcon
+    }
+
     var settingsTitle: String {
         switch self {
         case .general: return "General"
         case .notifications: return "Notifications"
-        case .network: return "Connection"
+        case .radios: return "Radios"
         case .transmission: return "Transmission"
         case .winlink: return "Winlink"
         case .bbs: return "BBS"
@@ -157,7 +169,7 @@ extension SettingsTab {
         switch self {
         case .general: return "gearshape.fill"
         case .notifications: return "bell.badge.fill"
-        case .network: return "cable.connector"
+        case .radios: return "radio"
         case .transmission: return "antenna.radiowaves.left.and.right"
         case .winlink: return "envelope.fill"
         case .bbs: return "tray.full.fill"
@@ -170,7 +182,7 @@ extension SettingsTab {
         switch self {
         case .general: return .gray
         case .notifications: return .red
-        case .network: return .blue
+        case .radios: return .blue
         case .transmission: return .orange
         case .winlink: return .teal
         case .bbs: return .indigo

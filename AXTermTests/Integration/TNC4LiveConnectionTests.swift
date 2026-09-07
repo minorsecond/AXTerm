@@ -88,13 +88,13 @@ final class TNC4LiveConnectionTests: XCTestCase {
 
         settings = AppSettingsStore(defaults: defaults)
         settings.myCallsign = localCallsign
-        settings.transportType = "serial"
-        settings.serialDevicePath = devicePath
-        settings.serialBaudRate = baudRate
+        settings.updateRadio(settings.primaryRadio!.id) { $0.kind = .serial }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.serialDevicePath = devicePath }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.serialBaudRate = baudRate }
         // NOTE: Mobilinkd config is disabled for connection tests because
         // SET_MODEM_TYPE causes a demodulator restart that can interfere with
         // receiving the UA response. Enable only when testing Mobilinkd-specific features.
-        settings.mobilinkdEnabled = false
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = false }
     }
 
     /// Lazy setup of PacketEngine + SessionCoordinator for tests that need the full stack.
@@ -310,7 +310,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
         let sessionManager = coordinator.sessionManager
 
         // Initiate connection — this generates SABM
-        let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), channel: 0)
+        let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), radio: .primary)
         XCTAssertNotNil(sabmFrame, "Should generate SABM frame")
 
         // Send the SABM via PacketEngine
@@ -327,7 +327,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
 
         if !sessionConnected {
             // Check if we got a DM (disconnect mode) instead
-            let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+            let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
             if session.state == .disconnected {
                 throw XCTSkip("K0EPI-7 responded with DM (busy or not accepting connections)")
             }
@@ -335,7 +335,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
             return
         }
 
-        let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+        let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
         XCTAssertEqual(session.state, .connected, "Session to K0EPI-7 should be connected")
     }
 
@@ -345,10 +345,10 @@ final class TNC4LiveConnectionTests: XCTestCase {
     /// which is how the real app connects to the TNC4.
     func testConnectToK0EPI7WithMobilinkdEnabled() async throws {
         // Override: enable Mobilinkd with factory-correct gains
-        settings.mobilinkdEnabled = true
-        settings.mobilinkdModemType = 1  // AFSK 1200
-        settings.mobilinkdOutputGain = 11  // TNC4 factory default
-        settings.mobilinkdInputGain = 0    // TNC4 factory default
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdModemType = 1 }  // AFSK 1200
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdOutputGain = 11 }  // TNC4 factory default
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdInputGain = 0 }  // TNC4 factory default
 
         setupFullStack()
         engine.connectUsingSettings()
@@ -363,7 +363,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
         let destination = AX25Address(call: "K0EPI", ssid: 7)
         let sessionManager = coordinator.sessionManager
 
-        let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), channel: 0)
+        let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), radio: .primary)
         XCTAssertNotNil(sabmFrame, "Should generate SABM frame")
 
         if let frame = sabmFrame {
@@ -377,7 +377,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
         )
 
         if !sessionConnected {
-            let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+            let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
             if session.state == .disconnected {
                 throw XCTSkip("K0EPI-7 responded with DM (busy or not accepting connections)")
             }
@@ -385,7 +385,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
             return
         }
 
-        let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+        let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
         XCTAssertEqual(session.state, .connected, "Session to K0EPI-7 should be connected")
     }
 
@@ -408,7 +408,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
         let sessionManager = coordinator.sessionManager
 
         // Connect
-        if let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), channel: 0) {
+        if let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), radio: .primary) {
             engine.send(frame: sabmFrame)
         }
 
@@ -440,7 +440,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
                 newline,
                 to: destination,
                 path: DigiPath(),
-                channel: 0,
+                radio: .primary,
                 pid: 0xF0
             )
             for frame in iFrames {
@@ -454,7 +454,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
         XCTAssertGreaterThan(receivedData.count, 0, "Should have received data from K0EPI-7")
 
         // Disconnect cleanly
-        let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+        let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
         if let discFrame = sessionManager.disconnect(session: session) {
             engine.send(frame: discFrame)
         }
@@ -468,7 +468,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
     /// Verify that the TNC4 responds to battery level queries.
     /// NOTE: Requires mobilinkdEnabled = true for battery polling to start.
     func testMobilinkdBatteryTelemetry() async throws {
-        settings.mobilinkdEnabled = true
+        settings.updateRadio(settings.primaryRadio!.id) { $0.mobilinkdEnabled = true }
         setupFullStack()
         engine.connectUsingSettings()
         guard await waitForStatus(.connected, timeout: 10.0) else {
@@ -543,7 +543,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
         let sessionManager = coordinator.sessionManager
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+            let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
             if session.state == expectedState { return true }
             try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
         }
@@ -635,7 +635,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
         // 3. Send SABM from TNC4 to K0EPI-7
         let destination = AX25Address(call: "K0EPI", ssid: 7)
         let sessionManager = coordinator.sessionManager
-        if let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), channel: 0) {
+        if let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), radio: .primary) {
             engine.send(frame: sabmFrame)
             print("[TEST] Sent SABM to K0EPI-7 via TNC4")
         }
@@ -741,7 +741,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
         let destination = AX25Address(call: "K0EPI", ssid: 7)
         let sessionManager = coordinator.sessionManager
 
-        if let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), channel: 0) {
+        if let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), radio: .primary) {
             engine.send(frame: sabmFrame)
         }
 
@@ -765,7 +765,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
         // 4. Wait for welcome, then send newline if needed
         try await Task.sleep(nanoseconds: 3_000_000_000)
         if receivedData.isEmpty {
-            let iFrames = sessionManager.sendData(Data("\r".utf8), to: destination, path: DigiPath(), channel: 0, pid: 0xF0)
+            let iFrames = sessionManager.sendData(Data("\r".utf8), to: destination, path: DigiPath(), radio: .primary, pid: 0xF0)
             for frame in iFrames { engine.send(frame: frame) }
         }
 
@@ -787,7 +787,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
         }
 
         // 6. Disconnect
-        let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+        let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
         if let discFrame = sessionManager.disconnect(session: session) {
             engine.send(frame: discFrame)
         }
@@ -809,7 +809,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
         let destination = AX25Address(call: "K0EPI", ssid: 7)
         let sessionManager = coordinator.sessionManager
 
-        if let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), channel: 0) {
+        if let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), radio: .primary) {
             engine.send(frame: sabmFrame)
         }
 
@@ -846,7 +846,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
         let beforeCount = capture.data.count
 
         let cmdData = Data("\(command)\r".utf8)
-        let iFrames = sessionManager.sendData(cmdData, to: destination, path: DigiPath(), channel: 0, pid: 0xF0)
+        let iFrames = sessionManager.sendData(cmdData, to: destination, path: DigiPath(), radio: .primary, pid: 0xF0)
         for frame in iFrames {
             engine.send(frame: frame)
         }
@@ -865,7 +865,7 @@ final class TNC4LiveConnectionTests: XCTestCase {
 
     /// Disconnect from K0EPI-7.
     private func disconnectFromK0EPI7(sessionManager: AX25SessionManager, destination: AX25Address) async {
-        let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+        let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
         if let discFrame = sessionManager.disconnect(session: session) {
             engine.send(frame: discFrame)
         }

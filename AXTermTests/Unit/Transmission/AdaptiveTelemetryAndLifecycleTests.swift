@@ -32,9 +32,9 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         destination: AX25Address,
         path: DigiPath
     ) -> AX25Session {
-        _ = manager.connect(to: destination, path: path, channel: 0)
-        let session = manager.session(for: destination, path: path, channel: 0)
-        manager.handleInboundUA(from: destination, path: path, channel: 0)
+        _ = manager.connect(to: destination, path: path, radio: .primary)
+        let session = manager.session(for: destination, path: path, radio: .primary)
+        manager.handleInboundUA(from: destination, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connected)
         return session
     }
@@ -52,7 +52,7 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         var samples: [LinkQualitySample] = []
         manager.onLinkQualitySample = { _, sample in samples.append(sample) }
 
-        _ = manager.sendData(Data("mh 3\r".utf8), to: remote, path: path, channel: 0)
+        _ = manager.sendData(Data("mh 3\r".utf8), to: remote, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 1)
 
         let frames = manager.handleT1Timeout(session: session)
@@ -75,7 +75,7 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         var samples: [LinkQualitySample] = []
         manager.onLinkQualitySample = { _, sample in samples.append(sample) }
 
-        _ = manager.sendData(Data("b\r".utf8), to: remote, path: path, channel: 0)
+        _ = manager.sendData(Data("b\r".utf8), to: remote, path: path, radio: .primary)
         let maxRetries = session.stateMachine.config.maxRetries
         for _ in 0...(maxRetries + 1) {
             _ = manager.handleT1Timeout(session: session)
@@ -98,8 +98,8 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         var samples: [LinkQualitySample] = []
         manager.onLinkQualitySample = { _, sample in samples.append(sample) }
 
-        _ = manager.sendData(Data("A".utf8), to: remote, path: path, channel: 0)
-        _ = manager.handleInboundRNR(from: remote, path: path, channel: 0,
+        _ = manager.sendData(Data("A".utf8), to: remote, path: path, radio: .primary)
+        _ = manager.handleInboundRNR(from: remote, path: path, radio: .primary,
                                      nr: 1, pf: false, isCommand: false)
         XCTAssertEqual(samples.count, 1, "an RNR's N(R) is an acknowledgement like any other")
         XCTAssertEqual(samples.first?.newFrames, 1)
@@ -118,13 +118,13 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         var samples: [LinkQualitySample] = []
         manager.onLinkQualitySample = { _, sample in samples.append(sample) }
 
-        _ = manager.sendData(Data("A".utf8), to: remote, path: path, channel: 0)
+        _ = manager.sendData(Data("A".utf8), to: remote, path: path, radio: .primary)
         // Corrupt the watermark past the real counter, then create genuine
         // retransmit evidence so the sampler has something to report.
         session.lastSampledFramesSent = session.statistics.framesSent + 5
         session.statistics.recordRetransmit()
 
-        _ = manager.handleInboundRRFrames(from: remote, path: path, channel: 0,
+        _ = manager.handleInboundRRFrames(from: remote, path: path, radio: .primary,
                                           nr: 1, pf: false, isCommand: false)
 
         XCTAssertEqual(samples.count, 1)
@@ -156,7 +156,7 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         // The peer disconnects normally — the REAL teardown path, so this
         // also pins that a lingering ended session cannot force the merged
         // config (which never carries learned state) onto the reconnect.
-        _ = coordinator.sessionManager.handleInboundDISC(from: remote, path: path, channel: 0)
+        _ = coordinator.sessionManager.handleInboundDISC(from: remote, path: path, radio: .primary)
         XCTAssertEqual(session.state, .disconnected, "precondition: real teardown ran")
 
         let config = coordinator.sessionManager.getConfigForDestination?("KB5YZB-7", path.display)
@@ -180,7 +180,7 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         // (via the coordinator's own wiring), so the collapse to skepticism
         // is driven end-to-end by genuine evidence, not injected samples.
         _ = coordinator.sessionManager.sendData(Data("b\r".utf8), to: remote,
-                                                path: path, channel: 0)
+                                                path: path, radio: .primary)
         let maxRetries = session.stateMachine.config.maxRetries
         for _ in 0...(maxRetries + 1) {
             _ = coordinator.sessionManager.handleT1Timeout(session: session)
@@ -207,7 +207,7 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         let path = DigiPath()
         let dead = connectSession(manager: manager, destination: remote, path: path)
 
-        _ = manager.sendData(Data("b\r".utf8), to: remote, path: path, channel: 0)
+        _ = manager.sendData(Data("b\r".utf8), to: remote, path: path, radio: .primary)
         let maxRetries = dead.stateMachine.config.maxRetries
         for _ in 0...(maxRetries + 1) {
             _ = manager.handleT1Timeout(session: dead)
@@ -216,10 +216,10 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         XCTAssertEqual(dead.state, .error, "precondition: N2 exhausted the link")
         XCTAssertGreaterThan(dead.timers.rto, 4.0, "precondition: the dead session's RTO backed off")
 
-        let sabm = manager.connect(to: remote, path: path, channel: 0)
+        let sabm = manager.connect(to: remote, path: path, radio: .primary)
         XCTAssertNotNil(sabm, "reconnect after failure must be possible")
 
-        let fresh = manager.session(for: remote, path: path, channel: 0)
+        let fresh = manager.session(for: remote, path: path, radio: .primary)
         XCTAssertNotIdentical(fresh, dead, "the reconnect gets a fresh session, not the carcass")
         XCTAssertEqual(fresh.state, .connecting)
         XCTAssertEqual(fresh.timers.rto, 4.0, accuracy: 0.01,
@@ -245,11 +245,11 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
                                            source: "session", routeKey: key,
                                            newFrames: 1, retransmits: 0)
 
-        _ = coordinator.sessionManager.handleInboundDISC(from: remote, path: path, channel: 0)
+        _ = coordinator.sessionManager.handleInboundDISC(from: remote, path: path, radio: .primary)
 
-        let sabm = coordinator.sessionManager.connect(to: remote, path: path, channel: 0)
+        let sabm = coordinator.sessionManager.connect(to: remote, path: path, radio: .primary)
         XCTAssertNotNil(sabm)
-        let fresh = coordinator.sessionManager.session(for: remote, path: path, channel: 0)
+        let fresh = coordinator.sessionManager.session(for: remote, path: path, radio: .primary)
         XCTAssertEqual(fresh.state, .connecting)
         XCTAssertEqual(fresh.timers.rto, 10.0, accuracy: 0.01,
                        "the reconnect's SABM runs at the learned full-path RTO (2 x srtt 5s), not the 12s hop-scaled default")
@@ -263,7 +263,7 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         let path = DigiPath()
         let dead = connectSession(manager: manager, destination: remote, path: path)
 
-        _ = manager.sendData(Data("b\r".utf8), to: remote, path: path, channel: 0)
+        _ = manager.sendData(Data("b\r".utf8), to: remote, path: path, radio: .primary)
         let maxRetries = dead.stateMachine.config.maxRetries
         for _ in 0...(maxRetries + 1) {
             _ = manager.handleT1Timeout(session: dead)
@@ -271,10 +271,10 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         }
         XCTAssertEqual(dead.state, .error)
 
-        let ua = manager.handleInboundSABM(from: remote, to: local, path: path, channel: 0)
+        let ua = manager.handleInboundSABM(from: remote, to: local, path: path, radio: .primary)
         XCTAssertNotNil(ua, "the peer's fresh SABM deserves a UA, not silence")
 
-        let fresh = manager.session(for: remote, path: path, channel: 0)
+        let fresh = manager.session(for: remote, path: path, radio: .primary)
         XCTAssertNotIdentical(fresh, dead)
         XCTAssertEqual(fresh.state, .connected)
         XCTAssertFalse(fresh.isInitiator, "the peer initiated this one")
@@ -294,7 +294,7 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         // One frame in flight, one queued behind the window when the link dies.
         let config = dead.stateMachine.config
         for i in 0..<(config.windowSize + 1) {
-            _ = manager.sendData(Data("chunk-\(i)\r".utf8), to: remote, path: path, channel: 0)
+            _ = manager.sendData(Data("chunk-\(i)\r".utf8), to: remote, path: path, radio: .primary)
         }
         for _ in 0...(config.maxRetries + 1) {
             _ = manager.handleT1Timeout(session: dead)
@@ -304,8 +304,8 @@ final class AdaptiveTelemetryAndLifecycleTests: XCTestCase {
         XCTAssertTrue(dead.pendingDataQueue.isEmpty,
                       "teardown clears the queue DELIBERATELY (logged reason), not by discard")
 
-        _ = manager.connect(to: remote, path: path, channel: 0)
-        let fresh = manager.session(for: remote, path: path, channel: 0)
+        _ = manager.connect(to: remote, path: path, radio: .primary)
+        let fresh = manager.session(for: remote, path: path, radio: .primary)
         XCTAssertNotIdentical(fresh, dead)
         XCTAssertEqual(fresh.pendingDataQueue.count, dead.pendingDataQueue.count,
                        "the discard transfers whatever the carcass held — zero here, but never less")

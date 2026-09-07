@@ -1910,13 +1910,13 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
         manager: AX25SessionManager,
         destination: AX25Address? = nil,
         path: DigiPath? = nil,
-        channel: UInt8 = 0
+        radio: RadioID = .primary
     ) -> AX25Session {
         let dest = destination ?? self.destination
         let p = path ?? self.path
-        _ = manager.connect(to: dest, path: p, channel: channel)
-        let session = manager.session(for: dest, path: p, channel: channel)
-        manager.handleInboundUA(from: dest, path: p, channel: channel)
+        _ = manager.connect(to: dest, path: p, radio: radio)
+        let session = manager.session(for: dest, path: p, radio: radio)
+        manager.handleInboundUA(from: dest, path: p, radio: radio)
         XCTAssertEqual(session.state, .connected)
         return session
     }
@@ -1929,12 +1929,12 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
         let session = connectSession(manager: manager)
 
         // Send a frame so there's something to ack
-        _ = manager.sendData(Data("test".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("test".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 1)
 
         // Inbound RR with poll=true
         let response = manager.handleInboundRR(
-            from: destination, path: path, channel: 0, nr: 1, isPoll: true
+            from: destination, path: path, radio: .primary, nr: 1, isPoll: true
         )
 
 
@@ -1950,13 +1950,13 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
         _ = connectSession(manager: manager)
 
         // Send 3 frames
-        _ = manager.sendData(Data("A".utf8), to: destination, path: path, channel: 0)
-        _ = manager.sendData(Data("B".utf8), to: destination, path: path, channel: 0)
-        _ = manager.sendData(Data("C".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("A".utf8), to: destination, path: path, radio: .primary)
+        _ = manager.sendData(Data("B".utf8), to: destination, path: path, radio: .primary)
+        _ = manager.sendData(Data("C".utf8), to: destination, path: path, radio: .primary)
 
         // REJ(1) — retransmit from ns=1 onwards
         let retransmitFrames = manager.handleInboundREJ(
-            from: destination, path: path, channel: 0, nr: 1
+            from: destination, path: path, radio: .primary, nr: 1
         )
 
 
@@ -1970,21 +1970,21 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
         let manager = makeManager()
         let session = connectSession(manager: manager)
 
-        _ = manager.sendData(Data("A".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("A".utf8), to: destination, path: path, radio: .primary)
 
         // Receive 2 I-frames → V(R) advances to 2
         _ = manager.handleInboundIFrame(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             ns: 0, nr: 0, pf: false, payload: Data("x".utf8)
         )
         _ = manager.handleInboundIFrame(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             ns: 1, nr: 0, pf: false, payload: Data("y".utf8)
         )
         XCTAssertEqual(session.vr, 2)
 
         let retransmitFrames = manager.handleInboundREJ(
-            from: destination, path: path, channel: 0, nr: 0
+            from: destination, path: path, radio: .primary, nr: 0
         )
 
 
@@ -2000,14 +2000,14 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
         let session = connectSession(manager: manager)
 
         // Send 3 frames
-        _ = manager.sendData(Data("A".utf8), to: destination, path: path, channel: 0)
-        _ = manager.sendData(Data("B".utf8), to: destination, path: path, channel: 0)
-        _ = manager.sendData(Data("C".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("A".utf8), to: destination, path: path, radio: .primary)
+        _ = manager.sendData(Data("B".utf8), to: destination, path: path, radio: .primary)
+        _ = manager.sendData(Data("C".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 3)
 
         // REJ(2) acks frames 0,1 and requests retransmit from 2
         let retransmitFrames = manager.handleInboundREJ(
-            from: destination, path: path, channel: 0, nr: 2
+            from: destination, path: path, radio: .primary, nr: 2
         )
 
 
@@ -2027,12 +2027,12 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
         let session = connectSession(manager: manager)
 
         // Send data
-        let frames = manager.sendData(Data("Hello\r".utf8), to: destination, path: path, channel: 0)
+        let frames = manager.sendData(Data("Hello\r".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(frames.count, 1)
 
         // Receive response
         let inboundResponse = manager.handleInboundIFrame(
-            from: destination, path: path, channel: 0,
+            from: destination, path: path, radio: .primary,
             ns: 0, nr: 1, pf: false, payload: Data("Welcome".utf8)
         )
         // P=0 → the ack is delayed onto T2; no synchronous S-frame.
@@ -2054,16 +2054,16 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
         let session = connectSession(manager: manager)
 
         // Send 4 chunks — only 2 fit in window, rest queued
-        _ = manager.sendData(Data("A".utf8), to: destination, path: path, channel: 0)
-        _ = manager.sendData(Data("B".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("A".utf8), to: destination, path: path, radio: .primary)
+        _ = manager.sendData(Data("B".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 2)
-        _ = manager.sendData(Data("C".utf8), to: destination, path: path, channel: 0)
-        _ = manager.sendData(Data("D".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("C".utf8), to: destination, path: path, radio: .primary)
+        _ = manager.sendData(Data("D".utf8), to: destination, path: path, radio: .primary)
         XCTAssertEqual(session.pendingDataQueue.count, 2)
 
         // RR acks both outstanding frames — should drain pending queue
         // Capture any frames sent immediately (clearing queue sends I-frames)
-        let sentFrames = manager.handleInboundRR(from: destination, path: path, channel: 0, nr: 2)
+        let sentFrames = manager.handleInboundRR(from: destination, path: path, radio: .primary, nr: 2)
         
         // Technically handleInboundRR returns a single frame if it generates one (like an updated RR or REJ),
         // but draining the queue happens as a side effect within the state machine or session.
@@ -2094,7 +2094,7 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
         let session = connectSession(manager: manager)
 
         let payload = Data("Important data".utf8)
-        _ = manager.sendData(payload, to: destination, path: path, channel: 0)
+        _ = manager.sendData(payload, to: destination, path: path, radio: .primary)
 
         let retransmitFrames = manager.handleT1Timeout(session: session)
 
@@ -2117,9 +2117,9 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
 
         // Send 4 frames (ns=0,1,2,3), ack all
         for _ in 0..<4 {
-            _ = manager.sendData(Data("X".utf8), to: destination, path: path, channel: 0)
+            _ = manager.sendData(Data("X".utf8), to: destination, path: path, radio: .primary)
         }
-        manager.handleInboundRR(from: destination, path: path, channel: 0, nr: 4)
+        manager.handleInboundRR(from: destination, path: path, radio: .primary, nr: 4)
         XCTAssertEqual(session.va, 4)
         XCTAssertEqual(session.outstandingCount, 0)
 
@@ -2128,15 +2128,15 @@ final class AX25SpecComplianceManagerTests: XCTestCase {
         // Let's rely on standard modulo 8 behavior.
         // WE need to send enough to wrap.
         // ns=4
-        _ = manager.sendData(Data("4".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("4".utf8), to: destination, path: path, radio: .primary)
         // ns=5
-        _ = manager.sendData(Data("5".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("5".utf8), to: destination, path: path, radio: .primary)
         // ns=6
-        _ = manager.sendData(Data("6".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("6".utf8), to: destination, path: path, radio: .primary)
         // ns=7
-        _ = manager.sendData(Data("7".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("7".utf8), to: destination, path: path, radio: .primary)
         // ns=0
-        _ = manager.sendData(Data("0".utf8), to: destination, path: path, channel: 0)
+        _ = manager.sendData(Data("0".utf8), to: destination, path: path, radio: .primary)
         
         // Check outstanding count
         XCTAssertEqual(session.outstandingCount, 5)

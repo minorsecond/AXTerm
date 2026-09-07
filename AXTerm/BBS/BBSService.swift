@@ -227,17 +227,26 @@ final class BBSService: ObservableObject {
 
     // MARK: - Answering
 
-    private func listener() -> PersonalBBSListener {
+    /// The name of the radio a call came in on, for the callers list — nil
+    /// with one radio, when every call came in on it.
+    func radioName(for radio: RadioID) -> String? {
+        guard let settings = coordinator.appSettings, settings.hasMultipleRadios,
+              let profile = settings.radio(radio) else { return nil }
+        return profile.name.isEmpty ? RadioProfile.defaultName(for: profile) : profile.name
+    }
+
+    private func listener(for radio: RadioID = .primary) -> PersonalBBSListener {
         PersonalBBSListener(
             isArmed: settings.onAir,
             winlinkP2PAddress: isWinlinkP2PArmed() ? winlinkP2PCallsign() : nil,
             myCallsign: answeringCallsign,
             contestedBy: contestedIdentityHolder(),
-            currentCaller: live?.callsign)
+            currentCaller: live?.callsign,
+            servesThisRadio: coordinator.appSettings?.radio(radio)?.answersMailbox ?? true)
     }
 
     private func handleInbound(_ session: AX25Session) {
-        let decision = listener().decide(
+        let decision = listener(for: session.radio).decide(
             called: session.localAddress.display,
             isInitiator: session.isInitiator)
 
@@ -292,7 +301,7 @@ final class BBSService: ObservableObject {
             publishesWhitePages: settings.publishWhitePages,
             bytesPerSecond: linkBytesPerSecond())
 
-        let callId = (store.flatMap { try? $0.beginCall(callsign: caller, at: at) }) ?? -1
+        let callId = (store.flatMap { try? $0.beginCall(callsign: caller, at: at, radio: session.radio) }) ?? -1
         live = LiveCall(callsign: caller, startedAt: at, callId: callId)
         // Read before anything else touches the call log, and held for the
         // call: `FN` must mean "since you were last here", not "since a
@@ -425,7 +434,7 @@ final class BBSService: ObservableObject {
             Data(text.utf8),
             to: session.remoteAddress,
             path: session.path,
-            channel: session.channel,
+            radio: session.radio,
             pid: 0xF0,
             displayInfo: "BBS (\(text.utf8.count) bytes)")
         sendFrames(frames)
@@ -723,7 +732,7 @@ final class BBSService: ObservableObject {
             data,
             to: session.remoteAddress,
             path: session.path,
-            channel: session.channel,
+            radio: session.radio,
             pid: 0xF0,
             displayInfo: "BBS file (\(data.count) bytes)")
         sendFrames(frames)

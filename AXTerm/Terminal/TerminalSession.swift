@@ -57,6 +57,9 @@ nonisolated struct TerminalSession: Identifiable, Equatable, Sendable {
     /// On a node-prompt relay, the station on the far end of the chain.
     var relayDestination: String?
     var transport: String
+    /// The radio the session ran on. `.primary` for sessions recorded before
+    /// the station had several.
+    var radioID: RadioID
     var startedAt: Date
     var endedAt: Date?
     var outcome: Outcome
@@ -73,6 +76,7 @@ nonisolated struct TerminalSession: Identifiable, Equatable, Sendable {
 
     init(id: UUID = UUID(), remote: String, via: [String] = [],
          relayDestination: String? = nil, transport: String = "AX.25",
+         radioID: RadioID = .primary,
          startedAt: Date, endedAt: Date? = nil, outcome: Outcome = .live,
          framesSent: Int = 0, framesReceived: Int = 0,
          bytesSent: Int = 0, bytesReceived: Int = 0,
@@ -82,6 +86,7 @@ nonisolated struct TerminalSession: Identifiable, Equatable, Sendable {
         self.via = via
         self.relayDestination = relayDestination?.uppercased()
         self.transport = transport
+        self.radioID = radioID
         self.startedAt = startedAt
         self.endedAt = endedAt
         self.outcome = outcome

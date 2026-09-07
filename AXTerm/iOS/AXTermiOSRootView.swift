@@ -126,9 +126,13 @@ struct AXTermiOSRootView: View {
     private func withTNCStrip<Content: View>(_ content: Content) -> some View {
         VStack(spacing: 0) {
             content
-            TNCStatusStrip(status: client.status,
-                           host: settings.host,
-                           port: settings.port)
+            if settings.hasMultipleRadios {
+                TNCStatusStrip(radios: client.radioSummaries)
+            } else {
+                TNCStatusStrip(status: client.status,
+                               host: settings.primaryRadio?.host ?? "",
+                               port: settings.primaryRadio?.port ?? 0)
+            }
         }
     }
 
@@ -136,7 +140,13 @@ struct AXTermiOSRootView: View {
     /// four nouns the operator has to open one at a time to check.
     private var stationFooter: String {
         let call = settings.myCallsign.isEmpty ? "No callsign set" : settings.myCallsign
-        return "\(call) · \(settings.host):\(settings.port)"
+        // One radio: where its link goes. Several: their names, because the
+        // endpoints belong to the radios and the list inside names them.
+        let radios = settings.activeRadios
+        if radios.count > 1 {
+            return "\(call) · \(radios.map(\.name).joined(separator: ", "))"
+        }
+        return "\(call) · \(radios.first?.displayEndpoint ?? "no radio")"
     }
 
     /// Views of the network, reachable from the traffic they describe.
@@ -150,7 +160,9 @@ struct AXTermiOSRootView: View {
     /// router speaks in `SettingsTab`, so the mapping lives here rather than
     /// asking every caller to know which shell it is talking to.
     fileprivate enum SettingsDestination: Hashable {
-        case identity, winlink, connection, transmission, diagnostics, mailbox
+        case identity, winlink, radios, transmission, diagnostics, mailbox
+        /// One radio's form, pushed over the radios list.
+        case radio(RadioID)
         /// The mailbox itself, pushed — the phone's home for it.
         case bbs
 
@@ -158,7 +170,7 @@ struct AXTermiOSRootView: View {
             switch tab {
             case .general, .advanced: self = .identity
             case .winlink: self = .winlink
-            case .network: self = .connection
+            case .radios: self = .radios
             case .transmission: self = .transmission
             case .notifications, .linkDebug: self = .diagnostics
             case .bbs: self = .mailbox
@@ -349,9 +361,19 @@ struct AXTermiOSRootView: View {
             // if they are already there. So the requested tab is honoured and
             // the matching screen is pushed.
             SettingsRouter.shared.openAction = {
-                let destination = SettingsDestination(SettingsRouter.shared.selectedTab)
+                let router = SettingsRouter.shared
+                let destination = SettingsDestination(router.selectedTab)
                 selection = .analytics
-                settingsPath = [destination]
+                // A link into the Radios pane lands on the radio it names —
+                // or on the only radio there is — with the list beneath it
+                // for the back button, not in front of it as a detour.
+                if destination == .radios {
+                    let radio = settings.hasMultipleRadios ? router.pendingRadio : nil
+                    router.pendingRadio = nil
+                    settingsPath = [.radios] + (radio.map { [.radio($0)] } ?? [])
+                } else {
+                    settingsPath = [destination]
+                }
             }
         }
     }
@@ -570,6 +592,7 @@ struct AXTermiOSRootView: View {
         NavigationStack {
             PacketTableView(
                 packets: client.packets,
+                radioNames: client.radioNames,
                 isLoadingHistory: client.isLoadingPersistedPackets,
                 selection: $packetSelection,
                 onInspectSelection: {
@@ -743,9 +766,13 @@ struct AXTermiOSRootView: View {
                         Label("Winlink", systemImage: "envelope.badge.shield.half.filled")
                     }
 
-                    NavigationLink(value: SettingsDestination.connection) {
-                        Label("Connection", systemImage: "cable.connector")
+                    NavigationLink(value: SettingsDestination.radios) {
+                        Label(SettingsTab.radios.settingsTitle(hasMultipleRadios: settings.hasMultipleRadios),
+                              systemImage: SettingsTab.radios.settingsIcon(hasMultipleRadios: settings.hasMultipleRadios))
                     }
+                    .accessibilityHint(settings.hasMultipleRadios
+                                       ? "The TNCs this station talks to and how each is reached"
+                                       : "How the TNC is reached")
 
                     NavigationLink(value: SettingsDestination.transmission) {
                         Label("Transmission", systemImage: "antenna.radiowaves.left.and.right")
@@ -845,9 +872,10 @@ struct AXTermiOSRootView: View {
                                sync: context.sync)
                 .navigationTitle("Winlink")
                 .navigationBarTitleDisplayMode(.inline)
-        case .connection:
-            ConnectionSettingsView(settings: settings, packetEngine: client)
-                .navigationTitle("Connection")
+        case .radios:
+            radiosScreen
+        case .radio(let id):
+            RadioDetailView(radioID: id, settings: settings, client: client)
                 .navigationBarTitleDisplayMode(.inline)
         case .transmission:
             TransmissionSettingsView(settings: settings, client: client)
@@ -861,6 +889,25 @@ struct AXTermiOSRootView: View {
             mailboxSettingsScreen
         case .bbs:
             pushedBBSScreen
+        }
+    }
+
+    /// One radio: its form, titled Connection, as it always was. Several:
+    /// the list, with each radio's form pushed over it.
+    @ViewBuilder
+    private var radiosScreen: some View {
+        if settings.hasMultipleRadios {
+            RadiosListView(settings: settings, client: client,
+                           destination: { SettingsDestination.radio($0) },
+                           onAdd: { settingsPath.append(.radio($0)) })
+                .navigationTitle("Radios")
+                .navigationBarTitleDisplayMode(.inline)
+        } else if let only = settings.activeRadios.first {
+            RadioDetailView(radioID: only.id, settings: settings, client: client,
+                            onAddSecondRadio: { settingsPath.append(.radio(settings.addRadio().id)) })
+                .id(only.id)
+                .navigationTitle("Connection")
+                .navigationBarTitleDisplayMode(.inline)
         }
     }
 

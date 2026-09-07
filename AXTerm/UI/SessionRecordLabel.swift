@@ -34,6 +34,10 @@ nonisolated enum SessionRecordLabel {
         let via: [String]
         let relayDestination: String?
         let statusText: String
+        /// Which radio carries the session, when the station has more than
+        /// one. Nil with a single radio, and then the label says nothing
+        /// about it.
+        var radioName: String? = nil
     }
 
     /// Label for every record, keyed by record id.
@@ -42,8 +46,14 @@ nonisolated enum SessionRecordLabel {
         // is picking by, so it is part of the base rather than a qualifier.
         var base: [String: String] = [:]
         for item in items {
-            base[item.id] = item.relayDestination.map { "\(item.destination) → \($0)" }
+            var name = item.relayDestination.map { "\(item.destination) → \($0)" }
                 ?? item.destination
+            // The radio is not a disambiguator, it is where the frames go:
+            // chosen when the session opened and fixed for its life. So it is
+            // part of the name whenever there is more than one radio to
+            // choose between, not only when two rows collide.
+            if let radio = item.radioName { name += " · on \(radio)" }
+            base[item.id] = name
         }
 
         var counts: [String: Int] = [:]

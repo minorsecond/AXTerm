@@ -177,7 +177,12 @@ nonisolated struct LinkStatRecord: Equatable {
     /// Total observation count.
     let observationCount: Int
 
-    init(fromCall: String, toCall: String, quality: Int, lastUpdated: Date, dfEstimate: Double? = nil, drEstimate: Double? = nil, duplicateCount: Int = 0, observationCount: Int = 0) {
+    /// The radio this link was measured on. A delivery probability is a
+    /// property of a path between two antennas; another radio's evidence
+    /// about the same station is kept apart, never blended in.
+    let radioID: RadioID
+
+    init(fromCall: String, toCall: String, quality: Int, lastUpdated: Date, dfEstimate: Double? = nil, drEstimate: Double? = nil, duplicateCount: Int = 0, observationCount: Int = 0, radioID: RadioID = .primary) {
         self.fromCall = fromCall
         self.toCall = toCall
         self.quality = quality
@@ -186,7 +191,15 @@ nonisolated struct LinkStatRecord: Equatable {
         self.drEstimate = drEstimate
         self.duplicateCount = duplicateCount
         self.observationCount = observationCount
+        self.radioID = radioID
     }
+}
+
+/// One directed link as one radio measured it.
+nonisolated struct LinkKey: Hashable, Sendable {
+    let radio: RadioID
+    let from: String
+    let to: String
 }
 
 /// ETX-style link quality estimator with directional tracking and EWMA smoothing.
@@ -202,8 +215,10 @@ nonisolated struct LinkQualityEstimator {
     /// Injectable clock for deterministic testing.
     private let clock: () -> Date
 
-    /// Internal storage keyed by "FROM→TO".
-    private var stats: [String: DirectionalLinkStats] = [:]
+    /// Internal storage keyed by (radio, FROM, TO). CLAUDE.md §8: metrics are
+    /// evidence-based, and evidence gathered by one antenna is not evidence
+    /// about another.
+    private var stats: [LinkKey: DirectionalLinkStats] = [:]
 
     init(config: LinkQualityConfig = .default, clock: @escaping () -> Date = { Date() }) {
         self.config = config
@@ -247,7 +262,7 @@ nonisolated struct LinkQualityEstimator {
         if duplicateStatus == .ingestionDedup { return }
 
         let decoded = packet.controlFieldDecoded
-        let key = "\(from)→\(to)"
+        let key = LinkKey(radio: packet.radioID ?? .primary, from: from, to: to)
         var s = stats[key] ?? DirectionalLinkStats(
             lastUpdated: timestamp,
             observations: RingBuffer(capacity: config.maxObservationsPerLink)
@@ -290,7 +305,7 @@ nonisolated struct LinkQualityEstimator {
         // Reject notices penalize the direction whose I-frame was lost.
         if isRejectNotice && !isRetry {
             applyDirectionalForward(
-                from: to, to: from,
+                from: to, to: from, radio: key.radio,
                 value: 0.0,
                 timestamp: timestamp
             )
@@ -299,7 +314,7 @@ nonisolated struct LinkQualityEstimator {
         // Connection responses credit the handshake initiator's forward channel.
         if isConnectionResponse && !isRetry {
             applyDirectionalForward(
-                from: to, to: from,
+                from: to, to: from, radio: key.radio,
                 value: 0.8,
                 timestamp: timestamp
             )
@@ -309,7 +324,7 @@ nonisolated struct LinkQualityEstimator {
         if let nr = decoded.nr, s.recordNrProgress(nr) {
             applyReverseEvidence(
                 from: to,
-                to: from,
+                to: from, radio: key.radio,
                 value: config.ackProgressWeight,
                 timestamp: timestamp
             )
@@ -319,7 +334,7 @@ nonisolated struct LinkQualityEstimator {
         if classification.reverseEvidenceWeight > 0 {
             applyReverseEvidence(
                 from: to,
-                to: from,
+                to: from, radio: key.radio,
                 value: classification.reverseEvidenceWeight,
                 timestamp: timestamp
             )
@@ -329,27 +344,34 @@ nonisolated struct LinkQualityEstimator {
     }
 
     /// Get the current quality estimate for a directional link (0...255).
-    func linkQuality(from: String, to: String) -> Int {
-        let key = "\(CallsignValidator.normalize(from))→\(CallsignValidator.normalize(to))"
+    func linkQuality(from: String, to: String, radio: RadioID = .primary) -> Int {
+        let key = LinkKey(radio: radio, from: CallsignValidator.normalize(from), to: CallsignValidator.normalize(to))
         guard let s = stats[key] else { return 0 }
         return s.quality(using: config)
     }
 
     /// Get detailed statistics for a directional link.
-    func linkStats(from: String, to: String) -> LinkStats {
-        let key = "\(CallsignValidator.normalize(from))→\(CallsignValidator.normalize(to))"
+    func linkStats(from: String, to: String, radio: RadioID = .primary) -> LinkStats {
+        let key = LinkKey(radio: radio, from: CallsignValidator.normalize(from), to: CallsignValidator.normalize(to))
         guard let s = stats[key] else { return .empty }
         return s.toLinkStats(using: config)
     }
 
+    /// The radios that have measured this directed link.
+    func radios(from: String, to: String) -> [RadioID] {
+        let f = CallsignValidator.normalize(from), t = CallsignValidator.normalize(to)
+        return stats.keys.filter { $0.from == f && $0.to == t }.map(\.radio)
+            .sorted { RadioID.deterministicOrder($0, $1) }
+    }
+
     /// Get symmetric link quality if both directions have evidence, nil otherwise.
     /// Uses the geometric mean of both directions (ETX combines multiplicatively).
-    func symmetricLinkQuality(a: String, b: String) -> Int? {
+    func symmetricLinkQuality(a: String, b: String, radio: RadioID = .primary) -> Int? {
         let normalizedA = CallsignValidator.normalize(a)
         let normalizedB = CallsignValidator.normalize(b)
 
-        let keyAB = "\(normalizedA)→\(normalizedB)"
-        let keyBA = "\(normalizedB)→\(normalizedA)"
+        let keyAB = LinkKey(radio: radio, from: normalizedA, to: normalizedB)
+        let keyBA = LinkKey(radio: radio, from: normalizedB, to: normalizedA)
 
         guard let statsAB = stats[keyAB], statsAB.hasEvidence,
               let statsBA = stats[keyBA], statsBA.hasEvidence else {
@@ -363,9 +385,18 @@ nonisolated struct LinkQualityEstimator {
         return min(255, max(0, Int(symmetric.rounded())))
     }
 
+    /// Expected transmissions over a directional link, or nil before the
+    /// link has produced a forward-delivery estimate. The same formula the
+    /// quality score uses, so the Auto radio and the Stations list agree.
+    func etx(from: String, to: String, radio: RadioID = .primary) -> Double? {
+        let s = linkStats(from: from, to: to, radio: radio)
+        guard let df = s.dfEstimate else { return nil }
+        return DirectionalLinkStats.etx(df: df, dr: s.drEstimate, config: config)
+    }
+
     /// Compute the effective TTL for a directional link based on its inter-arrival pattern.
-    func effectiveTTL(from: String, to: String) -> TimeInterval {
-        let key = "\(CallsignValidator.normalize(from))→\(CallsignValidator.normalize(to))"
+    func effectiveTTL(from: String, to: String, radio: RadioID = .primary) -> TimeInterval {
+        let key = LinkKey(radio: radio, from: CallsignValidator.normalize(from), to: CallsignValidator.normalize(to))
         guard let s = stats[key] else { return config.slidingWindowSeconds }
         return s.effectiveTTL(using: config)
     }
@@ -374,7 +405,7 @@ nonisolated struct LinkQualityEstimator {
     /// Uses two-phase tombstone expiry: entries without evidence are tombstoned first,
     /// then removed after the tombstone window elapses.
     mutating func purgeStaleData(currentDate: Date) {
-        var keysToRemove: [String] = []
+        var keysToRemove: [LinkKey] = []
 
         for (key, var s) in stats {
             let linkTTL = s.effectiveTTL(using: config)
@@ -414,8 +445,6 @@ nonisolated struct LinkQualityEstimator {
         let now = clock()
         return stats
             .compactMap { (key, s) -> LinkStatRecord? in
-                let parts = key.components(separatedBy: "→")
-                guard parts.count == 2 else { return nil }
                 let linkStats = s.toLinkStats(using: config)
 
                 // Skip entries with no evidence — these were touched by a packet
@@ -430,17 +459,18 @@ nonisolated struct LinkQualityEstimator {
                 let sanitizedTimestamp = Self.sanitizeTimestamp(timestamp, fallback: now)
 
                 return LinkStatRecord(
-                    fromCall: parts[0],
-                    toCall: parts[1],
+                    fromCall: key.from,
+                    toCall: key.to,
                     quality: linkStats.ewmaQuality,
                     lastUpdated: sanitizedTimestamp,
                     dfEstimate: linkStats.dfEstimate,
                     drEstimate: linkStats.drEstimate,
                     duplicateCount: linkStats.duplicateCount,
-                    observationCount: linkStats.observationCount
+                    observationCount: linkStats.observationCount,
+                    radioID: key.radio
                 )
             }
-            .sorted { ($0.fromCall, $0.toCall) < ($1.fromCall, $1.toCall) }
+            .sorted { ($0.radioID.rawValue, $0.fromCall, $0.toCall) < ($1.radioID.rawValue, $1.fromCall, $1.toCall) }
     }
 
     /// Import link statistics from persistence.
@@ -453,7 +483,7 @@ nonisolated struct LinkQualityEstimator {
         #endif
 
         for record in records {
-            let key = "\(record.fromCall)→\(record.toCall)"
+            let key = LinkKey(radio: record.radioID, from: record.fromCall, to: record.toCall)
             let sanitizedTimestamp = Self.sanitizeTimestamp(record.lastUpdated, fallback: now)
             let restoredForward = record.dfEstimate ?? (Double(record.quality) / 255.0)
 
@@ -487,8 +517,8 @@ nonisolated struct LinkQualityEstimator {
     /// Add forward-channel evidence to an arbitrary directional link — used
     /// when a frame carries evidence about the OPPOSITE direction (a UA
     /// proving the SABM arrived, a REJ proving an inbound I-frame was lost).
-    private mutating func applyDirectionalForward(from: String, to: String, value: Double, timestamp: Date) {
-        let key = "\(from)\u{2192}\(to)"
+    private mutating func applyDirectionalForward(from: String, to: String, radio: RadioID, value: Double, timestamp: Date) {
+        let key = LinkKey(radio: radio, from: from, to: to)
         var s = stats[key] ?? DirectionalLinkStats(
             lastUpdated: timestamp,
             observations: RingBuffer(capacity: config.maxObservationsPerLink)
@@ -503,8 +533,8 @@ nonisolated struct LinkQualityEstimator {
         stats[key] = s
     }
 
-    private mutating func applyReverseEvidence(from: String, to: String, value: Double, timestamp: Date) {
-        let reverseKey = "\(from)→\(to)"
+    private mutating func applyReverseEvidence(from: String, to: String, radio: RadioID, value: Double, timestamp: Date) {
+        let reverseKey = LinkKey(radio: radio, from: from, to: to)
         var reverseStats = stats[reverseKey] ?? DirectionalLinkStats(
             lastUpdated: timestamp,
             observations: RingBuffer(capacity: config.maxObservationsPerLink)
@@ -829,7 +859,7 @@ nonisolated private struct DirectionalLinkStats {
         return nil
     }
 
-    private static func etx(df: Double, dr: Double?, config: LinkQualityConfig) -> Double {
+    static func etx(df: Double, dr: Double?, config: LinkQualityConfig) -> Double {
         if let dr {
             let product = max(config.minDeliveryRatio, df) * max(config.minDeliveryRatio, dr)
             return min(config.maxETX, max(1.0, 1.0 / product))

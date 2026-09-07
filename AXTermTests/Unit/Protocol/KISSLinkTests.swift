@@ -332,4 +332,36 @@ private class TestLinkDelegate: KISSLinkDelegate {
     func linkDidError(_ message: String) {
         errors.append(message)
     }
+
+
+    // MARK: - KISS port
+
+    /// The command byte's high nibble is the port. It used to be read for a
+    /// log line and dropped; a multi-port TNC is several radios behind one
+    /// stream, so it has to survive deframing.
+    func testEveryPortSurvivesDeframing() {
+        for port: UInt8 in 0...15 {
+            var parser = KISSFrameParser()
+            let frames = parser.feedFrames(Data([0xC0, port << 4, 0x42, 0xC0]))
+            XCTAssertEqual(frames.count, 1)
+            XCTAssertEqual(frames.first?.port, port)
+            XCTAssertEqual(frames.first?.output, .ax25(Data([0x42])))
+        }
+    }
+
+    /// The port-less view still exists for callers that only want bytes.
+    func testFeedStripsThePortButKeepsTheBytes() {
+        var parser = KISSFrameParser()
+        XCTAssertEqual(parser.feed(Data([0xC0, 0x30, 0x42, 0xC0])), [.ax25(Data([0x42]))])
+    }
+
+    /// Telemetry carries its port too: a battery report from the TNC on
+    /// port 2 is about that TNC.
+    func testTelemetryCarriesItsPort() {
+        var parser = KISSFrameParser()
+        let frames = parser.feedFrames(Data([0xC0, 0x26, 0x06, 0x64, 0xC0]))
+        XCTAssertEqual(frames.count, 1)
+        XCTAssertEqual(frames.first?.port, 2)
+        XCTAssertEqual(frames.first?.output, .mobilinkdTelemetry(Data([0x26, 0x06, 0x64])))
+    }
 }

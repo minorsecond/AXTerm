@@ -327,6 +327,20 @@ struct NetRomRoutesView: View {
 
     // MARK: - Neighbors Table
 
+    /// Which radio the evidence came from. Nothing with one radio; with
+    /// several, the name under the callsign, because evidence on another
+    /// radio is kept separately — it is a different antenna and path.
+    @ViewBuilder
+    private func radioCaption(_ radio: RadioID) -> some View {
+        if settings.hasMultipleRadios, let profile = settings.radio(radio) {
+            Text(profile.name.isEmpty ? RadioProfile.defaultName(for: profile) : profile.name)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .help("Heard on \(profile.name.isEmpty ? RadioProfile.defaultName(for: profile) : profile.name). "
+                      + "Evidence on another radio is kept separately because it is a different antenna and path.")
+        }
+    }
+
     private var neighborsTable: some View {
         Group {
             if viewModel.filteredNeighbors.isEmpty {
@@ -337,8 +351,11 @@ struct NetRomRoutesView: View {
             } else {
                 Table(viewModel.filteredNeighbors) {
                     TableColumn("Callsign") { neighbor in
-                        Text(neighbor.callsign)
-                            .fontWeight(.medium)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(neighbor.callsign)
+                                .fontWeight(.medium)
+                            radioCaption(neighbor.radioID)
+                        }
                             .onTapGesture(count: 2) {
                                 requestNeighborConnect(neighbor)
                             }
@@ -430,7 +447,10 @@ struct NetRomRoutesView: View {
                     .width(min: 80, ideal: 100)
 
                     TableColumn("Next Hop") { route in
-                        Text(route.nextHop)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(route.nextHop)
+                            radioCaption(route.radioID)
+                        }
                     }
                     .width(min: 80, ideal: 100)
 

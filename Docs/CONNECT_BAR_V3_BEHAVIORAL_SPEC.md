@@ -59,6 +59,16 @@ No hybrid layout is valid. Draft editing is only available while disconnected. C
 
 Compact surface label: `Kx Py N2 z`.
 
+### Radio (several radios only)
+
+`ConnectBarViewModel.radioSelection: RadioID?` — nil is Auto. The picker
+exists only while `radioOptions.count > 1`; with one radio nothing is shown
+and the session goes out on it. Auto resolves at connect time through
+`SessionCoordinator.autoRadio(for:path:)` and shows its sentence
+(`RadioSelector.Choice.explanation`) as the picker's help and caption. A
+named radio is an override; the session's radio is fixed when it opens and
+the tab label says " · on IC-705". See `Docs/MultiRadio.md`.
+
 ## 3) Bottom Bar View Hierarchy
 
 - `BottomBarHost`

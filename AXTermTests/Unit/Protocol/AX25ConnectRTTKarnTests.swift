@@ -37,10 +37,10 @@ final class AX25ConnectRTTKarnTests: XCTestCase {
     func testFirstSABMAnsweredByUAProducesAnRTTSample() {
         let (manager, clock) = makeManager()
         _ = manager.connect(to: peer)
-        let session = try! XCTUnwrap(manager.existingSession(for: peer, path: DigiPath(), channel: 0))
+        let session = try! XCTUnwrap(manager.existingSession(for: peer, path: DigiPath(), radio: .primary))
 
         clock.currentTime += 1.8
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
 
         XCTAssertEqual(session.state, .connected)
         // A UA that answers the only SABM in flight is unambiguous, so the
@@ -54,7 +54,7 @@ final class AX25ConnectRTTKarnTests: XCTestCase {
     func testUAAfterRetransmittedSABMProducesNoRTTSample() {
         let (manager, clock) = makeManager()
         _ = manager.connect(to: peer)
-        let session = try! XCTUnwrap(manager.existingSession(for: peer, path: DigiPath(), channel: 0))
+        let session = try! XCTUnwrap(manager.existingSession(for: peer, path: DigiPath(), radio: .primary))
 
         clock.currentTime += 4.0
         _ = manager.handleT1Timeout(session: session)   // SABM #2
@@ -64,7 +64,7 @@ final class AX25ConnectRTTKarnTests: XCTestCase {
         _ = manager.handleT1Timeout(session: session)   // SABM #4
 
         clock.currentTime += 1.8
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
 
         XCTAssertEqual(session.state, .connected)
         // 29.8s elapsed since the first SABM, but the UA cannot be attributed
@@ -76,7 +76,7 @@ final class AX25ConnectRTTKarnTests: XCTestCase {
     func testRetransmittedConnectDoesNotInflateRTO() {
         let (manager, clock) = makeManager()
         _ = manager.connect(to: peer)
-        let session = try! XCTUnwrap(manager.existingSession(for: peer, path: DigiPath(), channel: 0))
+        let session = try! XCTUnwrap(manager.existingSession(for: peer, path: DigiPath(), radio: .primary))
         let rtoBeforeAnyTimeout = session.timers.rto
 
         clock.currentTime += 4.0
@@ -84,7 +84,7 @@ final class AX25ConnectRTTKarnTests: XCTestCase {
         clock.currentTime += 8.0
         _ = manager.handleT1Timeout(session: session)
         clock.currentTime += 60.0
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
 
         // Backoff legitimately raised the RTO while retrying; what must not
         // happen is the 72s elapsed becoming a measurement that pins the RTO
@@ -99,25 +99,25 @@ final class AX25ConnectRTTKarnTests: XCTestCase {
     func testReconnectingClearsTheRetransmitFlag() {
         let (manager, clock) = makeManager()
         _ = manager.connect(to: peer)
-        let first = try! XCTUnwrap(manager.existingSession(for: peer, path: DigiPath(), channel: 0))
+        let first = try! XCTUnwrap(manager.existingSession(for: peer, path: DigiPath(), radio: .primary))
 
         clock.currentTime += 4.0
         _ = manager.handleT1Timeout(session: first)
         XCTAssertTrue(first.sabmRetransmitted)
 
         clock.currentTime += 1.0
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
         manager.forceDisconnect(session: first)
 
         // A fresh connect is a fresh measurement opportunity. If the flag
         // survived, this peer could never produce an RTT sample again.
         clock.currentTime += 1.0
         _ = manager.connect(to: peer)
-        let second = try! XCTUnwrap(manager.existingSession(for: peer, path: DigiPath(), channel: 0))
+        let second = try! XCTUnwrap(manager.existingSession(for: peer, path: DigiPath(), radio: .primary))
         XCTAssertFalse(second.sabmRetransmitted)
 
         clock.currentTime += 2.0
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
         XCTAssertNotNil(second.timers.srtt,
                         "A clean reconnect must be able to measure the path again")
     }
@@ -127,12 +127,12 @@ final class AX25ConnectRTTKarnTests: XCTestCase {
     func testT1TimeoutWhileConnectedDoesNotSetTheConnectFlag() {
         let (manager, clock) = makeManager()
         _ = manager.connect(to: peer)
-        let session = try! XCTUnwrap(manager.existingSession(for: peer, path: DigiPath(), channel: 0))
+        let session = try! XCTUnwrap(manager.existingSession(for: peer, path: DigiPath(), radio: .primary))
         clock.currentTime += 1.5
-        manager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+        manager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
         XCTAssertEqual(session.state, .connected)
 
-        _ = manager.sendData(Data([0x41]), to: peer, path: DigiPath(), channel: 0)
+        _ = manager.sendData(Data([0x41]), to: peer, path: DigiPath(), radio: .primary)
         clock.currentTime += 5.0
         _ = manager.handleT1Timeout(session: session)
 

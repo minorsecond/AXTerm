@@ -126,10 +126,10 @@ final class SREJManagerTests: XCTestCase {
 
     private func connectAndSendThree() -> AX25Session {
         _ = manager.handleInboundSABM(
-            from: peer, to: manager.localCallsign, path: DigiPath(), channel: 0)
+            from: peer, to: manager.localCallsign, path: DigiPath(), radio: .primary)
         let session = manager.existingSession(for: peer)!
         for byte in ["A", "B", "C"] {
-            _ = manager.sendData(Data(byte.utf8), to: peer, path: DigiPath(), channel: 0)
+            _ = manager.sendData(Data(byte.utf8), to: peer, path: DigiPath(), radio: .primary)
         }
         XCTAssertEqual(session.outstandingCount, 3)
         return session
@@ -138,7 +138,7 @@ final class SREJManagerTests: XCTestCase {
     func testInboundSREJRetransmitsExactlyTheRequestedFrame() {
         let session = connectAndSendThree()
         let frames = manager.handleInboundSREJ(
-            from: peer, path: DigiPath(), channel: 0, nr: 1, pf: false)
+            from: peer, path: DigiPath(), radio: .primary, nr: 1, pf: false)
 
         XCTAssertEqual(frames.count, 1, "SREJ(1) asks for one frame, not go-back-N")
         XCTAssertEqual(frames.first?.ns, 1)
@@ -149,7 +149,7 @@ final class SREJManagerTests: XCTestCase {
     func testInboundSREJWithFinalAcksBelowIt() {
         let session = connectAndSendThree()
         let frames = manager.handleInboundSREJ(
-            from: peer, path: DigiPath(), channel: 0, nr: 2, pf: true)
+            from: peer, path: DigiPath(), radio: .primary, nr: 2, pf: true)
 
         XCTAssertEqual(session.va, 2, "F=1: frames 0 and 1 are acknowledged")
         XCTAssertEqual(frames.count, 1)
@@ -159,16 +159,16 @@ final class SREJManagerTests: XCTestCase {
     func testDuplicateSREJDoesNotAmplifyRetransmissions() {
         _ = connectAndSendThree()
         let first = manager.handleInboundSREJ(
-            from: peer, path: DigiPath(), channel: 0, nr: 1, pf: false)
+            from: peer, path: DigiPath(), radio: .primary, nr: 1, pf: false)
         XCTAssertEqual(first.count, 1)
         let second = manager.handleInboundSREJ(
-            from: peer, path: DigiPath(), channel: 0, nr: 1, pf: false)
+            from: peer, path: DigiPath(), radio: .primary, nr: 1, pf: false)
         XCTAssertTrue(second.isEmpty, "a duplicate SREJ storm must not multiply airtime — T1 owns the retry")
     }
 
     func testSREJForUnknownSessionIsIgnored() {
         let frames = manager.handleInboundSREJ(
-            from: AX25Address(call: "N0BODY", ssid: 1), path: DigiPath(), channel: 0, nr: 0, pf: false)
+            from: AX25Address(call: "N0BODY", ssid: 1), path: DigiPath(), radio: .primary, nr: 0, pf: false)
         XCTAssertTrue(frames.isEmpty)
     }
 }

@@ -1135,7 +1135,7 @@ Reserved TLV ranges:
 LinkKey / PeerKey Definition:
 
 	•	PeerKey = destCall+ssid
-	•	LinkKey = (PeerKey, pathSignature, channel)
+	•	LinkKey = (PeerKey, pathSignature, radioID) — radioID names the radio the link runs on (see Docs/MultiRadio.md); it was the KISS channel before radios existed, and one radio still maps to one KISS port
 
 ---
 

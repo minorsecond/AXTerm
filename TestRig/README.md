@@ -102,6 +102,47 @@ Adds two more stations to the frequency:
 connected-mode station) also run standalone against the hub if you want
 to script your own node behaviours.
 
+## Two frequencies (`dual` profile)
+
+```bash
+docker compose --profile dual up -d
+python3 scripts/smoke_dual.py        # proves both hubs and all three nodes (150 s)
+```
+
+Adds a second hub on **:8020** — a second frequency — and two nodes:
+
+- **BPQTX3-7 (CHBNOD)** hears only hub B.
+- **BPQTX4-7 (BRGNOD)** has one port on each hub: one NODECALL announced
+  on both frequencies under one alias, and L3 forwarding between them,
+  so TSTNOD and CHBNOD reach each other through it. This is exactly what
+  AXTerm's *one node on every radio* setting does, run by the reference
+  implementation.
+
+In AXTerm add two radios, "Hub A" → 127.0.0.1:8010 and "Hub B" →
+127.0.0.1:8020 (Settings → Radios) — or launch the built app isolated
+from your real station with both seeded:
+
+```bash
+"$APP/Contents/MacOS/AXTerm" --test-mode --ephemeral-db --auto-connect \
+  --instance-name rig --callsign K0EPI-7 --radios 127.0.0.1:8010,127.0.0.1:8020
+```
+
+Then:
+
+- **Routes** lists TSTNOD on Hub A only, CHBNOD on Hub B only, and BRGNOD
+  twice — once per radio, with independent qualities.
+- The connect bar's **Radio** picker on Auto explains itself: TSTNOD → Hub A
+  ("heard BPQTST-7 there …"), BRGNOD → a tie broken by list order → Hub A.
+  Set `LOSS=0.3` on `kisshub` and Auto for BRGNOD flips to Hub B, citing
+  ETX.
+- The sidebar's **Radios** switches hide one hub's traffic everywhere; the
+  Packets table gains a Radio column; the status line says "on Hub B".
+
+**Shared channel** needs no rig change: point both radios at :8010. The hub
+fans every frame to every client, so both radios hear everything —
+exercising the cross-radio fold (one packet, two hearings, dups 0 on both),
+own-echo detection, and staggered beacons.
+
 ## The node farm — many nodes, seed-driven (`farm` / `multi` profile)
 
 `scripts/nodefarm.py` puts a whole mixed neighbourhood on the channel:

@@ -160,7 +160,7 @@ final class DRLNODLiveTest: XCTestCase {
         }
 
         // ── 3. Send SABM ──────────────────────────────────────────────────
-        let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), channel: 0)
+        let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), radio: .primary)
         XCTAssertNotNil(sabmFrame, "connect() must return a SABM frame")
         if let frame = sabmFrame { engine.send(frame: frame) }
         let t_sabm = Date()
@@ -168,7 +168,7 @@ final class DRLNODLiveTest: XCTestCase {
 
         // ── 4. Wait for UA ─────────────────────────────────────────────────
         guard await waitForSessionState(expectedState: .connected, sessionManager: sessionManager, timeout: 30.0) else {
-            let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+            let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
             diag("FAIL: No UA after 30s — state=\(session.state.rawValue)")
             flushLog()
             XCTFail("Session did not reach .connected within 30s")
@@ -195,7 +195,7 @@ final class DRLNODLiveTest: XCTestCase {
             }
 
             // Premature disconnect?
-            let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+            let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
             if session.state == .disconnected {
                 diag("PREMATURE DISCONNECT before banner! elapsed=\(String(format: "%.3f", Date().timeIntervalSince(t_ua)))s")
                 diag("Data so far (\(receivedData.count) bytes): '\(Self.escape(String(data: receivedData, encoding: .ascii) ?? ""))'")
@@ -226,7 +226,7 @@ final class DRLNODLiveTest: XCTestCase {
             // Poll for premature disconnect every 100ms during the wait
             let delayDeadline = Date().addingTimeInterval(delayAfterBanner)
             while Date() < delayDeadline {
-                let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+                let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
                 if session.state == .disconnected {
                     let elapsedSinceBanner = Date().timeIntervalSince(t_banner)
                     diag("PREMATURE DISCONNECT during typing delay at +\(String(format: "%.3f", elapsedSinceBanner))s after banner!")
@@ -248,7 +248,7 @@ final class DRLNODLiveTest: XCTestCase {
             helpPayload,
             to: destination,
             path: DigiPath(),
-            channel: 0,
+            radio: .primary,
             pid: 0xF0
         )
         XCTAssertFalse(iFrames.isEmpty, "sendData must produce at least one I-frame")
@@ -267,7 +267,7 @@ final class DRLNODLiveTest: XCTestCase {
 
         while Date() < monitorDeadline {
             let elapsed = Int(Date().timeIntervalSince(t_help_sent))
-            let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+            let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
             finalState = session.state.rawValue
 
             // Log every second so we can see T1 firings from the timing
@@ -332,7 +332,7 @@ final class DRLNODLiveTest: XCTestCase {
         diag("Full received text:\n\(fullText)")
 
         // ── 9. Clean disconnect ────────────────────────────────────────────
-        let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+        let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
         if session.state == .connected, let discFrame = sessionManager.disconnect(session: session) {
             engine.send(frame: discFrame)
             try await Task.sleep(nanoseconds: 3_000_000_000)
@@ -377,14 +377,14 @@ final class DRLNODLiveTest: XCTestCase {
             self?.diag("STATE [\(self?.timestamp() ?? "?")]: \(old.rawValue) → \(new.rawValue)")
         }
 
-        let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), channel: 0)
+        let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), radio: .primary)
         XCTAssertNotNil(sabmFrame, "connect() must return a SABM frame")
         if let frame = sabmFrame { engine.send(frame: frame) }
         let tSABM = Date()
         diag("SABM sent at \(timestamp(tSABM)) as \(localCallsign)")
 
         guard await waitForSessionState(expectedState: .connected, sessionManager: sessionManager, timeout: 30.0) else {
-            let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+            let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
             diag("FAIL: No UA after 30s — state=\(session.state.rawValue)")
             flushLog()
             XCTFail("Session did not reach .connected within 30s")
@@ -401,7 +401,7 @@ final class DRLNODLiveTest: XCTestCase {
         let payload = Data("Help\r".utf8)
         let beforeHelpCount = receivedData.count
         let tHelp = Date()
-        let frames = sessionManager.sendData(payload, to: destination, path: DigiPath(), channel: 0, pid: 0xF0)
+        let frames = sessionManager.sendData(payload, to: destination, path: DigiPath(), radio: .primary, pid: 0xF0)
         XCTAssertFalse(frames.isEmpty, "sendData must produce at least one I-frame")
         for frame in frames {
             let ctl = frame.controlByte.map { String(format: "0x%02X", $0) } ?? "nil"
@@ -417,7 +417,7 @@ final class DRLNODLiveTest: XCTestCase {
         var lastLoggedElapsed = -1
         while Date() < monitorDeadline {
             let elapsed = Int(Date().timeIntervalSince(tHelp))
-            let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+            let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
             finalState = session.state.rawValue
 
             if elapsed != lastLoggedElapsed {
@@ -457,7 +457,7 @@ final class DRLNODLiveTest: XCTestCase {
         }
         diag("Full received text:\n\(String(data: receivedData, encoding: .ascii) ?? "(binary)")")
 
-        let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+        let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
         if session.state == .connected, let discFrame = sessionManager.disconnect(session: session) {
             engine.send(frame: discFrame)
             try await Task.sleep(nanoseconds: 3_000_000_000)
@@ -499,14 +499,14 @@ final class DRLNODLiveTest: XCTestCase {
             self?.diag("STATE [\(self?.timestamp() ?? "?")]: \(old.rawValue) → \(new.rawValue)")
         }
 
-        let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), channel: 0)
+        let sabmFrame = sessionManager.connect(to: destination, path: DigiPath(), radio: .primary)
         XCTAssertNotNil(sabmFrame, "connect() must return a SABM frame")
         if let frame = sabmFrame { engine.send(frame: frame) }
         let tSABM = Date()
         diag("SABM sent at \(timestamp(tSABM)) as \(localCallsign)")
 
         guard await waitForSessionState(expectedState: .connected, sessionManager: sessionManager, timeout: 30.0) else {
-            let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+            let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
             diag("FAIL: No UA after 30s — state=\(session.state.rawValue)")
             flushLog()
             XCTFail("Session did not reach .connected within 30s")
@@ -556,7 +556,7 @@ final class DRLNODLiveTest: XCTestCase {
 
         while Date() < monitorDeadline {
             let elapsed = Int(Date().timeIntervalSince(tSecond))
-            let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+            let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
             finalState = session.state.rawValue
 
             if elapsed != lastLoggedElapsed {
@@ -598,7 +598,7 @@ final class DRLNODLiveTest: XCTestCase {
         }
         diag("Full received text:\n\(String(data: receivedData, encoding: .ascii) ?? "(binary)")")
 
-        let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+        let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
         if session.state == .connected, let discFrame = sessionManager.disconnect(session: session) {
             engine.send(frame: discFrame)
             try await Task.sleep(nanoseconds: 3_000_000_000)
@@ -613,7 +613,7 @@ final class DRLNODLiveTest: XCTestCase {
         label: String,
         via sessionManager: AX25SessionManager
     ) throws {
-        let frames = sessionManager.sendData(payload, to: destination, path: DigiPath(), channel: 0, pid: 0xF0)
+        let frames = sessionManager.sendData(payload, to: destination, path: DigiPath(), radio: .primary, pid: 0xF0)
         XCTAssertFalse(frames.isEmpty, "\(label) must produce at least one I-frame")
         for frame in frames {
             let ctl = frame.controlByte.map { String(format: "0x%02X", $0) } ?? "nil"
@@ -644,7 +644,7 @@ final class DRLNODLiveTest: XCTestCase {
 
         while Date() < deadline {
             let elapsed = Int(timeout - deadline.timeIntervalSinceNow)
-            let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+            let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
 
             if elapsed != lastLoggedElapsed {
                 lastLoggedElapsed = elapsed
@@ -757,7 +757,7 @@ final class DRLNODLiveTest: XCTestCase {
     ) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            let session = sessionManager.session(for: destination, path: DigiPath(), channel: 0)
+            let session = sessionManager.session(for: destination, path: DigiPath(), radio: .primary)
             if session.state == expectedState { return true }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }

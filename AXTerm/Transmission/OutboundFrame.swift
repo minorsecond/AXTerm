@@ -80,7 +80,9 @@ nonisolated enum TxFrameStatus: String, Codable {
 /// Immutable once created; status tracked separately
 nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
     let id: UUID
-    let channel: UInt8
+    /// The radio this frame leaves on. The KISS port it is sent with is that
+    /// radio's, looked up at send time; a frame does not carry a port.
+    let radio: RadioID
     let destination: AX25Address
     let source: AX25Address
     let path: DigiPath
@@ -122,7 +124,7 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
 
     init(
         id: UUID = UUID(),
-        channel: UInt8 = 0,
+        radio: RadioID = .primary,
         destination: AX25Address,
         source: AX25Address,
         path: DigiPath = DigiPath(),
@@ -141,7 +143,7 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
         isCommand: Bool? = nil
     ) {
         self.id = id
-        self.channel = channel
+        self.radio = radio
         self.destination = destination
         self.source = source
         self.path = path
@@ -161,7 +163,7 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, channel, destination, source, path, createdAt, payload, priority
+        case id, channel, radio, destination, source, path, createdAt, payload, priority
         case frameType, pid, sessionId, axdpMessageId, displayInfo, isUserPayload
         case controlByte, ns, nr, isCommand
     }
@@ -169,7 +171,9 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
-        channel = try c.decode(UInt8.self, forKey: .channel)
+        // `channel` was the KISS port, always 0; frames written before radios
+        // existed decode onto the primary radio.
+        radio = try c.decodeIfPresent(RadioID.self, forKey: .radio) ?? .primary
         destination = try c.decode(AX25Address.self, forKey: .destination)
         source = try c.decode(AX25Address.self, forKey: .source)
         path = try c.decode(DigiPath.self, forKey: .path)
@@ -191,7 +195,7 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
-        try c.encode(channel, forKey: .channel)
+        try c.encode(radio, forKey: .radio)
         try c.encode(destination, forKey: .destination)
         try c.encode(source, forKey: .source)
         try c.encode(path, forKey: .path)
@@ -216,7 +220,7 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
         let newControl = AX25Control.iFrame(ns: oldNS, nr: newNR, pf: oldPollFinal)
         return OutboundFrame(
             id: UUID(),  // New ID for retransmit tracking
-            channel: channel,
+            radio: radio,
             destination: destination,
             source: source,
             path: path,
@@ -230,6 +234,36 @@ nonisolated struct OutboundFrame: Identifiable, Codable, Sendable {
             controlByte: newControl,
             ns: oldNS,
             nr: newNR,
+            displayInfo: displayInfo,
+            isUserPayload: isUserPayload,
+            isCommand: isCommand
+        )
+    }
+
+    /// The same frame, bound to a radio.
+    ///
+    /// Sessions know their radio, but the frame builders never did, so
+    /// `AX25SessionManager.processActions` stamps the session's radio here,
+    /// once, on the way out. The id is kept: this is the same transmission,
+    /// not a retry.
+    func onRadio(_ radio: RadioID) -> OutboundFrame {
+        guard radio != self.radio else { return self }
+        return OutboundFrame(
+            id: id,
+            radio: radio,
+            destination: destination,
+            source: source,
+            path: path,
+            createdAt: createdAt,
+            payload: payload,
+            priority: priority,
+            frameType: frameType,
+            pid: pid,
+            sessionId: sessionId,
+            axdpMessageId: axdpMessageId,
+            controlByte: controlByte,
+            ns: ns,
+            nr: nr,
             displayInfo: displayInfo,
             isUserPayload: isUserPayload,
             isCommand: isCommand

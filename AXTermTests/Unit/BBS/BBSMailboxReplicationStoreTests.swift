@@ -107,10 +107,10 @@ final class BBSMailboxReplicationStoreTests: XCTestCase {
 
     /// Publication offers finished calls inside the window only.
     func testPublicationOffersOnlyFinishedRecentCalls() throws {
-        let recent = try local.beginCall(callsign: "N0CVL-7", at: t(-60))
+        let recent = try local.beginCall(callsign: "N0CVL-7", at: t(-60), radio: .primary)
         try local.endCall(id: recent, at: t(0), unexpected: false)
-        _ = try local.beginCall(callsign: "LIVE-1", at: t(0))
-        let stale = try local.beginCall(callsign: "OLD-1", at: t(-10 * 86_400))
+        _ = try local.beginCall(callsign: "LIVE-1", at: t(0), radio: .primary)
+        let stale = try local.beginCall(callsign: "OLD-1", at: t(-10 * 86_400), radio: .primary)
         try local.endCall(id: stale, at: t(-10 * 86_400 + 60), unexpected: false)
 
         let offered = try store.localCallsForPublication(endedSince: t(-7 * 86_400))

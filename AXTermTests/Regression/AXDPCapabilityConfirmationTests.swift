@@ -171,7 +171,7 @@ final class ResponderCapabilityDiscoveryTests: XCTestCase {
                 from: initiatorAddress,
                 to: localAddress,
                 path: DigiPath(),
-                channel: 0
+                radio: .primary
             )
             
             // Get the created session
@@ -225,7 +225,7 @@ final class ResponderCapabilityDiscoveryTests: XCTestCase {
                 from: initiatorAddress,
                 to: localAddress,
                 path: DigiPath(),
-                channel: 0
+                radio: .primary
             )
             
             // Get the created session
@@ -499,7 +499,7 @@ final class BidirectionalCapabilityTests: XCTestCase {
                 from: peerA,
                 to: localB,
                 path: DigiPath(),
-                channel: 0
+                radio: .primary
             )
             
             // Get the created session
@@ -556,7 +556,7 @@ final class CapabilityInvalidationAndFilenameSanitizationTests: XCTestCase {
             XCTAssertTrue(coordinator.isImplicitlyConfirmedAXDP(for: peer.display))
 
             _ = sessionManager.disconnect(session: session)
-            sessionManager.handleInboundUA(from: peer, path: DigiPath(), channel: 0)
+            sessionManager.handleInboundUA(from: peer, path: DigiPath(), radio: .primary)
 
             XCTAssertEqual(session.state, .disconnected)
             XCTAssertFalse(

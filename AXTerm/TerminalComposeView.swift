@@ -451,6 +451,8 @@ private struct RoutingPopoverContent: View {
 
             protocolInfoCard
 
+            ConnectBarRadioRow(viewModel: viewModel, isLocked: isLocked)
+
             switch viewModel.mode {
             case .ax25:
                 EmptyView()
@@ -966,6 +968,45 @@ private struct ConnectBarPrimaryRow: View {
     }
 }
 
+/// Which radio the call leaves on. Present only when there are two radios
+/// to choose between; Auto is the default and says what it would do.
+private struct ConnectBarRadioRow: View {
+    @ObservedObject var viewModel: ConnectBarViewModel
+    var isLocked: Bool = false
+
+    var body: some View {
+        if viewModel.radioOptions.count > 1 {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Radio")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Picker("Radio", selection: $viewModel.radioSelection) {
+                    Text("Auto").tag(RadioID?.none)
+                    ForEach(viewModel.radioOptions) { option in
+                        Text(option.name).tag(RadioID?.some(option.id))
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .controlSize(.small)
+                .frame(width: 200, alignment: .leading)
+                .disabled(isLocked)
+                .help(viewModel.radioSelection == nil
+                      ? viewModel.autoRadioHelp
+                      : "Chosen by you. The session stays on this radio once it opens; Auto would pick by evidence.")
+                if viewModel.radioSelection == nil {
+                    // Auto's reasoning, in the words the coordinator gives,
+                    // so the operator can see why before pressing Connect.
+                    Text(viewModel.autoRadioHelp)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+}
+
 private struct ConnectBarAdvancedDisclosure: View {
     @ObservedObject var viewModel: ConnectBarViewModel
     let context: ConnectSourceContext
@@ -975,6 +1016,8 @@ private struct ConnectBarAdvancedDisclosure: View {
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 8) {
+                ConnectBarRadioRow(viewModel: viewModel)
+
                 switch viewModel.mode {
                 case .ax25:
                     Text("AX.25 direct connection. No path overrides are needed.")

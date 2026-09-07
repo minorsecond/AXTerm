@@ -51,9 +51,9 @@ final class AX25TimerRaceTests: XCTestCase {
     private func connect(
         _ manager: AX25SessionManager
     ) -> AX25Session {
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
-        let s = manager.session(for: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
+        let s = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertEqual(s.state, .connected)
         return s
     }
@@ -70,7 +70,7 @@ final class AX25TimerRaceTests: XCTestCase {
         var retransmitFrames: [OutboundFrame] = []
         manager.onSendFrame = { retransmitFrames.append($0) }
 
-        _ = manager.sendData(Data("Hello".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("Hello".utf8), to: peer, path: path, radio: .primary)
         print("[TEST] After sendData: outstanding=\(session.outstandingCount) t1=\(session.t1TimerTask != nil) t3=\(session.t3TimerTask != nil) rto=\(session.timers.rto) clockTime=\(clock.currentTime)")
         XCTAssertEqual(session.outstandingCount, 1)
         XCTAssertEqual(retransmitFrames.count, 0, "No retransmits before T1 fires")
@@ -101,7 +101,7 @@ final class AX25TimerRaceTests: XCTestCase {
         var retransmitCount = 0
         manager.onSendFrame = { _ in retransmitCount += 1 }
 
-        _ = manager.sendData(Data("GracePeriodTest".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("GracePeriodTest".utf8), to: peer, path: path, radio: .primary)
 
         // Advance past RTO but NOT past grace period (grace = 0.2s)
         // At 2.05s: T1 has fired, grace period is running (0.15s remaining)
@@ -109,7 +109,7 @@ final class AX25TimerRaceTests: XCTestCase {
         XCTAssertEqual(retransmitCount, 0, "Grace period still active — no retransmit yet")
 
         // Now deliver the RR — this should cancel the pending retransmit
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 1, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 1, isPoll: false)
 
         // Advance past where grace period would have fired
         clock.advance(by: 0.5)
@@ -128,11 +128,11 @@ final class AX25TimerRaceTests: XCTestCase {
         var txFrames: [OutboundFrame] = []
         manager.onSendFrame = { txFrames.append($0) }
 
-        _ = manager.sendData(Data("HELP\r".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("HELP\r".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 1)
         XCTAssertNotNil(session.t1TimerTask)
 
-        manager.handleInboundDM(from: peer, path: path, channel: 0)
+        manager.handleInboundDM(from: peer, path: path, radio: .primary)
         clock.advance(by: 2.0)
 
         XCTAssertEqual(session.state, .disconnected)
@@ -149,11 +149,11 @@ final class AX25TimerRaceTests: XCTestCase {
         var txFrames: [OutboundFrame] = []
         manager.onSendFrame = { txFrames.append($0) }
 
-        _ = manager.sendData(Data("HELP\r".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("HELP\r".utf8), to: peer, path: path, radio: .primary)
         clock.advance(by: 1.05)
         XCTAssertNotNil(session.t1PendingRetransmitTask)
 
-        manager.handleInboundDM(from: peer, path: path, channel: 0)
+        manager.handleInboundDM(from: peer, path: path, radio: .primary)
         clock.advance(by: 0.5)
 
         XCTAssertEqual(session.state, .disconnected)
@@ -168,7 +168,7 @@ final class AX25TimerRaceTests: XCTestCase {
         let (manager, clock) = makeManager(rto: 1.0)
         let session = connect(manager)
 
-        _ = manager.sendData(Data("BackoffTest".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("BackoffTest".utf8), to: peer, path: path, radio: .primary)
 
         let rto1 = session.timers.rto
         XCTAssertEqual(rto1, 1.0, accuracy: 0.01, "Initial RTO should be 1.0s")
@@ -196,10 +196,10 @@ final class AX25TimerRaceTests: XCTestCase {
         let manager = AX25SessionManager(localCallsign: local, clock: clock)
         manager.defaultConfig = config
 
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
-        let session = manager.session(for: peer, path: path, channel: 0)
-        _ = manager.sendData(Data("BoundedBackoff".utf8), to: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
+        let session = manager.session(for: peer, path: path, radio: .primary)
+        _ = manager.sendData(Data("BoundedBackoff".utf8), to: peer, path: path, radio: .primary)
 
         // Fire many timeouts; RTO must never exceed rtoMax
         for _ in 0..<8 {
@@ -220,7 +220,7 @@ final class AX25TimerRaceTests: XCTestCase {
         let (manager, clock) = makeManager(rto: 1.0, maxRetries: n2)
         let session = connect(manager)
 
-        _ = manager.sendData(Data("MaxRetryTest".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("MaxRetryTest".utf8), to: peer, path: path, radio: .primary)
 
         for attempt in 1...n2 {
             let rto = session.timers.rto
@@ -274,7 +274,7 @@ final class AX25TimerRaceTests: XCTestCase {
         XCTAssertTrue(t3ActiveAfterConnect, "T3 should be active after connection established")
 
         // Send data — T1 should start, T3 should stop
-        _ = manager.sendData(Data("KillT3".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("KillT3".utf8), to: peer, path: path, radio: .primary)
 
         // T3 should be cancelled (T1 is active for the outstanding frame)
         XCTAssertNil(session.t3TimerTask, "T3 should be cancelled once I-frame is outstanding")
@@ -286,14 +286,14 @@ final class AX25TimerRaceTests: XCTestCase {
         let (manager, _) = makeManager()
         let session = connect(manager)
 
-        _ = manager.sendData(Data("AckMeBack".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("AckMeBack".utf8), to: peer, path: path, radio: .primary)
 
         // T1 running, T3 not
         XCTAssertNotNil(session.t1TimerTask, "T1 should be running")
         XCTAssertNil(session.t3TimerTask, "T3 should be off while frames are outstanding")
 
         // Peer acks all frames
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 1, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 1, isPoll: false)
 
         // Now T1 should be stopped, T3 should be running
         XCTAssertNil(session.t1TimerTask, "T1 should stop after all frames acked")
@@ -311,8 +311,8 @@ final class AX25TimerRaceTests: XCTestCase {
         var retransmitFrames: [OutboundFrame] = []
         manager.onSendFrame = { retransmitFrames.append($0) }
 
-        _ = manager.sendData(Data("FrameA".utf8), to: peer, path: path, channel: 0)
-        _ = manager.sendData(Data("FrameB".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("FrameA".utf8), to: peer, path: path, radio: .primary)
+        _ = manager.sendData(Data("FrameB".utf8), to: peer, path: path, radio: .primary)
         XCTAssertEqual(session.outstandingCount, 2)
 
         // Advance past RTO + grace — first T1 fires and immediately retransmits both outstanding frames.
@@ -322,7 +322,7 @@ final class AX25TimerRaceTests: XCTestCase {
         XCTAssertEqual(iFramesAfterFirst.count, 2, "First T1 should immediately retransmit both unacked I-frames")
 
         // Peer now acks FrameA (N(R)=1)
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 1, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 1, isPoll: false)
         XCTAssertEqual(session.outstandingCount, 1, "Only FrameB outstanding")
         XCTAssertEqual(session.stateMachine.retryCount, 0, "retryCount resets on V(A) advance")
 
@@ -345,14 +345,14 @@ final class AX25TimerRaceTests: XCTestCase {
     func testSABMT1CancelledByUA() {
         let (manager, _) = makeManager()
 
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        let session = manager.session(for: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        let session = manager.session(for: peer, path: path, radio: .primary)
 
         XCTAssertEqual(session.state, .connecting)
         XCTAssertNotNil(session.t1TimerTask, "T1 should be armed while waiting for UA")
 
         // UA arrives — T1 should cancel, T3 should start
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
 
         XCTAssertEqual(session.state, .connected)
         XCTAssertNil(session.t1TimerTask, "T1 should be cleared after UA")
@@ -367,8 +367,8 @@ final class AX25TimerRaceTests: XCTestCase {
         manager.onSendFrame = { txFrames.append($0) }
 
         // connect() returns the initial SABM frame directly (not via onSendFrame)
-        let initialFrame = manager.connect(to: peer, path: path, channel: 0)
-        let session = manager.session(for: peer, path: path, channel: 0)
+        let initialFrame = manager.connect(to: peer, path: path, radio: .primary)
+        let session = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connecting)
         XCTAssertNotNil(initialFrame, "connect() must return initial SABM frame")
         XCTAssertEqual(initialFrame?.frameType, "u", "Initial SABM must be a U-frame")
@@ -394,16 +394,16 @@ final class AX25TimerRaceTests: XCTestCase {
         let peerA = AX25Address(call: "PEERA-1", ssid: 0)
         let peerB = AX25Address(call: "PEERB-2", ssid: 0)
 
-        _ = manager.connect(to: peerA, path: path, channel: 0)
-        manager.handleInboundUA(from: peerA, path: path, channel: 0)
-        let sessionA = manager.session(for: peerA, path: path, channel: 0)
+        _ = manager.connect(to: peerA, path: path, radio: .primary)
+        manager.handleInboundUA(from: peerA, path: path, radio: .primary)
+        let sessionA = manager.session(for: peerA, path: path, radio: .primary)
 
-        _ = manager.connect(to: peerB, path: path, channel: 0)
-        manager.handleInboundUA(from: peerB, path: path, channel: 0)
-        let sessionB = manager.session(for: peerB, path: path, channel: 0)
+        _ = manager.connect(to: peerB, path: path, radio: .primary)
+        manager.handleInboundUA(from: peerB, path: path, radio: .primary)
+        let sessionB = manager.session(for: peerB, path: path, radio: .primary)
 
-        _ = manager.sendData(Data("DataA".utf8), to: peerA, path: path, channel: 0)
-        _ = manager.sendData(Data("DataB".utf8), to: peerB, path: path, channel: 0)
+        _ = manager.sendData(Data("DataA".utf8), to: peerA, path: path, radio: .primary)
+        _ = manager.sendData(Data("DataB".utf8), to: peerB, path: path, radio: .primary)
 
         // Advance past both T1 timeouts + grace periods
         clock.advance(by: 1.5)
@@ -423,14 +423,14 @@ final class AX25TimerRaceTests: XCTestCase {
         var retransmitCount = 0
         manager.onSendFrame = { _ in retransmitCount += 1 }
 
-        _ = manager.sendData(Data("BoundaryTest".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("BoundaryTest".utf8), to: peer, path: path, radio: .primary)
 
         // Advance to T1 fire point (2.0s), grace period starts
         clock.advance(by: 2.0)
         XCTAssertEqual(retransmitCount, 0, "Grace period not yet expired")
 
         // RR arrives at t=2.0 + epsilon — grace period is running (expires at 2.2)
-        _ = manager.handleInboundRR(from: peer, path: path, channel: 0, nr: 1, isPoll: false)
+        _ = manager.handleInboundRR(from: peer, path: path, radio: .primary, nr: 1, isPoll: false)
 
         // Advance through grace period end (t=2.5)
         clock.advance(by: 0.5)
@@ -458,9 +458,9 @@ final class AX25TimerRaceTests: XCTestCase {
         manager.onSendFrame = { timerDrivenFrames.append($0) }
 
         // Connect: SABM schedules T1; UA stops it, but the racy cancel is a no-op.
-        _ = manager.connect(to: peer, path: path, channel: 0)
-        manager.handleInboundUA(from: peer, path: path, channel: 0)
-        let session = manager.session(for: peer, path: path, channel: 0)
+        _ = manager.connect(to: peer, path: path, radio: .primary)
+        manager.handleInboundUA(from: peer, path: path, radio: .primary)
+        let session = manager.session(for: peer, path: path, radio: .primary)
         XCTAssertEqual(session.state, .connected)
 
         // The connect-phase T1 closure now delivers anyway — it must be swallowed.
@@ -471,8 +471,8 @@ final class AX25TimerRaceTests: XCTestCase {
                       "stale connect-phase T1 must not put an RR poll on the air")
 
         // Data phase: I-frame starts T1; the ack stops it; the fire was already in flight.
-        _ = manager.sendData(Data("Hello".utf8), to: peer, path: path, channel: 0)
-        _ = manager.handleInboundRRFrames(from: peer, path: path, channel: 0,
+        _ = manager.sendData(Data("Hello".utf8), to: peer, path: path, radio: .primary)
+        _ = manager.handleInboundRRFrames(from: peer, path: path, radio: .primary,
                                           nr: 1, pf: false, isCommand: false)
         XCTAssertEqual(session.outstandingCount, 0)
         clock.fireInFlight(matchingDelay: 2.0)
@@ -484,7 +484,7 @@ final class AX25TimerRaceTests: XCTestCase {
                      "a stale fire must not restart T1 on an idle session")
 
         // Positive control: a T1 that was NOT stopped must still work end to end.
-        _ = manager.sendData(Data("World".utf8), to: peer, path: path, channel: 0)
+        _ = manager.sendData(Data("World".utf8), to: peer, path: path, radio: .primary)
         clock.fireInFlight(matchingDelay: 2.0)   // live T1 fires, schedules grace
         clock.fireInFlight(matchingDelay: 0.2)   // grace period elapses → retransmit
         XCTAssertEqual(session.stateMachine.retryCount, 1,
