@@ -71,12 +71,23 @@ def main():
     host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
     ports = {"A": int(sys.argv[2]) if len(sys.argv) > 2 else 8010,
              "B": int(sys.argv[3]) if len(sys.argv) > 3 else 8020}
-    heard = {}
+    # Both hubs at once, for two NODES intervals: on a half-duplex channel
+    # with several nodes a single broadcast can be lost to a collision, and
+    # the rig models exactly that.
+    import threading
+    heard, threads = {}, []
     for hub, port in ports.items():
-        with socket.create_connection((host, port), timeout=5) as sock:
-            print(f"hub {hub} ({host}:{port}): listening 90 s for NODES…")
-            heard[hub] = nodes_origins(sock, 90)
-            print(f"hub {hub}: {sorted(heard[hub]) or 'nothing'}")
+        def listen(hub=hub, port=port):
+            with socket.create_connection((host, port), timeout=5) as sock:
+                heard[hub] = nodes_origins(sock, 150)
+        threads.append(threading.Thread(target=listen))
+    print(f"listening 150 s on {', '.join(f'hub {h} ({host}:{p})' for h, p in ports.items())} for NODES…")
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    for hub in ports:
+        print(f"hub {hub}: {sorted(heard.get(hub, set())) or 'nothing'}")
 
     ok = True
     for node, hubs in EXPECTED.items():

@@ -106,7 +106,7 @@ to script your own node behaviours.
 
 ```bash
 docker compose --profile dual up -d
-python3 scripts/smoke_dual.py        # proves both hubs and all three nodes
+python3 scripts/smoke_dual.py        # proves both hubs and all three nodes (150 s)
 ```
 
 Adds a second hub on **:8020** — a second frequency — and two nodes:

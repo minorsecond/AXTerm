@@ -83,6 +83,11 @@ services:
         ipv4_address: 172.28.99.24
     volumes:
       - ./linbpq/bpq32-bridge.cfg:/opt/bpq/bpq32.cfg:ro
+    # Twenty seconds behind TSTNOD. Both run a one-minute NODES timer, and
+    # started together they keyed up in the same second every minute — the
+    # hub's collision model destroyed both, and hub A never heard a NODES
+    # frame. Real nodes drift apart; here they have to be told to.
+    command: ["sh", "-c", "sleep 20 && exec /opt/bpq/linbpq"]
     restart: unless-stopped
 
   linbpq-far:
