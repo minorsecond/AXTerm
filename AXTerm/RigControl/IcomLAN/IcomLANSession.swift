@@ -122,16 +122,32 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         try await control.connect(host: c.host, port: c.controlPort, timeout: c.timeout)
         control.trace("control connected")
 
-        // Login.
-        let tokenRequest = (UInt8.random(in: 0...255), UInt8.random(in: 0...255))
-        control.sendTracked(IcomLAN.login(local: control.localID, remote: control.remoteID, innerSequence: nextInner(),
-                                          tokenRequest: tokenRequest, username: c.username, password: c.password,
-                                          program: c.program))
-        control.trace("login sent")
-        let loginReply = try await control.expect(timeout: c.timeout, what: "login") { IcomLAN.parseLoginReply($0) != nil }
-        let login = IcomLAN.parseLoginReply(loginReply)!
-        control.trace("login accepted=" + String(login.accepted))
-        guard login.accepted else { throw IcomLANError.badCredentials }
+        // Login. A radio still holding a session from an unclean shutdown
+        // (Xcode stop, crash, a lost network) keeps its single client slot
+        // for tens of seconds and rejects a fresh login the whole time —
+        // and the rejection is byte-for-byte the one it sends for a wrong
+        // password, so the two are indistinguishable in the reply. Rather
+        // than fail a good password because the slot has not yet timed out,
+        // resend the login a few times over several seconds; the slot frees
+        // on its own and the next attempt is accepted. This is the same
+        // stale-session behaviour every Icom LAN client has to absorb.
+        var login: IcomLAN.LoginReply?
+        for attempt in 0..<Self.loginAttempts {
+            try Task.checkCancellation()
+            let tokenRequest = (UInt8.random(in: 0...255), UInt8.random(in: 0...255))
+            control.sendTracked(IcomLAN.login(local: control.localID, remote: control.remoteID, innerSequence: nextInner(),
+                                              tokenRequest: tokenRequest, username: c.username, password: c.password,
+                                              program: c.program))
+            control.trace("login sent (attempt \(attempt + 1))")
+            let loginReply = try await control.expect(timeout: c.timeout, what: "login") { IcomLAN.parseLoginReply($0) != nil }
+            let reply = IcomLAN.parseLoginReply(loginReply)!
+            control.trace("login accepted=\(reply.accepted) (attempt \(attempt + 1))")
+            if reply.accepted { login = reply; break }
+            if attempt + 1 < Self.loginAttempts {
+                try await Task.sleep(nanoseconds: UInt64(Self.loginRetryDelay * 1_000_000_000))
+            }
+        }
+        guard let login else { throw IcomLANError.badCredentials }
         authID = login.authID
 
         // From here the control exchange is event-driven: the radio sends
@@ -196,6 +212,13 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
 
     private static let queueKey = DispatchSpecificKey<Void>()
 
+    /// How many times to resend a rejected login before giving up, and how
+    /// long to wait between tries. Chosen to outlast the radio's stale-slot
+    /// timeout after an unclean disconnect (tens of seconds) without holding
+    /// a genuinely-wrong password hostage for too long.
+    private static let loginAttempts = 5
+    private static let loginRetryDelay: Double = 2.5
+
     private var isFailed: Bool { if case .failed = state { return true }; return false }
 
     private func fail(_ why: String) {
@@ -204,6 +227,16 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
             guard !isFailed else { return }
             renewTimer?.cancel(); renewTimer = nil
             reorderTimer?.cancel(); reorderTimer = nil
+            // Release the token before dropping the socket, exactly as a
+            // clean close does. Without this the radio keeps our session in
+            // its single client slot until the token times out (tens of
+            // seconds), so the next retry, a quick relaunch, or a Test
+            // connection collides with our own ghost and the radio reports
+            // it as "another client connected."
+            if !authID.isEmpty {
+                control.sendTracked(IcomLAN.token(.release, local: control.localID, remote: control.remoteID,
+                                                  innerSequence: nextInner(), authID: authID))
+            }
             audio.disconnect(); serial.disconnect(); control.disconnect()
             state = .failed(why)
         }
@@ -264,12 +297,25 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         if let reply = IcomLAN.parseConnectionReply(d) {
             control.trace("connection reply accepted=" + String(reply.accepted) + " dev=" + reply.deviceName)
             guard !connectionOpened else { return }
+            // The radio emits a 0x90 with accepted=false as its *initial*
+            // connection status ("no audio/CI-V session active yet"), part
+            // of its normal reply to the token — BEFORE we have sent our
+            // connection request. That is not a refusal of anything; only a
+            // 0x90 that arrives after we actually sent the request answers
+            // it. Treating the pre-request status as a refusal made the
+            // session fail on a perfectly good handshake and only then send
+            // the real request into a socket that was already tearing down.
+            guard requestSent else {
+                control.trace("ignoring pre-request 0x90 status (accepted=\(reply.accepted))")
+                return
+            }
             if reply.accepted {
                 deviceName = reply.deviceName
                 if !reply.authID.isEmpty { authID = reply.authID }
                 connectionOpened = true
                 openMediaStreams()
             } else {
+                control.trace("connection request refused: " + d.map { String(format: "%02x", $0) }.joined())
                 resolveConnect(.failure(IcomLANError.rejected("the radio refused the audio and CI-V request (is another client connected?)")))
             }
             return
@@ -302,9 +348,10 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
         request.serialPort = c.serialPort
         request.audioPort = c.audioPort
         request.txBufferMs = c.txBufferMs
-        control.trace("sending connection request")
-        control.sendTracked(IcomLAN.connectionRequest(request, local: control.localID, remote: control.remoteID,
-                                                      innerSequence: nextInner(), authID: authID, replyID: replyID ?? []))
+        let packet = IcomLAN.connectionRequest(request, local: control.localID, remote: control.remoteID,
+                                               innerSequence: nextInner(), authID: authID, replyID: replyID ?? [])
+        control.trace("sending connection request: " + packet.map { String(format: "%02x", $0) }.joined())
+        control.sendTracked(packet)
     }
 
     /// Open the CI-V and audio sockets once the radio has agreed, then

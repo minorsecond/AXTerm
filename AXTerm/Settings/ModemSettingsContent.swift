@@ -55,26 +55,59 @@ struct ModemSettingsContent: View {
     #if os(macOS)
     @ViewBuilder
     private var lanFields: some View {
-        Grid(alignment: .leading, verticalSpacing: 8) {
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 10, verticalSpacing: 10) {
             GridRow {
-                Text("Address:")
-                TextField("192.168.1.50", text: $viewModel.lanHost)
+                Text("Address")
+                    .gridColumnAlignment(.trailing)
+                    .foregroundStyle(.secondary)
+                DraftTextField("Address", text: $viewModel.lanHost, prompt: "192.168.3.34")
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 240, alignment: .leading)
+                    .help("The radio's IP address or host name on your network. The IC-705 shows its own address under Network settings.")
             }
             GridRow {
-                Text("Username:")
-                TextField("radio login", text: $viewModel.lanUsername)
+                Text("Username")
+                    .gridColumnAlignment(.trailing)
+                    .foregroundStyle(.secondary)
+                DraftTextField("Username", text: $viewModel.lanUsername, prompt: "radio login")
+                    .labelsHidden()
                     .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 240, alignment: .leading)
+                    .help("The radio's Network User name.")
             }
             GridRow {
-                Text("Password:")
+                Text("Password")
+                    .gridColumnAlignment(.trailing)
+                    .foregroundStyle(.secondary)
                 LANPasswordField(hasPassword: viewModel.hasLANPassword) { viewModel.setLANPassword($0) }
             }
+            GridRow {
+                Text("Connection")
+                    .gridColumnAlignment(.trailing)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Button(viewModel.isTestingLAN ? "Testing\u{2026}" : "Test connection") {
+                        viewModel.testLANConnection()
+                    }
+                    .controlSize(.small)
+                    .disabled(viewModel.isTestingLAN)
+                    if let result = viewModel.lanTestResult {
+                        Text(result)
+                            .font(.callout)
+                            .foregroundStyle(result.hasPrefix("Reached") || result.hasPrefix("Already")
+                                             ? .green : .red)
+                    }
+                }
+                .help("Logs in to the radio over Wi-Fi and waits for it to name itself, then lets go \u{2014} without starting the modem. It confirms the address, username and password reach the radio before you connect for real.")
+            }
         }
-        Text("The radio's Network settings: turn Network Control ON, and use its Network User and Password. "
-             + "The password is kept in your Mac's Keychain, never in the radio list.")
+        Text("This is the radio's own Wi-Fi link \u{2014} Icom's network protocol, the one RS-BA1 and wfview use, not a KISS TNC. "
+             + "Turn Network Control ON on the radio and use its Network User name and password; the password is kept in your Mac's Keychain. "
+             + "(The Network transport is a different thing \u{2014} a separate TNC such as Direwolf \u{2014} so a Wi-Fi radio needs its address only here.)")
             .font(.caption)
             .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
@@ -243,10 +276,10 @@ struct ModemTransmitSection: View {
             LabeledContent {
                 HStack(spacing: 8) {
                     Button(viewModel.isSendingTestTone ? "Sending\u{2026}" : "Test tone (2 s)") { viewModel.sendTestTone() }
-                        .disabled(viewModel.connectionStatus != .connected || viewModel.isSendingTestTone)
+                        .disabled(!viewModel.radioConnected || viewModel.isSendingTestTone)
                         .controlSize(.small)
                     Button("Send test frame") { viewModel.sendTestFrame() }
-                        .disabled(viewModel.connectionStatus != .connected)
+                        .disabled(!viewModel.radioConnected)
                         .controlSize(.small)
                 }
             } label: {
@@ -309,7 +342,7 @@ struct ModemRadioSection: View {
                 .help("Push the settings below each time this radio connects. Off by default: the radio is yours.")
             LabeledContent {
                 Button("Set radio for packet\u{2026}") { confirmingSetup = true }
-                    .disabled(viewModel.connectionStatus != .connected || viewModel.civSerialPath.isEmpty)
+                    .disabled(!viewModel.radioConnected || viewModel.civSerialPath.isEmpty)
                     .controlSize(.small)
             } label: {
                 Text("Radio setup")

@@ -1,4 +1,5 @@
 import XCTest
+import Network
 @testable import AXTerm
 
 /// The Icom LAN wire format, pinned. The golden vectors are real datagrams
@@ -117,6 +118,41 @@ final class IcomLANPacketTests: XCTestCase {
         let d = bytes("60000000000002000b4bd82cdd17905000000050020000000000e665710c3fdb00000000000000000000000000000000000000000000000000000000000000004654544800000000000000000000000001000000000000000000000000000000")
         let reply = IcomLAN.parseLoginReply(d)
         XCTAssertEqual(reply?.accepted, true)
+    }
+
+    func testLocalIDEncodesTheSourceIPInItsTopBits() {
+        // A real IC-705 refuses the audio/CI-V connection unless the top 16
+        // bits of the session ID are the third and fourth octets of our
+        // source IPv4 address. Routed to loopback, the source is 127.0.0.1,
+        // so those octets are 0 and 1. routedSource supplies only that base;
+        // the low 16 bits (the source UDP port) are filled in at .ready.
+        let src = IcomLANStream.routedSource(toward: "127.0.0.1", port: 50001)
+        XCTAssertEqual(src?.ip, "127.0.0.1")
+        XCTAssertEqual((src?.base ?? 0) >> 16, 0x0001, "top 16 bits must be source-IP octets 3 and 4")
+        XCTAssertEqual((src?.base ?? 0) & 0xFFFF, 0, "base carries no port; the port is added at .ready")
+    }
+
+    func testLocalIDLowBitsAreTheSourceUDPPort() {
+        // The other half of the rule: the radio validates the connection
+        // request against the low 16 bits being the actual source port. A
+        // random low 16 gets login/token/caps accepted but the audio+CI-V
+        // request silently refused, so the port must be read from the
+        // socket's own bound endpoint, not invented.
+        let ep = NWEndpoint.hostPort(host: "192.168.3.14", port: 55563)
+        XCTAssertEqual(IcomLANStream.baseFromEndpoint(ep), 0x030E_0000, "IP octets 3,4 → top 16 bits")
+        XCTAssertEqual(IcomLANStream.portFromEndpoint(ep), 55563, "low 16 bits are the source port")
+        XCTAssertNil(IcomLANStream.portFromEndpoint(nil))
+    }
+
+    func testLoginReplyRejectedWhenSlotIsBusy() {
+        // The radio marks a refused login (wrong password, or — much more
+        // often in practice — a stale session still holding its single
+        // client slot) with FF FF FF FE at offset 48. The two cases are
+        // byte-for-byte identical, which is why IcomLANSession retries a
+        // rejected login rather than failing a good password outright.
+        var b = bytes("60000000000002000b4bd82cdd17905000000050020000000000e665710c3fdb00000000000000000000000000000000000000000000000000000000000000004654544800000000000000000000000001000000000000000000000000000000")
+        b.replaceSubrange(48..<52, with: [0xFF, 0xFF, 0xFF, 0xFE])
+        XCTAssertEqual(IcomLAN.parseLoginReply(b)?.accepted, false)
     }
 
     func testParsesRealCapabilities() {

@@ -123,8 +123,12 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         guard config.usesRig else { return (nil, nil, NoPTTController()) }
         let transport: CIVTransport
         if let session { transport = LANCIVTransport(session: session) } else { transport = makeTransport(config.civSerialPath) }
+        // The Wi-Fi CI-V stream carries the radio's scope flood and its
+        // reorder-buffer latency, so give a reply longer to arrive there
+        // than over the direct serial bus.
+        let timeout: TimeInterval = session != nil ? 1.2 : 0.5
         let client = CIVClient(transport: transport, radioAddress: config.civAddress,
-                               controllerAddress: config.civControllerAddress)
+                               controllerAddress: config.civControllerAddress, requestTimeout: timeout)
         let ptt: PTTController
         // The WLAN has no control lines: keying there is the CI-V command.
         let method: ModemPTTMethod = (session != nil && (config.pttMethod == .rts || config.pttMethod == .dtr)) ? .civ : config.pttMethod
@@ -194,6 +198,13 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                 // before the audio devices are grabbed.
                 if let session = lanSession {
                     rigModel = session.radioName.isEmpty ? "IC-705" : session.radioName
+                    // Silence the spectrum-scope flood first. Until it stops,
+                    // its FD/FE-laden waveform frames desync the CI-V parser
+                    // and swallow the acks every later command waits on — PTT
+                    // included. The write lands even mid-flood; give the radio
+                    // a moment to go quiet before anything that needs a reply.
+                    try? await rig.setScopeDataOutput(false)
+                    try? await Task.sleep(for: .milliseconds(300))
                     if (try? await rig.identify()) == nil {
                         // The bus is busy; the login already proved the radio.
                     }

@@ -31,6 +31,8 @@ final class CIVFrameTests: XCTestCase {
     func testMenuItemsAndMeters() {
         XCTAssertEqual(hex(CIVCommand.setTransceive(false)), "FE FE A4 E0 1A 05 01 31 00 FD")
         XCTAssertEqual(hex(CIVCommand.setEchoBack(false)), "FE FE A4 E0 1A 05 01 32 00 FD")
+        XCTAssertEqual(hex(CIVCommand.setScopeDataOutput(false)), "FE FE A4 E0 27 11 00 FD")
+        XCTAssertEqual(hex(CIVCommand.setScopeDataOutput(true)), "FE FE A4 E0 27 11 01 FD")
         XCTAssertEqual(hex(CIVCommand.setUSBSendOff()), "FE FE A4 E0 1A 05 01 25 00 FD")
         XCTAssertEqual(hex(CIVCommand.setAFSquelchOpen()), "FE FE A4 E0 1A 05 01 11 00 FD")
         XCTAssertEqual(hex(CIVCommand.setDataModUSB()), "FE FE A4 E0 1A 05 01 19 01 FD")

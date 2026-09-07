@@ -97,6 +97,16 @@ nonisolated final class CIVClient: @unchecked Sendable {
         _ = try await request(CIVCommand.setPTT(on, radio: radioAddress, controller: controllerAddress), expecting: .acknowledgement)
     }
 
+    /// Ask the radio to stop (or start) pouring spectrum-scope waveform data
+    /// onto the CI-V stream. On Wi-Fi this flood is what makes CI-V unusable,
+    /// so the modem turns it off at connect. The write reaches the radio even
+    /// while the parser is swamped, so an ack we may never cleanly read does
+    /// not matter — callers treat it as best-effort.
+    func setScopeDataOutput(_ on: Bool) async throws {
+        _ = try await request(CIVCommand.setScopeDataOutput(on, radio: radioAddress, controller: controllerAddress),
+                              expecting: .acknowledgement)
+    }
+
     func readPTT() async throws -> Bool {
         let reply = try await request(CIVCommand.readPTT(radio: radioAddress, controller: controllerAddress),
                                       expecting: .reply(command: 0x1C, subcommand: 0x00))

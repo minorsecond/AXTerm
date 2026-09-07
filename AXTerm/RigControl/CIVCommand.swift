@@ -116,6 +116,16 @@ nonisolated enum CIVCommand {
         setMenuItem(.civUSBEchoBack, [on ? 0x01 : 0x00], radio: radio, controller: controller)
     }
 
+    /// Scope waveform data output (`27 11`). The modem never wants the
+    /// spectrum: over Wi-Fi the IC-705 pours ~500-byte `27 00` waveform
+    /// frames onto the CI-V stream, and their binary payload carries `FD`
+    /// and `FE` bytes that desync a terminator-framed CI-V parser and eat
+    /// the acks we are waiting for (PTT among them). Turning the output off
+    /// is what keeps CI-V usable — the same thing wfview does.
+    static func setScopeDataOutput(_ on: Bool, radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
+        frame(radio, controller, 0x27, 0x11, [on ? 0x01 : 0x00])
+    }
+
     /// `00` off — PTT by command, not by the serial lines.
     static func setUSBSendOff(radio: UInt8 = ic705, controller: UInt8 = CIVFrame.controller) -> CIVFrame {
         setMenuItem(.usbSend, [0x00], radio: radio, controller: controller)

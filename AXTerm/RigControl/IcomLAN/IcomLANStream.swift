@@ -12,7 +12,7 @@ nonisolated enum IcomLANError: Error, Equatable, Sendable {
     var message: String {
         switch self {
         case .timeout(let what): return "the radio did not answer (\(what)). Is its WLAN on and Network Control enabled?"
-        case .badCredentials: return "the radio refused the username or password"
+        case .badCredentials: return "the radio refused the username or password. Check the radio's Network User name and its password (on an IC-705: Menu \u{203A} Set \u{203A} Network), and that they match what you entered here."
         case .rejected(let why): return why
         case .radioDisconnected: return "the radio ended the connection"
         case .network(let why): return why
@@ -41,6 +41,10 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
     var onFailure: ((String) -> Void)?
 
     private var connection: NWConnection?
+    /// The ephemeral source port we reserved and pinned via
+    /// requiredLocalEndpoint, so the egress port equals the localID's low
+    /// 16 bits by construction. nil when reservation failed.
+    private var reservedLocalPort: UInt16?
     private var isReady = false
     private var trackedSequence: UInt16 = 1
     /// Tracked packets by sequence, for the radio's retransmit requests.
@@ -83,6 +87,30 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else { throw IcomLANError.network("bad port \(port)") }
         let params = NWParameters.udp
         params.allowLocalEndpointReuse = true
+        // The radio checks our session ID against the source of our
+        // packets: the top 16 bits must be octets 3/4 of the source IPv4,
+        // and the low 16 bits must be the source UDP port (this is exactly
+        // how wfview/kappanhang build localSID). We must not merely READ the
+        // port NWConnection happens to report — its `currentPath` port is
+        // not reliably the real egress port, and a mismatch makes the radio
+        // accept login/token/caps but silently refuse the audio+CI-V
+        // connection request. So we RESERVE an ephemeral port ourselves and
+        // pin the socket to it with requiredLocalEndpoint (host 0.0.0.0 so
+        // macOS still chooses the interface — we do not pin the NIC), which
+        // makes egress-port == localID-low by construction. The IP half
+        // comes from the routed source; if we cannot determine either half
+        // we fall back to letting the OS pick and reading it at .ready.
+        let base = Self.routedSource(toward: host, port: port)?.base
+        if let reservedPort = Self.reserveLocalPort() {
+            self.reservedLocalPort = reservedPort
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: "0.0.0.0",
+                                                               port: NWEndpoint.Port(rawValue: reservedPort)!)
+            self.localID = (base ?? UInt32.random(in: 0x1000_0000...0xFFFF_0000)) & 0xFFFF_0000 | UInt32(reservedPort)
+        } else if let base {
+            self.localID = base | UInt32.random(in: 0...0xFFFF)
+        } else {
+            self.localID = UInt32.random(in: 0x1000_0000...0xFFFF_FFFF)
+        }
         let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: params)
         self.connection = connection
 
@@ -93,8 +121,23 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
                 switch state {
                 case .ready:
                     self.isReady = true
-                    self.localID = self.deriveLocalID(connection)
-                    self.trace("socket ready")
+                    // Authoritative: correct the session ID's IP bits from
+                    // the connection's *actual* bound source (are-you-there
+                    // has not been sent yet), so it matches the packets the
+                    // radio really receives even if the pin above didn't
+                    // land the interface we measured.
+                    let ep = connection.currentPath?.localEndpoint
+                    // Correct the IP half from the real bound source; keep
+                    // the low 16 bits as our reserved port (the egress port
+                    // is pinned to it). When we could not reserve a port,
+                    // fall back to the reported port for the low half.
+                    if let realBase = Self.baseFromEndpoint(ep) {
+                        let low: UInt32 = self.reservedLocalPort.map(UInt32.init)
+                            ?? Self.portFromEndpoint(ep).map(UInt32.init)
+                            ?? (self.localID & 0xFFFF)
+                        self.localID = realBase | low
+                    }
+                    self.trace("socket ready, actual source \(String(describing: ep)), reserved \(String(describing: self.reservedLocalPort)), localID \(String(format: "%08x", self.localID))")
                     self.receiveLoop()
                     if !resumed { resumed = true; continuation.resume() }
                 case .failed(let error):
@@ -119,12 +162,17 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
         }
 
         // are-you-there → I-am-here (which names the radio's session).
-        // Retry: after another controller drops, the radio can take a few
-        // seconds to answer a fresh controller, so resend rather than fail.
+        // Retry: after a controller drops uncleanly (an app kill, a crash,
+        // a Wi-Fi blip), the radio keeps its single client slot and goes
+        // quiet to a fresh controller until the slot times out — tens of
+        // seconds. Resending across ~18s lets that heal on its own rather
+        // than failing the moment the radio is briefly unreachable. A radio
+        // that is genuinely off or whose Network Control is disabled simply
+        // runs out the window and reports the timeout.
         trace("sending are-you-there")
         let hello = IcomLAN.control(.areYouThere, local: localID, remote: 0)
         var here: Data?
-        for attempt in 0..<8 {
+        for attempt in 0..<22 {
             send(hello); send(hello)
             if let d = try? await expect(timeout: 0.8, what: "\(name) I-am-here", { $0.count == 16 && $0[$0.startIndex + 4] == 0x04 }) {
                 here = d
@@ -143,17 +191,122 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
         trace("handshake complete")
     }
 
-    /// The session ID the radio will know us by: our address and port, as
-    /// the other implementations do, or a random word when the path hides them.
-    private func deriveLocalID(_ connection: NWConnection) -> UInt32 {
-        if case .hostPort(let host, let port)? = connection.currentPath?.localEndpoint,
-           case .ipv4(let v4) = host {
-            let bytes = [UInt8](withUnsafeBytes(of: v4.rawValue) { Data($0) })
-            if bytes.count == 4 {
-                return UInt32(bytes[2]) << 24 | UInt32(bytes[3]) << 16 | UInt32(port.rawValue)
+    /// Our source toward `host`: the dotted IPv4 string to pin the socket
+    /// to, plus the session-ID `base` the radio insists on — its top 16
+    /// bits are the third and fourth octets of that address (the low 16
+    /// bits are the radio's don't-care field). The connected-UDP-socket
+    /// getsockname names the interface the OS actually routes through,
+    /// which on a host dual-homed on the radio's subnet cannot be guessed
+    /// from the interface list; getifaddrs is a sandbox fallback. Exposed
+    /// for the localID unit test.
+    /// The session-ID base (top 16 bits) from a connection's own local
+    /// endpoint — the ground-truth source the radio will see.
+    static func baseFromEndpoint(_ ep: NWEndpoint?) -> UInt32? {
+        guard case let .hostPort(host: host, port: _)? = ep else { return nil }
+        // Take the dotted quad out of the description ("192.168.3.14",
+        // possibly with a "%en0" scope), robust to how the host case prints.
+        let text = "\(host)".split(separator: "%").first.map(String.init) ?? "\(host)"
+        var addr = in_addr()
+        guard inet_pton(AF_INET, text, &addr) == 1 else { return nil }
+        let o = withUnsafeBytes(of: addr.s_addr) { Array($0) }
+        guard o.count == 4, !(o[0] == 0 && o[1] == 0 && o[2] == 0 && o[3] == 0) else { return nil }
+        return UInt32(o[2]) << 24 | UInt32(o[3]) << 16
+    }
+
+    /// The source UDP port from a connection's own local endpoint. The
+    /// radio requires the low 16 bits of the session ID to be the actual
+    /// source port of the control socket (this is how wfview builds its
+    /// localSID: `(ip & 0xffff) << 16 | port`). A random low 16 gets the
+    /// login/token/caps accepted but the audio+CI-V connection request
+    /// silently refused (the 0x50 status flips to ...ffffffff and no 0x90
+    /// arrives), which reads to the operator as "another client connected."
+    static func portFromEndpoint(_ ep: NWEndpoint?) -> UInt16? {
+        guard case let .hostPort(host: _, port: port)? = ep else { return nil }
+        return port.rawValue
+    }
+
+    /// Reserve an ephemeral UDP port by binding a throwaway socket to
+    /// 0.0.0.0:0, reading the OS-assigned port, and closing it. We then pin
+    /// the real connection to that port with requiredLocalEndpoint. There is
+    /// a small TOCTOU window before the rebind, but ephemeral collisions are
+    /// rare and allowLocalEndpointReuse softens them; returning nil falls the
+    /// caller back to reading whatever port the connection reports.
+    static func reserveLocalPort() -> UInt16? {
+        let fd = socket(AF_INET, SOCK_DGRAM, 0)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        addr.sin_addr.s_addr = INADDR_ANY
+        let bound = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
-        return UInt32.random(in: 0x1000_0000...0xFFFF_FFFF)
+        guard bound == 0 else { return nil }
+        var local = sockaddr_in()
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let ok = withUnsafeMutablePointer(to: &local) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) }
+        }
+        guard ok == 0 else { return nil }
+        let port = UInt16(bigEndian: local.sin_port)
+        return port == 0 ? nil : port
+    }
+
+    static func routedSource(toward host: String, port: UInt16) -> (ip: String, base: UInt32)? {
+        var radio = in_addr()
+        guard inet_pton(AF_INET, host, &radio) == 1 else { return nil }
+
+        func result(_ a: in_addr) -> (ip: String, base: UInt32)? {
+            let o = withUnsafeBytes(of: a.s_addr) { Array($0) } // network order
+            guard o.count == 4, !(o[0] == 0 && o[1] == 0 && o[2] == 0 && o[3] == 0) else { return nil }
+            return ("\(o[0]).\(o[1]).\(o[2]).\(o[3])", UInt32(o[2]) << 24 | UInt32(o[3]) << 16)
+        }
+
+        // Primary: the actual routed source address.
+        let fd = socket(AF_INET, SOCK_DGRAM, 0)
+        if fd >= 0 {
+            defer { close(fd) }
+            var addr = sockaddr_in()
+            addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_port = port.bigEndian
+            addr.sin_addr = radio
+            let connected = withUnsafePointer(to: &addr) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+            if connected == 0 {
+                var local = sockaddr_in()
+                var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+                let ok = withUnsafeMutablePointer(to: &local) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) }
+                }
+                if ok == 0, let r = result(local.sin_addr) { return r }
+            }
+        }
+
+        // Fallback: the interface whose network contains the radio.
+        var ifap: UnsafeMutablePointer<ifaddrs>?
+        if getifaddrs(&ifap) == 0 {
+            defer { freeifaddrs(ifap) }
+            var p = ifap
+            while let cur = p {
+                let flags = Int32(cur.pointee.ifa_flags)
+                if let sa = cur.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET),
+                   (flags & IFF_LOOPBACK) == 0, let nm = cur.pointee.ifa_netmask {
+                    let ip = UnsafeRawPointer(sa).assumingMemoryBound(to: sockaddr_in.self).pointee.sin_addr
+                    let mask = UnsafeRawPointer(nm).assumingMemoryBound(to: sockaddr_in.self).pointee.sin_addr
+                    if (ip.s_addr & mask.s_addr) == (radio.s_addr & mask.s_addr) { return result(ip) }
+                }
+                p = cur.pointee.ifa_next
+            }
+        }
+        return nil
     }
 
     private func receiveLoop() {
@@ -172,6 +325,7 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
     }
 
     func send(_ data: Data) {
+        trace("TX " + data.prefix(48).map { String(format: "%02x", $0) }.joined())
         guard isReady, let connection else { trace("send skipped (not ready)"); return }
         connection.send(content: data, completion: .contentProcessed { [weak self] error in
             if let error { self?.trace("send failed: " + error.localizedDescription) }
@@ -281,6 +435,9 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
     // MARK: - Inbound
 
     private func handle(_ d: Data) {
+        if !IcomLAN.isPing(d) && !IcomLAN.isIdle(d) {
+            trace("RX " + d.prefix(48).map { String(format: "%02x", $0) }.joined())
+        }
         if IcomLAN.isPing(d) {
             if IcomLAN.pingIsReply(d) {
                 if pingSentAt > 0 { roundTrip = (roundTrip + (Self.now - pingSentAt)) / 2 }
