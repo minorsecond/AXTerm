@@ -25,34 +25,66 @@ nonisolated enum CIVTransportError: Error, Equatable, Sendable {
     case io(String)
 }
 
-/// Placeholder for CI-V over the Icom LAN protocol (UDP :50002). Exists so
-/// the client is exercised against two transport shapes; a real
-/// implementation replaces it without touching the client.
+/// CI-V over the Icom LAN protocol: the bytes ride verbatim on the
+/// session's CI-V stream, so the client is exactly the serial one.
 nonisolated final class LANCIVTransport: CIVTransport, @unchecked Sendable {
-    let host: String
-    let port: UInt16
-    private(set) var state: CIVTransportState = .closed
+    let session: IcomLANSession
+    private let lock = NSLock()
+    private var _state: CIVTransportState = .closed
+    var state: CIVTransportState { lock.withLock { _state } }
     var onBytes: (@Sendable (Data) -> Void)?
     var onStateChange: (@Sendable (CIVTransportState) -> Void)?
+    private var openTask: Task<Void, Never>?
 
-    init(host: String, port: UInt16 = 50002) {
-        self.host = host
-        self.port = port
+    init(session: IcomLANSession) {
+        self.session = session
+        session.onSerialBytes = { [weak self] bytes in self?.onBytes?(bytes) }
+        session.onState = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .failed(let why): self.setState(.failed(why))
+            case .idle: if self.state == .open { self.setState(.closed) }
+            case .connecting, .connected: break
+            }
+        }
     }
 
+    /// Opening is the whole login; `state` goes to `.opening` at once and
+    /// to `.open` or `.failed` when the radio has answered.
     func open() {
-        state = .failed("Icom LAN control is not implemented yet")
-        onStateChange?(state)
+        guard state != .open, state != .opening else { return }
+        setState(.opening)
+        openTask = Task { [self] in
+            do {
+                try await session.open()
+                setState(.open)
+            } catch {
+                setState(.failed((error as? IcomLANError)?.message ?? String(describing: error)))
+            }
+        }
     }
 
     func close() {
-        state = .closed
-        onStateChange?(state)
+        openTask?.cancel()
+        session.close()
+        setState(.closed)
     }
 
     func write(_ data: Data, completion: @escaping @Sendable (Error?) -> Void) {
-        completion(CIVTransportError.notImplemented("Icom LAN control"))
+        guard state == .open else { completion(CIVTransportError.notOpen); return }
+        session.sendSerial(data)
+        completion(nil)
     }
 
+    /// The radio's WLAN carries no control lines; PTT is a CI-V command.
     func setModemLines(dtr: Bool?, rts: Bool?) {}
+
+    private func setState(_ new: CIVTransportState) {
+        let changed: Bool = lock.withLock {
+            guard _state != new else { return false }
+            _state = new
+            return true
+        }
+        if changed { onStateChange?(new) }
+    }
 }

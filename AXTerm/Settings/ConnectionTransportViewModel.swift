@@ -194,6 +194,11 @@ final class ConnectionTransportViewModel: ObservableObject {
         if setsRadioModeOnConnect != profile.setsRadioModeOnConnect { setsRadioModeOnConnect = profile.setsRadioModeOnConnect }
         if maxTransmitSeconds != profile.maxTransmitSeconds { maxTransmitSeconds = profile.maxTransmitSeconds }
         if rigModel != profile.rigModel { rigModel = profile.rigModel }
+        if modemRigLink != profile.modemRigLink { modemRigLink = profile.modemRigLink }
+        if lanHost != profile.lanHost { lanHost = profile.lanHost }
+        if lanControlPort != profile.lanControlPort { lanControlPort = profile.lanControlPort }
+        if lanUsername != profile.lanUsername { lanUsername = profile.lanUsername }
+        if hasLANPassword != profile.hasLANPassword { hasLANPassword = profile.hasLANPassword }
 
         let primary = settings.primaryRadio?.id == radioID
         if isPrimary != primary { isPrimary = primary }
@@ -614,6 +619,30 @@ final class ConnectionTransportViewModel: ObservableObject {
     }
     /// What the radio called itself, from the profile.
     @Published private(set) var rigModel: String = ""
+
+    // MARK: Wi-Fi (Icom LAN)
+    @Published var modemRigLink: ModemRigLink = .usb {
+        didSet { update { $0.modemRigLink = modemRigLink } }
+    }
+    @Published var lanHost: String = "" {
+        didSet { update { $0.lanHost = lanHost.trimmingCharacters(in: .whitespaces) } }
+    }
+    @Published var lanControlPort: Int = 50001 {
+        didSet { update { $0.lanControlPort = lanControlPort } }
+    }
+    @Published var lanUsername: String = "" {
+        didSet { update { $0.lanUsername = lanUsername.trimmingCharacters(in: .whitespaces) } }
+    }
+    /// Whether a Wi-Fi password is stored for this radio (in the Keychain).
+    @Published private(set) var hasLANPassword: Bool = false
+
+    /// Store the Wi-Fi password in the Keychain, or clear it with an empty
+    /// string. The value never touches the profile or its JSON.
+    func setLANPassword(_ password: String) {
+        let stored = RadioSecrets.setLANPassword(password, for: radioID)
+        hasLANPassword = stored
+        update { $0.hasLANPassword = stored }
+    }
 
     /// The Mac's sound devices, live.
     @Published private(set) var audioDevices: [ModemAudioDevice] = []

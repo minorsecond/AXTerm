@@ -201,6 +201,11 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     nonisolated static func unsupportedReason(for radio: RadioProfile) -> String? {
         guard radio.kind == .modem else { return nil }
         #if os(macOS)
+        if radio.modemRigLink == .lan {
+            if radio.lanHost.isEmpty { return "Enter the radio's Wi-Fi address." }
+            if radio.lanUsername.isEmpty || !radio.hasLANPassword { return "Enter the radio's network username and password." }
+            return nil
+        }
         if radio.audioInputDeviceUID.isEmpty || radio.audioOutputDeviceUID.isEmpty {
             return "Choose an audio input and output device for this radio."
         }
@@ -365,8 +370,12 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
                 mobilinkdConfig: radio.mobilinkdConfig))
         case .modem:
             #if os(macOS)
-            guard let config = radio.modemConfig,
-                  !config.audioInputDeviceUID.isEmpty, !config.audioOutputDeviceUID.isEmpty else { return nil }
+            guard let config = radio.modemConfig else { return nil }
+            if config.rigLink == .lan {
+                guard !config.lanHost.isEmpty, !config.lanUsername.isEmpty, !config.lanPassword.isEmpty else { return nil }
+                return ModemRadioLink(config: config, audio: nil)
+            }
+            guard !config.audioInputDeviceUID.isEmpty, !config.audioOutputDeviceUID.isEmpty else { return nil }
             return ModemRadioLink(
                 config: config,
                 audio: CoreAudioModemIO(inputUID: config.audioInputDeviceUID, outputUID: config.audioOutputDeviceUID,

@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 
 /// A `.modem` radio's link: the built-in modem, the radio's CI-V port, and
@@ -16,6 +15,11 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     private(set) var pttController: PTTController
     private var civTransport: CIVTransport?
     private let makeTransport: (String) -> CIVTransport
+    private let makeSession: (IcomLANSession.Configuration) -> IcomLANSession
+    /// The WLAN session, when the radio is reached that way: CI-V and audio
+    /// both ride on it.
+    private(set) var lanSession: IcomLANSession?
+    private let lanAudio: LANModemAudioIO?
 
     /// The radio, as CI-V reports it; empty until read.
     var rigStatus: RigStatus { lock.withLock { _rigStatus } }
@@ -44,24 +48,49 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         return "AXTerm Sound Modem \(version) · \(config.mode.rawValue)".replacingOccurrences(of: "  ", with: " ")
     }
 
+    /// `audio` is the sound device for a USB radio; a Wi-Fi radio brings its
+    /// own audio on the session and ignores it. The default serial
+    /// transport exists only on the Mac; elsewhere a USB radio has no rig.
     init(config: ModemLinkConfig,
-         audio: ModemAudioIO,
-         makeTransport: @escaping (String) -> CIVTransport = { SerialCIVTransport(path: $0) },
+         audio: ModemAudioIO?,
+         makeTransport: @escaping (String) -> CIVTransport = ModemRadioLink.defaultSerialTransport,
+         makeSession: @escaping (IcomLANSession.Configuration) -> IcomLANSession = { IcomLANSession(configuration: $0) },
          scheduling: ModemEngine.Scheduling = .dedicatedThread,
          deliver: @escaping SoftModemLink.Deliver = { work in
              DispatchQueue.main.async { MainActor.assumeIsolated { work() } }
          }) {
         self.config = config
         self.makeTransport = makeTransport
+        self.makeSession = makeSession
         self.deliver = deliver
-        let rigParts = Self.makeRig(config, makeTransport: makeTransport)
+        let session: IcomLANSession? = config.rigLink == .lan ? makeSession(config.lanConfiguration) : nil
+        self.lanSession = session
+        let audioIO: ModemAudioIO
+        if let session {
+            let lan = LANModemAudioIO(session: session)
+            self.lanAudio = lan
+            audioIO = lan
+        } else {
+            self.lanAudio = nil
+            audioIO = audio ?? SyntheticModemIO()
+        }
+        let rigParts = Self.makeRig(config, makeTransport: makeTransport, session: session)
         self.civTransport = rigParts.transport
         self.rig = rigParts.client
         self.pttController = rigParts.ptt
-        self.modem = SoftModemLink(configuration: config.softModemConfiguration, audio: audio, ptt: rigParts.ptt,
-                                   inputName: config.audioInputDeviceName, outputName: config.audioOutputDeviceName,
+        self.modem = SoftModemLink(configuration: config.softModemConfiguration, audio: audioIO, ptt: rigParts.ptt,
+                                   inputName: config.rigLink == .lan ? config.lanHost : config.audioInputDeviceName,
+                                   outputName: config.rigLink == .lan ? config.lanHost : config.audioOutputDeviceName,
                                    scheduling: scheduling, deliver: deliver)
         attachRig()
+    }
+
+    nonisolated static func defaultSerialTransport(_ path: String) -> CIVTransport {
+        #if os(macOS)
+        return SerialCIVTransport(path: path)
+        #else
+        return UnavailableCIVTransport(reason: "a USB serial port needs a Mac")
+        #endif
     }
 
     /// Frames the radio sends unasked — CI-V transceive broadcasts when the
@@ -89,14 +118,17 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         onRigStatus?(status)
     }
 
-    private static func makeRig(_ config: ModemLinkConfig, makeTransport: (String) -> CIVTransport)
+    private static func makeRig(_ config: ModemLinkConfig, makeTransport: (String) -> CIVTransport, session: IcomLANSession?)
     -> (transport: CIVTransport?, client: CIVClient?, ptt: PTTController) {
         guard config.usesRig else { return (nil, nil, NoPTTController()) }
-        let transport = makeTransport(config.civSerialPath)
+        let transport: CIVTransport
+        if let session { transport = LANCIVTransport(session: session) } else { transport = makeTransport(config.civSerialPath) }
         let client = CIVClient(transport: transport, radioAddress: config.civAddress,
                                controllerAddress: config.civControllerAddress)
         let ptt: PTTController
-        switch config.pttMethod {
+        // The WLAN has no control lines: keying there is the CI-V command.
+        let method: ModemPTTMethod = (session != nil && (config.pttMethod == .rts || config.pttMethod == .dtr)) ? .civ : config.pttMethod
+        switch method {
         case .civ: ptt = CIVPTTController(client: client, maxTransmitSeconds: TimeInterval(config.maxTransmitSeconds))
         case .rts: ptt = SerialLinePTTController(transport: transport, line: .rts, maxTransmitSeconds: TimeInterval(config.maxTransmitSeconds))
         case .dtr: ptt = SerialLinePTTController(transport: transport, line: .dtr, maxTransmitSeconds: TimeInterval(config.maxTransmitSeconds))
@@ -118,8 +150,13 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     }
 
     var endpointDescription: String {
-        let device = config.audioInputDeviceName.isEmpty ? "audio" : config.audioInputDeviceName
-        return "\(rigModel ?? "Sound modem") via \(device)"
+        let via: String
+        if config.rigLink == .lan {
+            via = config.lanHost.isEmpty ? "Wi-Fi" : config.lanHost
+        } else {
+            via = config.audioInputDeviceName.isEmpty ? "audio" : config.audioInputDeviceName
+        }
+        return "\(rigModel ?? "Sound modem") via \(via)"
     }
 
     var delegate: KISSLinkDelegate? {
@@ -142,11 +179,30 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
             await previousClose?.value
             civTransport.open()
             do {
+                var waited = 0
+                while civTransport.state == .opening, waited < 600 {
+                    try await Task.sleep(for: .milliseconds(25))
+                    waited += 1
+                }
                 if case .failed(let reason) = civTransport.state { throw CIVError.transport(reason) }
-                let address = try await rig.identify()
-                rigModel = CIVKnownRadios.model(forAddress: address) ?? String(format: "Icom %02X", address)
+
+                // Over the WLAN the login itself identifies the radio (the
+                // connection reply named it), and the IC-705 floods CI-V with
+                // scope data that can bury the identify reply. So there,
+                // trust the session's name and let identify be best-effort;
+                // over USB a wrong radio or dead port must still fail here,
+                // before the audio devices are grabbed.
+                if let session = lanSession {
+                    rigModel = session.radioName.isEmpty ? "IC-705" : session.radioName
+                    if (try? await rig.identify()) == nil {
+                        // The bus is busy; the login already proved the radio.
+                    }
+                } else {
+                    let address = try await rig.identify()
+                    rigModel = CIVKnownRadios.model(forAddress: address) ?? String(format: "Icom %02X", address)
+                }
                 try? await rig.setTransceive(false)
-                if config.setsRadioModeOnConnect { try await rig.configureForPacket(config.mode) }
+                if config.setsRadioModeOnConnect { try? await rig.configureForPacket(config.mode) }
                 await refreshRigStatus()
                 lock.withLock { phase = .modemOpen }
                 modem.open()
@@ -203,7 +259,14 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         if new.requiresReopen(from: old) {
             let wasOpen = state == .connected || state == .connecting
             close()
-            let rigParts = Self.makeRig(new, makeTransport: makeTransport)
+            if new.rigLink == .lan {
+                let session = makeSession(new.lanConfiguration)
+                lanSession = session
+                lanAudio?.session = session
+            } else {
+                lanSession = nil
+            }
+            let rigParts = Self.makeRig(new, makeTransport: makeTransport, session: lanSession)
             civTransport = rigParts.transport
             rig = rigParts.client
             pttController = rigParts.ptt
@@ -233,13 +296,21 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     /// The same question on a port nobody has open yet: a throwaway client
     /// that opens, asks and closes. For the form before the radio connects.
     static func identifyRadio(config: ModemLinkConfig,
-                              makeTransport: (String) -> CIVTransport = { SerialCIVTransport(path: $0) }) async throws -> String {
+                              makeTransport: (String) -> CIVTransport = ModemRadioLink.defaultSerialTransport) async throws -> String {
         guard config.usesRig else { throw CIVError.transport("no CI-V port chosen") }
-        let transport = makeTransport(config.civSerialPath)
+        let transport: CIVTransport = config.rigLink == .lan
+            ? LANCIVTransport(session: IcomLANSession(configuration: config.lanConfiguration))
+            : makeTransport(config.civSerialPath)
         let client = CIVClient(transport: transport, radioAddress: config.civAddress,
                                controllerAddress: config.civControllerAddress)
         client.open()
         defer { client.close() }
+        // The WLAN login takes a moment; the serial port is open at once.
+        var waited = 0
+        while transport.state == .opening, waited < 400 {
+            try await Task.sleep(for: .milliseconds(25))
+            waited += 1
+        }
         if case .failed(let reason) = transport.state { throw CIVError.transport(reason) }
         let address = try await client.identify()
         try? await client.setTransceive(false)
@@ -294,4 +365,17 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
         }
     }
 }
-#endif
+
+/// A transport for a port this platform cannot open: it fails with the
+/// reason, so the radio's status says why instead of hanging.
+nonisolated final class UnavailableCIVTransport: CIVTransport, @unchecked Sendable {
+    let reason: String
+    private(set) var state: CIVTransportState = .closed
+    var onBytes: (@Sendable (Data) -> Void)?
+    var onStateChange: (@Sendable (CIVTransportState) -> Void)?
+    init(reason: String) { self.reason = reason }
+    func open() { state = .failed(reason); onStateChange?(state) }
+    func close() { state = .closed; onStateChange?(state) }
+    func write(_ data: Data, completion: @escaping @Sendable (Error?) -> Void) { completion(CIVTransportError.notOpen) }
+    func setModemLines(dtr: Bool?, rts: Bool?) {}
+}

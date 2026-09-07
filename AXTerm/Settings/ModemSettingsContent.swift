@@ -19,6 +19,67 @@ struct ModemSettingsContent: View {
             set: { viewModel.userDidChangeAudioOutput($0) })
 
         VStack(alignment: .leading, spacing: 12) {
+            Picker("Connection:", selection: $viewModel.modemRigLink) {
+                Text("USB cable").tag(ModemRigLink.usb)
+                Text("Wi-Fi (Icom LAN)").tag(ModemRigLink.lan)
+            }
+            .pickerStyle(.segmented)
+            .help("How AXTerm reaches the radio. USB uses a sound device and a CI-V serial port. Wi-Fi uses Icom's network protocol, the same one wfview and RS-BA1 use \u{2014} the radio carries audio and CI-V over the air.")
+
+            if viewModel.modemRigLink == .lan {
+                lanFields
+            } else {
+                usbAudioFields(inputBinding: inputBinding, outputBinding: outputBinding)
+            }
+
+            Picker("Mode:", selection: $viewModel.modemMode) {
+                ForEach(ModemMode.selectable, id: \.self) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            Text(viewModel.modemMode.radioSetupNote)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ModemLevelMeter(telemetry: viewModel.modemTelemetry)
+        }
+        .padding(.vertical, 4)
+        #else
+        Text("The sound modem needs a Mac: it decodes the radio's audio through a sound device and keys "
+             + "it over a USB serial port. Reach a TNC over the network or Bluetooth from here.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        #endif
+    }
+
+    #if os(macOS)
+    @ViewBuilder
+    private var lanFields: some View {
+        Grid(alignment: .leading, verticalSpacing: 8) {
+            GridRow {
+                Text("Address:")
+                TextField("192.168.1.50", text: $viewModel.lanHost)
+                    .textFieldStyle(.roundedBorder)
+            }
+            GridRow {
+                Text("Username:")
+                TextField("radio login", text: $viewModel.lanUsername)
+                    .textFieldStyle(.roundedBorder)
+            }
+            GridRow {
+                Text("Password:")
+                LANPasswordField(hasPassword: viewModel.hasLANPassword) { viewModel.setLANPassword($0) }
+            }
+        }
+        Text("The radio's Network settings: turn Network Control ON, and use its Network User and Password. "
+             + "The password is kept in your Mac's Keychain, never in the radio list.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private func usbAudioFields(inputBinding: Binding<String>, outputBinding: Binding<String>) -> some View {
+        Group {
             Picker("Audio in:", selection: inputBinding) {
                 Text("Choose a device\u{2026}").tag("")
                 Divider()
@@ -51,26 +112,9 @@ struct ModemSettingsContent: View {
                 Text("Both, averaged").tag(ModemInputChannel.mono)
             }
             .help("Which channel of a stereo device carries the radio. The IC-705 puts receive audio on both.")
-
-            Picker("Mode:", selection: $viewModel.modemMode) {
-                ForEach(ModemMode.selectable, id: \.self) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            Text(viewModel.modemMode.radioSetupNote)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            ModemLevelMeter(telemetry: viewModel.modemTelemetry)
         }
-        .padding(.vertical, 4)
-        #else
-        Text("The sound modem needs a Mac: it decodes the radio's audio through a sound device and keys "
-             + "it over a USB serial port. Reach a TNC over the network or Bluetooth from here.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        #endif
     }
+    #endif
 
     private func deviceLabel(_ device: ModemAudioDevice) -> String {
         device.transport.isEmpty ? device.name : "\(device.name) (\(device.transport))"
@@ -356,3 +400,38 @@ struct ModemStatusRows: View {
         }
     }
 }
+
+#if os(macOS)
+/// A secure field that shows whether a Wi-Fi password is already stored and
+/// lets the operator replace or clear it, without ever displaying the value.
+struct LANPasswordField: View {
+    let hasPassword: Bool
+    let onSet: (String) -> Void
+    @State private var editing = false
+    @State private var draft = ""
+
+    var body: some View {
+        if editing {
+            HStack(spacing: 6) {
+                SecureField("password", text: $draft)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 200)
+                Button("Save") { onSet(draft); draft = ""; editing = false }
+                    .disabled(draft.isEmpty)
+                Button("Cancel") { draft = ""; editing = false }
+            }
+        } else {
+            HStack(spacing: 8) {
+                Text(hasPassword ? "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022} stored" : "Not set")
+                    .foregroundStyle(hasPassword ? .primary : .secondary)
+                Button(hasPassword ? "Change\u{2026}" : "Set\u{2026}") { editing = true }
+                    .controlSize(.small)
+                if hasPassword {
+                    Button("Clear") { onSet("") }
+                        .controlSize(.small)
+                }
+            }
+        }
+    }
+}
+#endif

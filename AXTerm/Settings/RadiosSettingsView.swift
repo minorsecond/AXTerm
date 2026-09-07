@@ -258,7 +258,11 @@ struct RadioDetailView: View {
 
             #if os(macOS)
             if viewModel.selectedTransport == .modem {
-                ModemRigSection(viewModel: viewModel)
+                // Over Wi-Fi the CI-V port is the network session itself, so
+                // the serial-port section only makes sense for a USB radio.
+                if viewModel.modemRigLink == .usb {
+                    ModemRigSection(viewModel: viewModel)
+                }
                 ModemTransmitSection(viewModel: viewModel)
                 ModemRadioSection(viewModel: viewModel)
             }

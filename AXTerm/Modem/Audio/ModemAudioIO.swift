@@ -62,4 +62,6 @@ nonisolated enum ModemAudioError: Error, Equatable, Sendable {
     case permissionDenied
     case unsupportedFormat(String)
     case system(code: Int32, stage: String)
+    /// The network session that carries the audio is not up.
+    case notConnected(String)
 }

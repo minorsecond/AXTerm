@@ -151,6 +151,7 @@ nonisolated final class SoftModemLink: KISSLink, @unchecked Sendable {
             case .permissionDenied: return "microphone access denied — allow AXTerm under System Settings › Privacy & Security › Microphone"
             case .unsupportedFormat(let detail): return "unsupported audio format: \(detail)"
             case .system(let code, let stage): return "CoreAudio error \(code) while \(stage)"
+            case .notConnected(let why): return why
             }
         }
         return String(describing: error)

@@ -203,6 +203,48 @@ reason a radio has no link (`unavailableReasons`) so the status shows
 "Choose an audio input and output device" or "The sound modem needs a Mac"
 instead of a silent "disconnected".
 
+## Wi-Fi (Icom LAN)
+
+The radio needs no USB cable: over its WLAN it speaks Icom's network
+protocol (the same one wfview and RS-BA1 use), carrying audio and CI-V
+together. In the radio's form, set **Connection** to Wi-Fi and give the
+radio's address, its Network user name, and its Network password (kept in
+the Mac's Keychain via `RadioSecrets`, never in the radio list or its JSON).
+
+- **Three UDP streams** — control :50001, CI-V :50002, audio :50003 — each
+  with a 16-byte header, a three-way hello (are-you-there / I-am-here /
+  ready), 3-second pings, and idle keepalives. `IcomLANStream` owns one
+  socket and the retransmit history; `IcomLANSession` runs the login, the
+  token it renews each minute, and the connection request that names the
+  codec. `IcomLANPacket` is the wire format, pinned byte-for-byte against
+  real IC-705 datagrams in `IcomLANPacketTests`.
+- **The handshake after login is event-driven.** The radio sends its
+  capabilities, a token acknowledgement and the connection reply in an
+  order that cannot be assumed, so the session drives them in one handler
+  and completes on the connection reply, rather than waiting for each in
+  turn.
+- **CI-V rides the session** (`LANCIVTransport`), so `CIVClient` is exactly
+  the serial one. The IC-705 floods CI-V with spectrum-scope frames, so on
+  Wi-Fi the login itself identifies the radio and `identify` is best-effort
+  — it never blocks the audio path.
+- **Audio is the point, and the radio picks the rate.** An IC-705 streams
+  **16 kHz** over Wi-Fi whatever rate we request (664-byte datagrams,
+  640 bytes of 16-bit mono PCM each). `LANModemAudioIO` measures the actual
+  rate over the first 0.7 s and builds the modem's DSP to match; a wrong
+  rate decodes nothing. 16 kHz is ample for 1200 and 300 baud AFSK. A small
+  reorder buffer (`SequenceReorderBuffer`, 100 ms) puts datagrams back in
+  order, asks for brief gaps to be re-sent, and pads the rest with silence
+  so the stream keeps time.
+- **One client.** The radio allows a single network controller. `close()`
+  releases the token and sends the disconnect before the sockets close, and
+  the hello retries for a few seconds so a reconnect after a dropped client
+  recovers once the radio lets go.
+
+Proven against a real IC-705 on 144.390: login, 16 kHz audio, and live APRS
+frames decoded through the full modem over Wi-Fi with no checksum failures.
+The link key is `modem://lan/<host>:<port>`, so a Wi-Fi radio is one more
+row beside a Direwolf and a USB radio.
+
 ## Hardware checklist (IC-705 over USB)
 
 1. **Radio menus.** SET › Connectors › CI-V: address `A4h`, CI-V Transceive
@@ -247,9 +289,9 @@ nothing was copied. Accelerate is the only DSP dependency.
 
 ## Not done yet
 
-- **Icom LAN** (wfview-style UDP: control :50001, CI-V :50002, audio
-  :50003 as LPCM). `CIVTransport` and `ModemAudioIO` are the seams; a
-  `LANCIVTransport` stub exists. This would also let the modem run on iOS.
+- **iOS over Wi-Fi.** The LAN path is pure `Network.framework` and DSP, so
+  it could run on iPhone/iPad; only the settings form and the factory are
+  macOS-gated today. Enabling it is a UI job, not a protocol one.
 - **9600 bd G3RUH** over the 12 kHz IF (receive only on this radio).
 - **Several slicers** at once (twist hypotheses ±3/±6 dB) and 300 bd
   frequency-offset detectors; the single centre slicer already meets the

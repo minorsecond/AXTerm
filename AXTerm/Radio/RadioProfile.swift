@@ -65,6 +65,14 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
     var audioOutputDeviceUID: String = ""
     var audioOutputDeviceName: String = ""
     var audioInputChannel: ModemInputChannel = .left
+    /// How the radio is reached: its USB cable, or its Wi-Fi (Icom LAN).
+    var modemRigLink: ModemRigLink = .usb
+    /// Wi-Fi (Icom LAN) settings. The password is not here — it lives in the
+    /// Keychain under this radio's id; the profile only says whether one is set.
+    var lanHost: String = ""
+    var lanControlPort: Int = 50001
+    var lanUsername: String = ""
+    var hasLANPassword: Bool = false
     var civSerialPath: String = ""
     var civAddress: UInt8 = 0xA4
     var civControllerAddress: UInt8 = 0xE0
@@ -133,6 +141,11 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         audioOutputDeviceUID = try c.decodeIfPresent(String.self, forKey: .audioOutputDeviceUID) ?? ""
         audioOutputDeviceName = try c.decodeIfPresent(String.self, forKey: .audioOutputDeviceName) ?? ""
         audioInputChannel = try c.decodeIfPresent(ModemInputChannel.self, forKey: .audioInputChannel) ?? .left
+        modemRigLink = try c.decodeIfPresent(ModemRigLink.self, forKey: .modemRigLink) ?? .usb
+        lanHost = try c.decodeIfPresent(String.self, forKey: .lanHost) ?? ""
+        lanControlPort = try c.decodeIfPresent(Int.self, forKey: .lanControlPort) ?? 50001
+        lanUsername = try c.decodeIfPresent(String.self, forKey: .lanUsername) ?? ""
+        hasLANPassword = try c.decodeIfPresent(Bool.self, forKey: .hasLANPassword) ?? false
         civSerialPath = try c.decodeIfPresent(String.self, forKey: .civSerialPath) ?? ""
         civAddress = try c.decodeIfPresent(UInt8.self, forKey: .civAddress) ?? 0xA4
         civControllerAddress = try c.decodeIfPresent(UInt8.self, forKey: .civControllerAddress) ?? 0xE0
@@ -171,8 +184,11 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         case .ble: return "ble://\(blePeripheralUUID.lowercased())"
         // The audio pair is the byte stream. The CI-V port is deliberately
         // not part of it: two modem radios on one sound device are one
-        // owner fight whatever their ports.
-        case .modem: return "modem://\(audioInputDeviceUID.lowercased())|\(audioOutputDeviceUID.lowercased())"
+        // owner fight whatever their ports. A Wi-Fi radio's stream is the
+        // radio itself, addressed by host.
+        case .modem:
+            if modemRigLink == .lan { return "modem://lan/\(lanHost.lowercased()):\(lanControlPort)" }
+            return "modem://\(audioInputDeviceUID.lowercased())|\(audioOutputDeviceUID.lowercased())"
         }
     }
 
@@ -185,10 +201,12 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         case .tcp: return "tcp://\(host.lowercased()):\(port)#\(kissPort)"
         case .serial: return "serial://\(serialDevicePath)@\(serialBaudRate)#\(kissPort)"
         case .ble: return "ble://\(blePeripheralUUID.lowercased())#\(kissPort)"
-        // Devices, mode, port and keying reopen; levels and timing apply in place.
+        // Devices/host, mode, port and keying reopen; levels and timing apply in place.
         case .modem:
-            return "modem://\(audioInputDeviceUID.lowercased())|\(audioOutputDeviceUID.lowercased())"
-                + "@\(modemMode.rawValue)/\(civSerialPath)/\(pttMethod.rawValue)/\(audioInputChannel.rawValue)#\(kissPort)"
+            let stream = modemRigLink == .lan
+                ? "lan/\(lanHost.lowercased()):\(lanControlPort)/\(lanUsername)"
+                : "\(audioInputDeviceUID.lowercased())|\(audioOutputDeviceUID.lowercased())"
+            return "modem://\(stream)@\(modemMode.rawValue)/\(civSerialPath)/\(pttMethod.rawValue)/\(audioInputChannel.rawValue)#\(kissPort)"
         }
     }
 
@@ -203,6 +221,10 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
             if !blePeripheralName.isEmpty { return blePeripheralName }
             return blePeripheralUUID.isEmpty ? "No device" : blePeripheralUUID
         case .modem:
+            if modemRigLink == .lan {
+                let where_ = lanHost.isEmpty ? "no address" : lanHost
+                return "\(rigModel.isEmpty ? "Sound modem" : rigModel) over Wi-Fi (\(where_))"
+            }
             guard !audioInputDeviceName.isEmpty || !audioInputDeviceUID.isEmpty else { return "No audio device" }
             let device = audioInputDeviceName.isEmpty ? audioInputDeviceUID : audioInputDeviceName
             return "\(rigModel.isEmpty ? "Sound modem" : rigModel) via \(device)"
@@ -221,6 +243,11 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         c.audioOutputDeviceName = audioOutputDeviceName
         c.inputChannel = audioInputChannel
         c.kissPort = kissPort
+        c.rigLink = modemRigLink
+        c.lanHost = lanHost
+        c.lanControlPort = UInt16(clamping: lanControlPort)
+        c.lanUsername = lanUsername
+        c.lanPassword = hasLANPassword ? RadioSecrets.lanPassword(for: id) ?? "" : ""
         c.civSerialPath = civSerialPath
         c.civAddress = civAddress
         c.civControllerAddress = civControllerAddress
