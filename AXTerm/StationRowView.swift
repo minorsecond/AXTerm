@@ -41,6 +41,14 @@ struct StationRowView: View {
         HStack {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
+                    if let aprs = station.aprs {
+                        Image(systemName: APRSSymbolGlyph.systemImage(
+                            table: aprs.symbolTable, code: aprs.symbolCode))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tint)
+                            .help("APRS: \(APRSSymbolGlyph.label(table: aprs.symbolTable, code: aprs.symbolCode))"
+                                  + (aprs.speedKnots.map { $0 > 0 ? " · \($0) kt" : "" } ?? ""))
+                    }
                     Text(station.call)
                         .font(.system(.subheadline, design: .monospaced))
                         .fontWeight(isSelected ? .semibold : .regular)
