@@ -119,7 +119,15 @@ Adds a second hub on **:8020** — a second frequency — and two nodes:
   implementation.
 
 In AXTerm add two radios, "Hub A" → 127.0.0.1:8010 and "Hub B" →
-127.0.0.1:8020 (Settings → Radios). Then:
+127.0.0.1:8020 (Settings → Radios) — or launch the built app isolated
+from your real station with both seeded:
+
+```bash
+"$APP/Contents/MacOS/AXTerm" --test-mode --ephemeral-db --auto-connect \
+  --instance-name rig --callsign K0EPI-7 --radios 127.0.0.1:8010,127.0.0.1:8020
+```
+
+Then:
 
 - **Routes** lists TSTNOD on Hub A only, CHBNOD on Hub B only, and BRGNOD
   twice — once per radio, with independent qualities.

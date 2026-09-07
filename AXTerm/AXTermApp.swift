@@ -126,9 +126,23 @@ struct AXTermApp: App {
 
         SentryManager.shared.setConnectionTags(host: effectiveHost, port: effectivePort)
 
+        // The rig's dual profile: --radios seeds the radio list, one TCP
+        // radio per hub, and the app connects to all of them.
+        if testConfig.isTestMode, !testConfig.radios.isEmpty {
+            settingsStore.radios = testConfig.radios.enumerated().map { index, endpoint in
+                var radio = RadioProfile(
+                    id: index == 0 ? .primary : RadioID(),
+                    name: "Hub \(Character(UnicodeScalar(65 + index) ?? "A"))")
+                radio.kind = .tcp
+                radio.host = endpoint.host
+                radio.port = endpoint.port
+                return radio
+            }
+        }
+
         // Auto-connect if settings say so OR if test mode requests it
         if !isUnitTests && (settingsStore.autoConnectOnLaunch || testConfig.autoConnect) {
-            if testConfig.isTestMode {
+            if testConfig.isTestMode, testConfig.radios.isEmpty {
                 // Test mode always uses network with explicit host/port
                 self.client.connect(host: effectiveHost, port: effectivePort)
             } else {
