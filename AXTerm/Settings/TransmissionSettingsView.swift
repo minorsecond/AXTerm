@@ -125,18 +125,33 @@ struct TransmissionSettingsView: View {
             }
 
             PreferencesSection("Digipeater") {
-                Toggle("Repeat frames addressed via this station", isOn: $settings.digipeatEnabled)
-                    .help("Classic AX.25 digipeating: a frame whose via path "
-                          + "names this station (H bit clear) is retransmitted "
-                          + "with that one bit set, nothing else changed. Off "
-                          + "by default \u{2014} it volunteers your transmitter for "
-                          + "other people\u{2019}s traffic.")
-                if settings.digipeatEnabled {
-                    TextField("Also answer to alias", text: $settings.digipeatAlias,
-                              prompt: Text("optional \u{2014} e.g. DWARC"))
-                        .help("A second name the digipeater responds to, the way "
-                              + "clubs publish a memorable digi alias. Leave empty "
-                              + "to answer on the station callsign only.")
+                if settings.hasMultipleRadios {
+                    Text("Each radio has its own digipeater — a packet radio and an "
+                         + "APRS radio digipeat different things. Configure them under "
+                         + "Settings → Radios.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Open Radios\u{2026}") { router.navigate(to: .radios, radio: nil) }
+                } else {
+                    Toggle("Repeat frames addressed via this station",
+                           isOn: digiField(\.enabled, default: false))
+                        .help("Digipeating: a frame whose via path names this station "
+                              + "(or a WIDEn-N the digi honours) is retransmitted on "
+                              + "this channel. Off by default \u{2014} it volunteers your "
+                              + "transmitter for other people\u{2019}s traffic.")
+                    if digiField(\.enabled, default: false).wrappedValue {
+                        Toggle("Fill-in (WIDE1-1)", isOn: digiField(\.fillIn, default: true))
+                        durationRow(
+                            "Wide-area hops",
+                            value: digiField(\.wideAreaMaxHops, default: 2),
+                            presets: [0, 1, 2, 3],
+                            label: { $0 == 0 ? "off" : "\($0)" }
+                        )
+                        TextField("Also answer to aliases",
+                                  text: digiAliases,
+                                  prompt: Text("optional \u{2014} e.g. DWARC, comma-separated"))
+                    }
                 }
             }
 
@@ -608,6 +623,31 @@ struct TransmissionSettingsView: View {
             set: { value in
                 guard let id = settings.activeRadios.first?.id else { return }
                 settings.updateRadio(id) { $0.beacon[keyPath: keyPath] = value }
+                applyNetRomSettings()
+            })
+    }
+
+    /// Bind a digipeater field of the first radio (the single-radio case).
+    private func digiField<V>(_ keyPath: WritableKeyPath<DigiConfig, V>,
+                             default def: V) -> Binding<V> {
+        Binding(
+            get: { settings.activeRadios.first?.digi[keyPath: keyPath] ?? def },
+            set: { value in
+                guard let id = settings.activeRadios.first?.id else { return }
+                settings.updateRadio(id) { $0.digi[keyPath: keyPath] = value }
+                applyNetRomSettings()
+            })
+    }
+
+    /// The first radio's digi aliases as one comma-separated field.
+    private var digiAliases: Binding<String> {
+        Binding(
+            get: { (settings.activeRadios.first?.digi.aliases ?? []).joined(separator: ", ") },
+            set: { text in
+                guard let id = settings.activeRadios.first?.id else { return }
+                let aliases = text.split(whereSeparator: { $0 == "," || $0.isWhitespace })
+                    .map { $0.uppercased() }
+                settings.updateRadio(id) { $0.digi.aliases = aliases }
                 applyNetRomSettings()
             })
     }

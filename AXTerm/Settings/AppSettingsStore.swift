@@ -1115,6 +1115,9 @@ final class AppSettingsStore: ObservableObject {
         // globals are left in place as the single-radio fallback.
         let seededBeaconOntoRadio = !defaults.bool(forKey: Self.beaconPerRadioMigratedKey)
         if seededBeaconOntoRadio {
+            let legacyDigiOn = defaults.object(forKey: Self.digipeatEnabledKey) as? Bool ?? false
+            let legacyDigiAlias = (defaults.string(forKey: Self.digipeatAliasKey) ?? "")
+                .trimmingCharacters(in: .whitespaces).uppercased()
             if let first = storedRadios.firstIndex(where: { !$0.archived }) {
                 storedRadios[first].beacon = BeaconConfig(
                     enabled: storedBeaconEnabled,
@@ -1122,6 +1125,11 @@ final class AppSettingsStore: ObservableObject {
                     text: storedBeaconText,
                     path: storedBeaconPath,
                     intervalMinutes: storedBeaconMinutes)
+                // The old digipeater was explicit-call only; preserve that
+                // (no WIDEn-N) so a station that had it on behaves the same.
+                storedRadios[first].digi = DigiConfig(
+                    enabled: legacyDigiOn, fillIn: false, wideAreaMaxHops: 0,
+                    aliases: legacyDigiAlias.isEmpty ? [] : [legacyDigiAlias])
             }
             defaults.set(true, forKey: Self.beaconPerRadioMigratedKey)
         }

@@ -93,4 +93,68 @@ final class AX25DigipeaterTests: XCTestCase {
         XCTAssertNil(AX25Digipeater.repeatFrame(Data([0x01, 0x02]),
                                                 myAddresses: ["K0EPI-7"]))
     }
+
+    // MARK: - APRS New-N paradigm
+
+    private let me = AX25Address(call: "K0EPI", ssid: 7)
+
+    private func newN(_ raw: Data, fillIn: Bool = true, maxHops: Int = 2, aliases: [String] = []) -> Data? {
+        AX25Digipeater.repeatFrame(raw, myCall: me, aliases: aliases,
+                                   fillIn: fillIn, wideAreaMaxHops: maxHops)
+    }
+
+    func testFillInInsertsOurCallAndSpendsWIDE1() {
+        let raw = frame(from: "W0ARP", to: "APRS", vias: [("WIDE1", 1, false)])
+        let out = newN(raw)
+        let expected = frame(from: "W0ARP", to: "APRS",
+                             vias: [("K0EPI", 7, true), ("WIDE1", 0, true)])
+        XCTAssertEqual(out, expected)
+    }
+
+    func testWideAreaInsertsOurCallAndDecrements() {
+        let raw = frame(from: "W0ARP", to: "APRS", vias: [("WIDE2", 2, false)])
+        let out = newN(raw)
+        let expected = frame(from: "W0ARP", to: "APRS",
+                             vias: [("K0EPI", 7, true), ("WIDE2", 1, false)])
+        XCTAssertEqual(out, expected)
+    }
+
+    func testWideAreaBeyondTheHopCapIsIgnored() {
+        let raw = frame(from: "W0ARP", to: "APRS", vias: [("WIDE7", 7, false)])
+        XCTAssertNil(newN(raw, maxHops: 2), "WIDE7-7 exceeds the cap and is not repeated")
+    }
+
+    func testFillInCanBeDisabled() {
+        let raw = frame(from: "W0ARP", to: "APRS", vias: [("WIDE1", 1, false)])
+        XCTAssertNil(newN(raw, fillIn: false))
+    }
+
+    func testDoesNotRepeatWhenAlreadyInThePath() {
+        // Our own decremented repeat comes back: we already appear, so refuse.
+        let raw = frame(from: "W0ARP", to: "APRS",
+                        vias: [("K0EPI", 7, true), ("WIDE2", 1, false)])
+        XCTAssertNil(newN(raw), "already repeated once — repeating again would loop")
+    }
+
+    func testDoesNotRepeatOurOwnBeacon() {
+        let raw = frame(from: "K0EPI", srcSSID: 7, to: "APRS", vias: [("WIDE2", 2, false)])
+        XCTAssertNil(newN(raw))
+    }
+
+    func testWideAreaDigipeatsAfterAnEarlierUsedHop() {
+        let raw = frame(from: "W0ARP", to: "APRS",
+                        vias: [("DIGI1", 0, true), ("WIDE2", 2, false)])
+        let out = newN(raw)
+        let expected = frame(from: "W0ARP", to: "APRS",
+                             vias: [("DIGI1", 0, true), ("K0EPI", 7, true), ("WIDE2", 1, false)])
+        XCTAssertEqual(out, expected)
+    }
+
+    func testExplicitAliasStillWorksThroughTheCombinedEntry() {
+        let raw = frame(from: "W0ARP", to: "APRS", vias: [("DWARC", 0, false)])
+        let out = newN(raw, aliases: ["DWARC"])
+        var expected = raw
+        expected[raw.startIndex + 20] |= 0x80   // DWARC's SSID byte gains the H bit
+        XCTAssertEqual(out, expected)
+    }
 }

@@ -1114,21 +1114,20 @@ final class PacketEngine: ObservableObject {
     /// Repeats a frame addressed via this station, when the operator
     /// has switched digipeating on. One bit changes; see AX25Digipeater.
     private func digipeatIfAsked(_ raw: Data, radio: RadioID) {
-        guard settings.digipeatEnabled else { return }
-        var addresses = [settings.myCallsign]
-        if let profile = settings.radio(radio) {
-            // The radio that heard it may operate as its own callsign.
-            addresses.append(profile.resolvedCallsign(station: settings.myCallsign))
-        }
-        let alias = settings.digipeatAlias
-            .trimmingCharacters(in: .whitespaces).uppercased()
-        if !alias.isEmpty { addresses.append(alias) }
-        guard let repeated = AX25Digipeater.repeatFrame(raw, myAddresses: addresses)
+        // Per radio: a radio repeats only when its own digipeater is on, and
+        // only on its own channel. Explicit call/alias plus the APRS New-N
+        // paradigm (fill-in WIDE1-1, wide-area WIDEn-N within the hop cap).
+        guard let profile = settings.radio(radio), profile.digi.enabled else { return }
+        let myCall = CallsignNormalizer.toAddress(profile.resolvedCallsign(station: settings.myCallsign))
+        guard let repeated = AX25Digipeater.repeatFrame(
+            raw, myCall: myCall, aliases: profile.digi.aliases,
+            fillIn: profile.digi.fillIn, wideAreaMaxHops: profile.digi.wideAreaMaxHops)
         else { return }
 
         let key = raw.hashValue
         let now = Date()
-        recentDigipeats = recentDigipeats.filter { now.timeIntervalSince($0.value) < 8 }
+        let window = TimeInterval(max(1, profile.digi.dupeSeconds))
+        recentDigipeats = recentDigipeats.filter { now.timeIntervalSince($0.value) < window }
         guard recentDigipeats[key] == nil else { return }
         recentDigipeats[key] = now
 

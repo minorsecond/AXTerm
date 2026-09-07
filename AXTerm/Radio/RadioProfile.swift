@@ -103,6 +103,9 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
     /// default so an added radio never inherits another radio's beacon; the
     /// first radio is seeded from the legacy station-wide beacon on migration.
     var beacon: BeaconConfig = BeaconConfig()
+    /// This radio's own digipeater. Off by default; a radio only repeats
+    /// other people's traffic when the operator turns it on here.
+    var digi: DigiConfig = DigiConfig()
     /// Removed radios are archived, not deleted, so rows that name them keep
     /// resolving to a name.
     var archived: Bool = false
@@ -169,6 +172,7 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         answersMailbox = try c.decodeIfPresent(Bool.self, forKey: .answersMailbox) ?? true
         netRomAlias = try c.decodeIfPresent(String.self, forKey: .netRomAlias) ?? ""
         beacon = try c.decodeIfPresent(BeaconConfig.self, forKey: .beacon) ?? BeaconConfig()
+        digi = try c.decodeIfPresent(DigiConfig.self, forKey: .digi) ?? DigiConfig()
         archived = try c.decodeIfPresent(Bool.self, forKey: .archived) ?? false
     }
 

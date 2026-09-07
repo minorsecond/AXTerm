@@ -391,6 +391,30 @@ struct RadioDetailView: View {
                          + "service runs at all is set under Transmission and BBS; these rows only "
                          + "say which radios it uses.")
                 }
+
+                Section {
+                    Toggle("Digipeat on this radio", isOn: digiBinding(\.enabled))
+                    if digiBinding(\.enabled).wrappedValue {
+                        Toggle("Fill-in (WIDE1-1)", isOn: digiBinding(\.fillIn))
+                        Stepper(digiBinding(\.wideAreaMaxHops).wrappedValue == 0
+                                ? "Wide-area: off"
+                                : "Wide-area hops: \(digiBinding(\.wideAreaMaxHops).wrappedValue)",
+                                value: digiBinding(\.wideAreaMaxHops), in: 0...7)
+                        LabeledContent("Also answer to") {
+                            TextField("aliases (comma-separated)", text: digiAliasesBinding)
+                                .textFieldStyle(.roundedBorder).frame(maxWidth: 200)
+                        }
+                        Stepper("Dupe window: \(digiBinding(\.dupeSeconds).wrappedValue) s",
+                                value: digiBinding(\.dupeSeconds), in: 5...120, step: 5)
+                    }
+                } header: {
+                    Text("Digipeater")
+                } footer: {
+                    Text("Repeat other stations' traffic on this radio's channel: explicit "
+                         + "calls/aliases, fill-in WIDE1-1, and wide-area WIDEn-N up to the hop "
+                         + "cap. Off by default. Use it to make this radio an APRS digipeater "
+                         + "without touching your other radio.")
+                }
             }
 
             if settings.hasMultipleRadios {
@@ -572,6 +596,27 @@ struct RadioDetailView: View {
             set: { value in
                 settings.updateRadio(radioID) { $0.beacon[keyPath: keyPath] = value }
                 SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+            })
+    }
+
+    /// Bind one field of this radio's digipeater config.
+    private func digiBinding<V>(_ keyPath: WritableKeyPath<DigiConfig, V>) -> Binding<V> {
+        Binding(
+            get: { (settings.radio(radioID)?.digi ?? DigiConfig())[keyPath: keyPath] },
+            set: { value in
+                settings.updateRadio(radioID) { $0.digi[keyPath: keyPath] = value }
+                SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+            })
+    }
+
+    /// This radio's digi aliases as one comma-separated field.
+    private var digiAliasesBinding: Binding<String> {
+        Binding(
+            get: { (settings.radio(radioID)?.digi.aliases ?? []).joined(separator: ", ") },
+            set: { text in
+                let aliases = text.split(whereSeparator: { $0 == "," || $0.isWhitespace })
+                    .map { $0.uppercased() }
+                settings.updateRadio(radioID) { $0.digi.aliases = aliases }
             })
     }
 
