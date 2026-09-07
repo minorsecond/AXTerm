@@ -108,6 +108,10 @@ struct RadiosListView<Destination: Hashable>: View {
                 return "\(name(a)) and \(name(b)) use the same TNC and port; only one can hold it."
             case let .duplicateCallsign(a, b, call):
                 return "\(name(a)) and \(name(b)) both answer as \(call). Fine on different frequencies, a collision on the same one."
+            case let .duplicateAudioDevice(a, b):
+                return "\(name(a)) and \(name(b)) share an audio device; a sound device can serve one modem."
+            case let .duplicateSerialPort(a, b):
+                return "\(name(a)) and \(name(b)) use the same serial port; only one can open it."
             }
         }
     }
@@ -231,7 +235,7 @@ struct RadioDetailView: View {
 
             Section {
                 Picker("Transport", selection: transportBinding) {
-                    ForEach(TransportSelection.allCases) { type in
+                    ForEach(TransportSelection.selectable(including: viewModel.selectedTransport)) { type in
                         Text(type.rawValue).tag(type)
                     }
                 }
@@ -245,6 +249,10 @@ struct RadioDetailView: View {
                     SerialSettingsContent(viewModel: viewModel)
                 case .ble:
                     BLESettingsContent(viewModel: viewModel)
+                case .modem:
+                    Text("The sound modem's settings arrive with its form.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             } header: {
                 Text("Transport")
@@ -257,7 +265,7 @@ struct RadioDetailView: View {
                 // in-band KISS hardware query with its name and version; a
                 // silent TNC is plain KISS, which is itself the answer.
                 if viewModel.connectionStatus == .connected,
-                   viewModel.selectedTransport == .network {
+                   viewModel.selectedTransport == .network || viewModel.selectedTransport == .modem {
                     if let identity = viewModel.tncIdentity {
                         LabeledContent {
                             HStack(spacing: 6) {

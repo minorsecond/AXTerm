@@ -10,6 +10,13 @@ protocol LinkSessionDelegate: AnyObject {
     func linkSession(_ session: LinkSession, didReceiveUnknown command: UInt8, payload: Data)
     func linkSession(_ session: LinkSession, didChangeState state: KISSLinkState, from previous: KISSLinkState)
     func linkSession(_ session: LinkSession, didError message: String)
+    func linkSession(_ session: LinkSession, didUpdateModemTelemetry telemetry: ModemTelemetry)
+    func linkSession(_ session: LinkSession, didUpdateRigStatus status: RigStatus, model: String?)
+}
+
+extension LinkSessionDelegate {
+    func linkSession(_ session: LinkSession, didUpdateModemTelemetry telemetry: ModemTelemetry) {}
+    func linkSession(_ session: LinkSession, didUpdateRigStatus status: RigStatus, model: String?) {}
 }
 
 /// One byte stream to one TNC: a `KISSLink` and the parser that reassembles
@@ -39,6 +46,10 @@ final class LinkSession: KISSLinkDelegate {
     private(set) var mobilinkdBatteryLevel: Int?
     private(set) var mobilinkdInputLevel: MobilinkdInputLevel?
     private(set) var lastError: String?
+    /// The built-in modem's telemetry, when this link is one.
+    private(set) var modemTelemetry: ModemTelemetry?
+    /// What the radio says about itself over CI-V, when this link has one.
+    private(set) var rigStatus: RigStatus?
 
     weak var delegate: LinkSessionDelegate?
 
@@ -55,6 +66,24 @@ final class LinkSession: KISSLinkDelegate {
         self.transport = transport
         self.tcpEndpoint = tcpEndpoint
         link.delegate = self
+        #if os(macOS)
+        if let modem = link as? ModemRadioLink {
+            modem.onTelemetry = { [weak self] telemetry in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.modemTelemetry = telemetry
+                    self.delegate?.linkSession(self, didUpdateModemTelemetry: telemetry)
+                }
+            }
+            modem.onRigStatus = { [weak self] status in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.rigStatus = status
+                    self.delegate?.linkSession(self, didUpdateRigStatus: status, model: modem.rigModel)
+                }
+            }
+        }
+        #endif
     }
 
     /// Marks the link as opening before the transport has said so, so a
@@ -126,7 +155,13 @@ final class LinkSession: KISSLinkDelegate {
             // A TNC that has gone away has not identified itself to us.
             tncIdentity = nil
         }
-        if newState == .connected { lastError = nil }
+        if newState == .connected {
+            lastError = nil
+            #if os(macOS)
+            // The modem is ours: it needs no KISS query to say what it is.
+            if let modem = link as? ModemRadioLink { tncIdentity = modem.identity }
+            #endif
+        }
         delegate?.linkSession(self, didChangeState: newState, from: previous)
     }
 

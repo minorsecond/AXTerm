@@ -23,6 +23,17 @@ protocol RadioManagerDelegate: AnyObject {
     /// A frame arrived on a port no radio claims. Reported once per link and
     /// port, so a misconfigured Direwolf channel says so without flooding.
     func radioManager(_ manager: RadioManager, link: LinkSession, droppedFrameOnUnassignedPort port: UInt8)
+    /// The built-in modem's levels, carrier and PTT, a few times a second.
+    func radioManager(_ manager: RadioManager, link: LinkSession, didUpdateModemTelemetry telemetry: ModemTelemetry)
+    /// The radio's frequency and mode, as CI-V reports them.
+    func radioManager(_ manager: RadioManager, link: LinkSession, didUpdateRigStatus status: RigStatus, model: String?)
+}
+
+/// The modem-only notifications are optional: a delegate that never sees a
+/// sound modem need not know one exists.
+extension RadioManagerDelegate {
+    func radioManager(_ manager: RadioManager, link: LinkSession, didUpdateModemTelemetry telemetry: ModemTelemetry) {}
+    func radioManager(_ manager: RadioManager, link: LinkSession, didUpdateRigStatus status: RigStatus, model: String?) {}
 }
 
 /// The station's radios and the links that carry them.
@@ -51,6 +62,14 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
 
     /// The radios as last reconciled: enabled and not archived, in order.
     @Published private(set) var profiles: [RadioProfile] = []
+
+    /// Why a radio has no link, for the ones the factory refused: a sound
+    /// modem on iOS, a modem with no audio device chosen.
+    @Published private(set) var unavailableReasons: [RadioID: String] = [:]
+    /// The built-in modem's telemetry, per radio.
+    @Published private(set) var modemTelemetry: [RadioID: ModemTelemetry] = [:]
+    /// What the radio reports about itself over CI-V, per radio.
+    @Published private(set) var rigStatus: [RadioID: RigStatus] = [:]
 
     private(set) var sessions: [String: LinkSession] = [:]
     /// linkKey → port → radio.
@@ -116,6 +135,7 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
     func reconcile(_ radios: [RadioProfile], open shouldOpen: Bool) -> Int {
         let desired = radios.filter { $0.enabled && !$0.archived }
         profiles = desired
+        var unavailable: [RadioID: String] = [:]
 
         var newDemux: [String: [UInt8: RadioID]] = [:]
         var newAssignment: [RadioID: (key: String, port: UInt8)] = [:]
@@ -148,7 +168,12 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
                 }
                 continue
             }
-            guard let link = linkFactory(representative) else { continue }
+            guard let link = linkFactory(representative) else {
+                for radio in desired where radio.linkKey == key {
+                    unavailable[radio.id] = Self.unsupportedReason(for: radio) ?? "This radio's link could not be created."
+                }
+                continue
+            }
             let session = LinkSession(
                 key: key, link: link, transport: representative.kind,
                 tcpEndpoint: representative.kind == .tcp
@@ -163,8 +188,26 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
         demux = newDemux
         assignment = newAssignment
         reportedUnassigned = reportedUnassigned.filter { newDemux[$0.components(separatedBy: "#").first ?? ""] != nil }
+        unavailableReasons = unavailable
+        let live = Set(desired.map(\.id))
+        modemTelemetry = modemTelemetry.filter { live.contains($0.key) }
+        rigStatus = rigStatus.filter { live.contains($0.key) }
         refreshRadioStates()
         return created
+    }
+
+    /// Why a radio can have no link here, in the operator's words; nil when
+    /// the factory should manage.
+    nonisolated static func unsupportedReason(for radio: RadioProfile) -> String? {
+        guard radio.kind == .modem else { return nil }
+        #if os(macOS)
+        if radio.audioInputDeviceUID.isEmpty || radio.audioOutputDeviceUID.isEmpty {
+            return "Choose an audio input and output device for this radio."
+        }
+        return nil
+        #else
+        return "The sound modem needs a Mac. Use this radio from AXTerm on your Mac, or reach a TNC over the network or Bluetooth here."
+        #endif
     }
 
     /// Applies what can change without reopening a link. The transports
@@ -186,6 +229,11 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
                 autoReconnect: radio.bleAutoReconnect,
                 mobilinkdConfig: radio.mobilinkdConfig))
         }
+        #if os(macOS)
+        if let modem = session.link as? ModemRadioLink, let config = radio.modemConfig {
+            modem.updateConfig(config)
+        }
+        #endif
     }
 
     func openAll() {
@@ -269,6 +317,16 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
         delegate?.radioManager(self, link: session, didError: message)
     }
 
+    func linkSession(_ session: LinkSession, didUpdateModemTelemetry telemetry: ModemTelemetry) {
+        for radio in radios(onLink: session.key) { modemTelemetry[radio] = telemetry }
+        delegate?.radioManager(self, link: session, didUpdateModemTelemetry: telemetry)
+    }
+
+    func linkSession(_ session: LinkSession, didUpdateRigStatus status: RigStatus, model: String?) {
+        for radio in radios(onLink: session.key) { rigStatus[radio] = status }
+        delegate?.radioManager(self, link: session, didUpdateRigStatus: status, model: model)
+    }
+
     private func refreshRadioStates() {
         var states: [RadioID: KISSLinkState] = [:]
         for radio in profiles {
@@ -305,6 +363,17 @@ final class RadioManager: ObservableObject, LinkSessionDelegate {
                 peripheralName: radio.blePeripheralName,
                 autoReconnect: radio.bleAutoReconnect,
                 mobilinkdConfig: radio.mobilinkdConfig))
+        case .modem:
+            #if os(macOS)
+            guard let config = radio.modemConfig,
+                  !config.audioInputDeviceUID.isEmpty, !config.audioOutputDeviceUID.isEmpty else { return nil }
+            return ModemRadioLink(
+                config: config,
+                audio: CoreAudioModemIO(inputUID: config.audioInputDeviceUID, outputUID: config.audioOutputDeviceUID,
+                                        inputChannel: config.inputChannel))
+            #else
+            return nil
+            #endif
         }
     }
 }

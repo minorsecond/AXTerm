@@ -18,6 +18,13 @@ nonisolated struct RadioStatusSummary: Hashable, Sendable {
     let lastError: String?
     let lastRx: Date?
     let lastTx: Date?
+    // Only the built-in modem knows these; nil for a TNC, and then every
+    // string below is exactly what it was.
+    var frequencyHz: Int? = nil
+    var modeLabel: String? = nil
+    var dcd: Bool? = nil
+    var ptt: Bool? = nil
+    var rxLevelDBFS: Float? = nil
 }
 
 /// The words and tints the status surfaces use, free of SwiftUI.
@@ -82,6 +89,10 @@ nonisolated enum RadioPresentation {
         var line = "\(radio.name): \(radio.status.rawValue)"
         if !radio.endpoint.isEmpty { line += " \u{b7} \(radio.endpoint)" }
         if !radio.callsign.isEmpty { line += " \u{b7} \(radio.callsign)" }
+        if let hz = radio.frequencyHz {
+            line += " \u{b7} " + String(format: "%.3f MHz", Double(hz) / 1_000_000)
+            if let mode = radio.modeLabel { line += " \(mode)" }
+        }
         if radio.status == .failed, let error = radio.lastError, !error.isEmpty {
             line += " \u{2014} \(error)"
         }

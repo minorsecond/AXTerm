@@ -215,6 +215,8 @@ final class PacketEngine: ObservableObject {
     @Published private(set) var bytesReceived: Int = 0
     @Published private(set) var lastRxTime: Date = .distantPast
     @Published private(set) var lastTxTime: Date = .distantPast
+    /// The built-in modem's last telemetry per link, to log only transitions.
+    private var lastModemTelemetry: [String: ModemTelemetry] = [:]
     /// The same two clocks, per radio, for the sidebar's radio rows.
     @Published private(set) var lastRxByRadio: [RadioID: Date] = [:]
     @Published private(set) var lastTxByRadio: [RadioID: Date] = [:]
@@ -1404,9 +1406,14 @@ final class PacketEngine: ObservableObject {
                 endpoint: radio.displayEndpoint,
                 host: radio.kind == .tcp ? radio.host : "",
                 port: radio.kind == .tcp ? radio.port : nil,
-                lastError: session?.lastError,
+                lastError: session?.lastError ?? radioManager.unavailableReasons[radio.id],
                 lastRx: lastRxByRadio[radio.id],
-                lastTx: lastTxByRadio[radio.id])
+                lastTx: lastTxByRadio[radio.id],
+                frequencyHz: radioManager.rigStatus[radio.id]?.frequencyHz ?? (radio.kind == .modem ? radio.frequencyHz : nil),
+                modeLabel: radioManager.rigStatus[radio.id]?.modeLabel,
+                dcd: radioManager.modemTelemetry[radio.id]?.dcd,
+                ptt: radioManager.modemTelemetry[radio.id]?.ptt,
+                rxLevelDBFS: radioManager.modemTelemetry[radio.id]?.rxPeakDBFS)
         }
     }
 
@@ -2673,6 +2680,32 @@ extension PacketEngine: RadioManagerDelegate {
 
     func radioManager(_ manager: RadioManager, link: LinkSession, didReceiveUnknown command: UInt8, payload: Data) {
         noteUnknownFrame(command: command, payload: payload)
+    }
+
+    func radioManager(_ manager: RadioManager, link: LinkSession, didUpdateModemTelemetry telemetry: ModemTelemetry) {
+        // Only the transitions are worth a line: PTT and carrier.
+        let previous = lastModemTelemetry[link.key]
+        lastModemTelemetry[link.key] = telemetry
+        if previous?.ptt != telemetry.ptt {
+            LinkDebugLog.shared.recordStateChange(from: previous?.ptt == true ? "PTT on" : "PTT off",
+                                                  to: telemetry.ptt ? "PTT on" : "PTT off",
+                                                  endpoint: link.endpointDescription)
+            TxLog.debug(.modem, telemetry.ptt ? "PTT on" : "PTT off", ["link": link.endpointDescription])
+        }
+        if previous?.dcd != telemetry.dcd {
+            TxLog.debug(.modem, telemetry.dcd ? "Carrier detected" : "Channel clear", ["link": link.endpointDescription])
+        }
+    }
+
+    func radioManager(_ manager: RadioManager, link: LinkSession, didUpdateRigStatus status: RigStatus, model: String?) {
+        // The radio's own frequency and name become facts about the radio
+        // profile; `updateRadio` is a no-op when nothing changed.
+        for radio in manager.radios(onLink: link.key) {
+            settings.updateRadio(radio) { (profile: inout RadioProfile) in
+                if let hz = status.frequencyHz { profile.frequencyHz = hz }
+                if let model, profile.rigModel != model { profile.rigModel = model }
+            }
+        }
     }
 
     func radioManager(_ manager: RadioManager, link: LinkSession, didChangeState state: KISSLinkState, from previous: KISSLinkState) {

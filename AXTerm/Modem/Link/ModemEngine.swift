@@ -25,7 +25,7 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
     enum Scheduling: Sendable { case dedicatedThread, inline }
 
     let audio: ModemAudioIO
-    let ptt: PTTController
+    private(set) var ptt: PTTController
     let scheduling: Scheduling
 
     /// Decoded frame (no FCS) and the slicer that heard it. DSP thread.
@@ -146,6 +146,13 @@ nonisolated final class ModemEngine: ModemAudioSink, @unchecked Sendable {
             queue.append(ax25)
         }
         if scheduling == .dedicatedThread { wake.signal() }
+    }
+
+    /// Swap the keying method. Only while stopped — a transmission in
+    /// progress keeps the controller that keyed it.
+    func replacePTT(_ new: PTTController) {
+        guard !isRunning else { return }
+        ptt = new
     }
 
     /// Apply new settings; takes effect at the next block boundary.

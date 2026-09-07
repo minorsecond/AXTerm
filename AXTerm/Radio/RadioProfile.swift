@@ -7,6 +7,9 @@ nonisolated enum RadioTransportKind: String, Codable, CaseIterable, Sendable {
     case tcp = "network"
     case serial = "serial"
     case ble = "ble"
+    /// The built-in sound modem: audio through a sound device, PTT and
+    /// frequency over CI-V. An IC-705 over USB, with no TNC in between.
+    case modem = "modem"
 }
 
 /// One radio: a TNC port on a link, operating under a callsign.
@@ -55,6 +58,28 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
     var autoConnect: Bool = true
     var frequencyHz: Int? = nil
 
+    // MARK: Built-in modem (kind == .modem)
+    var modemMode: ModemMode = .afsk1200
+    var audioInputDeviceUID: String = ""
+    var audioInputDeviceName: String = ""
+    var audioOutputDeviceUID: String = ""
+    var audioOutputDeviceName: String = ""
+    var audioInputChannel: ModemInputChannel = .left
+    var civSerialPath: String = ""
+    var civAddress: UInt8 = 0xA4
+    var civControllerAddress: UInt8 = 0xE0
+    /// "IC-705" once the radio has identified itself over CI-V.
+    var rigModel: String = ""
+    var pttMethod: ModemPTTMethod = .civ
+    var txDelayMs: Int = 300
+    var txTailMs: Int = 100
+    var persistence: Int = 63
+    var slotTimeMs: Int = 100
+    var txAudioLevel: Int = 85
+    var followsRadioFrequency: Bool = true
+    var setsRadioModeOnConnect: Bool = false
+    var maxTransmitSeconds: Int = 30
+
     // MARK: Services on this radio
     // All on by default, so one radio behaves exactly as it always has; the
     // switches are only shown once there are two. "Two of your radios on one
@@ -102,6 +127,25 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         autoConnect = try c.decodeIfPresent(Bool.self, forKey: .autoConnect) ?? true
         frequencyHz = try c.decodeIfPresent(Int.self, forKey: .frequencyHz)
+        modemMode = try c.decodeIfPresent(ModemMode.self, forKey: .modemMode) ?? .afsk1200
+        audioInputDeviceUID = try c.decodeIfPresent(String.self, forKey: .audioInputDeviceUID) ?? ""
+        audioInputDeviceName = try c.decodeIfPresent(String.self, forKey: .audioInputDeviceName) ?? ""
+        audioOutputDeviceUID = try c.decodeIfPresent(String.self, forKey: .audioOutputDeviceUID) ?? ""
+        audioOutputDeviceName = try c.decodeIfPresent(String.self, forKey: .audioOutputDeviceName) ?? ""
+        audioInputChannel = try c.decodeIfPresent(ModemInputChannel.self, forKey: .audioInputChannel) ?? .left
+        civSerialPath = try c.decodeIfPresent(String.self, forKey: .civSerialPath) ?? ""
+        civAddress = try c.decodeIfPresent(UInt8.self, forKey: .civAddress) ?? 0xA4
+        civControllerAddress = try c.decodeIfPresent(UInt8.self, forKey: .civControllerAddress) ?? 0xE0
+        rigModel = try c.decodeIfPresent(String.self, forKey: .rigModel) ?? ""
+        pttMethod = try c.decodeIfPresent(ModemPTTMethod.self, forKey: .pttMethod) ?? .civ
+        txDelayMs = try c.decodeIfPresent(Int.self, forKey: .txDelayMs) ?? 300
+        txTailMs = try c.decodeIfPresent(Int.self, forKey: .txTailMs) ?? 100
+        persistence = try c.decodeIfPresent(Int.self, forKey: .persistence) ?? 63
+        slotTimeMs = try c.decodeIfPresent(Int.self, forKey: .slotTimeMs) ?? 100
+        txAudioLevel = try c.decodeIfPresent(Int.self, forKey: .txAudioLevel) ?? 85
+        followsRadioFrequency = try c.decodeIfPresent(Bool.self, forKey: .followsRadioFrequency) ?? true
+        setsRadioModeOnConnect = try c.decodeIfPresent(Bool.self, forKey: .setsRadioModeOnConnect) ?? false
+        maxTransmitSeconds = try c.decodeIfPresent(Int.self, forKey: .maxTransmitSeconds) ?? 30
         sendsBeacons = try c.decodeIfPresent(Bool.self, forKey: .sendsBeacons) ?? true
         pings = try c.decodeIfPresent(Bool.self, forKey: .pings) ?? true
         announcesNode = try c.decodeIfPresent(Bool.self, forKey: .announcesNode) ?? true
@@ -125,6 +169,10 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         case .tcp: return "tcp://\(host.lowercased()):\(port)"
         case .serial: return "serial://\(serialDevicePath)"
         case .ble: return "ble://\(blePeripheralUUID.lowercased())"
+        // The audio pair is the byte stream. The CI-V port is deliberately
+        // not part of it: two modem radios on one sound device are one
+        // owner fight whatever their ports.
+        case .modem: return "modem://\(audioInputDeviceUID.lowercased())|\(audioOutputDeviceUID.lowercased())"
         }
     }
 
@@ -137,6 +185,10 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         case .tcp: return "tcp://\(host.lowercased()):\(port)#\(kissPort)"
         case .serial: return "serial://\(serialDevicePath)@\(serialBaudRate)#\(kissPort)"
         case .ble: return "ble://\(blePeripheralUUID.lowercased())#\(kissPort)"
+        // Devices, mode, port and keying reopen; levels and timing apply in place.
+        case .modem:
+            return "modem://\(audioInputDeviceUID.lowercased())|\(audioOutputDeviceUID.lowercased())"
+                + "@\(modemMode.rawValue)/\(civSerialPath)/\(pttMethod.rawValue)/\(audioInputChannel.rawValue)#\(kissPort)"
         }
     }
 
@@ -150,7 +202,38 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         case .ble:
             if !blePeripheralName.isEmpty { return blePeripheralName }
             return blePeripheralUUID.isEmpty ? "No device" : blePeripheralUUID
+        case .modem:
+            guard !audioInputDeviceName.isEmpty || !audioInputDeviceUID.isEmpty else { return "No audio device" }
+            let device = audioInputDeviceName.isEmpty ? audioInputDeviceUID : audioInputDeviceName
+            return "\(rigModel.isEmpty ? "Sound modem" : rigModel) via \(device)"
         }
+    }
+
+    /// The built-in modem's settings as its link takes them, or nil for a
+    /// radio that reaches a TNC.
+    var modemConfig: ModemLinkConfig? {
+        guard kind == .modem else { return nil }
+        var c = ModemLinkConfig()
+        c.mode = modemMode
+        c.audioInputDeviceUID = audioInputDeviceUID
+        c.audioInputDeviceName = audioInputDeviceName
+        c.audioOutputDeviceUID = audioOutputDeviceUID
+        c.audioOutputDeviceName = audioOutputDeviceName
+        c.inputChannel = audioInputChannel
+        c.kissPort = kissPort
+        c.civSerialPath = civSerialPath
+        c.civAddress = civAddress
+        c.civControllerAddress = civControllerAddress
+        c.pttMethod = pttMethod
+        c.txDelayMs = txDelayMs
+        c.txTailMs = txTailMs
+        c.persistence = UInt8(clamping: persistence)
+        c.slotTimeMs = slotTimeMs
+        c.txAudioLevel = txAudioLevel
+        c.followsRadioFrequency = followsRadioFrequency
+        c.setsRadioModeOnConnect = setsRadioModeOnConnect
+        c.maxTransmitSeconds = maxTransmitSeconds
+        return c
     }
 
     /// The Mobilinkd settings as the links take them, or nil when the TNC is
@@ -226,6 +309,8 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
             return trimmed.isEmpty ? "Serial TNC" : trimmed
         case .ble:
             return radio.blePeripheralName.isEmpty ? "Bluetooth TNC" : radio.blePeripheralName
+        case .modem:
+            return radio.rigModel.isEmpty ? "Sound Modem" : radio.rigModel
         }
     }
 }
@@ -249,6 +334,11 @@ nonisolated enum RadioProfileIssue: Equatable, Sendable {
     /// Two enabled radios answer as one address. Legal on different
     /// frequencies, a hazard on the same one.
     case duplicateCallsign(RadioID, RadioID, String)
+    /// Two modem radios share an audio device (one of the pair) — the
+    /// device can only serve one.
+    case duplicateAudioDevice(RadioID, RadioID)
+    /// A modem's CI-V port is another radio's serial port.
+    case duplicateSerialPort(RadioID, RadioID)
 
     static func issues(in radios: [RadioProfile], stationCallsign: String) -> [RadioProfileIssue] {
         let live = radios.filter { !$0.archived && $0.enabled }
@@ -261,6 +351,17 @@ nonisolated enum RadioProfileIssue: Equatable, Sendable {
                 let callA = a.resolvedCallsign(station: stationCallsign)
                 if !callA.isEmpty, callA == b.resolvedCallsign(station: stationCallsign) {
                     found.append(.duplicateCallsign(a.id, b.id, callA))
+                }
+                if a.kind == .modem, b.kind == .modem, a.linkKey != b.linkKey {
+                    let shared = [a.audioInputDeviceUID, a.audioOutputDeviceUID]
+                        .filter { !$0.isEmpty }
+                        .contains { $0 == b.audioInputDeviceUID || $0 == b.audioOutputDeviceUID }
+                    if shared { found.append(.duplicateAudioDevice(a.id, b.id)) }
+                }
+                let portsA = Set([a.kind == .modem ? a.civSerialPath : "", a.kind == .serial ? a.serialDevicePath : ""]).subtracting([""])
+                let portsB = Set([b.kind == .modem ? b.civSerialPath : "", b.kind == .serial ? b.serialDevicePath : ""]).subtracting([""])
+                if !portsA.isDisjoint(with: portsB), !(a.kind == .serial && b.kind == .serial) {
+                    found.append(.duplicateSerialPort(a.id, b.id))
                 }
             }
         }

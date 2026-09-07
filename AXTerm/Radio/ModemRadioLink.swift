@@ -1,0 +1,205 @@
+#if os(macOS)
+import Foundation
+
+/// A `.modem` radio's link: the built-in modem, the radio's CI-V port, and
+/// the PTT that joins them.
+///
+/// Opening goes CI-V first — a wrong radio or a dead port fails before the
+/// audio devices are grabbed, so the operator sees one clear error — then
+/// audio, then optionally the one-shot radio setup. The wrapper is what
+/// `RadioManager` holds, so in-place setting changes have one place to land.
+nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
+
+    private(set) var config: ModemLinkConfig
+    let modem: SoftModemLink
+    private(set) var rig: CIVClient?
+    private(set) var pttController: PTTController
+    private var civTransport: CIVTransport?
+    private let makeTransport: (String) -> CIVTransport
+
+    /// The radio, as CI-V reports it; nil until identified.
+    private(set) var rigStatus = RigStatus()
+    /// "IC-705" once identified.
+    private(set) var rigModel: String?
+
+    var onRigStatus: (@Sendable (RigStatus) -> Void)?
+    var onTelemetry: (@Sendable (ModemTelemetry) -> Void)? {
+        didSet { modem.engine.onTelemetry = onTelemetry }
+    }
+
+    private let lock = NSLock()
+    private enum Phase: Equatable { case idle, rigOpening, modemOpen, failed(String) }
+    private var phase: Phase = .idle
+    private var pollTask: Task<Void, Never>?
+    private weak var _delegate: KISSLinkDelegate?
+    private let deliver: SoftModemLink.Deliver
+
+    /// What the "Software" row shows: this modem, its mode.
+    var identity: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        return "AXTerm Sound Modem \(version) · \(config.mode.rawValue)".replacingOccurrences(of: "  ", with: " ")
+    }
+
+    init(config: ModemLinkConfig,
+         audio: ModemAudioIO,
+         makeTransport: @escaping (String) -> CIVTransport = { SerialCIVTransport(path: $0) },
+         scheduling: ModemEngine.Scheduling = .dedicatedThread,
+         deliver: @escaping SoftModemLink.Deliver = { work in
+             DispatchQueue.main.async { MainActor.assumeIsolated { work() } }
+         }) {
+        self.config = config
+        self.makeTransport = makeTransport
+        self.deliver = deliver
+        let rigParts = Self.makeRig(config, makeTransport: makeTransport)
+        self.civTransport = rigParts.transport
+        self.rig = rigParts.client
+        self.pttController = rigParts.ptt
+        self.modem = SoftModemLink(configuration: config.softModemConfiguration, audio: audio, ptt: rigParts.ptt,
+                                   inputName: config.audioInputDeviceName, outputName: config.audioOutputDeviceName,
+                                   scheduling: scheduling, deliver: deliver)
+    }
+
+    private static func makeRig(_ config: ModemLinkConfig, makeTransport: (String) -> CIVTransport)
+    -> (transport: CIVTransport?, client: CIVClient?, ptt: PTTController) {
+        guard config.usesRig else { return (nil, nil, NoPTTController()) }
+        let transport = makeTransport(config.civSerialPath)
+        let client = CIVClient(transport: transport, radioAddress: config.civAddress,
+                               controllerAddress: config.civControllerAddress)
+        let ptt: PTTController
+        switch config.pttMethod {
+        case .civ: ptt = CIVPTTController(client: client, maxTransmitSeconds: TimeInterval(config.maxTransmitSeconds))
+        case .rts: ptt = SerialLinePTTController(transport: transport, line: .rts, maxTransmitSeconds: TimeInterval(config.maxTransmitSeconds))
+        case .dtr: ptt = SerialLinePTTController(transport: transport, line: .dtr, maxTransmitSeconds: TimeInterval(config.maxTransmitSeconds))
+        case .none: ptt = NoPTTController()
+        }
+        return (transport, client, ptt)
+    }
+
+    // MARK: - KISSLink
+
+    var state: KISSLinkState {
+        let phase = lock.withLock { self.phase }
+        switch phase {
+        case .idle: return .disconnected
+        case .rigOpening: return .connecting
+        case .failed: return .failed
+        case .modemOpen: return modem.state
+        }
+    }
+
+    var endpointDescription: String {
+        let device = config.audioInputDeviceName.isEmpty ? "audio" : config.audioInputDeviceName
+        return "\(rigModel ?? "Sound modem") via \(device)"
+    }
+
+    var delegate: KISSLinkDelegate? {
+        get { _delegate }
+        set { _delegate = newValue; modem.delegate = newValue }
+    }
+
+    func open() {
+        guard state == .disconnected || state == .failed else { return }
+        guard let rig, let civTransport else {
+            lock.withLock { phase = .modemOpen }
+            modem.open()
+            return
+        }
+        lock.withLock { phase = .rigOpening }
+        deliver { [weak self] in self?._delegate?.linkDidChangeState(.connecting) }
+        civTransport.open()
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                if case .failed(let reason) = civTransport.state { throw CIVError.transport(reason) }
+                let address = try await rig.identify()
+                rigModel = CIVKnownRadios.model(forAddress: address) ?? String(format: "Icom %02X", address)
+                try? await rig.setTransceive(false)
+                if config.setsRadioModeOnConnect { try await rig.configureForPacket(config.mode) }
+                await refreshRigStatus()
+                lock.withLock { phase = .modemOpen }
+                modem.open()
+                startPolling()
+            } catch {
+                let message = "Radio control failed: \((error as? CIVError)?.message ?? String(describing: error))"
+                lock.withLock { phase = .failed(message) }
+                civTransport.close()
+                deliver { [weak self] in
+                    self?._delegate?.linkDidError(message)
+                    self?._delegate?.linkDidChangeState(.failed)
+                }
+            }
+        }
+    }
+
+    func close() {
+        pollTask?.cancel()
+        pollTask = nil
+        modem.close()
+        rig?.close()
+        lock.withLock { phase = .idle }
+    }
+
+    func send(_ data: Data, completion: @escaping (Error?) -> Void) {
+        modem.send(data, completion: completion)
+    }
+
+    // MARK: - Settings while running
+
+    /// Levels and timing apply in place; anything about the devices, the
+    /// mode, the port or the keying rebuilds the link.
+    func updateConfig(_ new: ModemLinkConfig) {
+        let old = config
+        guard new != old else { return }
+        config = new
+        if new.requiresReopen(from: old) {
+            let wasOpen = state == .connected || state == .connecting
+            close()
+            let rigParts = Self.makeRig(new, makeTransport: makeTransport)
+            civTransport = rigParts.transport
+            rig = rigParts.client
+            pttController = rigParts.ptt
+            modem.replacePTT(rigParts.ptt)
+            modem.update(configuration: new.softModemConfiguration)
+            if wasOpen { open() }
+        } else {
+            modem.update(configuration: new.softModemConfiguration)
+        }
+    }
+
+    /// The one-shot: put the radio in the right mode for this modem.
+    func configureRadioForPacket() async throws {
+        guard let rig else { throw CIVError.notOpen }
+        try await rig.configureForPacket(config.mode)
+        await refreshRigStatus()
+    }
+
+    // MARK: - Rig status
+
+    private func refreshRigStatus() async {
+        guard let rig else { return }
+        var status = rigStatus
+        if let hz = try? await rig.readFrequency() { status.frequencyHz = hz }
+        if let mode = try? await rig.readMode() { status.mode = mode.mode; status.filter = mode.filter }
+        if let data = try? await rig.readDataMode() { status.dataMode = data }
+        status.ptt = modem.telemetry.ptt
+        status.updatedAt = Date()
+        rigStatus = status
+        onRigStatus?(status)
+    }
+
+    /// Every five seconds while the modem is idle; once only when the
+    /// operator does not want the frequency followed.
+    private func startPolling() {
+        pollTask?.cancel()
+        guard config.followsRadioFrequency else { return }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard let self, !Task.isCancelled else { return }
+                if self.modem.telemetry.ptt { continue }
+                await self.refreshRigStatus()
+            }
+        }
+    }
+}
+#endif

@@ -2487,6 +2487,9 @@ struct ContentView: View {
             return "KISS Bluetooth @ \(name.isEmpty ? "No peripheral" : name)"
         case .tcp:
             return "KISS TCP @ \(connectionHostPort)"
+        case .modem:
+            let device = settings.primaryRadio?.audioInputDeviceName ?? ""
+            return "Sound modem @ \(device.isEmpty ? "No audio device" : device)"
         }
     }
 

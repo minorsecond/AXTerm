@@ -14,8 +14,15 @@ enum TransportSelection: String, CaseIterable, Identifiable {
     case network = "Network"
     case serial = "Serial"
     case ble = "Bluetooth LE"
+    case modem = "Sound Modem"
     
     var id: String { rawValue }
+
+    /// What the picker offers. The sound modem appears once its form
+    /// exists; a profile that already is one always shows its segment.
+    static func selectable(including current: TransportSelection) -> [TransportSelection] {
+        allCases.filter { $0 != .modem || current == .modem }
+    }
 }
 
 /// The form behind one radio: every field of its profile as a published
@@ -133,6 +140,7 @@ final class ConnectionTransportViewModel: ObservableObject {
         case .tcp: .network
         case .serial: .serial
         case .ble: .ble
+        case .modem: .modem
         }
     }
 
@@ -471,6 +479,11 @@ final class ConnectionTransportViewModel: ObservableObject {
             Task { serialDiscovery.stopScanning() }
             stopSerialGraceTimer()
             // BLE scan is manual or on-demand
+
+        case .modem:
+            // The CI-V port is a serial device; the audio devices come later.
+            Task { serialDiscovery.startScanning() }
+            bleScanner.stopScan()
         }
     }
     
@@ -487,8 +500,16 @@ final class ConnectionTransportViewModel: ObservableObject {
         case .network: kind = .tcp
         case .serial: kind = .serial
         case .ble: kind = .ble
+        case .modem: kind = .modem
         }
-        update { $0.kind = kind }
+        update {
+            $0.kind = kind
+            // Our own modem tunes both the link and itself.
+            if kind == .modem {
+                $0.capabilities = TNCCapabilities(mode: .kiss, supportsLinkTuning: true,
+                                                  supportsModemTuning: true, supportsCustomCommands: false)
+            }
+        }
     }
 
     var isSerialTransport: Bool {

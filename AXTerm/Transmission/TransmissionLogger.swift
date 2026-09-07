@@ -33,6 +33,7 @@ nonisolated enum TxLogCategory: String {
     case path = "PATH"
     case settings = "SETTINGS"
     case adaptive = "ADAPTIVE"
+    case modem = "MODEM"
 
     var emoji: String {
         switch self {
@@ -51,6 +52,7 @@ nonisolated enum TxLogCategory: String {
         case .path: return "🛤️"
         case .settings: return "⚙️"
         case .adaptive: return "📊"
+        case .modem: return "🎛️"
         }
     }
 }

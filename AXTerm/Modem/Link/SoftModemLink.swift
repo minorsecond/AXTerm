@@ -118,6 +118,9 @@ nonisolated final class SoftModemLink: KISSLink, @unchecked Sendable {
         completion(nil)
     }
 
+    /// A new keying method, for a closed link.
+    func replacePTT(_ new: PTTController) { engine.replacePTT(new) }
+
     /// Settings changed under a running link: levels and timing apply in
     /// place; the engine rebuilds its DSP if the mode did.
     func update(configuration new: SoftModemConfiguration) {
