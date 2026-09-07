@@ -213,7 +213,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
                     rigModel = CIVKnownRadios.model(forAddress: address) ?? String(format: "Icom %02X", address)
                 }
                 try? await rig.setTransceive(false)
-                if config.setsRadioModeOnConnect { try? await rig.configureForPacket(config.mode) }
+                if config.setsRadioModeOnConnect { try? await rig.configureForPacket(config.mode, dataMod: config.rigLink == .lan ? .wlan : .usb) }
                 await refreshRigStatus()
                 lock.withLock { phase = .modemOpen }
                 modem.open()
@@ -343,7 +343,7 @@ nonisolated final class ModemRadioLink: KISSLink, @unchecked Sendable {
     /// The one-shot: put the radio in the right mode for this modem.
     func configureRadioForPacket() async throws {
         guard let rig else { throw CIVError.notOpen }
-        try await rig.configureForPacket(config.mode)
+        try await rig.configureForPacket(config.mode, dataMod: config.rigLink == .lan ? .wlan : .usb)
         await refreshRigStatus()
     }
 

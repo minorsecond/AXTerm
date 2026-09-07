@@ -173,14 +173,21 @@ nonisolated final class CIVClient: @unchecked Sendable {
     /// go: the mode with data on, modulation from USB, the AF squelch open
     /// so the modem hears everything, USB SEND off (PTT is a command), CI-V
     /// transceive off (a clean bus), the radio's own TX delays off.
-    func configureForPacket(_ mode: ModemMode) async throws {
+    /// Where the radio takes its DATA-mode modulation from. Over USB the
+    /// audio arrives on the USB codec (0x01); over the LAN/RS-BA1 network
+    /// link the audio arrives on the WLAN codec (0x02), and picking the
+    /// wrong one keys an unmodulated carrier — a bare CW line on the
+    /// waterfall — because the modulator listens to a dead input.
+    enum DataModSource: UInt8 { case usb = 0x01, wlan = 0x02 }
+
+    func configureForPacket(_ mode: ModemMode, dataMod: DataModSource = .usb) async throws {
         switch mode {
         case .afsk1200: try await setMode(.fm, filter: 1)
         case .afsk300: try await setMode(.usb, filter: 1)
         case .g3ruh9600RxIF: try await setMode(.fm, filter: 1)
         }
         try await setDataMode(true, filter: 1)
-        try await setMenuItem(.dataMod, [0x01])
+        try await setMenuItem(.dataMod, [dataMod.rawValue])
         try await setMenuItem(.usbAFSquelch, [0x00])
         try await setMenuItem(.usbSend, [0x00])
         try await setTransceive(false)

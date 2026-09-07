@@ -104,6 +104,25 @@ nonisolated final class IcomLANSession: @unchecked Sendable {
     /// says the same.
     func open() async throws {
         guard state != .connected, state != .connecting else { return }
+        // The session (and its streams) is reused across reconnects, so clear
+        // everything the previous connection left behind before starting a
+        // new handshake — otherwise a stale authID, an already-sent flag, or
+        // a half-finished token exchange carries over and the reconnect fails.
+        authID = []
+        replyID = nil
+        tokenAccepted = false
+        innerSequence = 0
+        serialSendSequence = 0
+        audioSendSequence = 1
+        renewOutstanding = false
+        gotReplyID = false
+        authOK = false
+        requestSent = false
+        connectionOpened = false
+        finishConnect = nil
+        recentAudioSizes = []
+        serialReorder.reset()
+        audioReorder.reset()
         state = .connecting
         let task = Task { [self] in try await performOpen() }
         openTask = task

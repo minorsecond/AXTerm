@@ -85,6 +85,19 @@ nonisolated final class IcomLANStream: @unchecked Sendable {
     /// I-am-here (which carries the radio's session ID), ready.
     func connect(host: String, port: UInt16, timeout: Double = 2) async throws {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else { throw IcomLANError.network("bad port \(port)") }
+        // This stream object is reused across connect/disconnect cycles, so
+        // every per-session counter must start fresh — the radio treats a new
+        // localID as a new session and expects its tracked sequence to begin
+        // at 1. Carrying a climbing sequence (or a stale remote/ready flag)
+        // over from the previous connection makes the radio ignore the login,
+        // which surfaces as "the radio did not answer (login)" on reconnect.
+        trackedSequence = 1
+        pingSequence = 1
+        history.removeAll()
+        historyOrder.removeAll()
+        remoteID = 0
+        isReady = false
+        reservedLocalPort = nil
         let params = NWParameters.udp
         params.allowLocalEndpointReuse = true
         // The radio checks our session ID against the source of our
