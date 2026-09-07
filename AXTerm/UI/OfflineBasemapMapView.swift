@@ -42,6 +42,13 @@ struct OfflineBasemapMapView {
     /// Observed paths between stations, drawn as great-circle lines so the
     /// geometry matches how the signal actually travelled.
     var pathLinks: [MapPathLink] = []
+    /// APRS symbols to draw over station dots, keyed by the same id the
+    /// scope's sites carry. Empty leaves every dot plain, so a scope with no
+    /// APRS traffic looks exactly as it did.
+    var aprsSymbols: [String: APRSMapSymbol] = [:]
+    /// Movement trails, one per station that has beaconed more than one
+    /// position. Drawn as polylines under the dots.
+    var tracks: [MapTrack] = []
     /// Shaded elevation tiles. Empty draws none, so a map with no terrain
     /// stored looks exactly as it did.
     var terrainOverlays: [ElevationOverlay] = []
@@ -97,10 +104,14 @@ struct OfflineBasemapMapView {
         var isApproximate: Bool
         let isObserver: Bool
         var isNode: Bool
+        /// The APRS symbol this station beaconed, drawn over its dot. Nil for
+        /// a station that has never sent a position, and for infrastructure.
+        var aprsSymbol: APRSMapSymbol?
 
         init(id: String, coordinate: CLLocationCoordinate2D, title: String?,
              subtitle: String?, signal: StationScope.Signal,
-             isApproximate: Bool, isObserver: Bool, isNode: Bool = false) {
+             isApproximate: Bool, isObserver: Bool, isNode: Bool = false,
+             aprsSymbol: APRSMapSymbol? = nil) {
             self.id = id
             self.coordinate = coordinate
             self.title = title
@@ -109,6 +120,7 @@ struct OfflineBasemapMapView {
             self.isApproximate = isApproximate
             self.isObserver = isObserver
             self.isNode = isNode
+            self.aprsSymbol = aprsSymbol
         }
 
         #if DEBUG
@@ -160,6 +172,7 @@ struct OfflineBasemapMapView {
                 || signal != next.signal
                 || isApproximate != next.isApproximate
                 || isNode != next.isNode
+                || aprsSymbol != next.aprsSymbol
             if redraws {
                 #if DEBUG
                 Self.noteFieldWrite("title/tint")
@@ -168,6 +181,7 @@ struct OfflineBasemapMapView {
                 signal = next.signal
                 isApproximate = next.isApproximate
                 isNode = next.isNode
+                aprsSymbol = next.aprsSymbol
             }
             return redraws
         }
@@ -246,7 +260,8 @@ struct OfflineBasemapMapView {
                 signal: site.signal,
                 isApproximate: site.isApproximate,
                 isObserver: false,
-                isNode: site.isNode))
+                isNode: site.isNode,
+                aprsSymbol: aprsSymbols[site.id]))
         }
         return result
     }
@@ -319,6 +334,16 @@ struct OfflineBasemapMapView {
         /// layer, and evidence improves constantly on a busy channel.
         var linkGeometry: [String: String] = [:]
         var linkStyleSignatures: [String: String] = [:]
+        /// APRS movement trails by station id, with the geometry signature of
+        /// each. A trail grows a fix at a time; the polyline for one is rebuilt
+        /// only when its path actually changed, on the same batching clock as
+        /// the links so a new fix does not ripple the whole label layer.
+        var trailLines: [String: MKPolyline] = [:]
+        var trailGeometry: [String: String] = [:]
+        /// Identity set of the trail polylines, so the renderer can tell a
+        /// trail apart from a network path line at render time — MapKit hands
+        /// back a bare `MKPolyline` either way.
+        var trailLineIDs: Set<ObjectIdentifier> = []
         /// When the map was last structurally mutated — an annotation added
         /// or removed, a line rebuilt. Inserting anything makes MapKit
         /// re-resolve its own label layer: an animated ripple of the city
@@ -363,6 +388,16 @@ struct OfflineBasemapMapView {
                 return renderer
             case let line as MKPolyline:
                 let renderer = MKPolylineRenderer(polyline: line)
+                // A movement trail: the road a rover drove, drawn thin and
+                // quiet under its dot. Its colour is the same recency tint the
+                // marker carries, so the trail and the station read as one.
+                if trailLineIDs.contains(ObjectIdentifier(line)) {
+                    renderer.strokeColor = color.withAlphaComponent(0.7)
+                    renderer.lineWidth = 2.5
+                    renderer.lineCap = .round
+                    renderer.lineJoin = .round
+                    return renderer
+                }
                 if let link = linkStyles[ObjectIdentifier(line)] {
                     renderer.strokeColor = color.withAlphaComponent(
                         link.isPrediction ? 0.5
@@ -465,7 +500,8 @@ struct OfflineBasemapMapView {
                            isObserver: site.isObserver,
                            approximate: site.isApproximate,
                            isNode: site.isNode,
-                           callsign: site.title)
+                           callsign: site.title,
+                           aprsSymbol: site.aprsSymbol)
             view.setOverDarkBasemap(parent.store == nil && parent.basemap.isDark)
             view.setLabelVisible(
                 labelsVisible || site.isObserver || site.id == parent.selection)
@@ -512,7 +548,13 @@ struct OfflineBasemapMapView {
             // Infrastructure wears one colour so it reads apart from
             // traffic; recency still shows through the label and callout.
             if site.isNode { return .systemPurple }
-            switch site.signal {
+            return tint(forSignal: site.signal)
+        }
+
+        /// The recency colour for a signal level — the shared vocabulary a
+        /// dot and its movement trail both draw from.
+        static func tint(forSignal signal: StationScope.Signal) -> PlatformColor {
+            switch signal {
             case .good: return .systemGreen
             case .fair: return .systemYellow
             case .poor: return .systemOrange
@@ -699,6 +741,7 @@ struct OfflineBasemapMapView {
 
         applyBasemap(to: mapView, coordinator: context.coordinator)
         applyVectorOverlays(to: mapView, coordinator: context.coordinator)
+        applyTrails(to: mapView, coordinator: context.coordinator)
         applyCoverage(to: mapView, coordinator: context.coordinator)
 
         // A tap recogniser rather than MapKit's own selection handling: in a
@@ -836,13 +879,16 @@ struct OfflineBasemapMapView {
 
             let coverageIDs = Set(coordinator.coverageCircles.map(ObjectIdentifier.init))
             let linkIDs = Set(coordinator.linkLines.values.map(ObjectIdentifier.init))
+            let trailIDs = coordinator.trailLineIDs
             let existing = mapView.overlays.filter {
                 !($0 is MKTileOverlay) && !($0 is ElevationOverlay)
                     && !coverageIDs.contains(ObjectIdentifier($0))
                     && !linkIDs.contains(ObjectIdentifier($0))
+                    && !trailIDs.contains(ObjectIdentifier($0))
             }
             mapView.removeOverlays(existing)
-            for id in coordinator.overlayColors.keys where !linkIDs.contains(id) {
+            for id in coordinator.overlayColors.keys
+            where !linkIDs.contains(id) && !trailIDs.contains(id) {
                 coordinator.overlayColors.removeValue(forKey: id)
             }
 
@@ -864,6 +910,16 @@ struct OfflineBasemapMapView {
                 coordinator.linkLines.removeAll()
                 coordinator.linkGeometry.removeAll()
                 coordinator.linkStyleSignatures.removeAll()
+
+                // And the trails, for the same reason — they too must sit
+                // above the terrain the operator just added.
+                mapView.removeOverlays(Array(coordinator.trailLines.values))
+                for (_, line) in coordinator.trailLines {
+                    coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(line))
+                }
+                coordinator.trailLineIDs.removeAll()
+                coordinator.trailLines.removeAll()
+                coordinator.trailGeometry.removeAll()
             }
         }
 
@@ -929,6 +985,71 @@ struct OfflineBasemapMapView {
             mapView.addOverlay(line, level: .aboveRoads)
             coordinator.structuralMutationDidOccur = true
         }
+    }
+
+    /// Reconciles the APRS movement trails, one polyline per station, on the
+    /// same batching clock as the links. A trail is touched only when its
+    /// path changed — a rover beaconing a new fix rebuilds its own line and
+    /// nothing else's. Drawn below the network links (`.aboveRoads`, added
+    /// before them within a pass is not guaranteed, but trails and links do
+    /// not overlap in meaning, so their order among each other is immaterial;
+    /// both sit under the labels and the dots).
+    private func applyTrails(to mapView: MKMapView, coordinator: Coordinator) {
+        let wanted = Dictionary(
+            tracks.filter { $0.points.count >= 2 }.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first })
+        let mayMutate = coordinator.structuralMutationsAllowed
+
+        // Trails whose station is gone, or which no longer have enough fixes.
+        for (id, line) in coordinator.trailLines where wanted[id] == nil {
+            guard mayMutate else { break }
+            mapView.removeOverlay(line)
+            coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(line))
+            coordinator.trailLineIDs.remove(ObjectIdentifier(line))
+            coordinator.trailLines.removeValue(forKey: id)
+            coordinator.trailGeometry.removeValue(forKey: id)
+            coordinator.structuralMutationDidOccur = true
+        }
+
+        for (id, track) in wanted {
+            let geometry = track.geometrySignature
+            let color = Self.tint(forSignalOfStation: id, in: scope)
+
+            if coordinator.trailGeometry[id] == geometry,
+               let line = coordinator.trailLines[id] {
+                // Same path; the recency colour may have shifted as the
+                // station aged. Repaint the existing overlay in place — no
+                // insert, so the label layer is not disturbed.
+                if coordinator.overlayColors[ObjectIdentifier(line)] != color {
+                    coordinator.overlayColors[ObjectIdentifier(line)] = color
+                    mapView.renderer(for: line)?.setNeedsDisplay()
+                }
+                continue
+            }
+
+            guard mayMutate else { continue }
+            if let stale = coordinator.trailLines[id] {
+                mapView.removeOverlay(stale)
+                coordinator.overlayColors.removeValue(forKey: ObjectIdentifier(stale))
+                coordinator.trailLineIDs.remove(ObjectIdentifier(stale))
+            }
+            let line = track.polyline
+            coordinator.overlayColors[ObjectIdentifier(line)] = color
+            coordinator.trailLineIDs.insert(ObjectIdentifier(line))
+            coordinator.trailLines[id] = line
+            coordinator.trailGeometry[id] = geometry
+            mapView.addOverlay(line, level: .aboveRoads)
+            coordinator.structuralMutationDidOccur = true
+        }
+    }
+
+    /// The recency tint for a station id, so its trail matches its dot. Falls
+    /// back to a neutral colour when the station is not in the scope.
+    static func tint(forSignalOfStation id: String, in scope: StationScope) -> PlatformColor {
+        guard let site = scope.sites.first(where: { $0.id == id }) else {
+            return .systemGray
+        }
+        return Coordinator.tint(forSignal: site.signal)
     }
 
     /// Where a link runs. Only a change here needs a new polyline; the
@@ -1055,6 +1176,7 @@ struct OfflineBasemapMapView {
         // panning.
         applyBasemap(to: mapView, coordinator: context.coordinator)
         applyVectorOverlays(to: mapView, coordinator: context.coordinator)
+        applyTrails(to: mapView, coordinator: context.coordinator)
         applyCoverage(to: mapView, coordinator: context.coordinator)
         applyDrawingPreview(to: mapView, coordinator: context.coordinator)
 
@@ -1122,7 +1244,8 @@ struct OfflineBasemapMapView {
                                    isObserver: current.isObserver,
                                    approximate: current.isApproximate,
                                    isNode: current.isNode,
-                                   callsign: current.title)
+                                   callsign: current.title,
+                                   aprsSymbol: current.aprsSymbol)
                 }
             } else {
                 arrived.append(annotation)

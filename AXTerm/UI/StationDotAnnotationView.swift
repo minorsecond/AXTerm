@@ -55,6 +55,12 @@ final class StationDotAnnotationView: MKAnnotationView {
 
     private let fill = CAShapeLayer()
     private let ring = CAShapeLayer()
+    /// The APRS glyph drawn over the dot — a car, a digipeater, a weather
+    /// station. A plain `CALayer` whose `contents` is a white template image,
+    /// kept separate from the two shape layers so the jitter-tuned dot
+    /// geometry is never disturbed by it. Hidden for stations that beacon no
+    /// symbol, for the observer, and for nodes.
+    private let glyph = CALayer()
     private let label = PlatformLabel()
 
     /// Implicit animation is the default for a bare `CALayer`, and it is
@@ -207,8 +213,12 @@ final class StationDotAnnotationView: MKAnnotationView {
         #endif
         fill.actions = Self.noImplicitAnimations
         ring.actions = Self.noImplicitAnimations
+        glyph.actions = Self.noImplicitAnimations
+        glyph.contentsGravity = .resizeAspect
+        glyph.isHidden = true
         host.addSublayer(fill)
         host.addSublayer(ring)
+        host.addSublayer(glyph)
         configureLabel()
         addSubview(label)
     }
@@ -319,7 +329,8 @@ final class StationDotAnnotationView: MKAnnotationView {
     ///   station — drawn as a diamond, so the network's fixtures read apart
     ///   from the traffic at any zoom.
     func configure(tint: PlatformColor, isObserver: Bool, approximate: Bool,
-                   isNode: Bool = false, callsign: String?) {
+                   isNode: Bool = false, callsign: String?,
+                   aprsSymbol: APRSMapSymbol? = nil) {
         // A diamond reads at a slightly smaller size than a circle of the
         // same box, and infrastructure should sit quietly under traffic.
         let diameter = isObserver ? Self.observerSize : (isNode ? 13 : Self.size)
@@ -346,6 +357,23 @@ final class StationDotAnnotationView: MKAnnotationView {
         ring.frame = bounds
 
         setLabel(callsign, below: dotRect)
+
+        // The APRS glyph, centred on the dot. Only for a heard station that
+        // beaconed a symbol — never the observer, never a node (its diamond
+        // and connector glyph already say what it is), never an inferred
+        // lead (a symbol would assert a precision the position does not have).
+        if let aprsSymbol, !isObserver, !isNode, !approximate,
+           let image = APRSGlyphRasterizer.image(
+               systemName: APRSSymbolGlyph.systemImage(
+                   table: aprsSymbol.table, code: aprsSymbol.code),
+               diameter: diameter) {
+            glyph.contents = image
+            glyph.frame = dotRect
+            glyph.isHidden = false
+        } else {
+            glyph.isHidden = true
+            glyph.contents = nil
+        }
 
         fill.fillColor = approximate
             ? tint.withAlphaComponent(0.22).cgColor

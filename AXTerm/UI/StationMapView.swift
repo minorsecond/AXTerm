@@ -28,6 +28,11 @@ struct StationMapView: View {
     /// Observed paths between stations. Empty draws nothing, so a map with no
     /// topology yet looks exactly as it did.
     var pathLinks: [MapPathLink] = []
+    /// APRS symbols to draw over station dots, keyed by site id. Empty leaves
+    /// the dots plain.
+    var aprsSymbols: [String: APRSMapSymbol] = [:]
+    /// Movement trails, one per station that has beaconed more than one fix.
+    var tracks: [MapTrack] = []
     /// Shaded elevation, drawn under the network. Non-empty forces the
     /// MKMapView path, which is the only one that can host an overlay.
     var terrainOverlays: [ElevationOverlay] = []
@@ -85,6 +90,8 @@ struct StationMapView: View {
             basemap: basemap,
             overlays: overlays,
             pathLinks: pathLinks,
+            aprsSymbols: aprsSymbols,
+            tracks: tracks,
             terrainOverlays: terrainOverlays,
             drawing: drawing ?? .constant(MapDrawingSession()),
             onDrawTap: onDrawTap,
@@ -131,6 +138,16 @@ struct StationMapView: View {
                     .foregroundStyle(.clear)
                     .stroke(.tint.opacity(0.4),
                             style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
+            }
+
+            // Movement trails under the markers: the road a rover drove,
+            // drawn in the same recency tint its dot carries.
+            ForEach(tracks) { track in
+                MapPolyline(coordinates: track.points.map {
+                    CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+                })
+                .stroke(trailColor(for: track.id).opacity(0.7),
+                        style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
             }
 
             Annotation("", coordinate: observer.clCoordinate, anchor: .center) {
@@ -336,6 +353,13 @@ struct StationMapView: View {
                     Image(systemName: "point.3.connected.trianglepath.dotted")
                         .font(.system(size: 7, weight: .bold))
                         .foregroundStyle(site.isApproximate ? tint : .white)
+                } else if !site.isApproximate, let symbol = aprsSymbols[site.id] {
+                    // The APRS glyph the station beaconed, over its dot — a
+                    // car, a digipeater, a weather station.
+                    Image(systemName: APRSSymbolGlyph.systemImage(
+                        table: symbol.table, code: symbol.code))
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white)
                 }
                 // Selection is shown by a ring drawn inside the fixed
                 // footprint, never by resizing it.
@@ -370,6 +394,13 @@ struct StationMapView: View {
         case .poor: .orange
         case .unknown: .secondary
         }
+    }
+
+    /// A trail's colour matches its station's dot, so the line and the marker
+    /// read as one. Falls back to grey when the station is not in the scope.
+    private func trailColor(for id: String) -> Color {
+        guard let site = scope.sites.first(where: { $0.id == id }) else { return .secondary }
+        return site.isNode ? .purple : color(for: site.signal)
     }
 }
 

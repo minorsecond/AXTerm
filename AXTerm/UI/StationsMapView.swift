@@ -568,6 +568,38 @@ struct StationsMapView: View {
         HeardStationMap.fannedPositions(placed)
     }
 
+    /// The APRS symbol each heard station beaconed, keyed by the same id its
+    /// marker carries (the uppercased callsign). Only stations that are
+    /// actually placed on the map are included; a symbol with nowhere to sit
+    /// is nothing to draw.
+    private var aprsSymbols: [String: APRSMapSymbol] {
+        let placedIDs = Set(placed.map(\.id))
+        var result: [String: APRSMapSymbol] = [:]
+        for station in stations {
+            guard let aprs = station.aprs else { continue }
+            let id = station.call.uppercased()
+            guard placedIDs.contains(id) else { continue }
+            result[id] = APRSMapSymbol(table: aprs.symbolTable, code: aprs.symbolCode)
+        }
+        return result
+    }
+
+    /// Movement trails from the fixes stations beaconed, keyed by callsign.
+    /// A trail needs at least two fixes to be a line; the map ignores the
+    /// rest, but building only the drawable ones keeps the overlay work down.
+    private var tracks: [MapTrack] {
+        let placedIDs = Set(placed.map(\.id))
+        return stations.compactMap { station -> MapTrack? in
+            let id = station.call.uppercased()
+            guard placedIDs.contains(id), station.track.count >= 2 else { return nil }
+            return MapTrack(
+                id: id,
+                points: station.track.map {
+                    GreatCircle.Point(latitude: $0.latitude, longitude: $0.longitude)
+                })
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // The Mac has a control row above the map. iOS has a navigation
@@ -1194,6 +1226,8 @@ struct StationsMapView: View {
                                observerCallsign: myCallsign,
                                basemap: basemap, legend: .recency,
                                pathLinks: pathLinks,
+                               aprsSymbols: aprsSymbols,
+                               tracks: tracks,
                                terrainOverlays: terrainOverlays,
                                tileStore: offlineTiles.hasStoredTiles ? offlineTiles.store : nil,
                                tileSource: offlineTiles.storedSource,
