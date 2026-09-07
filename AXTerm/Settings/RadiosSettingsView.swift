@@ -383,13 +383,22 @@ struct RadioDetailView: View {
                 Section {
                     Toggle("Ping stations", isOn: serviceBinding(\.pings))
                     Toggle("Announce the NET/ROM node", isOn: serviceBinding(\.announcesNode))
+                    if serviceBinding(\.announcesNode).wrappedValue {
+                        LabeledContent("Node alias (this radio)") {
+                            TextField("station alias", text: netRomAliasBinding)
+                                .textFieldStyle(.roundedBorder).frame(maxWidth: 160)
+                                .help("The alias this radio's node announces under when the "
+                                      + "NET/ROM node identity is per-radio (Transmission "
+                                      + "settings). Empty uses the station alias.")
+                        }
+                    }
                     Toggle("Answer mailbox calls", isOn: serviceBinding(\.answersMailbox))
                 } header: {
                     Text("Services on this radio")
                 } footer: {
                     Text("Every service runs on every radio unless switched off here. Whether a "
                          + "service runs at all is set under Transmission and BBS; these rows only "
-                         + "say which radios it uses.")
+                         + "say which radios it uses (the mailbox is one shared store).")
                 }
 
                 Section {
@@ -507,6 +516,16 @@ struct RadioDetailView: View {
             }
         }
 
+        if (settings.radio(radioID)?.beacon.aprs?.symbolTable ?? "/") != "/" {
+            LabeledContent("Overlay") {
+                TextField("none", text: overlayBinding)
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 60)
+                    .help("A single 0–9 or A–Z drawn over an alternate-table symbol "
+                          + "(e.g. an S over the digi star). Leave empty for the plain "
+                          + "alternate symbol.")
+            }
+        }
+
         Toggle("Use GPS position", isOn: aprsBinding(\.useGPS, default: false))
         if !aprsBinding(\.useGPS, default: false).wrappedValue {
             LabeledContent("Latitude") {
@@ -558,6 +577,30 @@ struct RadioDetailView: View {
         return prefix + APRSBeacon.infoField(report)
     }
 
+    /// The overlay character (the symbol table byte when it is not `/` or
+    /// `\`). Setting it makes the symbol an overlay of the alternate table;
+    /// clearing it returns to the plain alternate table.
+    private var overlayBinding: Binding<String> {
+        Binding(
+            get: {
+                let t = settings.radio(radioID)?.beacon.aprs?.symbolTable ?? "/"
+                return (t == "/" || t == "\\") ? "" : t
+            },
+            set: { str in
+                let ch = str.uppercased().first
+                settings.updateRadio(radioID) {
+                    if $0.beacon.aprs == nil { $0.beacon.aprs = APRSPositionConfig() }
+                    if let ch, ch != "/", ch != "\\" {
+                        $0.beacon.aprs?.symbolTable = String(ch)
+                    } else {
+                        // Cleared: overlays live on the alternate table.
+                        $0.beacon.aprs?.symbolTable = "\\"
+                    }
+                }
+                SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+            })
+    }
+
     /// A text binding for an optional coordinate field.
     private func coordString(_ keyPath: WritableKeyPath<APRSPositionConfig, Double?>) -> Binding<String> {
         Binding(
@@ -605,6 +648,17 @@ struct RadioDetailView: View {
             get: { (settings.radio(radioID)?.digi ?? DigiConfig())[keyPath: keyPath] },
             set: { value in
                 settings.updateRadio(radioID) { $0.digi[keyPath: keyPath] = value }
+                SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+            })
+    }
+
+    /// This radio's NET/ROM node alias (used when the node identity is
+    /// per-radio). Empty means the station alias.
+    private var netRomAliasBinding: Binding<String> {
+        Binding(
+            get: { settings.radio(radioID)?.netRomAlias ?? "" },
+            set: { value in
+                settings.updateRadio(radioID) { $0.netRomAlias = value.uppercased() }
                 SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
             })
     }
