@@ -149,65 +149,66 @@ struct TransmissionSettingsView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Toggle("Send a beacon", isOn: $settings.beaconEnabled)
-                    .onChange(of: settings.beaconEnabled) { _, _ in applyNetRomSettings() }
+                if settings.hasMultipleRadios {
+                    // Each radio owns its beacon now, so there is no single
+                    // station beacon to edit here — a packet node and an APRS
+                    // node send different things on different channels.
+                    Text("Each radio has its own beacon — its text, path and "
+                         + "interval live with the radio. Configure them under "
+                         + "Settings → Radios.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Open Radios\u{2026}") { router.navigate(to: .radios, radio: nil) }
+                } else {
+                    Toggle("Send a beacon", isOn: beaconField(\.enabled, default: false))
 
-                if settings.beaconEnabled {
-                    RadioServiceRows(
-                        settings: settings, verb: "Send on", keyPath: \.sendsBeacons,
-                        help: "Two of your radios on one frequency should not both beacon; "
-                            + "on different frequencies each one should. When several do, "
-                            + "they take turns two seconds apart.")
-                    VStack(alignment: .leading, spacing: 4) {
-                        // Short prompts on purpose. In a settings row a
-                        // TextField renders its prompt as a label beside the
-                        // field as well as inside it, so a sentence-long
-                        // placeholder wraps and the row grows to three lines.
-                        TextField("Beacon text", text: $settings.beaconText, axis: .vertical)
-                            .textFieldStyle(.roundedBorder)
-                            .lineLimit(1...3)
-                            .onSubmit { applyNetRomSettings() }
-                        Text("\(settings.beaconText.utf8.count) of "
-                             + "\(BeaconPlan.maxTextBytes) bytes · sent to BEACON as "
-                             + "an unconnected frame")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    LabeledContent("Via digipeaters") {
-                        TextField("direct", text: $settings.beaconPath)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 160)
-                            .onSubmit { applyNetRomSettings() }
-                    }
-                    .help("Up to \(BeaconPlan.maxDigis) hops, comma or space separated. "
-                          + "A beacon is the one thing worth digipeating — its whole "
-                          + "purpose is to reach stations that cannot hear this one "
-                          + "directly. Each hop is another transmission on a shared "
-                          + "channel, so two is usually plenty.")
-
-                    durationRow(
-                        "Send every",
-                        value: $settings.beaconMinutes,
-                        presets: [10, 15, 20, 30, 45, 60, 90, 120, 240],
-                        label: Self.minutesLabel
-                    )
-                    .onChange(of: settings.beaconMinutes) { _, _ in applyNetRomSettings() }
-
-                    if case let .failure(problem) = BeaconPlan.plan(
-                        text: settings.beaconText, path: settings.beaconPath) {
-                        Text(problem.operatorText)
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } else {
-                        HStack {
-                            Button("Send one now") {
-                                SessionCoordinator.shared?.sendBeacon(settings)
-                            }
-                            Text("Goes out on the air immediately.")
-                                .font(.caption)
+                    if beaconField(\.enabled, default: false).wrappedValue {
+                        VStack(alignment: .leading, spacing: 4) {
+                            TextField("Beacon text", text: beaconField(\.text, default: ""), axis: .vertical)
+                                .textFieldStyle(.roundedBorder)
+                                .lineLimit(1...3)
+                            Text("\(beaconField(\.text, default: "").wrappedValue.utf8.count) of "
+                                 + "\(BeaconPlan.maxTextBytes) bytes · sent to BEACON as "
+                                 + "an unconnected frame")
+                                .font(.caption2)
                                 .foregroundStyle(.secondary)
+                        }
+
+                        LabeledContent("Via digipeaters") {
+                            TextField("direct", text: beaconField(\.path, default: ""))
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 160)
+                        }
+                        .help("Up to \(BeaconPlan.maxDigis) hops, comma or space separated. "
+                              + "A beacon is the one thing worth digipeating — its whole "
+                              + "purpose is to reach stations that cannot hear this one "
+                              + "directly. Each hop is another transmission on a shared "
+                              + "channel, so two is usually plenty.")
+
+                        durationRow(
+                            "Send every",
+                            value: beaconField(\.intervalMinutes, default: 30),
+                            presets: [10, 15, 20, 30, 45, 60, 90, 120, 240],
+                            label: Self.minutesLabel
+                        )
+
+                        if case let .failure(problem) = BeaconPlan.plan(
+                            text: beaconField(\.text, default: "").wrappedValue,
+                            path: beaconField(\.path, default: "").wrappedValue) {
+                            Text(problem.operatorText)
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            HStack {
+                                Button("Send one now") {
+                                    SessionCoordinator.shared?.sendBeacon(settings)
+                                }
+                                Text("Goes out on the air immediately.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -594,6 +595,21 @@ struct TransmissionSettingsView: View {
     /// moment the operator sets them rather than at next launch.
     private func applyNetRomSettings() {
         SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+    }
+
+    /// Bind a beacon field of the *first* radio. On a single-radio station
+    /// that is simply "the beacon"; the beacon now lives on the radio, so
+    /// this edits the same per-radio config the scheduler reads. Writing
+    /// re-applies so the change takes effect at the next beacon.
+    private func beaconField<V>(_ keyPath: WritableKeyPath<BeaconConfig, V>,
+                               default def: V) -> Binding<V> {
+        Binding(
+            get: { settings.activeRadios.first?.beacon[keyPath: keyPath] ?? def },
+            set: { value in
+                guard let id = settings.activeRadios.first?.id else { return }
+                settings.updateRadio(id) { $0.beacon[keyPath: keyPath] = value }
+                applyNetRomSettings()
+            })
     }
 
     private func syncAdaptiveSettingsToSessionCoordinator() {

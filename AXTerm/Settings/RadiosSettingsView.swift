@@ -206,13 +206,13 @@ struct RadioDetailView: View {
             // A name and a switch only mean something against other radios.
             if settings.hasMultipleRadios {
                 Section {
-                    TextField("Name", text: $viewModel.name, prompt: Text(RadioProfile.defaultName(for: profile)))
+                    DraftTextField("Name", text: $viewModel.name, prompt: RadioProfile.defaultName(for: profile))
                     Toggle("Enabled", isOn: $viewModel.enabled)
                 } header: {
                     Text("Radio")
                 } footer: {
                     Text(viewModel.enabled
-                         ? "The first enabled radio in the list is the one AXTerm connects to."
+                         ? "Every enabled radio connects. The first in the list leads where one radio must stand for the station."
                          : "Off: kept in the list, not connected.")
                 }
             }
@@ -269,16 +269,24 @@ struct RadioDetailView: View {
             #endif
 
             Section {
-                ConnectionStatusView(status: viewModel.connectionStatus)
+                ConnectionStatusView(status: viewModel.radioConnectionStatus)
 
-                if viewModel.selectedTransport == .modem, viewModel.connectionStatus == .connected {
+                // Why this radio has no link — an empty address, a missing
+                // audio device — so "Disconnected" is not the whole story.
+                if !viewModel.radioConnected, let reason = viewModel.radioUnavailableReason {
+                    Label(reason, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
+                if viewModel.selectedTransport == .modem, viewModel.radioConnected {
                     ModemStatusRows(viewModel: viewModel)
                 }
 
                 // What is on the other end of the link. Direwolf answers the
                 // in-band KISS hardware query with its name and version; a
                 // silent TNC is plain KISS, which is itself the answer.
-                if viewModel.connectionStatus == .connected,
+                if viewModel.radioConnected,
                    viewModel.selectedTransport == .network || viewModel.selectedTransport == .modem {
                     if let identity = viewModel.tncIdentity {
                         LabeledContent {
@@ -316,33 +324,69 @@ struct RadioDetailView: View {
                     }
                 }
 
-                if viewModel.isPrimary {
-                    Button {
-                        if viewModel.canConnect {
-                            viewModel.connect()
-                        } else {
-                            viewModel.disconnect()
-                        }
-                    } label: {
-                        if viewModel.connectionStatus == .connecting {
-                            Label("Connecting\u{2026}", systemImage: "hourglass")
-                        } else if viewModel.canConnect {
-                            Label("Connect", systemImage: "bolt.horizontal.circle")
-                        } else {
+                // Connect this radio. Opening reconciles every enabled
+                // radio, so a second radio comes up without disturbing the
+                // first. Disconnect stops all links, so it is offered only
+                // from the first radio, where it reads as "stop".
+                if viewModel.radioConnectionStatus == .connecting {
+                    Label("Connecting\u{2026}", systemImage: "hourglass")
+                        .foregroundStyle(.secondary)
+                } else if viewModel.radioConnected {
+                    if viewModel.isPrimary {
+                        Button { viewModel.disconnect() } label: {
                             Label("Disconnect", systemImage: "bolt.horizontal.circle.fill")
                         }
+                    } else {
+                        Text("Connected. Disconnecting from the first radio stops every radio.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                    .disabled(viewModel.connectionStatus == .connecting)
                 } else {
-                    Text("Not the first enabled radio, so not connected. Move it up, or switch the one above it off.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Button { viewModel.connectThisRadio() } label: {
+                        Label("Connect", systemImage: "bolt.horizontal.circle")
+                    }
+                    .disabled(!viewModel.enabled || viewModel.radioUnavailableReason != nil)
                 }
             }
 
             if settings.hasMultipleRadios {
                 Section {
-                    Toggle("Send beacons", isOn: serviceBinding(\.sendsBeacons))
+                    Toggle("Beacon on this radio", isOn: beaconBinding(\.enabled))
+                    if beaconBinding(\.enabled).wrappedValue {
+                        VStack(alignment: .leading, spacing: 4) {
+                            TextField("Beacon text", text: beaconBinding(\.text), axis: .vertical)
+                                .textFieldStyle(.roundedBorder)
+                                .lineLimit(1...3)
+                            Text("\(beaconBinding(\.text).wrappedValue.utf8.count) of "
+                                 + "\(BeaconPlan.maxTextBytes) bytes · sent to BEACON")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        LabeledContent("Via digipeaters") {
+                            TextField("direct", text: beaconBinding(\.path))
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 160)
+                        }
+                        Stepper("Send every \(beaconBinding(\.intervalMinutes).wrappedValue) min",
+                                value: beaconBinding(\.intervalMinutes), in: 5...240, step: 5)
+                        if case let .failure(problem) = BeaconPlan.plan(
+                            text: beaconBinding(\.text).wrappedValue,
+                            path: beaconBinding(\.path).wrappedValue) {
+                            Text(problem.operatorText)
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                } header: {
+                    Text("Beacon")
+                } footer: {
+                    Text("This radio's own beacon — its own words, path and interval. "
+                         + "An added radio does not beacon until you switch it on here, so "
+                         + "one radio's identity never goes out on another's channel.")
+                }
+
+                Section {
                     Toggle("Ping stations", isOn: serviceBinding(\.pings))
                     Toggle("Announce the NET/ROM node", isOn: serviceBinding(\.announcesNode))
                     Toggle("Answer mailbox calls", isOn: serviceBinding(\.answersMailbox))
@@ -405,6 +449,17 @@ struct RadioDetailView: View {
                 settings.updateRadio(radioID) { $0[keyPath: keyPath] = value }
                 // The node's L2 aliases are registered when configured, not
                 // when announced.
+                SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
+            })
+    }
+
+    /// Bind one field of this radio's beacon. Writing re-applies so the new
+    /// content/interval takes effect at the next beacon rather than at relaunch.
+    private func beaconBinding<V>(_ keyPath: WritableKeyPath<BeaconConfig, V>) -> Binding<V> {
+        Binding(
+            get: { (settings.radio(radioID)?.beacon ?? BeaconConfig())[keyPath: keyPath] },
+            set: { value in
+                settings.updateRadio(radioID) { $0.beacon[keyPath: keyPath] = value }
                 SessionCoordinator.shared?.applyNetRomNodeSettings(settings)
             })
     }

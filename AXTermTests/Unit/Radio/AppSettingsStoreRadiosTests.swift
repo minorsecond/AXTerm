@@ -42,6 +42,43 @@ final class AppSettingsStoreRadiosTests: XCTestCase {
         XCTAssertEqual(store.primaryRadio?.id, radio.id)
     }
 
+    /// The beacon used to be one station-wide setting; it is now per radio.
+    /// On first launch the legacy beacon is seeded onto the first radio and
+    /// the migration is marked done so it never runs twice.
+    func testTheLegacyBeaconSeedsOntoTheFirstRadioOnce() {
+        defaults.set(true, forKey: AppSettingsStore.beaconEnabledKey)
+        defaults.set("K0EPI Colorado packet", forKey: AppSettingsStore.beaconTextKey)
+        defaults.set("WIDE1-1", forKey: AppSettingsStore.beaconPathKey)
+        defaults.set(20, forKey: AppSettingsStore.beaconMinutesKey)
+
+        let store = AppSettingsStore(defaults: defaults)
+        let beacon = store.radios[0].beacon
+        XCTAssertTrue(beacon.enabled)
+        XCTAssertEqual(beacon.kind, .text)
+        XCTAssertEqual(beacon.text, "K0EPI Colorado packet")
+        XCTAssertEqual(beacon.path, "WIDE1-1")
+        XCTAssertEqual(beacon.intervalMinutes, 20)
+        XCTAssertTrue(defaults.bool(forKey: AppSettingsStore.beaconPerRadioMigratedKey))
+
+        // Idempotent: a later launch does not re-seed. Clear the radio's
+        // beacon, rebuild, and it stays cleared because the flag is set.
+        store.updateRadio(store.radios[0].id) { $0.beacon = BeaconConfig() }
+        let reopened = AppSettingsStore(defaults: defaults)
+        XCTAssertFalse(reopened.radios[0].beacon.enabled)
+    }
+
+    /// A second radio added later must not inherit the first radio's beacon:
+    /// its beacon stays off until the operator configures it.
+    func testAnAddedRadioDoesNotInheritTheBeacon() {
+        defaults.set(true, forKey: AppSettingsStore.beaconEnabledKey)
+        defaults.set("packet node", forKey: AppSettingsStore.beaconTextKey)
+        let store = AppSettingsStore(defaults: defaults)
+        _ = store.addRadio()
+        XCTAssertTrue(store.hasMultipleRadios)
+        XCTAssertTrue(store.radios[0].beacon.enabled)
+        XCTAssertFalse(store.radios[1].beacon.enabled)
+    }
+
     func testASerialStationMigratesAsASerialRadio() {
         defaults.set("serial", forKey: AppSettingsStore.transportTypeKey)
         defaults.set("/dev/cu.usbmodem1420", forKey: AppSettingsStore.serialDevicePathKey)

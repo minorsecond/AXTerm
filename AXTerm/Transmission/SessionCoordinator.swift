@@ -153,7 +153,9 @@ final class SessionCoordinator: ObservableObject {
     /// scheduleNetRomBroadcasts for why launch neither broadcasts
     /// immediately nor waits a whole interval.
     private var netRomWarmupBroadcastTimer: Timer?
-    private var beaconTimer: Timer?
+    /// One beacon timer per radio: each radio beacons its own content on its
+    /// own interval, so a packet node and an APRS node share nothing.
+    private var beaconTimers: [RadioID: Timer] = [:]
 
     /// Asks stations whether they can hear us, on the operator's terms.
     let pingProber = PingProber()
@@ -1239,42 +1241,64 @@ final class SessionCoordinator: ObservableObject {
     /// interval — an announcement nobody asked for should not be the
     /// reward for ticking a checkbox.
     private func scheduleBeacon(_ settings: AppSettingsStore) {
-        beaconTimer?.invalidate()
-        beaconTimer = nil
-        guard settings.beaconEnabled,
-              case .success = BeaconPlan.plan(text: settings.beaconText,
-                                              path: settings.beaconPath)
-        else { return }
-        let interval = TimeInterval(max(5, settings.beaconMinutes) * 60)
-        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.sendBeacon(settings)
+        beaconTimers.values.forEach { $0.invalidate() }
+        beaconTimers.removeAll()
+        // Each radio's beacon is its own: content, path and interval live on
+        // the radio, so an added radio never inherits another's beacon and a
+        // packet node and an APRS node do not cross-transmit.
+        for radio in settings.activeRadios where radio.enabled && radio.beacon.enabled {
+            guard case .success = BeaconPlan.plan(text: radio.beacon.text, path: radio.beacon.path)
+            else { continue }
+            let interval = TimeInterval(max(5, radio.beacon.intervalMinutes) * 60)
+            let id = radio.id
+            let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.sendBeacon(for: id, settings: settings) }
             }
+            RunLoop.main.add(timer, forMode: .common)
+            beaconTimers[id] = timer
         }
-        RunLoop.main.add(timer, forMode: .common)
-        beaconTimer = timer
     }
 
-    /// One beacon, now. Re-planned at send time rather than captured when
-    /// the timer was armed, so an edit takes effect at the next beacon
-    /// instead of at the next app launch.
+    /// This radio's beacon, now, on this radio only. Re-planned from the
+    /// radio's own config at send time so an edit takes effect at the next
+    /// beacon rather than the next launch.
+    func sendBeacon(for radioID: RadioID, settings: AppSettingsStore) {
+        guard let radio = settings.radio(radioID), radio.beacon.enabled,
+              let (frame, note) = buildBeaconFrame(for: radio) else { return }
+        transmit(frame, staggeredBy: 0)
+        packetEngine?.appendSystemNotification("\(note)\(radioSuffix([radioID])).")
+    }
+
+    /// Beacon every radio that has one, now — the "Send beacon now" button.
+    /// Staggered so two radios on one frequency do not key up together.
     func sendBeacon(_ settings: AppSettingsStore) {
-        guard case let .success(beacon) = BeaconPlan.plan(
-            text: settings.beaconText, path: settings.beaconPath) else { return }
-        let radios = serviceRadios(\.sendsBeacons)
-        for (index, radio) in radios.enumerated() {
-            let frame = AX25FrameBuilder.buildUI(
-                from: sessionManager.localAddress(for: radio),
-                to: AX25Address(call: BeaconPlan.destinationCall, ssid: 0),
-                via: DigiPath.from(beacon.digis),
-                pid: 0xF0,
-                payload: Data(beacon.text.utf8),
-                displayInfo: beacon.text).onRadio(radio)
+        let radios = settings.activeRadios.filter { $0.enabled && $0.beacon.enabled }
+        var index = 0
+        for radio in radios {
+            guard let (frame, note) = buildBeaconFrame(for: radio) else { continue }
             transmit(frame, staggeredBy: index)
+            packetEngine?.appendSystemNotification("\(note)\(radioSuffix([radio.id])).")
+            index += 1
         }
+    }
+
+    /// Build the AX.25 UI frame for a radio's beacon from its own config, on
+    /// that radio, plus the operator-facing note. Returns nil when the beacon
+    /// is off or its plan does not validate. (APRS-position beacons are wired
+    /// in the APRS phase; text is the only kind today.)
+    private func buildBeaconFrame(for radio: RadioProfile) -> (OutboundFrame, String)? {
+        guard case let .success(beacon) = BeaconPlan.plan(
+            text: radio.beacon.text, path: radio.beacon.path) else { return nil }
+        let frame = AX25FrameBuilder.buildUI(
+            from: sessionManager.localAddress(for: radio.id),
+            to: AX25Address(call: BeaconPlan.destinationCall, ssid: 0),
+            via: DigiPath.from(beacon.digis),
+            pid: 0xF0,
+            payload: Data(beacon.text.utf8),
+            displayInfo: beacon.text).onRadio(radio.id)
         let pathText = beacon.digis.isEmpty
             ? "direct" : "via \(beacon.digis.joined(separator: " → "))"
-        packetEngine?.appendSystemNotification("Beacon sent \(pathText)\(radioSuffix(radios)).")
+        return (frame, "Beacon sent \(pathText)")
     }
 
     // MARK: - Services across radios

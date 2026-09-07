@@ -99,6 +99,10 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
     /// The alias this radio's node announces under when the NET/ROM node
     /// identity is per radio. Empty means the station alias.
     var netRomAlias: String = ""
+    /// This radio's own beacon — content, not just an on/off switch. Off by
+    /// default so an added radio never inherits another radio's beacon; the
+    /// first radio is seeded from the legacy station-wide beacon on migration.
+    var beacon: BeaconConfig = BeaconConfig()
     /// Removed radios are archived, not deleted, so rows that name them keep
     /// resolving to a name.
     var archived: Bool = false
@@ -164,6 +168,7 @@ nonisolated struct RadioProfile: Codable, Identifiable, Equatable, Sendable {
         announcesNode = try c.decodeIfPresent(Bool.self, forKey: .announcesNode) ?? true
         answersMailbox = try c.decodeIfPresent(Bool.self, forKey: .answersMailbox) ?? true
         netRomAlias = try c.decodeIfPresent(String.self, forKey: .netRomAlias) ?? ""
+        beacon = try c.decodeIfPresent(BeaconConfig.self, forKey: .beacon) ?? BeaconConfig()
         archived = try c.decodeIfPresent(Bool.self, forKey: .archived) ?? false
     }
 

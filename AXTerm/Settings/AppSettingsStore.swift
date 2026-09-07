@@ -98,6 +98,9 @@ final class AppSettingsStore: ObservableObject {
     static let beaconTextKey = "beaconText"
     static let beaconMinutesKey = "beaconMinutes"
     static let beaconPathKey = "beaconPath"
+    /// Set once the station-wide beacon has been seeded onto the first radio's
+    /// per-radio `BeaconConfig`; gates that migration to run exactly once.
+    static let beaconPerRadioMigratedKey = "beacon.perRadio.migrated.v1"
 
     /// Off, and empty. A beacon is the operator's own words going out
     /// over their licence; there is no default worth putting on the air
@@ -1083,7 +1086,7 @@ final class AppSettingsStore: ObservableObject {
         // keys — once. Nothing writes those keys any more; the list is the
         // record, and `radios.v1` is written below so the migration is over
         // before anything else runs.
-        let storedRadios: [RadioProfile]
+        var storedRadios: [RadioProfile]
         let migratedRadios: Bool
         if let json = defaults.string(forKey: Self.radiosKey),
            let data = json.data(using: .utf8),
@@ -1103,6 +1106,24 @@ final class AppSettingsStore: ObservableObject {
                 mobilinkdEnabled: storedMobilinkdEnabled, mobilinkdModemType: storedMobilinkdModemType,
                 mobilinkdOutputGain: storedMobilinkdOutputGain, mobilinkdInputGain: storedMobilinkdInputGain,
                 capabilities: storedTNCCapabilities)]
+        }
+
+        // One-time: the beacon used to be a single station-wide setting; it is
+        // now per radio (so each radio is its own station). Seed the legacy
+        // beacon onto the first radio and leave every other radio's beacon off,
+        // so an added radio never inherits another radio's beacon. The legacy
+        // globals are left in place as the single-radio fallback.
+        let seededBeaconOntoRadio = !defaults.bool(forKey: Self.beaconPerRadioMigratedKey)
+        if seededBeaconOntoRadio {
+            if let first = storedRadios.firstIndex(where: { !$0.archived }) {
+                storedRadios[first].beacon = BeaconConfig(
+                    enabled: storedBeaconEnabled,
+                    kind: .text,
+                    text: storedBeaconText,
+                    path: storedBeaconPath,
+                    intervalMinutes: storedBeaconMinutes)
+            }
+            defaults.set(true, forKey: Self.beaconPerRadioMigratedKey)
         }
 
         // Clear timestamps (stored as TimeInterval)
@@ -1221,7 +1242,7 @@ final class AppSettingsStore: ObservableObject {
         // The first launch after the update: the list was read off the old
         // keys above; write it now so the migration is over before anything
         // else runs, and the old keys are never consulted again.
-        if migratedRadios { persistRadios() }
+        if migratedRadios || seededBeaconOntoRadio { persistRadios() }
     }
 
 

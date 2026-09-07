@@ -83,6 +83,32 @@ final class RadioProfileTests: XCTestCase {
         XCTAssertTrue(radios[0].announcesNode)
         XCTAssertTrue(radios[0].answersMailbox)
         XCTAssertEqual(radios[0].netRomAlias, "")
+        // A profile written before per-radio beacons decodes to a beacon that
+        // is off, so an added radio never inherits another radio's beacon.
+        XCTAssertFalse(radios[0].beacon.enabled)
+        XCTAssertEqual(radios[0].beacon.kind, .text)
+        XCTAssertEqual(radios[0].beacon.intervalMinutes, 30)
+    }
+
+    func testABeaconConfigSurvivesJSON() throws {
+        var radio = migrated()
+        radio.beacon = BeaconConfig(enabled: true, kind: .text,
+                                    text: "K0EPI test", path: "WIDE1-1", intervalMinutes: 20)
+        let data = try JSONEncoder().encode([radio])
+        let back = try JSONDecoder().decode([RadioProfile].self, from: data)
+        XCTAssertEqual(back, [radio])
+        XCTAssertEqual(back[0].beacon.text, "K0EPI test")
+        XCTAssertEqual(back[0].beacon.path, "WIDE1-1")
+        XCTAssertEqual(back[0].beacon.intervalMinutes, 20)
+    }
+
+    /// An unknown future beacon kind decodes to text rather than throwing, so
+    /// a newer build's settings still load on an older one.
+    func testAnUnknownBeaconKindDecodesToText() throws {
+        let json = Data(#"[{"id":"abc","name":"Base","beacon":{"enabled":true,"kind":"someFutureKind"}}]"#.utf8)
+        let radios = try JSONDecoder().decode([RadioProfile].self, from: json)
+        XCTAssertEqual(radios[0].beacon.kind, .text)
+        XCTAssertTrue(radios[0].beacon.enabled)
     }
 
     // MARK: - Two radios that cannot both be
