@@ -39,6 +39,9 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
     let contentSignature: String?
     /// Whether this is a duplicate of a recently seen packet (received via different path)
     let isDuplicate: Bool
+    /// Which radio produced this line (nil for system/error lines and our own
+    /// TX), so the per-radio sidebar filter can hide a radio's traffic here too.
+    let radioID: RadioID?
 
     init(
         id: UUID = UUID(),
@@ -49,7 +52,8 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         text: String,
         via: [String] = [],
         messageType: MessageType? = nil,
-        isDuplicate: Bool = false
+        isDuplicate: Bool = false,
+        radioID: RadioID? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -59,6 +63,7 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         self.text = text
         self.via = via
         self.isDuplicate = isDuplicate
+        self.radioID = radioID
 
         // Auto-detect message type for packets if not explicitly provided
         if let messageType = messageType {
@@ -197,7 +202,8 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
         timestamp: Date = Date(),
         via: [String] = [],
         isDuplicate: Bool = false,
-        messageType: MessageType? = nil
+        messageType: MessageType? = nil,
+        radioID: RadioID? = nil
     ) -> ConsoleLine {
         let detectedType = messageType ?? detectMessageType(text: text, to: to)
         // Normalize via path for console display so repeated digis like
@@ -212,7 +218,8 @@ nonisolated struct ConsoleLine: Identifiable, Hashable, Sendable {
             text: text,
             via: normalizedVia,
             messageType: detectedType,
-            isDuplicate: isDuplicate
+            isDuplicate: isDuplicate,
+            radioID: radioID
         )
     }
 

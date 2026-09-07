@@ -1320,7 +1320,7 @@ struct ContentView: View {
             }
 
             if showsRadioSections {
-            Section("Stations (\(client.stations.count))") {
+            Section("Stations (\(client.stations.filter(client.isVisible).count))") {
                 // "All" option. The accent treatment appears only while a
                 // page this filter actually drives is frontmost — on the
                 // Nodes or Map page a lit "All Packets" beside the lit
@@ -1378,7 +1378,7 @@ struct ContentView: View {
                     // Same reason as the two above: a per-row lookup would scan
                     // the whole alias directory once per station, every render.
                     let alsoKnownAs = nodeAliases.directory.otherNames()
-                    ForEach(client.stations) { station in
+                    ForEach(client.stations.filter(client.isVisible)) { station in
                         let normalizedCall = CallsignValidator.normalize(station.call)
                         let stationHasNetRomRoute = integration?.hasRoute(to: normalizedCall) ?? false
                         // Was computed and then discarded: both the tap and the

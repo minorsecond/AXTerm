@@ -1230,7 +1230,8 @@ final class PacketEngine: ObservableObject {
             to: to.display,
             text: description,
             via: Packet.normalizedViaItems(from: packet.via),
-            messageType: .prompt
+            messageType: .prompt,
+            radioID: packet.radioID
         )
         appendConsoleLine(line, category: .packet, packetID: nil, byteCount: description.utf8.count)
     }
@@ -1586,7 +1587,8 @@ final class PacketEngine: ObservableObject {
                 text: text,
                 timestamp: packet.timestamp,
                 via: viaPath,
-                isDuplicate: isDuplicate
+                isDuplicate: isDuplicate,
+                radioID: packet.radioID
             )
 
             appendConsoleLine(line, category: .packet, packetID: packet.id, byteCount: packet.info.count)

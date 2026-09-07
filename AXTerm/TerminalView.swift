@@ -2887,14 +2887,24 @@ struct TerminalView: View {
     }
 
     private var displayedSessionLines: [TerminalLine] {
+        // The per-radio sidebar filter hides a radio's traffic everywhere,
+        // the terminal included. A line with no radio (system, our own TX)
+        // is always shown.
+        let hidden = client.hiddenRadioIDs
+        func radioVisible(_ line: TerminalLine) -> Bool {
+            guard let id = line.radioID else { return true }
+            return !hidden.contains(id)
+        }
+
         // Sidebar station filter overrides session-peer filter — clicking any station in the
         // sidebar shows all console traffic involving that station, matching the Packets view.
         if let stationCall = client.selectedStationCall, !stationCall.isEmpty {
             let normalized = CallsignValidator.normalize(stationCall)
             return txViewModel.filteredLines.filter { line in
-                CallsignValidator.normalize(line.from ?? "") == normalized ||
-                CallsignValidator.normalize(line.to ?? "") == normalized ||
-                line.via.contains { CallsignValidator.normalize($0) == normalized }
+                radioVisible(line) && (
+                    CallsignValidator.normalize(line.from ?? "") == normalized ||
+                    CallsignValidator.normalize(line.to ?? "") == normalized ||
+                    line.via.contains { CallsignValidator.normalize($0) == normalized })
             }
         }
 
@@ -2912,6 +2922,7 @@ struct TerminalView: View {
             connectedPeers: connectedPeers
         )
         return TerminalSessionLineFilter.apply(txViewModel.filteredLines, peer: selectedPeer)
+            .filter(radioVisible)
     }
 
     @ViewBuilder
