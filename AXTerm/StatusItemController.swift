@@ -151,20 +151,42 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
+        let radios = client.radioSummaries
         let status = MenuModel.statusTitle(for: client.status)
         let host = client.connectedHost ?? settings.host
         let port = client.connectedPort.map(String.init) ?? String(settings.port)
-        let header = NSMenuItem(
-            title: "\(status) — \(host):\(port) • \(client.packets.count) packets",
-            action: nil, keyEquivalent: "")
+        // One radio: the line the menu has always shown. Several: how many
+        // are up, with one submenu per radio below.
+        let headerTitle = radios.count > 1
+            ? MenuModel.headerTitle(radios: radios, packetCount: client.packets.count)
+            : "\(status) — \(host):\(port) • \(client.packets.count) packets"
+        let header = NSMenuItem(title: headerTitle, action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
         menu.addItem(.separator())
 
         menu.addItem(makeItem("Open AXTerm", #selector(openMainWindow)))
-        let toggle = makeItem(MenuModel.connectionAction(for: client.status),
+        let toggle = makeItem(MenuModel.connectionAction(for: radios.map(\.status)),
                               #selector(toggleConnection), key: "k")
         menu.addItem(toggle)
+        if radios.count > 1 {
+            for radio in radios {
+                let submenu = NSMenu()
+                let state = NSMenuItem(title: "\(MenuModel.statusTitle(for: radio.status)) — \(radio.endpoint)",
+                                       action: nil, keyEquivalent: "")
+                state.isEnabled = false
+                submenu.addItem(state)
+                submenu.addItem(.separator())
+                let action = NSMenuItem(title: MenuModel.connectionAction(for: radio.status),
+                                        action: #selector(toggleRadio(_:)), keyEquivalent: "")
+                action.target = self
+                action.representedObject = radio.id.rawValue
+                submenu.addItem(action)
+                let parent = NSMenuItem(title: radio.name, action: nil, keyEquivalent: "")
+                parent.submenu = submenu
+                menu.addItem(parent)
+            }
+        }
         menu.addItem(makeItem("Preferences…", #selector(openPreferences)))
         menu.addItem(.separator())
 
@@ -217,6 +239,16 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             client.disconnect(reason: "user toggle connection (menu bar)")
         case .disconnected, .failed:
             client.connectUsingSettings()
+        }
+    }
+
+    /// One radio's Connect/Disconnect from its submenu.
+    @objc private func toggleRadio(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String else { return }
+        let radio = RadioID(rawValue: raw)
+        switch client.radioManager.state(of: radio) {
+        case .connected, .connecting: client.radioManager.close(radio)
+        case .disconnected, .failed: client.radioManager.open(radio)
         }
     }
 

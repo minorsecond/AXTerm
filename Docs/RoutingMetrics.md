@@ -80,3 +80,18 @@ configurable in Settings — neighbors default to 6 h, link stats 12 h, routes t
 an adaptive TTL (3× the origin's learned broadcast interval) with a 1 h global
 fallback. Persisted neighbors past their TTL load with exponentially decayed
 quality (half per additional TTL), never zeroed.
+
+## Per radio
+
+Every metric above is kept per **(radio, link)** — `LinkKey {radio, from,
+to}` in `LinkQualityEstimator`, `NeighborKey {radio, call}` in
+`NetRomRouter`, routes keyed (destination, origin, radio). Two radios are two
+antennas on two paths; blending their evidence into one number would
+describe neither. Deterministic tie-breaks gain the radio as the last key
+(primary first, then id). A frame both radios heard is one packet but one
+observation *per radio* (the cross-radio fold, `Docs/MultiRadio.md`).
+
+The **Auto radio** for a connect (`RadioSelector`) reads these numbers: the
+radio that heard the first hop within its link's TTL with the lowest ETX
+wins; then the most recent hearing; then the radio a route was learned on;
+then list order. It never measures anything of its own.

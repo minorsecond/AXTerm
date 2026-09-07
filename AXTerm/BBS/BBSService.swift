@@ -227,6 +227,14 @@ final class BBSService: ObservableObject {
 
     // MARK: - Answering
 
+    /// The name of the radio a call came in on, for the callers list — nil
+    /// with one radio, when every call came in on it.
+    func radioName(for radio: RadioID) -> String? {
+        guard let settings = coordinator.appSettings, settings.hasMultipleRadios,
+              let profile = settings.radio(radio) else { return nil }
+        return profile.name.isEmpty ? RadioProfile.defaultName(for: profile) : profile.name
+    }
+
     private func listener(for radio: RadioID = .primary) -> PersonalBBSListener {
         PersonalBBSListener(
             isArmed: settings.onAir,

@@ -29,6 +29,15 @@ Identity is undirected: A→B and B→A are one edge.
 
 ---
 
+### Radios
+
+The path graph is global: topology is a property of the network, not of
+which of your radios heard it, and the cross-radio fold keeps every count
+single when two radios hear one frame. Per-radio *reach* — which radio has
+heard which station, how often, how recently — lives in `Station.perRadio`
+and feeds the Auto radio and the sidebar, never the graph.
+See `Docs/MultiRadio.md`.
+
 ## 2. Topology — `NetworkTopology`
 
 The graph is built with digipeaters as **their own vertices**, not collapsed

@@ -47,6 +47,9 @@ nonisolated struct NeighborDisplayInfo: Identifiable, Hashable {
     let sourceType: String
     let lastSeen: Date
     let lastSeenRelative: String
+    /// The radio this neighbour is heard on. Evidence on another radio is
+    /// another entry: a different antenna and path.
+    let radioID: RadioID
 
     /// Time-based freshness fraction (0.0-1.0).
     let freshness: Double
@@ -67,8 +70,9 @@ nonisolated struct NeighborDisplayInfo: Identifiable, Hashable {
     private static let defaultPlateau: TimeInterval = FreshnessCalculator.defaultPlateau
 
     init(from info: NeighborInfo, now: Date, ttl: TimeInterval = NeighborDisplayInfo.defaultTTL, plateau: TimeInterval = NeighborDisplayInfo.defaultPlateau) {
-        self.id = info.call
+        self.id = info.radioID == .primary ? info.call : "\(info.call)@\(info.radioID.rawValue)"
         self.callsign = info.call
+        self.radioID = info.radioID
         self.quality = info.quality
         self.qualityPercent = Double(info.quality) / 255.0 * 100.0
         self.sourceType = info.sourceType
@@ -161,6 +165,8 @@ struct RouteDisplayInfo: Identifiable, Hashable {
     let hopCountKnown: Bool
     let lastUpdated: Date
     let lastUpdatedRelative: String
+    /// The radio the next hop is reached on.
+    let radioID: RadioID
 
     /// Time-based freshness fraction (0.0-1.0).
     let freshness: Double
@@ -184,9 +190,12 @@ struct RouteDisplayInfo: Identifiable, Hashable {
     private static let defaultPlateau: TimeInterval = FreshnessCalculator.defaultPlateau
 
     init(from info: RouteInfo, now: Date, ttl: TimeInterval = RouteDisplayInfo.defaultTTL, plateau: TimeInterval = RouteDisplayInfo.defaultPlateau, isLearning: Bool = false) {
-        self.id = "\(info.destination)→\(info.origin)"
+        self.id = info.radioID == .primary
+            ? "\(info.destination)→\(info.origin)"
+            : "\(info.destination)→\(info.origin)@\(info.radioID.rawValue)"
         self.destination = info.destination
         self.nextHop = info.path.first ?? info.origin
+        self.radioID = info.radioID
         self.quality = info.quality
         self.qualityPercent = Double(info.quality) / 255.0 * 100.0
         self.sourceType = info.sourceType

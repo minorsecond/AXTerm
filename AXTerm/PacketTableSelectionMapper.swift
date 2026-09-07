@@ -19,8 +19,11 @@ nonisolated struct PacketRowViewModel: Identifiable, Hashable {
     let infoText: String
     let infoTooltip: String
     let isLowSignal: Bool
+    /// Which radio decoded this frame — not which one the sender used. Nil
+    /// with one radio, when the column does not exist.
+    var radioName: String? = nil
 
-    static func fromPacket(_ packet: Packet) -> PacketRowViewModel {
+    static func fromPacket(_ packet: Packet, radioNames: [RadioID: String] = [:]) -> PacketRowViewModel {
         let classification = packet.classification
         return PacketRowViewModel(
             id: packet.id,
@@ -33,7 +36,8 @@ nonisolated struct PacketRowViewModel: Identifiable, Hashable {
             typeAccessibilityLabel: "Frame type: \(classification.badge). \(classification.tooltip)",
             infoText: packet.infoDisplay,
             infoTooltip: packet.infoTooltip,
-            isLowSignal: packet.isLowSignal
+            isLowSignal: packet.isLowSignal,
+            radioName: radioNames.isEmpty ? nil : radioNames[packet.radioID ?? .primary]
         )
     }
 }

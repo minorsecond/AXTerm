@@ -1770,6 +1770,9 @@ private struct SessionRecord: Identifiable, Hashable {
     let via: [String]
     var statusText: String
     var relayDestination: String?
+    /// The radio carrying the session, named only when the station has
+    /// several. Fixed when the session opened; a link cannot move radios.
+    var radioName: String?
 
     var label: String {
         if let relay = relayDestination {
@@ -2810,7 +2813,8 @@ struct TerminalView: View {
                 }(),
                 via: record.via,
                 relayDestination: record.relayDestination,
-                statusText: record.statusText)
+                statusText: record.statusText,
+                radioName: record.radioName)
         })
     }
 
@@ -4493,8 +4497,9 @@ struct TerminalView: View {
         } else {
             // The same event, kept. `sessionRecords` is a strip of live tabs
             // capped at twenty and gone on relaunch; this is the history.
+            let radio = txViewModel.currentSession?.radio ?? .primary
             sessionRecorder?.began(id: key, remote: intent.normalizedTo,
-                                   via: via, transport: mode.rawValue)
+                                   via: via, transport: mode.rawValue, radio: radio)
             sessionRecords.insert(
                 SessionRecord(
                     id: key,
@@ -4502,7 +4507,10 @@ struct TerminalView: View {
                     mode: mode,
                     via: via,
                     statusText: statusText,
-                    relayDestination: nil
+                    relayDestination: nil,
+                    radioName: settings.hasMultipleRadios
+                        ? settings.radio(radio).map { $0.name.isEmpty ? RadioProfile.defaultName(for: $0) : $0.name }
+                        : nil
                 ),
                 at: 0
             )

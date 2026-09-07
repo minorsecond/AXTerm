@@ -6,6 +6,7 @@
 #
 #   docker compose up -d          # the deterministic rig
 #   docker compose --profile rf up -d direwolf-rf linbpq-rf
+#   docker compose --profile dual up -d   # two frequencies + a bridge node
 #
 # Point AXTerm's Connection at 127.0.0.1:8010 (hub) or :8012 (rf).
 
@@ -38,6 +39,50 @@ services:
         ipv4_address: 172.28.99.20
     ports:
       - "8011:8011"
+    restart: unless-stopped
+
+  # --- dual: a second frequency ---------------------------------------
+  # hub B on :8020 with its own node, and a bridge node with one port on
+  # each hub. Point one AXTerm radio at :8010 and another at :8020.
+  kisshub-b:
+    profiles: ["dual"]
+    build: ./kisshub
+    networks:
+      channel:
+        ipv4_address: 172.28.99.11
+    ports:
+      - "8020:8020"
+    environment:
+      PORT: "8020"
+      LOSS: "0"
+      DELAY_MS: "0"
+      JITTER_MS: "0"
+
+  linbpq-b:
+    profiles: ["dual"]
+    build: ./linbpq
+    platform: linux/arm/v7
+    depends_on:
+      - kisshub-b
+    networks:
+      channel:
+        ipv4_address: 172.28.99.23
+    volumes:
+      - ./linbpq/bpq32-b.cfg:/opt/bpq/bpq32.cfg:ro
+    restart: unless-stopped
+
+  linbpq-bridge:
+    profiles: ["dual"]
+    build: ./linbpq
+    platform: linux/arm/v7
+    depends_on:
+      - kisshub
+      - kisshub-b
+    networks:
+      channel:
+        ipv4_address: 172.28.99.24
+    volumes:
+      - ./linbpq/bpq32-bridge.cfg:/opt/bpq/bpq32.cfg:ro
     restart: unless-stopped
 
   linbpq-far:

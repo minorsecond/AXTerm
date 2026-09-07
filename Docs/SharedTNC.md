@@ -3,6 +3,11 @@
 What happens when a desktop and a laptop — or a Mac and an iPad — both point
 at the same Direwolf, and what AXTerm does about it.
 
+The inverse case — one AXTerm, several TNCs — is `Docs/MultiRadio.md`. The
+two meet at the callsign rule below: whether the second listener is another
+device or another radio of your own, two stations answering one address is
+the thing that breaks, and per-radio callsigns are the same remedy.
+
 ---
 
 ## 1. What is already safe

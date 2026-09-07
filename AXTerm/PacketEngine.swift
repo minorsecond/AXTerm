@@ -215,6 +215,22 @@ final class PacketEngine: ObservableObject {
     @Published private(set) var bytesReceived: Int = 0
     @Published private(set) var lastRxTime: Date = .distantPast
     @Published private(set) var lastTxTime: Date = .distantPast
+    /// The same two clocks, per radio, for the sidebar's radio rows.
+    @Published private(set) var lastRxByRadio: [RadioID: Date] = [:]
+    @Published private(set) var lastTxByRadio: [RadioID: Date] = [:]
+
+    /// The radios the operator has switched off in the sidebar. Empty — the
+    /// default, and the only state a one-radio station can be in — shows
+    /// every radio's traffic interleaved: the universal view. A hidden radio
+    /// still receives and still counts; it is only not drawn. Kept per
+    /// device, like the map's layer toggles.
+    @Published var hiddenRadioIDs: Set<RadioID> = [] {
+        didSet {
+            guard hiddenRadioIDs != oldValue else { return }
+            UserDefaults.standard.set(hiddenRadioIDs.map(\.rawValue).sorted(), forKey: Self.hiddenRadiosKey)
+        }
+    }
+    static let hiddenRadiosKey = "radios.hidden"
     @Published private(set) var connectedHost: String?
     @Published private(set) var connectedPort: UInt16?
 
@@ -360,6 +376,8 @@ final class PacketEngine: ObservableObject {
         self.maxConsoleLines = maxConsoleLines
         self.maxRawChunks = maxRawChunks
         self.settings = settings
+        self.hiddenRadioIDs = Set((UserDefaults.standard.stringArray(forKey: Self.hiddenRadiosKey) ?? [])
+            .map(RadioID.init(rawValue:)))
         self.packetStore = packetStore
         self.consoleStore = consoleStore
         self.rawStore = rawStore
@@ -596,6 +614,7 @@ final class PacketEngine: ObservableObject {
     /// - Parameter completion: Callback with success or error
     func send(frame: OutboundFrame, completion: ((Result<Void, Error>) -> Void)? = nil) {
         lastTxTime = Date()
+        lastTxByRadio[frame.radio] = lastTxTime
         guard let activeLink = radioManager.session(for: frame.radio), activeLink.state == .connected else {
             let error = NSError(domain: "PacketEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not connected"])
             TxLog.error(.transport, "Send failed: not connected", error: error, ["frameId": String(frame.id.uuidString.prefix(8))])
@@ -937,6 +956,7 @@ final class PacketEngine: ObservableObject {
         // the retry tracker, which would otherwise have scored the copy as a
         // failed delivery.
         let now = Date()
+        lastRxByRadio[radio] = now
         if radioManager.profiles.count > 1,
            case .additionalRadio(let firstRadio) = crossRadioDedup.admit(raw: ax25Data, radio: radio, at: now) {
             crossRadioFolds += 1
@@ -1363,7 +1383,8 @@ final class PacketEngine: ObservableObject {
         return packets.reduce(into: 0) { $0 += $1.timestamp < clearedAt ? 0 : 1 }
     }
 
-    func filteredPackets(search: String, filters: PacketFilters, stationCall: String?) -> [Packet] {
+    func filteredPackets(search: String, filters: PacketFilters, stationCall: String?,
+                         hiddenRadios: Set<RadioID> = []) -> [Packet] {
         let visiblePackets = packets.filter { packet in
             if let clearedAt = packetsClearedAt, packet.timestamp < clearedAt {
                 return false
@@ -1375,8 +1396,66 @@ final class PacketEngine: ObservableObject {
             search: search,
             filters: filters,
             stationCall: stationCall,
-            pinnedIDs: pinnedPacketIDs
+            pinnedIDs: pinnedPacketIDs,
+            hiddenRadios: hiddenRadios
         )
+    }
+
+    // MARK: - Radios as the status surfaces see them
+
+    /// Every enabled radio, in the operator's order, with its link's state.
+    var radioSummaries: [RadioStatusSummary] {
+        let station = settings.myCallsign
+        return radioManager.profiles.map { radio in
+            let state = radioManager.state(of: radio.id)
+            let session = radioManager.session(for: radio.id)
+            return RadioStatusSummary(
+                id: radio.id, name: radio.name.isEmpty ? RadioProfile.defaultName(for: radio) : radio.name,
+                callsign: radio.resolvedCallsign(station: station),
+                status: Self.connectionStatus(for: state),
+                endpoint: radio.displayEndpoint,
+                host: radio.kind == .tcp ? radio.host : "",
+                port: radio.kind == .tcp ? radio.port : nil,
+                lastError: session?.lastError,
+                lastRx: lastRxByRadio[radio.id],
+                lastTx: lastTxByRadio[radio.id])
+        }
+    }
+
+    /// Radio names by id, for the Packets table's Radio column. Empty with
+    /// one radio, and then the column does not exist.
+    var radioNames: [RadioID: String] {
+        guard settings.hasMultipleRadios else { return [:] }
+        return Dictionary(uniqueKeysWithValues: settings.activeRadios.map {
+            ($0.id, $0.name.isEmpty ? RadioProfile.defaultName(for: $0) : $0.name)
+        })
+    }
+
+    /// The names of the radios still shown when some are hidden; nil when
+    /// every radio is visible, so a scope line costs no words.
+    var visibleRadioNames: [String]? {
+        guard !hiddenRadioIDs.isEmpty else { return nil }
+        let names = settings.activeRadios
+            .filter { $0.enabled && !hiddenRadioIDs.contains($0.id) }
+            .map { $0.name.isEmpty ? RadioProfile.defaultName(for: $0) : $0.name }
+        return names.isEmpty ? nil : names
+    }
+
+    /// A station is hidden only when every radio that heard it is hidden, so
+    /// one heard on both radios stays one dot on the map.
+    func isVisible(_ station: Station) -> Bool {
+        guard !hiddenRadioIDs.isEmpty else { return true }
+        let heardOn = station.heardOn.isEmpty ? [RadioID.primary] : station.heardOn
+        return heardOn.contains { !hiddenRadioIDs.contains($0) }
+    }
+
+    static func connectionStatus(for state: KISSLinkState) -> ConnectionStatus {
+        switch state {
+        case .connected: .connected
+        case .connecting: .connecting
+        case .failed: .failed
+        case .disconnected: .disconnected
+        }
     }
 
     func packet(with id: Packet.ID) -> Packet? {

@@ -24,12 +24,40 @@ struct TNCStatusStrip: View {
     let status: ConnectionStatus
     let host: String
     let port: Int
+    /// Every radio, when there are several; the one-radio init leaves this
+    /// empty and the strip reads exactly as it always has.
+    var radios: [RadioStatusSummary] = []
+
+    init(status: ConnectionStatus, host: String, port: Int) {
+        self.status = status
+        self.host = host
+        self.port = port
+    }
+
+    /// One dot per radio, one line about whichever needs attention.
+    init(radios: [RadioStatusSummary]) {
+        self.radios = radios
+        self.status = RadioPresentation.aggregateStatus(radios.map(\.status))
+        self.host = radios.first?.host ?? ""
+        self.port = radios.first?.port ?? 0
+    }
 
     var body: some View {
         HStack(spacing: 6) {
-            Circle()
-                .fill(tint)
-                .frame(width: 6, height: 6)
+            if radios.count > 1 {
+                HStack(spacing: 3) {
+                    ForEach(radios, id: \.id) { radio in
+                        Circle()
+                            .fill(Self.tint(for: radio.status))
+                            .frame(width: 6, height: 6)
+                            .accessibilityHidden(true)
+                    }
+                }
+            } else {
+                Circle()
+                    .fill(tint)
+                    .frame(width: 6, height: 6)
+            }
 
             if let label {
                 Text(label)
@@ -64,13 +92,19 @@ struct TNCStatusStrip: View {
         .animation(.easeInOut(duration: 0.2), value: status)
     }
 
-    private var needsAttention: Bool { Presentation.needsAttention(status) }
-    private var label: String? { Presentation.label(status) }
+    private var needsAttention: Bool {
+        radios.count > 1 ? Presentation.needsAttention(radios) : Presentation.needsAttention(status)
+    }
+    private var label: String? {
+        radios.count > 1 ? Presentation.label(radios) : Presentation.label(status)
+    }
     private var accessibilityText: String {
-        Presentation.spoken(status, host: host, port: port)
+        radios.count > 1 ? Presentation.spoken(radios) : Presentation.spoken(status, host: host, port: port)
     }
 
-    private var tint: Color {
+    private var tint: Color { Self.tint(for: status) }
+
+    private static func tint(for status: ConnectionStatus) -> Color {
         switch status {
         case .connected: .green
         case .connecting: .secondary

@@ -126,9 +126,13 @@ struct AXTermiOSRootView: View {
     private func withTNCStrip<Content: View>(_ content: Content) -> some View {
         VStack(spacing: 0) {
             content
-            TNCStatusStrip(status: client.status,
-                           host: settings.host,
-                           port: settings.port)
+            if settings.hasMultipleRadios {
+                TNCStatusStrip(radios: client.radioSummaries)
+            } else {
+                TNCStatusStrip(status: client.status,
+                               host: settings.host,
+                               port: settings.port)
+            }
         }
     }
 
@@ -588,6 +592,7 @@ struct AXTermiOSRootView: View {
         NavigationStack {
             PacketTableView(
                 packets: client.packets,
+                radioNames: client.radioNames,
                 isLoadingHistory: client.isLoadingPersistedPackets,
                 selection: $packetSelection,
                 onInspectSelection: {

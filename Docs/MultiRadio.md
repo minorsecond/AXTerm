@@ -336,6 +336,53 @@ radio. A radio that is not connected is never chosen, and the sentence
 says so: "Auto → IC-705: heard K0NTS-1 there 4 min ago, ETX 1.2. Base last
 heard it 3 h ago, past its TTL."
 
+## The universal view
+
+One set of views; the radio is a dimension of the data, never a mode of the
+app. Every radio's traffic arrives interleaved in the Packets table, the
+console and the map, each row attributable by its Radio column or the
+station's "heard on" list. That is the default and the only state a
+one-radio station is ever in.
+
+The sidebar's **Radios** section (macOS, `hasMultipleRadios` only) lists
+every radio with its status dot, callsign, RX/TX lights and a mini switch.
+The switch is *visibility, not power*: `PacketEngine.hiddenRadioIDs` is a
+set, empty by default, kept per device like the map's layer toggles. A
+hidden radio still receives, still counts, still answers — it is only not
+drawn. The set applies in one place, `PacketFilter.filter(hiddenRadios:)`,
+so the Packets table and everything built on it agree; the map hides a
+station only when *every* radio that heard it is hidden
+(`PacketEngine.isVisible`), so a station heard on both radios stays one
+dot, and says so in a footnote under Layers. The Packets status line reads
+"2 of 3 frames · on IC-705" while a radio is hidden, and Show Everything
+clears the radios along with the filters. "All Radios" above the rows
+turns every switch back on.
+
+The console is not filtered by radio: a terminal line is a conversation,
+and its session already names its radio in the tab ("K0NTS-1 · on
+IC-705"). The iOS shell shows the Radio column and the per-radio strip but
+has no sidebar, so no switches.
+
+**Status surfaces** with several radios — every one of them pinned to its
+one-radio string by test:
+
+- Toolbar capsule: one 8 pt dot per radio (help: name, status, endpoint,
+  callsign), aggregated RX/TX lights, "Radios: 2 connected" / "Radios: 1 of
+  2" / "Radios Disconnected", a menu section per radio with Connect /
+  Disconnect / Cancel and the endpoint, Connect All / Disconnect All, and
+  Radio Settings….
+- Menu bar: the header counts ("1 of 2 radios connected · 812 packets"),
+  ⌘K reads Connect All / Disconnect All, and each radio has a submenu.
+- iOS strip: one dot per radio; the line names the one radio that needs
+  attention ("IC-705 not connected") or counts them.
+- Packets: a Radio column after Time ("which radio decoded this frame, not
+  which the sender used"); on iOS the row's footer says "· IC-705".
+- Stations rows: "12 pkts | 14:02 | IC-705, Base", most recent first.
+- Routes: the radio's name under the neighbour's callsign and the route's
+  next hop, because evidence on another radio is a separate entry.
+- BBS callers: "on IC-705" beside the time.
+- Terminal tabs and history: " · on IC-705".
+
 ## What an operator with one radio must never notice
 
 Every "only when there is more than one" decision hangs off one predicate,
@@ -385,6 +432,9 @@ These are pinned literally in `RadioPresentationTests`,
    the mailbox; staggered announcements; both node identities; the Auto
    radio and its sentence; Winlink's preferred radio; the terminal's radio.
 
-Next: the multi-radio UI — the sidebar's radios and visibility switches,
-the Radio column, the connect bar's picker, the per-radio rows in
-Transmission settings — all hidden until a second radio exists.
+9. The universal view: the sidebar's radios and their visibility switches,
+   the Radio column, the counting capsule, menu bar and iOS strip, the
+   radio named on stations, routes, callers and terminal tabs — all hidden
+   until a second radio exists.
+
+Next: the dual rig profile, property tests, and the wider docs.
